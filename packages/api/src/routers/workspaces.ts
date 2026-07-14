@@ -68,11 +68,14 @@ import {
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
 import { resolveWorkspaceExtends } from "../services/workspace-composition.js";
+import type { ResolvedPackageDependency } from "../services/package-dependency-resolver.js";
 import {
-  resolvePackageDependencies,
-  type PackageDependencyResolverDefinition,
-} from "../services/package-dependency-resolver.js";
-import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+  materializeWorkspaceCore,
+  type MaterializeCoreResult,
+  ComposeBaseUnavailableError,
+  DependencyResolutionError,
+  ComposeBaseNotFoundError,
+} from "../services/workspace-materialization-service.js";
 // Loop materialization (playbooks + automation triggers) flows through the ONE
 // shared loop applier — the same one the standalone POST /loops/apply door uses.
 import { createLoopFromDefinition } from "../services/loops/create-from-definition.js";
@@ -2808,38 +2811,38 @@ export const workspacesRouter = router({
             }
           }
 
-          // ── Step 0: Resolve template-composition dependencies ──────────────
-          // Mirrors the Hub `POST /packages/apply` door so the BROWSER install
-          // path composes overlays exactly like the CLI/agent path. Placed AFTER
-          // both idempotency short-circuits above (a proposalId/packageSlug
-          // re-install returns the existing workspace WITHOUT re-resolving) and
-          // BEFORE the normal create/compose materialization below — so it never
-          // double-runs on the "return existing workspace" paths. Installs
-          // missing built-in `workspace` deps (deps-first, cycle-guarded) and,
-          // for a `compose` dependency, resolves the BASE workspace this package
-          // overlays.
-          let resolvedDependencies: Awaited<
-            ReturnType<typeof resolvePackageDependencies>
-          >["installed"] = [];
-          let composeTargetWorkspaceId: string | undefined;
+          // ── Steps 0-0b: Resolve dependencies + compose overlay (shared core)
+          // The SAME `materializeWorkspaceCore` the Hub `POST /packages/apply`
+          // door drives — so the BROWSER install path composes overlays exactly
+          // like the CLI/agent path. Placed AFTER both idempotency short-circuits
+          // above (a proposalId/packageSlug re-install returns the existing
+          // workspace WITHOUT re-resolving) and BEFORE resolveWorkspaceExtends +
+          // the normal create below. `deferCreate:true` keeps THIS door's own
+          // richer create path (onProgress/resumeFrom/seed-docs) for the
+          // no-compose case — the shared core only resolves + (maybe) composes.
+          // The compose reconcile intentionally receives the PRE-extends
+          // `input.definition`, preserving the pre-refactor behavior (extends is
+          // resolved only for the create path below).
+          let resolvedDependencies: ResolvedPackageDependency[] = [];
           if (input.definition.dependencies?.length) {
+            let core: MaterializeCoreResult;
             try {
-              const dep = await resolvePackageDependencies({
+              core = await materializeWorkspaceCore({
                 definition:
-                  input.definition as unknown as PackageDependencyResolverDefinition,
+                  input.definition as unknown as WorkspaceDefinitionInput,
                 userId: ctx.userId,
                 // The package's own identity for the cycle guard — NOT its
                 // subtype (overlays set subtype = base slug). tRPC input carries
                 // no `_meta`, so pass the packageSlug explicitly.
                 selfSlug: input.packageSlug,
+                deferCreate: true,
               });
-              resolvedDependencies = dep.installed;
-              composeTargetWorkspaceId = dep.composeTargetWorkspaceId;
+            } catch (err) {
               // A compose was requested but its base could not be resolved. Do
               // NOT fall through to creating a rogue standalone overlay workspace
               // — surface the reason (mirrors the Hub 422).
-              if (dep.composeRequested && !composeTargetWorkspaceId) {
-                const unresolved = dep.installed.find(
+              if (err instanceof ComposeBaseUnavailableError) {
+                const unresolved = err.dependencies.find(
                   (d) => d.relation === "compose"
                 );
                 throw new TRPCError({
@@ -2849,64 +2852,43 @@ export const workspacesRouter = router({
                     "compose base not available — the base template must be installed on the pod first",
                 });
               }
-            } catch (err) {
-              // Re-throw our own guard verbatim; convert resolver failures
-              // (cycle, >1 compose dep, wrong-kind compose) into a clean 400.
-              if (err instanceof TRPCError) throw err;
-              throw new TRPCError({
-                code: "BAD_REQUEST",
-                message: `Dependency resolution failed: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              });
+              // Resolver failures (cycle, >1 compose dep, wrong-kind) → clean 400.
+              if (err instanceof DependencyResolutionError) {
+                throw new TRPCError({
+                  code: "BAD_REQUEST",
+                  message: `Dependency resolution failed: ${err.message}`,
+                });
+              }
+              // Resolved compose base vanished before load → 404 (as before).
+              if (err instanceof ComposeBaseNotFoundError) {
+                throw new TRPCError({
+                  code: "NOT_FOUND",
+                  message: "compose base workspace not found",
+                });
+              }
+              // A compose-overlay reconcile/assert failure → propagate (500),
+              // matching the pre-refactor path (which let it throw).
+              throw err;
             }
-          }
-
-          // ── Step 0b: COMPOSE overlay ───────────────────────────────────────
-          // When a `compose` dependency resolved to a base workspace, layer this
-          // package's profiles/roles/relations/views ADDITIVELY onto it via the
-          // canonical reconcile primitive — never create a second workspace,
-          // never overwrite base schema. Write-gate the base first (defense in
-          // depth: the resolver already restricts to editor+ memberships).
-          if (composeTargetWorkspaceId) {
-            const [baseWs] = await db
-              .select({ id: workspaces.id, ownerId: workspaces.ownerId })
-              .from(workspaces)
-              .where(eq(workspaces.id, composeTargetWorkspaceId))
-              .limit(1);
-            if (!baseWs) {
-              throw new TRPCError({
-                code: "NOT_FOUND",
-                message: "compose base workspace not found",
+            if (core.status === "composed") {
+              auditLog({
+                subjectType: "workspaces",
+                subjectId: core.composeTargetWorkspaceId,
+                action: "update",
+                phase: "completed",
+                userId: ctx.userId,
+                data: { templateSlug: input.packageSlug, composed: true },
               });
+              return {
+                status: "composed" as const,
+                workspaceId: core.composeTargetWorkspaceId,
+                composed: true as const,
+                dependencies: core.dependencies,
+              };
             }
-            await assertWorkspaceWrite(db, ctx.userId, {
-              workspaceId: baseWs.id,
-              ownerId: baseWs.ownerId,
-            });
-            await reconcileWorkspaceFromDefinition({
-              workspaceId: composeTargetWorkspaceId,
-              userId: ctx.userId,
-              // Bounded boundary cast (not `any`): the definition is structurally
-              // a superset of the fields reconcile reads — same as the Hub route.
-              definition:
-                input.definition as unknown as WorkspaceDefinitionInput,
-              mergeCapabilities: true,
-            });
-            auditLog({
-              subjectType: "workspaces",
-              subjectId: composeTargetWorkspaceId,
-              action: "update",
-              phase: "completed",
-              userId: ctx.userId,
-              data: { templateSlug: input.packageSlug, composed: true },
-            });
-            return {
-              status: "composed" as const,
-              workspaceId: composeTargetWorkspaceId,
-              composed: true as const,
-              dependencies: resolvedDependencies,
-            };
+            // status "resolved" — no compose base. Fall through to the normal
+            // extends-resolve + create path below with the resolved graph.
+            resolvedDependencies = core.dependencies;
           }
 
           // Workspace composition (north star §10): resolve `definition.extends`
