@@ -1,7 +1,7 @@
 {
   "name": "@synap-core/auth-bootstrap",
   "version": "0.1.0",
-  "description": "Zero-dependency auth bootstrap for Synap data pods — handshake (session token) + agent setup (API key). Shared by the tRPC SDK and the REST client.",
+  "description": "Zero-dependency generic issuer exchange (session token) + agent setup (API key) for Synap data pods. Shared by the tRPC SDK and REST client.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -25,7 +25,7 @@
   "keywords": [
     "synap",
     "auth",
-    "handshake",
+    "federation",
     "data-pod",
     "sdk"
   ],

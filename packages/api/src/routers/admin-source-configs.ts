@@ -1,33 +1,44 @@
 /**
  * Admin Source Configs REST Router
  *
- * CP-signed ES256 JWT protected endpoint for provisioning a `source_configs`
- * row programmatically. Unlike the tRPC router, this one accepts inline
+ * Trusted-issuer assertion protected endpoint for provisioning a
+ * `source_configs` row programmatically. Unlike the tRPC router, this one accepts inline
  * secrets — each `secrets[]` entry is encrypted with the server vault key
  * and replaced with a `vault://<uuid>/value` reference in the stored config.
  *
- * Use case: CP wants to provision a CPRelay source config on a pod it just
- * created, using a fresh relay key. CP calls this endpoint with
- *   { providerType: 'cp-relay', name: 'CP Relay (prod)',
- *     config: { relayUrl: '…', upstreamType: 'rss-direct', upstreamConfig: {…} },
- *     secrets: [{ field: 'relayKey', value: '<generated-key>' }] }
- * and the pod stores the secret + rewrites config.relayKey to a vault://
- * reference.
+ * Use case: any Pod-approved issuer can provision a source config for an
+ * already-linked, locally authorized Pod user. The Pod stores supplied secrets
+ * and rewrites their configured fields to vault references.
  *
  * Routes:
  *   POST /api/admin/source-configs  — create a source_config with inline secrets
  *
  * Auth:
- *   Authorization: Bearer <ES256 JWT signed by Control Plane>
- *   Verified via verifyCpJwt — same JWKS flow used by provision/*.
+ *   Authorization: Bearer <short-lived issuer assertion>
+ *   Verified against the Pod-local trusted-issuer registry. The issuer's
+ *   opaque subject resolves through the Pod's local identity-link table.
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { createLogger, config } from "@synap-core/core";
-import { db, drizzleSql, inArray } from "@synap/database";
-import { sourceConfigs, secrets } from "@synap/database";
-import { verifyCpJwt } from "../utils/jwks-client.js";
+import { createLogger } from "@synap-core/core";
+import {
+  and,
+  consumeFederatedAssertionReceipt,
+  db,
+  eq,
+  inArray,
+  TrustedIssuerService,
+  TRUSTED_ISSUER_CAPABILITIES,
+} from "@synap/database";
+import {
+  federatedIdentityLinks,
+  secrets,
+  sourceConfigs,
+  workspaceMembers,
+  workspaces,
+} from "@synap/database";
+import { verifyTrustedIssuerJwt } from "../utils/jwks-client.js";
 import { encryptServerSide, isServerVaultAvailable } from "@synap/database";
 import { sourceProviderRegistry } from "@synap/feed-service";
 
@@ -52,6 +63,66 @@ const createInputSchema = z.object({
   /** Optional: tie the config to a specific workspace. Null/omitted = pod-wide. */
   workspaceId: z.string().uuid().optional(),
 });
+
+const MAX_ASSERTION_LIFETIME_SECONDS = 300;
+
+const sourceConfigAssertionSchema = z.object({
+  iat: z.number().int().nonnegative(),
+  exp: z.number().int().positive(),
+  jti: z.string().min(1).max(512),
+  iss: z.string().url(),
+  sub: z.string().min(1).max(512),
+  type: z.literal("federated_assertion"),
+  purpose: z.literal("source-config-write"),
+});
+
+function podAudience(): string | null {
+  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+  return value || null;
+}
+
+async function canWriteSourceConfig(input: {
+  userId: string;
+  workspaceId?: string;
+}): Promise<boolean> {
+  const allowedRoles = ["owner", "admin", "editor"];
+  if (input.workspaceId) {
+    const membership = await db
+      .select({
+        role: workspaceMembers.role,
+        archivedAt: workspaces.archivedAt,
+      })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+      .where(
+        and(
+          eq(workspaceMembers.userId, input.userId),
+          eq(workspaceMembers.workspaceId, input.workspaceId)
+        )
+      )
+      .limit(1);
+    return !!(
+      membership[0] &&
+      !membership[0].archivedAt &&
+      allowedRoles.includes(membership[0].role)
+    );
+  }
+
+  // Pod-wide source configuration is an administrative operation. A user with
+  // access only to an ordinary workspace cannot create it through an issuer.
+  const podAdmin = await db
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(
+      and(
+        eq(workspaceMembers.userId, input.userId),
+        eq(workspaces.systemSlug, "pod-admin")
+      )
+    )
+    .limit(1);
+  return !!podAdmin[0] && ["owner", "admin"].includes(podAdmin[0].role);
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,33 +164,56 @@ function setDeep(
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 adminSourceConfigsRouter.post("/", async (c) => {
-  // 1. Verify the CP JWT.
+  // 1. Verify a short-lived assertion from a Pod-approved issuer. The Pod
+  // selects the issuer record and its capability before fetching JWKS; no
+  // deployment-level provider URL is trusted implicitly.
   const auth = c.req.header("authorization");
   const token = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token) {
     return c.json({ error: "Missing Bearer token" }, 401);
   }
-
-  const payload = await verifyCpJwt<{
-    type?: string;
-    sub?: string;
-    scope?: string;
-    /**
-     * The user id to own the created source_config + secrets.
-     * CP supplies this — typically the pod's admin user.
-     */
-    ownerUserId?: string;
-  }>(token, config.server.controlPlaneUrl);
-  if (!payload) {
-    return c.json({ error: "Invalid or expired token" }, 401);
+  const audience = podAudience();
+  if (!audience) return c.json({ error: "PUBLIC_URL is required" }, 500);
+  const payload = await verifyTrustedIssuerJwt<Record<string, unknown>>(token, {
+    audience,
+    requiredScope: TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
+    consumeJti: false,
+  });
+  const claims = sourceConfigAssertionSchema.safeParse(payload);
+  if (
+    !claims.success ||
+    claims.data.exp - claims.data.iat > MAX_ASSERTION_LIFETIME_SECONDS
+  ) {
+    return c.json({ error: "Invalid source-config assertion" }, 401);
+  }
+  const issuer = await new TrustedIssuerService().getByUrl(claims.data.iss);
+  if (
+    !issuer ||
+    issuer.status !== "approved" ||
+    !issuer.allowedScopes.includes(
+      TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE
+    )
+  ) {
+    return c.json({ error: "Issuer is not approved" }, 403);
   }
 
-  const ownerUserId = payload.ownerUserId || payload.sub;
-  if (!ownerUserId) {
-    return c.json({ error: "Token missing ownerUserId / sub claim" }, 400);
+  // 2. Resolve an opaque issuer subject to a Pod-local identity. The issuer
+  // never chooses a local owner id in this request.
+  const identityLink = await db.query.federatedIdentityLinks.findFirst({
+    where: and(
+      eq(federatedIdentityLinks.issuerId, issuer.id),
+      eq(federatedIdentityLinks.issuerSubject, claims.data.sub)
+    ),
+    columns: { userId: true },
+  });
+  if (!identityLink) {
+    return c.json(
+      { error: "Federated identity is not linked on this Pod" },
+      403
+    );
   }
 
-  // 2. Parse body.
+  // 3. Parse the requested Pod-local target before consuming the assertion.
   const bodyRaw = await c.req.json().catch(() => null);
   const parsed = createInputSchema.safeParse(bodyRaw);
   if (!parsed.success) {
@@ -130,7 +224,21 @@ adminSourceConfigsRouter.post("/", async (c) => {
   }
   const input = parsed.data;
 
-  // 3. Validate provider exists.
+  if (
+    !(await canWriteSourceConfig({
+      userId: identityLink.userId,
+      workspaceId: input.workspaceId,
+    }))
+  ) {
+    return c.json(
+      { error: "Local user is not allowed to write this source config" },
+      403
+    );
+  }
+
+  const linkedUserId = identityLink.userId;
+
+  // 4. Validate provider exists.
   const provider = sourceProviderRegistry.get(input.providerType);
   if (!provider) {
     return c.json(
@@ -139,21 +247,51 @@ adminSourceConfigsRouter.post("/", async (c) => {
     );
   }
 
-  // 4. Create secrets (if any) and rewrite config with vault:// refs.
+  // Reject unavailable local prerequisites before spending this single-use
+  // assertion, so a caller can retry after the Pod operator fixes its vault.
+  if (input.secrets?.length && !isServerVaultAvailable()) {
+    return c.json(
+      {
+        error:
+          "VAULT_SERVER_KEY is not configured on this pod — cannot encrypt inline secrets",
+      },
+      500
+    );
+  }
+
+  // Make a valid, locally authorized mutation assertion durable-single-use
+  // before it can create a secret or source config.
+  try {
+    const receipt = await consumeFederatedAssertionReceipt({
+      issuerId: issuer.id,
+      jti: claims.data.jti,
+      expiresAt: new Date(claims.data.exp * 1_000),
+    });
+    if (receipt === "expired") {
+      return c.json({ error: "Source-config assertion has expired" }, 401);
+    }
+    if (receipt === "replayed") {
+      return c.json(
+        { error: "Source-config assertion has already been used" },
+        409
+      );
+    }
+  } catch (error) {
+    logger.error(
+      { error, issuerId: issuer.id },
+      "Could not record source-config assertion replay receipt"
+    );
+    return c.json(
+      { error: "Source-config replay protection is unavailable" },
+      503
+    );
+  }
+
+  // 5. Create secrets (if any) and rewrite config with vault:// refs.
   const configOut = structuredClone(input.config) as Record<string, unknown>;
   const createdSecretIds: string[] = [];
 
   if (input.secrets?.length) {
-    if (!isServerVaultAvailable()) {
-      return c.json(
-        {
-          error:
-            "VAULT_SERVER_KEY is not configured on this pod — cannot encrypt inline secrets",
-        },
-        500
-      );
-    }
-
     for (const entry of input.secrets) {
       const blob = encryptServerSide(entry.value);
       // Direct insert (not upsert) — we need one secret row per inline entry
@@ -162,12 +300,12 @@ adminSourceConfigsRouter.post("/", async (c) => {
       const [secret] = await db
         .insert(secrets)
         .values({
-          userId: ownerUserId,
+          userId: linkedUserId,
           serviceId: "source:admin-provisioned",
           name: `source-config "${input.name}" — ${entry.field}`,
           type: "api_key",
           category: "feed-sources",
-          description: `Inline secret provisioned by CP for source "${input.name}" field "${entry.field}"`,
+          description: `Inline secret provisioned by a trusted issuer for source "${input.name}" field "${entry.field}"`,
           encryptedData: blob.encryptedData,
           iv: blob.iv,
           authTag: blob.authTag,
@@ -180,11 +318,11 @@ adminSourceConfigsRouter.post("/", async (c) => {
     }
   }
 
-  // 5. Insert the source_config row.
+  // 6. Insert the source_config row.
   const [row] = await db
     .insert(sourceConfigs)
     .values({
-      userId: ownerUserId,
+      userId: linkedUserId,
       workspaceId: input.workspaceId ?? null,
       providerType: input.providerType,
       name: input.name,
@@ -194,7 +332,7 @@ adminSourceConfigsRouter.post("/", async (c) => {
     })
     .returning();
 
-  // 6. Re-tag the secrets with the real config id so the delete-cascade
+  // 7. Re-tag the secrets with the real config id so the delete-cascade
   //    cleanup path (secrets WHERE serviceId = "source:<id>") finds them.
   if (createdSecretIds.length > 0) {
     try {
@@ -209,17 +347,14 @@ adminSourceConfigsRouter.post("/", async (c) => {
       );
     }
   }
-  // Silence tree-shakers if drizzleSql isn't used in any future code path.
-  void drizzleSql;
-
   logger.info(
     {
       configId: row.id,
       providerType: row.providerType,
-      ownerUserId,
+      linkedUserId,
       secretCount: createdSecretIds.length,
     },
-    "Source config provisioned by CP"
+    "Source config provisioned through generic issuer federation"
   );
 
   return c.json(

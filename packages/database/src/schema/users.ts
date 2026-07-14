@@ -63,11 +63,6 @@ export const users = pgTable("users", {
 
   // Sync metadata (nullable — agents have no Kratos identity)
   kratosIdentityId: text("kratos_identity_id"),
-  // Stable identifier assigned by the managed Control Plane. It is deliberately
-  // nullable: self-hosted/local Pod users do not have a Control Plane account.
-  // A managed invite activation binds this exactly once to the pod-local
-  // Kratos identity; login tokens then prove the same relationship via `sub`.
-  controlPlaneUserId: text("control_plane_user_id"),
   lastSyncedAt: timestamp("last_synced_at", {
     mode: "date",
     withTimezone: true,

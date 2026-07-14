@@ -20,6 +20,7 @@ import {
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
+import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -111,6 +112,13 @@ export async function registerCronSchedules(): Promise<void> {
   // Notification cleanup (daily at 2:00 AM UTC — expires/deletes old notifications)
   await scheduleSafe(boss, "notification-cleanup", "0 2 * * *", {});
   logger.info("Registered cron: notification-cleanup (daily at 2:00 AM UTC)");
+
+  // Federation receipts are short-lived and single-use. Remove only receipts
+  // already past expiry; the indexed predicate keeps this maintenance bounded.
+  await scheduleSafe(boss, FEDERATION_RECEIPT_CLEANUP_QUEUE, "15 2 * * *", {});
+  logger.info(
+    "Registered cron: federation-receipt-cleanup (daily at 2:15 AM UTC)"
+  );
 
   // Feed scheduler (every minute — checks for due feeds and enqueues execution jobs)
   await scheduleSafe(boss, "feed-scheduler", "* * * * *", {});

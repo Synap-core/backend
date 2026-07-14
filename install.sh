@@ -37,25 +37,21 @@ INTELLIGENCE_API_KEY="${SYNAP_INTELLIGENCE_API_KEY:-}"
 ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
 BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
-# Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
-# out of the box (empty → the pod-local template cache never populates → `cap add`
-# shows nothing).
-# SECURITY — do NOT read this as "CONTROL_PLANE_URL is trust-irrelevant":
-#   • Provisioning / user-exchange JWTs are gated by the `trusted_issuers` registry
-#     (trusted-issuer-service.ts); this URL plays no role there.
-#   • BUT the invite-accept / entity-share / sync / admin-source-configs paths
-#     verify CP JWTs with this URL as the `iss` ALLOWLIST: empty = accept ANY
-#     properly-signed HTTPS issuer (open mode), set = pin `iss` to it. So defaulting
-#     empty→CP TIGHTENS trust (open→pinned) — it never loosens. Removing or emptying
-#     it would REOPEN those paths to any signed issuer.
-# Self-hosted installs override with `--control-plane-url <url>` / `SYNAP_CONTROL_PLANE_URL`.
-CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-https://api.synap.live}"
-# PROVISIONING_TOKEN is used by setup-openclaw.sh to create agent users and
-# API keys. It is NOT used for CP trust (seed-trust uses ES256 JWTs instead).
+POD_AGENT_ISSUER_URL_FLAG="${SYNAP_POD_AGENT_ISSUER_URL:-}"
+POD_AGENT_AUDIENCE_FLAG="${SYNAP_POD_AGENT_AUDIENCE:-}"
+POD_AGENT_ENABLED_FLAG="${SYNAP_WITH_POD_AGENT:-}"
+# Optional legacy integration endpoint. Federation trust is configured only by
+# a Pod owner through the trusted-issuer registry; a self-hosted Pod must never
+# silently receive an external service URL or authority during installation.
+CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
+# PROVISIONING_TOKEN is a one-time installation credential. It is used by
+# setup-openclaw.sh for local agent setup and may authorize the first generic
+# issuer-owner bootstrap on a managed Pod. It never identifies an issuer
+# and it must not become a user-login credential.
 # Managed pods can inject a pre-generated token; self-hosted installs generate one.
 PROVISIONING_TOKEN_FLAG="${SYNAP_PROVISIONING_TOKEN:-}"
 # SMTP connection URI for Kratos courier. Defaults to local catch-all (no real
-# delivery). Managed pods get a real relay URI injected by the Control Plane;
+# delivery). Managed environments can inject a real relay URI;
 # self-hosted installs can set SYNAP_SMTP_URI or pass --smtp-uri.
 SMTP_URI="${SYNAP_SMTP_URI:-}"
 
@@ -71,6 +67,9 @@ while [[ $# -gt 0 ]]; do
     --deploy-version)      DEPLOY_VERSION="$2";           shift 2 ;;
     --backend-version)     BACKEND_VERSION_FLAG="$2";     shift 2 ;;
     --pod-agent-version)   POD_AGENT_VERSION_FLAG="$2";   shift 2 ;;
+    --pod-agent-issuer-url) POD_AGENT_ISSUER_URL_FLAG="$2"; shift 2 ;;
+    --pod-agent-audience)  POD_AGENT_AUDIENCE_FLAG="$2";  shift 2 ;;
+    --with-pod-agent)      POD_AGENT_ENABLED_FLAG="1";    shift ;;
     --control-plane-url)   CONTROL_PLANE_URL_FLAG="$2";   shift 2 ;;
     --provisioning-token)  PROVISIONING_TOKEN_FLAG="$2";  shift 2 ;;
     --smtp-uri)            SMTP_URI="$2";                  shift 2 ;;
@@ -152,6 +151,71 @@ else
   UPDATE_ONLY=false
 fi
 
+# ─── Optional Pod-agent trust ─────────────────────────────────────────────────
+# A Pod agent has the Docker socket, so it must never start from a generic
+# installer default. A Pod owner either explicitly enables it or provides both
+# generic trust settings; in either case, the values must be present together.
+_env_value() {
+  local key="$1"
+  local file="$2"
+  grep -E "^${key}=" "$file" 2>/dev/null | head -n 1 | cut -d= -f2-
+}
+
+_set_env_value() {
+  local key="$1"
+  local value="$2"
+  local file="$3"
+  local escaped_value
+
+  escaped_value="${value//\\/\\\\}"
+  escaped_value="${escaped_value//&/\\&}"
+  escaped_value="${escaped_value//|/\\|}"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$file"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+_validate_canonical_https_url() {
+  local label="$1"
+  local value="$2"
+  local authority
+  local host
+
+  authority="${value#https://}"
+  host="${authority%%/*}"
+  if [[ "$value" != https://* || -z "$host" || "$authority" == */ || "$value" == *"?"* || "$value" == *"#"* || "$authority" == *"@"* || "$value" =~ [[:space:]] ]]; then
+    error "$label must be a canonical HTTPS URL without credentials, query, fragment, or a trailing slash"
+  fi
+}
+
+if [[ "$UPDATE_ONLY" == "true" ]]; then
+  if [[ -z "$POD_AGENT_ISSUER_URL_FLAG" ]]; then
+    POD_AGENT_ISSUER_URL_FLAG="$(_env_value POD_AGENT_ISSUER_URL "$INSTALL_DIR/.env")"
+  fi
+  if [[ -z "$POD_AGENT_AUDIENCE_FLAG" ]]; then
+    POD_AGENT_AUDIENCE_FLAG="$(_env_value POD_AGENT_AUDIENCE "$INSTALL_DIR/.env")"
+  fi
+  if [[ -z "$POD_AGENT_ENABLED_FLAG" ]]; then
+    POD_AGENT_ENABLED_FLAG="$(_env_value SYNAP_WITH_POD_AGENT "$INSTALL_DIR/.env")"
+  fi
+fi
+
+if [[ -n "$POD_AGENT_ENABLED_FLAG" && "$POD_AGENT_ENABLED_FLAG" != "0" && "$POD_AGENT_ENABLED_FLAG" != "1" ]]; then
+  error "SYNAP_WITH_POD_AGENT/--with-pod-agent must be 0 or 1"
+fi
+
+if [[ "$POD_AGENT_ENABLED_FLAG" == "1" || -n "$POD_AGENT_ISSUER_URL_FLAG" || -n "$POD_AGENT_AUDIENCE_FLAG" ]]; then
+  POD_AGENT_ENABLED=true
+  [[ -n "$POD_AGENT_ISSUER_URL_FLAG" ]] || error "POD_AGENT_ISSUER_URL is required when Pod-agent is enabled"
+  [[ -n "$POD_AGENT_AUDIENCE_FLAG" ]] || error "POD_AGENT_AUDIENCE is required when Pod-agent is enabled"
+  _validate_canonical_https_url "POD_AGENT_ISSUER_URL" "$POD_AGENT_ISSUER_URL_FLAG"
+  _validate_canonical_https_url "POD_AGENT_AUDIENCE" "$POD_AGENT_AUDIENCE_FLAG"
+else
+  POD_AGENT_ENABLED=false
+fi
+
 # ─── Directory structure ───────────────────────────────────────────────────────
 heading "Creating directories"
 
@@ -191,8 +255,8 @@ _download "kratos/oidc.google.jsonnet"                     "$INSTALL_DIR/config/
 _download "docker/postgres/init-databases.sh"              "$INSTALL_DIR/config/postgres/init-databases.sh"
 
 # Pod-agent operational scripts — executed from /deploy/ mount when the
-# Control Plane issues a pod-agent command (configure, suspend, archive,
-# restore, update, etc.). The pod-agent container bind-mounts $INSTALL_DIR
+# A configured trusted issuer can send a pod-agent command (configure, suspend,
+# archive, restore, update, etc.). The pod-agent container bind-mounts $INSTALL_DIR
 # as /deploy:rw, so these files MUST live next to docker-compose.yml.
 POD_AGENT_SCRIPTS="configure-pod.sh suspend-pod.sh restore-pod.sh restore-archive-pod.sh archive-pod.sh update-pod.sh update-agent.sh"
 for script in $POD_AGENT_SCRIPTS; do
@@ -372,20 +436,14 @@ SECRETS_EOF
     RECREATE_FOR_CORS=1
   fi
 
-  # Self-heal: backfill CONTROL_PLANE_URL (drives the capability MARKETPLACE
-  # catalog sync). Pods provisioned without --control-plane-url have it empty or
-  # missing, so the pod-local template cache never populates and `cap add` shows
-  # nothing to install. SECURITY: not a trust bypass — see the flag-default note
-  # above (defaulting empty→CP TIGHTENS the iss-allowlist JWT paths, never loosens).
-  # Fill when absent OR empty; never overwrite an explicit value, so a self-hosted
-  # opt-out (a real CP URL, or a deliberate edit) is preserved.
-  _cp_cur="$(grep -E '^CONTROL_PLANE_URL=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
-  if [[ -z "$_cp_cur" ]]; then
-    # Drop any empty assignment first so we don't leave a duplicate line.
-    sed -i '/^CONTROL_PLANE_URL=/d' "$INSTALL_DIR/.env" 2>/dev/null || true
-    printf '\n# Capability marketplace / Control Plane base (backfilled on update)\nCONTROL_PLANE_URL=%s\n' "$CONTROL_PLANE_URL_FLAG" >> "$INSTALL_DIR/.env"
-    info "Backfilled CONTROL_PLANE_URL=$CONTROL_PLANE_URL_FLAG into .env (marketplace self-heal)"
-    RECREATE_FOR_CORS=1
+  # Do not backfill CONTROL_PLANE_URL. A Pod may opt into an external service,
+  # but an installer must not establish an issuer or integration by default.
+
+  if [[ "$POD_AGENT_ENABLED" == "true" ]]; then
+    _set_env_value "SYNAP_WITH_POD_AGENT" "1" "$INSTALL_DIR/.env"
+    _set_env_value "POD_AGENT_ISSUER_URL" "$POD_AGENT_ISSUER_URL_FLAG" "$INSTALL_DIR/.env"
+    _set_env_value "POD_AGENT_AUDIENCE" "$POD_AGENT_AUDIENCE_FLAG" "$INSTALL_DIR/.env"
+    info "Configured the opt-in Pod-agent trust anchor"
   fi
 else
   heading "Generating secrets"
@@ -407,7 +465,7 @@ else
   HUB_JWT_SECRET=$(_gen)
   SYNAP_SERVICE_ENCRYPTION_KEY=$(_gen)
   VAULT_SERVER_KEY=$(_gen)
-  # Use the CP-supplied token when available (managed pods); otherwise generate.
+  # Use a managed-install token when available; otherwise generate one locally.
   PROVISIONING_TOKEN="${PROVISIONING_TOKEN_FLAG:-$(_gen)}"
 
   success "Secrets generated"
@@ -452,8 +510,16 @@ POSTGRES_INIT_SCRIPT=./config/postgres/init-databases.sh
 # Do NOT set these to "latest" unless you have cut a v* release — the workflow
 # only publishes :latest on version tags, so fresh installs will fail to pull.
 BACKEND_VERSION=$BACKEND_VERSION
-# Pod-agent (CP → configure / archive / suspend / …) — keep in sync with backend ring when pinning
+# Pod-agent image version — only used when the explicit pod-agent profile is enabled.
 POD_AGENT_VERSION=$POD_AGENT_VERSION
+
+# ── Optional Pod-agent operational trust ─────────────────────────────────────
+# Disabled by default. Enabling this starts a Docker-socket command receiver,
+# so both values are mandatory and must be canonical HTTPS URLs. The issuer is
+# an owner-selected external signer; it is not an authentication default.
+SYNAP_WITH_POD_AGENT=$([[ "$POD_AGENT_ENABLED" == "true" ]] && echo 1 || echo 0)
+POD_AGENT_ISSUER_URL=${POD_AGENT_ISSUER_URL_FLAG}
+POD_AGENT_AUDIENCE=${POD_AGENT_AUDIENCE_FLAG}
 
 # ── Admin (first user) ────────────────────────────────────────────────────────
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
@@ -484,7 +550,7 @@ HUB_JWT_SECRET=$HUB_JWT_SECRET
 
 # ── Service credential encryption ─────────────────────────────────────────────
 # Used by the pod to encrypt Hub API keys and other IS credentials at rest.
-# REQUIRED for Control Plane provisioning (register-intelligence endpoint).
+# Required for optional managed service provisioning (register-intelligence endpoint).
 # Rotating this key will invalidate stored IS credentials — re-provision to recover.
 SYNAP_SERVICE_ENCRYPTION_KEY=$SYNAP_SERVICE_ENCRYPTION_KEY
 
@@ -494,27 +560,25 @@ VAULT_SERVER_KEY=$VAULT_SERVER_KEY
 
 # ── OpenClaw / Agent Setup ────────────────────────────────────────────────────
 # Used by setup-openclaw.sh to create agent users and API keys on this pod.
-# NOT used for CP trust — seed-trust authenticates via ES256 JWT against
-# CONTROL_PLANE_URL, no shared secret required.
+# It can also authorize the one-time, generic first-owner federation bootstrap.
+# It does not establish trust in any named external service.
 PROVISIONING_TOKEN=$PROVISIONING_TOKEN
 
 # ── Pod Public URL ────────────────────────────────────────────────────────────
 # MUST match the public HTTPS origin the browser uses to reach this pod.
 # Used as:
-#   1) Handshake JWT audience check — CP signs handshake tokens with
-#      aud=https://<this-pod-domain>, and the pod verifies aud === PUBLIC_URL.
-#      If PUBLIC_URL is wrong, every handshake fails with 401.
+#   1) Federation assertion audience check — a trusted issuer signs an
+#      assertion with aud=https://<this-pod-domain>, and the Pod verifies it
+#      against PUBLIC_URL. If PUBLIC_URL is wrong, federation fails with 401.
 #   2) Self-reference for any backend-side link generation (invite URLs, etc.).
 # Overriding this is ONLY correct if you fronted the pod with a different
 # public hostname (custom domain) — then set PUBLIC_URL to that hostname too.
 PUBLIC_URL=https://$DOMAIN
 
-# ── Control Plane Integration ─────────────────────────────────────────────────
-# For Synap-managed deployments only. Leave blank for fully self-hosted setups.
-# The pod verifies ALL CP JWTs by fetching /.well-known/jwks.json from this URL.
-# This includes the seed-trust bootstrap JWT — no shared secret is required.
-# Setting this explicitly pins which Control Plane is trusted to act on this pod.
-# When blank the pod cannot accept CP provisioning calls (seed-trust returns 500).
+# ── Optional legacy external integration ──────────────────────────────────────
+# This does not establish issuer trust and is not needed for authentication,
+# invitations, or federation. Those are driven by the Pod-local trusted issuer
+# registry. Leave blank for a standalone/self-hosted Pod.
 CONTROL_PLANE_URL=${CONTROL_PLANE_URL_FLAG}
 
 # ── Intelligence Service (Synap Agent Hub) ────────────────────────────────────
@@ -527,7 +591,7 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 # GOOGLE_AI_API_KEY=
 
 # ── Email — SMTP for Kratos courier (password reset, recovery codes) ──────────
-# When --smtp-uri is passed (e.g. by the Synap Control Plane), real email is
+# When --smtp-uri is passed by an operator or managed deployment, real email is
 # delivered. Self-hosted installs can set SYNAP_SMTP_URI or edit this directly.
 # Without a real URI Kratos queues messages locally (never delivered).
 SMTP_CONNECTION_URI=${SMTP_URI:-smtp://localhost:1025/}
@@ -574,13 +638,22 @@ sleep 5
 
 docker compose logs --tail=30 backend-migrate || true
 
-info "Starting application services (including pod-agent for Control Plane commands)..."
+info "Starting application services..."
 # --remove-orphans frees ports held by orphaned containers from renamed/removed
 # services (a common "port is already allocated" cause on update). Volumes and
 # the network are untouched — non-destructive self-heal.
 # ${RECREATE_FOR_CORS:+--force-recreate} only expands when the SYNAP_BASE_DOMAIN
 # backfill ran this update, so the new env var actually reaches the containers.
-docker compose up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy pod-agent
+if [[ "$POD_AGENT_ENABLED" == "true" ]]; then
+  info "Starting the explicitly configured Pod-agent profile"
+  docker compose --profile pod-agent up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy pod-agent
+else
+  # A previous managed installation may have left this profile running. Stop it
+  # rather than preserving a Docker-socket receiver after its generic trust
+  # configuration has been removed.
+  docker compose --profile pod-agent stop pod-agent >/dev/null 2>&1 || true
+  docker compose up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy
+fi
 
 success "All services started"
 

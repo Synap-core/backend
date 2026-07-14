@@ -71,7 +71,8 @@ export async function checkPodHealth(
  * Create an agent user + Hub Protocol API key on the pod.
  *
  * Auth: `Authorization: Bearer <provisioningToken>` (the pod's `PROVISIONING_TOKEN`
- * for self-hosted, or a CP-signed `agent_setup` JWT for managed pods).
+ * for self-hosted, or an issuer-signed installation assertion for managed
+ * pods).
  * Endpoint: `POST {podUrl}/api/hub/setup/agent`.
  */
 export async function setupAgent(

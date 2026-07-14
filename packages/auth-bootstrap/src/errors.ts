@@ -1,7 +1,7 @@
 /**
  * Auth-bootstrap error class + response-body helpers.
  *
- * Tokens (handshake JWT, session token, provisioning token, API key) MUST NEVER
+ * Tokens (issuer assertion, session token, provisioning token, API key) MUST NEVER
  * be placed on an error — `body` is captured from the backend's *error* JSON
  * only, which never echoes credentials. Do not add request bodies to messages.
  */

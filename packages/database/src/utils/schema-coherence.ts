@@ -363,12 +363,6 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_metadata",
     addedBy: "0032_ai_agent_users.sql (custom)",
   },
-  {
-    table: "users",
-    column: "control_plane_user_id",
-    addedBy: "0188_control_plane_member_activations.sql",
-  },
-
   // widget_definitions
   {
     table: "widget_definitions",
@@ -532,6 +526,30 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "trusted_issuers",
     column: "issuer_url",
     addedBy: "0001_trusted_issuers.sql",
+  },
+
+  // Generic trusted-issuer federation (0192/0193). These server-only ledger
+  // tables are a hard authentication dependency: if any is absent, fail at
+  // boot rather than accepting a replayable assertion or failing mid-login.
+  {
+    table: "federated_identity_links",
+    column: "issuer_id",
+    addedBy: "0192_generic_federation_identity_links.sql",
+  },
+  {
+    table: "federated_access_receipts",
+    column: "issuer_id",
+    addedBy: "0192_generic_federation_identity_links.sql",
+  },
+  {
+    table: "issuer_identity_link_receipts",
+    column: "receipt_id",
+    addedBy: "0192_generic_federation_identity_links.sql",
+  },
+  {
+    table: "federated_assertion_receipts",
+    column: "issuer_id",
+    addedBy: "0193_federated_assertion_receipts.sql",
   },
 
   // source_configs — pluggable feed source providers (0008)

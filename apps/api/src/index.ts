@@ -5,7 +5,7 @@
  * - tRPC API endpoints
  * - Ory Kratos routes (session-based authentication)
  * - Token Exchange endpoint
- * - Control Plane Handshake endpoint (/api/handshake)
+ * - Federated trusted-issuer exchange endpoint (/api/federation/exchange)
  * - pg-boss job queue (background jobs)
  */
 
@@ -20,7 +20,6 @@ import "dotenv/config";
 
 import { Hono, type Context as HonoContext } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { z } from "zod";
 
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
@@ -57,8 +56,6 @@ import {
   stopLocalSyncDriver,
 } from "@synap/jobs";
 import crypto from "crypto";
-import { verifyCpJwtWithTrust } from "@synap/api";
-import { TRUSTED_ISSUER_CAPABILITIES } from "@synap/database";
 import {
   rateLimitMiddleware,
   aiRateLimitMiddleware,
@@ -742,560 +739,33 @@ app.post("/api/auth/token-exchange", async (c) => {
   }
 });
 
-// Control Plane Handshake Endpoint
-// Accepts a short-lived ES256 JWT issued by the Synap Control Plane.
-// Verifies via /.well-known/jwks.json (no shared secret required),
-// then creates or finds a Kratos identity and issues a Kratos session.
-// The session cookie is set in the response for browser-based auth.
-//
-// Flow:
-//   Browser → POST /pods/handshake (control plane) → ES256 JWT
-//   Browser → POST ${podUrl}/api/handshake { token } (this endpoint) → Kratos session cookie
+/**
+ * This product-specific endpoint intentionally has no compatibility path.
+ * The generic trusted-issuer protocol lives at `/api/federation/exchange`.
+ * Refusing legacy payloads prevents the Pod from regaining external product
+ * assumptions through a deprecated route.
+ */
 app.use("/api/handshake", handshakeRateLimitMiddleware);
-app.post("/api/handshake", async (c) => {
-  // LOCAL MODE: no CP JWT, no Kratos session. Return the fixed local identity
-  // as a successful handshake payload so the browser client can proceed.
-  if (config.server.localMode) {
-    const { buildLocalSession, buildLocalUser } = await import("@synap/auth");
-    const localUser = buildLocalUser();
-    const localSession = buildLocalSession();
-    apiLogger.info(
-      { userId: localUser.id },
-      "Local mode handshake: returning fixed identity"
-    );
-    return c.json({
-      success: true,
-      session: localSession,
-      session_token: config.server.localAuthToken,
-    });
-  }
+app.post("/api/handshake", (c) =>
+  c.json(
+    {
+      error: "This endpoint has been retired. Use /api/federation/exchange.",
+      code: "FEDERATION_HANDSHAKE_RETIRED",
+    },
+    410
+  )
+);
 
-  try {
-    const body = await c.req.json().catch(() => ({}));
-    const {
-      token,
-      issuerUrl: clientIssuerUrl,
-      cpUrl: legacyCpUrl,
-    } = body as { token?: string; issuerUrl?: string; cpUrl?: string };
-
-    if (!token || typeof token !== "string") {
-      return c.json({ error: "token is required" }, 400);
-    }
-
-    // Verify the handshake JWT via the issuer's JWKS (ES256) AND enforce the
-    // trusted_issuers allowlist. The audience claim (PUBLIC_URL) is mandatory —
-    // skipping it would let a token minted for another pod be replayed here.
-    //
-    // Issuer URL resolution:
-    //   - Client-provided issuerUrl or legacy cpUrl → passed as explicit allowlist
-    //   - CONTROL_PLANE_URL env var → passed as explicit allowlist
-    //   - Neither set → verifyCpJwt reads the `iss` claim from the JWT itself,
-    //     but trusted_issuers lookup still gates acceptance.
-    const podPublicUrl = process.env.PUBLIC_URL;
-    if (!podPublicUrl) {
-      apiLogger.error(
-        "Handshake refused: PUBLIC_URL not configured — audience check is mandatory"
-      );
-      return c.json(
-        { error: "PUBLIC_URL not configured; handshake refused" },
-        500
-      );
-    }
-
-    // issuerUrl resolution: client always passes issuerUrl; legacyCpUrl is for old clients.
-    // No env-var fallback — if neither is provided, verifyCpJwt reads the token's own `iss`
-    // claim and the trusted_issuers registry gates acceptance.
-    const issuerUrl = clientIssuerUrl ?? legacyCpUrl;
-
-    const payload = await verifyCpJwtWithTrust<{
-      sub: string;
-      email: string;
-      name?: string;
-      aud: string;
-      type: string;
-      trialEnd?: string;
-      /** Signed CP-selected workspace for a managed member session. */
-      activeWorkspaceId?: string;
-      /** Signed CP-selected project. Project membership is independently authoritative. */
-      activeProjectId?: string;
-      /** Whether the CP relationship owns this Pod or only has member access. */
-      accessRelationship?: "owner" | "member";
-    }>(token, {
-      pinnedIssuer: issuerUrl,
-      audience: podPublicUrl,
-      requiredScope: TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
-    });
-
-    if (!payload) {
-      apiLogger.warn(
-        { issuerUrl, podPublicUrl },
-        "Handshake token verification failed — signature/audience/expiry or trusted-issuer check failed"
-      );
-      return c.json(
-        {
-          error: "Invalid or expired handshake token",
-          code: "JWT_VERIFICATION_FAILED",
-          hint: `Token audience must match this pod's PUBLIC_URL (${podPublicUrl}) and issuer must be approved in trusted_issuers`,
-        },
-        401
-      );
-    }
-
-    if (payload.type !== "handshake") {
-      return c.json({ error: "Invalid token type" }, 400);
-    }
-
-    // Normalize email so lookups survive casing differences between the
-    // CP's Better Auth user record, the seed-admin-normalized email, and
-    // whatever casing the user originally typed. Without this, a JWT
-    // carrying "Alice@Ex.com" wouldn't find the Kratos identity created
-    // by seed-admin as "alice@ex.com" — and handshake would happily
-    // create a second identity, so the user ends up with two accounts:
-    // one they can sign into (from seeding), one the handshake keeps
-    // spawning (with a throwaway password).
-    // `name` used to be read here for the auto-create path; now that
-    // handshake only looks up existing identities (seed-admin owns
-    // creation), the claim is informational and we don't need it.
-    const rawEmail = payload.email;
-    const email = rawEmail?.trim().toLowerCase();
-    if (!email) {
-      return c.json({ error: "Token missing email claim" }, 400);
-    }
-    const activeWorkspaceId = payload.activeWorkspaceId?.trim();
-    const activeProjectId = payload.activeProjectId?.trim();
-    const accessRelationship = payload.accessRelationship;
-    if (
-      activeWorkspaceId &&
-      !z.string().uuid().safeParse(activeWorkspaceId).success
-    ) {
-      return c.json(
-        { error: "Token contains an invalid active workspace" },
-        400
-      );
-    }
-    if (
-      activeProjectId &&
-      !z.string().uuid().safeParse(activeProjectId).success
-    ) {
-      return c.json({ error: "Token contains an invalid active project" }, 400);
-    }
-
-    const kratosAdminUrl =
-      process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
-
-    // ──────────────────────────────────────────────────────────────────
-    // 1. Find existing Kratos identity by email.
-    //
-    // Kratos is the source of truth for auth identities. The CP seeds
-    // the identity via /api/provision/seed-admin during provisioning
-    // (dedicated pods) or we auto-create it here (shared pods).
-    //
-    // NOTE: user changing their Kratos password never breaks handshake —
-    // step 3 uses the admin API which bypasses password entirely.
-    // ──────────────────────────────────────────────────────────────────
-    let identityId: string | null = null;
-    let kratosUnreachable = false;
-
-    try {
-      const listResp = await fetch(
-        `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`,
-        { signal: AbortSignal.timeout(8_000) }
-      );
-
-      if (listResp.ok) {
-        const identities = (await listResp.json()) as Array<{ id: string }>;
-        if (Array.isArray(identities) && identities.length > 0) {
-          identityId = identities[0].id;
-          apiLogger.info(
-            { email, identityId },
-            "Handshake: found Kratos identity"
-          );
-        }
-      } else {
-        const errBody = await listResp.text().catch(() => "");
-        apiLogger.error(
-          {
-            status: listResp.status,
-            body: errBody.slice(0, 500),
-            kratosAdminUrl,
-          },
-          "Handshake: Kratos identity lookup returned non-OK"
-        );
-        // Non-OK from Kratos admin API = Kratos is up but broken.
-        // Fall through — identityId stays null → handled below.
-      }
-    } catch (err) {
-      kratosUnreachable = true;
-      apiLogger.error(
-        { err, kratosAdminUrl },
-        "Handshake: Kratos admin API unreachable"
-      );
-    }
-
-    if (kratosUnreachable) {
-      return c.json(
-        {
-          error: "auth_service_unavailable",
-          code: "KRATOS_UNREACHABLE",
-          message:
-            "The pod's auth service is not reachable. The pod may still be starting up.",
-        },
-        503
-      );
-    }
-
-    // ──────────────────────────────────────────────────────────────────
-    // 2. A handshake only connects an existing Pod identity.
-    //
-    // Account and workspace creation are explicit setup actions. Authentication
-    // must never create either one as a side effect: after connecting, the app
-    // lists compatible workspaces and may offer creation to owners separately.
-    // ──────────────────────────────────────────────────────────────────
-    if (!identityId) {
-      if (
-        activeWorkspaceId ||
-        activeProjectId ||
-        accessRelationship === "member"
-      ) {
-        return c.json(
-          {
-            error:
-              "This Control Plane account has not been activated on this pod",
-            code: "CP_MEMBER_GRANT_NOT_ACTIVE",
-          },
-          403
-        );
-      }
-      apiLogger.warn(
-        { email },
-        "Handshake: no existing Kratos identity for Control Plane user"
-      );
-      return c.json(
-        {
-          error: "account_not_set_up",
-          code: "IDENTITY_NOT_FOUND",
-          message: "No account exists for this email on this pod.",
-          setupRequired: true,
-        },
-        403
-      );
-    }
-
-    // A signed active workspace/project is a managed-member handshake. Its
-    // identity and exact membership MUST have been projected earlier by
-    // /provision/activate-member.
-    // Authentication never falls back to user or workspace creation here.
-    try {
-      const { getDb, and, eq } = await import("@synap/database");
-      const { users, workspaceMembers, projectMembers, projects, workspaces } =
-        await import("@synap/database/schema");
-      const handshakeDb = await getDb();
-      const podUser = await handshakeDb.query.users.findFirst({
-        where: eq(users.id, identityId),
-        columns: { controlPlaneUserId: true },
-      });
-      let exactAccess = false;
-      if (activeProjectId) {
-        const project = await handshakeDb.query.projects.findFirst({
-          where: eq(projects.id, activeProjectId),
-          columns: { workspaceId: true, status: true },
-        });
-        const membership = await handshakeDb.query.projectMembers.findFirst({
-          where: and(
-            eq(projectMembers.userId, identityId),
-            eq(projectMembers.projectId, activeProjectId)
-          ),
-          columns: { id: true },
-        });
-        const parentWorkspace = project?.workspaceId
-          ? await handshakeDb.query.workspaces.findFirst({
-              where: eq(workspaces.id, project.workspaceId),
-              columns: { archivedAt: true, systemSlug: true },
-            })
-          : null;
-        const parentAvailable = project?.workspaceId
-          ? Boolean(
-              parentWorkspace &&
-              !parentWorkspace.archivedAt &&
-              !parentWorkspace.systemSlug
-            )
-          : true;
-        exactAccess = Boolean(
-          membership &&
-          project?.status === "active" &&
-          parentAvailable &&
-          (!activeWorkspaceId || project.workspaceId === activeWorkspaceId)
-        );
-      } else if (activeWorkspaceId) {
-        const [workspace, membership] = await Promise.all([
-          handshakeDb.query.workspaces.findFirst({
-            where: eq(workspaces.id, activeWorkspaceId),
-            columns: { archivedAt: true, systemSlug: true },
-          }),
-          handshakeDb.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.userId, identityId),
-              eq(workspaceMembers.workspaceId, activeWorkspaceId)
-            ),
-            columns: { id: true },
-          }),
-        ]);
-        exactAccess = Boolean(
-          membership &&
-          workspace &&
-          !workspace.archivedAt &&
-          !workspace.systemSlug
-        );
-      } else {
-        const [workspaceMembership, activeProjectMembership] =
-          await Promise.all([
-            handshakeDb.query.workspaceMembers.findFirst({
-              where: eq(workspaceMembers.userId, identityId),
-              columns: { id: true },
-            }),
-            handshakeDb
-              .select({ id: projectMembers.id })
-              .from(projectMembers)
-              .innerJoin(projects, eq(projects.id, projectMembers.projectId))
-              .where(
-                and(
-                  eq(projectMembers.userId, identityId),
-                  eq(projects.status, "active")
-                )
-              )
-              .limit(1),
-          ]);
-        exactAccess = Boolean(
-          workspaceMembership || activeProjectMembership.length > 0
-        );
-      }
-
-      if (
-        !podUser ||
-        podUser.controlPlaneUserId !== payload.sub ||
-        !exactAccess
-      ) {
-        apiLogger.warn(
-          {
-            identityId,
-            activeWorkspaceId,
-            activeProjectId,
-            controlPlaneUserId: payload.sub,
-          },
-          "Managed handshake rejected: CP mapping or exact Pod grant is absent"
-        );
-        return c.json(
-          {
-            error:
-              "This Control Plane account is not active in the requested Pod scope",
-            code: "CP_MEMBER_GRANT_NOT_ACTIVE",
-          },
-          403
-        );
-      }
-      apiLogger.info(
-        {
-          email,
-          identityId,
-          activeWorkspaceId,
-          activeProjectId,
-        },
-        "Handshake accepted existing explicitly linked Pod user"
-      );
-    } catch (err) {
-      apiLogger.error(
-        { err, email, identityId },
-        "Handshake failed to verify the existing Pod relationship"
-      );
-      return c.json(
-        {
-          error: "Failed to verify Pod access",
-          code: "DB_ACCESS_CHECK_FAILED",
-        },
-        500
-      );
-    }
-
-    // ──────────────────────────────────────────────────────────────────
-    // 3. Create a Kratos session via ADMIN API — no password needed.
-    //
-    // POST /admin/identities/:id/sessions (Kratos v1.3+) creates a
-    // privileged session and returns session_token. This token is
-    // what the browser sends as the ory_kratos_session cookie.
-    //
-    // Note: password changes on the pod never break this — the admin
-    // API bypasses the credential check entirely.
-    // ──────────────────────────────────────────────────────────────────
-    let adminSessionResp: Response;
-    try {
-      adminSessionResp = await fetch(
-        `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-          signal: AbortSignal.timeout(8_000),
-        }
-      );
-    } catch (err) {
-      apiLogger.error(
-        { err, identityId },
-        "Handshake: Kratos session create threw (network)"
-      );
-      return c.json(
-        { error: "auth_service_unavailable", code: "KRATOS_UNREACHABLE" },
-        503
-      );
-    }
-
-    if (!adminSessionResp.ok) {
-      const errBody = await adminSessionResp.text().catch(() => "");
-      apiLogger.error(
-        {
-          status: adminSessionResp.status,
-          body: errBody.slice(0, 500),
-          identityId,
-        },
-        "Handshake: Kratos session creation failed"
-      );
-      return c.json(
-        {
-          error: "Failed to create session",
-          code: "KRATOS_SESSION_FAILED",
-          kratosStatus: adminSessionResp.status,
-          // Include Kratos error detail so the dashboard/client can diagnose without SSH.
-          detail: errBody.slice(0, 300),
-        },
-        500
-      );
-    }
-
-    const adminSessionData = (await adminSessionResp.json()) as {
-      session?: { id: string; active?: boolean };
-      session_token?: string;
-    };
-
-    const sessionToken = adminSessionData.session_token;
-    if (!sessionToken) {
-      apiLogger.error(
-        { identityId },
-        "Handshake: Kratos returned 200 but no session_token — check Kratos tokenizer config"
-      );
-      return c.json(
-        {
-          error: "Session token not returned by auth server",
-          code: "KRATOS_NO_SESSION_TOKEN",
-          hint: "Kratos may be running a version < 1.0 or session tokenizer is not configured",
-        },
-        500
-      );
-    }
-
-    // Shape the rest of the handler to match the previous success path:
-    // treat `sessionData` as if it came from the native login flow.
-    const sessionData: {
-      session?: { id: string; active?: boolean };
-      session_token?: string;
-    } = adminSessionData;
-
-    // ──────────────────────────────────────────────────────────────────
-    // 4. Set session cookie for the browser.
-    //
-    // `c.req.url` alone is unreliable here: Caddy terminates TLS and forwards
-    // to backend:4000 over plain HTTP, so `c.req.url.startsWith("https")` is
-    // always false behind the reverse proxy — which would drop the `Secure`
-    // flag. Modern browsers reject `SameSite=None` cookies without `Secure`,
-    // so the cookie would silently never reach the client.
-    //
-    // Detect HTTPS via the proxy's forwarded proto header, with X-Forwarded-Proto
-    // and X-Scheme as fallbacks, and finally trust PUBLIC_URL as the ground truth
-    // for the public origin. Default to Secure=true in production to fail safe.
-    const forwardedProto = c.req
-      .header("x-forwarded-proto")
-      ?.split(",")[0]
-      ?.trim();
-    const isSecure =
-      forwardedProto === "https" ||
-      c.req.header("x-scheme") === "https" ||
-      c.req.url.startsWith("https") ||
-      (process.env.PUBLIC_URL ?? "").startsWith("https://") ||
-      process.env.NODE_ENV === "production";
-
-    c.header(
-      "Set-Cookie",
-      `ory_kratos_session=${sessionToken}; Path=/; HttpOnly; ${isSecure ? "Secure; " : ""}SameSite=None`
-    );
-
-    apiLogger.info(
-      { email, identityId },
-      "Handshake successful — session created"
-    );
-
-    // 5. Store trialEnd from JWT payload in workspace settings (shared pod only)
-    if (payload.trialEnd && config.server.sharedPodMode && identityId) {
-      try {
-        const { getDb, eq } = await import("@synap/database");
-        const { workspaceMembers, workspaces } =
-          await import("@synap/database/schema");
-        const handshakeDb = await getDb();
-
-        // Find the user's workspace membership
-        const membership = await handshakeDb.query.workspaceMembers.findFirst({
-          where: eq(workspaceMembers.userId, identityId),
-          columns: { workspaceId: true },
-        });
-
-        if (membership) {
-          const ws = await handshakeDb.query.workspaces.findFirst({
-            where: eq(workspaces.id, membership.workspaceId),
-            columns: { settings: true },
-          });
-
-          const existing = (ws?.settings as Record<string, unknown>) ?? {};
-          const existingCp =
-            (existing.controlPlane as Record<string, unknown>) ?? {};
-
-          await handshakeDb
-            .update(workspaces)
-            .set({
-              settings: drizzleSql`settings || ${JSON.stringify({
-                controlPlane: { ...existingCp, trialEnd: payload.trialEnd },
-              })}::jsonb`,
-              updatedAt: new Date(),
-            })
-            .where(eq(workspaces.id, membership.workspaceId));
-
-          apiLogger.info(
-            { identityId, trialEnd: payload.trialEnd },
-            "Stored trialEnd in workspace settings"
-          );
-        }
-      } catch (trialErr) {
-        // Non-fatal — don't break handshake if trial storage fails
-        apiLogger.warn(
-          { err: trialErr },
-          "Failed to store trialEnd in workspace settings"
-        );
-      }
-    }
-
-    return c.json({
-      success: true,
-      session: sessionData.session,
-      session_token: sessionToken,
-      ...(activeWorkspaceId ? { activeWorkspaceId } : {}),
-    });
-  } catch (error) {
-    apiLogger.error({ err: error }, "Handshake endpoint error");
-    return c.json({ error: "Internal server error" }, 500);
-  }
-});
+// The canonical router receives the same rate limit before it is mounted
+// farther below at `/api/federation`.
+app.use("/api/federation/exchange", handshakeRateLimitMiddleware);
+app.use("/api/federation/bootstrap", handshakeRateLimitMiddleware);
 
 // Session check endpoint — used by the web landing page (synap.dev) to determine
-// if the user already has a valid pod session after a previous handshake, so it
-// doesn't need to re-run the handshake on every page load.
+// if the user already has a valid Pod session after a previous federated
+// exchange, so it does not need to create another session on every page load.
 //
-// Auth: ory_kratos_session cookie (set by /api/handshake). Public endpoint.
+// Auth: ory_kratos_session cookie (set by the native or federated login flow).
 // Returns 200 + session data if valid, 401 if missing or expired.
 app.get("/api/session", async (c) => {
   // LOCAL MODE: validate the bearer/x-local-token and return the fixed identity.
@@ -1355,7 +825,9 @@ if (config.server.localMode) {
   );
 }
 apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
-apiLogger.info("Control Plane handshake endpoint enabled at /api/handshake");
+apiLogger.info(
+  "Federated issuer exchange endpoint enabled at /api/federation/exchange; legacy /api/handshake returns 410"
+);
 
 // SSE endpoint for real-time event streaming (admin dashboard)
 // Server-Sent Events endpoint for event broadcasting
@@ -1460,9 +932,14 @@ app.route("/api/admin", adminRouter);
 import { adminSourceConfigsRouter } from "@synap/api";
 app.route("/api/admin/source-configs", adminSourceConfigsRouter);
 
-// Control Plane provisioning endpoint (ES256 JWT, verified via JWKS)
+// Legacy provisioning integration endpoints. New external identity and access
+// flows are mounted separately under /api/federation and do not depend on this
+// product-specific compatibility surface.
 import { provisionRouter } from "./routers/provision.js";
 app.route("/api/provision", provisionRouter);
+
+import { federationRouter } from "./routers/federation.js";
+app.route("/api/federation", federationRouter);
 
 // Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
@@ -1540,7 +1017,6 @@ app.route("/api/integrations/capabilities", integrationsCapabilitiesApp);
 
 // Channel Gateway REST adapter (for external channel bots; X-Channel-Key auth)
 import { channelGatewayApp } from "./routers/channel-gateway.js";
-import { sql as drizzleSql } from "drizzle-orm";
 app.route("/api/channels/gateway", channelGatewayApp);
 
 // MCP Server endpoint (for external agents: ZeroClaw, OpenClaw, Claude Desktop, Cursor)

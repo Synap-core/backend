@@ -2,8 +2,9 @@ import { router, podAdminProcedure } from "../trpc.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { TrustedIssuerService, db, eq, and } from "@synap/database";
-import { API_KEY_SCOPES } from "@synap/database/schema";
 import { apiKeys, trustedIssuers } from "@synap/database/schema";
+import { trustedIssuerCapabilitiesSchema } from "./trusted-issuer-capabilities.js";
+import { normalizeIssuerUrl } from "../utils/issuer-url-safety.js";
 
 export const trustedIssuersRouter = router({
   list: podAdminProcedure.query(async () => {
@@ -15,9 +16,7 @@ export const trustedIssuersRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        allowedScopes: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
+        allowedScopes: trustedIssuerCapabilitiesSchema,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -73,26 +72,33 @@ export const trustedIssuersRouter = router({
       z.object({
         issuerUrl: z.string().url(),
         displayName: z.string().min(1).max(100),
-        allowedScopes: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
+        allowedScopes: trustedIssuerCapabilitiesSchema,
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const issuerUrl = normalizeIssuerUrl(input.issuerUrl);
+      if (!issuerUrl || issuerUrl !== input.issuerUrl) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "issuerUrl must be a canonical HTTPS URL without credentials, query, fragment, or a trailing slash",
+        });
+      }
+
       const svc = new TrustedIssuerService();
 
       // Check if already registered (any status)
-      const existing = await svc.getByUrl(input.issuerUrl);
+      const existing = await svc.getByUrl(issuerUrl);
       if (existing) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `An issuer for ${input.issuerUrl} already exists (status: ${existing.status})`,
+          message: `An issuer for ${issuerUrl} already exists (status: ${existing.status})`,
         });
       }
 
       // Insert directly as approved — admin-initiated, no pending step needed
       const pending = await svc.registerPending(
-        input.issuerUrl,
+        issuerUrl,
         input.displayName,
         null
       );

@@ -53,6 +53,10 @@ import {
   handleNotificationCleanup,
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
+import {
+  FEDERATION_RECEIPT_CLEANUP_QUEUE,
+  handleFederationReceiptCleanup,
+} from "./federation-receipt-cleanup.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
@@ -150,6 +154,7 @@ const ALL_QUEUES = [
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
   NOTIFICATION_CLEANUP_QUEUE,
+  FEDERATION_RECEIPT_CLEANUP_QUEUE,
   "feed-scheduler",
   "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
@@ -347,6 +352,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleNotificationCleanup()
   );
   logger.info("Registered worker: notification-cleanup");
+
+  // Federation receipt cleanup (cron: daily at 2:15 AM UTC)
+  await boss.work(FEDERATION_RECEIPT_CLEANUP_QUEUE, async () =>
+    handleFederationReceiptCleanup()
+  );
+  logger.info("Registered worker: federation-receipt-cleanup");
 
   // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());

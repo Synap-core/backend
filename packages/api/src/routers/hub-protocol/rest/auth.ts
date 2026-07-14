@@ -22,14 +22,23 @@ import jwt from "jsonwebtoken";
 import {
   db,
   apiKeys,
+  and,
   users,
+  federatedIdentityLinks,
+  consumeFederatedAssertionReceipt,
+  projectMembers,
+  projects,
+  projectPodUserAccess,
+  workspaceMembers,
+  workspaces,
   eq,
   TrustedIssuerService,
   TRUSTED_ISSUER_CAPABILITIES,
 } from "@synap/database";
 
 import { shortenKeyId } from "../../../utils/auth-error.js";
-import { verifyCpJwt } from "../../../utils/jwks-client.js";
+import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
+import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
 import { AuthStatusSchema } from "./_codecs/auth.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
@@ -158,10 +167,10 @@ export function registerAuthRoutes(app: HubHono): void {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // A trusted issuer (registered in `trusted_issuers` with `auth:exchange-user`
-// in its allowed_scopes) signs a short-lived JWT vouching for a user it owns.
-// We verify the JWT against the issuer's JWKS, look up the user by email,
-// mint a Kratos session via the admin API, and return the session token in
-// an OAuth-style response.
+// in its allowed_scopes) signs a short-lived JWT for one of its opaque
+// subjects. We verify the JWT against the issuer's JWKS, resolve the Pod-local
+// `(issuer, subject) → user` link, then mint a Kratos session. Email is never
+// used as a cross-issuer identity key.
 //
 // Auth: NOT API-key gated. The JWT signature + the trusted_issuers registry
 // is the auth primitive. Mounted in `skipAuthPaths` upstream.
@@ -169,11 +178,6 @@ export function registerAuthRoutes(app: HubHono): void {
 // Returns OAuth 2.0 error envelopes per RFC 6749 §5.2 so standard OAuth
 // clients can react sensibly without parsing prose.
 //
-// TODO(replay-prevention): the `verifyCpJwt` helper already enforces a 15-min
-// jti replay cache in-process. For multi-instance pods we should back this
-// with a `used_assertion_nonces` table so a replay against a different node
-// is also rejected. Skipped for Phase 3 — single-node pods are fine.
-
 const GRANT_TYPE_JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 const REQUIRED_ISSUER_SCOPE = TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE;
 const MAX_ASSERTION_LIFETIME_SECONDS = 300; // 5 minutes
@@ -186,11 +190,79 @@ type ExchangeAssertion = {
   iat?: unknown;
   exp?: unknown;
   jti?: unknown;
+  type?: unknown;
+  purpose?: unknown;
+  requestedScope?: unknown;
 };
 
 interface KratosSessionResponse {
   session?: { id: string; active?: boolean };
   session_token?: string;
+}
+
+type RequestedScope =
+  | { kind: "pod" }
+  | { kind: "workspace"; id: string }
+  | { kind: "project"; id: string };
+
+function parseRequestedScope(value: unknown): RequestedScope | null {
+  if (value === undefined) return { kind: "pod" };
+  if (!value || typeof value !== "object") return null;
+  const scope = value as Record<string, unknown>;
+  if (scope.kind === "pod") return { kind: "pod" };
+  if (
+    (scope.kind === "workspace" || scope.kind === "project") &&
+    typeof scope.id === "string" &&
+    scope.id.length > 0
+  ) {
+    return { kind: scope.kind, id: scope.id };
+  }
+  return null;
+}
+
+async function getPodAuthoritativeAccess(userId: string) {
+  const [memberships, projectMemberships] = await Promise.all([
+    db
+      .select({
+        workspaceId: workspaceMembers.workspaceId,
+        role: workspaceMembers.role,
+        systemSlug: workspaces.systemSlug,
+        workspaceArchivedAt: workspaces.archivedAt,
+      })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+      .where(eq(workspaceMembers.userId, userId)),
+    db
+      .select({
+        projectId: projectMembers.projectId,
+        workspaceId: projects.workspaceId,
+        role: projectMembers.role,
+        status: projects.status,
+        workspaceArchivedAt: workspaces.archivedAt,
+        workspaceSystemSlug: workspaces.systemSlug,
+      })
+      .from(projectMembers)
+      .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+      .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
+      .where(eq(projectMembers.userId, userId)),
+  ]);
+  return projectPodUserAccess(memberships, projectMemberships);
+}
+
+function canUseRequestedScope(
+  access: Awaited<ReturnType<typeof getPodAuthoritativeAccess>>,
+  scope: RequestedScope
+): boolean {
+  const hasActiveScope =
+    access.workspaceScopes.length > 0 || access.projectScopes.length > 0;
+  if (scope.kind === "pod") {
+    return (
+      hasActiveScope || access.podRole === "owner" || access.podRole === "admin"
+    );
+  }
+  return scope.kind === "workspace"
+    ? access.workspaceScopes.some((entry) => entry.workspaceId === scope.id)
+    : access.projectScopes.some((entry) => entry.projectId === scope.id);
 }
 
 export function registerExchangeRoutes(app: HubHono): void {
@@ -199,7 +271,7 @@ export function registerExchangeRoutes(app: HubHono): void {
     // typed Hono context — extracting it as a top-level helper trips the
     // typed-Context inference (it resolves to `never` outside the handler).
     const oauthError = (
-      status: 400 | 401 | 403 | 404 | 500,
+      status: 400 | 401 | 403 | 404 | 500 | 503,
       error: string,
       description?: string
     ) => {
@@ -247,28 +319,36 @@ export function registerExchangeRoutes(app: HubHono): void {
       );
     }
 
-    const iss = typeof decoded.iss === "string" ? decoded.iss : null;
-    const subEmail =
-      typeof decoded.sub === "string" ? decoded.sub.trim().toLowerCase() : null;
+    const rawIssuer = typeof decoded.iss === "string" ? decoded.iss : null;
+    const issuerUrl = rawIssuer ? normalizeIssuerUrl(rawIssuer) : null;
+    const issuerSubject =
+      typeof decoded.sub === "string" ? decoded.sub.trim() : null;
     const iat = typeof decoded.iat === "number" ? decoded.iat : null;
     const exp = typeof decoded.exp === "number" ? decoded.exp : null;
 
-    if (!iss || !iss.startsWith("https://")) {
-      return oauthError(400, "invalid_grant", "iss claim must be an HTTPS URL");
-    }
-    if (!subEmail) {
+    if (!issuerUrl || rawIssuer !== issuerUrl) {
       return oauthError(
         400,
         "invalid_grant",
-        "sub claim is required (user email)"
+        "iss claim must be a canonical HTTPS issuer URL"
       );
     }
-    if (iat === null || exp === null) {
+    if (!issuerSubject) {
       return oauthError(
         400,
         "invalid_grant",
-        "iat and exp claims are required"
+        "sub claim is required (issuer subject)"
       );
+    }
+    if (
+      iat === null ||
+      exp === null ||
+      !Number.isSafeInteger(iat) ||
+      !Number.isSafeInteger(exp) ||
+      exp <= iat ||
+      iat > Math.floor(Date.now() / 1_000) + 60
+    ) {
+      return oauthError(400, "invalid_grant", "iat and exp claims are invalid");
     }
     // Cap acceptable token lifetime. Clients that mint hour-long assertions
     // are misusing the grant — the assertion is meant to be short-lived.
@@ -280,50 +360,10 @@ export function registerExchangeRoutes(app: HubHono): void {
       );
     }
 
-    // ── Look up issuer in the trusted_issuers registry ────────────────────
-    let issuerEntry;
-    try {
-      const svc = new TrustedIssuerService();
-      issuerEntry = await svc.getByUrl(iss);
-    } catch (err) {
-      logger.error(
-        { err, issuerUrl: iss },
-        "/auth/exchange: trusted issuer lookup failed"
-      );
-      return oauthError(500, "server_error");
-    }
-
-    if (!issuerEntry) {
-      logger.warn(
-        { issuerUrl: iss },
-        "/auth/exchange: rejected — issuer not registered"
-      );
-      return oauthError(401, "invalid_client");
-    }
-    if (issuerEntry.status !== "approved") {
-      logger.warn(
-        { issuerUrl: iss, status: issuerEntry.status },
-        "/auth/exchange: rejected — issuer not approved"
-      );
-      return oauthError(401, "invalid_client");
-    }
-    if (!issuerEntry.allowedScopes.includes(REQUIRED_ISSUER_SCOPE)) {
-      logger.warn(
-        {
-          issuerUrl: iss,
-          allowedScopes: issuerEntry.allowedScopes,
-          required: REQUIRED_ISSUER_SCOPE,
-        },
-        "/auth/exchange: rejected — issuer missing required scope"
-      );
-      return oauthError(403, "insufficient_scope");
-    }
-
-    // ── Verify signature + aud + exp + iss + jti via JWKS ─────────────────
-    // We pin the issuer to `iss` (the value we just verified is in the
-    // registry). verifyCpJwt enforces signature, expiry, audience match,
-    // issuer claim equality, and tracks jti to block replay (15 min window).
-    const podPublicUrl = process.env.PUBLIC_URL;
+    // ── Verify trusted issuer + signature + aud + exp + iss + jti ─────────
+    // The trusted verifier consults the Pod-local issuer registry before any
+    // outbound JWKS request, then pins verification to the approved issuer.
+    const podPublicUrl = process.env.PUBLIC_URL?.replace(/\/+$/, "");
     if (!podPublicUrl) {
       logger.error(
         "/auth/exchange: PUBLIC_URL not configured — audience check is mandatory"
@@ -331,14 +371,16 @@ export function registerExchangeRoutes(app: HubHono): void {
       return oauthError(500, "server_error");
     }
 
-    const verified = await verifyCpJwt<ExchangeAssertion>(
+    const verified = await verifyTrustedIssuerJwt<ExchangeAssertion>(
       assertion,
-      iss,
-      podPublicUrl
+      {
+        audience: podPublicUrl,
+        requiredScope: REQUIRED_ISSUER_SCOPE,
+      }
     );
     if (!verified) {
       logger.warn(
-        { issuerUrl: iss, sub: subEmail },
+        { issuerUrl, issuerSubject },
         "/auth/exchange: JWT verification failed (signature/aud/exp/jti)"
       );
       return oauthError(
@@ -348,9 +390,79 @@ export function registerExchangeRoutes(app: HubHono): void {
       );
     }
 
-    // ── Look up the user by email ─────────────────────────────────────────
+    if (
+      verified.type !== "federated_assertion" ||
+      verified.purpose !== "user-exchange" ||
+      typeof verified.sub !== "string" ||
+      typeof verified.jti !== "string" ||
+      verified.sub.trim() !== issuerSubject
+    ) {
+      return oauthError(
+        400,
+        "invalid_grant",
+        "assertion must be a federated user-exchange assertion"
+      );
+    }
+    const requestedScope = parseRequestedScope(verified.requestedScope);
+    if (!requestedScope) {
+      return oauthError(400, "invalid_grant", "requestedScope is invalid");
+    }
+
+    // Re-read after verification so revocation between the verifier lookup and
+    // the Pod-local link resolution fails closed.
+    const issuerEntry = await new TrustedIssuerService().getByUrl(issuerUrl);
+    if (
+      !issuerEntry ||
+      issuerEntry.status !== "approved" ||
+      !issuerEntry.allowedScopes.includes(REQUIRED_ISSUER_SCOPE)
+    ) {
+      return oauthError(401, "invalid_client");
+    }
+
+    // The shared verifier has a short in-process JTI cache. Persist the
+    // issuer-qualified receipt before resolving a user or minting a session so
+    // replay protection survives restarts and multiple Pod API processes.
+    try {
+      const receipt = await consumeFederatedAssertionReceipt({
+        issuerId: issuerEntry.id,
+        jti: verified.jti,
+        expiresAt: new Date(exp * 1_000),
+      });
+      if (receipt === "expired") {
+        return oauthError(400, "invalid_grant", "assertion has expired");
+      }
+      if (receipt === "replayed") {
+        return oauthError(400, "invalid_grant", "assertion was already used");
+      }
+    } catch (error) {
+      logger.error(
+        { error, issuerId: issuerEntry.id },
+        "/auth/exchange: durable assertion receipt unavailable"
+      );
+      return oauthError(
+        503,
+        "temporarily_unavailable",
+        "assertion replay protection is unavailable"
+      );
+    }
+
+    // ── Resolve the user by issuer-qualified identity link ────────────────
+    const identityLink = await db.query.federatedIdentityLinks.findFirst({
+      where: and(
+        eq(federatedIdentityLinks.issuerId, issuerEntry.id),
+        eq(federatedIdentityLinks.issuerSubject, issuerSubject)
+      ),
+      columns: { userId: true },
+    });
+    if (!identityLink) {
+      logger.warn(
+        { issuerUrl, issuerSubject },
+        "/auth/exchange: issuer subject is not linked on this Pod"
+      );
+      return oauthError(404, "user_not_found");
+    }
     const user = await db.query.users.findFirst({
-      where: eq(users.email, subEmail),
+      where: eq(users.id, identityLink.userId),
       columns: {
         id: true,
         email: true,
@@ -362,7 +474,7 @@ export function registerExchangeRoutes(app: HubHono): void {
 
     if (!user) {
       logger.warn(
-        { issuerUrl: iss, sub: subEmail },
+        { issuerUrl, issuerSubject },
         "/auth/exchange: user_not_found"
       );
       return oauthError(404, "user_not_found");
@@ -371,8 +483,8 @@ export function registerExchangeRoutes(app: HubHono): void {
     if (user.userType !== "human" || !user.kratosIdentityId) {
       logger.warn(
         {
-          issuerUrl: iss,
-          sub: subEmail,
+          issuerUrl,
+          issuerSubject,
           userType: user.userType,
           hasKratosId: !!user.kratosIdentityId,
         },
@@ -381,8 +493,17 @@ export function registerExchangeRoutes(app: HubHono): void {
       return oauthError(404, "user_not_found");
     }
 
+    const access = await getPodAuthoritativeAccess(user.id);
+    if (!canUseRequestedScope(access, requestedScope)) {
+      logger.warn(
+        { issuerUrl, issuerSubject, requestedScope },
+        "/auth/exchange: linked user has no active Pod access"
+      );
+      return oauthError(403, "insufficient_scope");
+    }
+
     // ── Mint a Kratos session via the admin API ───────────────────────────
-    // Same primitive used by /api/handshake (apps/api/src/index.ts ~620):
+    // Same primitive used by the generic federation exchange route:
     // POST /admin/identities/:id/sessions returns a session_token that the
     // browser/CLI can use as the ory_kratos_session cookie or X-Session-Token.
     const kratosAdminUrl =
@@ -401,7 +522,7 @@ export function registerExchangeRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error(
-        { err, issuerUrl: iss, sub: subEmail },
+        { err, issuerUrl, issuerSubject },
         "/auth/exchange: Kratos admin API unreachable"
       );
       return oauthError(500, "server_error");
@@ -413,8 +534,8 @@ export function registerExchangeRoutes(app: HubHono): void {
         {
           status: kratosResp.status,
           body: errBody.slice(0, 300),
-          issuerUrl: iss,
-          sub: subEmail,
+          issuerUrl,
+          issuerSubject,
         },
         "/auth/exchange: Kratos session creation failed"
       );
@@ -427,14 +548,14 @@ export function registerExchangeRoutes(app: HubHono): void {
     const accessToken = sessionData?.session_token;
     if (!accessToken) {
       logger.error(
-        { issuerUrl: iss, sub: subEmail },
+        { issuerUrl, issuerSubject },
         "/auth/exchange: Kratos returned 200 but no session_token (check tokenizer config)"
       );
       return oauthError(500, "server_error");
     }
 
     logger.info(
-      { issuerUrl: iss, sub: subEmail, userId: user.id },
+      { issuerUrl, issuerSubject, userId: user.id },
       "/auth/exchange: session minted"
     );
 

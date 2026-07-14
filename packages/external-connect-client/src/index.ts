@@ -200,15 +200,15 @@ export function buildPodAdminConnectUrl(input: {
   podUrl: string;
   integration: IntegrationKind;
   redirectUri?: string;
-  cpHandshakeToken?: string;
+  issuerAssertion?: string;
 }): string {
   const url = new URL(`${input.podUrl.replace(/\/$/, "")}/admin/connect`);
   url.searchParams.set("integration", input.integration);
   if (input.redirectUri) {
     url.searchParams.set("redirect_uri", input.redirectUri);
   }
-  if (input.cpHandshakeToken) {
-    url.searchParams.set("cp_handshake_token", input.cpHandshakeToken);
+  if (input.issuerAssertion) {
+    url.searchParams.set("issuer_assertion", input.issuerAssertion);
   }
   return url.toString();
 }
@@ -227,15 +227,15 @@ export function buildIntegrationConnectUrl(input: {
   podAdminUrl: string;
   integration: IntegrationKind;
   redirectUri?: string;
-  cpHandshakeToken?: string;
+  issuerAssertion?: string;
 }): string {
   const url = new URL(`${input.podAdminUrl.replace(/\/$/, "")}/connect`);
   url.searchParams.set("integration", input.integration);
   if (input.redirectUri) {
     url.searchParams.set("redirect_uri", input.redirectUri);
   }
-  if (input.cpHandshakeToken) {
-    url.searchParams.set("cp_handshake_token", input.cpHandshakeToken);
+  if (input.issuerAssertion) {
+    url.searchParams.set("issuer_assertion", input.issuerAssertion);
   }
   return url.toString();
 }

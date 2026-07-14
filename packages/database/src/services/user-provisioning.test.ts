@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
-  const activationFind = vi.fn();
+  const accessReceiptFind = vi.fn();
+  const identityLinkFind = vi.fn();
   const userFind = vi.fn();
   const workspaceFind = vi.fn();
   const projectFind = vi.fn();
@@ -11,12 +12,22 @@ const mocks = vi.hoisted(() => {
   const insert = vi.fn(() => ({
     values: vi.fn((values: Record<string, unknown>) => {
       insertedValues.push(values);
-      return { onConflictDoUpdate: vi.fn(async () => undefined) };
+      return {
+        returning: vi.fn(async () => [
+          { ...values, id: values.id ?? "generated-row-id" },
+        ]),
+        onConflictDoNothing: vi.fn(() => ({
+          returning: vi.fn(async () => [values]),
+        })),
+        onConflictDoUpdate: vi.fn(async () => undefined),
+      };
     }),
   }));
   const tx = {
     query: {
-      controlPlaneMemberActivations: { findFirst: activationFind },
+      federatedAccessReceipts: { findFirst: accessReceiptFind },
+      federatedIdentityLinks: { findFirst: identityLinkFind },
+      issuerIdentityLinkReceipts: { findFirst: vi.fn() },
       users: { findFirst: userFind },
       workspaces: { findFirst: workspaceFind },
       projects: { findFirst: projectFind },
@@ -24,9 +35,13 @@ const mocks = vi.hoisted(() => {
       projectMembers: { findFirst: projectMemberFind },
     },
     insert,
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+    })),
   };
   return {
-    activationFind,
+    accessReceiptFind,
+    identityLinkFind,
     userFind,
     workspaceFind,
     projectFind,
@@ -49,14 +64,13 @@ vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn() }),
 }));
 
-import {
-  activateControlPlaneMember,
-  seedAdminUser,
-} from "./user-provisioning.js";
+import { activateFederatedMember, seedAdminUser } from "./user-provisioning.js";
+import { projectPodUserAccess } from "./pod-user-access.js";
 
 const baseInput = {
-  activationId: "activation-1",
-  controlPlaneUserId: "cp-user-1",
+  commandId: "grant-1",
+  issuerId: "issuer-a",
+  issuerSubject: "external-user-1",
   kratosIdentityId: "pod-user-1",
   email: "person@example.com",
   role: "viewer" as const,
@@ -65,7 +79,8 @@ const baseInput = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.insertedValues.length = 0;
-  mocks.activationFind.mockResolvedValue(undefined);
+  mocks.accessReceiptFind.mockResolvedValue(undefined);
+  mocks.identityLinkFind.mockResolvedValue(undefined);
   mocks.userFind.mockResolvedValue(undefined);
   mocks.workspaceFind.mockResolvedValue(undefined);
   mocks.projectFind.mockResolvedValue(undefined);
@@ -73,15 +88,15 @@ beforeEach(() => {
   mocks.projectMemberFind.mockResolvedValue(undefined);
 });
 
-describe("activateControlPlaneMember", () => {
-  it("creates only project membership for a project-scoped activation", async () => {
+describe("activateFederatedMember", () => {
+  it("creates only project membership for a project-scoped issuer command", async () => {
     mocks.projectFind.mockResolvedValue({
       id: "project-1",
       workspaceId: null,
       status: "active",
     });
 
-    const result = await activateControlPlaneMember({
+    const result = await activateFederatedMember({
       ...baseInput,
       scopeKind: "project",
       projectId: "project-1",
@@ -117,7 +132,7 @@ describe("activateControlPlaneMember", () => {
     });
 
     await expect(
-      activateControlPlaneMember({
+      activateFederatedMember({
         ...baseInput,
         scopeKind: "project",
         projectId: "project-1",
@@ -133,33 +148,70 @@ describe("activateControlPlaneMember", () => {
     });
 
     await expect(
-      activateControlPlaneMember({
+      activateFederatedMember({
         ...baseInput,
         scopeKind: "workspace",
         workspaceId: "pod-admin",
       })
-    ).rejects.toThrow("cannot accept external members");
+    ).rejects.toThrow("workspace cannot accept members");
     expect(mocks.workspaceMemberFind).not.toHaveBeenCalled();
+  });
+
+  it("keeps identical command IDs isolated by issuer", async () => {
+    mocks.projectFind.mockResolvedValue({
+      id: "project-1",
+      workspaceId: null,
+      status: "active",
+    });
+
+    await activateFederatedMember({
+      ...baseInput,
+      scopeKind: "project",
+      projectId: "project-1",
+    });
+    mocks.projectMemberFind.mockResolvedValue({
+      id: "member-1",
+      role: "viewer",
+    });
+    await activateFederatedMember({
+      ...baseInput,
+      issuerId: "issuer-b",
+      scopeKind: "project",
+      projectId: "project-1",
+    });
+
+    const receipts = mocks.insertedValues.filter(
+      (value) => value.commandId === "grant-1"
+    );
+    expect(receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issuerId: "issuer-a" }),
+        expect.objectContaining({ issuerId: "issuer-b" }),
+      ])
+    );
   });
 });
 
 describe("seedAdminUser", () => {
-  it("persists the signed Control Plane user mapping for a managed owner", async () => {
-    mocks.userFind
-      .mockResolvedValueOnce({
-        id: "pod-user-1",
-        controlPlaneUserId: null,
-      })
-      .mockResolvedValueOnce(undefined);
-    mocks.workspaceMemberFind.mockResolvedValue({
-      workspaceId: "workspace-1",
-      workspace: { settings: {} },
-    });
+  it("persists an issuer-qualified identity link for a managed owner", async () => {
+    mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
+    // The local Pod-admin workspace is created once, while the owner already
+    // has a regular workspace. This keeps the test focused on the issuer link
+    // rather than exercising personal-workspace/twin provisioning.
+    mocks.workspaceFind
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ id: "workspace-1" });
+    mocks.workspaceMemberFind
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ role: "owner" });
 
     const result = await seedAdminUser({
       kratosIdentityId: "pod-user-1",
-      controlPlaneUserId: "cp-user-1",
       email: "person@example.com",
+      federatedIdentity: {
+        issuerId: "issuer-a",
+        issuerSubject: "external-user-1",
+      },
     });
 
     expect(result).toEqual({
@@ -169,9 +221,89 @@ describe("seedAdminUser", () => {
     });
     expect(mocks.insertedValues).toContainEqual(
       expect.objectContaining({
-        id: "pod-user-1",
-        controlPlaneUserId: "cp-user-1",
+        issuerId: "issuer-a",
+        issuerSubject: "external-user-1",
+        userId: "pod-user-1",
       })
     );
+    expect(mocks.insertedValues).toContainEqual(
+      expect.objectContaining({
+        systemSlug: "pod-admin",
+        workspaceType: "operational",
+      })
+    );
+  });
+
+  it("allows the same external subject to be linked independently per issuer", async () => {
+    mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
+    mocks.workspaceFind
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ id: "workspace-1" })
+      .mockResolvedValueOnce({ id: "pod-admin" })
+      .mockResolvedValueOnce({ id: "workspace-1" });
+    mocks.workspaceMemberFind
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ role: "owner" });
+
+    for (const issuerId of ["issuer-a", "issuer-b"]) {
+      await seedAdminUser({
+        kratosIdentityId: "pod-user-1",
+        email: "person@example.com",
+        federatedIdentity: {
+          issuerId,
+          issuerSubject: "shared-subject",
+        },
+      });
+    }
+
+    const identityLinks = mocks.insertedValues.filter(
+      (value) => value.issuerSubject === "shared-subject"
+    );
+    expect(identityLinks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issuerId: "issuer-a" }),
+        expect.objectContaining({ issuerId: "issuer-b" }),
+      ])
+    );
+  });
+});
+
+describe("projectPodUserAccess", () => {
+  it("excludes archived workspaces from user-facing scopes", () => {
+    const access = projectPodUserAccess([
+      {
+        workspaceId: "archived-workspace",
+        role: "viewer",
+        systemSlug: null,
+        workspaceArchivedAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+      {
+        workspaceId: "active-workspace",
+        role: "editor",
+        systemSlug: null,
+        workspaceArchivedAt: null,
+      },
+    ]);
+
+    expect(access.workspaceScopes).toEqual([
+      {
+        workspaceId: "active-workspace",
+        role: "editor",
+      },
+    ]);
+  });
+
+  it("does not treat an archived pod-admin workspace as Pod-wide access", () => {
+    const access = projectPodUserAccess([
+      {
+        workspaceId: "pod-admin",
+        role: "owner",
+        systemSlug: "pod-admin",
+        workspaceArchivedAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    ]);
+
+    expect(access.podRole).toBe("member");
+    expect(access.workspaceScopes).toEqual([]);
   });
 });

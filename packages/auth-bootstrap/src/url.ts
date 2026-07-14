@@ -4,7 +4,7 @@
  * `podUrl` is attacker-influenceable in multi-tenant / portal contexts, and the
  * bootstrap helpers POST bearer tokens to it — so every credential-bearing call
  * validates the URL first. Without this a caller could be coaxed into sending a
- * handshake JWT or provisioning token to an arbitrary host.
+ * issuer assertion or provisioning token to an arbitrary host.
  */
 
 import { AuthBootstrapError } from "./errors.js";

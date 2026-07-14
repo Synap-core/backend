@@ -10,8 +10,8 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
   ADMIN_EMAIL: ${ADMIN_EMAIL:-}
   PROVISIONING_TOKEN: ${PROVISIONING_TOKEN:-}
-  # CP↔Pod auth: ES256 asymmetric JWT (JWKS). No shared secret needed.
-  # Pod fetches {CONTROL_PLANE_URL}/.well-known/jwks.json to verify signatures.
+  # Generic issuer signatures are verified against the owner-approved trusted
+  # issuer registry. No external URL in this file grants Pod authentication.
   JWT_SECRET: ${JWT_SECRET}
   KRATOS_PUBLIC_URL: http://kratos:4433
   KRATOS_ADMIN_URL: http://kratos:4434
@@ -33,7 +33,7 @@ x-backend-env: &backend-env
   TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
   HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
   CHANNEL_GATEWAY_KEY: ${CHANNEL_GATEWAY_KEY:-}
-  # Service credential encryption — REQUIRED for CP provisioning.
+  # Service credential encryption for optional managed service provisioning.
   # Rotating invalidates stored IS credentials.
   SYNAP_SERVICE_ENCRYPTION_KEY: ${SYNAP_SERVICE_ENCRYPTION_KEY}
   # REQUIRED — the secret vault is non-functional without it, and an empty value
@@ -44,16 +44,9 @@ x-backend-env: &backend-env
   PUBLIC_URL: ${PUBLIC_URL:-http://backend:4000}
   # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
   SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
-  # Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
-  # on ANY deploy path (docker compose up / synap.sh / eve — not just install.sh):
-  # empty → the pod-local template cache never populates → `cap add` shows nothing.
-  # SECURITY — not trust-irrelevant: provisioning/user-exchange JWTs are gated by
-  # the `trusted_issuers` registry, but the invite / entity-share / sync / admin
-  # CP-JWT paths use this URL as the `iss` allowlist (empty = accept ANY signed
-  # HTTPS issuer, set = pin to it). Defaulting empty→CP TIGHTENS trust; never
-  # loosens. `:-` also substitutes an explicit empty value, so a self-hosted
-  # air-gap opt-out must use its own CP URL, not an empty string.
-  CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-https://api.synap.live}
+  # Optional legacy integration endpoint. It is never an authentication or
+  # federation default; trusted issuers are explicitly owner-approved.
+  CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
@@ -801,21 +794,18 @@ services:
       - pangolin-tunnel
 
   # ============================================================================
-  # POD AGENT (always-running command receiver for CP-initiated operations)
+  # POD AGENT (opt-in, issuer-authorized operational command receiver)
   # ============================================================================
-  # Pod-agent is the Control-Plane-managed update + diagnostics endpoint. It
-  # is OFF by default — eve installs and standalone self-hosted operators have
-  # no need for it (eve manages updates via the synap CLI delegate; standalone
-  # operators run `synap update` directly). Activate it ONLY when this pod is
-  # registered with synap.dev's Control Plane:
+  # Pod-agent is OFF by default. A self-hosted Pod does not expose a Docker
+  # socket command receiver unless its owner deliberately configures both a
+  # generic issuer and this Pod's exact public audience:
   #
+  #   POD_AGENT_ISSUER_URL=https://issuer.example
+  #   POD_AGENT_AUDIENCE=https://pod.example
   #   docker compose --profile pod-agent up -d pod-agent
   #
-  # …or set `SYNAP_WITH_POD_AGENT=1` in `.env` so the synap CLI includes it
-  # in install/update bring-up. Leaving it off avoids spawning the agent +
-  # the canary + updater chain that historically wiped operator data via
-  # `update-pod.sh` (now patched, but the surface area is still unnecessary
-  # for non-CP users).
+  # `synap` and install.sh require the same configuration before they start
+  # this profile. Leaving it off keeps this optional operational surface absent.
   pod-agent:
     profiles:
       - pod-agent
@@ -830,17 +820,22 @@ services:
       POD_AGENT_PORT: 4002
       DEPLOY_DIR: /deploy
       HOST_LOG_DIR: /host-log
-      # Pinned CP trust anchor — pod-agent verifies all JWTs against this JWKS.
-      # Set by install.sh; must never be accepted from the request header.
-      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
+      POD_AGENT_STATE_DIR: /state
+      # Exact generic trust anchor. The agent derives JWKS only from this
+      # configured issuer and requires signed commands to target this Pod's
+      # exact audience. Neither value is accepted from an HTTP request.
+      POD_AGENT_ISSUER_URL: ${POD_AGENT_ISSUER_URL:-}
+      POD_AGENT_AUDIENCE: ${POD_AGENT_AUDIENCE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy:rw
-      # Host /var/log mounted read-only so the agent can serve install /
-      # cloud-init logs to the Control Plane dashboard (allowlisted files
-      # only — see server.js HOST_LOG_ALLOWLIST). Read-only is critical:
-      # a compromised CP JWT should never be able to tamper with host logs.
+      # Host /var/log is read-only. The agent serves only its explicit log
+      # allowlist; even a compromised trusted issuer cannot tamper with logs.
       - /var/log:/host-log:ro
+      # JWT IDs are consumed atomically here before any command or authenticated
+      # diagnostic response. This survives an agent restart without coupling the
+      # agent to the Pod database or any external control service.
+      - pod_agent_state:/state
     # No host port binding — Caddy proxies /api/pod-agent/* to pod-agent:4002
     # on the same Docker network. Binding 4002 to the host would expose an
     # unauthenticated (at network level) command endpoint to the public internet.
@@ -886,6 +881,7 @@ volumes:
   openclaw_workspace:
   prometheus-data:
   grafana-data:
+  pod_agent_state:
 
 networks:
   synap-net:

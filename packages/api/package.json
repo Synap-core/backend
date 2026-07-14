@@ -41,7 +41,6 @@
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "provision": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision.ts",
     "provision-agent": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision-agent.ts"
   },
   "dependencies": {

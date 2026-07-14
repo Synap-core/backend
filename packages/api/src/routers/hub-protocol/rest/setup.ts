@@ -40,7 +40,8 @@ import {
   resolveExternalUserMapping,
 } from "../../../services/external-user-mapping.js";
 import { NotificationService } from "../../../notifications/NotificationService.js";
-import { verifyCpJwt } from "../../../utils/jwks-client.js";
+import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
+import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
 import {
   AGENT_KEY_ROTATION_LEAD_DAYS,
   AGENT_KEY_TTL_DAYS,
@@ -204,7 +205,7 @@ function toPodAdminOrigin(origin: string): string {
 export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent", async (c) => {
     const flowId = randomUUID();
-    // ── Auth: CP JWT (preferred) or PROVISIONING_TOKEN (self-hosted fallback) ──
+    // ── Auth: trusted-issuer JWT or Pod-local provisioning credential ────────
     const authHeader = c.req.header("authorization") ?? "";
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7).trim()
@@ -222,24 +223,24 @@ export function registerSetupRoutes(app: HubHono): void {
       | "api_key_surface" = "provisioning_token";
     let jwtIssuerUrl: string | null = null;
 
-    // Try 1: CP-signed JWT verified against Trusted Issuers registry
+    // Try 1: generic issuer JWT verified against the Pod-local issuer registry.
     const adminUrl = `${process.env.PUBLIC_URL ?? ""}/admin/trusted-issuers`;
     try {
       const decoded = jwt.decode(token);
       if (decoded && typeof decoded === "object") {
-        const iss = (decoded as Record<string, unknown>).iss;
-        if (typeof iss === "string" && iss.startsWith("https://")) {
+        const rawIssuer = (decoded as Record<string, unknown>).iss;
+        const iss =
+          typeof rawIssuer === "string" ? normalizeIssuerUrl(rawIssuer) : null;
+        if (iss && rawIssuer === iss) {
           const issuerSvc = new TrustedIssuerService();
           let issuer = await issuerSvc.getByUrl(iss);
 
           if (!issuer) {
             // Unknown issuer — register as pending and ask admin to approve
             const derivedDisplayName = new URL(iss).hostname;
-            issuer = await issuerSvc.registerPending(
-              iss,
-              derivedDisplayName,
-              decoded
-            );
+            issuer = await issuerSvc.registerPending(iss, derivedDisplayName, {
+              requestedVia: "setup-agent",
+            });
             try {
               const podAdminWorkspace = await db.query.workspaces.findFirst({
                 where: eq(workspaces.systemSlug, "pod-admin"),
@@ -306,7 +307,7 @@ export function registerSetupRoutes(app: HubHono): void {
             }
 
             try {
-              const payload = await verifyCpJwt<{
+              const payload = await verifyIssuerJwt<{
                 type: string;
                 email?: string;
                 name?: string;
@@ -366,7 +367,7 @@ export function registerSetupRoutes(app: HubHono): void {
       return c.json(
         {
           error:
-            "Invalid credentials. Accepted: CP-signed JWT, PROVISIONING_TOKEN, or a Hub API key with `setup.agent` scope.",
+            "Invalid credentials. Accepted: a trusted-issuer JWT, PROVISIONING_TOKEN, or a Hub API key with `setup.agent` scope.",
         },
         401
       );
@@ -525,7 +526,7 @@ export function registerSetupRoutes(app: HubHono): void {
             createdByUserId: ownerUserId ?? null,
             agentMetadata: {
               agentType,
-              description: `${agentLabel} — external agent (${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup)`,
+              description: `${agentLabel} — external agent (${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup)`,
               createdByUserId: ownerUserId ?? agentUserId,
               isPersonalAgent: false,
               writesRequireProposal: true,
@@ -636,7 +637,7 @@ export function registerSetupRoutes(app: HubHono): void {
           scope: [...SETUP_AGENT_HUB_SCOPES],
           userId: agentUserId,
           keyType: "hub_inbound",
-          description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,
+          description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup`,
           linkedUserId: resolvedLinkedUserId ?? null,
           expiresAt: new Date(nowMs + AGENT_KEY_TTL_DAYS * DAY_MS),
           rotationScheduledAt: new Date(

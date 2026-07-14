@@ -19,10 +19,9 @@
  *   redirect_uri      — deeplink the page will send credentials to on
  *                       success. Must match an entry in
  *                       DEFAULT_CONNECT_REDIRECT_PREFIXES.
- *   cp_handshake_token — (managed pods) one-shot CP→pod handshake token
- *                       used to bootstrap a Kratos session before the
- *                       key is minted. Falls back to inline sign-in on
- *                       failure.
+ *   issuer_assertion  — one-shot assertion from any Pod-approved issuer,
+ *                       exchanged directly with this Pod before the key is
+ *                       minted. Falls back to inline sign-in on failure.
  */
 
 import { ConnectForm } from "./ConnectForm";
@@ -31,7 +30,7 @@ interface ConnectPageProps {
   searchParams: Promise<{
     integration?: string;
     redirect_uri?: string;
-    cp_handshake_token?: string;
+    issuer_assertion?: string;
   }>;
 }
 
@@ -41,13 +40,13 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   const sp = await searchParams;
   const integration = normalizeIntegration(sp.integration);
   const redirectUri = sp.redirect_uri ?? "";
-  const cpHandshakeToken = sp.cp_handshake_token ?? "";
+  const issuerAssertion = sp.issuer_assertion ?? "";
 
   return (
     <ConnectForm
       integration={integration}
       redirectUri={redirectUri}
-      cpHandshakeToken={cpHandshakeToken}
+      issuerAssertion={issuerAssertion}
     />
   );
 }

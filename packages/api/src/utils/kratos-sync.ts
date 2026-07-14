@@ -2,9 +2,8 @@
  * Kratos Webhook Utilities
  *
  * Syncs Kratos identity updates (email / name changes) into the Synap
- * users table. Identity creation is handled synchronously by seed-admin
- * (dedicated pods) or handshake auto-create (shared pods) — NOT via
- * Kratos webhooks.
+ * users table. Identity creation and federation projection are handled by
+ * authenticated Pod endpoints, never by Kratos webhooks.
  */
 
 import { kratosAdmin } from "@synap/auth";

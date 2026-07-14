@@ -483,9 +483,9 @@ export async function runStartupHooks(): Promise<void> {
     );
   }
 
-  // Trusted issuers are established at provisioning time via POST /api/provision/seed-trust
-  // (authenticated with PROVISIONING_TOKEN). No startup seeding — the pod starts with zero
-  // knowledge of the CP URL. Trust is purely provisioning-driven.
+  // Trusted issuers are established explicitly through the generic federation
+  // bootstrap or by a local Pod owner. No startup seeding: a fresh Pod starts
+  // with no knowledge of any external issuer.
 
   // LOCAL MODE: ensure the operator user + personal workspace exist in the DB.
   // Must run before verifyPodAdminInvariant so the invariant check sees a user.

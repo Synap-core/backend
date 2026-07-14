@@ -110,9 +110,11 @@ const ServerConfigSchema = z.object({
   logLevel: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
-  /** @deprecated No longer used for trust. Trust is established via /api/provision/seed-trust.
-   *  Kept for backward compat — callers that read this get undefined when env var is unset,
-   *  which causes verifyCpJwtWithTrust to rely solely on the trusted_issuers registry. */
+  /**
+   * @deprecated Optional legacy external-service URL. It never establishes
+   * federation trust; that is exclusively the Pod-local trusted-issuer registry.
+   * Kept only for operational integrations that have not yet been generalized.
+   */
   controlPlaneUrl: z.string().url().optional(),
   /** Shared pod mode: multiple users share this pod (each gets one workspace). */
   sharedPodMode: z.coerce.boolean().default(false),

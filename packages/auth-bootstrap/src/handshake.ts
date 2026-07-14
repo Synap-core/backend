@@ -1,14 +1,16 @@
 /**
- * Session-token bootstrap (the credential the tRPC SDK consumes as `sessionToken`).
+ * Generic issuer-assertion exchange (the credential the tRPC SDK consumes as
+ * `sessionToken`).
  *
- * Two steps, kept as separate functions so self-hosted callers can skip the
- * Control Plane entirely:
- *   1. `fetchHandshakeJwt()` — get a short-lived CP-signed handshake JWT (the CP hop).
- *   2. `handshake()`         — exchange that JWT at `POST {podUrl}/api/handshake`
- *                              for a Kratos session token.
+ * An issuer-specific client obtains a short-lived signed assertion. This
+ * package performs only the reusable, direct browser/client → Pod exchange at
+ * `POST {podUrl}/api/federation/exchange`. The Pod derives the issuer from the
+ * assertion and checks its own trusted-issuer registry; callers never send an
+ * issuer URL or an external product identifier to the Pod.
  *
- * No client-side crypto — all signing is server-side; the client only relays
- * opaque tokens. Native `fetch` only.
+ * `fetchIssuerAssertion()` is a small convenience adapter for issuers that
+ * expose an assertion endpoint. New integrations should use
+ * `exchangeIssuerAssertion()` directly when they already hold an assertion.
  */
 
 import {
@@ -18,12 +20,14 @@ import {
 } from "./errors.js";
 import { assertValidPodUrl, normalizeUrl } from "./url.js";
 
-export interface FetchHandshakeJwtOptions {
-  /** Control Plane base URL, e.g. `https://api.synap.live`. */
-  cpUrl: string;
-  /** CP session token (Better-Auth). Sent as `Authorization: Bearer`. */
-  cpToken: string;
-  /** Pod URL the JWT will be audience-bound to. */
+export interface FetchIssuerAssertionOptions {
+  /**
+   * Issuer service base URL, e.g. `https://issuer.example`.
+   */
+  issuerUrl: string;
+  /** Issuer-service session token, sent as `Authorization: Bearer`. */
+  issuerToken: string;
+  /** Pod URL the assertion will be audience-bound to. */
   podUrl: string;
   /** Override fetch (tests / edge runtimes). Defaults to global `fetch`. */
   fetchImpl?: typeof fetch;
@@ -32,23 +36,21 @@ export interface FetchHandshakeJwtOptions {
 }
 
 /**
- * Get a CP-signed handshake JWT (`type:"handshake"`, `aud=podUrl`, ES256) via
- * `POST {cpUrl}/pods/handshake-jwt`. Self-hosted pods that mint their own
- * handshake JWT from a trusted issuer can skip this and pass that token straight
- * to `handshake()`.
+ * Request a generic user-exchange assertion from an issuer convenience API.
+ * The returned assertion is still exchanged directly with the Pod.
  */
-export async function fetchHandshakeJwt(
-  opts: FetchHandshakeJwtOptions
+export async function fetchIssuerAssertion(
+  opts: FetchIssuerAssertionOptions
 ): Promise<string> {
-  assertValidPodUrl(opts.cpUrl);
-  const cpUrl = normalizeUrl(opts.cpUrl);
+  assertValidPodUrl(opts.issuerUrl);
+  const issuerUrl = normalizeUrl(opts.issuerUrl);
   const doFetch = opts.fetchImpl ?? fetch;
 
-  const res = await doFetch(`${cpUrl}/pods/handshake-jwt`, {
+  const res = await doFetch(`${issuerUrl}/pods/federation/assertion`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${opts.cpToken}`,
+      Authorization: `Bearer ${opts.issuerToken}`,
     },
     body: JSON.stringify({ podUrl: opts.podUrl }),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000),
@@ -56,32 +58,53 @@ export async function fetchHandshakeJwt(
 
   if (!res.ok) {
     throw new AuthBootstrapError(
-      `Could not get handshake JWT (HTTP ${res.status})`,
+      `Could not get issuer assertion (HTTP ${res.status})`,
       res.status,
       { body: await readErrorBody(res) }
     );
   }
 
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) {
+  const data = (await res.json()) as { assertion?: string };
+  const assertion = data.assertion;
+  if (!assertion) {
     throw new AuthBootstrapError(
-      "Handshake JWT response missing `token`",
+      "Issuer assertion response missing `assertion`",
       res.status,
       {
         body: data,
       }
     );
   }
-  return data.token;
+  return assertion;
 }
 
-export interface HandshakeOptions {
+/** @deprecated Use `FetchIssuerAssertionOptions`. */
+export interface FetchHandshakeJwtOptions {
+  cpUrl: string;
+  cpToken: string;
+  podUrl: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/** @deprecated Use `fetchIssuerAssertion()`. */
+export async function fetchHandshakeJwt(
+  opts: FetchHandshakeJwtOptions
+): Promise<string> {
+  return fetchIssuerAssertion({
+    issuerUrl: opts.cpUrl,
+    issuerToken: opts.cpToken,
+    podUrl: opts.podUrl,
+    fetchImpl: opts.fetchImpl,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
+export interface ExchangeIssuerAssertionOptions {
   /** Pod base URL — no trailing slash, no `/api` suffix. Validated (https-only). */
   podUrl: string;
-  /** CP-signed handshake JWT (from `fetchHandshakeJwt` or a self-hosted issuer). */
-  handshakeToken: string;
-  /** JWKS issuer URL to pin on the pod side. Defaults to the token's own `iss`. */
-  issuerUrl?: string;
+  /** Short-lived assertion signed by an issuer trusted by this Pod. */
+  assertion: string;
   /** Override fetch (tests / edge runtimes). Defaults to global `fetch`. */
   fetchImpl?: typeof fetch;
   /** Per-request timeout (ms). Default 15000. */
@@ -90,7 +113,7 @@ export interface HandshakeOptions {
   allowHttp?: boolean;
 }
 
-export interface HandshakeResult {
+export interface ExchangeIssuerAssertionResult {
   /** Kratos API session token. Pass as `sessionToken` to `createSynapClient`. */
   sessionToken: string;
   /** Raw Kratos session object when the pod returns it. */
@@ -103,41 +126,29 @@ export interface HandshakeResult {
 }
 
 /**
- * Exchange a CP handshake JWT for a pod Kratos session token via
- * `POST {podUrl}/api/handshake`. Throws `AuthBootstrapError` on failure; a 409
- * (identity already exists, no `session_token` in the body) becomes a typed
- * `ALREADY_EXISTS` error so the caller re-issues a JWT and retries.
+ * Exchange a generic issuer assertion for a direct Pod Kratos session token.
+ * The assertion is sent directly to the Pod; it never returns to, or carries a
+ * raw Pod session token through, the issuer service.
  */
-export async function handshake(
-  opts: HandshakeOptions
-): Promise<HandshakeResult> {
+export async function exchangeIssuerAssertion(
+  opts: ExchangeIssuerAssertionOptions
+): Promise<ExchangeIssuerAssertionResult> {
   assertValidPodUrl(opts.podUrl, { allowHttp: opts.allowHttp });
   const url = normalizeUrl(opts.podUrl);
   const doFetch = opts.fetchImpl ?? fetch;
 
-  const res = await doFetch(`${url}/api/handshake`, {
+  const res = await doFetch(`${url}/api/federation/exchange`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      token: opts.handshakeToken,
-      ...(opts.issuerUrl ? { issuerUrl: opts.issuerUrl } : {}),
-    }),
+    body: JSON.stringify({ assertion: opts.assertion }),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
   });
-
-  if (res.status === 409) {
-    throw new AuthBootstrapError(
-      "Identity already exists on the pod; re-issue a handshake JWT and retry to obtain a session token",
-      409,
-      { code: "ALREADY_EXISTS", body: await readErrorBody(res) }
-    );
-  }
 
   if (!res.ok) {
     const body = await readErrorBody(res);
     const meta = extractErrorMeta(body);
     throw new AuthBootstrapError(
-      `Pod handshake failed (HTTP ${res.status})`,
+      `Pod issuer assertion exchange failed (HTTP ${res.status})`,
       res.status,
       {
         body,
@@ -155,7 +166,7 @@ export async function handshake(
 
   if (!data.session_token) {
     throw new AuthBootstrapError(
-      "Handshake succeeded but no `session_token` was returned",
+      "Issuer assertion exchange succeeded but no `session_token` was returned",
       res.status,
       { body: data }
     );
@@ -167,3 +178,33 @@ export async function handshake(
     expiresAt: data.session?.expires_at,
   };
 }
+
+/**
+ * @deprecated Use `exchangeIssuerAssertion({ podUrl, assertion })`. This
+ * wrapper intentionally does not forward `issuerUrl`: issuer selection is a
+ * Pod-local trusted-issuer decision.
+ */
+export interface HandshakeOptions extends Omit<
+  ExchangeIssuerAssertionOptions,
+  "assertion"
+> {
+  handshakeToken: string;
+  /** @deprecated Ignored. The Pod derives the issuer from the assertion. */
+  issuerUrl?: string;
+}
+
+/** @deprecated Use `exchangeIssuerAssertion()`. */
+export async function handshake(
+  opts: HandshakeOptions
+): Promise<ExchangeIssuerAssertionResult> {
+  return exchangeIssuerAssertion({
+    podUrl: opts.podUrl,
+    assertion: opts.handshakeToken,
+    fetchImpl: opts.fetchImpl,
+    timeoutMs: opts.timeoutMs,
+    allowHttp: opts.allowHttp,
+  });
+}
+
+/** @deprecated Prefer `ExchangeIssuerAssertionResult`. */
+export type HandshakeResult = ExchangeIssuerAssertionResult;

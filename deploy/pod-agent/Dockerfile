@@ -4,7 +4,7 @@ FROM node:20-alpine
 RUN apk add --no-cache docker-cli docker-cli-compose wget
 
 WORKDIR /app
-COPY server.js .
+COPY server.js trust.js replay-receipts.js package.json ./
 
 EXPOSE 4002
 CMD ["node", "server.js"]

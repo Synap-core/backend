@@ -131,12 +131,16 @@ export {
   resolveVaultReferences,
 } from "./utils/vault-resolver.js";
 
-// Export JWKS client for CP JWT verification
+// Export generic trusted-issuer JWT verification. CP-named aliases remain for
+// older Pod routes while those routes migrate to the generic boundary.
 export {
+  verifyIssuerJwt,
+  verifyTrustedIssuerJwt,
   verifyCpJwt,
   verifyCpJwtWithTrust,
   clearJwksCache,
 } from "./utils/jwks-client.js";
+export { normalizeIssuerUrl } from "./utils/issuer-url-safety.js";
 export {
   setTrustedIssuerSeedHealth,
   getTrustedIssuerSeedHealth,

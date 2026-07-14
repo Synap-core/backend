@@ -3,7 +3,7 @@
 Zero-dependency auth bootstrap for [Synap](https://synap.live) data pods. The shared home of the two
 credential flows, used by both `@synap-core/sdk` (tRPC) and `@synap/hub-rest-client` (REST).
 
-- **`handshake()`** → a Kratos **session token** — the credential the tRPC SDK consumes as `sessionToken`.
+- **`exchangeIssuerAssertion()`** → a Kratos **session token** — the credential the tRPC SDK consumes as `sessionToken`.
 - **`setupAgent()`** → a Hub Protocol **API key** — the credential the REST client consumes as `apiKey`.
 
 Native `fetch` only — runs in Node ≥ 18, browsers, Deno, Bun, and edge runtimes.
@@ -11,20 +11,18 @@ Native `fetch` only — runs in Node ≥ 18, browsers, Deno, Bun, and edge runti
 ## Session token (for the tRPC SDK)
 
 ```typescript
-import { fetchHandshakeJwt, handshake } from "@synap-core/auth-bootstrap";
+import { exchangeIssuerAssertion } from "@synap-core/auth-bootstrap";
 import { createSynapClient } from "@synap-core/sdk";
 
-// 1. (managed pods) get a CP-signed handshake JWT — skip for self-hosted issuers
-const handshakeToken = await fetchHandshakeJwt({
-  cpUrl: "https://api.synap.live",
-  cpToken: "<cp-session-token>",
-  podUrl: "https://your-pod.synap.live",
-});
+// 1. Obtain a short-lived signed assertion from any issuer the Pod owner has
+//    approved. How a client authenticates to that issuer is issuer-specific.
+const assertion = "<trusted-issuer-signed-assertion>";
 
-// 2. exchange it for a pod session token
-const { sessionToken, expiresAt } = await handshake({
+// 2. Send the assertion directly to the Pod. The Pod resolves the issuer from
+//    the assertion and mints its own session token.
+const { sessionToken, expiresAt } = await exchangeIssuerAssertion({
   podUrl: "https://your-pod.synap.live",
-  handshakeToken,
+  assertion,
 });
 
 // 3. authenticate the SDK
@@ -35,7 +33,9 @@ const synap = createSynapClient({
 });
 ```
 
-`@synap-core/sdk/auth` ships `createAuthedClient()` that wraps steps 2–3 in one call.
+`handshake()` and `fetchHandshakeJwt()` are deprecated compatibility adapters
+for the former managed-Pod flow. New integrations must use
+`exchangeIssuerAssertion()` so the Pod stays independent of issuer products.
 
 ## API key (for the REST client)
 
@@ -59,4 +59,4 @@ if ((await checkPodHealth("https://your-pod.synap.live")).healthy) {
   backend's error JSON only).
 - Every credential-bearing call validates `podUrl` via `assertValidPodUrl` (https-only by default,
   no embedded credentials) — `podUrl` is attacker-influenceable in multi-tenant/portal contexts.
-- Stateless: no auto-refresh. On a 401, re-`handshake()` with a fresh JWT.
+- Stateless: no auto-refresh. On a 401, exchange a fresh short-lived assertion.

@@ -191,6 +191,47 @@ update_env_value() {
     fi
 }
 
+# Pod-agent has the Docker socket, so only start its profile after the Pod
+# owner configured a generic issuer and this Pod's exact audience. The legacy
+# CONTROL_PLANE_URL setting is intentionally not considered here.
+_pod_agent_setting() {
+    local key="$1"
+    local shell_value="${!key:-}"
+    if [ -n "$shell_value" ]; then
+        printf '%s' "$shell_value"
+        return
+    fi
+    if [ -f .env ]; then
+        grep -E "^${key}=" .env 2>/dev/null | head -n 1 | cut -d= -f2-
+    fi
+}
+
+_is_canonical_https_url() {
+    local value="$1"
+    local authority="${value#https://}"
+    [[ "$value" == https://* && -n "$authority" && "$authority" != */ && "$value" != *"?"* && "$value" != *"#"* && "$authority" != *"@"* && ! "$value" =~ [[:space:]] ]]
+}
+
+should_start_pod_agent() {
+    local enabled issuer audience
+    enabled="$(_pod_agent_setting SYNAP_WITH_POD_AGENT)"
+    issuer="$(_pod_agent_setting POD_AGENT_ISSUER_URL)"
+    audience="$(_pod_agent_setting POD_AGENT_AUDIENCE)"
+
+    if [ "$enabled" != "1" ] && [ -z "$issuer" ] && [ -z "$audience" ]; then
+        return 1
+    fi
+    if [ -z "$issuer" ] || [ -z "$audience" ]; then
+        echo -e "${RED}✗ Pod-agent requires POD_AGENT_ISSUER_URL and POD_AGENT_AUDIENCE.${NC}" >&2
+        return 2
+    fi
+    if ! _is_canonical_https_url "$issuer" || ! _is_canonical_https_url "$audience"; then
+        echo -e "${RED}✗ Pod-agent issuer and audience must be canonical HTTPS URLs without credentials, query, fragment, or trailing slash.${NC}" >&2
+        return 2
+    fi
+    return 0
+}
+
 # ============================================================================
 # HELPER: Generate secrets and create .env
 # ============================================================================
@@ -1525,14 +1566,18 @@ EOF
     # via the listed leaf services (backend, realtime, pod-admin, etc.).
     # Mirror cmd_update's behavior so install + update have one rule.
     #
-    # Pod-agent is profile-gated (compose profile: pod-agent) and only included
-    # when the operator opts in via `SYNAP_WITH_POD_AGENT=1`. CP-managed pods
-    # need it; eve installs and standalone self-hosters do not.
+    # Pod-agent is profile-gated and needs a generic issuer plus local audience.
+    # It never starts because a legacy integration URL happens to be present.
     local pod_agent_args=()
     local profile_args=()
-    if [ "${SYNAP_WITH_POD_AGENT:-}" = "1" ]; then
+    if should_start_pod_agent; then
         pod_agent_args=(pod-agent)
         profile_args=(--profile pod-agent)
+    else
+        local pod_agent_status=$?
+        if [ "$pod_agent_status" -eq 2 ]; then
+            exit 1
+        fi
     fi
 
     # Detect whether this "install" is really an update of an already-running
@@ -2248,13 +2293,18 @@ cmd_update() {
     # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
     # pod-agent and pod-admin come up regardless.
 
-    # Pod-agent is profile-gated (compose profile: pod-agent) and only restarted
-    # when SYNAP_WITH_POD_AGENT=1 is set. See cmd_install for full rationale.
+    # Pod-agent is profile-gated and only restarts with its generic trust
+    # configuration. See cmd_install for the same guard.
     local pod_agent_args=()
     local profile_args=()
-    if [ "${SYNAP_WITH_POD_AGENT:-}" = "1" ]; then
+    if should_start_pod_agent; then
         pod_agent_args=(pod-agent)
         profile_args=(--profile pod-agent)
+    else
+        local pod_agent_status=$?
+        if [ "$pod_agent_status" -eq 2 ]; then
+            exit 1
+        fi
     fi
 
     # Bring up support services (pod-admin, caddy, pod-agent), force-recreate
@@ -4040,4 +4090,3 @@ case "${1:-help}" in
         exit 1
         ;;
 esac
-

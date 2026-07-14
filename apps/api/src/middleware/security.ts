@@ -119,9 +119,10 @@ export const aiRateLimitMiddleware = rateLimiter({
 });
 
 /**
- * Handshake Rate Limiting Middleware
+ * Federated Exchange Rate Limiting Middleware
  *
- * /api/handshake creates Kratos sessions — stricter than the global limit.
+ * /api/federation/exchange creates Kratos sessions — stricter than the global
+ * limit.
  * 20 attempts per 15 minutes per IP prevents brute-force session minting.
  */
 export const handshakeRateLimitMiddleware = rateLimiter({
@@ -247,6 +248,7 @@ export const getCorsOrigins = (): string[] => {
       "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:3000",
+      "http://localhost:3030",
       "http://localhost:3001",
     ];
   }

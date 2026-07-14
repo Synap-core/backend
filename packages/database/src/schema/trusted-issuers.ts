@@ -1,12 +1,12 @@
 /**
  * Trusted Issuers — pod-level registry of external services allowed to act on this pod.
  *
- * Replaces the CONTROL_PLANE_URL env var with a proper allowlist + approval workflow.
- * Any external service (control plane, automation provider, etc.) that signs JWTs and
+ * Replaces environment-based implicit trust with a proper allowlist + approval workflow.
+ * Any external service that signs JWTs and
  * presents them to pod provisioning endpoints must appear here with status "approved".
  *
  * Lifecycle: pending → approved (or rejected) → revoked
- * Built-in issuers (Synap Cloud) are seeded on startup with status "approved".
+ * A deployment may seed its own issuer, but no vendor issuer is implied by this schema.
  */
 import {
   pgTable,
@@ -27,6 +27,11 @@ import { sql } from "drizzle-orm";
  */
 export const TRUSTED_ISSUER_CAPABILITIES = {
   USER_EXCHANGE: "auth:exchange-user",
+  IDENTITY_LINK: "identity:link-user",
+  MEMBERSHIP_GRANT: "membership:grant",
+  /** Create source configuration for a linked, locally authorized user. */
+  SOURCE_CONFIG_WRITE: "source-config:write",
+  /** @deprecated Use MEMBERSHIP_GRANT for new issuer integrations. */
   MEMBER_ACTIVATION: "membership:activate",
 } as const;
 

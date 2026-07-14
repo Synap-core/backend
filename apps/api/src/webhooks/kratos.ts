@@ -3,8 +3,9 @@
  *
  * Receives webhooks from Ory Kratos for identity.updated events only.
  * identity.created events only fire for self-service registration flows,
- * which we do not use — admin-API creates (seed-admin) don't trigger
- * webhooks. Identity seeding is handled synchronously by seed-admin.
+ * which we do not use — admin-API identity creation does not trigger
+ * webhooks. Initial owner and federated identity projection are handled
+ * synchronously by their authenticated provisioning endpoints.
  */
 
 import { timingSafeEqual } from "crypto";

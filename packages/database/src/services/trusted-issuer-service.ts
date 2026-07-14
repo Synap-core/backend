@@ -1,12 +1,12 @@
 /**
  * TrustedIssuerService — CRUD for the trusted_issuers registry.
  *
- * Manages the pod-level allowlist of external services that are permitted to
- * sign JWTs and call provisioning endpoints. Replaces the CONTROL_PLANE_URL
- * env-var trust model with a database-backed approval workflow.
+ * Manages the Pod-level allowlist of external services that are permitted to
+ * sign JWTs and call provisioning endpoints. Replaces environment-based
+ * implicit trust with a database-backed approval workflow.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { trustedIssuers } from "../schema/trusted-issuers.js";
 import type {
@@ -98,6 +98,32 @@ export class TrustedIssuerService {
   }
 
   /**
+   * Atomically approve a pending issuer during the locally authenticated
+   * first-link flow. Unlike the administrative `approve` operation, this
+   * cannot resurrect an issuer another Pod owner has rejected or revoked.
+   */
+  async approvePending(
+    id: string,
+    reviewedBy: string,
+    allowedScopes: string[]
+  ): Promise<TrustedIssuer | null> {
+    const [updated] = await db
+      .update(trustedIssuers)
+      .set({
+        status: "approved",
+        allowedScopes,
+        reviewedBy,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(trustedIssuers.id, id), eq(trustedIssuers.status, "pending"))
+      )
+      .returning();
+    return updated ?? null;
+  }
+
+  /**
    * Reject a pending issuer with a human-readable reason.
    */
   async reject(id: string, reviewedBy: string, reason: string): Promise<void> {
@@ -149,7 +175,7 @@ export class TrustedIssuerService {
   }
 
   /**
-   * Seed built-in issuers (e.g. Synap Cloud) on pod startup.
+   * Seed deployment-provided issuers on Pod startup.
    *
    * For each entry:
    * - If no row exists → insert with status "approved" and isBuiltIn = true.

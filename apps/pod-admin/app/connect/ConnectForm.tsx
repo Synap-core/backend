@@ -58,18 +58,18 @@ type Step =
   | { kind: "redirecting"; apiKey: string }
   | { kind: "done"; apiKey: string; podUrl: string; workspaceId: string | null }
   | { kind: "error"; message: string; flowId: string | null }
-  | { kind: "handshake-failed"; detail: string };
+  | { kind: "issuer-assertion-failed"; detail: string };
 
 interface ConnectFormProps {
   integration: IntegrationKind;
   redirectUri: string;
-  cpHandshakeToken: string;
+  issuerAssertion: string;
 }
 
 export function ConnectForm({
   integration,
   redirectUri,
-  cpHandshakeToken,
+  issuerAssertion,
 }: ConnectFormProps) {
   const info = INTEGRATION_INFO[integration];
   const hasRedirect = redirectUri.length > 0;
@@ -82,7 +82,7 @@ export function ConnectForm({
   );
   const [copied, setCopied] = useState(false);
   const [sessionReady, setSessionReady] = useState(
-    cpHandshakeToken.length === 0
+    issuerAssertion.length === 0
   );
   const [bootstrapping, setBootstrapping] = useState(false);
 
@@ -99,30 +99,32 @@ export function ConnectForm({
     }
   }, [hasRedirect, redirectIsAllowed]);
 
-  // Managed-pod CP handshake — if the CP forwarded a one-shot token,
-  // exchange it for a Kratos session before we mint the key.
+  // An approved issuer may forward a one-shot assertion. Exchange it directly
+  // with this Pod; the Pod resolves the issuer from the assertion itself.
   useEffect(() => {
-    if (!cpHandshakeToken || sessionReady || bootstrapping) return;
+    if (!issuerAssertion || sessionReady || bootstrapping) return;
     let cancelled = false;
     setBootstrapping(true);
-    void fetch(`${POD_URL}/api/handshake`, {
+    void fetch(`${POD_URL}/api/federation/exchange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ token: cpHandshakeToken }),
+      body: JSON.stringify({ assertion: issuerAssertion }),
     })
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          throw new Error(text || `Handshake failed (${res.status})`);
+          throw new Error(
+            text || `Issuer assertion exchange failed (${res.status})`
+          );
         }
         setSessionReady(true);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setStep({
-          kind: "handshake-failed",
+          kind: "issuer-assertion-failed",
           detail: err instanceof Error ? err.message : "unknown",
         });
       })
@@ -132,7 +134,7 @@ export function ConnectForm({
     return () => {
       cancelled = true;
     };
-  }, [cpHandshakeToken, sessionReady, bootstrapping]);
+  }, [issuerAssertion, sessionReady, bootstrapping]);
 
   const existingActive = trpc.apiKeys.list.useQuery(undefined, {
     enabled: sessionReady,
@@ -306,8 +308,8 @@ export function ConnectForm({
             />
           )}
 
-          {step.kind === "handshake-failed" && (
-            <HandshakeFailedStep
+          {step.kind === "issuer-assertion-failed" && (
+            <IssuerAssertionFailedStep
               detail={step.detail}
               integrationLabel={info.label}
               onContinue={() => {
@@ -565,17 +567,17 @@ function ErrorStep({ message, flowId, onRetry }: ErrorStepProps) {
   );
 }
 
-interface HandshakeFailedStepProps {
+interface IssuerAssertionFailedStepProps {
   detail: string;
   integrationLabel: string;
   onContinue: () => void;
 }
 
-function HandshakeFailedStep({
+function IssuerAssertionFailedStep({
   detail,
   integrationLabel,
   onContinue,
-}: HandshakeFailedStepProps) {
+}: IssuerAssertionFailedStepProps) {
   return (
     <div className="flex flex-col gap-4">
       <div
