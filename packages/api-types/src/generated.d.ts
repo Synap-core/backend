@@ -3415,6 +3415,8 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
+export type PackageDependencyKind = "workspace" | "capability" | "automation";
+export type PackageDependencyRelation = "compose" | "require";
 export interface ReconcileReport {
 	workspaceId: string;
 	dryRun: boolean;
@@ -4866,6 +4868,24 @@ export interface GraphEnvelope {
 		byKind: Record<string, number>;
 		byVia: Record<string, number>;
 	};
+}
+/**
+ * What happened to a single dependency during resolution.
+ *   - `found`          — a matching artifact already existed on the pod.
+ *   - `installed`      — a built-in `workspace` template was materialized now.
+ *   - `composed`       — the compose base was resolved and set as the overlay target.
+ *   - `required-absent`— required but not present, and not auto-installable (surfaced).
+ */
+export type PackageDependencyAction = "found" | "installed" | "composed" | "required-absent";
+export interface ResolvedPackageDependency {
+	slug: string;
+	kind: PackageDependencyKind;
+	relation: PackageDependencyRelation;
+	/** Resolved workspace id (present for `workspace`-kind deps that resolved). */
+	workspaceId?: string;
+	action: PackageDependencyAction;
+	/** Human context — set for `required-absent` (why it couldn't be satisfied). */
+	message?: string;
 }
 /**
  * Standard paginated response envelope.
@@ -12629,6 +12649,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						credentialRequired?: boolean | undefined;
 						inputSchema?: Record<string, unknown> | undefined;
 					}[] | undefined;
+					dependencies?: {
+						slug: string;
+						kind?: "workspace" | "automation" | "capability" | undefined;
+						relation?: "compose" | "require" | undefined;
+						reason?: string | undefined;
+					}[] | undefined;
 				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
@@ -12648,6 +12674,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewIds: string[];
 				entityIds?: undefined;
 				reconciled?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
 			} | {
 				workspaceId: string;
 				entityIds: never[];
@@ -12655,6 +12683,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
 			} | {
 				status: "created" | "pending";
 				workspaceId: string;
@@ -12662,13 +12692,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
+			} | {
+				status: "composed";
+				workspaceId: string;
+				composed: true;
+				dependencies: ResolvedPackageDependency[];
+				profileIds?: undefined;
+				viewIds?: undefined;
+				entityIds?: undefined;
+				reconciled?: undefined;
 			} | {
 				status: "created";
 				workspaceId: string;
 				profileIds: string[];
 				viewIds: string[];
 				entityIds: string[];
+				dependencies: ResolvedPackageDependency[];
 				reconciled?: undefined;
+				composed?: undefined;
 			};
 			meta: object;
 		}>;

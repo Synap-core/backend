@@ -24,9 +24,11 @@
  *
  * This is a pure composition layer: workspace materialization is delegated to
  * `createWorkspaceFromDefinitionIdempotent` (the canonical idempotent create
- * path) — never reimplemented here. Presence resolution is write-gated: a
- * pre-existing workspace only counts as the compose base if the acting user has
- * an editor+ role on it, so composing can never widen access.
+ * path) — never reimplemented here. Presence resolution is access-gated by
+ * relation: a `compose` base only counts if the acting user has an editor+ role
+ * on it (composing writes onto it, so it can never widen access), while a
+ * `require` base only needs to be visible (nothing is written), so an existing
+ * base is reused instead of a duplicate being installed.
  */
 
 import {
@@ -58,14 +60,13 @@ const WRITE_ROLES = new Set(["owner", "admin", "editor"]);
  * What happened to a single dependency during resolution.
  *   - `found`          — a matching artifact already existed on the pod.
  *   - `installed`      — a built-in `workspace` template was materialized now.
- *   - `composed`       — the compose base was resolved and set as the overlay target.
  *   - `required-absent`— required but not present, and not auto-installable (surfaced).
+ *
+ * (A `compose` base surfaces as `found`/`installed` — it's the base that is
+ * found/installed; the OVERLAY is what composes onto it. The workspace-level
+ * `status:"composed"` in the apply response captures that outcome.)
  */
-export type PackageDependencyAction =
-  | "found"
-  | "installed"
-  | "composed"
-  | "required-absent";
+export type PackageDependencyAction = "found" | "installed" | "required-absent";
 
 export interface ResolvedPackageDependency {
   slug: string;
@@ -125,15 +126,20 @@ export interface ResolvePackageDependenciesResult {
 }
 
 /**
- * Find a workspace the user can WRITE whose `settings.workspaceSubtype` matches
- * `slug`. Deterministic when several match: prefer a workspace the user owns,
- * then the most recently created. Ambiguity is logged. Returns null when none
- * match OR the user lacks an editor+ role on every match (so a viewer-only
- * membership can never be hijacked as a compose base).
+ * Find a workspace whose `settings.workspaceSubtype` matches `slug` that the
+ * user may use as a dependency target. `requireWrite` picks the access floor:
+ *   - `true` (compose): editor+ ONLY — the overlay WILL write onto this base,
+ *     so a viewer-only membership must never be hijacked as a compose target.
+ *   - `false` (require): ANY visible membership — presence is all that's needed
+ *     (nothing is written), so an existing base is REUSED rather than a
+ *     duplicate being installed for a user who can only view it.
+ * Deterministic when several match: prefer a workspace the user owns, then the
+ * most recently created. Ambiguity is logged.
  */
-async function findWritableWorkspaceBySubtype(
+async function findWorkspaceBySubtype(
   slug: string,
-  userId: string
+  userId: string,
+  requireWrite: boolean
 ): Promise<{ id: string } | null> {
   const rows = await db
     .select({
@@ -154,30 +160,34 @@ async function findWritableWorkspaceBySubtype(
       )
     );
 
-  const writable = rows.filter((r) => WRITE_ROLES.has(r.role));
-  if (writable.length === 0) return null;
+  // compose writes onto the base → editor+ floor; require only needs presence.
+  const matches = requireWrite
+    ? rows.filter((r) => WRITE_ROLES.has(r.role))
+    : rows;
+  if (matches.length === 0) return null;
 
-  writable.sort((a, b) => {
+  matches.sort((a, b) => {
     const aOwner = a.ownerId === userId ? 1 : 0;
     const bOwner = b.ownerId === userId ? 1 : 0;
     if (aOwner !== bOwner) return bOwner - aOwner;
     return b.createdAt.getTime() - a.createdAt.getTime();
   });
 
-  if (writable.length > 1) {
+  if (matches.length > 1) {
     logger.warn(
       {
         slug,
         userId,
-        count: writable.length,
-        chosen: writable[0].id,
-        candidates: writable.map((w) => w.id),
+        requireWrite,
+        count: matches.length,
+        chosen: matches[0].id,
+        candidates: matches.map((w) => w.id),
       },
       "Multiple workspaces match dependency subtype — chose deterministically (owner, then most-recent)"
     );
   }
 
-  return { id: writable[0].id };
+  return { id: matches[0].id };
 }
 
 /**
@@ -224,8 +234,14 @@ async function ensureWorkspaceDependencyPresent(
     return res;
   };
 
-  // 1. Already present (and writable) → reuse.
-  const existing = await findWritableWorkspaceBySubtype(slug, userId);
+  // 1. Already present → reuse. A `compose` dep needs editor+ on the base (it
+  //    writes onto it); a `require` dep only needs the base to exist + be
+  //    visible (nothing is written), so it reuses rather than installing a dup.
+  const existing = await findWorkspaceBySubtype(
+    slug,
+    userId,
+    dep.relation === "compose"
+  );
   if (existing) return record({ workspaceId: existing.id, action: "found" });
 
   // 2. Resolve the built-in template. Absent → surface (V1: built-in bases only).
@@ -240,6 +256,9 @@ async function ensureWorkspaceDependencyPresent(
   // 3. Ensure the base template's OWN dependencies first (deps-first). Add this
   //    slug to the ancestor path while recursing, then remove it on exit so a
   //    SIBLING re-encountering it (a diamond) is dedup'd, not thrown.
+  //    NOTE: a nested `compose` is treated as presence-only (install-if-missing)
+  //    — compose semantics are TOP-LEVEL only; a base cannot inject an overlay
+  //    target. It never sets `composeTargetWorkspaceId` (see the outer loop).
   path.add(slug);
   try {
     const baseDeps =
