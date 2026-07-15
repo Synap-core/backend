@@ -50,6 +50,7 @@ import { notifCenterRouter } from "./routers/notif-center.js";
 import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
+import { applicationConnectionsRouter } from "./routers/application-connections.js";
 import { sourceConfigsRouter } from "./routers/source-configs.js";
 import { sourceSubscriptionsRouter } from "./routers/source-subscriptions.js";
 import { feedsRouter } from "./routers/feeds.js";
@@ -126,6 +127,7 @@ export const coreRouter = router({
   proactive: proactiveRouter,
   sync: syncManagementRouter,
   trustedIssuers: trustedIssuersRouter,
+  applicationConnections: applicationConnectionsRouter,
   sourceConfigs: sourceConfigsRouter,
   sourceSubscriptions: sourceSubscriptionsRouter,
   feeds: feedsRouter,

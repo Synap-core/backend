@@ -68,6 +68,7 @@ import {
   configureLocalMode,
   safeTokenEqual,
 } from "@synap/auth";
+import { validateExplicitPodSessionToken } from "./explicit-pod-session.js";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { createRequire } from "node:module";
 import { readFileSync, existsSync } from "node:fs";
@@ -203,20 +204,27 @@ configureLocalMode(config.server.localMode, config.server.localAuthToken);
 // Initialize Hono app
 const app = new Hono();
 
-// CORS middleware — derived first-party allowlist (Pattern B), credentialed.
+// CORS middleware — first-party allowlist plus owner-approved applications.
 //
 // Reflecting every origin together with Allow-Credentials is the textbook
 // CSWSH/credentialed-CORS vulnerability (an attacker page can read any
 // cookie-authed response cross-origin). Instead we echo the Origin back ONLY
-// when it is a trusted first party — the base domain or any of its subdomains
-// (SYNAP_BASE_DOMAIN), the explicit ALLOWED_ORIGINS list, or the pod's own
-// PUBLIC_URL. See cors-origin.ts. Cookies/sessions still Just Work across every
-// first-party Synap surface; unknown origins get no ACAO header and the browser
-// blocks the cross-origin read (fail closed).
+// when it is a trusted first party. An exact browser origin explicitly
+// approved by this Pod's owner gets a separate, credentialless CORS allowance.
+// It is transport permission only: every Pod API still requires explicit local
+// authentication and membership. Federation bootstrap endpoints are stricter:
+// the exact application id in their URL must own the calling origin and is
+// matched against the signed issuer assertion by the federation router.
 //
 // Must run first so error responses (429, 413) still carry CORS headers.
 // Electron desktop (no Origin header) passes through untouched.
-import { isAllowedOrigin, hasConfiguredOrigins } from "./cors-origin.js";
+import {
+  hasConfiguredOrigins,
+  isAllowedOrigin,
+  isApprovedApplicationOrigin,
+  isApprovedApplicationOriginForClient,
+  rejectsUnapprovedExternalPodApiRequest,
+} from "./cors-origin.js";
 
 if (!hasConfiguredOrigins() && process.env.NODE_ENV === "production") {
   apiLogger.warn(
@@ -226,9 +234,25 @@ if (!hasConfiguredOrigins() && process.env.NODE_ENV === "production") {
 
 app.use("*", async (c, next) => {
   const origin = c.req.header("origin");
-  if (origin && isAllowedOrigin(origin)) {
+  const firstPartyOrigin = Boolean(origin) && isAllowedOrigin(origin);
+  const applicationExchangePath = c.req.path === "/api/federation/exchange";
+  const applicationFederationPath =
+    applicationExchangePath || c.req.path === "/api/federation/identity-links";
+  const approvedApplicationOrigin =
+    Boolean(origin) &&
+    !firstPartyOrigin &&
+    (applicationFederationPath
+      ? await isApprovedApplicationOriginForClient(
+          origin,
+          c.req.query("application_id"),
+          c.req.query("issuer_url")
+        )
+      : await isApprovedApplicationOrigin(origin));
+  if (origin && (firstPartyOrigin || approvedApplicationOrigin)) {
     c.header("Access-Control-Allow-Origin", origin);
-    c.header("Access-Control-Allow-Credentials", "true");
+    if (firstPartyOrigin) {
+      c.header("Access-Control-Allow-Credentials", "true");
+    }
     c.header("Vary", "Origin");
     c.header(
       "Access-Control-Allow-Methods",
@@ -244,6 +268,73 @@ app.use("*", async (c, next) => {
     );
     c.header("Access-Control-Max-Age", "86400");
   }
+
+  const applicationConnectionPath = c.req.path.startsWith(
+    "/api/federation/application-connections/"
+  );
+  // CORS headers govern what a browser may read, not whether it can send a
+  // cached-preflight request. Enforce revocation at the server boundary too:
+  // an unapproved external origin cannot call any normal Pod API, even while
+  // the browser still remembers a previous preflight response. The narrow
+  // opaque application-connection routes own their separate capability and
+  // CORS checks below.
+  if (
+    rejectsUnapprovedExternalPodApiRequest({
+      origin,
+      firstPartyOrigin,
+      approvedApplicationOrigin,
+      path: c.req.path,
+      method: c.req.method,
+    })
+  ) {
+    return c.json(
+      { error: "This browser origin is not approved for this Pod" },
+      403
+    );
+  }
+  // An owner-approved external origin is allowed to use an explicit Pod token
+  // for normal APIs. It must never fall back to an ambient Kratos cookie:
+  // CORS does not stop a cross-site request from being sent, only from being
+  // read. Bootstrap and opaque continuation routes have their own assertion /
+  // capability checks and intentionally do not carry this session token.
+  const requiresExplicitPodToken =
+    approvedApplicationOrigin &&
+    !firstPartyOrigin &&
+    !applicationExchangePath &&
+    !applicationConnectionPath &&
+    c.req.method !== "OPTIONS";
+  if (requiresExplicitPodToken) {
+    const tokenStatus = await validateExplicitPodSessionToken(
+      c.req.header("x-session-token")
+    );
+    if (tokenStatus !== "valid") {
+      return c.json(
+        {
+          error:
+            tokenStatus === "unavailable"
+              ? "Pod authentication is temporarily unavailable"
+              : "An explicit X-Session-Token is required for an external application origin",
+        },
+        tokenStatus === "unavailable" ? 503 : 401
+      );
+    }
+    // Downstream auth middleware re-validates the token in strict mode. This
+    // closes the race between this transport guard and an ordinary middleware
+    // fallback to a SameSite=None Kratos cookie.
+    c.set("requireExplicitSessionToken" as never, true);
+  }
+
+  // The application-connection completion routes use a narrower,
+  // credentialless per-request CORS policy inside the federation router. They
+  // cannot use this global first-party allowlist because a self-hosted Pod may
+  // have just approved an exact external app origin. Let those OPTIONS calls
+  // reach the route-level validator; every other preflight stays fail-closed.
+  const applicationConnectionPreflight =
+    c.req.method === "OPTIONS" &&
+    /^\/api\/federation\/application-connections\/requests(?:\/[^/]+\/(?:consume|status))?$/.test(
+      c.req.path
+    );
+  if (applicationConnectionPreflight) return next();
 
   // Preflight always gets a 204; a disallowed origin simply receives no ACAO
   // header above, so the browser blocks the actual request.
@@ -760,6 +851,10 @@ app.post("/api/handshake", (c) =>
 // farther below at `/api/federation`.
 app.use("/api/federation/exchange", handshakeRateLimitMiddleware);
 app.use("/api/federation/bootstrap", handshakeRateLimitMiddleware);
+app.use(
+  "/api/federation/application-connections/*",
+  handshakeRateLimitMiddleware
+);
 
 // Session check endpoint — used by the web landing page (synap.dev) to determine
 // if the user already has a valid Pod session after a previous federated

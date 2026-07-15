@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("@synap/auth", () => ({
   authMiddleware: async (_context: unknown, next: () => Promise<Response>) =>
     next(),
+  getKratosSessionByToken: vi.fn(),
 }));
 
 vi.mock("@synap-core/core", () => ({
@@ -39,6 +40,7 @@ vi.mock("@synap/database", () => ({
   consumeFederatedAssertionReceipt: mocks.consumeFederatedAssertionReceipt,
   consumeIssuerIdentityLinkReceipt: vi.fn(),
   createIssuerIdentityLinkReceipt: vi.fn(),
+  FederatedApplicationConnectionService: class FederatedApplicationConnectionService {},
   and: vi.fn(),
   eq: vi.fn(),
   getDb: mocks.getDb,
@@ -57,6 +59,7 @@ vi.mock("@synap/database", () => ({
 
 vi.mock("@synap/database/schema", () => ({
   federatedIdentityLinks: {},
+  federatedApplicationConnections: {},
   projectMembers: {},
   projects: {},
   users: {},
@@ -65,6 +68,13 @@ vi.mock("@synap/database/schema", () => ({
 }));
 
 vi.mock("@synap/api", () => ({
+  createOpaqueApplicationConnectionValue: vi.fn(),
+  hashOpaqueApplicationConnectionValue: vi.fn(),
+  normalizeApplicationCallbackUrl: vi.fn(),
+  normalizeApplicationClientId: vi.fn(),
+  normalizeApplicationConnectionScopes: vi.fn(),
+  normalizeApplicationOrigin: vi.fn(),
+  normalizePublisherUrl: vi.fn(),
   normalizeIssuerUrl: (value: string) => value,
   verifyIssuerJwt: mocks.verifyIssuerJwt,
   verifyTrustedIssuerJwt: mocks.verifyTrustedIssuerJwt,

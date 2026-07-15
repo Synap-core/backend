@@ -64,7 +64,9 @@ export async function proxy(req: NextRequest) {
   // here, not the pod_admin role.
   const path = req.nextUrl.pathname;
   const isSelfService =
-    path === "/connect" || path.startsWith("/approve-agent");
+    path === "/connect" ||
+    path.startsWith("/approve-agent") ||
+    path.startsWith("/connection-requests/");
   if (!isSelfService) {
     const admin = await isPodAdmin(cookie);
     if (!admin) {

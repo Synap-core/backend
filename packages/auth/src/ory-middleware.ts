@@ -68,6 +68,11 @@ export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
 export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") || "";
   const sessionToken = c.req.header("x-session-token") || "";
+  // API server middleware can mark an owner-approved external browser origin
+  // as strict. That origin may never fall back to an ambient Pod cookie: it
+  // must authenticate with its explicit X-Session-Token on every request.
+  const requireExplicitSessionToken =
+    c.get("requireExplicitSessionToken" as never) === true;
 
   // ── LOCAL MODE: fixed-identity auth, no Kratos ──────────────────────────
   // Authenticate via a static bearer token or x-local-token header.
@@ -156,6 +161,9 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
     // is the non-Hono path; both must agree).
     if (sessionToken) {
       session = await getKratosSessionByToken(sessionToken);
+    }
+    if (!session && requireExplicitSessionToken) {
+      return c.json({ error: "Invalid X-Session-Token" }, 401);
     }
     if (!session) {
       // Encrypted browser cookie first

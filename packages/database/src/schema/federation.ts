@@ -10,6 +10,7 @@
 import {
   check,
   index,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -24,6 +25,23 @@ import { workspaces } from "./workspaces.js";
 import { projects } from "./projects.js";
 
 export type FederatedAccessScopeKind = "workspace" | "project";
+
+/**
+ * Capabilities that can be approved for a browser application connection.
+ *
+ * This is deliberately narrower than the Pod's trusted-issuer capability
+ * registry. An application connection currently governs the federation
+ * sign-in/link journey and the exact browser origin permitted to present an
+ * explicit Pod session token. It grants no data privileges itself: every
+ * resulting request remains bounded by the person's real Pod memberships.
+ */
+export const FEDERATED_APPLICATION_CONNECTION_SCOPES = [
+  "auth:exchange-user",
+  "identity:link-user",
+] as const;
+
+export type FederatedApplicationConnectionScope =
+  (typeof FEDERATED_APPLICATION_CONNECTION_SCOPES)[number];
 
 /**
  * An explicit one-to-one link between a trusted issuer subject and a local
@@ -196,6 +214,140 @@ export const issuerIdentityLinkReceipts = pgTable(
   })
 );
 
+/**
+ * A Pod-owner approved pairing of a browser application client and a trusted
+ * issuer. This is separate from `trusted_issuers`: an issuer answers “who may
+ * sign assertions?”, while this row answers “which exact app journey may use
+ * that issuer on this Pod?”.
+ *
+ * `allowedOrigins` and `allowedCallbackUrls` are exact owner-approved browser
+ * registration data. The API CORS policy consults approved origins only to
+ * admit transport from that named app; they never create data permissions.
+ * The user's local Pod session and membership remain authoritative.
+ */
+export const federatedApplicationConnections = pgTable(
+  "federated_application_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    issuerId: uuid("issuer_id")
+      .notNull()
+      .references(() => trustedIssuers.id, { onDelete: "restrict" }),
+    clientId: text("client_id").notNull(),
+    displayName: text("display_name").notNull(),
+    publisherUrl: text("publisher_url"),
+    allowedOrigins: text("allowed_origins")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    allowedCallbackUrls: text("allowed_callback_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    allowedScopes: text("allowed_scopes")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`)
+      .$type<FederatedApplicationConnectionScope[]>(),
+    status: text("status")
+      .notNull()
+      .default("pending")
+      .$type<"pending" | "approved" | "rejected" | "revoked">(),
+    reviewedBy: text("reviewed_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    rejectionReason: text("rejection_reason"),
+    initialRequestData: jsonb("initial_request_data"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    issuerClientUnique: uniqueIndex(
+      "federated_application_connections_issuer_client_unique"
+    ).on(table.issuerId, table.clientId),
+    issuerStatusIdx: index(
+      "federated_application_connections_issuer_status_idx"
+    ).on(table.issuerId, table.status),
+    exactOriginsCheck: check(
+      "federated_application_connections_exact_origins_check",
+      sql`cardinality(${table.allowedOrigins}) > 0`
+    ),
+    exactCallbacksCheck: check(
+      "federated_application_connections_exact_callbacks_check",
+      sql`cardinality(${table.allowedCallbackUrls}) > 0`
+    ),
+  })
+);
+
+/**
+ * Short-lived review request for an application connection. Opaque browser
+ * continuation and callback codes are stored only as hashes. Approval creates
+ * the durable connection above; redirect URLs never contain Pod sessions,
+ * issuer assertions, or bearer credentials.
+ */
+export const federatedApplicationConnectionRequests = pgTable(
+  "federated_application_connection_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    issuerUrl: text("issuer_url").notNull(),
+    clientId: text("client_id").notNull(),
+    displayName: text("display_name").notNull(),
+    publisherUrl: text("publisher_url"),
+    requestedOrigin: text("requested_origin").notNull(),
+    requestedCallbackUrl: text("requested_callback_url").notNull(),
+    requestedScopes: text("requested_scopes")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`)
+      .$type<FederatedApplicationConnectionScope[]>(),
+    /** SHA-256 of the opaque secret returned only to the requesting app. */
+    continuationHash: text("continuation_hash").notNull().unique(),
+    /** SHA-256 of the one-time completion code sent to the stored callback. */
+    callbackCodeHash: text("callback_code_hash").unique(),
+    requestedByUserId: text("requested_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    status: text("status")
+      .notNull()
+      .default("pending")
+      .$type<"pending" | "approved" | "rejected" | "expired">(),
+    approvedConnectionId: uuid("approved_connection_id").references(
+      () => federatedApplicationConnections.id,
+      { onDelete: "set null" }
+    ),
+    reviewedBy: text("reviewed_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    decisionReason: text("decision_reason"),
+    callbackIssuedAt: timestamp("callback_issued_at", { withTimezone: true }),
+    callbackConsumedAt: timestamp("callback_consumed_at", {
+      withTimezone: true,
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    requestMetadata: jsonb("request_metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    statusExpiryIdx: index(
+      "federated_application_connection_requests_status_expiry_idx"
+    ).on(table.status, table.expiresAt),
+    issuerClientIdx: index(
+      "federated_application_connection_requests_issuer_client_idx"
+    ).on(table.issuerUrl, table.clientId),
+    nonemptyScopesCheck: check(
+      "federated_application_connection_requests_nonempty_scopes_check",
+      sql`cardinality(${table.requestedScopes}) > 0`
+    ),
+  })
+);
+
 export type FederatedIdentityLink = typeof federatedIdentityLinks.$inferSelect;
 export type FederatedAccessReceipt =
   typeof federatedAccessReceipts.$inferSelect;
@@ -203,3 +355,7 @@ export type FederatedAssertionReceipt =
   typeof federatedAssertionReceipts.$inferSelect;
 export type IssuerIdentityLinkReceipt =
   typeof issuerIdentityLinkReceipts.$inferSelect;
+export type FederatedApplicationConnection =
+  typeof federatedApplicationConnections.$inferSelect;
+export type FederatedApplicationConnectionRequest =
+  typeof federatedApplicationConnectionRequests.$inferSelect;

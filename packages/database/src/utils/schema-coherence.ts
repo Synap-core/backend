@@ -527,7 +527,6 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "issuer_url",
     addedBy: "0001_trusted_issuers.sql",
   },
-
   // Generic trusted-issuer federation (0192/0193). These server-only ledger
   // tables are a hard authentication dependency: if any is absent, fail at
   // boot rather than accepting a replayable assertion or failing mid-login.
@@ -550,6 +549,19 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "federated_assertion_receipts",
     column: "issuer_id",
     addedBy: "0193_federated_assertion_receipts.sql",
+  },
+  // Pod-owned browser application connection ledger (0194). This remains
+  // generic: it names issuers and application clients, never a particular
+  // control plane or hosted deployment.
+  {
+    table: "federated_application_connections",
+    column: "issuer_id",
+    addedBy: "0194_federated_application_connections.sql",
+  },
+  {
+    table: "federated_application_connection_requests",
+    column: "continuation_hash",
+    addedBy: "0194_federated_application_connections.sql",
   },
 
   // source_configs — pluggable feed source providers (0008)

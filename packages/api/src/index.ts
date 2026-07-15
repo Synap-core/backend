@@ -142,6 +142,18 @@ export {
 } from "./utils/jwks-client.js";
 export { normalizeIssuerUrl } from "./utils/issuer-url-safety.js";
 export {
+  APPLICATION_CONNECTION_SCOPES,
+  normalizeApplicationClientId,
+  normalizeApplicationOrigin,
+  normalizeApplicationCallbackUrl,
+  normalizePublisherUrl,
+  normalizeApplicationConnectionScopes,
+  hashOpaqueApplicationConnectionValue,
+  createOpaqueApplicationConnectionValue,
+  buildApplicationConnectionCallbackUrl,
+  type ApplicationConnectionScope,
+} from "./utils/application-connection.js";
+export {
   setTrustedIssuerSeedHealth,
   getTrustedIssuerSeedHealth,
 } from "./utils/startup-health.js";
