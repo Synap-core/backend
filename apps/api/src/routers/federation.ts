@@ -656,7 +656,7 @@ federationRouter.post("/identity-links/consume", async (c) => {
     nonce: claims.data.nonce,
     receiptId: body.data.receiptId,
   });
-  if (receipt.status !== "consumed") {
+  if (receipt.status !== "consumed" && receipt.status !== "already-consumed") {
     return c.json(
       { error: "Identity-link receipt is expired or already consumed" },
       409

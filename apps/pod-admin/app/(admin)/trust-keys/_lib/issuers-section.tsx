@@ -56,7 +56,36 @@ type IssuerFilter =
   | "revoked"
   | "built-in";
 
-const ISSUER_SCOPES: { value: string; label: string; description: string }[] = [
+/** Derived from the generated tRPC contract so this UI cannot submit a scope
+ * the Pod does not recognize. */
+type TrustedIssuerScope = Parameters<
+  ReturnType<typeof trpc.trustedIssuers.approve.useMutation>["mutateAsync"]
+>[0]["allowedScopes"][number];
+
+const ISSUER_SCOPES = [
+  {
+    value: "auth:exchange-user",
+    label: "Sign in linked users",
+    description: "Exchange this issuer's identity assertion for a Pod session",
+  },
+  {
+    value: "identity:link-user",
+    label: "Link Pod identities",
+    description:
+      "Link an issuer identity after the user proves direct Pod access",
+  },
+  {
+    value: "membership:grant",
+    label: "Manage federated membership",
+    description:
+      "Create or update scoped Pod membership; grant only to a trusted operator",
+  },
+  {
+    value: "source-config:write",
+    label: "Configure data sources",
+    description:
+      "Create source configuration for an already-linked, locally authorized user",
+  },
   {
     value: "setup.agent",
     label: "Setup: Agent",
@@ -93,12 +122,15 @@ const ISSUER_SCOPES: { value: string; label: string; description: string }[] = [
     description: "Update pod tier",
   },
   { value: "sync", label: "Sync", description: "Pod-to-pod sync" },
-];
+] as const satisfies readonly {
+  value: TrustedIssuerScope;
+  label: string;
+  description: string;
+}[];
 
-const DEFAULT_SCOPES = [
-  "setup.agent",
-  "hub-protocol.read",
-  "hub-protocol.write",
+const DEFAULT_SCOPES: TrustedIssuerScope[] = [
+  "auth:exchange-user",
+  "identity:link-user",
 ];
 
 interface IssuerLike {
@@ -449,15 +481,16 @@ function ApproveModal({
   issuer: IssuerLike;
   isPending: boolean;
   onClose: () => void;
-  onConfirm: (scopes: string[]) => void | Promise<void>;
+  onConfirm: (scopes: TrustedIssuerScope[]) => void | Promise<void>;
 }) {
   const { isOpen, onOpenChange } = useDisclosure({
     defaultOpen: true,
     onClose,
   });
-  const [selected, setSelected] = useState<string[]>(DEFAULT_SCOPES);
+  const [selected, setSelected] =
+    useState<TrustedIssuerScope[]>(DEFAULT_SCOPES);
 
-  function toggle(s: string) {
+  function toggle(s: TrustedIssuerScope) {
     setSelected((prev) =>
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
     );

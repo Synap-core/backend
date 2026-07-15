@@ -51,6 +51,12 @@ const originalControlPlaneUrl = process.env.CONTROL_PLANE_URL;
 const issuerUrl = "https://issuer.example.test";
 const podUrl = "https://pod.example.test";
 
+type JwkWithMetadata = JsonWebKey & {
+  kid?: string;
+  alg?: string;
+  use?: string;
+};
+
 function restoreControlPlaneUrl() {
   if (originalControlPlaneUrl === undefined) {
     delete process.env.CONTROL_PLANE_URL;
@@ -59,7 +65,15 @@ function restoreControlPlaneUrl() {
   }
 }
 
-function installJwksResponse(publicJwk: JsonWebKey) {
+function installJwksResponse(publicJwk: JwkWithMetadata | JwkWithMetadata[]) {
+  const inputKeys = Array.isArray(publicJwk) ? publicJwk : [publicJwk];
+  const keys = inputKeys.map((key, index) => ({
+    ...key,
+    alg: "ES256",
+    kid:
+      key.kid ??
+      (inputKeys.length === 1 ? "issuer-key" : `issuer-key-${index}`),
+  }));
   mocks.httpsRequest.mockImplementation(((
     _options: Record<string, unknown>,
     callback: (response: unknown) => void
@@ -81,7 +95,7 @@ function installJwksResponse(publicJwk: JsonWebKey) {
             onData?.(
               Buffer.from(
                 JSON.stringify({
-                  keys: [{ ...publicJwk, alg: "ES256", kid: "issuer-key" }],
+                  keys,
                 })
               )
             );
@@ -270,6 +284,41 @@ describe("trusted issuer JWT verification", () => {
         requiredScope: "auth:exchange-user",
       })
     ).resolves.not.toBeNull();
+  });
+
+  it("selects the exact JWT kid when an issuer publishes rotating ES256 keys", async () => {
+    const first = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const second = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    installJwksResponse([
+      { ...first.publicKey.export({ format: "jwk" }), kid: "old-key" },
+      { ...second.publicKey.export({ format: "jwk" }), kid: "new-key" },
+    ]);
+    mocks.getByUrl.mockResolvedValue({
+      status: "approved",
+      allowedScopes: ["auth:exchange-user"],
+    });
+
+    const token = jwt.sign(
+      {
+        iss: issuerUrl,
+        sub: "external-user-1",
+        aud: podUrl,
+        jti: crypto.randomUUID(),
+      },
+      second.privateKey,
+      { algorithm: "ES256", expiresIn: "5m", keyid: "new-key" }
+    );
+
+    await expect(
+      verifyTrustedIssuerJwt(token, {
+        audience: podUrl,
+        requiredScope: "auth:exchange-user",
+      })
+    ).resolves.toMatchObject({ sub: "external-user-1" });
   });
 
   it("leaves durable-receipt assertions retriable until their route persists the receipt", async () => {

@@ -5,7 +5,8 @@
  *   1. Resolve issuer URL: use a pinned issuer if provided (allowlist mode),
  *      or fall back to the `iss` claim in the JWT itself (OIDC-style discovery).
  *   2. Fetch /.well-known/jwks.json from the resolved issuer URL on first use.
- *   3. Cache the public key in memory (no rotation needed in the same process).
+ *   3. Cache the issuer's ES256 signing keys in memory and refresh on an
+ *      unknown `kid`, so normal signing-key rotation remains available.
  *   4. Verify incoming JWT signature + issuer claim.
  *   5. Track used `jti` claims to prevent replay attacks (LRU, 15 min TTL).
  *
@@ -35,10 +36,10 @@ const logger = createLogger({ module: "jwks-client" });
 // ---------------------------------------------------------------------------
 
 interface JwksCache {
-  publicKeyPem: string;
+  publicKeysByKid: Map<string, string>;
   fetchedAt: number;
-  /** Last successfully fetched key — used as fallback when refresh fails */
-  lastKnownGood?: { publicKeyPem: string; fetchedAt: number };
+  /** Last successfully fetched key set — used as fallback when refresh fails. */
+  lastKnownGood?: { publicKeysByKid: Map<string, string>; fetchedAt: number };
 }
 
 const cache = new Map<string, JwksCache>();
@@ -52,6 +53,8 @@ const RETRY_DELAYS_MS = [1_000, 5_000, 30_000];
 
 const JWKS_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_JWKS_RESPONSE_BYTES = 256 * 1024;
+
+class UnknownJwksKeyError extends Error {}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -124,9 +127,9 @@ function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<string> {
   });
 }
 
-async function fetchPublicKeyPem(
+async function fetchPublicKeys(
   target: ResolvedIssuerEndpoint
-): Promise<string> {
+): Promise<Map<string, string>> {
   let body: unknown;
   try {
     body = JSON.parse(await fetchJwksBody(target)) as unknown;
@@ -143,30 +146,53 @@ async function fetchPublicKeyPem(
     throw new Error(`JWKS response contained no keys from ${target.issuerUrl}`);
   }
 
-  const keys = body.keys.filter((key): key is CryptoJsonWebKey =>
-    isRecord(key)
-  );
-  if (keys.length === 0) {
+  const publicKeysByKid = new Map<string, string>();
+  for (const key of body.keys) {
+    if (!isRecord(key)) continue;
+    const jwk = key as CryptoJsonWebKey;
+    if (
+      typeof jwk.kid !== "string" ||
+      !jwk.kid ||
+      jwk.kty !== "EC" ||
+      jwk.crv !== "P-256" ||
+      (jwk.alg !== undefined && jwk.alg !== "ES256") ||
+      (jwk.use !== undefined && jwk.use !== "sig")
+    ) {
+      continue;
+    }
+    try {
+      const publicKeyObj = crypto.createPublicKey({ key: jwk, format: "jwk" });
+      publicKeysByKid.set(
+        jwk.kid,
+        publicKeyObj.export({ type: "spki", format: "pem" }) as string
+      );
+    } catch {
+      // Ignore malformed entries; an issuer may publish unrelated key types.
+    }
+  }
+  if (publicKeysByKid.size === 0) {
     throw new Error(
-      `JWKS response contained no usable keys from ${target.issuerUrl}`
+      `JWKS response contained no usable ES256 signing keys from ${target.issuerUrl}`
     );
   }
-
-  // Use the first ES256 key (or the only key if no alg filter needed).
-  const jwk =
-    keys.find((key) => key.alg === "ES256" || key.kty === "EC") ?? keys[0];
-  if (!jwk) {
-    throw new Error(`No suitable key found in JWKS from ${target.issuerUrl}`);
-  }
-
-  const publicKeyObj = crypto.createPublicKey({ key: jwk, format: "jwk" });
-  return publicKeyObj.export({ type: "spki", format: "pem" }) as string;
+  return publicKeysByKid;
 }
 
-async function getPublicKeyPem(issuerUrl: string): Promise<string> {
+function publicKeyForKid(
+  publicKeysByKid: ReadonlyMap<string, string>,
+  kid: string
+): string | null {
+  return publicKeysByKid.get(kid) ?? null;
+}
+
+async function getPublicKeyPem(
+  issuerUrl: string,
+  kid: string
+): Promise<string> {
   const cached = cache.get(issuerUrl);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.publicKeyPem;
+    const cachedKey = publicKeyForKid(cached.publicKeysByKid, kid);
+    if (cachedKey) return cachedKey;
   }
 
   // Resolve exactly once before issuing any request. fetchPublicKeyPem connects
@@ -178,17 +204,30 @@ async function getPublicKeyPem(issuerUrl: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      const publicKeyPem = await fetchPublicKeyPem(target);
+      const publicKeysByKid = await fetchPublicKeys(target);
       const fetchedAt = Date.now();
       const entry: JwksCache = {
-        publicKeyPem,
+        publicKeysByKid,
         fetchedAt,
-        lastKnownGood: { publicKeyPem, fetchedAt },
+        lastKnownGood: {
+          publicKeysByKid: new Map(publicKeysByKid),
+          fetchedAt,
+        },
       };
       cache.set(issuerUrl, entry);
       logger.info({ issuerUrl, attempt }, "JWKS public key cached");
+      const publicKeyPem = publicKeyForKid(publicKeysByKid, kid);
+      if (!publicKeyPem) {
+        throw new UnknownJwksKeyError(
+          `JWKS response has no ES256 signing key for kid ${kid} from ${target.issuerUrl}`
+        );
+      }
       return publicKeyPem;
     } catch (err) {
+      // A complete JWKS that lacks this key is a deterministic authorization
+      // failure, not a transient network error. Do not retry for 36 seconds
+      // or evict the useful cache entries for other active signing keys.
+      if (err instanceof UnknownJwksKeyError) throw err;
       lastError = err;
       if (attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
@@ -203,14 +242,21 @@ async function getPublicKeyPem(issuerUrl: string): Promise<string> {
 
   // All retries exhausted — fall back to last-known-good if within 48 h window
   const lkg = cached?.lastKnownGood;
-  if (lkg && Date.now() - lkg.fetchedAt < LAST_KNOWN_GOOD_TTL_MS) {
+  const lastKnownGoodKey = lkg
+    ? publicKeyForKid(lkg.publicKeysByKid, kid)
+    : null;
+  if (
+    lkg &&
+    lastKnownGoodKey &&
+    Date.now() - lkg.fetchedAt < LAST_KNOWN_GOOD_TTL_MS
+  ) {
     const ageHours = Math.round((Date.now() - lkg.fetchedAt) / 3_600_000);
     logger.warn(
       { issuerUrl, ageHours, err: lastError },
       `JWKS fetch failed after retries — using last-known-good key (${ageHours}h old). ` +
         "Issuer may be temporarily unreachable."
     );
-    return lkg.publicKeyPem;
+    return lastKnownGoodKey;
   }
 
   // No fallback available — clear cache so next request retries fresh
@@ -284,6 +330,19 @@ function readUnverifiedIssuerClaim(token: string): string | null {
 }
 
 /**
+ * Key rotation is normal for OIDC issuers. Select the exact ES256 `kid` before
+ * verification instead of trusting whichever JWK happens to be first.
+ */
+function readUnverifiedKeyId(token: string): string | null {
+  const decoded = jwt.decode(token, { complete: true });
+  if (!decoded || typeof decoded !== "object") return null;
+  const header = decoded.header;
+  return header.alg === "ES256" && typeof header.kid === "string" && header.kid
+    ? header.kid
+    : null;
+}
+
+/**
  * Verify a JWT issued by an external issuer using ES256 (ECDSA P-256).
  *
  * Returns the decoded payload if valid, or null if:
@@ -347,9 +406,18 @@ export async function verifyIssuerJwt<T extends object>(
     return null;
   }
 
+  const kid = readUnverifiedKeyId(token);
+  if (!kid) {
+    logger.debug(
+      { issuerUrl },
+      "verifyIssuerJwt: missing ES256 key id — token rejected"
+    );
+    return null;
+  }
+
   // ── Verify signature ──────────────────────────────────────────────────────
   try {
-    const publicKeyPem = await getPublicKeyPem(issuerUrl);
+    const publicKeyPem = await getPublicKeyPem(issuerUrl, kid);
     const payload = jwt.verify(token, publicKeyPem, {
       algorithms: ["ES256"],
       issuer: issuerUrl,

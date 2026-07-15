@@ -48,9 +48,29 @@ export const adminSourceConfigsRouter = new Hono();
 
 // ── Input schema ─────────────────────────────────────────────────────────────
 
+const MAX_INLINE_SECRETS = 50;
+const MAX_CONFIG_ARRAY_INDEX = 10_000;
+const UNSAFE_CONFIG_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+function isSafeConfigPath(path: string): boolean {
+  const parts = path.split(".");
+  return parts.every((part) => {
+    if (!part || UNSAFE_CONFIG_PATH_SEGMENTS.has(part)) return false;
+    if (!/^\d+$/.test(part)) return true;
+    const index = Number(part);
+    return Number.isSafeInteger(index) && index <= MAX_CONFIG_ARRAY_INDEX;
+  });
+}
+
 const inlineSecretSchema = z.object({
   /** Dotted JSON path into the config where the vault reference should land. */
-  field: z.string().min(1),
+  field: z.string().min(1).max(512).refine(isSafeConfigPath, {
+    message: "field must be a safe, bounded dotted configuration path",
+  }),
   value: z.string().min(1),
 });
 
@@ -59,7 +79,7 @@ const createInputSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
   config: z.record(z.string(), z.unknown()),
-  secrets: z.array(inlineSecretSchema).optional(),
+  secrets: z.array(inlineSecretSchema).max(MAX_INLINE_SECRETS).optional(),
   /** Optional: tie the config to a specific workspace. Null/omitted = pod-wide. */
   workspaceId: z.string().uuid().optional(),
 });
@@ -135,12 +155,21 @@ function setDeep(
   path: string,
   value: unknown
 ): void {
+  // The schema rejects these paths, but retain a local guard because this
+  // helper mutates objects and must never be a prototype-pollution primitive
+  // if it is reused outside the HTTP boundary.
+  if (!isSafeConfigPath(path)) {
+    throw new Error("Unsafe source-config secret path");
+  }
   const parts = path.split(".");
   let node: unknown = root;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];
     if (Array.isArray(node)) {
-      const idx = Number.parseInt(key, 10);
+      if (!/^\d+$/.test(key)) {
+        throw new Error("Source-config array paths must use numeric indices");
+      }
+      const idx = Number(key);
       if (node[idx] == null) node[idx] = {};
       node = node[idx];
     } else if (node && typeof node === "object") {
@@ -155,7 +184,10 @@ function setDeep(
   }
   const tail = parts[parts.length - 1];
   if (Array.isArray(node)) {
-    node[Number.parseInt(tail, 10)] = value;
+    if (!/^\d+$/.test(tail)) {
+      throw new Error("Source-config array paths must use numeric indices");
+    }
+    node[Number(tail)] = value;
   } else if (node && typeof node === "object") {
     (node as Record<string, unknown>)[tail] = value;
   }
@@ -287,72 +319,68 @@ adminSourceConfigsRouter.post("/", async (c) => {
     );
   }
 
-  // 5. Create secrets (if any) and rewrite config with vault:// refs.
-  const configOut = structuredClone(input.config) as Record<string, unknown>;
-  const createdSecretIds: string[] = [];
+  // 5. Create the config and its encrypted secrets atomically. The assertion
+  // receipt is intentionally spent before any write, so this transaction is
+  // the rollback boundary that prevents orphaned secrets if a later insert or
+  // re-tag fails. A retry receives a new signed assertion rather than a
+  // partially provisioned config.
+  const { row, secretCount } = await db.transaction(async (tx) => {
+    const configOut = structuredClone(input.config) as Record<string, unknown>;
+    const createdSecretIds: string[] = [];
 
-  if (input.secrets?.length) {
-    for (const entry of input.secrets) {
-      const blob = encryptServerSide(entry.value);
-      // Direct insert (not upsert) — we need one secret row per inline entry
-      // and we retag serviceId to 'source:<configId>' after the config row
-      // is created (see step 6 below).
-      const [secret] = await db
-        .insert(secrets)
-        .values({
-          userId: linkedUserId,
-          serviceId: "source:admin-provisioned",
-          name: `source-config "${input.name}" — ${entry.field}`,
-          type: "api_key",
-          category: "feed-sources",
-          description: `Inline secret provisioned by a trusted issuer for source "${input.name}" field "${entry.field}"`,
-          encryptedData: blob.encryptedData,
-          iv: blob.iv,
-          authTag: blob.authTag,
-          encryptionMode: "server",
-          encryptionVersion: 1,
-        })
-        .returning();
-      createdSecretIds.push(secret.id);
-      setDeep(configOut, entry.field, `vault://${secret.id}/value`);
+    if (input.secrets?.length) {
+      for (const entry of input.secrets) {
+        const blob = encryptServerSide(entry.value);
+        // Direct insert (not upsert) — each inline field needs a distinct
+        // vault value. The transaction re-tags them after the config exists.
+        const [secret] = await tx
+          .insert(secrets)
+          .values({
+            userId: linkedUserId,
+            serviceId: "source:admin-provisioned",
+            name: `source-config "${input.name}" — ${entry.field}`,
+            type: "api_key",
+            category: "feed-sources",
+            description: `Inline secret provisioned by a trusted issuer for source "${input.name}" field "${entry.field}"`,
+            encryptedData: blob.encryptedData,
+            iv: blob.iv,
+            authTag: blob.authTag,
+            encryptionMode: "server",
+            encryptionVersion: 1,
+          })
+          .returning();
+        createdSecretIds.push(secret.id);
+        setDeep(configOut, entry.field, `vault://${secret.id}/value`);
+      }
     }
-  }
 
-  // 6. Insert the source_config row.
-  const [row] = await db
-    .insert(sourceConfigs)
-    .values({
-      userId: linkedUserId,
-      workspaceId: input.workspaceId ?? null,
-      providerType: input.providerType,
-      name: input.name,
-      description: input.description,
-      config: configOut,
-      enabled: true,
-    })
-    .returning();
+    const [row] = await tx
+      .insert(sourceConfigs)
+      .values({
+        userId: linkedUserId,
+        workspaceId: input.workspaceId ?? null,
+        providerType: input.providerType,
+        name: input.name,
+        description: input.description,
+        config: configOut,
+        enabled: true,
+      })
+      .returning();
 
-  // 7. Re-tag the secrets with the real config id so the delete-cascade
-  //    cleanup path (secrets WHERE serviceId = "source:<id>") finds them.
-  if (createdSecretIds.length > 0) {
-    try {
-      await db
+    if (createdSecretIds.length > 0) {
+      await tx
         .update(secrets)
         .set({ serviceId: `source:${row.id}` })
         .where(inArray(secrets.id, createdSecretIds));
-    } catch (err) {
-      logger.warn(
-        { err, configId: row.id, secretIds: createdSecretIds },
-        "Failed to retag provisioned secrets — cascade delete will need manual purge"
-      );
     }
-  }
+    return { row, secretCount: createdSecretIds.length };
+  });
   logger.info(
     {
       configId: row.id,
       providerType: row.providerType,
       linkedUserId,
-      secretCount: createdSecretIds.length,
+      secretCount,
     },
     "Source config provisioned through generic issuer federation"
   );

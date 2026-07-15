@@ -4,7 +4,7 @@
  * Federation is intentionally issuer-agnostic: an external subject is never
  * meaningful without the trusted issuer that asserted it.
  */
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
@@ -354,23 +354,41 @@ export async function consumeIssuerIdentityLinkReceipt(input: {
   nonce: string;
   receiptId: string;
 }): Promise<
-  | { status: "consumed"; userId: string; issuerSubject: string }
+  | {
+      /** First successful consumption of this browser proof. */
+      status: "consumed";
+      userId: string;
+      issuerSubject: string;
+    }
+  | {
+      /**
+       * The exact issuer proof was already consumed. Returning the same
+       * result lets the issuer recover a lost response after its own ledger
+       * write failed; it never replays a Pod mutation or accepts a different
+       * receipt, subject, intent, nonce, or expired proof.
+       */
+      status: "already-consumed";
+      userId: string;
+      issuerSubject: string;
+    }
   | { status: "not-found" }
 > {
   const now = new Date();
+  const receiptId = input.receiptId.trim();
+  const issuerId = input.issuerId.trim();
+  const issuerSubject = input.issuerSubject.trim();
+  const intentId = input.intentId.trim();
+  const nonceHash = hashNonce(input.nonce.trim());
   const [receipt] = await db
     .update(issuerIdentityLinkReceipts)
     .set({ consumedAt: now })
     .where(
       and(
-        eq(issuerIdentityLinkReceipts.receiptId, input.receiptId.trim()),
-        eq(issuerIdentityLinkReceipts.issuerId, input.issuerId.trim()),
-        eq(
-          issuerIdentityLinkReceipts.issuerSubject,
-          input.issuerSubject.trim()
-        ),
-        eq(issuerIdentityLinkReceipts.intentId, input.intentId.trim()),
-        eq(issuerIdentityLinkReceipts.nonceHash, hashNonce(input.nonce.trim())),
+        eq(issuerIdentityLinkReceipts.receiptId, receiptId),
+        eq(issuerIdentityLinkReceipts.issuerId, issuerId),
+        eq(issuerIdentityLinkReceipts.issuerSubject, issuerSubject),
+        eq(issuerIdentityLinkReceipts.intentId, intentId),
+        eq(issuerIdentityLinkReceipts.nonceHash, nonceHash),
         isNull(issuerIdentityLinkReceipts.consumedAt),
         gt(issuerIdentityLinkReceipts.expiresAt, now)
       )
@@ -379,7 +397,32 @@ export async function consumeIssuerIdentityLinkReceipt(input: {
       userId: issuerIdentityLinkReceipts.userId,
       issuerSubject: issuerIdentityLinkReceipts.issuerSubject,
     });
-  return receipt ? { status: "consumed", ...receipt } : { status: "not-found" };
+  if (receipt) return { status: "consumed", ...receipt };
+
+  // A Control Plane response can be lost after the Pod has atomically marked
+  // this receipt consumed but before the CP writes its discovery ledger. The
+  // caller is still presenting a fresh signed issuer assertion, and every
+  // proof-binding field below must match, so replaying this *read* is safe.
+  // Keep the original expiry boundary: an old receipt cannot be used as a
+  // durable access oracle.
+  const alreadyConsumed = await db.query.issuerIdentityLinkReceipts.findFirst({
+    where: and(
+      eq(issuerIdentityLinkReceipts.receiptId, receiptId),
+      eq(issuerIdentityLinkReceipts.issuerId, issuerId),
+      eq(issuerIdentityLinkReceipts.issuerSubject, issuerSubject),
+      eq(issuerIdentityLinkReceipts.intentId, intentId),
+      eq(issuerIdentityLinkReceipts.nonceHash, nonceHash),
+      isNotNull(issuerIdentityLinkReceipts.consumedAt),
+      gt(issuerIdentityLinkReceipts.expiresAt, now)
+    ),
+    columns: {
+      userId: true,
+      issuerSubject: true,
+    },
+  });
+  return alreadyConsumed
+    ? { status: "already-consumed", ...alreadyConsumed }
+    : { status: "not-found" };
 }
 
 /** Apply one exact trusted-issuer membership command atomically. */
