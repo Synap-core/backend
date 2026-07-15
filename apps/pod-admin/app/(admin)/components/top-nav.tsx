@@ -24,8 +24,9 @@ import {
 } from "@heroui/react";
 import { LogOut, RefreshCw, Search } from "lucide-react";
 import { useEffect, useState } from "react";
+import { publicPodUrl } from "../../../lib/public-pod-url";
 
-const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
+const POD_URL = publicPodUrl();
 
 interface TopNavProps {
   /** Operator email (from middleware-injected header on first paint). */

@@ -606,7 +606,10 @@ $return_urls
       enabled: true
       config: {}
     passkey:
-      enabled: true
+      # The native Pod Admin login currently supports password/OIDC flow nodes.
+      # Keep passkeys disabled until its WebAuthn ceremony is implemented; an
+      # enabled but non-functional trigger is worse than an absent option.
+      enabled: false
       config:
         rp:
           display_name: "Synap"

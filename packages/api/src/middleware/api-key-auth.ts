@@ -124,9 +124,12 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
       },
       "Rate limit exceeded"
     );
+    // Include a machine-parseable Retry-After so bulk clients (Superwhisper
+    // store-first) can sleep the window instead of spinning. Window = 60s.
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
-      message: "Rate limit exceeded. Please try again later.",
+      message: "Rate limit exceeded. Retry after 60s.",
+      cause: { retryAfterSec: 60 },
     });
   }
 

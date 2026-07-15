@@ -13,10 +13,7 @@ import { SetupForm } from "./SetupForm";
 
 export const dynamic = "force-dynamic";
 
-const INTERNAL_POD_URL =
-  process.env.POD_URL ??
-  process.env.NEXT_PUBLIC_POD_URL ??
-  "http://localhost:4000";
+const INTERNAL_POD_URL = process.env.POD_URL ?? "http://localhost:4000";
 
 interface SetupStatus {
   needsSetup: boolean;

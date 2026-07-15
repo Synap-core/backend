@@ -150,6 +150,37 @@ export const handshakeRateLimitMiddleware = rateLimiter({
 });
 
 /**
+ * A pending application connection is polled by the browser holding its
+ * opaque continuation. Status itself cannot mint a session or mutate trust,
+ * so it needs a separate budget that covers the documented 30-poll recovery
+ * window without weakening the strict handoff/complete protections.
+ */
+export const applicationConnectionStatusRateLimitMiddleware = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: "draft-7",
+  keyGenerator: (c) => {
+    const ip =
+      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+      c.req.header("x-real-ip") ||
+      "unknown";
+    if (process.env.NODE_ENV === "development") {
+      return "application-connection-status-dev-bypass";
+    }
+    return `application-connection-status:${ip}`;
+  },
+  handler: (c) =>
+    c.json(
+      {
+        error: "Too many connection status checks",
+        message: "Please wait before checking this connection again.",
+        retryAfter: "15 minutes",
+      },
+      429
+    ),
+});
+
+/**
  * Request Size Limit Middleware
  *
  * Default: 10MB max request body.

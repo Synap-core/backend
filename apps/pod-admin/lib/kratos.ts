@@ -12,10 +12,7 @@
 // Server-side URL: this Next.js process to the backend. Reads POD_URL first
 // (set to `http://backend:4000` in compose), falls back to the public URL
 // when running locally outside docker.
-const INTERNAL_POD_URL =
-  process.env.POD_URL ??
-  process.env.NEXT_PUBLIC_POD_URL ??
-  "http://localhost:4000";
+const INTERNAL_POD_URL = process.env.POD_URL ?? "http://localhost:4000";
 
 export interface KratosIdentity {
   id: string;

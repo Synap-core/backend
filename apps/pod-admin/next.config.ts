@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
 
 /**
- * Pod Admin lives on the same origin as the pod API in production
- * (served behind the pod's reverse proxy at `/admin-next` or a dedicated
- * subdomain). The dev server runs on :4040 and proxies tRPC + Kratos
- * requests through `NEXT_PUBLIC_POD_URL` so cookies stay same-origin.
+ * Pod Admin is a dedicated operator origin. Browser API configuration is
+ * injected at request time by the root layout, never baked into this reusable
+ * Next image via NEXT_PUBLIC_*.
  */
 const nextConfig: NextConfig = {
   output: "standalone",

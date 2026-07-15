@@ -3,29 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Button, Card, CardBody, CardHeader } from "@heroui/react";
 import { Bot, Check, ShieldCheck, X } from "lucide-react";
-
-/**
- * Derive the pod API origin from the page's own hostname.
- *
- * `NEXT_PUBLIC_POD_URL` is baked at build time and can drift between
- * environments. Since pod-admin always lives at `pod-admin.<root>` and the API
- * at `pod.<root>`, derive it at runtime — robust regardless of which env the
- * pod-admin container was built against.
- *
- * Mirrors the reverse of `toPodAdminOrigin()` in `hub-protocol/rest/setup.ts`.
- * Dev (localhost) → :4000 Hono API port.
- */
-function getPodUrl(): string {
-  if (typeof window === "undefined") return "";
-  const host = window.location.hostname;
-  // Dev: pod-admin runs on :4040, API on :4000
-  if (host === "localhost" || host === "127.0.0.1") {
-    return "http://localhost:4000";
-  }
-  // pod-admin.<root> → pod.<root>
-  const root = host.replace(/^pod-admin\./, "");
-  return `https://pod.${root}`;
-}
+import { publicPodUrl } from "../../../lib/public-pod-url";
 
 const SCOPES = [
   "hub-protocol.read",
@@ -48,8 +26,7 @@ interface ApproveFormProps {
 
 export function ApproveForm({ keyId, agentType }: ApproveFormProps) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
-  // Derive at render time from the page's own origin — not a build-time env var.
-  const podUrl = useMemo(() => getPodUrl(), []);
+  const podUrl = useMemo(() => publicPodUrl(), []);
 
   const act = useCallback(
     async (action: "approve" | "reject") => {

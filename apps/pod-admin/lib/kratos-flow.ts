@@ -11,28 +11,14 @@
  * here — those still live in the pod's bootstrap surface.
  */
 
-const ENV_POD_URL = process.env.NEXT_PUBLIC_POD_URL?.trim() ?? "";
+import { publicPodUrl as runtimePublicPodUrl } from "./public-pod-url";
 
 /**
- * Resolve the public pod URL at request time. The env var is preferred, but
- * when the docker image was built without `NEXT_PUBLIC_POD_URL` we derive
- * `pod.<root>` from `pod-admin.<root>`. This mirrors the runtime fallback
- * in `app/providers.tsx` and keeps a stale build from baking `undefined`
- * into the bundle.
+ * Resolve the public Pod API URL from server-injected runtime configuration.
+ * This keeps a reusable Pod Admin image correct after hostname transitions.
  */
 function publicPodUrl(): string {
-  if (ENV_POD_URL) return ENV_POD_URL;
-  if (typeof window === "undefined") return "";
-  try {
-    const u = new URL(window.location.origin);
-    if (u.hostname.startsWith("pod-admin.")) {
-      const root = u.hostname.slice("pod-admin.".length);
-      return `${u.protocol}//pod.${root}`;
-    }
-    return window.location.origin;
-  } catch {
-    return window.location.origin;
-  }
+  return runtimePublicPodUrl();
 }
 
 function kratosPublic(): string {

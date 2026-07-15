@@ -60,8 +60,10 @@ import {
   rateLimitMiddleware,
   aiRateLimitMiddleware,
   requestSizeLimit,
+  applicationConnectionStatusRateLimitMiddleware,
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
+import { configuredPodAdminBase } from "./pod-admin-config.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import {
   authMiddleware,
@@ -506,29 +508,21 @@ app.get("/status/release", async (c) => {
 // `pod-admin.<root>/connect` directly via
 // `buildIntegrationConnectUrl()` in `@synap-core/external-connect-client`.
 app.get("/admin/connect", (c) => {
-  const host = c.req.header("host") ?? "";
-  const proto = c.req.header("x-forwarded-proto") ?? "https";
   const url = new URL(c.req.url);
-
-  // Production: `pod.<root>` → `pod-admin.<root>`. Anything else (raw
-  // IP, localhost, custom CNAME) falls back to the dev pod-admin port.
-  let target: string;
-  if (host.startsWith("pod.")) {
-    const root = host.slice("pod.".length).replace(/:\d+$/, "");
-    target = `${proto}://pod-admin.${root}/connect${url.search}`;
-  } else if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
-    target = `http://localhost:4040/connect${url.search}`;
-  } else {
-    // Best effort: assume `<sub>.<root>` and swap `<sub>` → `pod-admin`.
-    const dot = host.indexOf(".");
-    const root =
-      dot > 0
-        ? host.slice(dot + 1).replace(/:\d+$/, "")
-        : host.replace(/:\d+$/, "");
-    target = `${proto}://pod-admin.${root}/connect${url.search}`;
+  const admin = configuredPodAdminBase();
+  if (!admin.ok) {
+    return c.json(
+      {
+        error: "Pod Admin is not configured",
+        code: admin.code,
+        remediation: "configure_pod_admin_url",
+      },
+      503
+    );
   }
-
-  return c.redirect(target, 302);
+  const target = new URL("/connect", admin.base);
+  target.search = url.search;
+  return c.redirect(target.toString(), 302);
 });
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
@@ -851,10 +845,12 @@ app.post("/api/handshake", (c) =>
 // farther below at `/api/federation`.
 app.use("/api/federation/exchange", handshakeRateLimitMiddleware);
 app.use("/api/federation/bootstrap", handshakeRateLimitMiddleware);
-app.use(
-  "/api/federation/application-connections/*",
-  handshakeRateLimitMiddleware
-);
+app.use("/api/federation/application-connections/requests/*", (c, next) => {
+  if (c.req.path.endsWith("/status")) {
+    return applicationConnectionStatusRateLimitMiddleware(c, next);
+  }
+  return handshakeRateLimitMiddleware(c, next);
+});
 
 // Session check endpoint — used by the web landing page (synap.dev) to determine
 // if the user already has a valid Pod session after a previous federated
@@ -1582,10 +1578,15 @@ void (async () => {
   const domain = process.env.DOMAIN?.trim();
   if (!domain || domain === "localhost") return; // dev mode — skip
 
-  // Synap's domain convention: DOMAIN is `pod.<root>`. Strip the pod prefix
-  // to get the bare root, then compute the expected pod-admin origin.
-  const bareRoot = domain.startsWith("pod.") ? domain.slice(4) : domain;
-  const expectedOrigin = `https://pod-admin.${bareRoot}`;
+  const admin = configuredPodAdminBase();
+  if (!admin.ok) {
+    apiLogger.warn(
+      { code: admin.code },
+      "Kratos CORS coherence check skipped — Pod Admin URL is not configured"
+    );
+    return;
+  }
+  const expectedOrigin = admin.base.origin;
   const kratosPublicUrl =
     process.env.KRATOS_PUBLIC_URL?.replace(/\/$/, "") || "http://kratos:4433";
 

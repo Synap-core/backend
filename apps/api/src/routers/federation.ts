@@ -49,6 +49,7 @@ import {
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
 } from "@synap/api";
+import { configuredPodAdminBase } from "../pod-admin-config.js";
 
 const logger = createLogger({ module: "federation" });
 export const federationRouter = new Hono();
@@ -333,54 +334,67 @@ async function requireRegisteredApplicationConnection(input: {
   return null;
 }
 
-type PodAdminReviewTarget =
-  | { ok: true; url: string }
-  | { ok: false; code: "POD_ADMIN_URL_REQUIRED" | "POD_ADMIN_URL_INVALID" };
-
-/**
- * The Pod Admin URL is deployment configuration, not something an app or an
- * API request may infer. The Pod's public API and its operator console can be
- * on different hosts, particularly for self-hosted installations. Requiring
- * this explicit URL avoids accidentally redirecting an owner to an API path.
- */
 function podAdminConnectionReviewTarget(
   requestId: string,
   redemptionSecret: string
-): PodAdminReviewTarget {
-  const configuredUrl = process.env.POD_ADMIN_URL?.trim();
-  if (!configuredUrl) {
-    return { ok: false, code: "POD_ADMIN_URL_REQUIRED" };
-  }
+):
+  | { ok: true; url: string }
+  | {
+      ok: false;
+      code: "POD_ADMIN_URL_REQUIRED" | "POD_ADMIN_URL_INVALID";
+    } {
+  const result = configuredPodAdminBase();
+  if (!result.ok) return result;
+  const base = result.base;
 
-  try {
-    const base = new URL(configuredUrl);
-    const isHttpUrl = base.protocol === "https:" || base.protocol === "http:";
-    const requiresHttps = process.env.NODE_ENV === "production";
-    if (
-      !isHttpUrl ||
-      !base.hostname ||
-      base.username ||
-      base.password ||
-      base.pathname !== "/" ||
-      base.search ||
-      base.hash ||
-      (requiresHttps && base.protocol !== "https:")
-    ) {
-      return { ok: false, code: "POD_ADMIN_URL_INVALID" };
-    }
+  // Pod Admin's native-login route redeems the generic request against the
+  // locally authenticated Pod user before it exposes the review surface.
+  base.pathname = "/connection-requests/new";
+  base.search = "";
+  base.searchParams.set("requestId", requestId);
+  // A fragment is never sent to Pod Admin, its proxy, or application logs.
+  // The client immediately scrubs it after reading the one-time proof.
+  base.hash = new URLSearchParams({ redeem: redemptionSecret }).toString();
+  return { ok: true, url: base.toString() };
+}
 
-    // Pod Admin's native-login route redeems the generic request against the
-    // locally authenticated Pod user before it exposes the review surface.
-    base.pathname = "/connection-requests/new";
-    base.search = "";
-    base.searchParams.set("requestId", requestId);
-    // A fragment is never sent to Pod Admin, its proxy, or application logs.
-    // The client immediately scrubs it after reading the one-time proof.
-    base.hash = new URLSearchParams({ redeem: redemptionSecret }).toString();
-    return { ok: true, url: base.toString() };
-  } catch {
-    return { ok: false, code: "POD_ADMIN_URL_INVALID" };
+function podAdminConnectionFailureTarget(code: string): string | null {
+  const result = configuredPodAdminBase();
+  if (!result.ok) return null;
+  result.base.pathname = "/connection-requests/error";
+  result.base.search = "";
+  result.base.searchParams.set("code", code);
+  return result.base.toString();
+}
+
+function applicationConnectionStartFailure(
+  c: Context,
+  status: 400 | 415 | 503,
+  code: string,
+  error: string
+): Response {
+  // Explicit API callers retain a JSON contract. A browser form submit must
+  // never strand an owner on raw API JSON; use the configured Pod Admin error
+  // surface whenever it is safe to do so.
+  if (c.req.header("accept")?.includes("application/json")) {
+    return c.json(
+      {
+        error,
+        code,
+        remediation:
+          code === "POD_ADMIN_URL_REQUIRED" || code === "POD_ADMIN_URL_INVALID"
+            ? "configure_pod_admin_url"
+            : "review_pod_connection_setup",
+      },
+      status
+    );
   }
+  const target = podAdminConnectionFailureTarget(code);
+  if (target) return c.redirect(target, 303);
+  return c.html(
+    "<!doctype html><title>Pod connection needs configuration</title><main><h1>Pod connection needs configuration</h1><p>This Pod cannot open its secure Admin console yet.</p><p>A Pod owner needs to configure this Pod's Admin URL before secure application access can be set up.</p></main>",
+    status
+  );
 }
 
 function normalizeApplicationConnectionProposal(input: {
@@ -822,63 +836,75 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
   const origin = c.req.header("origin");
   const normalizedOrigin = origin ? normalizeApplicationOrigin(origin) : null;
   if (!origin || normalizedOrigin !== origin) {
-    return c.json(
-      { error: "A canonical application Origin header is required" },
-      400
+    return applicationConnectionStartFailure(
+      c,
+      400,
+      "INVALID_APPLICATION_ORIGIN",
+      "A canonical application Origin header is required"
     );
   }
   const contentType = c.req.header("content-type") ?? "";
   if (!contentType.startsWith("application/x-www-form-urlencoded")) {
-    return c.json(
-      { error: "Application setup must use a top-level form submission" },
-      415
+    return applicationConnectionStartFailure(
+      c,
+      415,
+      "INVALID_APPLICATION_HANDOFF",
+      "Application setup must use a top-level form submission"
     );
   }
   const parsed = applicationConnectionStartSchema.safeParse(
     await c.req.parseBody().catch(() => null)
   );
   if (!parsed.success || parsed.data.origin !== origin) {
-    return c.json(
-      {
-        error:
-          "A canonical issuer, registered application, exact origin, callback, and continuation hash are required",
-      },
-      400
+    return applicationConnectionStartFailure(
+      c,
+      400,
+      "INVALID_APPLICATION_HANDOFF",
+      "A canonical issuer, registered application, exact origin, callback, and continuation hash are required"
     );
   }
   if (
     hashOpaqueApplicationConnectionValue(parsed.data.redemptionSecret) !==
     parsed.data.redemptionHash.toLowerCase()
   ) {
-    return c.json({ error: "Invalid application connection proof" }, 400);
+    return applicationConnectionStartFailure(
+      c,
+      400,
+      "INVALID_APPLICATION_HANDOFF",
+      "Invalid application connection proof"
+    );
   }
   const reviewTarget = podAdminConnectionReviewTarget(
     parsed.data.requestId,
     parsed.data.redemptionSecret
   );
   if (!reviewTarget.ok) {
-    return c.json(
-      {
-        error:
-          "This Pod needs a secure Pod Admin URL before application access can be set up",
-        code: reviewTarget.code,
-        remediation: "configure_pod_admin_url",
-      },
-      503
+    return applicationConnectionStartFailure(
+      c,
+      503,
+      reviewTarget.code,
+      "This Pod needs a secure Pod Admin URL before application access can be set up"
     );
   }
   try {
     const request = await startApplicationConnectionRequest(parsed.data);
     if (!request) {
-      return c.json(
-        { error: "Application origin and callback must be exact HTTPS URLs" },
-        400
+      return applicationConnectionStartFailure(
+        c,
+        400,
+        "INVALID_APPLICATION_HANDOFF",
+        "Application origin and callback must be exact HTTPS URLs"
       );
     }
     return c.redirect(reviewTarget.url, 303);
   } catch (error) {
     logger.error({ error }, "Could not start Pod Admin connection handoff");
-    return c.json({ error: "Could not start Pod Admin setup" }, 503);
+    return applicationConnectionStartFailure(
+      c,
+      503,
+      "POD_CONNECTION_START_FAILED",
+      "Could not start Pod Admin setup"
+    );
   }
 });
 

@@ -20,8 +20,9 @@ import { useCallback, useEffect as _useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, Card, CardBody, Input } from "@heroui/react";
 import { KeyRound, AlertCircle, CheckCircle2 } from "lucide-react";
+import { publicPodUrl } from "../../lib/public-pod-url";
 
-const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
+const POD_URL = publicPodUrl();
 
 export function SetupForm() {
   const searchParams = useSearchParams();

@@ -114,6 +114,7 @@ describe("application connection request boundary", () => {
 
   afterEach(() => {
     delete process.env.PUBLIC_URL;
+    delete process.env.POD_ADMIN_DOMAIN;
     delete process.env.POD_ADMIN_URL;
   });
 
@@ -126,6 +127,7 @@ describe("application connection request boundary", () => {
           "Content-Type": "application/json",
           Cookie: "ory_kratos_session=cookie-only",
           Origin: "https://app.example.test",
+          Accept: "application/json",
         },
         body: JSON.stringify({
           issuerUrl: "https://issuer.example.test",
@@ -140,7 +142,29 @@ describe("application connection request boundary", () => {
     expect(response.status).toBe(415);
     await expect(response.json()).resolves.toEqual({
       error: "Application setup must use a top-level form submission",
+      code: "INVALID_APPLICATION_HANDOFF",
+      remediation: "review_pod_connection_setup",
     });
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
+  });
+
+  it("sends browser form failures to the Pod-owned Admin error surface", async () => {
+    const response = await federationRouter.request(
+      "/application-connections/requests/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://app.example.test",
+        },
+        body: "origin=https%3A%2F%2Fapp.example.test",
+      }
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "https://pod-admin.example.test/connection-requests/error?code=INVALID_APPLICATION_HANDOFF"
+    );
     expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
   });
 
@@ -171,6 +195,7 @@ describe("application connection request boundary", () => {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           Origin: "https://app.example.test",
+          Accept: "application/json",
         },
         body: form.toString(),
       }
@@ -223,6 +248,7 @@ describe("application connection request boundary", () => {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           Origin: "https://app.example.test",
+          Accept: "application/json",
         },
         body: form.toString(),
       }
@@ -233,6 +259,80 @@ describe("application connection request boundary", () => {
       error:
         "This Pod needs a secure Pod Admin URL before application access can be set up",
       code: "POD_ADMIN_URL_REQUIRED",
+      remediation: "configure_pod_admin_url",
+    });
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
+  });
+
+  it("renders a safe HTML fallback for a browser handoff when Pod Admin is not configured", async () => {
+    delete process.env.POD_ADMIN_URL;
+    const form = new URLSearchParams({
+      requestId: "11111111-1111-4111-8111-111111111111",
+      issuerUrl: "https://issuer.example.test",
+      issuerSubject: "issuer-user-1",
+      azp: "com.example.crm",
+      displayName: "Example CRM",
+      origin: "https://app.example.test",
+      callbackUrl: "https://app.example.test/login",
+      requestedScopes: JSON.stringify(["identity:link-user"]),
+      continuationHash: "a".repeat(64),
+      redemptionHash: "b".repeat(64),
+      redemptionSecret: "r".repeat(32),
+    });
+
+    const response = await federationRouter.request(
+      "/application-connections/requests/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://app.example.test",
+        },
+        body: form.toString(),
+      }
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    await expect(response.text()).resolves.toContain(
+      "Pod connection needs configuration"
+    );
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Pod Admin URL that disagrees with the deployed Admin hostname", async () => {
+    process.env.POD_ADMIN_DOMAIN = "pod-admin.example.test";
+    process.env.POD_ADMIN_URL = "https://different-admin.example.test";
+    const form = new URLSearchParams({
+      requestId: "11111111-1111-4111-8111-111111111111",
+      issuerUrl: "https://issuer.example.test",
+      issuerSubject: "issuer-user-1",
+      azp: "com.example.crm",
+      displayName: "Example CRM",
+      origin: "https://app.example.test",
+      callbackUrl: "https://app.example.test/login",
+      requestedScopes: JSON.stringify(["identity:link-user"]),
+      continuationHash: "a".repeat(64),
+      redemptionHash: "b".repeat(64),
+      redemptionSecret: "r".repeat(32),
+    });
+
+    const response = await federationRouter.request(
+      "/application-connections/requests/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://app.example.test",
+          Accept: "application/json",
+        },
+        body: form.toString(),
+      }
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "POD_ADMIN_URL_INVALID",
       remediation: "configure_pod_admin_url",
     });
     expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
@@ -264,6 +364,7 @@ describe("application connection request boundary", () => {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           Origin: "https://app.example.test",
+          Accept: "application/json",
         },
         body: form.toString(),
       }

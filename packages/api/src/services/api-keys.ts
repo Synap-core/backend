@@ -32,10 +32,20 @@ const DEFAULT_ROTATION_DAYS = 90;
 
 /**
  * Rate limiting configuration
+ *
+ * `request` is the per-key auth-boundary budget for ALL Hub `/api/hub/*`
+ * traffic (every structure/create/source-file hit counts once). 100/min was
+ * fine for interactive agents but kills bulk store-first import (2 req/unit
+ * × Superwhisper ≈ 50 units/min hard ceiling → 429 mid-corpus).
+ *
+ * 1200/min still rate-limits a compromised key (20 rps) but lets a legitimate
+ * bulk importer run ~10 units/s (create+blob) or ~20 units/s with the combined
+ * store-unit door. Further bulk should go through a server-side import_run job
+ * (one enqueue call), not "no limit".
  */
 const RATE_LIMITS = {
   generate: { limit: 10, window: 60000 }, // 10/min
-  request: { limit: 100, window: 60000 }, // 100/min
+  request: { limit: 1200, window: 60000 }, // 1200/min — bulk import friendly
   submit: { limit: 50, window: 60000 }, // 50/min
 } as const;
 

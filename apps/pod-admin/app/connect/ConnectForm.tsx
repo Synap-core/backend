@@ -27,8 +27,9 @@ import {
   type IntegrationKind,
 } from "@synap-core/external-connect-client";
 import { trpc } from "../../lib/trpc";
+import { publicPodUrl } from "../../lib/public-pod-url";
 
-const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
+const POD_URL = publicPodUrl();
 
 const INTEGRATION_INFO: Record<
   IntegrationKind,

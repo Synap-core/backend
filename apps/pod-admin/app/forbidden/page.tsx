@@ -9,8 +9,9 @@
 
 import { Button, Card, CardBody } from "@heroui/react";
 import { ShieldOff, LogOut } from "lucide-react";
+import { publicPodUrl } from "../../lib/public-pod-url";
 
-const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
+const POD_URL = publicPodUrl();
 
 export default function ForbiddenPage() {
   const handleSignOut = async () => {

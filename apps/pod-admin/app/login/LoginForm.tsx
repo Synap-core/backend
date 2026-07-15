@@ -241,7 +241,10 @@ function FlowFields({
   return (
     <form className="flex flex-col gap-4" onSubmit={onSubmit}>
       {error ? (
-        <div className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30">
+        <div
+          className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+          role="alert"
+        >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
@@ -351,11 +354,20 @@ function ErrorPanel({
 }) {
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30">
+      <div
+        className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+        role="alert"
+      >
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <span>{message}</span>
       </div>
-      <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
+      <Button
+        size="sm"
+        variant="flat"
+        radius="md"
+        className="min-h-11"
+        onPress={onRetry}
+      >
         Try again
       </Button>
     </div>

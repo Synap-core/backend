@@ -46,6 +46,7 @@ x-backend-env: &backend-env
   # Fresh and upgraded installers write both values; self-hosted operators may
   # set their own public origins in deploy/.env.
   PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL must be set to this Pod's public HTTPS URL in deploy/.env}
+  POD_ADMIN_DOMAIN: ${POD_ADMIN_DOMAIN:?POD_ADMIN_DOMAIN must be set to this Pod Admin hostname in deploy/.env}
   POD_ADMIN_URL: ${POD_ADMIN_URL:?POD_ADMIN_URL must be set to this Pod Admin's public HTTPS URL in deploy/.env}
   # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
   SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
@@ -238,8 +239,9 @@ services:
     restart: always
     environment:
       NODE_ENV: production
-      # Browser-visible pod URL — used by tRPC client + Kratos self-service.
-      NEXT_PUBLIC_POD_URL: ${PUBLIC_URL:-https://${DOMAIN:-localhost}}
+      # Browser-visible Pod API origin, injected by the dynamic root layout.
+      # Do not use NEXT_PUBLIC_*: those values are baked into a reusable image.
+      POD_PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL must be set to this Pod's public HTTPS URL in deploy/.env}
       # Server-side calls (whoami, sync status). In-cluster, talk to the
       # backend container directly to avoid a round-trip through the edge.
       POD_URL: http://backend:4000
@@ -468,8 +470,8 @@ services:
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
       # Post-success return URL — pod-admin's /login handles the Kratos flow
       # natively; on success it navigates to the return target (default: /).
-      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${POD_ADMIN_DOMAIN}/
-      SELFSERVICE_ALLOWED_RETURN_URLS: https://${DOMAIN},https://${DOMAIN}/*,https://${POD_ADMIN_DOMAIN},https://${POD_ADMIN_DOMAIN}/*
+      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: ${POD_ADMIN_URL}/
+      SELFSERVICE_ALLOWED_RETURN_URLS: ${PUBLIC_URL},${PUBLIC_URL}/*,${POD_ADMIN_URL},${POD_ADMIN_URL}/*
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}

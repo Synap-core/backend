@@ -11,29 +11,8 @@
 
 import { createTRPCReact } from "@trpc/react-query";
 import type { AppRouter } from "@synap-core/api-types";
+import { publicPodUrl } from "./public-pod-url";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-/**
- * Derive the pod API URL from the current browser origin.
- * pod-admin runs at `pod-admin.<root>` while the pod API lives at
- * `pod.<root>` — swap the subdomain so all fetch calls target the
- * right host. Falls back to origin as-is for local dev (non-pod-admin
- * hostnames), where NEXT_PUBLIC_POD_URL should be set explicitly.
- */
-function derivePodUrl(): string {
-  if (process.env.NEXT_PUBLIC_POD_URL) return process.env.NEXT_PUBLIC_POD_URL;
-  if (typeof window === "undefined") return "";
-  try {
-    const u = new URL(window.location.origin);
-    if (u.hostname.startsWith("pod-admin.")) {
-      const root = u.hostname.slice("pod-admin.".length);
-      return `${u.protocol}//pod.${root}`;
-    }
-  } catch {
-    // ignore
-  }
-  return window.location.origin;
-}
-
-export const POD_URL = derivePodUrl();
+export const POD_URL = publicPodUrl();

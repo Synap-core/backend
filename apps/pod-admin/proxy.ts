@@ -51,7 +51,10 @@ export async function proxy(req: NextRequest) {
   // scrub its fragment before native sign-in, preserving the requester-held
   // redemption proof across a Kratos redirect. It cannot inspect, redeem, or
   // review a connection request without a local Pod session.
-  if (path === "/connection-requests/new") {
+  if (
+    path === "/connection-requests/new" ||
+    path === "/connection-requests/error"
+  ) {
     return NextResponse.next();
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Alert,
@@ -32,6 +32,13 @@ export default function ConnectionRequestPage() {
     null
   );
   const [autoReturning, setAutoReturning] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (!request.isLoading && request.data) {
+      headingRef.current?.focus();
+    }
+  }, [request.data, request.isLoading, requestId]);
 
   const approve = trpc.applicationConnections.approveRequest.useMutation({
     onSuccess: async (data) => {
@@ -115,7 +122,11 @@ export default function ConnectionRequestPage() {
               <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
                 Pod connection request
               </p>
-              <h1 className="mt-2 text-xl font-semibold tracking-tight">
+              <h1
+                ref={headingRef}
+                tabIndex={-1}
+                className="mt-2 text-xl font-semibold tracking-tight outline-none"
+              >
                 {canViewRequestDetails
                   ? `Review ${data.displayName}`
                   : "Connection request ready"}
@@ -262,7 +273,7 @@ export default function ConnectionRequestPage() {
           </>
         ) : null}
       </Card>
-      {approvedReturnUrl ? (
+      {approvedReturnUrl && autoReturning ? (
         <div className="mt-4 flex justify-end">
           <Button
             color="primary"
