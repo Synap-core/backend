@@ -152,14 +152,24 @@ export const handshakeRateLimitMiddleware = rateLimiter({
 /**
  * Request Size Limit Middleware
  *
- * Limit: 10MB max request body
+ * Default: 10MB max request body.
+ * Exception: Hub entity source-file attach (binary provenance / Superwhisper
+ * WAV dogfood) allows 32MB — matches SOURCE_BLOB_MAX_BYTES. Path-scoped so
+ * the rest of the surface stays at 10MB.
  */
 export const requestSizeLimit: MiddlewareHandler = async (c, next) => {
   const contentLength = c.req.header("content-length");
 
   if (contentLength) {
     const size = parseInt(contentLength, 10);
-    const maxSize = 10 * 1024 * 1024; // 10MB
+    const path = c.req.path;
+    // /api/hub/entities/:id/source-file (and bare /entities/... if mounted root)
+    const isSourceFile =
+      /\/entities\/[^/]+\/source-file\/?$/.test(path) ||
+      path.endsWith("/source-file");
+    const maxSize = isSourceFile
+      ? 32 * 1024 * 1024 // 32MB — audio provenance
+      : 10 * 1024 * 1024; // 10MB default
 
     if (size > maxSize) {
       return c.json(

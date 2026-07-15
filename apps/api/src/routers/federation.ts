@@ -333,33 +333,53 @@ async function requireRegisteredApplicationConnection(input: {
   return null;
 }
 
+type PodAdminReviewTarget =
+  | { ok: true; url: string }
+  | { ok: false; code: "POD_ADMIN_URL_REQUIRED" | "POD_ADMIN_URL_INVALID" };
+
+/**
+ * The Pod Admin URL is deployment configuration, not something an app or an
+ * API request may infer. The Pod's public API and its operator console can be
+ * on different hosts, particularly for self-hosted installations. Requiring
+ * this explicit URL avoids accidentally redirecting an owner to an API path.
+ */
 function podAdminConnectionReviewTarget(
   requestId: string,
   redemptionSecret: string
-): string | null {
-  const audience = podAudience();
-  if (!audience) return null;
+): PodAdminReviewTarget {
+  const configuredUrl = process.env.POD_ADMIN_URL?.trim();
+  if (!configuredUrl) {
+    return { ok: false, code: "POD_ADMIN_URL_REQUIRED" };
+  }
+
   try {
-    // Dedicated Pod Admin deployments set POD_ADMIN_URL. A same-origin Pod
-    // deployment uses the documented /admin-next reverse-proxy prefix.
-    const base = new URL(
-      process.env.POD_ADMIN_URL?.trim() || `${audience}/admin-next`
-    );
-    if (base.protocol !== "https:" && process.env.NODE_ENV === "production") {
-      return null;
+    const base = new URL(configuredUrl);
+    const isHttpUrl = base.protocol === "https:" || base.protocol === "http:";
+    const requiresHttps = process.env.NODE_ENV === "production";
+    if (
+      !isHttpUrl ||
+      !base.hostname ||
+      base.username ||
+      base.password ||
+      base.pathname !== "/" ||
+      base.search ||
+      base.hash ||
+      (requiresHttps && base.protocol !== "https:")
+    ) {
+      return { ok: false, code: "POD_ADMIN_URL_INVALID" };
     }
-    const prefix = base.pathname.replace(/\/+$/, "");
+
     // Pod Admin's native-login route redeems the generic request against the
     // locally authenticated Pod user before it exposes the review surface.
-    base.pathname = `${prefix}/connection-requests/new`;
+    base.pathname = "/connection-requests/new";
     base.search = "";
     base.searchParams.set("requestId", requestId);
     // A fragment is never sent to Pod Admin, its proxy, or application logs.
     // The client immediately scrubs it after reading the one-time proof.
     base.hash = new URLSearchParams({ redeem: redemptionSecret }).toString();
-    return base.toString();
+    return { ok: true, url: base.toString() };
   } catch {
-    return null;
+    return { ok: false, code: "POD_ADMIN_URL_INVALID" };
   }
 }
 
@@ -832,6 +852,21 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
   ) {
     return c.json({ error: "Invalid application connection proof" }, 400);
   }
+  const reviewTarget = podAdminConnectionReviewTarget(
+    parsed.data.requestId,
+    parsed.data.redemptionSecret
+  );
+  if (!reviewTarget.ok) {
+    return c.json(
+      {
+        error:
+          "This Pod needs a secure Pod Admin URL before application access can be set up",
+        code: reviewTarget.code,
+        remediation: "configure_pod_admin_url",
+      },
+      503
+    );
+  }
   try {
     const request = await startApplicationConnectionRequest(parsed.data);
     if (!request) {
@@ -840,12 +875,7 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
         400
       );
     }
-    const reviewUrl = podAdminConnectionReviewTarget(
-      request.id,
-      parsed.data.redemptionSecret
-    );
-    if (!reviewUrl) return c.json({ error: "Pod Admin is unavailable" }, 503);
-    return c.redirect(reviewUrl, 303);
+    return c.redirect(reviewTarget.url, 303);
   } catch (error) {
     logger.error({ error }, "Could not start Pod Admin connection handoff");
     return c.json({ error: "Could not start Pod Admin setup" }, 503);

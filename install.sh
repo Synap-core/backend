@@ -177,6 +177,26 @@ _set_env_value() {
   fi
 }
 
+# Kratos uses one session cookie for both the Pod API and the bundled Pod
+# Admin. Return their longest shared DNS suffix, including the API hostname
+# itself when the console is a subdomain of it. Do not ever widen a cookie to a
+# public suffix such as "com".
+_shared_cookie_domain() {
+  local api_host="$1"
+  local admin_host="$2"
+  local candidate="$api_host"
+
+  while [[ "$candidate" == *.* ]]; do
+    if [[ "$admin_host" == "$candidate" || "$admin_host" == *."$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    candidate="${candidate#*.}"
+  done
+
+  return 1
+}
+
 _validate_canonical_https_url() {
   local label="$1"
   local value="$2"
@@ -281,9 +301,48 @@ if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]]; then
   error "Invalid domain '$DOMAIN' — only letters, digits, dots and hyphens are allowed."
 fi
 
-# Root domain (strip leading "pod." so the session cookie and Eve subdomain
-# entries are scoped to the shared parent, e.g. "team.example.com").
-ROOT_DOMAIN="${DOMAIN#pod.}"
+# Pod Admin is a sibling hostname. For a Pod API at alice.example.com, both
+# Kratos origins must share a DNS parent so its session cookie reaches the
+# console. On an update, preserve an operator's explicit Pod Admin endpoint:
+# the API redirect, Caddy and Kratos must always agree on the same host.
+if [[ "$DOMAIN" == *.* ]]; then
+  POD_ADMIN_DOMAIN="${DOMAIN%%.*}-admin.${DOMAIN#*.}"
+else
+  POD_ADMIN_DOMAIN="pod-admin.${DOMAIN}"
+fi
+POD_ADMIN_URL="https://${POD_ADMIN_DOMAIN}"
+if [[ "$DOMAIN" == "localhost" ]]; then
+  POD_ADMIN_DOMAIN="pod-admin.localhost"
+  POD_ADMIN_URL="http://localhost:4040"
+elif [[ "$UPDATE_ONLY" == "true" ]]; then
+  existing_pod_admin_domain="$(_env_value POD_ADMIN_DOMAIN "$INSTALL_DIR/.env")"
+  existing_pod_admin_url="$(_env_value POD_ADMIN_URL "$INSTALL_DIR/.env")"
+
+  if [[ -n "$existing_pod_admin_domain" ]]; then
+    POD_ADMIN_DOMAIN="$existing_pod_admin_domain"
+  fi
+  if [[ -n "$existing_pod_admin_url" ]]; then
+    POD_ADMIN_URL="$existing_pod_admin_url"
+  fi
+  if [[ -z "$existing_pod_admin_domain" && -n "$existing_pod_admin_url" ]]; then
+    pod_admin_authority="${POD_ADMIN_URL#https://}"
+    POD_ADMIN_DOMAIN="${pod_admin_authority%%/*}"
+  fi
+fi
+
+if [[ "$DOMAIN" != "localhost" ]]; then
+  _validate_canonical_https_url "POD_ADMIN_URL" "$POD_ADMIN_URL"
+  [[ "$POD_ADMIN_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]] \
+    || error "POD_ADMIN_DOMAIN must be a hostname without a protocol, path, or port"
+  pod_admin_authority="${POD_ADMIN_URL#https://}"
+  pod_admin_url_host="${pod_admin_authority%%/*}"
+  [[ "$POD_ADMIN_URL" == "https://${POD_ADMIN_DOMAIN}" && "$pod_admin_url_host" == "$POD_ADMIN_DOMAIN" ]] \
+    || error "POD_ADMIN_URL must be the HTTPS origin for POD_ADMIN_DOMAIN, without a path, so the API, Caddy, and Kratos use one Pod Admin endpoint"
+  ROOT_DOMAIN="$(_shared_cookie_domain "$DOMAIN" "$POD_ADMIN_DOMAIN")" \
+    || error "POD_ADMIN_DOMAIN must share a parent domain with DOMAIN so Kratos can keep the owner session."
+else
+  ROOT_DOMAIN="localhost"
+fi
 
 cat > "$INSTALL_DIR/config/kratos/kratos.yml" << KRATOS_EOF
 version: v1.3.1
@@ -320,10 +379,12 @@ serve:
     base_url: http://kratos:4434
 
 selfservice:
-  default_browser_return_url: https://$DOMAIN/admin/
+  default_browser_return_url: $POD_ADMIN_URL/
   allowed_return_urls:
     - https://$DOMAIN
     - https://$DOMAIN/*
+    - $POD_ADMIN_URL
+    - $POD_ADMIN_URL/*
     - https://eve.$ROOT_DOMAIN
     - https://eve.$ROOT_DOMAIN/*
 
@@ -335,16 +396,16 @@ selfservice:
 
   flows:
     login:
-      ui_url: https://$DOMAIN/admin/kratos
+      ui_url: $POD_ADMIN_URL/login
       lifespan: 10m
     registration:
-      ui_url: https://$DOMAIN/admin/kratos
+      ui_url: $POD_ADMIN_URL/login
       lifespan: 10m
     recovery:
       enabled: true
-      ui_url: https://$DOMAIN/admin/kratos
+      ui_url: $POD_ADMIN_URL/login
     settings:
-      ui_url: https://$DOMAIN/admin/kratos
+      ui_url: $POD_ADMIN_URL/login
       privileged_session_max_age: 15m
       after:
         password:
@@ -358,7 +419,7 @@ selfservice:
       enabled: false
     logout:
       after:
-        default_browser_return_url: https://$DOMAIN/admin/
+        default_browser_return_url: $POD_ADMIN_URL/
 
 session:
   cookie:
@@ -411,7 +472,10 @@ SECRETS_EOF
     _base="$ROOT_DOMAIN"
     if [[ -z "$_base" ]]; then
       source "$INSTALL_DIR/.env" 2>/dev/null || true
-      _base="${DOMAIN#pod.}"
+      _base="$DOMAIN"
+      if [[ "$DOMAIN" == *.* ]]; then
+        _base="${DOMAIN#*.}"
+      fi
     fi
     if [[ -n "$_base" ]]; then
       printf '\n# Parent domain for the derived first-party CORS allowlist (backfilled on update)\nSYNAP_BASE_DOMAIN=%s\n' "$_base" >> "$INSTALL_DIR/.env"
@@ -419,7 +483,7 @@ SECRETS_EOF
       # Force the env-consuming services to recreate this run so the new var is
       # injected immediately (a plain `up -d` may skip recreation on an .env-only
       # change, leaving CORS fail-closed until the next restart).
-      RECREATE_FOR_CORS=1
+      RECREATE_FOR_ENV_CHANGE=1
     else
       warn "Could not derive SYNAP_BASE_DOMAIN — set it in .env manually, or cross-subdomain frontends will be denied by CORS"
     fi
@@ -433,7 +497,26 @@ SECRETS_EOF
   if ! grep -q "^VAULT_SERVER_KEY=" "$INSTALL_DIR/.env" 2>/dev/null; then
     printf '\n# Secret-vault encryption key (backfilled on update)\nVAULT_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "$INSTALL_DIR/.env"
     info "Backfilled VAULT_SERVER_KEY into .env (vault self-heal)"
-    RECREATE_FOR_CORS=1
+    RECREATE_FOR_ENV_CHANGE=1
+  fi
+
+  # Federation requires the Pod's browser-facing API audience and its separate
+  # operator-console origin. Older installs can predate either setting; add
+  # them without overwriting explicit custom-domain configuration.
+  if ! grep -q "^PUBLIC_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    _set_env_value "PUBLIC_URL" "https://$DOMAIN" "$INSTALL_DIR/.env"
+    info "Backfilled PUBLIC_URL for secure federation"
+    RECREATE_FOR_ENV_CHANGE=1
+  fi
+  if ! grep -q "^POD_ADMIN_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    _set_env_value "POD_ADMIN_URL" "$POD_ADMIN_URL" "$INSTALL_DIR/.env"
+    info "Backfilled POD_ADMIN_URL for Pod Admin handoff"
+    RECREATE_FOR_ENV_CHANGE=1
+  fi
+  if ! grep -q "^POD_ADMIN_DOMAIN=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    _set_env_value "POD_ADMIN_DOMAIN" "$POD_ADMIN_DOMAIN" "$INSTALL_DIR/.env"
+    info "Backfilled POD_ADMIN_DOMAIN for bundled Pod Admin routing"
+    RECREATE_FOR_ENV_CHANGE=1
   fi
 
   # Do not backfill CONTROL_PLANE_URL. A Pod may opt into an external service,
@@ -575,6 +658,12 @@ PROVISIONING_TOKEN=$PROVISIONING_TOKEN
 # public hostname (custom domain) — then set PUBLIC_URL to that hostname too.
 PUBLIC_URL=https://$DOMAIN
 
+# Public Pod Admin console. It is distinct from the Pod API URL so the backend
+# can hand off owner authentication without assuming a same-origin admin route.
+# Self-hosted operators may override this with their own operator-console URL.
+POD_ADMIN_DOMAIN=$POD_ADMIN_DOMAIN
+POD_ADMIN_URL=$POD_ADMIN_URL
+
 # ── Optional legacy external integration ──────────────────────────────────────
 # This does not establish issuer trust and is not needed for authentication,
 # invitations, or federation. Those are driven by the Pod-local trusted issuer
@@ -642,17 +731,17 @@ info "Starting application services..."
 # --remove-orphans frees ports held by orphaned containers from renamed/removed
 # services (a common "port is already allocated" cause on update). Volumes and
 # the network are untouched — non-destructive self-heal.
-# ${RECREATE_FOR_CORS:+--force-recreate} only expands when the SYNAP_BASE_DOMAIN
-# backfill ran this update, so the new env var actually reaches the containers.
+# ${RECREATE_FOR_ENV_CHANGE:+--force-recreate} only expands when an environment
+# backfill ran, so the corrected public origins reach the containers immediately.
 if [[ "$POD_AGENT_ENABLED" == "true" ]]; then
   info "Starting the explicitly configured Pod-agent profile"
-  docker compose --profile pod-agent up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy pod-agent
+  docker compose --profile pod-agent up -d --remove-orphans ${RECREATE_FOR_ENV_CHANGE:+--force-recreate} backend realtime caddy pod-admin pod-agent
 else
   # A previous managed installation may have left this profile running. Stop it
   # rather than preserving a Docker-socket receiver after its generic trust
   # configuration has been removed.
   docker compose --profile pod-agent stop pod-agent >/dev/null 2>&1 || true
-  docker compose up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy
+  docker compose up -d --remove-orphans ${RECREATE_FOR_ENV_CHANGE:+--force-recreate} backend realtime caddy pod-admin
 fi
 
 success "All services started"

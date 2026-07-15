@@ -41,7 +41,12 @@ x-backend-env: &backend-env
   # `docker compose up` ERROR on a missing/empty key instead of substituting "".
   # Generate once and persist in deploy/.env: openssl rand -hex 32
   VAULT_SERVER_KEY: ${VAULT_SERVER_KEY:?VAULT_SERVER_KEY must be set in deploy/.env (openssl rand -hex 32)}
-  PUBLIC_URL: ${PUBLIC_URL:-http://backend:4000}
+  # Federation assertions and owner handoffs are browser-facing security
+  # boundaries. Neither may fall back to an in-cluster Docker hostname.
+  # Fresh and upgraded installers write both values; self-hosted operators may
+  # set their own public origins in deploy/.env.
+  PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL must be set to this Pod's public HTTPS URL in deploy/.env}
+  POD_ADMIN_URL: ${POD_ADMIN_URL:?POD_ADMIN_URL must be set to this Pod Admin's public HTTPS URL in deploy/.env}
   # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
   SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
   # Optional legacy integration endpoint. It is never an authentication or
@@ -463,8 +468,8 @@ services:
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
       # Post-success return URL — pod-admin's /login handles the Kratos flow
       # natively; on success it navigates to the return target (default: /).
-      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://pod-admin.${DOMAIN}/
-      SELFSERVICE_ALLOWED_RETURN_URLS: https://${DOMAIN},https://${DOMAIN}/*
+      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${POD_ADMIN_DOMAIN}/
+      SELFSERVICE_ALLOWED_RETURN_URLS: https://${DOMAIN},https://${DOMAIN}/*,https://${POD_ADMIN_DOMAIN},https://${POD_ADMIN_DOMAIN}/*
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
@@ -576,6 +581,9 @@ services:
       - caddy_config:/config
     environment:
       DOMAIN: ${DOMAIN}
+      # Hostname only, used by the bundled Caddy and Kratos configuration.
+      # POD_ADMIN_URL is the API's explicit public redirect target.
+      POD_ADMIN_DOMAIN: ${POD_ADMIN_DOMAIN:?POD_ADMIN_DOMAIN must be set to this Pod Admin hostname in deploy/.env}
       EMAIL: ${LETSENCRYPT_EMAIL}
     networks:
       - synap-net

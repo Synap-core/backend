@@ -40,6 +40,12 @@ import {
   type ProfileCatalogEntry,
 } from "../../../services/retrieval/index.js";
 import {
+  storeEntitySourceBlob,
+  SourceBlobTooLargeError,
+  SourceBlobEmptyError,
+  SOURCE_BLOB_MAX_BYTES,
+} from "../../../utils/store-entity-source-blob.js";
+import {
   CreateEntityRequestSchema,
   CreateEntityResponseSchema,
   RawEntityRecordSchema,
@@ -1441,6 +1447,149 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err, entityId }, "POST /entities/:id/attachments failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities/:entityId/source-file ─────────────────────────────────
+  // Attach a raw source blob (WAV, PDF, …) as PROVENANCE on an existing entity
+  // without creating a second `file` entity. Shared with capture keepRaw via
+  // storeEntitySourceBlob. Hub API-key door so CLI bulk import (Superwhisper)
+  // does not need a Kratos cookie.
+  //
+  // Accepts multipart/form-data (preferred for audio) OR JSON base64 for small
+  // blobs. Max SOURCE_BLOB_MAX_BYTES (32MB). audio/* | video/* | image/* |
+  // application/pdf | application/octet-stream allowed.
+  app.post("/entities/:entityId/source-file", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const entityId = c.req.param("entityId");
+    if (!entityId) {
+      return c.json({ error: "entityId is required" }, 400);
+    }
+
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) {
+      return c.json({ error: acting.error }, acting.status);
+    }
+    const userId = acting.userId;
+
+    // Confirm the entity exists and is owned by the acting user (pod-wide or workspace).
+    const existing = await db.query.entities.findFirst({
+      where: and(eq(entities.id, entityId), eq(entities.userId, userId)),
+      columns: { id: true, workspaceId: true },
+    });
+    if (!existing) {
+      return c.json({ error: "Entity not found" }, 404);
+    }
+
+    const contentType = c.req.header("content-type") ?? "";
+    let buffer: Buffer;
+    let mimeType: string;
+    let filename: string | undefined;
+    let workspaceId: string | null | undefined = existing?.workspaceId ?? null;
+
+    try {
+      if (contentType.includes("multipart/form-data")) {
+        const body = await c.req.parseBody({ all: true });
+        const file = body["file"];
+        if (!file || !(file instanceof File)) {
+          return c.json(
+            { error: "file is required (multipart file field)" },
+            400
+          );
+        }
+        mimeType = file.type || "application/octet-stream";
+        filename = file.name || undefined;
+        if (typeof body["workspaceId"] === "string" && body["workspaceId"]) {
+          workspaceId = body["workspaceId"];
+        }
+        if (file.size > SOURCE_BLOB_MAX_BYTES) {
+          return c.json(
+            {
+              error: `File too large. Maximum size is ${SOURCE_BLOB_MAX_BYTES / 1024 / 1024}MB`,
+            },
+            413
+          );
+        }
+        buffer = Buffer.from(await file.arrayBuffer());
+      } else {
+        // JSON: { contentBase64, mimeType, filename?, workspaceId? }
+        const body = (await c.req.json()) as {
+          contentBase64?: string;
+          mimeType?: string;
+          filename?: string;
+          workspaceId?: string | null;
+        };
+        if (!body.contentBase64 || !body.mimeType) {
+          return c.json(
+            {
+              error:
+                "contentBase64 and mimeType are required (or use multipart/form-data with file)",
+            },
+            400
+          );
+        }
+        mimeType = body.mimeType;
+        filename = body.filename;
+        if (body.workspaceId !== undefined) workspaceId = body.workspaceId;
+        buffer = Buffer.from(body.contentBase64, "base64");
+      }
+    } catch (err) {
+      logger.warn({ err, entityId }, "source-file body parse failed");
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+
+    // Allow media + common document binaries. Not a free-for-all of every MIME.
+    const allowed =
+      mimeType.startsWith("audio/") ||
+      mimeType.startsWith("video/") ||
+      mimeType.startsWith("image/") ||
+      mimeType === "application/pdf" ||
+      mimeType === "application/octet-stream" ||
+      mimeType === "application/json" ||
+      mimeType.startsWith("text/");
+    if (!allowed) {
+      return c.json(
+        { error: `MIME type not allowed for source-file: ${mimeType}` },
+        415
+      );
+    }
+
+    try {
+      const result = await storeEntitySourceBlob({
+        database: db,
+        userId,
+        entityId,
+        buffer,
+        mimeType,
+        filename,
+        workspaceId: workspaceId ?? null,
+      });
+      return c.json({
+        ok: true as const,
+        entityId,
+        documentId: result.documentId,
+        storageKey: result.storageKey,
+        storageUrl: result.storageUrl,
+        size: result.size,
+        mimeType: result.mimeType,
+      });
+    } catch (err) {
+      if (err instanceof SourceBlobTooLargeError) {
+        return c.json({ error: err.message }, 413);
+      }
+      if (err instanceof SourceBlobEmptyError) {
+        return c.json({ error: err.message }, 400);
+      }
+      logger.error(
+        { err, entityId, userId },
+        "POST /entities/:id/source-file failed"
+      );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

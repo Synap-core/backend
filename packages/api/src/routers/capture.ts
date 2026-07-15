@@ -32,13 +32,11 @@ import {
   entityVectors,
   entities as entitiesTable,
   drizzleSql,
-  EntityRepository,
   RelationRepository,
   RelationDefRepository,
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
-  DocumentRepository,
   PropertyValidationError,
   workspaces,
   workspaceMembers,
@@ -82,6 +80,7 @@ import {
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
+import { storeEntitySourceBlob } from "../utils/store-entity-source-blob.js";
 import {
   emitAiDecision,
   emitCaptureTrace,
@@ -1501,7 +1500,6 @@ export const captureRouter = router({
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
       const eventRepo = eventRepository;
-      const entityRepo = new EntityRepository(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
       const entitiesCaller = entitiesRouter.createCaller(
         ctx as unknown as Context
@@ -2125,70 +2123,21 @@ export const captureRouter = router({
           created.find((c) => !c.linked) ?? created[0] ?? undefined;
         if (primary?.entityId) {
           try {
-            const { storage } = await import("@synap/storage");
-            const ext = (input.file.mimeType.split("/")[1] || "bin")
-              .split(";")[0]
-              .split("+")[0];
+            // Shared door with Hub POST /entities/:id/source-file (Superwhisper, etc.).
+            // Still best-effort: never fail the capture on a storage hiccup.
+            // Zod on file.content still caps ~5MB base64 for this path; bulk
+            // audio should use the Hub multipart source-file door instead.
             const buffer = Buffer.from(input.file.content, "base64");
-            const key = storage.buildPath(
+            await storeEntitySourceBlob({
+              database,
               userId,
-              "entity",
-              primary.entityId,
-              ext
-            );
-            const metadata = await storage.upload(key, buffer, {
-              contentType: input.file.mimeType,
+              entityId: primary.entityId,
+              buffer,
+              mimeType: input.file.mimeType,
+              filename: input.file.filename,
+              workspaceId: workspaceId ?? null,
             });
-
-            // Map mimeType → document `type` (the only typed enum it accepts).
-            // Binary blobs are NOT given `content` (that's a text v1 snapshot).
-            const docType: "text" | "markdown" | "code" | "pdf" | "docx" =
-              input.file.mimeType === "application/pdf" ? "pdf" : "text";
-
-            const docRepo = new DocumentRepository(database, eventRepo);
-            const createdDocument = await docRepo.create(
-              {
-                title: input.file.filename || "Source file",
-                type: docType,
-                storageUrl: metadata.url,
-                storageKey: metadata.path,
-                size: metadata.size,
-                mimeType: input.file.mimeType,
-                userId,
-                workspaceId: workspaceId ?? undefined,
-              },
-              userId
-            );
-
-            // Record the raw source blob as PROVENANCE on the primary entity
-            // WITHOUT clobbering entity.documentId. The primary may already
-            // carry an extracted-content document (set by entityCaller.create
-            // via resolveContentTarget → materializeContentDocument); overwriting
-            // documentId here would orphan that long-form item body. Instead we
-            // merge two properties — entityRepo.update MERGES properties (it does
-            // NOT replace), and unknown property keys are preserved by the
-            // validation service — so the extracted documentId stays intact.
-            await entityRepo.update(
-              primary.entityId,
-              {
-                properties: {
-                  sourceFileDocumentId: createdDocument.id,
-                  sourceFileUrl: metadata.url,
-                },
-              },
-              userId
-            );
-
-            logger.info(
-              {
-                userId,
-                entityId: primary.entityId,
-                sourceFileDocumentId: createdDocument.id,
-              },
-              "P3: raw source blob stored and recorded as provenance on primary entity"
-            );
           } catch (err) {
-            // Never fail the capture on a storage hiccup — log and continue.
             logger.warn(
               { err, userId, entityId: primary.entityId },
               "P3: raw source blob storage failed (capture preserved)"

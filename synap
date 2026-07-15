@@ -191,6 +191,84 @@ update_env_value() {
     fi
 }
 
+pod_admin_domain_for_domain() {
+    local domain="$1"
+    if [ "$domain" = "localhost" ]; then
+        printf '%s' "pod-admin.localhost"
+        return
+    fi
+    if [[ "$domain" == *.* ]]; then
+        printf '%s-admin.%s' "${domain%%.*}" "${domain#*.}"
+        return
+    fi
+    printf 'pod-admin.%s' "$domain"
+}
+
+pod_admin_url_for_domain() {
+    local domain="$1"
+    if [ "$domain" = "localhost" ]; then
+        printf '%s' "http://localhost:4040"
+        return
+    fi
+    printf 'https://%s' "$(pod_admin_domain_for_domain "$domain")"
+}
+
+shared_cookie_domain() {
+    local api_host="$1"
+    local admin_host="$2"
+    local -a api_labels admin_labels
+    local common=""
+    local ai bi
+
+    IFS='.' read -r -a api_labels <<< "$api_host"
+    IFS='.' read -r -a admin_labels <<< "$admin_host"
+    ai=$((${#api_labels[@]} - 1))
+    bi=$((${#admin_labels[@]} - 1))
+    while [ "$ai" -ge 0 ] && [ "$bi" -ge 0 ] && [ "${api_labels[$ai]}" = "${admin_labels[$bi]}" ]; do
+        common="${api_labels[$ai]}${common:+.$common}"
+        ai=$((ai - 1))
+        bi=$((bi - 1))
+    done
+
+    # A domain cookie must be scoped to a registrable-style parent, not a TLD.
+    if [[ "$common" == *.* ]]; then
+        printf '%s' "$common"
+    fi
+}
+
+backfill_federation_public_urls() {
+    local domain="$1"
+    local configured_pod_admin_domain
+    local configured_pod_admin_url
+    local pod_admin_authority
+
+    if ! grep -q "^PUBLIC_URL=" .env 2>/dev/null; then
+        update_env_value "PUBLIC_URL" "https://${domain}"
+        echo -e "${BLUE}ℹ️  Backfilled PUBLIC_URL for secure federation${NC}"
+    fi
+
+    configured_pod_admin_domain=$(grep "^POD_ADMIN_DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
+    configured_pod_admin_url=$(grep "^POD_ADMIN_URL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
+
+    # Older deployments may have received only one endpoint setting during a
+    # partial rollout. Complete the pair from that explicit value, rather than
+    # replacing it with the conventional host and splitting Caddy from Kratos.
+    if [ -z "$configured_pod_admin_domain" ] && [ -n "$configured_pod_admin_url" ]; then
+        pod_admin_authority="${configured_pod_admin_url#https://}"
+        configured_pod_admin_domain="${pod_admin_authority%%/*}"
+        update_env_value "POD_ADMIN_DOMAIN" "$configured_pod_admin_domain"
+        echo -e "${BLUE}ℹ️  Backfilled POD_ADMIN_DOMAIN from the configured Pod Admin URL${NC}"
+    elif [ -z "$configured_pod_admin_url" ] && [ -n "$configured_pod_admin_domain" ]; then
+        configured_pod_admin_url="https://${configured_pod_admin_domain}"
+        update_env_value "POD_ADMIN_URL" "$configured_pod_admin_url"
+        echo -e "${BLUE}ℹ️  Backfilled POD_ADMIN_URL from the configured Pod Admin domain${NC}"
+    elif [ -z "$configured_pod_admin_domain" ] && [ -z "$configured_pod_admin_url" ]; then
+        update_env_value "POD_ADMIN_DOMAIN" "$(pod_admin_domain_for_domain "$domain")"
+        update_env_value "POD_ADMIN_URL" "$(pod_admin_url_for_domain "$domain")"
+        echo -e "${BLUE}ℹ️  Backfilled Pod Admin handoff endpoints${NC}"
+    fi
+}
+
 # Pod-agent has the Docker socket, so only start its profile after the Pod
 # owner configured a generic issuer and this Pod's exact audience. The legacy
 # CONTROL_PLANE_URL setting is intentionally not considered here.
@@ -248,6 +326,10 @@ generate_and_create_env() {
     local intelligence_key=$9
     local admin_bootstrap_mode=${10}
     local admin_bootstrap_token=${11}
+    local pod_admin_domain
+    local pod_admin_url
+    pod_admin_domain="$(pod_admin_domain_for_domain "$domain")"
+    pod_admin_url="$(pod_admin_url_for_domain "$domain")"
     
     # Generate secrets
     echo -e "${BLUE}🔐 Generating secrets...${NC}"
@@ -287,6 +369,11 @@ LETSENCRYPT_EMAIL=${email:-noreply@localhost}
 # PUBLIC_URL: How intelligence hub calls back to this backend
 # This MUST be the public-facing URL (not internal Docker network)
 PUBLIC_URL=https://${domain}
+
+# Public Pod Admin console. Keep this explicit: the API and operator console
+# may use different origins on self-hosted deployments.
+POD_ADMIN_DOMAIN=${pod_admin_domain}
+POD_ADMIN_URL=${pod_admin_url}
 
 # Intelligence Service
 INTELLIGENCE_HUB_URL=${intelligence_url}
@@ -391,7 +478,7 @@ generate_kratos_config() {
     fi
 
     # Browser-visible UI for Kratos flows. The legacy admin-ui SPA was retired
-    # 2026-05; pod-admin (Next.js, served at pod-admin.<bare-root>) now hosts
+    # 2026-05; Pod Admin now hosts
     # all flow renderers natively at /login. Kratos still hits ui_url for
     # browser-initiated flows (error pages, /self-service/*/browser
     # redirects) — pointing it at pod-admin/login lets pod-admin re-init the
@@ -399,15 +486,34 @@ generate_kratos_config() {
     local pod_admin_ui=""
     local kratos_ui=""
     local bare_root="$domain"
+    local pod_admin_domain=""
+    local configured_pod_admin_domain=""
+    local configured_pod_admin_url=""
+    local pod_admin_origin=""
     if [ "$is_localhost" = true ]; then
         pod_admin_ui="http://localhost:4040"
+        pod_admin_origin="$pod_admin_ui"
     else
-        # Strip the `pod.` FQDN prefix to recover the bare root domain. Eve's
-        # toPodFqdn() always passes `pod.<root>`; for hand-rolled installs
-        # that bypass eve, $domain may already be the bare root, in which
-        # case the prefix strip is a no-op.
-        bare_root="${domain#pod.}"
-        pod_admin_ui="https://pod-admin.${bare_root}"
+        if [ -n "$env_file" ]; then
+            configured_pod_admin_domain=$(grep "^POD_ADMIN_DOMAIN=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true)
+            configured_pod_admin_url=$(grep "^POD_ADMIN_URL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true)
+        fi
+        pod_admin_domain="${configured_pod_admin_domain:-$(pod_admin_domain_for_domain "$domain")}"
+        pod_admin_ui="${configured_pod_admin_url:-https://${pod_admin_domain}}"
+        pod_admin_ui="${pod_admin_ui%/}"
+        local admin_remainder="${pod_admin_ui#*://}"
+        local admin_host="${admin_remainder%%/*}"
+        local admin_scheme="${pod_admin_ui%%://*}"
+        if [ "$pod_admin_ui" != "https://${pod_admin_domain}" ] || ! [[ "$pod_admin_domain" =~ ^[A-Za-z0-9.-]+$ ]] || [ "$admin_host" != "$pod_admin_domain" ]; then
+            echo -e "${RED}❌ POD_ADMIN_URL must be the HTTPS origin for POD_ADMIN_DOMAIN, without a path.${NC}" >&2
+            return 1
+        fi
+        pod_admin_origin="${admin_scheme}://${admin_host}"
+        bare_root="$(shared_cookie_domain "$domain" "$pod_admin_domain")"
+        if [ -z "$bare_root" ]; then
+            echo -e "${RED}❌ POD_ADMIN_DOMAIN must share a parent domain with DOMAIN so Kratos can keep the owner session.${NC}" >&2
+            return 1
+        fi
     fi
     kratos_ui="${pod_admin_ui}/login"
 
@@ -429,7 +535,7 @@ generate_kratos_config() {
     if [ "$is_localhost" = false ]; then
         cors_origins="$cors_origins
         - https://${domain}
-        - https://pod-admin.${bare_root}
+        - ${pod_admin_origin}
         - https://*.synap.live"
     fi
 
@@ -445,8 +551,8 @@ generate_kratos_config() {
         return_urls="$return_urls
     - https://${domain}
     - https://${domain}/*
-    - https://pod-admin.${bare_root}
-    - https://pod-admin.${bare_root}/*"
+    - ${pod_admin_origin}
+    - ${pod_admin_origin}/*"
     fi
 
     # Cookie domain and secure settings — scoped to the bare root so the
@@ -511,7 +617,7 @@ echo "            - http://localhost:3000"
 echo "            - http://localhost:4040"
 else
 echo "            - https://${domain}"
-echo "            - https://pod-admin.${bare_root}"
+echo "            - ${pod_admin_origin}"
 fi)
     oidc:
       enabled: false
@@ -1466,6 +1572,7 @@ EOF
                 update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
                 update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
                 update_env_value "EMBEDDING_PROVIDER" "deterministic"
+                backfill_federation_public_urls "$DOMAIN"
                 # Update backend version based on method
                 local backend_version="latest"
                 if [ "$FROM_SOURCE" = true ]; then
@@ -1490,6 +1597,7 @@ EOF
             update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
             update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
             update_env_value "EMBEDDING_PROVIDER" "deterministic"
+            backfill_federation_public_urls "$DOMAIN"
             local backend_version="latest"
             if [ "$FROM_SOURCE" = true ]; then
                 backend_version="local"
@@ -2070,6 +2178,15 @@ cmd_update() {
             echo -e "     existing values and only regenerates secrets when .env is missing entirely."
             exit 1
         fi
+
+        # These browser-facing endpoints were added after early Pod installs.
+        # Backfill before *any* Compose command: Compose deliberately refuses
+        # to start without them rather than silently using an internal host.
+        local federation_domain
+        federation_domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        if [ -n "$federation_domain" ]; then
+            backfill_federation_public_urls "$federation_domain"
+        fi
     fi
 
     cleanup_stale_synap_state "$deploy_dir"
@@ -2204,6 +2321,7 @@ cmd_update() {
 
         # Read DOMAIN from .env for kratos config regeneration
         local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "localhost")
+        backfill_federation_public_urls "$domain"
     else
         local domain="localhost"
     fi

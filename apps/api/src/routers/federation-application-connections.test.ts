@@ -102,6 +102,7 @@ describe("application connection request boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PUBLIC_URL = "https://pod.example.test";
+    process.env.POD_ADMIN_URL = "https://pod-admin.example.test";
     mocks.normalizeApplicationCallbackUrl.mockImplementation(
       (value: string) => value
     );
@@ -113,6 +114,7 @@ describe("application connection request boundary", () => {
 
   afterEach(() => {
     delete process.env.PUBLIC_URL;
+    delete process.env.POD_ADMIN_URL;
   });
 
   it("requires a top-level form rather than a cross-origin credentialed fetch", async () => {
@@ -177,7 +179,7 @@ describe("application connection request boundary", () => {
     expect(response.status).toBe(303);
     const location = response.headers.get("location");
     expect(location).toBe(
-      "https://pod.example.test/admin-next/connection-requests/new?requestId=11111111-1111-4111-8111-111111111111#redeem=rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+      "https://pod-admin.example.test/connection-requests/new?requestId=11111111-1111-4111-8111-111111111111#redeem=rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
     );
     const target = new URL(location!);
     expect(target.searchParams.get("redeem")).toBeNull();
@@ -193,6 +195,86 @@ describe("application connection request boundary", () => {
     expect(mocks.createAwaitingLocalAuth.mock.calls[0]?.[0]).not.toHaveProperty(
       "redemptionSecret"
     );
+  });
+
+  it("requires an explicit secure Pod Admin URL before persisting a request", async () => {
+    delete process.env.POD_ADMIN_URL;
+    const form = new URLSearchParams({
+      requestId: "11111111-1111-4111-8111-111111111111",
+      issuerUrl: "https://issuer.example.test",
+      issuerSubject: "issuer-user-1",
+      azp: "com.example.crm",
+      displayName: "Example CRM",
+      origin: "https://app.example.test",
+      callbackUrl: "https://app.example.test/login",
+      requestedScopes: JSON.stringify([
+        "auth:exchange-user",
+        "identity:link-user",
+      ]),
+      continuationHash: "a".repeat(64),
+      redemptionHash: "b".repeat(64),
+      redemptionSecret: "r".repeat(32),
+    });
+
+    const response = await federationRouter.request(
+      "/application-connections/requests/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://app.example.test",
+        },
+        body: form.toString(),
+      }
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "This Pod needs a secure Pod Admin URL before application access can be set up",
+      code: "POD_ADMIN_URL_REQUIRED",
+      remediation: "configure_pod_admin_url",
+    });
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Pod Admin path because the deployed console is a dedicated origin", async () => {
+    process.env.POD_ADMIN_URL = "https://pod-admin.example.test/admin";
+    const form = new URLSearchParams({
+      requestId: "11111111-1111-4111-8111-111111111111",
+      issuerUrl: "https://issuer.example.test",
+      issuerSubject: "issuer-user-1",
+      azp: "com.example.crm",
+      displayName: "Example CRM",
+      origin: "https://app.example.test",
+      callbackUrl: "https://app.example.test/login",
+      requestedScopes: JSON.stringify([
+        "auth:exchange-user",
+        "identity:link-user",
+      ]),
+      continuationHash: "a".repeat(64),
+      redemptionHash: "b".repeat(64),
+      redemptionSecret: "r".repeat(32),
+    });
+
+    const response = await federationRouter.request(
+      "/application-connections/requests/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://app.example.test",
+        },
+        body: form.toString(),
+      }
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "POD_ADMIN_URL_INVALID",
+      remediation: "configure_pod_admin_url",
+    });
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
   });
 
   it("answers a narrow credentialless status preflight", async () => {

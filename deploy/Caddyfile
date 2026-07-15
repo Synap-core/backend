@@ -198,16 +198,18 @@
 }
 
 # ─── Pod Admin Console ────────────────────────────────────────────────────────
-# Operator-facing Next.js console served at pod-admin.{$DOMAIN}.
+# Operator-facing Next.js console served at the explicit Pod Admin hostname.
+# It is not derived from {$DOMAIN}: a Pod API commonly lives at
+# pod.<root>, while its console lives at pod-admin.<root>.
 # Owns /login (Kratos sign-in) and /setup (first-admin bootstrap).
 # The legacy admin-ui SPA (/admin/*) has been retired.
 # ─────────────────────────────────────────────────────────────────────────────
-pod-admin.{$DOMAIN}:80 {
+{$POD_ADMIN_DOMAIN}:80 {
     # Cloudflare Tunnel HTTP path — same shape as the main host's :80 block.
     reverse_proxy pod-admin:3000
 }
 
-pod-admin.{$DOMAIN} {
+{$POD_ADMIN_DOMAIN} {
     reverse_proxy pod-admin:3000
 
     header {

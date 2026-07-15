@@ -17767,6 +17767,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requests: {
 					id: string;
 					createdAt: Date;
+					issuerSubject: string;
 					expiresAt: Date;
 					clientId: string;
 					displayName: string;
