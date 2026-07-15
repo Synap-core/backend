@@ -147,6 +147,12 @@ export const federatedAssertionReceipts = pgTable(
       .notNull()
       .references(() => trustedIssuers.id, { onDelete: "restrict" }),
     jti: text("jti").notNull(),
+    /**
+     * Optional generic operation namespace for a retry-safe assertion
+     * ceremony. It never identifies a product or federator; it only lets a
+     * single request recover a server failure after the JTI was consumed.
+     */
+    replayContext: text("replay_context"),
     expiresAt: timestamp("expires_at", {
       mode: "date",
       withTimezone: true,
@@ -285,15 +291,21 @@ export const federatedApplicationConnections = pgTable(
 
 /**
  * Short-lived review request for an application connection. Opaque browser
- * continuation and callback codes are stored only as hashes. Approval creates
- * the durable connection above; redirect URLs never contain Pod sessions,
- * issuer assertions, or bearer credentials.
+ * continuation and local-redemption proofs are stored only as hashes. Approval
+ * creates the durable connection above; redirect URLs never contain Pod
+ * sessions, issuer assertions, or bearer credentials.
  */
 export const federatedApplicationConnectionRequests = pgTable(
   "federated_application_connection_requests",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     issuerUrl: text("issuer_url").notNull(),
+    /**
+     * The issuer-qualified subject the requesting application expects to
+     * link. The later signed assertion must match exactly, preventing a
+     * session switch between request creation and completion.
+     */
+    issuerSubject: text("issuer_subject").notNull(),
     clientId: text("client_id").notNull(),
     displayName: text("display_name").notNull(),
     publisherUrl: text("publisher_url"),
@@ -306,15 +318,26 @@ export const federatedApplicationConnectionRequests = pgTable(
       .$type<FederatedApplicationConnectionScope[]>(),
     /** SHA-256 of the opaque secret returned only to the requesting app. */
     continuationHash: text("continuation_hash").notNull().unique(),
-    /** SHA-256 of the one-time completion code sent to the stored callback. */
-    callbackCodeHash: text("callback_code_hash").unique(),
+    /**
+     * SHA-256 of the proof that lets the requesting browser bind this public
+     * request to its locally authenticated Pod identity in Pod Admin.
+     */
+    redemptionHash: text("redemption_hash").notNull(),
     requestedByUserId: text("requested_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
     status: text("status")
       .notNull()
-      .default("pending")
-      .$type<"pending" | "approved" | "rejected" | "expired">(),
+      .default("awaiting_local_auth")
+      .$type<
+        | "awaiting_local_auth"
+        | "pending"
+        | "approved"
+        | "completing"
+        | "completed"
+        | "rejected"
+        | "expired"
+      >(),
     approvedConnectionId: uuid("approved_connection_id").references(
       () => federatedApplicationConnections.id,
       { onDelete: "set null" }
@@ -324,8 +347,15 @@ export const federatedApplicationConnectionRequests = pgTable(
     }),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     decisionReason: text("decision_reason"),
-    callbackIssuedAt: timestamp("callback_issued_at", { withTimezone: true }),
-    callbackConsumedAt: timestamp("callback_consumed_at", {
+    /** Completion of the generic issuer assertion and local identity binding. */
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** Short lease while the Pod binds an identity and mints its durable receipt. */
+    completionStartedAt: timestamp("completion_started_at", {
+      withTimezone: true,
+    }),
+    /** The opaque Pod receipt lets the requester recover after a lost response. */
+    completionReceiptId: uuid("completion_receipt_id"),
+    completionReceiptExpiresAt: timestamp("completion_receipt_expires_at", {
       withTimezone: true,
     }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

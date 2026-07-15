@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildApplicationConnectionCallbackUrl,
+  buildApplicationConnectionReturnUrl,
   normalizeApplicationCallbackUrl,
   normalizeApplicationOrigin,
 } from "./application-connection.js";
@@ -33,15 +33,14 @@ describe("application connection URL registration", () => {
     ).toBeNull();
   });
 
-  it("adds only opaque completion values to a registered callback", () => {
+  it("adds only a public request correlation to an owner return URL", () => {
     expect(
-      buildApplicationConnectionCallbackUrl({
+      buildApplicationConnectionReturnUrl({
         callbackUrl: "https://crm.example.test/auth/pod-return?source=crm",
         requestId: "11111111-1111-4111-8111-111111111111",
-        code: "opaque-code",
       })
     ).toBe(
-      "https://crm.example.test/auth/pod-return?source=crm&connection_request=11111111-1111-4111-8111-111111111111&connection_code=opaque-code"
+      "https://crm.example.test/auth/pod-return?source=crm&connection_request=11111111-1111-4111-8111-111111111111"
     );
   });
 });

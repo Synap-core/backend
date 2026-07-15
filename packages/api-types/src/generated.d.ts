@@ -10595,8 +10595,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					commandId: string;
 					status: "completed" | "running" | "failed";
-					startedAt: Date;
 					completedAt: Date | null;
+					startedAt: Date;
 					threadId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
 					inputs: Record<string, unknown> | null;
@@ -10621,8 +10621,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				errorMessage: string | null;
 				commandId: string;
 				status: "completed" | "running" | "failed";
-				startedAt: Date;
 				completedAt: Date | null;
+				startedAt: Date;
 				threadId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
 				inputs: Record<string, unknown> | null;
@@ -17623,7 +17623,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				issuerUrl: string;
 				description: string | null;
-				applicationAdmissionMode: "issuer_only" | "application_bound";
 				isBuiltIn: boolean;
 			}[];
 			meta: object;
@@ -17646,7 +17645,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				issuerUrl: string;
 				description: string | null;
-				applicationAdmissionMode: "issuer_only" | "application_bound";
 				isBuiltIn: boolean;
 			};
 			meta: object;
@@ -17685,7 +17683,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				issuerUrl: string;
 				description: string | null;
-				applicationAdmissionMode: "issuer_only" | "application_bound";
 				isBuiltIn: boolean;
 			};
 			meta: object;
@@ -17701,6 +17698,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		redeemRequest: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				requestId: string;
+				redemptionSecret: string;
+			};
+			output: {
+				requestId: string;
+			};
+			meta: object;
+		}>;
 		getReviewRequest: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				requestId: string;
@@ -17714,7 +17721,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestedOrigin: string;
 				requestedCallbackUrl: string;
 				requestedScopes: never[];
-				status: "approved" | "pending" | "rejected" | "expired";
+				status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
 				decisionReason: string | null;
 				expiresAt: Date;
 				reviewedAt: Date | null;
@@ -17728,7 +17735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestedOrigin: string;
 				requestedCallbackUrl: string;
 				requestedScopes: ("auth:exchange-user" | "identity:link-user")[];
-				status: "approved" | "pending" | "rejected" | "expired";
+				status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
 				decisionReason: string | null;
 				expiresAt: Date;
 				reviewedAt: Date | null;
@@ -17764,20 +17771,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					clientId: string;
 					displayName: string;
 					publisherUrl: string | null;
-					status: "approved" | "pending" | "rejected" | "expired";
+					status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
 					issuerUrl: string;
 					requestedOrigin: string;
 					requestedCallbackUrl: string;
 					requestedScopes: ("auth:exchange-user" | "identity:link-user")[];
-					continuationHash: string;
-					callbackCodeHash: string | null;
 					requestedByUserId: string | null;
 					approvedConnectionId: string | null;
 					decisionReason: string | null;
-					callbackIssuedAt: Date | null;
-					callbackConsumedAt: Date | null;
+					completedAt: Date | null;
+					completionStartedAt: Date | null;
+					completionReceiptId: string | null;
+					completionReceiptExpiresAt: Date | null;
 					requestMetadata: unknown;
 				}[];
 			};
@@ -17790,7 +17797,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				requestId: string;
 				connectionId: string;
-				continuationUrl: string;
+				returnUrl: string;
 			};
 			meta: object;
 		}>;
@@ -19690,8 +19697,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					input: unknown;
 					status: PlaybookRunStatus;
-					startedAt: Date;
 					completedAt: Date | null;
+					startedAt: Date;
 					createdBy: string;
 					playbookId: string;
 					executor: PlaybookRunExecutorRef;

@@ -4,12 +4,16 @@ const mocks = vi.hoisted(() => {
   const returning = vi.fn();
   const onConflictDoNothing = vi.fn(() => ({ returning }));
   const values = vi.fn(() => ({ onConflictDoNothing }));
+  const findFirst = vi.fn();
   const insert = vi.fn(() => ({ values }));
-  return { insert, onConflictDoNothing, returning, values };
+  return { findFirst, insert, onConflictDoNothing, returning, values };
 });
 
 vi.mock("../client-pg.js", () => ({
-  db: { insert: mocks.insert },
+  db: {
+    insert: mocks.insert,
+    query: { federatedAssertionReceipts: { findFirst: mocks.findFirst } },
+  },
 }));
 
 import { consumeFederatedAssertionReceipt } from "./federated-assertion-receipt-service.js";
@@ -36,6 +40,7 @@ describe("consumeFederatedAssertionReceipt", () => {
       issuerId: "issuer-1",
       jti: "assertion-1",
       expiresAt,
+      replayContext: null,
     });
     expect(mocks.onConflictDoNothing).toHaveBeenCalledOnce();
   });
@@ -50,6 +55,29 @@ describe("consumeFederatedAssertionReceipt", () => {
         expiresAt,
       })
     ).resolves.toBe("replayed");
+  });
+
+  it("allows only the same generic operation context to recover an interrupted request", async () => {
+    mocks.returning.mockResolvedValue([]);
+    mocks.findFirst.mockResolvedValue({
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      consumeFederatedAssertionReceipt({
+        issuerId: "issuer-1",
+        jti: "assertion-1",
+        expiresAt,
+        replayContext: "application-connection:request-1",
+      })
+    ).resolves.toBe("recovered");
+
+    expect(mocks.values).toHaveBeenCalledWith({
+      issuerId: "issuer-1",
+      jti: "assertion-1",
+      expiresAt,
+      replayContext: "application-connection:request-1",
+    });
   });
 
   it("does not write an already-expired assertion", async () => {

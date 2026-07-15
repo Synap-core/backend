@@ -46,11 +46,9 @@ import {
   normalizeApplicationOrigin,
   normalizePublisherUrl,
   hashOpaqueApplicationConnectionValue,
-  createOpaqueApplicationConnectionValue,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
 } from "@synap/api";
-import { validateExplicitPodSessionToken } from "../explicit-pod-session.js";
 
 const logger = createLogger({ module: "federation" });
 export const federationRouter = new Hono();
@@ -97,9 +95,6 @@ const identityLinkClaimsSchema = z.object({
   nonce: z.string().min(16).max(1024),
   /** Optional registered application client id (authorized party). */
   azp: z.string().min(3).max(128).optional(),
-  clientName: z.string().min(1).max(160).optional(),
-  clientOrigin: z.string().url().max(2_048).optional(),
-  clientCallbackUrl: z.string().url().max(4_096).optional(),
 });
 const receiptClaimsSchema = z.object({
   ...shortLivedAssertionClaims,
@@ -122,7 +117,7 @@ const exchangeClaimsSchema = z.object({
   /** Optional registered application client id (authorized party). */
   azp: z.string().min(3).max(128).optional(),
 });
-const applicationConnectionRequestSchema = z.object({
+const applicationConnectionProposalSchema = z.object({
   issuerUrl: z.string().url().max(2_048),
   azp: z.string().min(3).max(128),
   displayName: z.string().trim().min(1).max(160),
@@ -134,8 +129,39 @@ const applicationConnectionRequestSchema = z.object({
     .min(1)
     .max(2)
     .default(["auth:exchange-user", "identity:link-user"]),
-  metadata: z.record(z.string(), z.unknown()).optional(),
 });
+const applicationConnectionStartSchema =
+  applicationConnectionProposalSchema.extend({
+    requestId: z.string().uuid(),
+    /**
+     * Generic issuer-qualified subject commitment. It is checked against the
+     * later signed assertion before the Pod links any local identity.
+     */
+    issuerSubject: z.string().trim().min(1).max(512),
+    continuationHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    redemptionHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    // This short-lived browser proof is used only to pass the Pod-owned
+    // native-login boundary. It is never persisted and is sent in the
+    // Location fragment, which browsers do not include in requests.
+    redemptionSecret: z.string().regex(/^[A-Za-z0-9_-]{32,512}$/),
+    // HTML form submissions encode compound fields as strings. Keep the
+    // wire-format concern here rather than teaching the generic service about
+    // a browser transport.
+    requestedScopes: z.preprocess(
+      (value) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value);
+        } catch {
+          return value;
+        }
+      },
+      z
+        .array(z.enum(["auth:exchange-user", "identity:link-user"]))
+        .min(1)
+        .max(2)
+    ),
+  });
 const grantClaimsSchema = z.object({
   ...shortLivedAssertionClaims,
   iss: z.string().url(),
@@ -307,23 +333,10 @@ async function requireRegisteredApplicationConnection(input: {
   return null;
 }
 
-function selectedPodConnectionReviewUrl(requestId: string): string | null {
-  const audience = podAudience();
-  if (!audience) return null;
-  try {
-    // The app receives a URL on the selected Pod origin. The Pod performs the
-    // configured admin redirect server-side, so app-side origin validation
-    // never needs to accept an arbitrary POD_ADMIN_URL host.
-    return new URL(
-      `/api/federation/application-connections/requests/${requestId}/review`,
-      audience
-    ).toString();
-  } catch {
-    return null;
-  }
-}
-
-function podAdminConnectionReviewTarget(requestId: string): string | null {
+function podAdminConnectionReviewTarget(
+  requestId: string,
+  redemptionSecret: string
+): string | null {
   const audience = podAudience();
   if (!audience) return null;
   try {
@@ -336,17 +349,21 @@ function podAdminConnectionReviewTarget(requestId: string): string | null {
       return null;
     }
     const prefix = base.pathname.replace(/\/+$/, "");
-    base.pathname = `${prefix}/connection-requests/${requestId}`;
+    // Pod Admin's native-login route redeems the generic request against the
+    // locally authenticated Pod user before it exposes the review surface.
+    base.pathname = `${prefix}/connection-requests/new`;
     base.search = "";
-    base.hash = "";
+    base.searchParams.set("requestId", requestId);
+    // A fragment is never sent to Pod Admin, its proxy, or application logs.
+    // The client immediately scrubs it after reading the one-time proof.
+    base.hash = new URLSearchParams({ redeem: redemptionSecret }).toString();
     return base.toString();
   } catch {
     return null;
   }
 }
 
-async function createPendingApplicationConnection(input: {
-  requestedByUserId: string;
+function normalizeApplicationConnectionProposal(input: {
   issuerUrl: string;
   azp: string;
   displayName: string;
@@ -354,7 +371,6 @@ async function createPendingApplicationConnection(input: {
   origin: string;
   callbackUrl: string;
   requestedScopes: string[];
-  metadata?: Record<string, unknown>;
 }) {
   const issuerUrl = canonicalIssuerUrl(input.issuerUrl);
   const clientId = normalizeApplicationClientId(input.azp);
@@ -376,9 +392,7 @@ async function createPendingApplicationConnection(input: {
   ) {
     return null;
   }
-
-  const continuation = createOpaqueApplicationConnectionValue();
-  const request = await applicationConnectionService.createPending({
+  return {
     issuerUrl,
     clientId,
     displayName: input.displayName.trim(),
@@ -386,16 +400,33 @@ async function createPendingApplicationConnection(input: {
     requestedOrigin: origin,
     requestedCallbackUrl: callbackUrl,
     requestedScopes,
-    continuationHash: hashOpaqueApplicationConnectionValue(continuation),
-    requestedByUserId: input.requestedByUserId,
+  };
+}
+
+async function startApplicationConnectionRequest(input: {
+  requestId: string;
+  issuerUrl: string;
+  issuerSubject: string;
+  azp: string;
+  displayName: string;
+  publisherUrl?: string;
+  origin: string;
+  callbackUrl: string;
+  requestedScopes: string[];
+  continuationHash: string;
+  redemptionHash: string;
+}) {
+  const proposal = normalizeApplicationConnectionProposal(input);
+  if (!proposal) return null;
+  return applicationConnectionService.createAwaitingLocalAuth({
+    ...proposal,
+    requestId: input.requestId,
+    issuerSubject: input.issuerSubject.trim(),
+    continuationHash: input.continuationHash.toLowerCase(),
+    redemptionHash: input.redemptionHash.toLowerCase(),
     expiresAt: new Date(Date.now() + 30 * 60 * 1_000),
-    requestMetadata: input.metadata,
+    requestMetadata: { requestedVia: "browser-pod-admin-handoff" },
   });
-  const approvalUrl = selectedPodConnectionReviewUrl(request.id);
-  if (!approvalUrl) {
-    throw new Error("Pod Admin URL is not configured");
-  }
-  return { request, continuation, approvalUrl };
 }
 
 /**
@@ -456,15 +487,17 @@ function hasIssuerCapability(
 async function consumeFederatedAssertion(
   c: Context,
   issuerId: string,
-  claims: { jti: string; exp: number }
+  claims: { jti: string; exp: number },
+  replayContext?: string
 ): Promise<Response | null> {
   try {
     const result = await consumeFederatedAssertionReceipt({
       issuerId,
       jti: claims.jti,
       expiresAt: new Date(claims.exp * 1_000),
+      ...(replayContext ? { replayContext } : {}),
     });
-    if (result === "consumed") return null;
+    if (result === "consumed" || result === "recovered") return null;
     if (result === "expired") {
       return c.json({ error: "Federated assertion has expired" }, 401);
     }
@@ -728,7 +761,7 @@ function setCredentiallessApplicationConnectionCors(
   }
   c.header("Access-Control-Allow-Origin", origin);
   c.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-  c.header("Access-Control-Allow-Headers", "Content-Type, X-Session-Token");
+  c.header("Access-Control-Allow-Headers", "Content-Type");
   c.header("Access-Control-Max-Age", "600");
   c.header("Vary", "Origin");
   // Do not set Allow-Credentials. A continuation is authorized solely by its
@@ -745,40 +778,6 @@ function isApplicationConnectionJsonRequest(c: Context): boolean {
   );
 }
 
-/**
- * The global auth middleware correctly falls back from an invalid API token to
- * a browser cookie for ordinary surfaces. That compatibility behavior would be
- * unsafe here: a cross-site form could add a bogus header and ride SameSite=None
- * cookies. This endpoint therefore proves the explicit session token first and
- * only then delegates to the regular middleware for the canonical user context.
- */
-async function requireApplicationConnectionSessionToken(
-  c: Context,
-  next: () => Promise<void>
-): Promise<Response> {
-  const status = await validateExplicitPodSessionToken(
-    c.req.header("x-session-token")
-  );
-  if (status === "missing") {
-    return c.json(
-      { error: "X-Session-Token is required for this Pod approval request" },
-      403
-    );
-  }
-  if (status === "invalid") {
-    return c.json({ error: "Invalid X-Session-Token" }, 401);
-  }
-  if (status === "unavailable") {
-    return c.json(
-      { error: "Pod authentication is temporarily unavailable" },
-      503
-    );
-  }
-  c.set("requireExplicitSessionToken" as never, true);
-  await next();
-  return c.res;
-}
-
 async function setStoredApplicationConnectionCors(
   c: Context
 ): Promise<boolean> {
@@ -792,172 +791,76 @@ async function setStoredApplicationConnectionCors(
 }
 
 /**
- * Browser app → Pod: ask an owner to approve an issuer + application journey.
+ * Browser app → Pod Admin: start a top-level, credentialless handoff.
  *
- * The request is intentionally non-authorizing. The app receives only an
- * opaque continuation secret and a Pod Admin review URL; the owner must review
- * the exact origin/callback before the Pod records any trust relationship.
+ * This intentionally accepts an HTML form rather than a cross-origin fetch:
+ * the browser follows the Pod-owned redirect to its configured Admin surface,
+ * where local Kratos authentication happens. The request is created only as
+ * `awaiting_local_auth`; redemption is what binds it to a Pod-local user.
  */
-federationRouter.options("/application-connections/requests", (c) => {
+federationRouter.post("/application-connections/requests/start", async (c) => {
   const origin = c.req.header("origin");
-  const normalized = origin ? normalizeApplicationOrigin(origin) : null;
-  setCredentiallessApplicationConnectionCors(
-    c,
-    normalized === origin ? origin : null
+  const normalizedOrigin = origin ? normalizeApplicationOrigin(origin) : null;
+  if (!origin || normalizedOrigin !== origin) {
+    return c.json(
+      { error: "A canonical application Origin header is required" },
+      400
+    );
+  }
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.startsWith("application/x-www-form-urlencoded")) {
+    return c.json(
+      { error: "Application setup must use a top-level form submission" },
+      415
+    );
+  }
+  const parsed = applicationConnectionStartSchema.safeParse(
+    await c.req.parseBody().catch(() => null)
   );
-  return c.body(null, 204);
+  if (!parsed.success || parsed.data.origin !== origin) {
+    return c.json(
+      {
+        error:
+          "A canonical issuer, registered application, exact origin, callback, and continuation hash are required",
+      },
+      400
+    );
+  }
+  if (
+    hashOpaqueApplicationConnectionValue(parsed.data.redemptionSecret) !==
+    parsed.data.redemptionHash.toLowerCase()
+  ) {
+    return c.json({ error: "Invalid application connection proof" }, 400);
+  }
+  try {
+    const request = await startApplicationConnectionRequest(parsed.data);
+    if (!request) {
+      return c.json(
+        { error: "Application origin and callback must be exact HTTPS URLs" },
+        400
+      );
+    }
+    const reviewUrl = podAdminConnectionReviewTarget(
+      request.id,
+      parsed.data.redemptionSecret
+    );
+    if (!reviewUrl) return c.json({ error: "Pod Admin is unavailable" }, 503);
+    return c.redirect(reviewUrl, 303);
+  } catch (error) {
+    logger.error({ error }, "Could not start Pod Admin connection handoff");
+    return c.json({ error: "Could not start Pod Admin setup" }, 503);
+  }
 });
 
 federationRouter.options(
   "/application-connections/requests/:requestId/:operation",
   async (c) => {
     const operation = c.req.param("operation");
-    if (operation !== "consume" && operation !== "status") {
+    if (operation !== "status" && operation !== "complete") {
       return c.json({ error: "Not found" }, 404);
     }
     await setStoredApplicationConnectionCors(c);
     return c.body(null, 204);
-  }
-);
-
-federationRouter.post(
-  "/application-connections/requests",
-  async (c, next): Promise<Response> => {
-    const origin = c.req.header("origin");
-    const normalizedOrigin = origin ? normalizeApplicationOrigin(origin) : null;
-    setCredentiallessApplicationConnectionCors(
-      c,
-      normalizedOrigin === origin ? origin : null
-    );
-    if (!origin || normalizedOrigin !== origin) {
-      return c.json(
-        { error: "A canonical application Origin header is required" },
-        400
-      );
-    }
-    if (!isApplicationConnectionJsonRequest(c)) {
-      return c.json(
-        { error: "Content-Type application/json is required" },
-        415
-      );
-    }
-    await next();
-    return c.res;
-  },
-  requireApplicationConnectionSessionToken,
-  authMiddleware,
-  async (c) => {
-    const requestedByUserId = c.get("userId" as never) as string | undefined;
-    if (!requestedByUserId) return c.json({ error: "Unauthorized" }, 401);
-    const parsed = applicationConnectionRequestSchema.safeParse(
-      await c.req.json().catch(() => null)
-    );
-    if (!parsed.success) {
-      return c.json(
-        {
-          error:
-            "A canonical issuer, registered application, exact origin, and exact callback are required",
-          code: "APPLICATION_CONNECTION_REQUEST_INVALID",
-        },
-        400
-      );
-    }
-    if (c.req.header("origin") !== parsed.data.origin) {
-      return c.json(
-        {
-          error:
-            "The Origin header must exactly match the application origin being proposed",
-          code: "APPLICATION_CONNECTION_ORIGIN_MISMATCH",
-        },
-        400
-      );
-    }
-    try {
-      const created = await createPendingApplicationConnection({
-        ...parsed.data,
-        requestedByUserId,
-      });
-      if (!created) {
-        return c.json(
-          {
-            error:
-              "Application origin and callback must be exact HTTPS URLs (or explicit localhost development URLs on the same origin)",
-            code: "APPLICATION_CONNECTION_REQUEST_INVALID",
-          },
-          400
-        );
-      }
-      return c.json(
-        {
-          code: "APPLICATION_CONNECTION_APPROVAL_REQUIRED",
-          requestId: created.request.id,
-          approvalUrl: created.approvalUrl,
-          continuation: created.continuation,
-          expiresAt: created.request.expiresAt.toISOString(),
-        },
-        201
-      );
-    } catch (error) {
-      logger.error(
-        { error },
-        "Could not create application connection request"
-      );
-      return c.json(
-        {
-          error: "Could not create the Pod owner approval request",
-          code: "APPLICATION_CONNECTION_REQUEST_FAILED",
-        },
-        503
-      );
-    }
-  }
-);
-
-/**
- * Application callback → Pod: consume both opaque browser values exactly once.
- * No assertion, Pod session, or bearer token is ever transported in the URL.
- */
-federationRouter.post(
-  "/application-connections/requests/:requestId/consume",
-  async (c) => {
-    if (
-      !isApplicationConnectionJsonRequest(c) ||
-      !(await setStoredApplicationConnectionCors(c))
-    ) {
-      return c.json(
-        { error: "Invalid application connection origin or content type" },
-        400
-      );
-    }
-    const requestId = z.string().uuid().safeParse(c.req.param("requestId"));
-    const body = z
-      .object({
-        continuation: z.string().min(32).max(512),
-        code: z.string().min(32).max(512),
-      })
-      .safeParse(await c.req.json().catch(() => null));
-    if (!requestId.success || !body.success) {
-      return c.json(
-        { error: "Invalid application connection completion" },
-        400
-      );
-    }
-    const consumed = await applicationConnectionService.consumeCompletion({
-      requestId: requestId.data,
-      continuationHash: hashOpaqueApplicationConnectionValue(
-        body.data.continuation
-      ),
-      callbackCodeHash: hashOpaqueApplicationConnectionValue(body.data.code),
-    });
-    if (!consumed) {
-      // Deliberately indistinguishable for invalid, expired, and replayed
-      // continuations so request IDs cannot become a status oracle.
-      return c.json(
-        { error: "Application connection completion is invalid or expired" },
-        400
-      );
-    }
-    return c.json({ status: "approved", requestId: consumed.id });
   }
 );
 
@@ -996,7 +899,268 @@ federationRouter.post(
     if (!status) {
       return c.json({ error: "Application connection request not found" }, 404);
     }
-    return c.json({ status });
+    return c.json({
+      status: status.status,
+      expiresAt: status.expiresAt.toISOString(),
+      ...(status.completion
+        ? {
+            receiptId: status.completion.receiptId,
+            receiptExpiresAt: status.completion.expiresAt.toISOString(),
+          }
+        : {}),
+    });
+  }
+);
+
+/**
+ * Requesting application → Pod: finish an owner-approved generic identity
+ * link. The app proves only its opaque continuation and a fresh issuer
+ * assertion; the Pod-local user was fixed by the native Pod Admin redemption
+ * step, not by the owner who reviewed this request.
+ */
+federationRouter.post(
+  "/application-connections/requests/:requestId/complete",
+  async (c) => {
+    if (
+      !isApplicationConnectionJsonRequest(c) ||
+      !(await setStoredApplicationConnectionCors(c))
+    ) {
+      return c.json(
+        { error: "Invalid application connection origin or content type" },
+        400
+      );
+    }
+    const requestId = z.string().uuid().safeParse(c.req.param("requestId"));
+    const body = z
+      .object({
+        continuation: z.string().min(32).max(512),
+        assertion: z.string().min(1).max(MAX_ASSERTION_LENGTH).optional(),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!requestId.success || !body.success) {
+      return c.json(
+        { error: "Invalid application connection completion" },
+        400
+      );
+    }
+    const continuationHash = hashOpaqueApplicationConnectionValue(
+      body.data.continuation
+    );
+    const existing =
+      await applicationConnectionService.getStatusForContinuation({
+        requestId: requestId.data,
+        continuationHash,
+      });
+    if (!existing) {
+      // Do not expose whether a request id, decision, or continuation failed.
+      return c.json(
+        { error: "Application connection completion is invalid or expired" },
+        400
+      );
+    }
+    if (existing.completion) {
+      return c.json({
+        status: "completed",
+        receiptId: existing.completion.receiptId,
+        expiresAt: existing.completion.expiresAt.toISOString(),
+      });
+    }
+    if (existing.status === "completing") {
+      const recovered =
+        await applicationConnectionService.recoverStaleCompletion({
+          requestId: requestId.data,
+          continuationHash,
+        });
+      if (!recovered) {
+        return c.json(
+          { error: "Application connection is completing; retry shortly" },
+          409
+        );
+      }
+    }
+    if (!body.data.assertion) {
+      return c.json({ error: "Identity-link assertion is required" }, 400);
+    }
+    const request = await applicationConnectionService.getCompletableRequest({
+      requestId: requestId.data,
+      continuationHash,
+    });
+    if (!request) {
+      return c.json(
+        { error: "Application connection is not approved for completion" },
+        409
+      );
+    }
+    // Service admission guarantees this value, but retain a local narrow for
+    // the compiler and for defence-in-depth if a future service changes.
+    const requesterUserId = request.requestedByUserId;
+    if (!requesterUserId) {
+      return c.json(
+        { error: "Application connection cannot be completed" },
+        409
+      );
+    }
+    const audience = podAudience();
+    if (!audience) return c.json({ error: "PUBLIC_URL is required" }, 500);
+    const decoded = decodeShortLivedAssertion(body.data.assertion);
+    const candidateIssuerUrl =
+      decoded && typeof decoded.iss === "string"
+        ? canonicalIssuerUrl(decoded.iss)
+        : null;
+    if (!candidateIssuerUrl || candidateIssuerUrl !== request.issuerUrl) {
+      return c.json({ error: "Invalid issuer identity-link assertion" }, 401);
+    }
+    const issuer = await new TrustedIssuerService().getByUrl(
+      candidateIssuerUrl
+    );
+    if (!issuer || issuer.status !== "approved") {
+      return c.json({ error: "Issuer is not approved" }, 401);
+    }
+
+    let payload: Assertion | null;
+    try {
+      payload = await verifyIssuerJwt<Assertion>(
+        body.data.assertion,
+        issuer.issuerUrl,
+        audience,
+        { consumeJti: false }
+      );
+    } catch {
+      return c.json({ error: "Invalid issuer identity-link assertion" }, 401);
+    }
+    const claims = identityLinkClaimsSchema.safeParse(payload);
+    if (
+      !claims.success ||
+      canonicalIssuerUrl(claims.data.iss) !== request.issuerUrl ||
+      claims.data.sub !== request.issuerSubject ||
+      claims.data.azp !== request.clientId ||
+      !request.requestedScopes.includes("identity:link-user")
+    ) {
+      return c.json({ error: "Invalid issuer identity-link assertion" }, 401);
+    }
+    const applicationAdmission = await requireRegisteredApplicationConnection({
+      c,
+      issuerId: issuer.id,
+      issuerUrl: request.issuerUrl,
+      azp: claims.data.azp,
+      capability: TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
+      purpose: "identity-link",
+      requireBrowserBinding: false,
+    });
+    if (applicationAdmission) return applicationAdmission;
+
+    // Reserve before consuming the JTI. A concurrent caller that loses this
+    // request-scoped lease has not spent its one-time issuer assertion and can
+    // retry with the same fresh proof. The replay context below permits only
+    // this exact request to recover a later post-consumption server failure.
+    const reservation = await applicationConnectionService.reserveCompletion({
+      requestId: request.id,
+      continuationHash,
+    });
+    if (reservation?.kind === "completed") {
+      return c.json({
+        status: "completed",
+        receiptId: reservation.completion.receiptId,
+        expiresAt: reservation.completion.expiresAt.toISOString(),
+      });
+    }
+    if (!reservation) {
+      return c.json(
+        { error: "Application connection is completing; retry shortly" },
+        409
+      );
+    }
+
+    const assertionResult = await consumeFederatedAssertion(
+      c,
+      issuer.id,
+      claims.data,
+      `application-connection:${request.id}`
+    );
+    if (assertionResult) {
+      await applicationConnectionService
+        .releaseCompletion({ requestId: request.id, continuationHash })
+        .catch((releaseError) =>
+          logger.error(
+            { releaseError, requestId: request.id },
+            "Could not release rejected application connection reservation"
+          )
+        );
+      return assertionResult;
+    }
+
+    try {
+      const reservedRequest = reservation.request;
+      const requesterUserId = reservedRequest.requestedByUserId;
+      if (!requesterUserId) {
+        throw new Error("Application connection requester is unavailable");
+      }
+      // A receipt renewal proves the original committed subject again and
+      // mints a fresh short-lived receipt. It intentionally does not call the
+      // binding operation: `createIssuerIdentityLinkReceipt` below verifies
+      // that the original issuer subject still maps to this Pod user.
+      if (!reservedRequest.completedAt) {
+        const binding = await bindExistingFederatedIdentity({
+          issuerId: issuer.id,
+          issuerSubject: claims.data.sub,
+          kratosIdentityId: requesterUserId,
+          linkedByUserId: requesterUserId,
+        });
+        if (binding.status !== "bound") {
+          await applicationConnectionService.releaseCompletion({
+            requestId: request.id,
+            continuationHash,
+          });
+          return c.json(
+            {
+              error: "Could not link this Pod identity",
+              reason: binding.reason,
+            },
+            409
+          );
+        }
+      }
+      const receipt = await createIssuerIdentityLinkReceipt({
+        issuerId: issuer.id,
+        issuerSubject: claims.data.sub,
+        userId: requesterUserId,
+        intentId: claims.data.intentId,
+        nonce: claims.data.nonce,
+        expiresAt: new Date(
+          Math.min(claims.data.exp * 1_000, Date.now() + 5 * 60_000)
+        ),
+      });
+      const finalized = await applicationConnectionService.finalizeCompletion({
+        requestId: request.id,
+        continuationHash,
+        completion: receipt,
+      });
+      if (!finalized) {
+        throw new Error("Could not persist completed application connection");
+      }
+      return c.json({
+        status: "completed",
+        receiptId: receipt.receiptId,
+        expiresAt: receipt.expiresAt.toISOString(),
+      });
+    } catch (error) {
+      await applicationConnectionService
+        .releaseCompletion({ requestId: request.id, continuationHash })
+        .catch((releaseError) =>
+          logger.error(
+            { releaseError, requestId: request.id },
+            "Could not release application connection completion reservation"
+          )
+        );
+      logger.error(
+        { error, requestId: request.id, issuerId: issuer.id },
+        "Could not complete application connection identity link"
+      );
+      return c.json(
+        { error: "Could not complete application connection" },
+        503
+      );
+    }
   }
 );
 
@@ -1028,52 +1192,10 @@ federationRouter.post("/identity-links", authMiddleware, async (c) => {
   const issuerService = new TrustedIssuerService();
   let issuer = await issuerService.getByUrl(issuerUrl);
   if (!issuer || issuer.status !== "approved") {
-    // Do not auto-approve an issuer just because the current caller is an
-    // owner. A decoded assertion may describe an app request, but is not
-    // treated as authority: the Pod Admin owner reviews every exact value.
-    const decodedClaims = identityLinkClaimsSchema.safeParse(decoded);
-    if (
-      decodedClaims.success &&
-      decodedClaims.data.azp &&
-      decodedClaims.data.clientName &&
-      decodedClaims.data.clientOrigin &&
-      decodedClaims.data.clientCallbackUrl
-    ) {
-      try {
-        const created = await createPendingApplicationConnection({
-          requestedByUserId: userId,
-          issuerUrl,
-          azp: decodedClaims.data.azp,
-          displayName: decodedClaims.data.clientName,
-          origin: decodedClaims.data.clientOrigin,
-          callbackUrl: decodedClaims.data.clientCallbackUrl,
-          requestedScopes: ["auth:exchange-user", "identity:link-user"],
-          metadata: { requestedVia: "identity-link" },
-        });
-        if (created) {
-          return c.json(
-            {
-              error:
-                "This Pod owner must approve the issuer and application before identities can be linked",
-              code: "APPLICATION_CONNECTION_APPROVAL_REQUIRED",
-              requestId: created.request.id,
-              approvalUrl: created.approvalUrl,
-              expiresAt: created.request.expiresAt.toISOString(),
-            },
-            409
-          );
-        }
-      } catch (error) {
-        logger.error(
-          { error, issuerUrl },
-          "Could not create identity-link application approval request"
-        );
-      }
-    }
     return c.json(
       {
         error:
-          "This issuer is not approved to link Pod identities. Ask a Pod owner to approve it in Pod Admin.",
+          "This issuer is not approved to link Pod identities. Start a Pod Admin application-connection request so an owner can review the exact issuer and browser application.",
         code: "ISSUER_APPROVAL_REQUIRED",
       },
       403
@@ -1497,26 +1619,6 @@ federationRouter.post("/exchange", async (c) => {
         : undefined,
   });
 });
-
-/**
- * Keep the externally visible approval URL on the selected Pod origin. The
- * deployment-owned Pod Admin host is followed only from this server-side
- * redirect; no caller-controlled redirect target is accepted here.
- */
-federationRouter.get(
-  "/application-connections/requests/:requestId/review",
-  async (c) => {
-    const requestId = z.string().uuid().safeParse(c.req.param("requestId"));
-    if (!requestId.success) return c.json({ error: "Not found" }, 404);
-    const request = await applicationConnectionService.getRequest(
-      requestId.data
-    );
-    if (!request) return c.json({ error: "Not found" }, 404);
-    const target = podAdminConnectionReviewTarget(request.id);
-    if (!target) return c.json({ error: "Pod Admin is unavailable" }, 503);
-    return c.redirect(target, 302);
-  }
-);
 
 /**
  * Install-time creation of the first local Pod owner.

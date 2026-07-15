@@ -125,7 +125,7 @@ describe("approved application origin CORS policy", () => {
         origin: "https://crm.example.test",
         firstPartyOrigin: false,
         approvedApplicationOrigin: false,
-        path: "/api/federation/application-connections/requests",
+        path: "/api/federation/application-connections/requests/request-id/status",
         method: "POST",
       })
     ).toBe(false);

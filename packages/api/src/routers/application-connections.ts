@@ -19,12 +19,14 @@ import {
 } from "@synap/database";
 import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
 import {
-  buildApplicationConnectionCallbackUrl,
-  createOpaqueApplicationConnectionValue,
+  buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
 } from "../utils/application-connection.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
+const redeemRequestSchema = requestIdSchema.extend({
+  redemptionSecret: z.string().regex(/^[A-Za-z0-9_-]{32,512}$/),
+});
 
 const connectionService = new FederatedApplicationConnectionService();
 
@@ -92,6 +94,34 @@ function reviewShape(
 }
 
 export const applicationConnectionsRouter = router({
+  /**
+   * The browser reached this Pod-owned route through a public, non-authorizing
+   * handoff. Redeem it only after Pod Admin's local Kratos session exists;
+   * this is what binds the later review request to a real Pod user.
+   */
+  redeemRequest: protectedProcedure
+    .input(redeemRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const request = await connectionService.redeemRequest({
+          requestId: input.requestId,
+          redemptionHash: hashOpaqueApplicationConnectionValue(
+            input.redemptionSecret
+          ),
+          requestedByUserId: ctx.userId,
+        });
+        return { requestId: request.id };
+      } catch (error) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not prepare this application connection request",
+        });
+      }
+    }),
+
   /** A signed-in member may open a request link and see whether an owner must act. */
   getReviewRequest: protectedProcedure
     .input(requestIdSchema)
@@ -103,10 +133,17 @@ export const applicationConnectionsRouter = router({
           message: "Connection request not found",
         });
       }
-      return reviewShape(
-        request,
-        await canReviewPodApplicationConnections(ctx.userId)
-      );
+      const canReview = await canReviewPodApplicationConnections(ctx.userId);
+      // A request id is a public browser-correlation value, not an intra-Pod
+      // discovery token. Ordinary members may see only their own requester
+      // guidance; owners/admins may inspect the security-relevant proposal.
+      if (!canReview && request.requestedByUserId !== ctx.userId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Connection request not found",
+        });
+      }
+      return reviewShape(request, canReview);
     }),
 
   list: podAdminProcedure.query(async () => {
@@ -136,14 +173,22 @@ export const applicationConnectionsRouter = router({
         ...connection,
         issuerUrl,
       })),
-      requests,
+      // Owner inventory needs the proposal and its lifecycle, never either
+      // browser-held capability hash. Keeping those out of the tRPC payload
+      // avoids copying them into client caches or diagnostics.
+      requests: requests.map(
+        ({
+          continuationHash: _continuationHash,
+          redemptionHash: _redemptionHash,
+          ...request
+        }) => request
+      ),
     };
   }),
 
   approveRequest: podAdminProcedure
     .input(requestIdSchema)
     .mutation(async ({ input, ctx }) => {
-      const callbackCode = createOpaqueApplicationConnectionValue();
       let approved: Awaited<
         ReturnType<FederatedApplicationConnectionService["approve"]>
       >;
@@ -151,7 +196,6 @@ export const applicationConnectionsRouter = router({
         approved = await connectionService.approve({
           requestId: input.requestId,
           reviewerUserId: ctx.userId,
-          callbackCodeHash: hashOpaqueApplicationConnectionValue(callbackCode),
         });
       } catch (error) {
         throw new TRPCError({
@@ -165,12 +209,12 @@ export const applicationConnectionsRouter = router({
       return {
         requestId: approved.request.id,
         connectionId: approved.connection.id,
-        // This URL is constructed from the exact callback the owner just
-        // reviewed. It includes a one-time opaque code, never a Pod credential.
-        continuationUrl: buildApplicationConnectionCallbackUrl({
+        // A reviewer may return to the app, but this public link is not the
+        // completion authority. The original requester holds the opaque
+        // continuation and can poll/complete from another browser.
+        returnUrl: buildApplicationConnectionReturnUrl({
           callbackUrl: approved.request.requestedCallbackUrl,
           requestId: approved.request.id,
-          code: callbackCode,
         }),
       };
     }),

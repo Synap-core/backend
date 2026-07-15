@@ -66,8 +66,8 @@ export function normalizeApplicationOrigin(value: string): string | null {
 
 /**
  * A callback may have a path and static query parameters, but must live on the
- * exact origin proposed by the application. We append only opaque request and
- * completion code values after owner approval.
+ * exact origin proposed by the application. A reviewer return carries only a
+ * public request correlation; the requester-held continuation stays local.
  */
 export function normalizeApplicationCallbackUrl(
   value: string,
@@ -149,16 +149,15 @@ export function createOpaqueApplicationConnectionValue(): string {
 }
 
 /**
- * Build a callback solely from a URL that passed exact registration and owner
- * approval. It carries no Pod session, bearer token, or issuer assertion.
+ * A reviewed application may be offered a non-authorizing return link after
+ * owner approval. The requester still proves possession of its continuation
+ * to poll and complete, so this public correlation id is safe in a URL.
  */
-export function buildApplicationConnectionCallbackUrl(input: {
+export function buildApplicationConnectionReturnUrl(input: {
   callbackUrl: string;
   requestId: string;
-  code: string;
 }): string {
   const url = new URL(input.callbackUrl);
   url.searchParams.set("connection_request", input.requestId);
-  url.searchParams.set("connection_code", input.code);
   return url.toString();
 }

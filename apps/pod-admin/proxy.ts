@@ -45,6 +45,15 @@ export const config = {
 export async function proxy(req: NextRequest) {
   const cookie = req.headers.get("cookie") ?? "";
   const currentUrl = req.nextUrl.pathname + req.nextUrl.search;
+  const path = req.nextUrl.pathname;
+
+  // This is a deliberately data-free bootstrap page. A browser can read and
+  // scrub its fragment before native sign-in, preserving the requester-held
+  // redemption proof across a Kratos redirect. It cannot inspect, redeem, or
+  // review a connection request without a local Pod session.
+  if (path === "/connection-requests/new") {
+    return NextResponse.next();
+  }
 
   // ── 1. Kratos session ─────────────────────────────────────────────
   const identity = await whoamiFromCookie(cookie);
@@ -62,7 +71,6 @@ export async function proxy(req: NextRequest) {
   // matching agent-key approval). The backend endpoints they call already
   // re-verify the Kratos session server-side — we just need a valid session
   // here, not the pod_admin role.
-  const path = req.nextUrl.pathname;
   const isSelfService =
     path === "/connect" ||
     path.startsWith("/approve-agent") ||

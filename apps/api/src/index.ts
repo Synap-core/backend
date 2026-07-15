@@ -331,7 +331,7 @@ app.use("*", async (c, next) => {
   // reach the route-level validator; every other preflight stays fail-closed.
   const applicationConnectionPreflight =
     c.req.method === "OPTIONS" &&
-    /^\/api\/federation\/application-connections\/requests(?:\/[^/]+\/(?:consume|status))?$/.test(
+    /^\/api\/federation\/application-connections\/requests\/[^/]+\/(?:status|complete)$/.test(
       c.req.path
     );
   if (applicationConnectionPreflight) return next();

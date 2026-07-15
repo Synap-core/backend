@@ -96,14 +96,13 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
     };
   }, [initialFlowId, goReturn]);
 
-  const onSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
+  const submitFlow = useCallback(
+    async (submittedValues: Record<string, string>) => {
       if (!flow) return;
       setSubmitting(true);
       setError(null);
       try {
-        const r = await submitLoginFlow(flow, values);
+        const r = await submitLoginFlow(flow, submittedValues);
         if (r.session) {
           goReturn();
           return;
@@ -146,7 +145,15 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
         setSubmitting(false);
       }
     },
-    [flow, values, goReturn]
+    [flow, goReturn]
+  );
+
+  const onSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      void submitFlow(values);
+    },
+    [submitFlow, values]
   );
 
   return (
@@ -170,10 +177,10 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
 
           <div className="flex flex-col gap-1.5">
             <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
-              Sign in to Pod Admin
+              Sign in to this Pod
             </h1>
             <p className="text-[13.5px] leading-relaxed text-foreground/65">
-              Operator access only. Session is scoped to this device.
+              Your session is scoped to this Pod and this device.
             </p>
           </div>
 
@@ -187,6 +194,9 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
               values={values}
               setValues={setValues}
               onSubmit={onSubmit}
+              onSubmitMethod={(name, value) =>
+                void submitFlow({ ...values, [name]: value })
+              }
               submitting={submitting}
               error={error}
             />
@@ -209,6 +219,7 @@ interface FlowFieldsProps {
     updater: (prev: Record<string, string>) => Record<string, string>
   ) => void;
   onSubmit: (e: React.FormEvent) => void;
+  onSubmitMethod: (name: string, value: string) => void;
   submitting: boolean;
   error: string | null;
 }
@@ -218,22 +229,14 @@ function FlowFields({
   values,
   setValues,
   onSubmit,
+  onSubmitMethod,
   submitting,
   error,
 }: FlowFieldsProps) {
-  // Pod Admin is an email + password OPERATOR console. The shared Kratos config
-  // may have other methods enabled (passkey / webauthn / oidc) for the BROWSER
-  // app's login flow — those inject extra UI nodes (e.g. a `passkey_login_trigger`)
-  // that this generic renderer would otherwise draw as a stray, purposeless input.
-  // Render ONLY the credential groups so this form is always a clean email+password
-  // operator login, regardless of what methods the browser flow turns on.
-  const CREDENTIAL_GROUPS = new Set(["default", "password"]);
-  const inputs = flow.ui.nodes.filter(
-    (n) =>
-      n.type === "input" &&
-      (!n.group || CREDENTIAL_GROUPS.has(n.group)) &&
-      n.attributes?.type !== "button"
-  );
+  // Connection handoff is available to every Pod member, not only operators.
+  // Render every Pod-configured Kratos method (password, passkey, OIDC, …)
+  // rather than silently stranding members who do not use a password.
+  const inputs = flow.ui.nodes.filter((n) => n.type === "input");
 
   return (
     <form className="flex flex-col gap-4" onSubmit={onSubmit}>
@@ -249,7 +252,37 @@ function FlowFields({
         const name = attrs.name;
         if (typeof name !== "string") return null;
         const type = (attrs.type as string) || "text";
-        if (type === "submit") return null;
+        if (type === "button" || type === "submit") {
+          // Password remains the ordinary form submission below. Other Kratos
+          // method triggers carry their exact name/value pair to the flow.
+          if (
+            node.group === "password" ||
+            (name === "method" && attrs.value === "password")
+          ) {
+            return null;
+          }
+          const value = typeof attrs.value === "string" ? attrs.value : "";
+          const label =
+            typeof attrs.label === "string"
+              ? attrs.label
+              : node.group === "webauthn" || name.includes("passkey")
+                ? "Sign in with passkey"
+                : value
+                  ? `Continue with ${value}`
+                  : "Continue";
+          return (
+            <Button
+              key={`${name}-${idx}`}
+              type="button"
+              variant="flat"
+              radius="md"
+              isDisabled={submitting}
+              onPress={() => onSubmitMethod(name, value)}
+            >
+              {label}
+            </Button>
+          );
+        }
         if (type === "hidden") {
           return (
             <input
@@ -276,7 +309,13 @@ function FlowFields({
             label={String(label)}
             labelPlacement="outside"
             name={name}
-            type={type === "password" ? "password" : "text"}
+            type={
+              type === "password"
+                ? "password"
+                : type === "email"
+                  ? "email"
+                  : "text"
+            }
             value={values[name] ?? ""}
             onValueChange={(v) => setValues((prev) => ({ ...prev, [name]: v }))}
             isRequired={attrs.required === true}

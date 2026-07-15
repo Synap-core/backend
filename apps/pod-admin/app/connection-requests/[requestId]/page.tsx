@@ -14,7 +14,7 @@ import {
   Spinner,
   Textarea,
 } from "@heroui/react";
-import { Check, ExternalLink, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { Check, ExternalLink, ShieldAlert, X } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
 
@@ -28,20 +28,37 @@ export default function ConnectionRequestPage() {
   );
   const [reason, setReason] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
-  const [approvedContinuationUrl, setApprovedContinuationUrl] = useState<
-    string | null
-  >(null);
+  const [approvedReturnUrl, setApprovedReturnUrl] = useState<string | null>(
+    null
+  );
+  const [autoReturning, setAutoReturning] = useState(false);
 
   const approve = trpc.applicationConnections.approveRequest.useMutation({
     onSuccess: async (data) => {
-      // A reviewer may be a different owner/device than the requester. The
-      // callback is offered as a convenience, never claimed as the universal
-      // completion path; the requester can also check their saved request.
-      setApprovedContinuationUrl(data.continuationUrl);
+      // A reviewer may be a different owner/device than the requester. Only
+      // the browser that successfully redeemed the native Pod sign-in holds
+      // this Pod-Admin-origin marker, so an owner who merely approves stays
+      // here rather than being pushed into the external application.
+      let isRequesterBrowser = false;
+      try {
+        isRequesterBrowser =
+          window.sessionStorage.getItem(
+            `application-connection-requester:${requestId}`
+          ) === "1";
+      } catch {
+        // Safe default: never auto-navigate when browser storage is blocked.
+      }
+      setApprovedReturnUrl(data.returnUrl);
+      setAutoReturning(isRequesterBrowser);
       setActionError(null);
       await utils.applicationConnections.getReviewRequest.invalidate({
         requestId,
       });
+      if (isRequesterBrowser) {
+        // The URL contains only the public request correlation; completion
+        // still requires the requester browser's opaque continuation.
+        window.setTimeout(() => window.location.assign(data.returnUrl), 900);
+      }
     },
     onError: () =>
       setActionError(
@@ -76,7 +93,7 @@ export default function ConnectionRequestPage() {
   const data = request.data;
   const canViewRequestDetails = data.canReview;
   const isPending =
-    !approvedContinuationUrl &&
+    !approvedReturnUrl &&
     data.status === "pending" &&
     new Date(data.expiresAt) > new Date();
   const isWorking = approve.isPending || reject.isPending;
@@ -84,6 +101,10 @@ export default function ConnectionRequestPage() {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(data.expiresAt));
+  const statusLabel =
+    data.status === "awaiting_local_auth"
+      ? "Awaiting Pod sign-in"
+      : data.status.charAt(0).toUpperCase() + data.status.slice(1);
 
   return (
     <Frame>
@@ -96,8 +117,8 @@ export default function ConnectionRequestPage() {
               </p>
               <h1 className="mt-2 text-xl font-semibold tracking-tight">
                 {canViewRequestDetails
-                  ? `${data.displayName} wants to connect`
-                  : "An application needs approval"}
+                  ? `Review ${data.displayName}`
+                  : "Connection request ready"}
               </h1>
             </div>
             <Chip
@@ -111,13 +132,13 @@ export default function ConnectionRequestPage() {
               variant="flat"
               size="sm"
             >
-              {data.status}
+              {statusLabel}
             </Chip>
           </div>
           <p className="max-w-xl text-sm leading-6 text-foreground/65">
             {canViewRequestDetails
-              ? "Review the issuer and exact callback below. Approving lets this app begin a federated sign-in journey from this approved browser origin. It never creates Pod membership or grants data beyond each signed-in person’s existing Pod access."
-              : "A Pod owner or administrator must review the application details before it can connect. This page intentionally does not disclose another app’s registration details to ordinary members."}
+              ? "Review the external issuer and exact browser permission before changing this Pod’s trust configuration."
+              : "Your local Pod sign-in prepared this request. A Pod owner or administrator must approve the external application; its registration details stay private to reviewers."}
           </p>
         </CardHeader>
         <Divider />
@@ -153,13 +174,12 @@ export default function ConnectionRequestPage() {
               title="What approval means"
               startContent={<ShieldAlert size={18} />}
             >
-              The Pod will remember this exact issuer, client, origin, and
-              callback. That application must present its registered signed
-              identifier for future sign-in and identity-link requests. Other
-              applications and issuer-only flows keep their own approval
-              boundaries. Access after sign-in still depends on the
-              person&apos;s linked Pod identity and existing workspace or
-              project membership.
+              The Pod will register this exact issuer, client, browser origin,
+              callback, and capabilities. It does not create membership, grant
+              workspace or project access, or bind this reviewer&apos;s Pod
+              account to an external identity. After approval, only the locally
+              authenticated requester can complete a link between their external
+              issuer identity and their existing Pod identity.
             </Alert>
           ) : null}
           {actionError ? (
@@ -171,24 +191,26 @@ export default function ConnectionRequestPage() {
               {actionError}
             </Alert>
           ) : null}
-          {approvedContinuationUrl ? (
+          {approvedReturnUrl ? (
             <Alert color="success" title="Connection approved" role="status">
-              If you started this request in this browser, continue back to the
-              app. Otherwise, the requester can return to their app and choose
-              Check connection.
+              {autoReturning
+                ? "Returning to the requesting app now so it can finish the connection."
+                : "The requesting browser can now finish the connection. You can stay in Pod Admin; the requester’s app will resume when it checks the request."}
             </Alert>
           ) : null}
           {!data.canReview ? (
             <Alert
               color="primary"
               variant="flat"
-              title="A Pod owner must review this request"
+              title="A Pod owner or administrator must review this request"
             >
-              You&apos;re signed in, but only a Pod owner or administrator can
-              approve an external application. Share this page with one of them.
+              You&apos;re signed in to the Pod, but only a Pod owner or
+              administrator can approve an external application. Ask one to
+              review it from Pod Admin. Keep the requesting app available; it
+              can resume after approval without sharing your Pod credentials.
             </Alert>
           ) : null}
-          {!isPending && !approvedContinuationUrl ? (
+          {!isPending && !approvedReturnUrl ? (
             <Alert
               color="default"
               variant="flat"
@@ -201,7 +223,7 @@ export default function ConnectionRequestPage() {
           {data.canReview && isPending ? (
             <Textarea
               label="Reason if declining"
-              description="Optional for approval. Add a concise reason before declining so the requester understands what to change."
+              description="Required only if you decline, so the requester knows what to change."
               value={reason}
               onValueChange={setReason}
               minRows={2}
@@ -216,7 +238,7 @@ export default function ConnectionRequestPage() {
               <Button
                 color="danger"
                 variant="flat"
-                className="min-h-10"
+                className="min-h-11"
                 startContent={<X size={16} />}
                 isLoading={reject.isPending}
                 isDisabled={isWorking || reason.trim().length < 3}
@@ -228,7 +250,7 @@ export default function ConnectionRequestPage() {
               </Button>
               <Button
                 color="primary"
-                className="min-h-10"
+                className="min-h-11"
                 startContent={<Check size={16} />}
                 isLoading={approve.isPending}
                 isDisabled={isWorking}
@@ -240,22 +262,22 @@ export default function ConnectionRequestPage() {
           </>
         ) : null}
       </Card>
-      {approvedContinuationUrl ? (
+      {approvedReturnUrl ? (
         <div className="mt-4 flex justify-end">
           <Button
             color="primary"
-            className="min-h-10"
+            className="min-h-11"
             endContent={<ExternalLink size={16} />}
-            onPress={() => window.location.assign(approvedContinuationUrl)}
+            onPress={() => window.location.assign(approvedReturnUrl)}
           >
-            Continue to app
+            Open app in this browser
           </Button>
         </div>
       ) : null}
       <p className="mt-4 flex items-center gap-2 text-xs text-foreground/45">
         <ExternalLink size={13} />
-        This review link is Pod-owned. It does not expose a Pod session or an
-        issuer token.
+        This Pod-owned review uses your local Pod session only. It does not
+        expose a Pod session or external issuer token to the application.
       </p>
     </Frame>
   );

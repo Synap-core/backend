@@ -150,7 +150,7 @@ export {
   normalizeApplicationConnectionScopes,
   hashOpaqueApplicationConnectionValue,
   createOpaqueApplicationConnectionValue,
-  buildApplicationConnectionCallbackUrl,
+  buildApplicationConnectionReturnUrl,
   type ApplicationConnectionScope,
 } from "./utils/application-connection.js";
 export {
