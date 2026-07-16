@@ -4,22 +4,48 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * A template whose profiles are `scope: shared` seeds ONE pod-wide base row. The
- * template that reaches that row FIRST seeds its body; later templates only add
- * workspace OVERLAYS. So "which template applies first" decides the base.
+ * A template whose profiles are `scope: shared` seeds ONE base row, reachable
+ * from other workspaces only through `profile_workspace_access` grants. (NOTE:
+ * `shared` is NOT pod-wide — that is `scope: system`. See ProfileScope in
+ * `@synap/database`.) The template that reaches that row FIRST seeds its body;
+ * later templates only add workspace OVERLAYS. So "which template applies first"
+ * decides the base.
  *
  * On the INSTALL path that order is guaranteed: `resolvePackageDependencies`
  * walks `dependencies` deps-first before materializing the consumer.
  *
  * On the BOOT path (`apps/api/src/startup/reconcile-workspaces-to-templates.ts`)
- * it was NOT. That pass selected every workspace with no ORDER BY and reconciled
- * in whatever order Postgres returned rows. On a pod holding `marketing-campaign`
- * + `ecosystem` but no pod-wide `lead` row yet, a marketing-first row order made
- * `resolveProfileForApply("lead")` find no candidate, fall to
- * `createScope: "shared"`, and seed the pod-wide `lead` base from marketing's
- * body instead of foundation's SSOT body. Every later workspace then granted onto
- * the wrong base. This function closes that gap by giving the boot loop the same
- * deps-first ordering the install resolver already has.
+ * it was NOT: that pass selected every workspace with no ORDER BY and reconciled
+ * in whatever order Postgres returned rows. Given a pod that holds BOTH
+ * `foundation` and `marketing-campaign` workspaces, a marketing-first row order
+ * made `resolveProfileForApply("lead")` find no candidate, fall to
+ * `createScope: "shared"`, and seed the `lead` base from marketing's body instead
+ * of foundation's SSOT body. This function closes that gap by giving the boot
+ * loop the same deps-first ordering the install resolver already has.
+ *
+ * WHAT THIS DOES **NOT** FIX — read before relying on it
+ * -----------------------------------------------------
+ * This orders only what is PRESENT. `visit()` walks a dependency edge solely
+ * when the dependency has a workspace ON THIS POD (`present.has(dep.slug)`), and
+ * that is deliberate: this pass reconciles existing workspaces, it must never
+ * conjure one.
+ *
+ * So on a pod holding `marketing-campaign` and NO `foundation` workspace, this
+ * function is a NO-OP and marketing still seeds the `lead` base. The root cause
+ * there is ABSENCE, not order, and ordering cannot fix absence. That is the live
+ * state of at least one production pod, and an earlier version of this comment
+ * (and the commit that introduced it, 66cabcaa) wrongly claimed this function
+ * closed it.
+ *
+ * The remedies for absence are elsewhere and are NOT interchangeable with this:
+ *   - NEW installs: `require: foundation` makes the install resolver materialize
+ *     the dependency first. Correct by construction, but only going forward.
+ *   - EXISTING drifted pods: a data conversion (install the owner template, or a
+ *     ConvertToFacetOp-style migration). Nothing in this file helps them.
+ *
+ * Consequently `template-shared-role-ssot`'s rule (b)/(c) relaxation rests on the
+ * INSTALL path's ordering, not on this one. Do not cite this function as the
+ * guarantee for a pod that predates the dependency edges.
  *
  * AGNOSTIC BY CONSTRUCTION
  * ------------------------
