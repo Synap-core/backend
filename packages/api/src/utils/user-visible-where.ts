@@ -11,17 +11,15 @@
  *     "rows where workspaceId IS NULL (pod-wide globals) OR workspaceId
  *      belongs to a workspace the user is a member of"
  *
- * Pair this with a `.listAll` procedure variant alongside each
- * workspace-scoped `.list`. The convention across the pod's tRPC surface:
- *
- *   entities.list      / entities.listAll
- *   proposals.list     / proposals.listAll
- *   notifCenter.list   / notifCenter.listAll
- *   graph.getStats     / graph.getStatsAll
- *
- * Eve OS calls the `.listAll` variant via its scope-aware `usePodQuery`
- * helper; Studio keeps using `.list` because it always has an active
- * workspace. Both speak to the same pod tRPC surface.
+ * ONE-DOOR CONTRACT: there is no `.list`/`.listAll` split. Every user-data
+ * table has a single scope-aware `.list` door built on `workspaceLensWhere`
+ * below: no lens (`undefined`) = the full user floor (all the user's
+ * workspaces + pod-wide globals — this is what Eve OS and cross-workspace
+ * callers pass); a workspace/project lens only narrows that floor, it can
+ * never widen it. A second `listAll` door is the exact two-door split this
+ * collapsed and is CI-blocked (`read-scoping.tripwire.test.ts`, "THE
+ * ONE-DOOR LOCK") — the only allowed exception is `subscriptions.listAll`,
+ * grandfathered because `events` has no `workspace_id` column to lens on.
  */
 
 import { and, eq, inArray, isNull, or, drizzleSql } from "@synap/database";

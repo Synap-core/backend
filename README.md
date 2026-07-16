@@ -182,9 +182,9 @@ cp .env.example .env
 # Start development services
 docker compose -f docker-compose.local.yml up -d postgres redis minio typesense
 
-# Run database migrations
+# Run database migrations (hand-written .sql only — drizzle-kit push/generate are forbidden)
 cd packages/database
-pnpm db:push
+pnpm db:migrate
 
 # Start backend
 pnpm dev
