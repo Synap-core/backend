@@ -90,6 +90,49 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
+/**
+ * Derive the MCP scopes a validated key actually grants, from the key's OWN
+ * `scope` column (schema: `api_keys.scope`, text[] — singular, which is why a
+ * grep for `.scopes` found nothing here).
+ *
+ * Before this, the HTTP door handed every authenticated key a hardcoded
+ * `["mcp.read","mcp.write"]` (index.ts), so `requireScope()` could never fail
+ * over HTTP and a read-only key silently got write. That was privilege
+ * inflation, not data loss — governance still forces agent writes to propose —
+ * but the key's own scopes are the authority and must be honoured.
+ *
+ * Equivalences below are NOT invented: adapter.ts:61-72 already declares
+ * `mcp.read ⇒ hub-protocol.read` and `mcp.write ⇒ hub-protocol.read+write` when
+ * translating outward to Hub Protocol. This reads that same equivalence inward.
+ * `data.read`/`data.write` ("Read/Write entities, documents, relations" —
+ * api-keys.ts schema) cover exactly what the MCP tools expose, and are what the
+ * workspace-settings and connections UIs actually mint. `hub-protocol.admin` is
+ * documented as full entity/workspace control, so it implies both.
+ *
+ * Deliberately NOT a fallback-to-full: a key whose scope array grants none of
+ * these gets NEITHER mcp scope and its tool calls fail closed via
+ * requireScope() — which is the point of the fix.
+ */
+export function deriveMcpScopes(keyScopes: string[] | null): string[] {
+  const has = (s: string) => (keyScopes ?? []).includes(s);
+  const admin = has("hub-protocol.admin");
+  const out: string[] = [];
+  if (admin || has("mcp.read") || has("hub-protocol.read") || has("data.read"))
+    out.push("mcp.read");
+  if (
+    admin ||
+    has("mcp.write") ||
+    has("hub-protocol.write") ||
+    has("data.write")
+  ) {
+    // A writer is implicitly a reader — mirrors adapter.ts's outward mapping,
+    // where mcp.write expands to hub-protocol.read + hub-protocol.write.
+    if (!out.includes("mcp.read")) out.push("mcp.read");
+    out.push("mcp.write");
+  }
+  return out;
+}
+
 function extractBearer(authHeader: string | null): string | null {
   if (!authHeader) return null;
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
@@ -243,7 +286,10 @@ mcpHttpApp.post("/", async (c) => {
     effectiveUserId,
     grounding,
     defaultProjectId,
-    agentUserId
+    agentUserId,
+    // The validated key's OWN scopes — never the process-global MCP_SCOPES env
+    // var, which is meaningless per-key over HTTP.
+    deriveMcpScopes(keyRecord.scope)
   );
   await server.connect(transport);
 

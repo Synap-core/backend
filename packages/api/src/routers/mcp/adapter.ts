@@ -190,7 +190,14 @@ function ok(data: unknown): CallToolResult {
 
 function requireScope(scopes: string[], scope: string, toolName: string): void {
   if (!scopes.includes(scope)) {
-    throw new Error(`Tool '${toolName}' requires scope '${scope}'`);
+    // Reachable over HTTP only since the door started honouring the key's own
+    // scopes (http-handler.ts deriveMcpScopes); it previously received a
+    // hardcoded read+write and could never fail. Name the recovery, not just
+    // the denial — this surfaces to the model as recoverable text.
+    throw new Error(
+      `Tool '${toolName}' requires the '${scope}' scope, which your API key does not grant (it has: ${scopes.length ? scopes.join(", ") : "none"}). ` +
+        `Mint a key with the '${scope}' scope in Synap settings → Intelligence → API Keys, or use a read-only tool instead.`
+    );
   }
 }
 

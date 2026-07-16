@@ -14,6 +14,7 @@ import {
   MAIN_CAPABILITY_TOOLS,
   type CapabilityBriefDoor,
 } from "../../../services/capability-briefs/compose-capability-brief.js";
+import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
@@ -1335,23 +1336,35 @@ export const tools = {
     sessionUserId?: string,
     agentUserId?: string
   ): Promise<CallToolResult> {
-    if (name === "synap_load_skill") {
-      const { resolveSkillContent } =
-        await import("../../../services/capability-briefs/load-skill.js");
-      const ref = args.ref as string;
-      const content = await resolveSkillContent(ref, sessionUserId ?? userId);
-      return {
-        content: [{ type: "text", text: content }],
-      };
+    // THE error door. Every MCP tool call flows through this one seam, so the
+    // boundary lives here and nowhere else: a thrown error becomes an
+    // `isError: true` RESULT (recoverable text the model can act on) instead of
+    // a JSON-RPC -32603 protocol crash. A governed `{status:"proposed"}` write
+    // returns normally and is untouched — proposed is SUCCESS, not an error.
+    const badArg = validateUuidArgs(args, name);
+    if (badArg) return badArg;
+
+    try {
+      if (name === "synap_load_skill") {
+        const { resolveSkillContent } =
+          await import("../../../services/capability-briefs/load-skill.js");
+        const ref = args.ref as string;
+        const content = await resolveSkillContent(ref, sessionUserId ?? userId);
+        return {
+          content: [{ type: "text", text: content }],
+        };
+      }
+      const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
+      return await executeMCPToolViaHubProtocol(
+        name,
+        args,
+        userId,
+        apiKeyScopes,
+        sessionUserId,
+        agentUserId
+      );
+    } catch (err) {
+      return toSafeToolError(err, name);
     }
-    const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
-    return await executeMCPToolViaHubProtocol(
-      name,
-      args,
-      userId,
-      apiKeyScopes,
-      sessionUserId,
-      agentUserId
-    );
   },
 };

@@ -85,7 +85,18 @@ export function createMCPServer(
    * (agent-key linkedUserId flow). Threaded to writes so governance proposes
    * instead of auto-applying as the operator. Undefined for operator keys.
    */
-  agentUserId?: string
+  agentUserId?: string,
+  /**
+   * The validated API key's OWN scopes, derived by the HTTP door
+   * (`deriveMcpScopes` in http-handler.ts). When supplied, they are the
+   * authority and MCP_SCOPES is never consulted — the env var is a
+   * process-global and cannot describe a per-key grant.
+   *
+   * Undefined ONLY on the stdio/dev path (and the unauthenticated GET/SSE
+   * stream-establishment branch, which cannot execute tools in production —
+   * both handlers below hard-fail without a sessionUserId/MCP_USER_ID).
+   */
+  apiKeyScopes?: string[]
 ) {
   const server = new Server(
     {
@@ -129,9 +140,11 @@ export function createMCPServer(
     }
     const userId =
       sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
-    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? ["mcp.read"];
+    // HTTP: the key's own scopes. stdio/dev only: MCP_SCOPES env fallback.
+    const scopes = apiKeyScopes ??
+      process.env.MCP_SCOPES?.split(",") ?? ["mcp.read"];
 
-    return await resources.read(request.params.uri, userId, apiKeyScopes);
+    return await resources.read(request.params.uri, userId, scopes);
   });
 
   // Register tool handlers
@@ -160,10 +173,10 @@ export function createMCPServer(
     }
     const userId =
       sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
-    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? [
-      "mcp.read",
-      "mcp.write",
-    ];
+    // HTTP: the key's own scopes (deriveMcpScopes). stdio/dev only: env
+    // fallback. This is the fix for the door granting every key read+write.
+    const scopes = apiKeyScopes ??
+      process.env.MCP_SCOPES?.split(",") ?? ["mcp.read", "mcp.write"];
 
     const args = request.params.arguments ?? {};
     // Auto-inject the URL's scope (?workspaceId= / ?projectId=) into every tool
@@ -183,7 +196,7 @@ export function createMCPServer(
       request.params.name,
       scopedArgs,
       userId,
-      apiKeyScopes,
+      scopes,
       sessionUserId,
       agentUserId
     );

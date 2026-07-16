@@ -913,11 +913,16 @@ provisionRouter.get("/status", async (c) => {
             // cpApiKey intentionally omitted from status response
           }
         : null,
-      intelligenceService: {
-        ...intelligenceService,
-        resolvedUrl: resolvedIsUrl,
-        source: resolvedIsSource,
-      },
+      // null when unprovisioned — same contract as controlPlane above. Spreading
+      // a null here would emit `{}`, which reads as "provisioned, status unknown"
+      // to every consumer that truth-tests the object.
+      intelligenceService: intelligenceService
+        ? {
+            ...intelligenceService,
+            resolvedUrl: resolvedIsUrl,
+            source: resolvedIsSource,
+          }
+        : null,
       // Pod version info — read from env (set by install.sh / synap update)
       podVersion: process.env.BACKEND_VERSION || null,
       // Courier (SMTP) status — drives the "no recovery email arriving" warning
