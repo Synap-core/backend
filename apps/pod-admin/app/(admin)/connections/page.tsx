@@ -34,7 +34,7 @@ export default function ApplicationConnectionsPage() {
   function confirmRevoke(connection: { id: string; displayName: string }) {
     if (
       !window.confirm(
-        `Revoke ${connection.displayName}? It will immediately stop this browser app from calling this Pod and block future federation connections. It will not remove user memberships, invalidate direct Pod sessions, or affect other app connections.`
+        `Revoke ${connection.displayName}? Those browser origins will immediately lose permission to call this Pod. This does not remove people, revoke trusted issuers, or invalidate direct Pod sign-in sessions.`
       )
     ) {
       return;
@@ -103,10 +103,11 @@ export default function ApplicationConnectionsPage() {
           Apps &amp; Connections
         </h1>
         <p className="mt-1 text-[13px] leading-5 text-foreground/60">
-          Approve the exact browser applications that may use a trusted issuer
-          to start a Pod sign-in journey and present an explicit Pod session
-          token. This never creates data access or membership; each
-          person&apos;s Pod membership remains authoritative.
+          Allowlist which browser website addresses (origins) may call this Pod.
+          By default no external site can reach the Pod API. Approving an origin
+          is transport only — it does not grant data access or membership, and
+          it is separate from Trusted issuers (who may sign identity tokens)
+          under Trust &amp; Keys.
         </p>
         {revokeError ? (
           <p className="mt-3 text-sm text-danger" role="alert">
@@ -154,9 +155,9 @@ export default function ApplicationConnectionsPage() {
             </span>
           </div>
           <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            These handoffs timed out before approval. If an approved connection
-            already exists for the same app origin, the requester should use
-            Check connection in the app — not a new request.
+            These origin-approval handoffs timed out. If this origin is already
+            under Approved browser origins, the app only needs Check connection
+            — not another request.
           </p>
           {expiredRequests.map((request) => (
             <RequestRow
@@ -202,19 +203,20 @@ export default function ApplicationConnectionsPage() {
             id="approved-connections"
             className="text-sm font-medium text-foreground"
           >
-            Approved app connections
+            Approved browser origins
           </h2>
           <span className="text-xs text-foreground/50">
             {activeConnections.length}
           </span>
         </div>
         <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-          These are the browser origins that can use the listed trusted issuer
-          with an explicit Pod session. They do not grant membership or data
-          access.
+          These website addresses may call this Pod from a browser. Each origin
+          is exact (scheme + host + port). This is not data access — people
+          still need membership. Identity providers are managed under Trust
+          &amp; Keys.
         </p>
         {activeConnections.length === 0 ? (
-          <EmptyState label="No browser application connections have been approved." />
+          <EmptyState label="No external browser origins have been allowed yet." />
         ) : (
           activeConnections.map((connection) => (
             <ConnectionCard
@@ -246,9 +248,8 @@ export default function ApplicationConnectionsPage() {
             </span>
           </div>
           <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            These records are retained for audit. Their browser origins can no
-            longer use this connection; re-approval requires a new
-            owner-reviewed request.
+            These origins are no longer allowed to call the Pod. Re-allowing
+            them requires a new owner-reviewed request from the app.
           </p>
           {revokedConnections.map((connection) => (
             <ConnectionCard key={connection.id} connection={connection} />
@@ -329,26 +330,23 @@ function ConnectionCard({
         </div>
 
         <dl className="grid gap-4 md:grid-cols-2">
-          <ConnectionDetail
-            label="Trusted issuer"
-            value={connection.issuerUrl}
-          />
-          <ConnectionDetail
-            label="Application client"
-            value={connection.clientId}
-          />
-          <ConnectionDetail
-            className="md:col-span-2"
-            label="Connection capabilities"
-            value={applicationConnectionCapabilities(connection.allowedScopes)}
-          />
           <ConnectionList
-            label="Approved browser origins"
+            label="Allowed browser origins"
             values={connection.allowedOrigins}
           />
           <ConnectionList
-            label="Approved completion callbacks"
+            label="Allowed return URLs"
             values={connection.allowedCallbackUrls}
+          />
+          <ConnectionDetail label="App id" value={connection.clientId} />
+          <ConnectionDetail
+            label="Registered via (bootstrap only)"
+            value={connection.issuerUrl}
+          />
+          <ConnectionDetail
+            className="md:col-span-2"
+            label="Optional capabilities noted at approval"
+            value={applicationConnectionCapabilities(connection.allowedScopes)}
           />
         </dl>
 
@@ -363,7 +361,7 @@ function ConnectionCard({
               isLoading={isRevoking}
               onPress={onRevoke}
             >
-              Revoke connection
+              Revoke origins
             </Button>
           </div>
         ) : null}

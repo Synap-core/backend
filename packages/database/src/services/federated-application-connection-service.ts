@@ -1,9 +1,11 @@
 /**
- * Pod-owned application-connection ledger.
+ * Pod-owned browser-origin allowlist (application connection plane).
  *
- * The lifecycle is deliberately generic: an issuer is a cryptographic
- * authority, a client is a browser application, and the Pod owns its local
- * user identity. No external federator or product account is persisted here.
+ * Primary job: owner-approved Origins that may call this Pod (CORS / transport).
+ * Approving a request also ensures the named JWT issuer exists as approved so
+ * Control Plane handshakes can verify crypto — that is a side effect, not the
+ * product meaning of this ledger. Trusted-issuer trust and origin admission
+ * remain separable concerns.
  */
 
 import { and, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";

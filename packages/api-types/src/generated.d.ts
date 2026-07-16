@@ -17749,11 +17749,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestedOrigin: string;
 				requestedCallbackUrl: string;
 				requestedScopes: never[];
-				status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
+				status: string;
 				decisionReason: string | null;
 				expiresAt: Date;
 				reviewedAt: Date | null;
 				canReview: boolean;
+				matchingApprovedConnection: boolean;
 			} | {
 				id: string;
 				issuerUrl: string;
@@ -17763,11 +17764,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestedOrigin: string;
 				requestedCallbackUrl: string;
 				requestedScopes: ("auth:exchange-user" | "identity:link-user")[];
-				status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
+				status: string;
 				decisionReason: string | null;
 				expiresAt: Date;
 				reviewedAt: Date | null;
 				canReview: true;
+				matchingApprovedConnection: boolean;
 			};
 			meta: object;
 		}>;
@@ -17793,6 +17795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 				}[];
 				requests: {
+					status: string;
 					id: string;
 					createdAt: Date;
 					issuerSubject: string;
@@ -17800,7 +17803,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					clientId: string;
 					displayName: string;
 					publisherUrl: string | null;
-					status: "approved" | "pending" | "rejected" | "completed" | "awaiting_local_auth" | "completing" | "expired";
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
 					issuerUrl: string;

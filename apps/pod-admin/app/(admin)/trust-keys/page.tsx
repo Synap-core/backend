@@ -10,7 +10,8 @@
  * land in the right place.
  *
  * Sub-tabs:
- *   1. Trusted issuers — approve / reject / revoke external JWT issuers
+ *   1. Trusted issuers — who may *sign* JWTs this Pod verifies (crypto plane).
+ *      Orthogonal to Apps & Connections (browser origin CORS allowlist).
  *   2. API keys        — system (read-only) + operator (CRUD) keys
  *   3. Secrets vault   — pointer to env-managed + Studio user vaults
  */

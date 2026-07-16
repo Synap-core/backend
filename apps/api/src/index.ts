@@ -224,7 +224,6 @@ import {
   hasConfiguredOrigins,
   isAllowedOrigin,
   isApprovedApplicationOrigin,
-  isApprovedApplicationOriginForClient,
   rejectsUnapprovedExternalPodApiRequest,
 } from "./cors-origin.js";
 
@@ -238,18 +237,13 @@ app.use("*", async (c, next) => {
   const origin = c.req.header("origin");
   const firstPartyOrigin = Boolean(origin) && isAllowedOrigin(origin);
   const applicationExchangePath = c.req.path === "/api/federation/exchange";
-  const applicationFederationPath =
-    applicationExchangePath || c.req.path === "/api/federation/identity-links";
+  // Transport admission is ORIGIN-ONLY (application connection allowlist).
+  // It is deliberately independent of trusted-issuer / application_id /
+  // issuer_url. Crypto for exchange is checked later on the federation route.
   const approvedApplicationOrigin =
     Boolean(origin) &&
     !firstPartyOrigin &&
-    (applicationFederationPath
-      ? await isApprovedApplicationOriginForClient(
-          origin,
-          c.req.query("application_id"),
-          c.req.query("issuer_url")
-        )
-      : await isApprovedApplicationOrigin(origin));
+    (await isApprovedApplicationOrigin(origin));
   if (origin && (firstPartyOrigin || approvedApplicationOrigin)) {
     c.header("Access-Control-Allow-Origin", origin);
     if (firstPartyOrigin) {
@@ -290,7 +284,12 @@ app.use("*", async (c, next) => {
     })
   ) {
     return c.json(
-      { error: "This browser origin is not approved for this Pod" },
+      {
+        error: "This browser origin is not approved for this Pod",
+        code: "BROWSER_ORIGIN_NOT_APPROVED",
+        remediation: "approve_browser_origin",
+        origin: origin ?? null,
+      },
       403
     );
   }

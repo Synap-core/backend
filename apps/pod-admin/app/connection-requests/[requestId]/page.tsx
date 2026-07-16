@@ -179,7 +179,7 @@ export default function ConnectionRequestPage() {
           <div className="flex w-full items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
-                Pod connection request
+                Browser origin request
               </p>
               <h1
                 id="connection-request-title"
@@ -188,14 +188,14 @@ export default function ConnectionRequestPage() {
                 className="mt-1.5 text-xl font-semibold tracking-tight outline-none"
               >
                 {canViewRequestDetails
-                  ? `Review ${data.displayName}`
-                  : "Connection request ready"}
+                  ? `Allow ${data.displayName}?`
+                  : "Origin request ready"}
               </h1>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Chip color={chipColor} variant="flat" size="sm">
                 {matchingApproved && data.status !== "approved"
-                  ? "Already approved"
+                  ? "Origin already allowed"
                   : statusLabel}
               </Chip>
               <Button
@@ -212,29 +212,33 @@ export default function ConnectionRequestPage() {
           </div>
           <p className="max-w-2xl text-sm leading-6 text-foreground/65">
             {canViewRequestDetails
-              ? "Review the external issuer and exact browser permission before changing this Pod’s trust configuration."
-              : "Your local Pod sign-in prepared this request. A Pod owner or administrator must approve the external application; its registration details stay private to reviewers."}
+              ? "Decide whether this exact website address may call this Pod. This is CORS / transport admission only — not membership, and not the same as Trust & Keys (JWT issuers)."
+              : "Your local Pod sign-in prepared this request. A Pod owner must allow this browser origin; details stay private to reviewers."}
           </p>
         </CardHeader>
         <Divider />
         <CardBody className="gap-4 px-6 py-4">
           {canViewRequestDetails ? (
             <dl className="grid gap-4 sm:grid-cols-2">
-              <Detail label="Application client" value={data.clientId} mono />
-              <Detail label="Issuer" value={data.issuerUrl} mono />
               <Detail
-                label="Browser origin"
+                label="Browser origin (required decision)"
                 value={data.requestedOrigin}
                 mono
               />
               <Detail
-                label="Completion callback"
+                label="Return URL"
                 value={data.requestedCallbackUrl}
+                mono
+              />
+              <Detail label="App id" value={data.clientId} mono />
+              <Detail
+                label="Identity provider (separate Trust plane)"
+                value={data.issuerUrl}
                 mono
               />
               <Detail
                 className="sm:col-span-2"
-                label="Connection allows"
+                label="Notes at registration"
                 value={applicationConnectionCapabilities(data.requestedScopes)}
               />
               <Detail label="Request expires" value={expiresAt} />
@@ -253,12 +257,11 @@ export default function ConnectionRequestPage() {
               title="What approval means"
               startContent={<ShieldAlert size={18} />}
             >
-              The Pod will register this exact issuer, client, browser origin,
-              callback, and capabilities. It does not create membership, grant
-              workspace or project access, or bind this reviewer&apos;s Pod
-              account to an external identity. After approval, only the locally
-              authenticated requester can complete a link between their external
-              issuer identity and their existing Pod identity.
+              Approving adds this browser origin to the Pod allowlist so the
+              site may call the Pod API (CORS). It does not create membership or
+              grant workspace access. The identity provider listed above is
+              managed under Trust &amp; Keys; approving here may also ensure
+              that provider is registered so sign-in tokens can be verified.
             </Alert>
           ) : null}
 
@@ -266,14 +269,13 @@ export default function ConnectionRequestPage() {
             <Alert
               color="success"
               variant="flat"
-              title="This app origin is already approved"
+              title="This browser origin is already allowed"
               role="status"
             >
-              A matching approved connection already exists for this issuer,
-              client, and browser origin. Ask the requester to return to the
-              application and choose <strong>Check connection</strong> — no new
-              approval is required. You can dismiss expired or duplicate
-              requests from the list.
+              This origin is already on the allowlist for this app. Ask the
+              requester to return to the application and choose{" "}
+              <strong>Check connection</strong> — no new origin approval is
+              required.
             </Alert>
           ) : null}
 
@@ -382,7 +384,7 @@ export default function ConnectionRequestPage() {
                 isDisabled={isWorking}
                 onPress={() => approve.mutate({ requestId })}
               >
-                Approve connection
+                Allow this origin
               </Button>
             </>
           ) : null}

@@ -1,9 +1,11 @@
 /**
- * Pod-owner administration for browser application connections.
+ * Pod-owner administration for browser origin allowlisting (application plane).
  *
- * This router manages connection review only. It deliberately does not expose
- * a new data-plane permission model: issuer capabilities and the user's Pod
- * memberships remain the authority for federation and resource access.
+ * Approving a request allows that exact browser Origin to call this Pod
+ * (CORS / transport). Trusted issuers (JWT crypto) are a separate plane under
+ * Trust & Keys — this router does not replace issuer approval, membership, or
+ * data permissions. Approving may still ensure the named CP issuer exists so
+ * handshakes can verify signatures; that is a side effect, not the product.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -68,19 +70,13 @@ async function canReviewPodApplicationConnections(
   return membership?.role === "owner" || membership?.role === "admin";
 }
 
+/** Origin allowlist only — does not require a particular trusted issuer. */
 async function matchingApprovedConnection(input: {
-  issuerUrl: string;
   clientId: string;
   origin: string;
 }): Promise<boolean> {
-  const issuer = await db.query.trustedIssuers.findFirst({
-    where: eq(trustedIssuers.issuerUrl, input.issuerUrl),
-    columns: { id: true },
-  });
-  if (!issuer) return false;
   const connection = await db.query.federatedApplicationConnections.findFirst({
     where: and(
-      eq(federatedApplicationConnections.issuerId, issuer.id),
       eq(federatedApplicationConnections.clientId, input.clientId),
       eq(federatedApplicationConnections.status, "approved")
     ),
@@ -194,7 +190,6 @@ export const applicationConnectionsRouter = router({
       const matching =
         canReview &&
         (await matchingApprovedConnection({
-          issuerUrl: request.issuerUrl,
           clientId: request.clientId,
           origin: request.requestedOrigin,
         }));

@@ -19,6 +19,7 @@ import {
   consumeIssuerIdentityLinkReceipt,
   createIssuerIdentityLinkReceipt,
   and,
+  arrayContains,
   eq,
   getDb,
   projectPodUserAccess,
@@ -248,11 +249,16 @@ function requestOriginMatchesConnection(
 }
 
 /**
- * App admission is deliberately opt-in per assertion. A legacy issuer-only
- * assertion has no authorized party or app query and keeps its established
- * federation behavior. Once an assertion represents an application, the Pod
- * requires its signed `azp`, exact query pair, owner-approved connection, and
- * browser origin together.
+ * Application-plane check (orthogonal to trusted-issuer crypto).
+ *
+ * Trusted issuer verification already ran on the JWT. This function only
+ * answers: “for this signed app client (`azp`), has the owner approved the
+ * calling browser Origin (and the capability)?” It does NOT re-bind the
+ * connection to a particular issuer — issuer trust is plane 1; origin
+ * allowlist is plane 2.
+ *
+ * Legacy issuer-only assertions (no azp / application query) skip this and
+ * use issuer-wide capabilities instead.
  */
 async function requireRegisteredApplicationConnection(input: {
   c: Context;
@@ -264,9 +270,8 @@ async function requireRegisteredApplicationConnection(input: {
     | typeof TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK;
   purpose: "sign-in" | "identity-link";
   /**
-   * Browser bootstrap binds the URL query and Origin to an app connection.
-   * A receipt is CP-server-to-Pod and carries no browser URL, so it validates
-   * the signed client against the exact registered connection instead.
+   * Browser bootstrap binds the URL query to the signed `azp`. Server-to-Pod
+   * receipts may skip browser Origin binding (requireBrowserBinding: false).
    */
   requireBrowserBinding?: boolean;
 }): Promise<Response | null> {
@@ -308,25 +313,50 @@ async function requireRegisteredApplicationConnection(input: {
   }
 
   const db = await getDb();
-  const connection = await db.query.federatedApplicationConnections.findFirst({
-    where: and(
-      eq(federatedApplicationConnections.issuerId, input.issuerId),
-      eq(federatedApplicationConnections.clientId, clientId),
-      eq(federatedApplicationConnections.status, "approved")
-    ),
-    columns: { allowedOrigins: true, allowedScopes: true },
-  });
+  // Lookup by client + origin only — not issuerId. The same app client may
+  // have been registered while bootstrapping CP as issuer; transport admission
+  // must not fail if JWT issuer trust is already satisfied independently.
+  const originHeader = input.c.req.header("origin");
+  const originNormalized = originHeader
+    ? normalizeApplicationOrigin(originHeader)
+    : null;
+
+  // Server-to-server (no Origin): admit if any approved connection for this
+  // client has the capability. Browser callers must match an approved origin.
+  const connection = originNormalized
+    ? await db.query.federatedApplicationConnections.findFirst({
+        where: and(
+          eq(federatedApplicationConnections.clientId, clientId),
+          eq(federatedApplicationConnections.status, "approved"),
+          arrayContains(federatedApplicationConnections.allowedOrigins, [
+            originNormalized,
+          ])
+        ),
+        columns: { allowedOrigins: true, allowedScopes: true },
+      })
+    : await db.query.federatedApplicationConnections.findFirst({
+        where: and(
+          eq(federatedApplicationConnections.clientId, clientId),
+          eq(federatedApplicationConnections.status, "approved")
+        ),
+        columns: { allowedOrigins: true, allowedScopes: true },
+      });
+
   if (
     !connection ||
     !connection.allowedScopes.includes(input.capability) ||
-    !requestOriginMatchesConnection(input.c, connection.allowedOrigins)
+    (input.requireBrowserBinding !== false &&
+      originNormalized &&
+      !requestOriginMatchesConnection(input.c, connection.allowedOrigins))
   ) {
     return input.c.json(
       {
-        error: `This Pod has not approved this application to use the issuer for ${input.purpose}`,
-        code: "APPLICATION_CONNECTION_APPROVAL_REQUIRED",
+        error:
+          "This Pod has not approved this browser origin for this application",
+        code: "BROWSER_ORIGIN_NOT_APPROVED",
         azp: clientId,
-        remediation: "create_application_connection_request",
+        origin: originNormalized,
+        remediation: "approve_browser_origin",
       },
       403
     );

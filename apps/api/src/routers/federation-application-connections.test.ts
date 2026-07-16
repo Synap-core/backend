@@ -40,6 +40,7 @@ vi.mock("@synap-core/core", () => ({ createLogger: () => mocks.logger }));
 vi.mock("@synap/database", () => ({
   activateFederatedMember: vi.fn(),
   and: vi.fn(),
+  arrayContains: vi.fn(),
   assertFederatedAccessTarget: vi.fn(),
   bindExistingFederatedIdentity: mocks.bindExistingFederatedIdentity,
   consumeFederatedAssertionReceipt: mocks.consumeFederatedAssertionReceipt,
@@ -863,7 +864,7 @@ describe("application connection request boundary", () => {
     expect(mocks.getDb).not.toHaveBeenCalled();
   });
 
-  it("rejects a browser origin that is not approved for the signed issuer and client", async () => {
+  it("rejects a browser origin that is not on the application allowlist", async () => {
     const claims = {
       email: "person@example.test",
       exp: now + 300,
@@ -882,13 +883,11 @@ describe("application connection request boundary", () => {
       issuerUrl: claims.iss,
       status: "approved",
     });
+    // DB lookup is by client + origin; no row for other.example.test.
     mocks.getDb.mockResolvedValue({
       query: {
         federatedApplicationConnections: {
-          findFirst: vi.fn().mockResolvedValue({
-            allowedOrigins: ["https://approved.example.test"],
-            allowedScopes: ["auth:exchange-user"],
-          }),
+          findFirst: vi.fn().mockResolvedValue(null),
         },
       },
     });
@@ -909,7 +908,8 @@ describe("application connection request boundary", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      code: "APPLICATION_CONNECTION_APPROVAL_REQUIRED",
+      code: "BROWSER_ORIGIN_NOT_APPROVED",
+      origin: "https://other.example.test",
     });
   });
 

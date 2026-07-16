@@ -1,19 +1,20 @@
 /**
- * First-party CORS origin policy (Pattern B — derive, don't reflect-all)
+ * Browser origin admission (CORS + hard server reject)
  *
- * The pod serves many first-party browser surfaces on operator-chosen origins
- * (studio., app., devplane., relay., …) that all live under one base domain.
- * Rather than enumerate them (drift) or reflect every origin (the textbook
- * CSWSH/credentialed-CORS vulnerability), we DERIVE the allowlist:
+ * Two independent planes:
  *
- *   - SYNAP_BASE_DOMAIN (e.g. "example.com") → allow it + any "*.example.com"
- *   - the explicit ALLOWED_ORIGINS list (+ DB-dynamic + dev localhost) via getCorsOrigins()
- *   - the pod's own PUBLIC_URL origin
+ *   1. First-party origins (SYNAP_BASE_DOMAIN / ALLOWED_ORIGINS) — Pod-owned
+ *      surfaces (pod-admin, …). Not application registration.
  *
- * Absent Origin (Electron/desktop, curl, same-origin) → allowed (CORS N/A).
- * A literal "null" Origin (sandboxed iframe/data:) → never trusted.
- * Nothing configured → cross-origin denied (fail closed). This mirrors how Ory
- * Kratos (which we use) is configured: allowed_origins: [https://*.BASE].
+ *   2. Application origin allowlist — Pod-owner approved browser Origins in
+ *      `federated_application_connections.allowed_origins`. This is ONLY
+ *      transport admission (who may call the Pod from a browser). It is NOT
+ *      trusted-issuer trust, membership, or data permission.
+ *
+ * Trusted issuers (JWT `iss`) live in `trusted_issuers` and are verified on
+ * federation crypto paths separately. An approved Origin may call the Pod
+ * even when a given issuer is pending; exchange still fails crypto if the
+ * issuer is untrusted.
  */
 
 import { getCorsOrigins } from "./middleware/security.js";
@@ -23,9 +24,7 @@ import {
   eq,
   federatedApplicationConnections,
   getDb,
-  trustedIssuers,
 } from "@synap/database";
-import { normalizeIssuerUrl } from "@synap/api";
 
 /** Canonicalize to scheme://host[:port]; null if invalid or the literal "null". */
 function normalizeOrigin(value: string): string | null {
@@ -73,9 +72,6 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
     try {
       const u = new URL(norm);
       const host = u.hostname.toLowerCase();
-      // Derived subdomain trust requires https + the default port, so a plain-http
-      // or odd-port first-party subdomain (e.g. a MinIO console on :9001) is NOT
-      // auto-trusted. Dev allows http for localhost convenience.
       const schemeOk =
         u.protocol === "https:" || process.env.NODE_ENV !== "production";
       if (
@@ -93,14 +89,11 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 }
 
 /**
- * Check whether a Pod owner has approved this exact browser origin for an
- * application connection. This is intentionally an exact database lookup,
- * not a wildcard or an environment allowlist: the connection is revocable in
- * Pod Admin and remains independent of any particular issuer implementation.
+ * Pod-owner approved browser Origin allowlist (application connection plane).
  *
- * An approved origin receives only browser transport permission. Every API
- * route still authenticates the user and enforces their local Pod membership;
- * CORS itself is never a data-plane authorization grant.
+ * Exact match only — no wildcards. Independent of trusted-issuer status:
+ * revoking an issuer does not silently revoke CORS for an origin; the owner
+ * revokes the application connection (or the origin row) for that.
  */
 export async function isApprovedApplicationOrigin(
   origin: string | undefined
@@ -118,21 +111,10 @@ export async function isApprovedApplicationOrigin(
             normalized,
           ])
         ),
-        columns: { issuerId: true },
+        columns: { id: true },
       }
     );
-    if (!connection) return false;
-    // A connection never outlives its issuer approval. This second lookup is
-    // intentional: a Pod owner can revoke an issuer without having to find
-    // and revoke every application connection created beneath it.
-    const issuer = await db.query.trustedIssuers.findFirst({
-      where: and(
-        eq(trustedIssuers.id, connection.issuerId),
-        eq(trustedIssuers.status, "approved")
-      ),
-      columns: { id: true },
-    });
-    return Boolean(issuer);
+    return Boolean(connection);
   } catch {
     // A database outage must never degrade into reflecting an unknown Origin.
     return false;
@@ -140,43 +122,31 @@ export async function isApprovedApplicationOrigin(
 }
 
 /**
- * Strict browser transport check for the federation bootstrap endpoints.
- * The `application_id` appears in the endpoint URL so browsers include it in
- * preflight. The federation route then compares it with the signed `azp`
- * assertion claim. This prevents one approved application origin from reading
- * another application's signed exchange response.
+ * Optional tighter check: origin is approved for a named application client.
+ * Still does NOT consult trusted issuers — clientId is only which app
+ * registered the origin (e.g. "crm"), not who signs JWTs.
+ *
+ * @deprecated Prefer {@link isApprovedApplicationOrigin} for transport. Kept
+ * for call sites that want client-scoped admission without issuer coupling.
  */
 export async function isApprovedApplicationOriginForClient(
   origin: string | undefined,
   clientId: string | undefined,
-  issuerUrl: string | undefined
+  _issuerUrl?: string | undefined
 ): Promise<boolean> {
   const normalized = origin ? normalizeOrigin(origin) : null;
-  const normalizedIssuer = issuerUrl ? normalizeIssuerUrl(issuerUrl) : null;
-  if (
-    !normalized ||
-    !clientId ||
-    !normalizedIssuer ||
-    !/^[a-zA-Z0-9._-]{3,128}$/.test(clientId)
-  ) {
-    return false;
+  if (!normalized) return false;
+  // No client id → same as origin-only allowlist.
+  if (!clientId || !/^[a-zA-Z0-9._-]{3,128}$/.test(clientId)) {
+    return isApprovedApplicationOrigin(origin);
   }
 
   try {
     const db = await getDb();
-    const issuer = await db.query.trustedIssuers.findFirst({
-      where: and(
-        eq(trustedIssuers.issuerUrl, normalizedIssuer),
-        eq(trustedIssuers.status, "approved")
-      ),
-      columns: { id: true },
-    });
-    if (!issuer) return false;
     const connection = await db.query.federatedApplicationConnections.findFirst(
       {
         where: and(
           eq(federatedApplicationConnections.status, "approved"),
-          eq(federatedApplicationConnections.issuerId, issuer.id),
           eq(federatedApplicationConnections.clientId, clientId),
           arrayContains(federatedApplicationConnections.allowedOrigins, [
             normalized,

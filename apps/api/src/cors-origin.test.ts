@@ -18,16 +18,7 @@ vi.mock("@synap/database", () => ({
     issuerId: "issuerId",
     status: "status",
   },
-  trustedIssuers: {
-    id: "issuerId",
-    issuerUrl: "issuerUrl",
-    status: "issuerStatus",
-  },
   getDb: mocks.getDb,
-}));
-
-vi.mock("@synap/api", () => ({
-  normalizeIssuerUrl: (value: string) => value,
 }));
 
 vi.mock("./middleware/security.js", () => ({
@@ -40,21 +31,18 @@ import {
   rejectsUnapprovedExternalPodApiRequest,
 } from "./cors-origin.js";
 
-describe("approved application origin CORS policy", () => {
+describe("approved application origin CORS policy (origin allowlist plane)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockResolvedValue({
       query: {
         federatedApplicationConnections: { findFirst: mocks.findFirst },
-        trustedIssuers: { findFirst: mocks.findFirst },
       },
     });
   });
 
   it("admits only an exact owner-approved browser origin", async () => {
-    mocks.findFirst
-      .mockResolvedValueOnce({ issuerId: "issuer-1" })
-      .mockResolvedValueOnce({ id: "issuer-1" });
+    mocks.findFirst.mockResolvedValueOnce({ id: "connection-1" });
 
     await expect(
       isApprovedApplicationOrigin("https://crm.example.test")
@@ -63,6 +51,15 @@ describe("approved application origin CORS policy", () => {
       "https://crm.example.test",
     ]);
     expect(mocks.eq).toHaveBeenCalledWith("status", "approved");
+  });
+
+  it("does not consult trusted issuers for transport admission", async () => {
+    mocks.findFirst.mockResolvedValueOnce({ id: "connection-1" });
+    await expect(
+      isApprovedApplicationOrigin("https://crm.example.test")
+    ).resolves.toBe(true);
+    // Single connection lookup only — no second issuer status query.
+    expect(mocks.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed for unapproved, malformed, or unavailable origins", async () => {
@@ -77,34 +74,23 @@ describe("approved application origin CORS policy", () => {
     ).resolves.toBe(false);
   });
 
-  it("withdraws application CORS when its issuer is revoked", async () => {
-    mocks.findFirst
-      .mockResolvedValueOnce({ issuerId: "issuer-1" })
-      .mockResolvedValueOnce(null);
-
-    await expect(
-      isApprovedApplicationOrigin("https://crm.example.test")
-    ).resolves.toBe(false);
-  });
-
-  it("binds federation bootstrap CORS to the exact approved client", async () => {
-    mocks.findFirst
-      .mockResolvedValueOnce({ id: "issuer-1" })
-      .mockResolvedValueOnce({ id: "connection-1" });
+  it("can optionally scope origin admission to an application client id", async () => {
+    mocks.findFirst.mockResolvedValueOnce({ id: "connection-1" });
 
     await expect(
       isApprovedApplicationOriginForClient(
         "https://crm.example.test",
         "crm",
-        "https://issuer.example.test"
+        "https://issuer.example.test" // ignored for transport
       )
     ).resolves.toBe(true);
     expect(mocks.eq).toHaveBeenCalledWith("clientId", "crm");
 
+    mocks.findFirst.mockResolvedValueOnce(null);
     await expect(
       isApprovedApplicationOriginForClient(
         "https://crm.example.test",
-        undefined,
+        "unknown-app",
         "https://issuer.example.test"
       )
     ).resolves.toBe(false);

@@ -221,15 +221,18 @@ export const issuerIdentityLinkReceipts = pgTable(
 );
 
 /**
- * A Pod-owner approved pairing of a browser application client and a trusted
- * issuer. This is separate from `trusted_issuers`: an issuer answers “who may
- * sign assertions?”, while this row answers “which exact app journey may use
- * that issuer on this Pod?”.
+ * Application origin allowlist (transport plane) — orthogonal to trusted issuers.
  *
- * `allowedOrigins` and `allowedCallbackUrls` are exact owner-approved browser
- * registration data. The API CORS policy consults approved origins only to
- * admit transport from that named app; they never create data permissions.
- * The user's local Pod session and membership remain authoritative.
+ * - `trusted_issuers` answer: who may *sign* JWTs the Pod will verify?
+ * - This table answers: which browser *Origins* (and app client ids) may call
+ *   this Pod at all (CORS + hard reject)? It is not membership and not crypto.
+ *
+ * `issuerId` is retained as historical/bootstrap linkage when an origin was
+ * registered during a CP handoff; transport admission looks up by origin
+ * (and optionally clientId), never “issuer must match” for CORS.
+ *
+ * `allowedOrigins` / `allowedCallbackUrls` are exact owner-approved values.
+ * The user's local Pod session and membership remain the data-plane authority.
  */
 export const federatedApplicationConnections = pgTable(
   "federated_application_connections",
