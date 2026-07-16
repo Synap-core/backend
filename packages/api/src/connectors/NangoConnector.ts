@@ -68,6 +68,30 @@ const NangoIntegrationsResponseSchema = z.union([
   z.object({ data: z.array(NangoIntegrationSchema) }),
 ]);
 
+/** One declared Nango integration, normalized to Synap's naming. */
+export interface NangoIntegration {
+  uniqueKey: string;
+  provider: string;
+  displayName: string;
+}
+
+/**
+ * The TYPED outcome of listing this environment's declared integrations.
+ *
+ * `ok:true` with `integrations: []` means Nango answered and genuinely declares
+ * ZERO integrations. `ok:false` means we could not find out — which is a
+ * DIFFERENT fact and must never be presented as "no integrations". Callers that
+ * need to tell a real emptiness from a failed lookup use this; the legacy
+ * `listIntegrations()` wrapper flattens both to `[]` for callers that don't.
+ */
+export type NangoIntegrationsResult =
+  | { ok: true; integrations: NangoIntegration[] }
+  | {
+      ok: false;
+      reason: "unreachable" | "unauthenticated" | "malformed";
+      error: string;
+    };
+
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
 
@@ -274,27 +298,80 @@ export class NangoConnector implements SyncConnector {
     return revoked;
   }
 
-  async listIntegrations(): Promise<
-    Array<{ uniqueKey: string; provider: string; displayName: string }>
-  > {
-    const res = await fetch(`${this.host}/integrations`, {
-      headers: this.authHeaders(),
-    });
+  /**
+   * List this environment's declared integrations, PRESERVING WHY a lookup came
+   * back without any. Never throws — every failure is a typed `ok:false` — so
+   * adding a caller can't turn a soft empty list into a hard 500.
+   *
+   * Failure mapping: 401/403 → `unauthenticated` (the secret key doesn't belong
+   * to this Nango environment); a network/timeout error, or any other non-OK
+   * status (Nango answered but not usefully), → `unreachable`; a response we
+   * can't parse → `malformed`.
+   */
+  async listIntegrationsResult(): Promise<NangoIntegrationsResult> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.host}/integrations`, {
+        headers: this.authHeaders(),
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: `Cannot reach ${this.host}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
 
-    if (!res.ok) return [];
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        reason: "unauthenticated",
+        error: `Nango rejected the secret key (${res.status})`,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: `Nango returned ${res.status}`,
+      };
+    }
 
     const parsed = NangoIntegrationsResponseSchema.safeParse(
       await res.json().catch(() => null)
     );
-    if (!parsed.success) return [];
+    if (!parsed.success) {
+      return {
+        ok: false,
+        reason: "malformed",
+        error: "Nango returned an integration list we could not parse",
+      };
+    }
 
     const items =
       "data" in parsed.data ? parsed.data.data : parsed.data.configs;
-    return items.map((c) => ({
-      uniqueKey: c.unique_key,
-      provider: c.provider,
-      displayName: c.display_name ?? c.provider,
-    }));
+    return {
+      ok: true,
+      integrations: items.map((c) => ({
+        uniqueKey: c.unique_key,
+        provider: c.provider,
+        displayName: c.display_name ?? c.provider,
+      })),
+    };
+  }
+
+  /**
+   * Legacy list: flattens every failure to `[]`.
+   *
+   * KEPT for callers that only need a best-effort list and are NOT wrapped in a
+   * try/catch. It CANNOT distinguish "Nango unreachable" / "wrong secret key" /
+   * "genuinely zero integrations" — when that difference matters (i.e. when you
+   * are about to tell a human why their connect failed), call
+   * `listIntegrationsResult()` instead.
+   */
+  async listIntegrations(): Promise<NangoIntegration[]> {
+    const r = await this.listIntegrationsResult();
+    return r.ok ? r.integrations : [];
   }
 
   /**

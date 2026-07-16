@@ -37,7 +37,7 @@ const ConnectionSchema = z.object({
   required: z.boolean(),
   kind: z.enum(["provider", "vault"]).nullable(),
   provider: z.string().optional(),
-  state: z.enum(["connected", "missing", "expired"]),
+  state: z.enum(["connected", "missing", "expired", "unavailable"]),
   account: z.string().optional(),
 });
 
@@ -63,6 +63,7 @@ const CapabilityCardSchema = z.object({
     "draft",
     "ready",
     "partial",
+    "unavailable",
   ]),
   connection: ConnectionSchema.optional(),
   verbs: z.array(VerbSchema),
@@ -90,7 +91,8 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       "(member tools folded into `connection`, member skills into `verbs`) plus " +
       "each available template not yet installed. Every card carries a computed " +
       "`status` (available / needs_connection / connected / draft / ready / " +
-      "partial) and exactly one `nextAction`. De-duped by pack identity (the " +
+      "partial / unavailable) and exactly one `nextAction`. De-duped by pack " +
+      "identity (the " +
       "container/template name) so duplicate bare tools/skills collapse under " +
       "their pack. Requires hub-protocol.read scope and a `workspaceId` query param.",
     request: {

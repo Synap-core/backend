@@ -956,7 +956,8 @@ export interface HubCapabilityCatalogConnection {
   required: boolean;
   kind: "provider" | "vault" | null;
   provider?: string;
-  state: "connected" | "missing" | "expired";
+  /** `unavailable`: this pod's Nango doesn't declare the provider — no connect action exists. */
+  state: "connected" | "missing" | "expired" | "unavailable";
   account?: string;
 }
 
@@ -972,7 +973,8 @@ export interface HubCapabilityCatalogCard {
     | "connected"
     | "draft"
     | "ready"
-    | "partial";
+    | "partial"
+    | "unavailable";
   connection?: HubCapabilityCatalogConnection;
   verbs: Array<{
     verbId: string;

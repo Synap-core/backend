@@ -4525,7 +4525,7 @@ export interface CapabilityConnectionView {
  * connector-resolver failure degrades a connection to `state:"missing"`, never a
  * 500 — the catalog always renders.
  */
-export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial";
+export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial" | "unavailable";
 export interface CapabilityCardConnection {
 	required: boolean;
 	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */

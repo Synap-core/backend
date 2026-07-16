@@ -46,6 +46,20 @@ export function registerConnectorsRoutes(app: HubHono): void {
                       connectionId: z.string().optional(),
                     })
                   ),
+                  // Discriminates "we couldn't check" from "nothing declared" —
+                  // an empty `providers` alone conflates the two, which is the
+                  // false diagnosis `synap status` would otherwise print.
+                  nangoStatus: z.enum(["ok", "error"]),
+                  nangoError: z
+                    .object({
+                      reason: z.enum([
+                        "unreachable",
+                        "unauthenticated",
+                        "malformed",
+                      ]),
+                      message: z.string(),
+                    })
+                    .optional(),
                 })
                 .openapi("ConnectorProviderList"),
             },
@@ -70,22 +84,33 @@ export function registerConnectorsRoutes(app: HubHono): void {
         return c.json({ error: "Nango not configured" }, 503);
       }
       const userId = c.get("userId") as string;
-      const [integrations, connections] = await Promise.all([
-        connector.listIntegrations(),
+      const [declared, connections] = await Promise.all([
+        connector.listIntegrationsResult(),
         connector.listConnections(userId),
       ]);
+      if (!declared.ok) {
+        return c.json(
+          {
+            providers: [],
+            nangoStatus: "error" as const,
+            nangoError: { reason: declared.reason, message: declared.error },
+          },
+          200
+        );
+      }
       const connMap = new Map(
         connections.map((conn) => [conn.provider, conn.connectionId])
       );
       return c.json(
         {
-          providers: integrations.map((i) => ({
+          providers: declared.integrations.map((i) => ({
             id: i.uniqueKey,
             provider: i.provider,
             displayName: i.displayName,
             connected: connMap.has(i.uniqueKey),
             connectionId: connMap.get(i.uniqueKey),
           })),
+          nangoStatus: "ok" as const,
         },
         200
       );
@@ -131,7 +156,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
       responses: {
         200: {
           description:
-            "Connection status: connected | setup_required | provider_required",
+            "Connection status: connected | setup_required | provider_required | provider_unavailable",
           content: {
             "application/json": {
               schema: z
@@ -140,9 +165,23 @@ export function registerConnectorsRoutes(app: HubHono): void {
                     "connected",
                     "setup_required",
                     "provider_required",
+                    "provider_unavailable",
                   ]),
                   provider: z.string().optional(),
                   displayName: z.string().optional(),
+                  // provider_unavailable: WHY the pod can't offer it. `reason`
+                  // separates "Nango answered, doesn't declare it" from the
+                  // lookup failures, so the caller states the real cause.
+                  code: z.literal("POD_PROVIDER_NOT_CONFIGURED").optional(),
+                  reason: z
+                    .enum([
+                      "not_declared",
+                      "unauthenticated",
+                      "unreachable",
+                      "malformed",
+                    ])
+                    .optional(),
+                  message: z.string().optional(),
                   connectionId: z.string().optional(),
                   redirectUrl: z.string().optional(),
                   sessionToken: z.string().optional(),
@@ -248,15 +287,39 @@ export function registerConnectorsRoutes(app: HubHono): void {
       }
 
       try {
-        const [integrations, connections] = await Promise.all([
-          connector.listIntegrations(),
+        const [declared, connections] = await Promise.all([
+          connector.listIntegrationsResult(),
           connector.listConnections(userId),
         ]);
 
+        const wanted = (provider ?? "").trim().toLowerCase();
+
+        // Could not find out what this pod offers → say THAT, naming the real
+        // cause. Minting a session against an unvalidated provider here is what
+        // produced the vendor 500 this door exists to prevent.
+        if (!declared.ok) {
+          const message =
+            declared.reason === "unauthenticated"
+              ? `This pod's NANGO_SECRET_KEY is not valid for its Nango environment, so its integrations can't be listed. A pod admin needs to fix the key.`
+              : declared.reason === "unreachable"
+                ? `This pod cannot reach its Nango server, so its integrations can't be listed. A pod admin needs to check that Nango is running and reachable.`
+                : `This pod's Nango returned an integration list that could not be read. A pod admin needs to check the Nango version and configuration.`;
+          return c.json(
+            {
+              status: "provider_unavailable" as const,
+              ...(provider ? { provider } : {}),
+              code: "POD_PROVIDER_NOT_CONFIGURED" as const,
+              reason: declared.reason,
+              message,
+            },
+            200
+          );
+        }
+
+        const integrations = declared.integrations;
+
         // ── Provider resolution: match the requested term against the real
         // integration list by uniqueKey / provider / displayName (case-insensitive).
-        // Empty or unknown → return the pickable list (NOT a generic popup).
-        const wanted = (provider ?? "").trim().toLowerCase();
         const match = wanted
           ? integrations.find(
               (i) =>
@@ -266,21 +329,19 @@ export function registerConnectorsRoutes(app: HubHono): void {
             )
           : undefined;
 
-        // When Nango is configured but no integrations are declared (self-hosted
-        // Nango v0.70+ where the environment API key can't list admin-created
-        // integrations), skip the provider-required dead-end and go straight to
-        // a Connect session. The Nango Connect UI handles integration discovery.
+        // Nango answered and declares nothing. A picker with zero entries is the
+        // same dead end as an unvalidated session, so neither is offered — the
+        // remedy is for a pod admin to declare the integration.
         if (integrations.length === 0) {
-          const session = await connector.createSession(
-            userId,
-            wanted || "*",
-            workspaceId ?? ""
-          );
           return c.json(
             {
-              status: "setup_required" as const,
-              redirectUrl: session.redirectUrl,
-              sessionToken: session.sessionToken,
+              status: "provider_unavailable" as const,
+              ...(provider ? { provider } : {}),
+              code: "POD_PROVIDER_NOT_CONFIGURED" as const,
+              reason: "not_declared" as const,
+              message: provider
+                ? `This pod's Nango declares no integrations, so "${provider}" can't be connected yet. A pod admin needs to declare it in the Nango dashboard.`
+                : `This pod's Nango declares no integrations yet. A pod admin needs to declare one in the Nango dashboard before anything can be connected.`,
             },
             200
           );
@@ -366,11 +427,33 @@ export function registerConnectorsRoutes(app: HubHono): void {
         }
 
         // ── Not connected → provider-specific OAuth session.
-        const session = await connector.createSession(
-          userId,
-          match.uniqueKey,
-          workspaceId ?? ""
-        );
+        // Nango can LIST an integration and still REJECT it at session time (a
+        // declared-but-incomplete config), which pre-validation cannot catch —
+        // so the throw is mapped here rather than escaping as a vendor 500.
+        let session;
+        try {
+          session = await connector.createSession(
+            userId,
+            match.uniqueKey,
+            workspaceId ?? ""
+          );
+        } catch (sessErr) {
+          logger.warn(
+            { err: sessErr, provider: match.uniqueKey, userId },
+            "connect: Nango rejected a declared integration at session time"
+          );
+          return c.json(
+            {
+              status: "provider_unavailable" as const,
+              provider: match.uniqueKey,
+              displayName: match.displayName,
+              code: "POD_PROVIDER_NOT_CONFIGURED" as const,
+              reason: "malformed" as const,
+              message: `"${match.displayName}" is declared on this pod's Nango but looks incomplete, so it can't be connected yet. A pod admin needs to finish configuring it in the Nango dashboard.`,
+            },
+            200
+          );
+        }
         return c.json(
           {
             status: "setup_required" as const,
@@ -518,58 +601,22 @@ export function registerConnectorsRoutes(app: HubHono): void {
         userId = onBehalfOfUserId;
       }
 
-      // ── CP Gateway proxy (user-scoped, centralized Nango) ───────────────────
-      // When a Control Plane is configured, route session creation through the
-      // CP rather than calling Nango directly. The CP authenticates the calling
-      // pod, scopes the connection per-user (not per-pod), and pre-creates
-      // `connector_connections` rows for tracking. Self-hosted pods without CP
-      // access still call Nango directly (the env var fallback below).
-      const cpUrl = process.env.CP_API_URL || process.env.CONTROL_PLANE_URL;
-      if (cpUrl) {
-        try {
-          const body: Record<string, unknown> = { userId };
-          if (providerId) body.providerId = providerId;
-          if (workspaceId) body.workspaceId = workspaceId;
-          const podId = process.env.POD_ID || process.env.POD_URL || "";
-          if (podId) body.podId = podId;
-          const cpRes = await fetch(
-            `${cpUrl.replace(/\/$/, "")}/connectors/session`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${process.env.HUB_PROTOCOL_API_KEY || ""}`,
-              },
-              body: JSON.stringify(body),
-            }
+      // No CP gateway here — the CP returns {token, connectLink, nangoHost}, not redirectUrl.
+
+      // Pre-validate against what Nango actually declares. Falling back to the
+      // generic picker is only correct when Nango ANSWERED and doesn't declare
+      // the provider; a failed lookup must not be read as "doesn't exist".
+      let effectiveProvider = providerId ?? "*";
+      if (effectiveProvider !== "*") {
+        const declared = await connector.listIntegrationsResult();
+        if (declared.ok) {
+          const exists = declared.integrations.some(
+            (i) => i.uniqueKey === effectiveProvider
           );
-          const cpJson = (await cpRes.json().catch(() => ({}))) as Record<
-            string,
-            unknown
-          >;
-          if (cpRes.ok && cpJson.redirectUrl) {
-            return c.json(
-              {
-                redirectUrl: cpJson.redirectUrl,
-                sessionToken: (cpJson.sessionToken || "") as string,
-              },
-              200
-            );
-          }
-          // CP unavailable → fall through to direct Nango
-          logger.warn(
-            { status: cpRes.status, body: cpJson },
-            "CP gateway session failed — falling back to direct Nango"
-          );
-        } catch (err) {
-          logger.warn(
-            { err },
-            "CP gateway session unreachable — falling back to direct Nango"
-          );
+          if (!exists) effectiveProvider = "*";
         }
       }
 
-      const effectiveProvider = providerId ?? "*";
       let session;
       try {
         session = await connector.createSession(
@@ -578,38 +625,14 @@ export function registerConnectorsRoutes(app: HubHono): void {
           workspaceId ?? ""
         );
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Fall back to the generic picker when the requested integration
-        // doesn't exist in Nango yet (not yet configured or wrong key).
-        if (
-          effectiveProvider !== "*" &&
-          msg.toLowerCase().includes("integration does not exist")
-        ) {
-          try {
-            session = await connector.createSession(
-              userId,
-              "*",
-              workspaceId ?? ""
-            );
-          } catch (retryErr) {
-            logger.error(
-              { err: retryErr, providerId },
-              "POST /connectors/session fallback failed"
-            );
-            return c.json(
-              {
-                error:
-                  retryErr instanceof Error
-                    ? retryErr.message
-                    : "Unknown error",
-              },
-              500
-            );
-          }
-        } else {
-          logger.error({ err, providerId }, "POST /connectors/session failed");
-          return c.json({ error: msg }, 500);
-        }
+        logger.error({ err, providerId }, "POST /connectors/session failed");
+        return c.json(
+          {
+            error:
+              "Could not start a connection session with this pod's Nango. A pod admin needs to check that the integration is fully configured.",
+          },
+          500
+        );
       }
       return c.json(
         {

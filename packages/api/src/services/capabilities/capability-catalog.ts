@@ -45,7 +45,8 @@ export type CapabilityCardStatus =
   | "connected"
   | "draft"
   | "ready"
-  | "partial";
+  | "partial"
+  | "unavailable";
 
 export interface CapabilityCardConnection {
   required: boolean;
@@ -53,7 +54,12 @@ export interface CapabilityCardConnection {
   kind: "provider" | "vault" | null;
   /** providerConfigKey, e.g. "google" — present for provider connections. */
   provider?: string;
-  state: "connected" | "missing" | "expired";
+  /**
+   * `missing` = connectable, the user just hasn't. `unavailable` = this POD
+   * cannot offer it at all (Nango answered and doesn't declare the provider), so
+   * "Connect" would dead-end — only claimed when availability is actually KNOWN.
+   */
+  state: "connected" | "missing" | "expired" | "unavailable";
   /** connectionId (or display account) when connected. */
   account?: string;
   /**
@@ -283,6 +289,12 @@ function verbGovernance(type: VerbType): "auto" | "propose" {
 interface ConnState {
   /** Provider keys connected for the user → their connectionId. */
   providerConn: Map<string, string>;
+  /**
+   * Provider keys this pod's Nango DECLARES (uniqueKey and provider, lowercased).
+   * `null` means UNKNOWN — the lookup failed, so availability is unproven and no
+   * caller may claim a provider is unavailable.
+   */
+  providerAvailable: Set<string> | null;
   /** Real `vault://<id>` secret ids that exist (not soft-deleted). */
   vaultExists: Set<string>;
 }
@@ -311,12 +323,25 @@ function deriveConnection(
     if (m) {
       const provider = m[1];
       const connectionId = conn.providerConn.get(provider);
+      if (connectionId) {
+        return {
+          required: true,
+          kind: "provider",
+          provider,
+          state: "connected",
+          account: connectionId,
+        };
+      }
+      // Only downgrade to `unavailable` when availability is KNOWN (non-null) and
+      // the provider is absent from it. Unknown → `missing`, the connectable state.
+      const unavailable =
+        conn.providerAvailable !== null &&
+        !conn.providerAvailable.has(provider.toLowerCase());
       return {
         required: true,
         kind: "provider",
         provider,
-        state: connectionId ? "connected" : "missing",
-        ...(connectionId ? { account: connectionId } : {}),
+        state: unavailable ? "unavailable" : "missing",
       };
     }
   }
@@ -353,7 +378,13 @@ function computeInstalledStatus(
   verbs: CapabilityCardVerb[]
 ): CapabilityCardStatus {
   const connectionOk = !connection.required || connection.state === "connected";
-  if (!connectionOk) return "needs_connection";
+  if (!connectionOk) {
+    // A pod that can't offer the provider must not render "Needs connection" —
+    // there is no connect action behind it.
+    return connection.state === "unavailable"
+      ? "unavailable"
+      : "needs_connection";
+  }
 
   const enabledCount = verbs.filter((v) => v.enabled).length;
   const total = verbs.length;
@@ -398,6 +429,15 @@ function nextActionFor(
       };
     case "ready":
       return { kind: "run", hint: `Run a verb of "${name}".` };
+    case "unavailable": {
+      const prov = connection?.provider;
+      return {
+        kind: "none",
+        hint: prov
+          ? `"${name}" needs ${prov}, which this pod doesn't offer yet.`
+          : `"${name}" needs a provider this pod doesn't offer yet.`,
+      };
+    }
   }
 }
 
@@ -414,6 +454,7 @@ async function loadConnState(
   vaultSecretIds: string[]
 ): Promise<ConnState> {
   const providerConn = new Map<string, string>();
+  let providerAvailable: Set<string> | null = null;
   try {
     const nango = await resolveNangoConnector();
     if (nango) {
@@ -422,6 +463,16 @@ async function loadConnState(
         if (!providerConn.has(cn.provider)) {
           providerConn.set(cn.provider, cn.connectionId);
         }
+      }
+      // Availability stays null unless Nango actually ANSWERED — see ConnState.
+      const declared = await nango.listIntegrationsResult();
+      if (declared.ok) {
+        providerAvailable = new Set(
+          declared.integrations.flatMap((i) => [
+            i.uniqueKey.toLowerCase(),
+            i.provider.toLowerCase(),
+          ])
+        );
       }
     }
   } catch {
@@ -452,7 +503,7 @@ async function loadConnState(
     }
   }
 
-  return { providerConn, vaultExists };
+  return { providerConn, providerAvailable, vaultExists };
 }
 
 // ── Template loading (DB rows + on-disk family templates) ─────────────────────
