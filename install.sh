@@ -501,11 +501,17 @@ SECRETS_EOF
   fi
 
   # Federation requires the Pod's browser-facing API audience and its separate
-  # operator-console origin. Older installs can predate either setting; add
-  # them without overwriting explicit custom-domain configuration.
-  if ! grep -q "^PUBLIC_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+  # operator-console origin. Older installs can predate either setting. An
+  # HTTP public URL on a non-local Pod is unsafe and makes Pod Admin send its
+  # browser Kratos requests to the wrong host, so upgrade it to HTTPS as well.
+  existing_public_url="$(_env_value PUBLIC_URL "$INSTALL_DIR/.env")"
+  if [[ -z "$existing_public_url" ]]; then
     _set_env_value "PUBLIC_URL" "https://$DOMAIN" "$INSTALL_DIR/.env"
     info "Backfilled PUBLIC_URL for secure federation"
+    RECREATE_FOR_ENV_CHANGE=1
+  elif [[ "$DOMAIN" != "localhost" && "$existing_public_url" == http://* ]]; then
+    _set_env_value "PUBLIC_URL" "https://${existing_public_url#http://}" "$INSTALL_DIR/.env"
+    info "Upgraded PUBLIC_URL to HTTPS for secure Pod Admin federation"
     RECREATE_FOR_ENV_CHANGE=1
   fi
   if ! grep -q "^POD_ADMIN_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then

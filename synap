@@ -238,13 +238,18 @@ shared_cookie_domain() {
 
 backfill_federation_public_urls() {
     local domain="$1"
+    local configured_public_url
     local configured_pod_admin_domain
     local configured_pod_admin_url
     local pod_admin_authority
 
-    if ! grep -q "^PUBLIC_URL=" .env 2>/dev/null; then
+    configured_public_url=$(grep "^PUBLIC_URL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
+    if [ -z "$configured_public_url" ]; then
         update_env_value "PUBLIC_URL" "https://${domain}"
         echo -e "${BLUE}ℹ️  Backfilled PUBLIC_URL for secure federation${NC}"
+    elif [ "$domain" != "localhost" ] && [[ "$configured_public_url" == http://* ]]; then
+        update_env_value "PUBLIC_URL" "https://${configured_public_url#http://}"
+        echo -e "${BLUE}ℹ️  Upgraded PUBLIC_URL to HTTPS for secure Pod Admin federation${NC}"
     fi
 
     configured_pod_admin_domain=$(grep "^POD_ADMIN_DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
@@ -2428,16 +2433,20 @@ cmd_update() {
         fi
     fi
 
-    # Bring up support services (pod-admin, caddy, pod-agent), force-recreate
-    # kratos for its new image + regenerated config, then swap the backend
-    # through the canary gate so a broken new image can't down the live pod.
+    # Bring up Caddy and the optional Pod agent, then force-recreate Pod Admin
+    # and Kratos. Pod Admin receives PUBLIC_URL at container creation time, so
+    # a normal `up` would otherwise leave its browser Kratos target stale after
+    # this update repairs a legacy public URL.
     echo -e "${BLUE}🔄 Restarting services...${NC}"
     if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
-        docker compose "${profile_args[@]}" up -d --remove-orphans "${pod_agent_args[@]}" pod-admin
+        if [ "${#pod_agent_args[@]}" -gt 0 ]; then
+            docker compose "${profile_args[@]}" up -d --remove-orphans "${pod_agent_args[@]}"
+        fi
     else
-        docker compose "${profile_args[@]}" up -d --remove-orphans caddy "${pod_agent_args[@]}" pod-admin
+        docker compose "${profile_args[@]}" up -d --remove-orphans caddy "${pod_agent_args[@]}"
     fi
+    docker compose up -d --force-recreate pod-admin
     docker compose up -d --force-recreate kratos
 
     if ! _swap_backend_canary; then

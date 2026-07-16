@@ -194,11 +194,12 @@ export const requestSizeLimit: MiddlewareHandler = async (c, next) => {
   if (contentLength) {
     const size = parseInt(contentLength, 10);
     const path = c.req.path;
-    // /api/hub/entities/:id/source-file (and bare /entities/... if mounted root)
-    const isSourceFile =
+    // Bulk media: source-file attach OR combined store-unit (entity + WAV).
+    const isBulkMedia =
       /\/entities\/[^/]+\/source-file\/?$/.test(path) ||
-      path.endsWith("/source-file");
-    const maxSize = isSourceFile
+      path.endsWith("/source-file") ||
+      path.includes("/import/store-unit");
+    const maxSize = isBulkMedia
       ? 32 * 1024 * 1024 // 32MB — audio provenance
       : 10 * 1024 * 1024; // 10MB default
 

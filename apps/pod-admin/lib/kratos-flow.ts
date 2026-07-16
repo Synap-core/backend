@@ -11,7 +11,10 @@
  * here — those still live in the pod's bootstrap surface.
  */
 
-import { publicPodUrl as runtimePublicPodUrl } from "./public-pod-url";
+import {
+  POD_PUBLIC_URL_CONFIGURATION_ERROR,
+  publicPodUrl as runtimePublicPodUrl,
+} from "./public-pod-url";
 
 /**
  * Resolve the public Pod API URL from server-injected runtime configuration.
@@ -22,7 +25,27 @@ function publicPodUrl(): string {
 }
 
 function kratosPublic(): string {
-  return `${publicPodUrl().replace(/\/$/, "")}/.ory/kratos/public`;
+  const podUrl = publicPodUrl();
+  if (!podUrl) throw new Error(POD_PUBLIC_URL_CONFIGURATION_ERROR);
+  return `${podUrl.replace(/\/$/, "")}/.ory/kratos/public`;
+}
+
+function isJsonResponse(response: Response): boolean {
+  return (response.headers.get("content-type") ?? "").includes("json");
+}
+
+async function readJsonResponse<T>(
+  response: Response,
+  failureMessage: string
+): Promise<T> {
+  if (!isJsonResponse(response)) {
+    throw new Error(failureMessage);
+  }
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new Error(failureMessage);
+  }
 }
 
 /**
@@ -132,7 +155,10 @@ export async function createLoginFlow(): Promise<CreateLoginFlowResult> {
   });
 
   if (res.status === 200) {
-    const flow = (await res.json()) as KratosFlow;
+    const flow = await readJsonResponse<KratosFlow>(
+      res,
+      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+    );
     return { flow };
   }
 
@@ -174,7 +200,10 @@ export async function fetchLoginFlow(flowId: string): Promise<KratosFlow> {
       body.error?.message ?? `Login flow ${flowId} not found (${res.status})`
     );
   }
-  return (await res.json()) as KratosFlow;
+  return readJsonResponse<KratosFlow>(
+    res,
+    "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+  );
 }
 
 export async function submitLoginFlow(
@@ -194,9 +223,7 @@ export async function submitLoginFlow(
     body: JSON.stringify(body),
   });
 
-  const isJson = (res.headers.get("content-type") ?? "").includes(
-    "application/json"
-  );
+  const isJson = isJsonResponse(res);
   let data: unknown = null;
   if (isJson) {
     try {

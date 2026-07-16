@@ -6,6 +6,9 @@ declare global {
   }
 }
 
+export const POD_PUBLIC_URL_CONFIGURATION_ERROR =
+  "This Pod Admin is not configured with the Pod's secure API URL. A Pod owner needs to set PUBLIC_URL to the Pod's HTTPS address and restart Pod Admin.";
+
 function canonicalPublicPodUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;
   try {
@@ -49,5 +52,8 @@ export function publicPodUrl(): string {
   const configured = canonicalPublicPodUrl(
     window.__SYNAP_POD_ADMIN_RUNTIME__?.podUrl
   );
-  return configured ?? window.location.origin;
+  // Pod Admin is deliberately a different origin from the Pod API. Falling
+  // back to window.location would send Kratos requests back to this Next app,
+  // which returns HTML and turns a deployment error into a JSON parse error.
+  return configured ?? "";
 }

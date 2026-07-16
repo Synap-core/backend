@@ -32,6 +32,12 @@ import {
 } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
+import {
+  storeEntitySourceBlob,
+  SourceBlobTooLargeError,
+  SourceBlobEmptyError,
+  SOURCE_BLOB_MAX_BYTES,
+} from "../../../utils/store-entity-source-blob.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
 import {
@@ -58,6 +64,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   resolveActingContext,
   hasScope,
+  getCaller,
   logger,
   type HubHono,
 } from "./_shared.js";
@@ -710,6 +717,169 @@ export function registerCaptureRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, userId }, "POST /import/apply failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /import/store-unit
+   *
+   * Bulk store-first door: create ONE entity (+ optional source-file blob) in a
+   * single authenticated request. Superwhisper import was 2 Hub auth hits per
+   * unit (POST /entities + POST /entities/:id/source-file), which burns the
+   * per-key rate window twice as fast. This collapses to 1 hit.
+   *
+   * Multipart fields:
+   *   title (required), content?, profileSlug? (default note), properties? (JSON),
+   *   source? (cli|…), file? (optional binary provenance)
+   * Omit workspaceId for pod-wide kinds (note) — entityScope decides placement.
+   */
+  app.post("/import/store-unit", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const contentType = c.req.header("content-type") ?? "";
+    if (!contentType.includes("multipart/form-data")) {
+      return c.json(
+        {
+          error:
+            "Content-Type must be multipart/form-data (title + optional file)",
+        },
+        400
+      );
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: "Invalid multipart body" }, 400);
+    }
+
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    if (!title) {
+      return c.json({ error: "title is required" }, 400);
+    }
+    const profileSlug =
+      typeof body.profileSlug === "string" && body.profileSlug
+        ? body.profileSlug
+        : "note";
+    const content = typeof body.content === "string" ? body.content : undefined;
+    const description =
+      typeof body.description === "string" ? body.description : undefined;
+    const source =
+      typeof body.source === "string" ? body.source : ("cli" as const);
+    let properties: Record<string, unknown> = {};
+    if (typeof body.properties === "string" && body.properties) {
+      try {
+        properties = JSON.parse(body.properties) as Record<string, unknown>;
+      } catch {
+        return c.json({ error: "properties must be valid JSON" }, 400);
+      }
+    }
+    const workspaceIdField =
+      typeof body.workspaceId === "string" && body.workspaceId
+        ? body.workspaceId
+        : undefined;
+
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdField,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId } = acting;
+
+    // Optional binary (WAV, etc.)
+    let fileBuffer: Buffer | undefined;
+    let fileMime: string | undefined;
+    let fileName: string | undefined;
+    const file = body.file;
+    if (file instanceof File) {
+      if (file.size > SOURCE_BLOB_MAX_BYTES) {
+        return c.json(
+          {
+            error: `File too large. Maximum size is ${SOURCE_BLOB_MAX_BYTES / 1024 / 1024}MB`,
+          },
+          413
+        );
+      }
+      fileMime = file.type || "application/octet-stream";
+      fileName = file.name || "source.bin";
+      fileBuffer = Buffer.from(await file.arrayBuffer());
+    }
+
+    try {
+      // Pod-wide: omit workspaceId pin so note entityScope lands null.
+      const caller = await getCaller(c, {
+        workspaceId: workspaceIdField ?? null,
+        userId,
+      });
+      const created = await caller.entities.createEntity({
+        userId,
+        profileSlug,
+        title,
+        ...(description ? { description } : {}),
+        ...(content ? { content } : {}),
+        properties,
+        ...(workspaceIdField ? { workspaceId: workspaceIdField } : {}),
+        ...(source ? { source: source as "cli" } : {}),
+      });
+
+      const entityId = created.id as string;
+      let audio: {
+        documentId: string;
+        storageKey: string;
+        size: number;
+        mimeType: string;
+      } | null = null;
+      let audioSkippedReason: string | undefined;
+
+      if (fileBuffer && fileBuffer.length > 0 && fileMime) {
+        try {
+          const stored = await storeEntitySourceBlob({
+            database: db,
+            userId,
+            entityId,
+            buffer: fileBuffer,
+            mimeType: fileMime,
+            filename: fileName,
+            workspaceId: workspaceIdField ?? null,
+          });
+          audio = {
+            documentId: stored.documentId,
+            storageKey: stored.storageKey,
+            size: stored.size,
+            mimeType: stored.mimeType,
+          };
+        } catch (err) {
+          if (err instanceof SourceBlobTooLargeError) {
+            audioSkippedReason = "over_limit";
+          } else if (err instanceof SourceBlobEmptyError) {
+            audioSkippedReason = "empty";
+          } else {
+            // Entity already created — report partial success (same as keepRaw best-effort).
+            logger.warn(
+              { err, entityId, userId },
+              "store-unit: source blob failed (entity kept)"
+            );
+            audioSkippedReason = "storage_error";
+          }
+        }
+      }
+
+      return c.json({
+        id: entityId,
+        entityId,
+        profileSlug,
+        title,
+        audio,
+        audioSkippedReason: audioSkippedReason ?? null,
+      });
+    } catch (err) {
+      logger.error({ err, userId }, "POST /import/store-unit failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
