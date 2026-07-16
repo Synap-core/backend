@@ -3415,6 +3415,14 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
+export interface BackfillTeamPersonBridgeResult {
+	scanned: number;
+	created: number;
+	linked: number;
+	updated: number;
+	skipped: number;
+	errors: number;
+}
 export type PackageDependencyKind = "workspace" | "capability" | "automation";
 export type PackageDependencyRelation = "compose" | "require";
 export interface ReconcileReport {
@@ -3426,6 +3434,26 @@ export interface ReconcileReport {
 	profiles: {
 		added: string[];
 		reused: string[];
+		/** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
+		promoted: string[];
+		/**
+		 * Slugs where an existing same-slug profile was found but could NOT be
+		 * safely promoted (another user's private row, or the pod-wide slug seat is
+		 * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
+		 * profile was created instead. This is the one branch where the dedup
+		 * keystone knowingly fails to dedup — surfaced, never silent.
+		 */
+		deferred: string[];
+		/**
+		 * Declared slug matched an existing profile of a DIFFERENT profileKind
+		 * (kind vs role). The merge was SKIPPED and the existing row left untouched
+		 * — the caller decides (never a silent kind flip).
+		 */
+		conflicts: Array<{
+			slug: string;
+			existingKind: string;
+			declaredKind: string;
+		}>;
 	};
 	properties: {
 		/** New overlay/base property-defs added. */
@@ -3807,6 +3835,45 @@ export interface ProposalMaterializedRecord {
 	relationIds?: string[];
 	/** Document ids CREATED by approval (revert → delete each). */
 	documentIds?: string[];
+	/**
+	 * Entity-merge materialization (pod hygiene). Stamped by the entity.merge
+	 * approve executor so revert can full-unmerge: reverse signals/relations/
+	 * links, restore facets, restore winner projection, undelete the loser.
+	 *
+	 * Full unmerge requires invertibility fields (`rewiredRelations` with prior
+	 * endpoints, `previousWinnerSnapshot` on proposal data). Legacy stamps that
+	 * only have `loserId` fall back to soft-undelete of the loser only.
+	 */
+	merge?: {
+		winnerId: string;
+		loserId: string;
+		movedSignalIds?: string[];
+		movedExternalLinkIds?: string[];
+		movedFacetIds?: string[];
+		/** Facet ids created/attached on winner during merge (soft-detached on unmerge). */
+		winnerFacetIds?: string[];
+		/**
+		 * Relations re-pointed loser → winner with prior endpoints for reverse.
+		 * Preferred over legacy bare `rewiredRelationIds`.
+		 */
+		rewiredRelations?: Array<{
+			id: string;
+			previousSourceEntityId: string | null;
+			previousTargetEntityId: string | null;
+		}>;
+		/** @deprecated Prefer `rewiredRelations` (carries prior endpoints). */
+		rewiredRelationIds?: string[];
+		/** message_links rows re-pointed loser → winner. */
+		rewiredMessageLinkIds?: string[];
+		/** Polymorphic links re-pointed loser → winner. */
+		rewiredLinkIds?: string[];
+		documentMoved?: boolean;
+		/**
+		 * Relations dropped as self-loop/dedupe during merge — irreversible;
+		 * recorded for audit only (cannot resurrect on unmerge).
+		 */
+		deletedRelationIds?: string[];
+	};
 }
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
@@ -5606,6 +5673,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId?: string | undefined;
 			};
 			output: {
+				status: "proposed";
+				message: string;
+				created: never[];
+				relations: never[];
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				proposalId: string;
+				proposalType: string;
+				summary: string;
+				reasoning: string;
+				reviewPath: string;
+				reviewUrl: string;
+			} | {
 				pendingWorkspaceSwitch?: {
 					suggestedWorkspaceId: string;
 					reason: string | null;
@@ -5632,6 +5711,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				status?: undefined;
+				message?: undefined;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				summary?: undefined;
+				reasoning?: undefined;
+				reviewPath?: undefined;
+				reviewUrl?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5775,6 +5862,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				} | null;
 				deduplicated: boolean;
 				facets: {
@@ -5830,6 +5923,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				};
 				facets: {
 					slug: string;
@@ -5860,6 +5959,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sourceProposalId?: string | undefined;
 				facetSlug?: string | undefined;
 				facetProfileId?: string | undefined;
+				includeFacets?: boolean | undefined;
 			};
 			output: {
 				items: {
@@ -5883,6 +5983,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				}[];
 				pagination: {
 					hasMore: boolean;
@@ -5912,6 +6018,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				}[];
 				hasMore: boolean;
 			};
@@ -5944,6 +6056,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -5977,6 +6095,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -6022,6 +6146,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -12306,6 +12436,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId?: undefined;
 			};
+			meta: object;
+		}>;
+		backfillTeamPersonBridge: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: BackfillTeamPersonBridgeResult;
 			meta: object;
 		}>;
 		updateMemberRole: import("@trpc/server").TRPCMutationProcedure<{

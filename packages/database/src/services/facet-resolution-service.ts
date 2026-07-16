@@ -97,6 +97,72 @@ export async function loadFacetSlugsBatch(
 }
 
 /**
+ * One live facet row in the RICH batch shape: the slug plus the overlay the
+ * slug alone cannot carry (`properties`, `status`). Sibling of the slugs-only
+ * annotation — same join, same lens, wider projection.
+ */
+export interface FacetRowAnnotation {
+  facetId: string;
+  slug: string;
+  properties: Record<string, unknown>;
+  status: string | null;
+}
+
+/**
+ * Batch-load live facet ROWS for a set of entity ids → a
+ * Map<entityId, FacetRowAnnotation[]>. The rich sibling of
+ * {@link loadFacetSlugsBatch}: ONE query for the whole page (never N+1), the
+ * SAME join and the SAME `facetVisibilityConditions` lens — only the projection
+ * widens to carry each facet's overlay `properties` and `status`.
+ *
+ * Exists because the slugs-only annotation is lossy for any consumer that must
+ * READ a facet overlay on a list page (e.g. the CRM's `leadStage: "prospect"`,
+ * which distinguishes a Prospect from a plain Lead). Opt-in only — the default
+ * list shape stays the cheap slug annotation its consumers depend on.
+ *
+ * Every call must supply a visibility scope; there is deliberately no
+ * unfiltered wrapper for this shape.
+ */
+export async function loadFacetRowsBatch(
+  db: PostgresJsDatabase<typeof schema>,
+  entityIds: string[],
+  visibility: FacetVisibilityScope
+): Promise<Map<string, FacetRowAnnotation[]>> {
+  if (entityIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      entityId: entityFacets.entityId,
+      facetId: entityFacets.id,
+      slug: profiles.slug,
+      properties: entityFacets.properties,
+      status: entityFacets.status,
+    })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+    .where(
+      and(
+        inArray(entityFacets.entityId, entityIds),
+        isNull(entityFacets.deletedAt),
+        ...facetVisibilityConditions(visibility)
+      )
+    );
+
+  const out = new Map<string, FacetRowAnnotation[]>();
+  for (const row of rows) {
+    const annotation: FacetRowAnnotation = {
+      facetId: row.facetId,
+      slug: row.slug,
+      properties: (row.properties ?? {}) as Record<string, unknown>,
+      status: row.status,
+    };
+    const list = out.get(row.entityId);
+    if (list) list.push(annotation);
+    else out.set(row.entityId, [annotation]);
+  }
+  return out;
+}
+
+/**
  * TRUSTED INDEXING ONLY. Search documents are stored with all role slugs and
  * query-time access control applies the user floor. Never use this in an API
  * response, user-facing filter, graph, relation, or retrieval path.

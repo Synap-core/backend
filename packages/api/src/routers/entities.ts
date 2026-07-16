@@ -32,6 +32,8 @@ import {
   FacetRepository,
   getEffectiveFacets,
   loadFacetSlugsBatch,
+  loadFacetRowsBatch,
+  type FacetRowAnnotation,
   type FacetVisibilityScope,
   facetRoleExists,
   facetVisibilityConditions,
@@ -57,6 +59,7 @@ import {
   workspaces,
   entityExternalLinks,
   profiles,
+  profileWorkspaceAccess,
   entityFacets,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
@@ -134,7 +137,11 @@ function entityLensWhere(
  * `Entity` shape (`type` field instead of `profileSlug`) plus the explicit null
  * file fields, while routing the source-of-truth normalization through the codec.
  */
-function toApiEntity(entity: any, facetSlugs?: string[]): Entity {
+function toApiEntity(
+  entity: any,
+  facetSlugs?: string[],
+  facets?: FacetRowAnnotation[]
+): Entity {
   // Defer to the canonical codec for shape normalization. We then spread the
   // original DB row over the result so any tRPC-only fields (profileId, version,
   // deletedAt, etc.) that don't exist on the wire shape are preserved verbatim
@@ -154,6 +161,10 @@ function toApiEntity(entity: any, facetSlugs?: string[]): Entity {
     // Kind + Facets: role "hats" the entity wears. Only attached when the caller
     // batch-resolved them (via toApiEntitiesWithFacets) and the entity has ≥1.
     ...(facetSlugs && facetSlugs.length > 0 ? { facetSlugs } : {}),
+    // Rich facet rows (slug + overlay properties/status). Only attached when the
+    // caller opted in (via toApiEntitiesWithFacetRows) and the entity has ≥1 —
+    // so the default response shape is untouched.
+    ...(facets && facets.length > 0 ? { facets } : {}),
   } as Entity;
 }
 
@@ -175,6 +186,38 @@ async function toApiEntitiesWithFacets(
     visibility
   );
   return rows.map((r) => toApiEntity(r, slugsById.get(r.id)));
+}
+
+/**
+ * Rich sibling of {@link toApiEntitiesWithFacets}: annotates a page with the
+ * FULL facet rows (`facets` — slug + overlay `properties`/`status`) in ONE
+ * batched load, for callers that opted in via `includeFacets: true`.
+ *
+ * Emits `facetSlugs` TOO, derived from the very same rows: the opt-in is purely
+ * ADDITIVE, so a page that asks for the overlay still feeds the six consumers
+ * that read the cheap slug annotation (role chips, graph adapters,
+ * view-renderer, …). `loadFacetRowsBatch` is the same join under the same lens
+ * as `loadFacetSlugsBatch`, so the derived slugs are identical to what the
+ * default path would have produced — the opt-in only ADDS `facets`.
+ */
+async function toApiEntitiesWithFacetRows(
+  rows: any[],
+  visibility: FacetVisibilityScope
+): Promise<Entity[]> {
+  if (rows.length === 0) return [];
+  const facetsById = await loadFacetRowsBatch(
+    db,
+    rows.map((r) => r.id),
+    visibility
+  );
+  return rows.map((r) => {
+    const facets = facetsById.get(r.id);
+    return toApiEntity(
+      r,
+      facets?.map((f) => f.slug),
+      facets
+    );
+  });
 }
 
 // ── Built-in per-profile bento templates ──────────────────────────────────
@@ -1430,6 +1473,16 @@ export const entitiesRouter = router({
          */
         facetSlug: z.string().optional(),
         facetProfileId: z.string().uuid().optional(),
+        /**
+         * Kind + Facets, opt-in rich annotation. Default `false` keeps the
+         * response byte-identical to today's: `facetSlugs` only. Set `true` to
+         * ALSO get `facets` — each live facet's overlay `properties`/`status`
+         * beside its slug — for a list page that must read a facet property
+         * (e.g. the CRM's `leadStage: "prospect"`, invisible in a slug alone).
+         * Costs the same ONE batched query under the SAME visibility lens; it
+         * only widens the projection, so it is never an N+1.
+         */
+        includeFacets: z.boolean().optional().default(false),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1589,8 +1642,15 @@ export const entitiesRouter = router({
         .where(and(...conditions));
       const total = totalRow[0]?.count ?? 0;
 
+      // Kind + Facets annotation. The opt-in branch loads the rich rows (slug +
+      // overlay) instead of slugs-only — same single batched query, same lens.
+      // Unset/false takes the untouched default path.
+      const annotated = input.includeFacets
+        ? await toApiEntitiesWithFacetRows(results, facetVisibilityScope)
+        : await toApiEntitiesWithFacets(results, facetVisibilityScope);
+
       const { items, pagination } = buildPaginatedResponse(
-        await toApiEntitiesWithFacets(results, facetVisibilityScope),
+        annotated,
         input,
         total
       );
@@ -2473,15 +2533,73 @@ export const entitiesRouter = router({
       } else if (parent.workspaceId != null) {
         facetWorkspaceId = parent.workspaceId;
       } else {
-        const facetSlug =
-          input.profileSlug ??
-          (
-            await db.query.profiles.findFirst({
-              where: eq(profiles.id, input.profileId!),
-              columns: { slug: true },
-            })
-          )?.slug;
-        if (facetSlug) {
+        // Resolve the role-profile ROW ONCE, and make the lens decision against
+        // THAT row.
+        //
+        // When the caller pinned `profileId`, the pinned row IS the answer —
+        // fetching its slug and then re-querying BY SLUG could decide against a
+        // DIFFERENT row, because one slug can be carried by several rows
+        // (`profile-repository.ts:164-170`). When only a slug is given, resolve
+        // it through `profileRepo.getBySlug`, which applies the caller's
+        // visibility floor AND the deterministic specificity sort — an
+        // ORDER BY-less `findFirst` let an arbitrary twin win.
+        let roleProfile: {
+          id: string;
+          slug: string;
+          scope: string;
+          profileKind: string | null;
+          isActive: boolean;
+        } | null = null;
+        if (input.profileId) {
+          roleProfile =
+            (await db.query.profiles.findFirst({
+              where: eq(profiles.id, input.profileId),
+              columns: {
+                id: true,
+                slug: true,
+                scope: true,
+                profileKind: true,
+                isActive: true,
+              },
+            })) ?? null;
+        } else {
+          const profileRepo = new (
+            await import("@synap/database")
+          ).ProfileRepository(db);
+          roleProfile = await profileRepo.getBySlug(
+            input.profileSlug!,
+            undefined,
+            ctx.userId
+          );
+        }
+        const facetSlug = roleProfile?.slug ?? input.profileSlug;
+        // Only an ACTIVE role-profile drives the ontology pin; anything else
+        // (a kind, a soft-deleted row) leaves the decision to placement below.
+        const activeRole =
+          roleProfile &&
+          roleProfile.profileKind === "role" &&
+          roleProfile.isActive
+            ? roleProfile
+            : null;
+        // A CROSS-LENS role (a shared/system role-profile surfaced in MANY
+        // workspaces) is pod-wide by nature — pinning it to the single lens the
+        // caller happens to be a member of would defeat "visible in both". Keep
+        // such a role pod-wide (workspace_id = NULL). Only a role that is
+        // genuinely single-workspace (workspace-scoped, or shared+granted to
+        // exactly one ws) is eligible for the rung-2 ontology pin.
+        let stayPodWide = false;
+        if (activeRole?.scope === "system") {
+          stayPodWide = true;
+        } else if (activeRole?.scope === "shared") {
+          const grants = await db.query.profileWorkspaceAccess.findMany({
+            where: eq(profileWorkspaceAccess.profileId, activeRole.id),
+            columns: { workspaceId: true },
+          });
+          if (grants.length > 1) stayPodWide = true;
+        }
+        if (stayPodWide || !facetSlug) {
+          facetWorkspaceId = null;
+        } else {
           const facetPlacement = await resolveWorkspacePlacement(db, {
             userId: ctx.userId,
             facetSlugs: [facetSlug],
@@ -2491,8 +2609,6 @@ export const entitiesRouter = router({
           // facet off pod-wide; candidates / no-signal keep the null lens.
           facetWorkspaceId =
             facetPlacement.rung === 2 ? facetPlacement.workspaceId : null;
-        } else {
-          facetWorkspaceId = null;
         }
       }
       const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;

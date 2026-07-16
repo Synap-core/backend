@@ -190,6 +190,10 @@ export {
   type ReconcileOptions,
   type ReconcileReport,
 } from "./utils/reconcile-workspace-from-definition.js";
+export {
+  resolveProfileForApply,
+  type ProfileApplyResolution,
+} from "./utils/resolve-profile-for-apply.js";
 
 // Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
 export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";

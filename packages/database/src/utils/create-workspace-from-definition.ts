@@ -16,6 +16,7 @@ import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
+import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -845,106 +846,106 @@ export async function createWorkspaceFromDefinition(
           constraints: pd.constraints,
         }));
 
-      // Resolution order:
-      //   1. Profile is accessible in this workspace (system, shared+grant, or workspace-owned)
-      //      → reuse it as-is
-      //   2. Profile exists pod-wide but NOT accessible here (another workspace's private profile)
-      //      → fail with a clear actionable error
-      //   3. Profile does not exist at all → create it
+      // Resolution via the ONE shared dedup door (identical rule in
+      // reconcileWorkspaceFromDefinition):
+      //   1. Reuse-and-share an existing profile — grant access, or promote a
+      //      same-user workspace-scoped profile to shared — instead of minting a
+      //      duplicate. Kinds are pod-wide/shared; a declared slug that already
+      //      exists RESOLVES to that row.
+      //   2. A declared slug matching an existing profile of a DIFFERENT
+      //      profileKind (kind vs role) is a CONFLICT: skip it, never mutate the
+      //      existing row's kind.
+      //   3. No match (or a cross-user match, deferred for multi-user safety)
+      //      → create a workspace-scoped profile.
       let created;
       let profileIsReused = false;
 
-      const accessible = await profileRepo.getBySlugForWorkspace(
-        profile.slug,
-        workspaceId
-      );
-      if (accessible) {
+      // The resolver PERFORMS WRITES (grants + the promote scope flip), so it can
+      // throw — and a throw outside the step-error handler would bypass
+      // `provisioningStatus:"failed"` / `failedStep` entirely and defeat the
+      // resume machinery. It gets the same handler as the create/grant calls below.
+      let resolution: Awaited<ReturnType<typeof resolveProfileForApply>>;
+      try {
+        resolution = await resolveProfileForApply(profileRepo, {
+          slug: profile.slug,
+          declaredScope: scope,
+          declaredKind: profile.profileKind,
+          workspaceId,
+          actorUserId: userId,
+        });
+      } catch (err) {
+        await handleStepError(`profiles[${profile.slug}].resolve`, err);
+      }
+      if (resolution!.conflict) {
+        logger.warn(
+          { ...resolution!.conflict },
+          "Skipping profile: profileKind conflict with an existing profile — not overlaying or mutating it"
+        );
+        continue;
+      }
+      if (resolution!.profile) {
+        created = resolution!.profile;
+        profileIsReused = true;
         logger.info(
           {
             slug: profile.slug,
-            existingId: accessible.id,
-            scope: accessible.scope,
+            existingId: created.id,
+            scope: created.scope,
+            promoted: resolution!.promoted,
           },
-          "Reusing accessible profile"
+          resolution!.promoted
+            ? "Promoted + reused profile (resolve-and-share)"
+            : "Reusing accessible / pod-wide profile (granting access)"
         );
-        // Shared profiles need an explicit access grant for this workspace
-        if (accessible.scope === ProfileScope.SHARED) {
-          try {
-            await profileRepo.grantAccess(accessible.id, workspaceId);
-          } catch (err) {
-            await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
-          }
-        }
-        created = accessible;
-        profileIsReused = true;
       } else {
-        // For shared/system scope: do a pod-wide check — their slugs are globally
-        // unique, so if one exists but wasn't accessible we should reuse it.
-        if (scope === "shared" || scope === "system") {
-          const podWide = await profileRepo.getBySlug(profile.slug);
-          if (podWide) {
-            logger.info(
-              {
-                slug: profile.slug,
-                existingId: podWide.id,
-                scope: podWide.scope,
-              },
-              "Reusing pod-wide shared/system profile (granting access)"
-            );
-            try {
-              await profileRepo.grantAccess(podWide.id, workspaceId);
-            } catch (err) {
-              await handleStepError(
-                `profiles[${profile.slug}].grantAccess`,
-                err
-              );
-            }
-            profileMap[profile.slug] = podWide.id;
-            profileHintsMap[profile.slug] = {
+        // Not found (or a match was deferred) → create it here.
+        //
+        // A DEFERRED promotion is the one case where the dedup keystone knowingly
+        // mints a duplicate (a same-slug row exists but is not safely promotable),
+        // so it must be visible rather than silently swallowed into "created".
+        if (resolution!.promotionDeferred) {
+          logger.warn(
+            {
+              slug: profile.slug,
+              workspaceId,
+              reason: resolution!.deferredReason,
+              createScope: resolution!.createScope,
+            },
+            "Promotion DEFERRED — creating a duplicate workspace-scoped profile instead of resolving to the existing same-slug row"
+          );
+        }
+        try {
+          created = await profileRepo.create({
+            slug: profile.slug,
+            displayName: profile.displayName,
+            uiHints: {
               icon: resolvedIcon,
               color: resolvedColor,
-            };
-            profileIds.push(podWide.id);
-            profileIsReused = true;
-            created = podWide;
-          }
+              description: resolvedDescription,
+            },
+            // NOT the raw declared `scope`: the resolver downgrades it to
+            // `workspace` on a deferred promotion, because a `shared` create
+            // would collide with the very same-slug pod-wide row that made the
+            // promotion impossible in the first place.
+            scope: resolution!.createScope as ProfileScope,
+            workspaceId,
+            userId,
+            // Pass explicit semanticSlug from template; auto-assignment for
+            // standard slugs (task, project, person, etc.) happens in create().
+            semanticSlug: profile.semanticSlug,
+            profileKind: profile.profileKind,
+            applicableKinds: profile.applicableKinds,
+          });
+        } catch (err) {
+          await handleStepError(`profiles[${profile.slug}].create`, err);
         }
-        // For workspace/user scope: partial DB index allows same slug in different
-        // workspaces — no pod-wide check needed, just create it.
 
-        if (!created) {
+        // For newly created shared profiles, grant the creating workspace access
+        if (resolution!.createScope === "shared") {
           try {
-            created = await profileRepo.create({
-              slug: profile.slug,
-              displayName: profile.displayName,
-              uiHints: {
-                icon: resolvedIcon,
-                color: resolvedColor,
-                description: resolvedDescription,
-              },
-              scope: scope as ProfileScope,
-              workspaceId,
-              userId,
-              // Pass explicit semanticSlug from template; auto-assignment for
-              // standard slugs (task, project, person, etc.) happens in create().
-              semanticSlug: profile.semanticSlug,
-              profileKind: profile.profileKind,
-              applicableKinds: profile.applicableKinds,
-            });
+            await profileRepo.grantAccess(created!.id, workspaceId);
           } catch (err) {
-            await handleStepError(`profiles[${profile.slug}].create`, err);
-          }
-
-          // For newly created shared profiles, grant the creating workspace access
-          if (scope === "shared") {
-            try {
-              await profileRepo.grantAccess(created!.id, workspaceId);
-            } catch (err) {
-              await handleStepError(
-                `profiles[${profile.slug}].grantAccess`,
-                err
-              );
-            }
+            await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
           }
         }
       }

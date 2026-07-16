@@ -34,6 +34,7 @@ import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
+import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -69,7 +70,30 @@ export interface ReconcileReport {
   workspaceId: string;
   dryRun: boolean;
   settings: { merged: string[] };
-  profiles: { added: string[]; reused: string[] };
+  profiles: {
+    added: string[];
+    reused: string[];
+    /** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
+    promoted: string[];
+    /**
+     * Slugs where an existing same-slug profile was found but could NOT be
+     * safely promoted (another user's private row, or the pod-wide slug seat is
+     * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
+     * profile was created instead. This is the one branch where the dedup
+     * keystone knowingly fails to dedup — surfaced, never silent.
+     */
+    deferred: string[];
+    /**
+     * Declared slug matched an existing profile of a DIFFERENT profileKind
+     * (kind vs role). The merge was SKIPPED and the existing row left untouched
+     * — the caller decides (never a silent kind flip).
+     */
+    conflicts: Array<{
+      slug: string;
+      existingKind: string;
+      declaredKind: string;
+    }>;
+  };
   properties: {
     /** New overlay/base property-defs added. */
     added: Array<{ profile: string; slug: string }>;
@@ -131,7 +155,13 @@ export async function reconcileWorkspaceFromDefinition(
     workspaceId,
     dryRun,
     settings: { merged: [] },
-    profiles: { added: [], reused: [] },
+    profiles: {
+      added: [],
+      reused: [],
+      promoted: [],
+      deferred: [],
+      conflicts: [],
+    },
     properties: { added: [], skipped: [], enumsUpdated: [], conflicts: [] },
     views: { added: [], skipped: [], deferred: [] },
     entityLinks: { added: [], skipped: [], unresolved: [] },
@@ -182,33 +212,36 @@ export async function reconcileWorkspaceFromDefinition(
         constraints: pd.constraints,
       }));
 
-    // Resolve-or-create the profile (same precedence as create-from-definition).
-    let resolved = await profileRepo.getBySlugForWorkspace(
-      profile.slug,
-      workspaceId
-    );
-    let profileIsReused = false;
-    if (resolved) {
-      profileIsReused = true;
-      if (resolved.scope === ProfileScope.SHARED && !dryRun) {
-        await profileRepo.grantAccess(resolved.id, workspaceId).catch(() => {});
-      }
+    // Resolve-or-create the profile via the ONE shared dedup door (same rule as
+    // create-from-definition): resolve-and-share an existing profile (grant, or
+    // promote a same-user workspace profile to shared) rather than mint a
+    // duplicate; a profileKind mismatch is a CONFLICT that skips the merge.
+    const resolution = await resolveProfileForApply(profileRepo, {
+      slug: profile.slug,
+      declaredScope: scope,
+      declaredKind: profile.profileKind,
+      workspaceId,
+      actorUserId: userId,
+      dryRun,
+    });
+    if (resolution.conflict) {
+      report.profiles.conflicts.push(resolution.conflict);
+      // Never overlay onto (or mutate) a different-kind profile — skip entirely.
+      continue;
+    }
+    let resolved = resolution.profile;
+    let profileIsReused = resolution.reused;
+    if (resolution.reused) {
       report.profiles.reused.push(profile.slug);
-    } else if (scope === "shared" || scope === "system") {
-      const podWide = await profileRepo.getBySlug(profile.slug);
-      if (podWide) {
-        profileIsReused = true;
-        resolved = podWide;
-        if (!dryRun)
-          await profileRepo
-            .grantAccess(podWide.id, workspaceId)
-            .catch(() => {});
-        report.profiles.reused.push(profile.slug);
-      }
+      if (resolution.promoted) report.profiles.promoted.push(profile.slug);
     }
     if (!resolved) {
-      // Create the (workspace-scoped) profile.
+      // Create the profile. A DEFERRED promotion lands here too — a same-slug
+      // row exists but could not be safely promoted, so this create is a known
+      // duplicate. Report it as such (`added` alone would hide it).
       report.profiles.added.push(profile.slug);
+      if (resolution.promotionDeferred)
+        report.profiles.deferred.push(profile.slug);
       if (!dryRun) {
         resolved = await profileRepo.create({
           slug: profile.slug,
@@ -218,7 +251,10 @@ export async function reconcileWorkspaceFromDefinition(
             color: resolvedColor,
             description: resolvedDescription,
           },
-          scope: scope as ProfileScope,
+          // NOT the raw declared `scope` — the resolver downgrades it to
+          // `workspace` on a deferred promotion, where a `shared` create would
+          // collide with the same-slug pod-wide row that blocked the promotion.
+          scope: resolution.createScope as ProfileScope,
           workspaceId,
           userId,
           semanticSlug: profile.semanticSlug,
@@ -229,7 +265,7 @@ export async function reconcileWorkspaceFromDefinition(
           profileKind: profile.profileKind,
           applicableKinds: profile.applicableKinds,
         });
-        if (scope === "shared")
+        if (resolution.createScope === "shared")
           await profileRepo
             .grantAccess(resolved.id, workspaceId)
             .catch(() => {});
@@ -479,6 +515,9 @@ export async function reconcileWorkspaceFromDefinition(
       workspaceId,
       dryRun,
       profilesAdded: report.profiles.added.length,
+      profilesReused: report.profiles.reused.length,
+      profilesPromoted: report.profiles.promoted.length,
+      profileKindConflicts: report.profiles.conflicts.length,
       propsAdded: report.properties.added.length,
       propConflicts: report.properties.conflicts.length,
       viewsAdded: report.views.added.length,

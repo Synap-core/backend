@@ -44,8 +44,35 @@ export const EntitySchema = z.object({
    * resolve from the profile catalog the consumer already holds. The full facet
    * detail (status, workspaceId, properties) lives on `entities.get`'s
    * `effectiveFacets`.
+   *
+   * This is the DEFAULT annotation on every list path and stays that way: its
+   * consumers (role chips, graph adapters, view-renderer, search indexing) need
+   * only the hats, and the slug load is the cheap one. See `facets` below when
+   * a slug is not enough.
    */
   facetSlugs: z.array(z.string()).optional(),
+  /**
+   * Kind + Facets, RICH shape: each live facet's overlay alongside its slug.
+   * Present ONLY when the caller explicitly opts in (`entities.list`'s
+   * `includeFacets: true`) — never on the default list response, which carries
+   * `facetSlugs` alone.
+   *
+   * Opt-in because `facetSlugs` is lossy for a consumer that must read a facet
+   * PROPERTY on a list page: e.g. the `lead` role's `leadStage: "prospect"`
+   * separates a Prospect from a plain Lead, and a slug cannot express it — the
+   * distinction was previously visible only on `entities.get`. Callers that
+   * just chip the hats should stay on the default and skip the wider load.
+   */
+  facets: z
+    .array(
+      z.object({
+        facetId: z.string().uuid(),
+        slug: z.string(),
+        properties: z.record(z.string(), z.unknown()),
+        status: z.string().nullable(),
+      })
+    )
+    .optional(),
 });
 
 /**

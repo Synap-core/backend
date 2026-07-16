@@ -251,6 +251,43 @@ export class ProfileRepository {
   }
 
   /**
+   * All active profiles carrying a slug, across EVERY scope (system/shared/
+   * workspace/user) and workspace. Unlike `getBySlug`/`getBySlugForWorkspace`
+   * this applies NO visibility floor — it is the pod-wide DEDUP probe used by
+   * the template-apply resolver to detect an existing profile (even one owned by
+   * another workspace) so it can resolve-and-share instead of minting a
+   * duplicate. NEVER use this for a user-facing read; it is a provisioning-time
+   * existence check only.
+   */
+  async findActiveBySlugAnyScope(slug: string): Promise<Profile[]> {
+    return this.db.query.profiles.findMany({
+      where: and(eq(profiles.slug, slug), eq(profiles.isActive, true)),
+    });
+  }
+
+  /**
+   * Every row holding this slug at POD-WIDE scope — INCLUDING soft-deleted ones.
+   *
+   * This mirrors the `profiles_slug_system_shared_uniq` partial unique index
+   * EXACTLY (`ON (slug) WHERE scope IN ('system','shared')` — note it has NO
+   * `is_active` predicate, see `migrations/0000_baseline_schema.sql:269-271`).
+   * Because `delete()` is a SOFT delete (`isActive = false`), a deleted shared
+   * row is invisible to `findActiveBySlugAnyScope` but STILL HOLDS the index —
+   * so flipping another row's scope to `shared` would raise a unique violation.
+   * The template-apply resolver uses this to know, BEFORE writing, whether a
+   * promotion to `shared` is even possible. Provisioning-time probe only — no
+   * visibility floor; never use for a user-facing read.
+   */
+  async findPodWideBySlugIncludingInactive(slug: string): Promise<Profile[]> {
+    return this.db.query.profiles.findMany({
+      where: and(
+        eq(profiles.slug, slug),
+        inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED])
+      ),
+    });
+  }
+
+  /**
    * Get profile by ID
    */
   async getById(id: string): Promise<Profile | null> {
