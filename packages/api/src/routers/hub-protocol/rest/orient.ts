@@ -20,6 +20,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 import {
   discover,
+  WorkspaceNotAccessibleError,
   type DiscoverScope,
 } from "../../../services/discover/discover.js";
 
@@ -78,6 +79,17 @@ export function registerOrientRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // A pinned ?workspaceId= the caller can't see is a REQUEST fault, not a
+      // pod fault — 500 would misreport it (and retry logic would hammer a
+      // request that can never succeed). 403 covers both "no such workspace"
+      // and "not yours" on purpose: see WorkspaceNotAccessibleError.
+      if (err instanceof WorkspaceNotAccessibleError) {
+        logger.warn(
+          { userId, workspaceId: err.workspaceId },
+          "GET /orient pinned an inaccessible workspace"
+        );
+        return c.json({ error: err.message }, 403);
+      }
       logger.error({ err, userId }, "GET /orient failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

@@ -42,6 +42,77 @@ export type DiscoverScope = "workspaces" | "projects" | "profiles";
 
 const ALL_SCOPES: DiscoverScope[] = ["workspaces", "projects", "profiles"];
 
+/**
+ * A pinned `workspaceId` the caller cannot see. Thrown — never returned as an
+ * empty success, which is the lie this class exists to prevent: orient is the
+ * agent's FIRST call, so "0 workspaces" reads as "the pod is empty" and the
+ * agent goes on to re-create data that already exists.
+ *
+ * Deliberately does NOT distinguish "no such workspace" from "exists but not
+ * yours": we never load the row, and telling them apart would hand any caller
+ * an existence oracle for workspace UUIDs. One condition, one message.
+ */
+export class WorkspaceNotAccessibleError extends Error {
+  readonly code = "workspace_not_accessible";
+  readonly workspaceId: string;
+  constructor(message: string, workspaceId: string) {
+    super(message);
+    this.name = "WorkspaceNotAccessibleError";
+    this.workspaceId = workspaceId;
+  }
+}
+
+/**
+ * Build the not-accessible error, naming the workspaces the caller DOES have.
+ *
+ * Ordering is load-bearing: the recovery advice comes BEFORE the workspace
+ * list because the MCP error door (`mcp/tool-errors.ts`) truncates messages at
+ * 500 chars — truncation must eat the tail of the list, never the fix.
+ */
+async function workspaceNotAccessible(
+  workspaceId: string,
+  accessibleIds: string[]
+): Promise<WorkspaceNotAccessibleError> {
+  const rows = accessibleIds.length
+    ? await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(inArray(workspaces.id, accessibleIds))
+    : [];
+  const advice =
+    `Workspace ${workspaceId} isn't accessible to you (it may not exist, or isn't shared with you). ` +
+    `This pin — not an empty pod — is why nothing came back. ` +
+    `If it came from your MCP URL's ?workspaceId= pin, that pin applies to every call: fix or remove it there. ` +
+    `Otherwise retry without workspaceId. `;
+
+  if (!rows.length) {
+    return new WorkspaceNotAccessibleError(
+      `${advice}You have no accessible workspaces.`,
+      workspaceId
+    );
+  }
+
+  // Fit whole entries inside the MCP door's 500-char cap rather than a guessed
+  // count: a mid-UUID truncation would hand the agent an id it might copy.
+  // Entries are dropped whole, and the remainder is always accounted for.
+  const BUDGET = 500 - advice.length - "Yours: , +99 more.".length;
+  const shown: string[] = [];
+  let used = 0;
+  for (const w of rows) {
+    const entry = `${w.name.slice(0, 32)} (${w.id})`;
+    if (used + entry.length + 2 > BUDGET) break;
+    shown.push(entry);
+    used += entry.length + 2;
+  }
+  const more =
+    rows.length > shown.length ? `, +${rows.length - shown.length} more` : "";
+  const yours = shown.length
+    ? `Yours: ${shown.join(", ")}${more}.`
+    : `You have ${rows.length} workspace(s) — retry without workspaceId to list them.`;
+
+  return new WorkspaceNotAccessibleError(advice + yours, workspaceId);
+}
+
 interface DiscoverOptions {
   detail?: DiscoverDetail;
   scope?: DiscoverScope[];
@@ -176,8 +247,14 @@ export async function discover(
   const want = (s: DiscoverScope): boolean => wantScopes.includes(s);
 
   // Accessible workspace ids (memberships + pod-visible), narrowed when pinned.
-  let wsIds = await getUserAccessibleWorkspaceIds(userId);
-  if (workspaceId) wsIds = wsIds.filter((id) => id === workspaceId);
+  // A pin that isn't in the allow-list is REJECTED, not filtered away: filtering
+  // collapsed wsIds to [] and every section below then fell out empty *by
+  // construction*, reporting an inaccessible workspace as an empty pod.
+  const wsIds = await getUserAccessibleWorkspaceIds(userId);
+  if (workspaceId && !wsIds.includes(workspaceId)) {
+    throw await workspaceNotAccessible(workspaceId, wsIds);
+  }
+  const lensWsIds = workspaceId ? [workspaceId] : wsIds;
 
   const needWorkspaces = want("workspaces");
   const needProfiles = want("profiles");
@@ -185,7 +262,7 @@ export async function discover(
   // Workspace rows + per-workspace live entity counts (same count semantics as
   // GET /workspaces, so orient reports the truth instead of "empty").
   const [wsRaw, countRows] = await Promise.all([
-    (needWorkspaces || needProfiles) && wsIds.length
+    (needWorkspaces || needProfiles) && lensWsIds.length
       ? db
           .select({
             id: workspaces.id,
@@ -195,9 +272,9 @@ export async function discover(
             workspaceType: workspaces.workspaceType,
           })
           .from(workspaces)
-          .where(inArray(workspaces.id, wsIds))
+          .where(inArray(workspaces.id, lensWsIds))
       : Promise.resolve([]),
-    needWorkspaces && wsIds.length
+    needWorkspaces && lensWsIds.length
       ? db
           .select({
             workspaceId: entities.workspaceId,
@@ -206,7 +283,7 @@ export async function discover(
           .from(entities)
           .where(
             and(
-              inArray(entities.workspaceId, wsIds),
+              inArray(entities.workspaceId, lensWsIds),
               isNull(entities.deletedAt)
             )
           )
@@ -219,7 +296,7 @@ export async function discover(
   const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
 
   // ── Profiles: representative sample (light) or per-workspace (full) ──
-  const sampleWsId = workspaceId ?? wsIds[0];
+  const sampleWsId = workspaceId ?? lensWsIds[0];
   let profileSample: ProfileSample[] = [];
   const perWsProfiles = new Map<string, ProfileSample[]>();
   if (needProfiles && sampleWsId) {
@@ -240,9 +317,14 @@ export async function discover(
       for (const r of results) perWsProfiles.set(r.id, r.profiles);
       profileSample = perWsProfiles.get(sampleWsId) ?? [];
     } else {
-      const res = await caller.profiles
-        .listProfiles({ userId, workspaceId: sampleWsId })
-        .catch(() => ({ profiles: [] }));
+      // NOT best-effort: this is the single sample the agent judges the pod by.
+      // Swallowing the failure into `profiles: []` reported "you have no entity
+      // types" as a success — the same lie as the pin bug, one section down.
+      // Let it throw; the callers' error arms say something true instead.
+      const res = await caller.profiles.listProfiles({
+        userId,
+        workspaceId: sampleWsId,
+      });
       profileSample = trimProfiles(res);
     }
   }
