@@ -1,143 +1,67 @@
 /**
- * Batch Index Existing Entities
+ * Backfill Entity Embeddings
  *
- * One-time script to generate embeddings for all existing entities.
+ * Enqueues an `entity-embedding` job for every live entity that has no row
+ * in `entity_vectors`, through the canonical pg-boss queue — the same one
+ * door the per-entity CRUD reactors use. The worker owns text building
+ * (title + preview + properties + facets), the IS call, and the upsert;
+ * this script never talks to the IS directly.
+ *
+ * Recovery tool for provider outages: failed pg-boss jobs exhaust their
+ * retries and never self-heal, so re-running this after the embedding
+ * provider is restored re-enqueues exactly the entities left vector-less.
  *
  * Usage:
- *   pnpm --filter @synap/jobs index-entities
+ *   pnpm --filter @synap/jobs index-entities            # only vector-less entities
+ *   pnpm --filter @synap/jobs index-entities -- --all   # re-embed everything
  */
 
-import {
-  db,
-  isNull,
-  sql,
-  resolveDefaultIntelligenceEndpoint,
-  getEffectiveFacets,
-} from "@synap/database";
-import { entities } from "@synap/database/schema";
-import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
-
-/**
- * Generate embedding using the registered Intelligence Service (from DB)
- */
-async function generateEmbedding(text: string): Promise<number[]> {
-  const { endpoint, apiKey } = await resolveDefaultIntelligenceEndpoint();
-  const response = await fetch(`${endpoint}/api/embeddings/generate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-    },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to generate embedding: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return (data as { embedding: number[] }).embedding;
-}
-
-/**
- * Generate and store embedding for entity
- */
-async function generateAndStoreEmbedding(
-  entityId: string,
-  userId: string,
-  entityType: string,
-  title: string,
-  description?: string,
-  properties?: Record<string, unknown> | null
-): Promise<void> {
-  // Unfiltered lens — all workspaces — so the reindex matches the live
-  // per-entity embedding worker's facet coverage.
-  const effectiveFacets = await getEffectiveFacets(db, entityId, {
-    userId,
-    workspaceId: undefined,
-  });
-  const textToEmbed = buildEntityEmbeddingText({
-    type: entityType,
-    title,
-    preview: description,
-    properties: properties ?? null,
-    facets: effectiveFacets.map((ef) => ({
-      slug: ef.profile.slug,
-      status: ef.facet.status,
-      properties: ef.facet.properties as Record<string, unknown> | null,
-    })),
-  });
-
-  const embedding = await generateEmbedding(textToEmbed);
-  const embeddingStr = `[${embedding.join(",")}]`;
-
-  // Upsert into entity_vectors
-  await sql`
-    INSERT INTO entity_vectors (entity_id, user_id, embedding, entity_type, title, preview)
-    VALUES (${entityId}, ${userId}, ${embeddingStr}::vector, ${entityType}, ${title}, ${description || null})
-    ON CONFLICT (entity_id) DO UPDATE SET
-      embedding = ${embeddingStr}::vector,
-      title = ${title},
-      preview = ${description || null},
-      updated_at = NOW()
-  `;
-}
+import { sql } from "@synap/database";
+import { getBoss, startBoss, stopBoss } from "@synap/events";
 
 async function indexExistingEntities() {
-  console.log("🚀 Starting batch entity indexing...");
+  const reembedAll = process.argv.includes("--all");
+  console.log(
+    `🚀 Enqueueing embedding jobs for ${reembedAll ? "ALL live" : "vector-less"} entities...`
+  );
 
-  // Get all entities without embeddings
-  const allEntities = await db.query.entities.findMany({
-    where: isNull(entities.deletedAt),
-  });
+  const rows = (await sql`
+    SELECT e.id, e.user_id
+    FROM entities e
+    LEFT JOIN entity_vectors ev ON ev.entity_id = e.id
+    WHERE e.deleted_at IS NULL
+      ${reembedAll ? sql`` : sql`AND ev.entity_id IS NULL`}
+  `) as { id: string; user_id: string }[];
 
-  console.log(`📊 Found ${allEntities.length} entities to index`);
+  console.log(`📊 Found ${rows.length} entities to enqueue`);
 
-  let indexed = 0;
-  let failed = 0;
-  const startTime = Date.now();
+  await startBoss();
+  const boss = getBoss();
 
-  for (const entity of allEntities) {
-    try {
-      await generateAndStoreEmbedding(
-        entity.id,
-        entity.userId,
-        entity.type,
-        entity.title || "",
-        entity.preview || undefined,
-        (entity.properties as Record<string, unknown> | null) ?? null
-      );
-
-      indexed++;
-
-      if (indexed % 10 === 0) {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        const rate = ((indexed / (Date.now() - startTime)) * 1000).toFixed(1);
-        console.log(
-          `✅ Indexed ${indexed}/${allEntities.length} entities (${rate} entities/sec, ${elapsed}s elapsed)`
-        );
+  let enqueued = 0;
+  for (const row of rows) {
+    await boss.send(
+      "entity-embedding",
+      { entityId: row.id, userId: row.user_id },
+      // Same per-entity debounce as the CRUD reactors, so a backfill that
+      // overlaps live traffic can't double-enqueue the same row.
+      {
+        singletonKey: `entity-embedding:${row.id}`,
+        singletonSeconds: 30,
       }
-
-      // Rate limit (OpenAI: 3000 RPM for tier 1 = 50 req/sec)
-      // Use 20ms delay for 50 req/sec
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    } catch (error) {
-      console.error(
-        `❌ Failed to index ${entity.id} (${entity.title}):`,
-        error
-      );
-      failed++;
+    );
+    enqueued++;
+    if (enqueued % 200 === 0) {
+      console.log(`✅ Enqueued ${enqueued}/${rows.length}`);
     }
   }
 
-  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-  const avgRate = ((indexed / (Date.now() - startTime)) * 1000).toFixed(1);
+  console.log(`\n🎉 Enqueued ${enqueued} embedding jobs.`);
+  console.log(
+    "Watch progress: SELECT state, count(*) FROM pgboss.job WHERE name='entity-embedding' GROUP BY state;"
+  );
 
-  console.log(`\n🎉 Batch indexing complete!`);
-  console.log(`✅ Indexed: ${indexed}`);
-  console.log(`❌ Failed: ${failed}`);
-  console.log(`⏱️  Total time: ${totalTime}s`);
-  console.log(`📈 Average rate: ${avgRate} entities/sec`);
+  await stopBoss();
 }
 
 // Run if called directly
