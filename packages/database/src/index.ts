@@ -194,6 +194,7 @@ export {
   resolveProfileForApply,
   type ProfileApplyResolution,
 } from "./utils/resolve-profile-for-apply.js";
+export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 
 // Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
 export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";

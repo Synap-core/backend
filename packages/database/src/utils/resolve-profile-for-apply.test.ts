@@ -5,6 +5,12 @@
  *   • promote a SAME-USER workspace profile to shared (+ keep owner access)
  *   • NEVER hijack another user's private schema (cross-user → deferred, no write)
  *   • profileKind mismatch → CONFLICT, existing row never mutated, no create
+ *   • an OMITTED profileKind means 'kind' — absence is not consent
+ *   • a load-bearing grant on a pod-wide reuse is NOT swallowed
+ *   • the is_active-blind WORKSPACE slug seat is probed before any create
+ *     (soft-deleted holder → revive, never a 23505 that aborts the whole apply)
+ *   • deferredReason distinguishes a real `cross-user` hijack refusal from an
+ *     actor-owned `not-promotable` row
  *   • dryRun computes the decision but performs no write
  */
 
@@ -36,10 +42,22 @@ function fakeRepo(opts: {
    * soft-deleted shared row still blocks a promote.
    */
   podWideIncludingInactive?: any[];
+  /**
+   * Rows holding the slug at WORKSPACE scope in the target workspace INCLUDING
+   * soft-deleted ones — `profiles_slug_workspace_uniq` is equally is_active-blind,
+   * so a soft-deleted workspace row still blocks a workspace-scoped create.
+   */
+  workspaceScopedIncludingInactive?: any[];
   /** Make the promote scope-flip raise a Postgres unique_violation. */
   updateThrowsUniqueViolation?: boolean;
+  /** Make grantAccess fail (proves a load-bearing grant is not swallowed). */
+  grantThrows?: boolean;
 }) {
-  const calls = { grant: [] as any[], update: [] as any[] };
+  const calls = {
+    grant: [] as any[],
+    update: [] as any[],
+    reactivate: [] as any[],
+  };
   const repo = {
     calls,
     async getBySlugForWorkspace() {
@@ -51,8 +69,21 @@ function fakeRepo(opts: {
     async findPodWideBySlugIncludingInactive() {
       return opts.podWideIncludingInactive ?? [];
     },
+    async findWorkspaceScopedBySlugIncludingInactive() {
+      return opts.workspaceScopedIncludingInactive ?? [];
+    },
+    async reactivate(id: string) {
+      calls.reactivate.push(id);
+      const row = (opts.workspaceScopedIncludingInactive ?? []).find(
+        (p) => p.id === id
+      );
+      return { ...row, isActive: true };
+    },
     async grantAccess(id: string, ws: string) {
       calls.grant.push([id, ws]);
+      if (opts.grantThrows) {
+        throw new Error("grant failed");
+      }
     },
     async update(id: string, patch: any) {
       calls.update.push([id, patch]);
@@ -154,6 +185,220 @@ describe("resolveProfileForApply — template dedup + guard", () => {
     expect(r.reused).toBe(false);
     expect(repo.calls.update).toHaveLength(0);
     expect(repo.calls.grant).toHaveLength(0);
+  });
+
+  it("reports an ACTOR-OWNED user-scoped row as 'not-promotable', NOT 'cross-user'", async () => {
+    // Fix 8 — `deferredReason` used to lie. Only WORKSPACE-scoped rows are
+    // promotable, so the actor's OWN `user`-scoped row also lands in the defer
+    // branch — and reporting that as `cross-user` told the operator log the actor
+    // was hijacking themselves. Same outcome (create fresh), different truth.
+    const repo = fakeRepo({
+      anyScope: [
+        mkProfile({
+          id: "u9",
+          scope: ProfileScope.USER,
+          workspaceId: null,
+          userId: "u1", // the ACTOR
+          profileKind: "role",
+        }),
+      ],
+    });
+    const r = await resolveProfileForApply(repo, baseOpts);
+    expect(r.promotionDeferred).toBe(true);
+    expect(r.deferredReason).toBe("not-promotable");
+    expect(r.deferredReason).not.toBe("cross-user");
+    expect(r.createScope).toBe("workspace");
+    expect(repo.calls.update).toHaveLength(0);
+  });
+
+  it("still reports ANOTHER user's row as 'cross-user' (the real hijack refusal)", async () => {
+    const repo = fakeRepo({
+      anyScope: [
+        mkProfile({
+          id: "u10",
+          scope: ProfileScope.USER,
+          workspaceId: null,
+          userId: "uX", // NOT the actor
+          profileKind: "role",
+        }),
+      ],
+    });
+    const r = await resolveProfileForApply(repo, baseOpts);
+    expect(r.deferredReason).toBe("cross-user");
+  });
+
+  it("treats an OMITTED profileKind as 'kind' — absence is not consent (no reuse of a role row)", async () => {
+    // Fix 6 — `kindMismatch` used to lead with `!!declaredKind &&`, so simply
+    // OMITTING profileKind skipped the conflict guard entirely and reused
+    // whatever row it found. That made the guard opt-out by omission: the exact
+    // silent overlay it exists to prevent. `normalizeKind` already documents
+    // `undefined → "kind"`, so an omitted kind vs an existing `role` row IS a
+    // conflict.
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "r7",
+        scope: ProfileScope.SHARED,
+        profileKind: "role",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredKind: undefined,
+      declaredScope: "shared",
+    });
+    expect(r.conflict).toEqual({
+      slug: "client",
+      existingKind: "role",
+      declaredKind: "kind",
+    });
+    expect(r.profile).toBeNull();
+    expect(r.reused).toBe(false);
+    expect(repo.calls.update).toHaveLength(0);
+  });
+
+  it("does NOT swallow the load-bearing grant on a pod-wide reuse", async () => {
+    // Fix 4 — this branch is reached only because the profile is NOT accessible
+    // here, and a `shared` row is reachable ONLY via profile_workspace_access. So
+    // this grant IS the reuse. Swallowing it reported `reused: true` and a
+    // successful provision while leaving the workspace holding a profile it
+    // cannot resolve — its entities would come up schema-less.
+    const repo = fakeRepo({
+      anyScope: [
+        mkProfile({
+          id: "s8",
+          scope: ProfileScope.SHARED,
+          profileKind: "role",
+        }),
+      ],
+      grantThrows: true,
+    });
+    await expect(resolveProfileForApply(repo, baseOpts)).rejects.toThrow(
+      "grant failed"
+    );
+  });
+
+  it("REVIVES a soft-deleted workspace row holding the slug seat instead of aborting the create", async () => {
+    // Fix 5 — `profiles_slug_workspace_uniq ON (slug, workspace_id) WHERE
+    // scope='workspace'` is as is_active-blind as its pod-wide sibling, and
+    // `delete()` is a SOFT delete. The row is invisible to every active-only
+    // probe yet still holds the seat, so `create()` (a plain insert) raises 23505
+    // and aborts the WHOLE apply. This is the most-travelled create path.
+    const dead = mkProfile({
+      id: "d1",
+      scope: ProfileScope.WORKSPACE,
+      workspaceId: "wsB",
+      userId: "u1",
+      profileKind: "role",
+      isActive: false,
+    });
+    const repo = fakeRepo({
+      anyScope: [], // soft-deleted → invisible to the active-only probe
+      workspaceScopedIncludingInactive: [dead],
+    });
+    const r = await resolveProfileForApply(repo, baseOpts);
+    expect(r.profile?.id).toBe("d1");
+    expect(r.profile?.isActive).toBe(true);
+    expect(r.reused).toBe(true);
+    expect(r.conflict).toBeNull();
+    expect(repo.calls.reactivate).toEqual(["d1"]);
+  });
+
+  it("does NOT revive a seat-holder of a DIFFERENT kind — that is a CONFLICT", async () => {
+    const dead = mkProfile({
+      id: "d2",
+      scope: ProfileScope.WORKSPACE,
+      workspaceId: "wsB",
+      userId: "u1",
+      profileKind: "kind", // declared is 'role'
+      isActive: false,
+    });
+    const repo = fakeRepo({
+      anyScope: [],
+      workspaceScopedIncludingInactive: [dead],
+    });
+    const r = await resolveProfileForApply(repo, baseOpts);
+    expect(r.conflict).toEqual({
+      slug: "client",
+      existingKind: "kind",
+      declaredKind: "role",
+    });
+    expect(r.profile).toBeNull();
+    expect(repo.calls.reactivate).toHaveLength(0);
+  });
+
+  it("probes the workspace seat on the DEFER path too (every defer forces a workspace create)", async () => {
+    // A deferral always hands the caller `createScope: "workspace"` — straight
+    // into the same trap. Probing only the plain create path would leave the
+    // most common route unguarded.
+    const dead = mkProfile({
+      id: "d3",
+      scope: ProfileScope.WORKSPACE,
+      workspaceId: "wsB",
+      userId: "u1",
+      profileKind: "role",
+      isActive: false,
+    });
+    const repo = fakeRepo({
+      // another user's row → would otherwise defer("cross-user") and create
+      anyScope: [
+        mkProfile({
+          id: "wX",
+          scope: ProfileScope.WORKSPACE,
+          workspaceId: "wsA",
+          userId: "uX",
+          profileKind: "role",
+        }),
+      ],
+      workspaceScopedIncludingInactive: [dead],
+    });
+    const r = await resolveProfileForApply(repo, baseOpts);
+    expect(r.profile?.id).toBe("d3");
+    expect(r.reused).toBe(true);
+    expect(r.promotionDeferred).toBe(false);
+    expect(repo.calls.reactivate).toEqual(["d3"]);
+  });
+
+  it("dryRun revives NOTHING (decision only, no write)", async () => {
+    const dead = mkProfile({
+      id: "d4",
+      scope: ProfileScope.WORKSPACE,
+      workspaceId: "wsB",
+      userId: "u1",
+      profileKind: "role",
+      isActive: false,
+    });
+    const repo = fakeRepo({
+      anyScope: [],
+      workspaceScopedIncludingInactive: [dead],
+    });
+    const r = await resolveProfileForApply(repo, { ...baseOpts, dryRun: true });
+    expect(r.profile?.id).toBe("d4");
+    expect(r.reused).toBe(true);
+    expect(repo.calls.reactivate).toHaveLength(0);
+  });
+
+  it("ignores an ACTIVE workspace row in the seat probe (it is not a revival case)", async () => {
+    // The seat probe must only fire on SOFT-DELETED holders. An active row is
+    // resolved by the normal candidate path, not revived.
+    const alive = mkProfile({
+      id: "a1",
+      scope: ProfileScope.WORKSPACE,
+      workspaceId: "wsB",
+      userId: "u1",
+      profileKind: "role",
+      isActive: true,
+    });
+    const repo = fakeRepo({
+      anyScope: [],
+      workspaceScopedIncludingInactive: [alive],
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      slug: "podcast",
+    });
+    expect(r.profile).toBeNull();
+    expect(r.conflict).toBeNull();
+    expect(repo.calls.reactivate).toHaveLength(0);
   });
 
   it("flags a profileKind mismatch as a CONFLICT and never mutates the existing row", async () => {

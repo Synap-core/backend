@@ -17,6 +17,7 @@ import { WorkspaceMemberRepository } from "../repositories/workspace-member-repo
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -815,15 +816,12 @@ export async function createWorkspaceFromDefinition(
     onProgress?.("profiles", 25, "Profiles restored");
   } else {
     for (const profile of definition.profiles ?? []) {
-      const scopeMap: Record<string, string> = {
-        SYSTEM: "system",
-        SHARED: "shared",
-        WORKSPACE: "workspace",
-        USER: "user",
-      };
-      const scope = profile.scope
-        ? (scopeMap[profile.scope] ?? "workspace")
-        : "workspace";
+      // Templates declare scope in MIXED case ("WORKSPACE" and "shared" both
+      // ship today) — normalize through the ONE shared door, never a local
+      // uppercase-keyed `Record<string, string>` (that map returned `undefined`
+      // for "shared" and the `?? "workspace"` fallback silently demoted every
+      // pod-wide shared role to a private per-workspace duplicate).
+      const scope = normalizeProfileScope(profile.scope);
 
       // Normalize profile fields: support both formats
       //   • Control-plane registry: uiHints.icon/color/description + propertyDefs[]

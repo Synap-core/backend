@@ -51,13 +51,25 @@ export interface ProfileApplyResolution {
   promotionDeferred: boolean;
   /**
    * Why the promotion was deferred:
-   *   • `cross-user`     — the match is another user's private (workspace/user)
+   *   • `cross-user`     — the match is ANOTHER user's private (workspace/user)
    *                        row; promoting it would hijack their schema.
+   *   • `not-promotable` — the match is not eligible for promotion for a reason
+   *                        that is NOT a cross-user hijack. Today that is the
+   *                        actor's OWN `user`-scoped row: only `workspace`-scoped
+   *                        rows can be flipped to `shared`, so an actor-owned
+   *                        `user` row is un-promotable even though nobody else's
+   *                        schema is at stake. Reporting this as `cross-user`
+   *                        made the operator log claim the actor was hijacking
+   *                        themselves.
    *   • `slug-taken-pod-wide` — a soft-deleted `shared`/`system` row still holds
    *                        the `profiles_slug_system_shared_uniq` index for this
    *                        slug, so no row can be flipped to `shared`.
    */
-  deferredReason: "cross-user" | "slug-taken-pod-wide" | null;
+  deferredReason:
+    | "cross-user"
+    | "not-promotable"
+    | "slug-taken-pod-wide"
+    | null;
   /**
    * The scope the caller MUST use if it creates the profile (i.e. when
    * `profile` and `conflict` are both null). Normally the template's declared
@@ -110,14 +122,6 @@ export async function resolveProfileForApply(
    * `workspace` scope, never at the declared `shared`/`system` scope: the slug's
    * pod-wide seat is exactly what we could not take.
    */
-  const defer = (
-    reason: "cross-user" | "slug-taken-pod-wide"
-  ): ProfileApplyResolution => ({
-    ...base,
-    promotionDeferred: true,
-    deferredReason: reason,
-    createScope: "workspace",
-  });
   const declaredKind = opts.declaredKind;
   const conflictWith = (existing: Profile): ProfileApplyResolution => ({
     ...base,
@@ -127,8 +131,69 @@ export async function resolveProfileForApply(
       declaredKind: normalizeKind(declaredKind),
     },
   });
+
+  /**
+   * THE WORKSPACE-SEAT PROBE — the is_active-blind sibling of the pod-wide one.
+   *
+   * `profiles_slug_workspace_uniq` is `ON (slug, workspace_id) WHERE
+   * scope = 'workspace'` with NO `is_active` predicate
+   * (`migrations/0000_baseline_schema.sql:273-275`), and `delete()` is a SOFT
+   * delete. So a soft-deleted workspace-scoped row is invisible to every active-
+   * only probe in this resolver yet STILL HOLDS the seat — and `create()` is a
+   * plain insert, so a workspace-scoped create for that slug raises 23505 and
+   * aborts the WHOLE apply.
+   *
+   * Every path that ends in a workspace-scoped create must run this first: the
+   * plain create-path below, AND every `defer()` (which forces
+   * `createScope: "workspace"` by design). Returns:
+   *   • a CONFLICT if the seat-holder is a different `profileKind` — never
+   *     revive across identities;
+   *   • a REUSE of the revived row if the kind matches — it is the same slug in
+   *     the same workspace, i.e. the row this apply is asking for, merely
+   *     soft-deleted. Reviving is the only outcome that is neither a crash nor a
+   *     duplicate;
+   *   • `null` if the seat is free (caller proceeds normally).
+   */
+  const probeWorkspaceSeat =
+    async (): Promise<ProfileApplyResolution | null> => {
+      const seatHolders =
+        await profileRepo.findWorkspaceScopedBySlugIncludingInactive(
+          opts.slug,
+          opts.workspaceId
+        );
+      const holder = seatHolders.find((p) => !p.isActive);
+      if (!holder) return null;
+      if (kindMismatch(holder)) return conflictWith(holder);
+      const revived = opts.dryRun
+        ? { ...holder, isActive: true }
+        : await profileRepo.reactivate(holder.id);
+      return { ...base, profile: revived, reused: true };
+    };
+
+  const defer = async (
+    reason: NonNullable<ProfileApplyResolution["deferredReason"]>
+  ): Promise<ProfileApplyResolution> => {
+    // A deferral ALWAYS means "the caller creates at workspace scope" — so it
+    // walks straight into the workspace-seat trap above. Probe before promising
+    // the caller a create that would raise 23505.
+    const seat = await probeWorkspaceSeat();
+    if (seat) return seat;
+    return {
+      ...base,
+      promotionDeferred: true,
+      deferredReason: reason,
+      createScope: "workspace",
+    };
+  };
+  // ABSENCE IS NOT CONSENT. The `!!declaredKind &&` short-circuit that used to
+  // lead this predicate made an OMITTED `profileKind` skip the conflict check
+  // entirely and reuse whatever row it found — including a `role` row for a
+  // template that meant `kind`. That is precisely the silent-overlay this guard
+  // exists to stop, and it was reachable by simply not declaring the field.
+  // `normalizeKind` already collapses `undefined → "kind"`, which is the
+  // documented default — so an omitted kind means "kind", and a mismatch
+  // against a `role` row is a real conflict.
   const kindMismatch = (existing: Profile): boolean =>
-    !!declaredKind &&
     normalizeKind(existing.profileKind) !== normalizeKind(declaredKind);
 
   // 1. Already accessible in this workspace's lens (owned / shared+grant / system)?
@@ -139,6 +204,12 @@ export async function resolveProfileForApply(
   if (accessible) {
     if (kindMismatch(accessible)) return conflictWith(accessible);
     if (accessible.scope === ProfileScope.SHARED && !opts.dryRun) {
+      // JUSTIFIED SWALLOW (unlike the reuse branch below, which must NOT).
+      // The row is ALREADY accessible from this workspace — that is what
+      // `getBySlugForWorkspace` just proved — so the grant here is a redundant
+      // re-affirmation, not the thing that makes the profile reachable. If it
+      // fails, the workspace still resolves the profile. Un-swallowing would
+      // turn a harmless no-op into an apply-aborting error with no safety gain.
       await profileRepo
         .grantAccess(accessible.id, opts.workspaceId)
         .catch(() => {});
@@ -163,6 +234,22 @@ export async function resolveProfileForApply(
       );
       if (holders.length > 0) return defer("slug-taken-pod-wide");
     }
+    // The pod-wide probe above has an equally is_active-blind SIBLING index:
+    // `profiles_slug_workspace_uniq ON (slug, workspace_id) WHERE scope='workspace'`
+    // (migrations/0000_baseline_schema.sql:273-275). A SOFT-DELETED
+    // workspace-scoped row holds that seat invisibly — `findActiveBySlugAnyScope`
+    // cannot see it, so we land here and create, and the insert raises 23505 and
+    // aborts the ENTIRE apply. This is the most-travelled create path (every
+    // deferral above forces `createScope: "workspace"` into it), so leaving it
+    // unprobed made the rarest bug the loudest one.
+    //
+    // Reviving the row is the only outcome that is neither a crash nor a
+    // duplicate: it is the SAME slug in the SAME workspace: the row this apply
+    // is asking for already exists and is merely soft-deleted. Returning it as
+    // `reused` lets the caller overlay properties additively, exactly as for any
+    // other reuse.
+    const seat = await probeWorkspaceSeat();
+    if (seat) return seat;
     return base; // caller creates at the declared scope
   }
 
@@ -198,9 +285,19 @@ export async function resolveProfileForApply(
     existing.scope === ProfileScope.SYSTEM
   ) {
     if (!opts.dryRun) {
-      await profileRepo
-        .grantAccess(existing.id, opts.workspaceId)
-        .catch(() => {});
+      // NOT SWALLOWED — this grant is the whole reuse. We reached here because
+      // step 1 proved the profile is NOT accessible from this workspace, and a
+      // `shared` row is reachable ONLY through the `profile_workspace_access`
+      // join. So this insert is the single thing that makes the resolved profile
+      // resolvable here. Swallowing it reported `reused: true` and a successful
+      // provision while leaving the workspace holding a profile it cannot see —
+      // its entities would come up schema-less. Let it throw, exactly as the
+      // promote branch below already does for the same reason.
+      //
+      // (A `system` row needs no grant, but `grantAccess` is
+      // onConflictDoNothing and harmless; the failure mode we care about is the
+      // `shared` one.)
+      await profileRepo.grantAccess(existing.id, opts.workspaceId);
     }
     return { ...base, profile: existing, reused: true };
   }
@@ -256,7 +353,14 @@ export async function resolveProfileForApply(
     };
   }
 
-  // Cross-user or user-scoped match → NEVER hijack another user's private schema.
-  // Caller creates a fresh workspace-scoped profile.
-  return defer("cross-user");
+  // Un-promotable match → caller creates a fresh workspace-scoped profile.
+  //
+  // TWO DISTINCT REASONS live here, and conflating them made the operator log
+  // lie. `cross-user` is a real refusal: promoting ANOTHER user's private row
+  // would hijack their schema. But an ACTOR-OWNED `user`-scoped row also lands
+  // here — only `workspace`-scoped rows are promotable — and reporting that as
+  // `cross-user` told the operator the actor was hijacking themselves. Same
+  // outcome (create fresh), different truth.
+  const ownedByActor = existing.userId === opts.actorUserId;
+  return defer(ownedByActor ? "not-promotable" : "cross-user");
 }

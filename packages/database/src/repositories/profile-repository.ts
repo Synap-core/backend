@@ -288,6 +288,35 @@ export class ProfileRepository {
   }
 
   /**
+   * Every row holding this slug at WORKSPACE scope in a given workspace —
+   * INCLUDING soft-deleted ones.
+   *
+   * The is_active-blind SIBLING of `findPodWideBySlugIncludingInactive`. This
+   * mirrors the `profiles_slug_workspace_uniq` partial unique index EXACTLY
+   * (`ON (slug, workspace_id) WHERE scope = 'workspace'` — note it has NO
+   * `is_active` predicate, see `migrations/0000_baseline_schema.sql:273-275`).
+   * Because `delete()` is a SOFT delete (`isActive = false`), a deleted
+   * workspace-scoped row is invisible to `findActiveBySlugAnyScope` but STILL
+   * HOLDS the seat — so a workspace-scoped `create()` for that slug would raise
+   * a unique violation and abort the whole apply. The template-apply resolver
+   * uses this to know, BEFORE writing, whether the seat is free (and to revive
+   * the holder instead of crashing). Provisioning-time probe only — no
+   * visibility floor; never use for a user-facing read.
+   */
+  async findWorkspaceScopedBySlugIncludingInactive(
+    slug: string,
+    workspaceId: string
+  ): Promise<Profile[]> {
+    return this.db.query.profiles.findMany({
+      where: and(
+        eq(profiles.slug, slug),
+        eq(profiles.workspaceId, workspaceId),
+        eq(profiles.scope, ProfileScope.WORKSPACE)
+      ),
+    });
+  }
+
+  /**
    * Get profile by ID
    */
   async getById(id: string): Promise<Profile | null> {
@@ -522,6 +551,32 @@ export class ProfileRepository {
     const [profile] = await this.db
       .update(profiles)
       .set(updateData)
+      .where(eq(profiles.id, id))
+      .returning();
+
+    if (!profile) {
+      throw new Error(`Profile ${id} not found`);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Revive a soft-deleted profile — the exact inverse of `delete()`.
+   *
+   * `update()` cannot do this: `isActive` is deliberately absent from
+   * `CreateProfileInput`, so un-deleting is not reachable through the general
+   * patch door. It needs to be reachable because the `profiles_slug_*_uniq`
+   * indexes are is_active-BLIND while `delete()` is a SOFT delete: a deleted row
+   * still occupies the slug's unique seat, so a create for that slug raises
+   * 23505. Reviving the holder is the only outcome that is neither a crash nor a
+   * duplicate — it is the same slug in the same place, merely soft-deleted.
+   * Returns the revived row so the caller can reuse it directly.
+   */
+  async reactivate(id: string): Promise<Profile> {
+    const [profile] = await this.db
+      .update(profiles)
+      .set({ isActive: true, updatedAt: new Date() })
       .where(eq(profiles.id, id))
       .returning();
 

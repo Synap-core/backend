@@ -35,6 +35,7 @@ import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -120,13 +121,6 @@ export interface ReconcileReport {
   entityLinks: { added: string[]; skipped: string[]; unresolved: string[] };
 }
 
-const SCOPE_MAP: Record<string, string> = {
-  SYSTEM: "system",
-  SHARED: "shared",
-  WORKSPACE: "workspace",
-  USER: "user",
-};
-
 export async function reconcileWorkspaceFromDefinition(
   opts: ReconcileOptions
 ): Promise<ReconcileReport> {
@@ -193,9 +187,10 @@ export async function reconcileWorkspaceFromDefinition(
   // ── 2. Profiles + property-defs (mirrors the create-path additive pass) ─────
   const profileMap: Record<string, string> = {};
   for (const profile of definition.profiles ?? []) {
-    const scope = profile.scope
-      ? (SCOPE_MAP[profile.scope] ?? "workspace")
-      : "workspace";
+    // Same normalization as the create door — through the ONE shared, typed,
+    // case-insensitive door. A local uppercase-keyed map here is what silently
+    // demoted all pod-wide `shared` roles to workspace duplicates.
+    const scope = normalizeProfileScope(profile.scope);
     const resolvedIcon = profile.icon ?? profile.uiHints?.icon;
     const resolvedColor = profile.color ?? profile.uiHints?.color;
     const resolvedDescription =
