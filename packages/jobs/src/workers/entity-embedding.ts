@@ -27,7 +27,10 @@ async function generateEmbedding(text: string): Promise<number[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to generate embedding: ${response.statusText}`);
+    const body = (await response.text().catch(() => "")).slice(0, 500);
+    throw new Error(
+      `Failed to generate embedding: HTTP ${response.status} ${response.statusText}${body ? ` — ${body}` : ""}`
+    );
   }
 
   const data = await response.json();
