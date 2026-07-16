@@ -4532,7 +4532,12 @@ export interface CapabilityCardConnection {
 	kind: "provider" | "vault" | null;
 	/** providerConfigKey, e.g. "google" — present for provider connections. */
 	provider?: string;
-	state: "connected" | "missing" | "expired";
+	/**
+	 * `missing` = connectable, the user just hasn't. `unavailable` = this POD
+	 * cannot offer it at all (Nango answered and doesn't declare the provider), so
+	 * "Connect" would dead-end — only claimed when availability is actually KNOWN.
+	 */
+	state: "connected" | "missing" | "expired" | "unavailable";
 	/** connectionId (or display account) when connected. */
 	account?: string;
 	/**
@@ -18406,6 +18411,293 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				providerType: string | null;
 				count: number;
 			}[];
+			meta: object;
+		}>;
+	}>>;
+	automations: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				status?: "error" | "active" | "paused" | "draft" | undefined;
+				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				automations: {
+					id: string;
+					workspaceId: string | null;
+					createdBy: string;
+					name: string;
+					description: string | null;
+					triggerType: "event" | "cron" | "webhook" | "manual";
+					triggerConfig: AutomationTriggerConfig;
+					flowDefinition: FlowDefinition;
+					status: "error" | "active" | "paused" | "draft";
+					errorMessage: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					runCount: number;
+					successCount: number;
+					failureCount: number;
+					state: Record<string, unknown>;
+					metadata: {
+						[key: string]: unknown;
+						tags?: string[];
+						version?: number;
+						createdVia?: "ai" | "manual" | "template";
+						averageExecutionTime?: number;
+						suggestedByPattern?: boolean;
+						patternConfidence?: number;
+						description?: string;
+					};
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				errorMessage: string | null;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "error" | "active" | "paused" | "draft";
+				metadata: {
+					[key: string]: unknown;
+					tags?: string[];
+					version?: number;
+					createdVia?: "ai" | "manual" | "template";
+					averageExecutionTime?: number;
+					suggestedByPattern?: boolean;
+					patternConfidence?: number;
+					description?: string;
+				};
+				description: string | null;
+				createdBy: string;
+				triggerType: "event" | "cron" | "webhook" | "manual";
+				triggerConfig: AutomationTriggerConfig;
+				flowDefinition: FlowDefinition;
+				lastRunAt: Date | null;
+				nextRunAt: Date | null;
+				runCount: number;
+				successCount: number;
+				failureCount: number;
+				state: Record<string, unknown>;
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				triggerType: "event" | "cron" | "webhook" | "manual";
+				flowDefinition: {
+					nodes: Record<string, unknown>[];
+					edges: Record<string, unknown>[];
+				};
+				workspaceId?: string | null | undefined;
+				description?: string | undefined;
+				triggerConfig?: Record<string, unknown> | undefined;
+				status?: "error" | "active" | "paused" | "draft" | undefined;
+				metadata?: Record<string, unknown> | undefined;
+				state?: Record<string, unknown> | undefined;
+				agentUserId?: string | undefined;
+				source?: "user" | "system" | "ai" | "agent" | "intelligence" | undefined;
+			};
+			output: {
+				status: "proposed";
+				id: string | null;
+				message: string;
+				proposalId: string;
+			} | {
+				status: "created";
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+				name?: string | undefined;
+				description?: string | undefined;
+				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
+				triggerConfig?: Record<string, unknown> | undefined;
+				flowDefinition?: {
+					nodes: Record<string, unknown>[];
+					edges: Record<string, unknown>[];
+				} | undefined;
+				status?: "error" | "active" | "paused" | "draft" | undefined;
+				metadata?: Record<string, unknown> | undefined;
+				state?: Record<string, unknown> | undefined;
+			};
+			output: {
+				status: string;
+				message: string;
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				status: string;
+			};
+			meta: object;
+		}>;
+		activate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				status: string;
+				nextRunAt?: undefined;
+			} | {
+				status: string;
+				nextRunAt: string | undefined;
+			};
+			meta: object;
+		}>;
+		pause: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				status: string;
+			};
+			meta: object;
+		}>;
+		listRuns: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				automationId: string;
+				workspaceId?: string | null | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				runs: {
+					id: string;
+					automationId: string;
+					workspaceId: string | null;
+					triggeredBy: string | null;
+					triggerPayload: Record<string, unknown>;
+					status: "completed" | "running" | "failed" | "cancelled";
+					errorMessage: string | null;
+					stepsCompleted: number;
+					stepsFailed: number;
+					outputSummary: Record<string, unknown> | null;
+					startedAt: Date;
+					completedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		getRun: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				runId: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				run: {
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					status: "completed" | "running" | "failed" | "cancelled";
+					completedAt: Date | null;
+					startedAt: Date;
+					outputSummary: Record<string, unknown> | null;
+					automationId: string;
+					triggeredBy: string | null;
+					triggerPayload: Record<string, unknown>;
+					stepsCompleted: number;
+					stepsFailed: number;
+				};
+				steps: {
+					id: string;
+					runId: string;
+					nodeId: string;
+					commandId: string | null;
+					status: "pending" | "completed" | "running" | "failed" | "skipped";
+					resolvedInputs: Record<string, unknown>;
+					output: Record<string, unknown>;
+					errorMessage: string | null;
+					startedAt: Date | null;
+					completedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		diagnoseRun: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				automationName: string;
+				flowDefinition: Record<string, unknown>;
+				run: {
+					id: string;
+					status: string;
+					startedAt: string;
+					finishedAt?: string | undefined;
+					errorMessage?: string | undefined;
+				};
+				steps: {
+					nodeId: string;
+					nodeType: string;
+					status: string;
+					resolvedInputs?: Record<string, unknown> | undefined;
+					output?: Record<string, unknown> | undefined;
+					errorMessage?: string | undefined;
+				}[];
+			};
+			output: {
+				explanation: string;
+				suggestions: string[];
+			};
+			meta: object;
+		}>;
+		generateFlow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				prompt: string;
+				existingFlow?: Record<string, unknown> | undefined;
+			};
+			output: {
+				flowDefinition: {
+					nodes: unknown[];
+					edges: unknown[];
+				};
+				name: string;
+				explanation: string;
+			};
+			meta: object;
+		}>;
+		trigger: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+				payload?: Record<string, unknown> | undefined;
+			};
+			output: {
+				status: string;
+				runId: string;
+			};
 			meta: object;
 		}>;
 	}>>;

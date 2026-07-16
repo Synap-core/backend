@@ -69,6 +69,7 @@ import { activityRouter } from "./routers/activity.js";
 import { runsRouter } from "./routers/runs.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
+import { automationsRouter } from "./routers/automations.js";
 
 /**
  * Core API Router
@@ -131,6 +132,7 @@ export const coreRouter = router({
   sourceConfigs: sourceConfigsRouter,
   sourceSubscriptions: sourceSubscriptionsRouter,
   feeds: feedsRouter,
+  automations: automationsRouter,
   devplane: devplaneRouter,
   audit: auditRouter,
   secretsVault: secretsVaultRouter,
