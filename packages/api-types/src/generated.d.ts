@@ -10574,11 +10574,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		runOpenClawRuntimeAction: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				action: "rollback" | "restart" | "safe_update";
+				action: "restart" | "safe_update" | "rollback";
 			};
 			output: {
 				automated: boolean;
-				action: "rollback" | "restart" | "safe_update";
+				action: "restart" | "safe_update" | "rollback";
 				commands: string[];
 				message: string;
 			};
@@ -13719,7 +13719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "normal" | "fast" | "slow" | undefined;
+						speed?: "normal" | "slow" | "fast" | undefined;
 					} | undefined;
 				} | undefined;
 				defaultTemplates?: Record<string, string> | undefined;
@@ -13785,7 +13785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "normal" | "fast" | "slow" | undefined;
+						speed?: "normal" | "slow" | "fast" | undefined;
 					} | undefined;
 				} | undefined;
 			};
@@ -18748,7 +18748,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				steps: RecipeStep[];
 				linkedEnvironmentId: string | null;
 				linkedAppSlug: string | null;
-				onFailure: "continue" | "stop" | "rollback";
+				onFailure: "continue" | "rollback" | "stop";
 				rollbackRecipeId: string | null;
 				recipeTemplate: "custom" | "kamal" | "docker-compose" | "git-pull" | null;
 			};
