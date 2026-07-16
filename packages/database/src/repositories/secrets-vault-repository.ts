@@ -762,7 +762,12 @@ export class SecretsVaultRepository extends BaseRepository<
         )
       );
 
-    return result[0]?.count ?? 0;
+    // `sql<number>` is a type ASSERTION, not a coercion: uncast `count(*)` is
+    // Postgres bigint, which postgres.js returns as a STRING. Coerce, or the
+    // declared `Promise<number>` lies and Watchtower's `typeof v === 'number'`
+    // guard silently zeroes the count → false "All clear". Same pattern as
+    // getNoTotpCount / getReusedPasswordCount below.
+    return Number(result[0]?.count ?? 0);
   }
 
   /**
@@ -781,7 +786,12 @@ export class SecretsVaultRepository extends BaseRepository<
         )
       );
 
-    return result[0]?.count ?? 0;
+    // `sql<number>` is a type ASSERTION, not a coercion: uncast `count(*)` is
+    // Postgres bigint, which postgres.js returns as a STRING. Coerce, or the
+    // declared `Promise<number>` lies and Watchtower's `typeof v === 'number'`
+    // guard silently zeroes the count → false "All clear". Same pattern as
+    // getNoTotpCount / getReusedPasswordCount below.
+    return Number(result[0]?.count ?? 0);
   }
 
   /**
@@ -803,7 +813,12 @@ export class SecretsVaultRepository extends BaseRepository<
         )
       );
 
-    return result[0]?.count ?? 0;
+    // `sql<number>` is a type ASSERTION, not a coercion: uncast `count(*)` is
+    // Postgres bigint, which postgres.js returns as a STRING. Coerce, or the
+    // declared `Promise<number>` lies and Watchtower's `typeof v === 'number'`
+    // guard silently zeroes the count → false "All clear". Same pattern as
+    // getNoTotpCount / getReusedPasswordCount below.
+    return Number(result[0]?.count ?? 0);
   }
 
   /**
