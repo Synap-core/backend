@@ -24,6 +24,17 @@
  *    mutates or deletes live profiles/properties (type mismatches are reported as
  *    conflicts and left untouched).
  *  - A failure on one workspace is logged and skipped — it never blocks boot.
+ *
+ * ORDER MATTERS — DEPS FIRST. A `scope: shared` profile is ONE pod-wide row, and
+ * whichever template reaches it first seeds its base body (later templates only
+ * add workspace overlays). This pass used to iterate an unordered SELECT, so a
+ * pod holding `marketing-campaign` + `ecosystem` with no pod-wide `lead` row yet
+ * could reconcile marketing first and seed the shared `lead` base from marketing's
+ * body instead of foundation's SSOT body — every later workspace then granting
+ * onto the wrong base. The install path never had this hole
+ * (`resolvePackageDependencies` walks deps-first); this one did. Rows are now
+ * sorted by `orderWorkspacesByTemplateDependencies`, which reads each template's
+ * OWN declared `dependencies` — no domain slug is hardcoded here.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -37,6 +48,7 @@ import {
   getWorkspaceTemplate,
   toWorkspaceDefinition,
 } from "@synap-core/workspace-templates";
+import { orderWorkspacesByTemplateDependencies } from "@synap/api";
 
 const logger = createLogger({ module: "reconcile-workspaces-to-templates" });
 
@@ -55,10 +67,21 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   let skipped = 0;
   let failed = 0;
 
-  for (const ws of rows) {
-    const subtype = (ws.settings as { workspaceSubtype?: string } | null)
-      ?.workspaceSubtype;
+  // Resolve each row's declared subtype ONCE, then order deps-first so a
+  // workspace whose template another depends on seeds shared pod-wide bases
+  // before its consumers reconcile. Rows with no subtype / no template / caught
+  // in a dependency cycle are all preserved — the sort never drops a row, so
+  // this stays a full pass over every workspace exactly as before.
+  const ordered = orderWorkspacesByTemplateDependencies(
+    rows.map((ws) => ({
+      ws,
+      subtype: (ws.settings as { workspaceSubtype?: string } | null)
+        ?.workspaceSubtype,
+    })),
+    getWorkspaceTemplate
+  );
 
+  for (const { ws, subtype } of ordered) {
     // No subtype (e.g. a bare "personal" workspace) or no canonical template for
     // it → nothing to converge to.
     if (!subtype || !getWorkspaceTemplate(subtype)) {

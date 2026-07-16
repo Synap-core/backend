@@ -74,6 +74,13 @@ export {
   notifyCapabilityUpdatesAvailable,
   CAPABILITY_UPDATE_GROUP_KEY,
 } from "./services/capabilities/notify-capability-updates.js";
+export {
+  orderWorkspacesByTemplateDependencies,
+  type OrderableWorkspaceRow,
+  type TemplateForOrdering,
+  type TemplateDependencyRef,
+  type TemplateLookup,
+} from "./services/workspace-reconcile-order.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

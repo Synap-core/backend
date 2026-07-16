@@ -38,17 +38,40 @@
  *     violation: both bodies target the same pod-wide row, so the surviving
  *     definition depends on apply order. That is base drift — the actual bug.
  *
- * WHAT MAKES EXTRAS SAFE: ORDERING IS NOW GUARANTEED BY CONSTRUCTION.
+ * WHAT MAKES EXTRAS SAFE: ORDERING, AND EXACTLY WHERE IT COMES FROM.
  * Extras are only sound if the BASE is deterministic. Previously foundation.yaml
  * was the declared SSOT but a dependency of NOTHING, so whichever template
  * applied FIRST seeded the base (marketing-first ⇒ the pod-wide `lead` base
  * became marketing's 10-prop body for every workspace). Every consumer of a
  * foundation-owned shared role now declares `relation: require` on `foundation`,
- * and `resolvePackageDependencies` installs dependencies deps-first BEFORE the
- * consumer's own workspace is materialized. The base is therefore always
- * foundation's body. That ordering guarantee is what lets this rule relax from
- * "identical-or-empty" to "no conflicts" without reopening the hole — the old
- * rule only "worked" by accidentally guarding the ordering gap.
+ * which is what makes deps-first ordering derivable at all.
+ *
+ * There are TWO paths that apply a template to a pod, and BOTH must be ordered —
+ * this rule's relaxation from "identical-or-empty" to "no conflicts" rests on
+ * both, not on one:
+ *
+ *   1. INSTALL — `resolvePackageDependencies`
+ *      (`packages/api/src/services/package-dependency-resolver.ts`) walks
+ *      `dependencies` and installs deps-first BEFORE the consumer's own
+ *      workspace is materialized.
+ *
+ *   2. BOOT — `reconcileWorkspacesToTemplates`
+ *      (`apps/api/src/startup/reconcile-workspaces-to-templates.ts`) re-applies
+ *      every workspace's template on EVERY pod boot. This path is NOT covered by
+ *      the install resolver — it never calls it. It iterated an unordered SELECT
+ *      until it was given the same deps-first guarantee via
+ *      `orderWorkspacesByTemplateDependencies`
+ *      (`packages/api/src/services/workspace-reconcile-order.ts`, unit-tested in
+ *      `workspace-reconcile-order.test.ts`), which topologically sorts the
+ *      workspace ROWS by their templates' own declared `dependencies`.
+ *
+ * An earlier version of this comment justified the relaxation with "ordering is
+ * guaranteed by construction" while only path (1) was actually ordered — the
+ * boot pass could still seed a shared base from the wrong template on any pod
+ * where Postgres happened to return a consumer before foundation. Stating the
+ * mechanism per-path (rather than asserting the conclusion) is what makes that
+ * kind of gap visible instead of assumed. If a THIRD apply path is ever added,
+ * it must be ordered too — or this rule must go back to "identical-or-empty".
  */
 
 import { describe, expect, it } from "vitest";
