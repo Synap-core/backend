@@ -37,6 +37,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  type EntityProvenance,
   PropertyValidationError,
   workspaces,
   workspaceMembers,
@@ -87,6 +88,7 @@ import {
   emitCaptureTrace,
 } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -1469,6 +1471,12 @@ export const captureRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const database = await getDb();
+      // The capture's self-diagnosis id. Minted UP HERE (rather than at the
+      // facet pass, where it used to live) so it can also be the governance
+      // gate's correlationId — a proposal-gated capture is then joinable to the
+      // same capture story as a granted one. Purely a move; every later use is
+      // unchanged.
+      const captureId = randomUUID();
       // Workspace placement — THE one door (WorkspaceResolutionService, I1). A
       // direct `targetWorkspaceId` override always wins (rung 1: a caller that
       // already resolved the workspace). Otherwise, when the caller forwards the
@@ -1606,6 +1614,108 @@ export const captureRouter = router({
             );
           }
         }
+      }
+
+      // ── Governance gate (entity.create) ──────────────────────────────────
+      //
+      // Capture is a WRITE door like every other, so the workspace's
+      // `settings.aiGovernance.autoApproveFor` policy decides whether an AI
+      // agent's capture commits directly or files a reviewable proposal. This
+      // door previously hardcoded auto-approval — it only RECORDED an
+      // `auto_approved` proposal AFTER the fact (Track 3, below) — so a
+      // workspace that TIGHTENED the policy to exclude `entity.create` was
+      // silently ignored and the agent still wrote directly.
+      //
+      // Placed HERE deliberately: everything above is read-only (workspace
+      // placement, relation-slug prefetch, the role→facet rewrite), and the
+      // first write is the identity-enrich `entitiesCaller.update` just below.
+      // So a "propose" verdict leaves NOTHING written.
+      //
+      // HUMANS ARE UNAFFECTED. With no `agentUserId` the ladder skips the agent
+      // branch (step 6a — the `autoApproveFor` whitelist applies to agent users
+      // only) and we pass no AI `source`, so the legacy AI branch is skipped
+      // too: a permitted operator falls straight through to `{ granted: true }`.
+      // And because `entity.create` ∈ DEFAULT_AUTO_APPROVE, an agent capture in
+      // a DEFAULT workspace still grants — the gate only bites once an owner
+      // explicitly tightens the policy, which is the point.
+      //
+      // Gate `data` carries the composite `operations` graph (the SAME shape
+      // Track 3 records, and the same one `submitCaptureGraph` proposes) so an
+      // approved proposal materializes the WHOLE capture — N entities + their
+      // relations + their role facets — through `materializeCompositeGraph`,
+      // not a lone entity. Facets ride along here (unlike the direct-write
+      // `operations` built below, where a separate governed attach pass handles
+      // them after materialization).
+      //
+      // NOTE: `profileSlug` is deliberately NOT a top-level `data` key. The
+      // gate's fail-fast profile guardrail (step 4c) fires on
+      // `entity`+`create`+`data.profileSlug` and would HARD-DENY a capture
+      // naming an unseeded profile — destroying capture's retry-as-item
+      // degradation, which is load-bearing zero-friction behavior.
+      const gateOperations: CompositeProposalOperation[] = [
+        ...input.entities.map((e) => ({
+          op: "create_entity" as const,
+          ref: e.tempId,
+          profileSlug: e.profileSlug,
+          title: e.title,
+          ...(e.description ? { description: e.description } : {}),
+          ...(e.content ? { content: e.content } : {}),
+          properties: e.properties ?? {},
+          ...(e.existingEntityId
+            ? { existingEntityId: e.existingEntityId }
+            : {}),
+          ...(e.facets ? { facets: e.facets } : {}),
+        })),
+        ...input.relations.map((r) => ({
+          op: "create_relation" as const,
+          type: r.relationType,
+          sourceRef: r.sourceTempId,
+          targetRef: r.targetTempId,
+        })),
+      ];
+      const captureSummary = buildCaptureSummary(gateOperations);
+      const perm = await checkPermissionOrPropose({
+        userId,
+        // The canonical AI signal. Set by the hub-protocol key middleware, so
+        // MCP `synap_capture` arrives as an agent; the CLI/browser do not.
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: workspaceId ?? null,
+        subjectType: "entity",
+        action: "create",
+        correlationId: captureId,
+        sessionId: input.sessionId ?? ctx.sessionId ?? undefined,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        projectId: input.projectId ?? undefined,
+        reasoning: `Capture — ${captureSummary}`,
+        data: {
+          operations: gateOperations,
+          source: "capture",
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        // Nothing was written. Mirrors the "proposed" envelope every other
+        // governed door returns (entities.create, mcp synap_create_workspace):
+        // `status` + the reviewable handle. `created`/`relations` stay empty
+        // arrays so the shape remains a superset of the granted response and
+        // existing consumers (the MCP adapter forwards this verbatim) don't
+        // mistake a proposal for materialized rows.
+        return {
+          status: "proposed" as const,
+          message:
+            "Capture proposed for review — it materializes on approval (this workspace's AI governance policy does not auto-approve entity.create).",
+          created: [] as never[],
+          relations: [] as never[],
+          captureId,
+          proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        };
       }
 
       // Identity-first: for each entity op that doesn't already name an
@@ -1893,7 +2003,6 @@ export const captureRouter = router({
       // The capture's self-diagnosis join key — minted here (before the first
       // instrumentable drop) and threaded into the proposal below so the routing
       // decision, the entity stamp, and every capture-trace share ONE id.
-      const captureId = randomUUID();
       let facetsAttached = 0;
       // Self-diagnosis: facets the pipeline dropped (the exemplar-bug class —
       // the IS no longer eats role facets, but this governed door still can:
@@ -2349,6 +2458,19 @@ export const captureRouter = router({
       const upsertService = new EntityUpsertService(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
 
+      // Provenance for rows this batch CREATES (materializeEntity invariant 4:
+      // no silent 'human' default). ctx.agentUserId is set only by the
+      // hub-protocol api-key middleware and cannot be spoofed by a human
+      // session — its presence is the honest signal that an AI agent authored
+      // this import; otherwise the Kratos-authenticated operator did.
+      const provenance: EntityProvenance = ctx.agentUserId
+        ? {
+            createdByKind: "ai_agent",
+            agentUserId: ctx.agentUserId,
+            createdByUserId: userId,
+          }
+        : { createdByKind: "human", createdByUserId: userId };
+
       // ── Phase 1: property defs ────────────────────────────────────────────
       // remap[profileSlug][fromSlug] = toSlug — applied to entity properties
       const remap: Record<string, Record<string, string>> = {};
@@ -2468,6 +2590,8 @@ export const captureRouter = router({
             signals,
             workspaceId,
             userId,
+            provenance,
+            projectId: ctx.projectId,
           });
           tempToReal[entity.tempId] = result.entity.id;
           created.push({

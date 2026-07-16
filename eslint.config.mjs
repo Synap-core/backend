@@ -116,17 +116,31 @@ export default [
           message:
             "Raw `.insert(entities)` bypasses the governed entity materializer. Use `materializeEntity()` from @synap/database (it wraps EntityRepository.create and owns provenance/dedup/project-link/relation-slug invariants). If this is a sanctioned low-level site, add it to the allowlist in eslint.config.mjs.",
         },
+        {
+          // `entityRepo.create(...)` is the OTHER door into an entity write, and
+          // the raw-insert selector above cannot see it (the repository does the
+          // insert, and the repository is allowlisted). That blind spot is how
+          // EntityUpsertService bypassed the materializer unnoticed. Banning the
+          // call here closes it.
+          selector:
+            "CallExpression[callee.property.name='create'][callee.object.name='entityRepo']",
+          message:
+            "`entityRepo.create()` bypasses the governed entity materializer — the five invariants (relation-slug guard, dedup, project-link, provenance, completeness) never run. Use `materializeEntity()` from @synap/database; it wraps EntityRepository.create itself. If this is a sanctioned low-level site, add it to the allowlist in eslint.config.mjs.",
+        },
       ],
     },
   },
   {
-    // Allowlist — sites sanctioned to perform a raw entity insert.
+    // Allowlist — sites sanctioned to write an entity directly (raw insert
+    // and/or `entityRepo.create`).
     //   • materialize-entity.ts   — the materializer itself (its physical home).
     //   • entity-repository.ts    — the canonical create the materializer wraps.
     //   • sync-materializer.ts    — replication sink (raw by design; not a create).
     // The remaining entries are Wave-2 HARD sites not yet funneled; they already
     // apply provenance/project-link via their own paths. This list SHRINKS as
     // Wave 2 funnels them through materializeEntity.
+    // NOTE: entity-upsert-service.ts is deliberately ABSENT — it was funneled
+    // through materializeEntity, and its absence is what keeps it funneled.
     files: [
       "packages/database/src/utils/materialize-entity.ts",
       "packages/database/src/repositories/entity-repository.ts",
@@ -135,6 +149,8 @@ export default [
       "packages/api/src/routers/entities.ts",
       "packages/jobs/src/workers/materializer.ts",
       "packages/api/src/routers/capture.ts",
+      "packages/database/src/services/team-person-bridge.ts",
+      "packages/database/src/utils/create-workspace-from-definition.ts",
     ],
     rules: {
       "no-restricted-syntax": "off",
@@ -172,6 +188,16 @@ export default [
           // db.insert|update|delete(<scopedTable>)
           selector: `CallExpression[callee.property.name=/^(insert|update|delete)$/][arguments.0.name=${SCOPED_TABLES_RE}]`,
           message: SCOPED_ACCESS_MESSAGE,
+        },
+        {
+          // Re-declared here because this block OVERRIDES `no-restricted-syntax`
+          // for routers/** (one rule name = one selector list), which would
+          // otherwise silently drop the materializer tripwire for every router.
+          // The access selectors above do NOT cover `entityRepo.create`.
+          selector:
+            "CallExpression[callee.property.name='create'][callee.object.name='entityRepo']",
+          message:
+            "`entityRepo.create()` bypasses the governed entity materializer — the five invariants (relation-slug guard, dedup, project-link, provenance, completeness) never run. Use `materializeEntity()` from @synap/database. If this is a sanctioned low-level site, add it to the allowlist in eslint.config.mjs.",
         },
       ],
     },

@@ -112,6 +112,13 @@ export async function handleLinkedInBulkImport(
           signals: extractSignalsFromProperties(properties, "linkedin"),
           workspaceId: await placementFor(profileSlug),
           userId,
+          // A CSV bulk import is machine-authored: no AI agent reasoned about
+          // these rows, and no operator hand-entered them — the worker
+          // mechanically materializes a file the user handed over. 'human'
+          // would over-claim (the user uploaded a file, they did not author
+          // each contact); 'ai_agent' would be a lie (no agent involved).
+          // createdByUserId still attributes the owning user.
+          provenance: { createdByKind: "system", createdByUserId: userId },
         });
 
         if (result.action === "created") created++;

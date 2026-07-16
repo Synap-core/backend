@@ -9,7 +9,9 @@
  * Upsert flow:
  *  1. Check entity_external_links by (provider, externalId) — exact re-import
  *  2. Check entity_identity_signals for any matching signal — cross-source match
- *  3. No match → EntityRepository.create() + register all signals + external link
+ *  3. No match → materializeEntity() (the governed single door; dedup already
+ *     done by 1-2, so it is called with dedup:'none') + register all signals +
+ *     external link
  *
  * Each call also registers new signals for the matched entity, so future imports
  * from other sources that share any signal will resolve to the same entity.
@@ -28,18 +30,21 @@
  *     ],
  *     workspaceId: 'ws-uuid',
  *     userId: 'user-uuid',
+ *     provenance: { createdByKind: 'system' },
  *   });
  *   // result.action = 'created' | 'updated'
  */
 
 import { eq, and } from "drizzle-orm";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { entityExternalLinks, entities } from "../schema/index.js";
-import type * as schema from "../schema/index.js";
+import type { getDb } from "../client-pg.js";
 import type { Entity } from "../schema/entities.js";
-import { EntityRepository } from "../repositories/entity-repository.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
+import {
+  materializeEntity,
+  type EntityProvenance,
+} from "../utils/materialize-entity.js";
 import { resolveRolePayload } from "./facet-resolution-service.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -71,6 +76,18 @@ export interface EntityUpsertInput {
    */
   workspaceId: string | null;
   userId: string;
+  /**
+   * REQUIRED — who/what authored a row this upsert CREATES. Threaded straight
+   * through to `materializeEntity` (invariant 4: no silent 'human' default).
+   * Only consulted on the create path; a matched/updated row keeps the
+   * provenance of whoever originally created it.
+   */
+  provenance: EntityProvenance;
+  /**
+   * When set, idempotently stamp `entity --belongs_to_project--> projectId`
+   * on the created row (materializeEntity invariant 3).
+   */
+  projectId?: string | null;
 }
 
 export interface EntityUpsertResult {
@@ -82,16 +99,24 @@ export interface EntityUpsertResult {
 /** nangoConnectionId sentinel for non-OAuth imports */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
 
-export class EntityUpsertService {
-  private entityRepo: EntityRepository;
+/**
+ * The drizzle db handle — the SAME shape `materializeEntity` requires (and that
+ * both construction sites already pass, via `await getDb()`). Previously typed
+ * as the narrower `PostgresJsDatabase<typeof schema>`, which omitted `$client`
+ * and so could not be forwarded to the materializer.
+ */
+type UpsertDb = Awaited<ReturnType<typeof getDb>>;
 
+export class EntityUpsertService {
   private facetRepo: FacetRepository;
 
+  private eventRepo: EventRepository;
+
   constructor(
-    private db: PostgresJsDatabase<typeof schema>,
+    private db: UpsertDb,
     eventRepo: EventRepository
   ) {
-    this.entityRepo = new EntityRepository(db, eventRepo);
+    this.eventRepo = eventRepo;
     this.facetRepo = new FacetRepository(db, eventRepo);
   }
 
@@ -257,16 +282,35 @@ export class EntityUpsertService {
       );
     }
 
-    const entity = await this.entityRepo.create(
+    // Funnel through the governed materializer (NOT EntityRepository.create
+    // directly) so this path gets the cross-cutting invariants: relation-slug
+    // guard, project-link, required provenance, completeness.
+    //
+    // dedup: 'none' is deliberate and load-bearing — identity resolution is
+    // ALREADY DONE by Steps 1-2 above (external-link exact match, then the
+    // strong-signal resolver). Asking the materializer to dedup again would
+    // re-run resolveIdentity against signals it would re-extract from
+    // properties — a redundant query at best, and a second, differently-scoped
+    // matching policy at worst. By here, "no match" is settled: create.
+    const { entity } = await materializeEntity(
       {
         profileSlug: createSlug,
         title: input.title,
         properties: input.properties,
         workspaceId: input.workspaceId,
         userId: input.userId,
+        // Preserved verbatim from the previous EntityRepository.create call —
+        // imports carry messy provider values and must not start failing
+        // schema enforcement on this path.
         skipValidation: true,
       },
-      input.userId
+      {
+        db: this.db,
+        eventRepo: this.eventRepo,
+        provenance: input.provenance,
+        dedup: "none",
+        projectId: input.projectId,
+      }
     );
 
     await Promise.all([

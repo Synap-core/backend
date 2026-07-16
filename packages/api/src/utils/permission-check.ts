@@ -30,7 +30,10 @@ import {
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
-import { isLikelyUUID } from "@synap-core/types/proposals";
+import {
+  isLikelyUUID,
+  isCompositeProposalData,
+} from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
@@ -1217,6 +1220,25 @@ async function createProposal(opts: {
       ...(previousData ? { previousData } : {}),
     };
 
+    // COMPOSITE PASS-THROUGH: when the gate `data` IS a composite operations
+    // graph (N create_entity + M create_relation — what the capture door
+    // proposes), hoist `operations` to the TOP LEVEL of the stored payload.
+    // The approve flow branches on `isCompositeProposalData(proposal.data)`
+    // BEFORE the single-op executors, and that guard reads a top-level
+    // `operations` — nested under the request-shaped `data` it is invisible, so
+    // the reviewer would get an `entity/create` executor that throws
+    // "missing profileSlug" and the proposal could never be approved.
+    // The request-shaped envelope is PRESERVED alongside it (both guards pass;
+    // the composite branch wins on approve, and the review UI renders the
+    // graph). INERT for every existing caller — none passes `operations` in
+    // gate data, so `isCompositeProposalData` is false and the payload is
+    // byte-identical to before.
+    const compositeOperations = isCompositeProposalData(
+      data as unknown as Parameters<typeof isCompositeProposalData>[0]
+    )
+      ? (data as unknown as { operations: unknown[] }).operations
+      : undefined;
+
     const pendingInput: CreatePendingProposalInput = {
       userId,
       workspaceId: workspaceId ?? null,
@@ -1226,6 +1248,7 @@ async function createProposal(opts: {
       data: {
         ...(proposalData as unknown as Record<string, unknown>),
         ...(authorshipMode ? { authorshipMode } : {}),
+        ...(compositeOperations ? { operations: compositeOperations } : {}),
       },
       agentUserId: attributionAgentUserId ?? undefined,
       createdBy: userId,
