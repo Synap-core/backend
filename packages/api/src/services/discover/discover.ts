@@ -32,6 +32,10 @@ import {
   getUserAccessibleWorkspaceIds,
   type HubProtocolCaller,
 } from "../../routers/hub-protocol/rest/_shared.js";
+import {
+  formatTeamRosterBlock,
+  loadTeamRosterForCapture,
+} from "../team-roster-context.js";
 
 export type DiscoverDetail = "light" | "full";
 export type DiscoverScope = "workspaces" | "projects" | "profiles";
@@ -93,6 +97,17 @@ interface DiscoverProject {
   homeWorkspace: string | null;
 }
 
+/**
+ * Prompt-facing team roster (no emails). Same OUR TEAM context capture
+ * injects into structure — agents that orient get it without a second call.
+ */
+export interface DiscoverTeamRoster {
+  instructionBlock: string | null;
+  /** Dedup aliases (names/handles) — emails stripped for prompt safety. */
+  names: string[];
+  members: Array<{ displayName: string; personId?: string | null }>;
+}
+
 interface DiscoverResult {
   me: { userId: string; scopes: string[] };
   detail: DiscoverDetail;
@@ -103,6 +118,11 @@ interface DiscoverResult {
   /** Representative profile sample from the pinned / first workspace. */
   profiles: ProfileSample[];
   note: string;
+  /**
+   * Internal team for the pinned / sample workspace. Omitted when empty.
+   * No emails — display names + person ids only.
+   */
+  teamRoster?: DiscoverTeamRoster;
 }
 
 /** Take listProfiles's `{ profiles }` shape → a light slug+name+kind list. */
@@ -311,7 +331,7 @@ export async function discover(
     }));
   }
 
-  return {
+  const result: DiscoverResult = {
     me: { userId, scopes: authScopes },
     detail,
     projects: projectsOut,
@@ -321,4 +341,44 @@ export async function discover(
     profiles: profileSample,
     note: buildNote(projectsOut.length, workspacesOut.length),
   };
+
+  // Team roster — same loader capture uses for structure. One workspace only
+  // (pinned or first accessible sample) so light orient stays cheap. Best-
+  // effort: never fail orient on roster errors. No emails in the payload.
+  const rosterWsId = sampleWsId;
+  if (rosterWsId) {
+    try {
+      const roster = await loadTeamRosterForCapture(db, {
+        workspaceId: rosterWsId,
+        userId,
+      });
+      // Strip email from every prompt-facing field (loader may fall back
+      // displayName → email when the user has no name set).
+      const members = roster.members.map((m) => ({
+        displayName: m.displayName.includes("@") ? "Member" : m.displayName,
+        personId: m.personId ?? null,
+      }));
+      const names = roster.names.filter((n) => !n.includes("@"));
+      const instructionBlock =
+        roster.instructionBlock && !roster.instructionBlock.includes("@")
+          ? roster.instructionBlock
+          : formatTeamRosterBlock(
+              members.map((m) => ({
+                displayName: m.displayName,
+                personId: m.personId,
+              }))
+            );
+      if (members.length > 0 || instructionBlock) {
+        result.teamRoster = {
+          instructionBlock,
+          names,
+          members,
+        };
+      }
+    } catch {
+      // Best-effort — orient proceeds without team context.
+    }
+  }
+
+  return result;
 }

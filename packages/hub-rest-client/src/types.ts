@@ -655,6 +655,16 @@ export interface HubOrientProject {
   homeWorkspace: string | null;
 }
 
+/**
+ * Prompt-facing team roster for a workspace (no emails). Present when the
+ * pinned/sample workspace has human members. Treat as internal — not contacts.
+ */
+export interface HubOrientTeamRoster {
+  instructionBlock: string | null;
+  names: string[];
+  members: Array<{ displayName: string; personId?: string | null }>;
+}
+
 /** Canonical session bootstrap response shared by MCP, CLI, and REST surfaces. */
 export interface HubOrientResult {
   me: { userId: string; scopes: string[] };
@@ -665,6 +675,8 @@ export interface HubOrientResult {
   workspaceCount: number;
   profiles: HubOrientProfile[];
   note: string;
+  /** Internal team for the pinned/sample workspace — omitted when empty. */
+  teamRoster?: HubOrientTeamRoster;
 }
 
 export interface HubOrientOptions {

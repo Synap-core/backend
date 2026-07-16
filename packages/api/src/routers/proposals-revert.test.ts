@@ -15,46 +15,54 @@ import { describe, it, expect, vi } from "vitest";
 // proposals.ts imports many DB-backed routers at module load. Stub the ones that
 // would otherwise pull in postgres/storage so the pure planner is importable in
 // isolation. The planner itself touches none of these.
-vi.mock("@synap/database", () => ({
-  db: {
-    query: { proposals: { findFirst: vi.fn() } },
-    select: vi.fn(),
-    update: vi.fn(),
-  },
-  EventRepository: class {},
-  proposals: {},
-  documents: {},
-  documentVersions: {},
-  eq: vi.fn(),
-  and: vi.fn(),
-  or: vi.fn(),
-  desc: vi.fn(),
-  inArray: vi.fn(),
-  isNull: vi.fn(),
-  isNotNull: vi.fn(),
-  gt: vi.fn(),
-  lt: vi.fn(),
-  entities: {},
-  users: {},
-  getWorkspaceMembership: vi.fn(),
-  normalizeDocumentType: vi.fn(),
-  storedVersionValues: vi.fn(),
-  uploadDocumentVersionSnapshot: vi.fn(),
-  ProfileResolutionService: class {},
-  sql: {},
-}));
-vi.mock("@synap/database/schema", () => ({
-  ProposalStatus: {
-    PENDING: "pending",
-    APPROVED: "approved",
-    REJECTED: "rejected",
-    AUTO_APPROVED: "auto_approved",
-    REVERTED: "reverted",
-  },
-  workspaces: {},
-  messages: {},
-  notifications: {},
-}));
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: {
+      query: {
+        proposals: { findFirst: vi.fn() },
+        entities: { findFirst: vi.fn() },
+      },
+      select: vi.fn(),
+      update: vi.fn(),
+      insert: vi.fn(),
+      delete: vi.fn(),
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) =>
+        fn({
+          query: { entities: { findFirst: vi.fn() } },
+          select: vi.fn(),
+          update: vi.fn(),
+          insert: vi.fn(),
+          delete: vi.fn(),
+        })
+      ),
+    },
+    getWorkspaceMembership: vi.fn(),
+    mergeEntities: vi.fn(),
+    unmergeEntities: vi.fn(),
+    // Keep real assertUnmergeable so planProposalRevert full-unmerge gate works.
+    PropertyIndexService: class {
+      reindexEntity = vi.fn();
+    },
+  };
+});
+vi.mock("@synap/database/schema", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@synap/database/schema")>();
+  return {
+    ...actual,
+    // Keep real table symbols so access/registry can register visibility rules
+    // when proposals.ts loads; only override status enums if needed.
+    ProposalStatus: {
+      PENDING: "pending",
+      APPROVED: "approved",
+      REJECTED: "rejected",
+      AUTO_APPROVED: "auto_approved",
+      REVERTED: "reverted",
+    },
+  };
+});
 vi.mock("@synap/storage", () => ({ storage: {} }));
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("./channels.js", () => ({ channelsRouter: {} }));
@@ -230,6 +238,115 @@ describe("planProposalRevert", () => {
       data: { requestId: "r4", targetType: "relation", changeType: "create" },
     });
     expect(plan.kind).toBe("unsupported");
+  });
+
+  it("merge with legacy stamp (only loserId) → restore-delete that id", () => {
+    const loserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const plan = planProposalRevert({
+      status: "approved",
+      targetType: "entity",
+      targetId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", // winner
+      proposalType: "merge",
+      data: {
+        // Prefer approve stamp path: only materialized.merge.loserId (no top-level)
+        materialized: { merge: { loserId } },
+      },
+    });
+    expect(plan).toEqual({
+      kind: "restore-delete",
+      entityId: loserId,
+    });
+  });
+
+  it("merge with full invertibility stamp + snapshot → unmerge plan", () => {
+    const winnerId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const loserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const plan = planProposalRevert({
+      status: "approved",
+      targetType: "entity",
+      targetId: winnerId,
+      proposalType: "merge",
+      data: {
+        winnerId,
+        loserId,
+        previousWinnerSnapshot: {
+          title: "Winner",
+          properties: { email: "a@x.com" },
+          documentId: null,
+        },
+        previousLoserSnapshot: {
+          title: "Loser",
+          properties: { email: "b@x.com" },
+        },
+        materialized: {
+          merge: {
+            winnerId,
+            loserId,
+            movedSignalIds: ["sig-1"],
+            movedExternalLinkIds: [],
+            movedFacetIds: [],
+            rewiredRelations: [
+              {
+                id: "rel-1",
+                previousSourceEntityId: loserId,
+                previousTargetEntityId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+              },
+            ],
+            documentMoved: false,
+          },
+        },
+      },
+    });
+    expect(plan).toEqual({
+      kind: "unmerge",
+      winnerId,
+      loserId,
+    });
+  });
+
+  it("merge with incomplete stamp (no rewiredRelations) falls back to restore-delete", () => {
+    const winnerId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const loserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const plan = planProposalRevert({
+      status: "approved",
+      targetType: "entity",
+      targetId: winnerId,
+      proposalType: "merge",
+      data: {
+        previousWinnerSnapshot: { title: "W", properties: {} },
+        materialized: {
+          merge: {
+            winnerId,
+            loserId,
+            // legacy bare ids only — assertUnmergeable rejects
+            rewiredRelationIds: ["rel-1"],
+            documentMoved: true,
+          },
+        },
+      },
+    });
+    expect(plan).toEqual({
+      kind: "restore-delete",
+      entityId: loserId,
+    });
+  });
+
+  it("FAILS LOUD on merge without loserId stamp", () => {
+    const plan = planProposalRevert({
+      status: "approved",
+      targetType: "entity",
+      targetId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      proposalType: "merge",
+      data: {
+        winnerId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        // no top-level loserId and no materialized.merge.loserId
+        materialized: {},
+      },
+    });
+    expect(plan.kind).toBe("unsupported");
+    if (plan.kind === "unsupported") {
+      expect(plan.reason).toMatch(/loserId|stamp/i);
+    }
   });
 });
 

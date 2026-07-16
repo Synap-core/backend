@@ -120,6 +120,10 @@ import {
   handlePageRankCentrality,
   PAGERANK_CENTRALITY_QUEUE,
 } from "./pagerank-centrality.js";
+import {
+  handlePodHygieneNearDupScan,
+  POD_HYGIENE_NEAR_DUP_QUEUE,
+} from "./pod-hygiene-near-dup.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -182,6 +186,7 @@ const ALL_QUEUES = [
   CAL_BACKFILL_CRON_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
+  POD_HYGIENE_NEAR_DUP_QUEUE,
 ];
 
 /**
@@ -503,6 +508,12 @@ export async function registerAllWorkers(): Promise<void> {
     handlePageRankCentrality()
   );
   logger.info("Registered worker: pagerank-centrality");
+
+  // Pod hygiene near-dup scan (cron: daily 03:15 UTC — files merge proposals only)
+  await boss.work(POD_HYGIENE_NEAR_DUP_QUEUE, async () =>
+    handlePodHygieneNearDupScan()
+  );
+  logger.info("Registered worker: pod-hygiene.near-dup-scan");
 
   logger.info("All workers registered");
 }

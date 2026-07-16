@@ -38,6 +38,9 @@ import {
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
   isFacetVisibleForLens,
+  unmergeEntities,
+  assertUnmergeable,
+  type MergeMaterializedStamp,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import {
@@ -1305,6 +1308,15 @@ export type ProposalRevertPlan =
       documentIds: string[];
     }
   | { kind: "restore-delete"; entityId: string }
+  /**
+   * Full entity-merge inverse: reverse signals/relations/links/facets and
+   * restore both entities from pre-merge snapshots via `unmergeEntities`.
+   */
+  | {
+      kind: "unmerge";
+      winnerId: string;
+      loserId: string;
+    }
   | { kind: "unsupported"; reason: string };
 
 /**
@@ -1362,6 +1374,11 @@ export function planProposalRevert(
     !isCreate &&
     !isUpdate &&
     (proposal.proposalType === "delete" || changeType === "delete");
+  const isMerge =
+    !isCreate &&
+    !isUpdate &&
+    !isDelete &&
+    (proposal.proposalType === "merge" || changeType === "merge");
 
   // Update/edit: reverting needs the BEFORE-state, which is NOT persisted
   // anywhere on the row (the review enrich computes a before→after diff at read
@@ -1388,6 +1405,67 @@ export function planProposalRevert(
     return {
       kind: "unsupported",
       reason: `Revert of a '${proposal.targetType}' delete proposal is not supported: no recoverable soft-delete for this target type.`,
+    };
+  }
+
+  // Entity merge: prefer FULL unmerge when invertibility stamp + snapshots are
+  // present; fall back to soft-undelete of the loser for legacy stamps that
+  // only recorded loserId (pre-B2 partial unmerge).
+  if (isMerge) {
+    const mergeStamp = materialized?.merge;
+    const winnerId =
+      (mergeStamp?.winnerId as string | undefined) ??
+      (data &&
+      typeof data === "object" &&
+      typeof (data as { winnerId?: unknown }).winnerId === "string"
+        ? ((data as { winnerId: string }).winnerId as string)
+        : undefined);
+    const loserId =
+      (mergeStamp?.loserId as string | undefined) ??
+      (data &&
+      typeof data === "object" &&
+      typeof (data as { loserId?: unknown }).loserId === "string"
+        ? ((data as { loserId: string }).loserId as string)
+        : undefined);
+
+    const previousWinnerSnapshot =
+      data &&
+      typeof data === "object" &&
+      (data as { previousWinnerSnapshot?: unknown }).previousWinnerSnapshot &&
+      typeof (data as { previousWinnerSnapshot?: unknown })
+        .previousWinnerSnapshot === "object"
+        ? ((data as { previousWinnerSnapshot: unknown })
+            .previousWinnerSnapshot as {
+            title?: string | null;
+            preview?: string | null;
+            properties?: Record<string, unknown>;
+            documentId?: string | null;
+            systemData?: Record<string, unknown>;
+          })
+        : undefined;
+
+    // Full unmerge when stamp has invertibility fields (rewiredRelations etc.).
+    if (winnerId && loserId && previousWinnerSnapshot && mergeStamp) {
+      try {
+        assertUnmergeable({
+          winnerId,
+          loserId,
+          previousWinnerSnapshot,
+          materialized: mergeStamp as MergeMaterializedStamp,
+        });
+        return { kind: "unmerge", winnerId, loserId };
+      } catch {
+        // Incomplete stamp — fall through to legacy restore-delete if possible.
+      }
+    }
+
+    if (loserId) {
+      return { kind: "restore-delete", entityId: loserId };
+    }
+    return {
+      kind: "unsupported",
+      reason:
+        "Revert of an entity merge requires materialized.merge.loserId (approve stamp missing).",
     };
   }
 
@@ -2716,7 +2794,7 @@ export const proposalsRouter = router({
         revertCtx as unknown as Context
       );
 
-      // Apply the inverse. Two shapes:
+      // Apply the inverse. Three shapes:
       //   - "delete-creations": the proposal CREATED rows — undo by deleting
       //     them through the SAME canonical routers approve uses, so the undo
       //     is governed and emits its own delete events. Idempotent (entities
@@ -2724,7 +2802,9 @@ export const proposalsRouter = router({
       //     so a partial earlier revert can be retried safely.
       //   - "restore-delete": the proposal DELETED an entity (soft-delete) —
       //     undo by clearing `deletedAt` directly, guarded against the row
-      //     having since been hard-purged.
+      //     having since been hard-purged. Also the legacy fallback for merge
+      //     proposals that only stamped loserId (partial unmerge).
+      //   - "unmerge": full entity-merge inverse via unmergeEntities.
       const deleted: ProposalMaterializedRecord = {
         entityIds: [],
         relationIds: [],
@@ -2732,8 +2812,74 @@ export const proposalsRouter = router({
       };
       const failures: string[] = [];
       let restoredEntityId: string | undefined;
+      let unmerged: { winnerId: string; loserId: string } | undefined;
 
-      if (plan.kind === "restore-delete") {
+      if (plan.kind === "unmerge") {
+        const existingData =
+          proposal.data && typeof proposal.data === "object"
+            ? (proposal.data as StoredProposalData & {
+                previousWinnerSnapshot?: {
+                  title?: string | null;
+                  preview?: string | null;
+                  properties?: Record<string, unknown>;
+                  documentId?: string | null;
+                  systemData?: Record<string, unknown>;
+                };
+                previousLoserSnapshot?: {
+                  title?: string | null;
+                  preview?: string | null;
+                  properties?: Record<string, unknown>;
+                  documentId?: string | null;
+                  systemData?: Record<string, unknown>;
+                };
+                sourceId?: string;
+                materialized?: ProposalMaterializedRecord;
+              })
+            : undefined;
+        const mergeStamp = existingData?.materialized?.merge;
+        if (!mergeStamp || !existingData?.previousWinnerSnapshot) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Cannot unmerge — merge invertibility stamp or previousWinnerSnapshot missing.",
+          });
+        }
+
+        // Run as the data owner (same as merge approve), not the reverter.
+        const ownerUserId =
+          (typeof existingData.sourceId === "string" &&
+            existingData.sourceId) ||
+          userId;
+
+        try {
+          unmerged = await unmergeEntities(db, {
+            winnerId: plan.winnerId,
+            loserId: plan.loserId,
+            userId: ownerUserId,
+            previousWinnerSnapshot: existingData.previousWinnerSnapshot,
+            previousLoserSnapshot: existingData.previousLoserSnapshot,
+            materialized: mergeStamp as MergeMaterializedStamp,
+          });
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              err instanceof Error ? err.message : "Entity unmerge failed",
+          });
+        }
+
+        restoredEntityId = plan.loserId;
+        // Winner update side-effect now; loser restore is emitted below via
+        // restoredEntityId (shared path with restore-delete).
+        emitSideEffects({
+          subjectType: "entity",
+          action: "update",
+          subjectId: plan.winnerId,
+          userId: ownerUserId,
+          workspaceId: proposal.workspaceId ?? undefined,
+          data: { reason: "entity.unmerge", loserId: plan.loserId },
+        });
+      } else if (plan.kind === "restore-delete") {
         const [entityRow] = await db
           .select({ id: entities.id, deletedAt: entities.deletedAt })
           .from(entities)
@@ -2869,6 +3015,12 @@ export const proposalsRouter = router({
           deletedRelationIds: deleted.relationIds,
           deletedDocumentIds: deleted.documentIds,
           ...(restoredEntityId ? { restoredEntityId } : {}),
+          ...(unmerged
+            ? {
+                unmergeWinnerId: unmerged.winnerId,
+                unmergeLoserId: unmerged.loserId,
+              }
+            : {}),
         },
         source: "api",
       });
@@ -2880,6 +3032,14 @@ export const proposalsRouter = router({
           subjectId: restoredEntityId,
           userId,
           workspaceId: proposal.workspaceId ?? undefined,
+          ...(unmerged
+            ? {
+                data: {
+                  reason: "entity.unmerge",
+                  winnerId: unmerged.winnerId,
+                },
+              }
+            : {}),
         });
       }
 

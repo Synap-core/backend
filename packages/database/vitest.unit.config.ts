@@ -16,7 +16,10 @@ export default defineConfig({
       "src/utils/resolve-agent-governance-decision.test.ts",
       "src/conversions/*.test.ts",
       "src/services/identity-resolution-service.test.ts",
+      "src/services/entity-merge-service.test.ts",
       "src/services/profile-resolution-service.test.ts",
+      "src/services/team-person-bridge.test.ts",
+
       "src/__tests__/facet-slug-visibility.test.ts",
       "src/__tests__/facet-visibility.test.ts",
       "src/__tests__/profile-scope-conditions.test.ts",

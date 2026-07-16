@@ -423,9 +423,9 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
 });
 
 describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
-  it("a broad autoApproveFor entry does NOT auto-approve delete/archive/purge", () => {
+  it("a broad autoApproveFor entry does NOT auto-approve delete/archive/purge/merge", () => {
     for (const broad of ["entity.delete", "entity.*", "*"]) {
-      for (const action of ["delete", "archive", "purge"]) {
+      for (const action of ["delete", "archive", "purge", "merge"]) {
         const v = decideAgentPolicy({
           subjectType: "entity",
           action,
@@ -437,6 +437,44 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
         });
       }
     }
+  });
+
+  it("entity.merge is ALWAYS proposal-gated (never auto-approve)", () => {
+    // Pod hygiene lock: near-duplicate merge is NEVER silent, even under
+    // ownership, DEFAULT_AUTO_APPROVE fallthrough, or an explicit whitelist.
+    for (const input of [
+      { subjectType: "entity", action: "merge" },
+      {
+        subjectType: "entity",
+        action: "merge",
+        isAgentOwnedWorkspace: true,
+      },
+      {
+        subjectType: "entity",
+        action: "merge",
+        autoApproveFor: ["entity.merge", "entity.*", "*"],
+      },
+      {
+        subjectType: "entity",
+        action: "merge",
+        autoApproveFor: ["entity.merge"],
+        isAgentOwnedWorkspace: true,
+      },
+    ] as const) {
+      const v = decideAgentPolicy(input);
+      expect(v).toEqual({
+        verdict: "propose",
+        reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      });
+    }
+    // Not on the default whitelist either.
+    expect(isAutoApproved("entity.merge", DEFAULT_AUTO_APPROVE)).toBe(false);
+    expect(
+      isAutoApproved("entity.merge", GOVERNANCE_MODES.normal.autoApproveFor)
+    ).toBe(false);
+    expect(
+      isAutoApproved("entity.merge", GOVERNANCE_MODES.safe.autoApproveFor)
+    ).toBe(false);
   });
 
   it("a non-destructive action in the same broad autoApproveFor list still auto-approves", () => {
@@ -770,11 +808,15 @@ describe("findUnsafeAutoApproveEntries", () => {
     expect(findUnsafeAutoApproveEntries(["delete"])).toEqual(["delete"]);
     expect(findUnsafeAutoApproveEntries(["archive"])).toEqual(["archive"]);
     expect(findUnsafeAutoApproveEntries(["purge"])).toEqual(["purge"]);
+    expect(findUnsafeAutoApproveEntries(["merge"])).toEqual(["merge"]);
     expect(findUnsafeAutoApproveEntries(["entity.delete"])).toEqual([
       "entity.delete",
     ]);
     expect(findUnsafeAutoApproveEntries(["document.archive"])).toEqual([
       "document.archive",
+    ]);
+    expect(findUnsafeAutoApproveEntries(["entity.merge"])).toEqual([
+      "entity.merge",
     ]);
   });
 
@@ -880,6 +922,7 @@ describe("constants are intact", () => {
     expect([...DESTRUCTIVE_ACTIONS].sort()).toEqual([
       "archive",
       "delete",
+      "merge",
       "purge",
     ]);
   });

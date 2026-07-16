@@ -64,6 +64,7 @@ import {
   fetchRoutingMemory,
   fetchWorkspaceRoutingThreshold,
 } from "../services/routing-memory.js";
+import { loadTeamRosterForCapture } from "../services/team-roster-context.js";
 import { AI_KIND, BELOW_GATE_CONFIDENCE } from "../lib/ai-events.js";
 import { type CaptureRoutingResult } from "../lib/capture-routing.js";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
@@ -828,6 +829,35 @@ export const captureRouter = router({
         existingEntityNames = [];
       }
 
+      // Team roster — merge known teammates into existingEntityNames + inject
+      // an OUR TEAM instruction so structure prefers link-not-create for
+      // internal people. Best-effort: never fail capture on roster errors.
+      let structureInstructions = input.instructions;
+      if (workspaceId) {
+        try {
+          const roster = await loadTeamRosterForCapture(database, {
+            workspaceId,
+            userId,
+          });
+          existingEntityNames = Array.from(
+            new Set([...existingEntityNames, ...roster.names])
+          );
+          if (roster.instructionBlock) {
+            structureInstructions = [
+              input.instructions,
+              roster.instructionBlock,
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+          }
+        } catch (err) {
+          logger.debug(
+            { err, userId, workspaceId },
+            "team roster load failed (capture proceeds without it)"
+          );
+        }
+      }
+
       // Routing memory — recent corrections (negatives: the user moved the AI's
       // pick) + confirmed routes (positives) so the router learns from its own
       // history. Threaded into structure() so EVERY capture door benefits. Best
@@ -862,7 +892,7 @@ export const captureRouter = router({
         url: input.url,
         html: input.html,
         context: input.context,
-        instructions: input.instructions,
+        instructions: structureInstructions,
         hints: {
           availableProfiles,
           availableWorkspaces,

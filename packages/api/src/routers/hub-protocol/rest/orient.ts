@@ -2,10 +2,10 @@
  * Hub Protocol REST — /orient
  *
  * The canonical lens-map endpoint for agent session bootstrap: workspaces +
- * projects + a profile sample + identity. A thin wrapper over the shared
- * `discover()` service (the ONE place that shapes orient output). The CLI
- * `synap orient` renders this DTO verbatim; the MCP `synap_orient` tool calls
- * the same service in-process.
+ * projects + a profile sample + identity + optional teamRoster. A thin wrapper
+ * over the shared `discover()` service (the ONE place that shapes orient
+ * output). The CLI `synap orient` renders this DTO verbatim; the MCP
+ * `synap_orient` tool calls the same service in-process.
  *
  *   ?detail=full   — workspace descriptions + full onboarding + per-ws profiles
  *   ?scope=a,b,c   — restrict to workspaces|projects|profiles

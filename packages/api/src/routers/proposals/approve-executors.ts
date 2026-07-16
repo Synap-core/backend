@@ -26,18 +26,26 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   ProfileResolutionService,
+  mergeEntities,
+  PropertyIndexService,
+  type MergeMaterializedStamp,
+  entities,
   links,
   type LinkEndpointType,
   type LinkType,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import type { ProposalMaterializedRecord } from "@synap-core/types";
+import {
+  isEntityMergeProposalData,
+  type ProposalMaterializedRecord,
+} from "@synap-core/types";
 import type { RendererRef } from "@synap/database";
 import { storage } from "@synap/storage";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
+import { emitSideEffects } from "@synap/events";
 import { channelsRouter } from "../channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { projectsRouter } from "../projects.js";
@@ -1344,6 +1352,200 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── entity / merge ───────────────────────────────────────────────────────
+  // Pod Hygiene W0: near-duplicate → glass-box merge. ALWAYS proposal-gated
+  // (`merge` ∈ DESTRUCTIVE_ACTIONS). Materializes via EntityMergeService only
+  // (one door). Stamps data.materialized.merge + full snapshots for unmerge.
+  registerProposalExecutor({
+    key: "entity/merge",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const raw = proposal.data;
+      if (!isEntityMergeProposalData(raw)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "entity/merge proposal data is missing winnerId/loserId/confidence/method",
+        });
+      }
+
+      // Membership: workspace-scoped proposals require access; pod-wide (null)
+      // runs as the approver who owns the entities (mergeEntities checks userId).
+      const wsId = proposal.workspaceId ?? undefined;
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+      }
+
+      // mergeEntities asserts entity.userId === input.userId. Run as the
+      // DATA OWNER (sourceId / winner row), not the approver — admins may
+      // review but the data plane is still the owner's graph.
+      const winnerRow = await db.query.entities.findFirst({
+        where: eq(entities.id, raw.winnerId),
+        columns: {
+          id: true,
+          userId: true,
+          profileId: true,
+          workspaceId: true,
+          properties: true,
+        },
+      });
+      if (!winnerRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Winner entity not found",
+        });
+      }
+      const ownerUserId =
+        (typeof raw.sourceId === "string" && raw.sourceId) || winnerRow.userId;
+
+      let result;
+      try {
+        result = await mergeEntities(db, {
+          winnerId: raw.winnerId,
+          loserId: raw.loserId,
+          userId: ownerUserId,
+        });
+      } catch (err) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: err instanceof Error ? err.message : "Entity merge failed",
+        });
+      }
+
+      // Winner properties may have grown (fill-null) — reindex hot props
+      // (email etc.) so identity/filter paths stay correct.
+      if (winnerRow.profileId) {
+        try {
+          const indexService = new PropertyIndexService(db);
+          const winnerAfter = await db.query.entities.findFirst({
+            where: eq(entities.id, result.winnerId),
+            columns: { properties: true, profileId: true, workspaceId: true },
+          });
+          if (winnerAfter?.profileId) {
+            await indexService.reindexEntity(
+              result.winnerId,
+              (winnerAfter.properties as Record<string, unknown>) ?? {},
+              winnerAfter.profileId,
+              winnerAfter.workspaceId
+            );
+          }
+        } catch (err) {
+          // Best-effort — merge already committed; search side-effects still run.
+          void err;
+        }
+      }
+
+      // Invertibility stamp for full unmerge (mirrors MergeMaterializedStamp).
+      const m = result.materialized;
+      const mergeStamp: NonNullable<ProposalMaterializedRecord["merge"]> &
+        MergeMaterializedStamp & { winnerId: string; loserId: string } = {
+        winnerId: result.winnerId,
+        loserId: result.loserId,
+        movedSignalIds: m.movedSignalIds,
+        movedExternalLinkIds: m.movedExternalLinkIds,
+        movedFacetIds: m.movedFacetIds,
+        rewiredRelations: m.rewiredRelations,
+        documentMoved: m.documentMoved,
+        // Also stamp bare ids for older clients that still read rewiredRelationIds.
+        rewiredRelationIds: m.rewiredRelations.map((r) => r.id),
+      };
+      if (m.winnerFacetIds?.length)
+        mergeStamp.winnerFacetIds = m.winnerFacetIds;
+      if (m.rewiredMessageLinkIds?.length) {
+        mergeStamp.rewiredMessageLinkIds = m.rewiredMessageLinkIds;
+      }
+      if (m.rewiredLinkIds?.length)
+        mergeStamp.rewiredLinkIds = m.rewiredLinkIds;
+      if (m.deletedRelationIds?.length) {
+        mergeStamp.deletedRelationIds = m.deletedRelationIds;
+      }
+
+      // Full pre-merge snapshots from mergeEntities (title/preview/properties/
+      // documentId/systemData). Overlay detector snapshots so review UI fields
+      // (profileSlug etc.) are preserved while unmerge always has enough.
+      const fullWinnerSnapshot = {
+        title: result.previousWinnerSnapshot.title,
+        preview: result.previousWinnerSnapshot.preview,
+        properties: result.previousWinnerSnapshot.properties,
+        documentId: result.previousWinnerSnapshot.documentId,
+        systemData: result.previousWinnerSnapshot.systemData,
+      };
+      const fullLoserSnapshot = {
+        title: result.previousLoserSnapshot.title,
+        preview: result.previousLoserSnapshot.preview,
+        properties: result.previousLoserSnapshot.properties,
+        documentId: result.previousLoserSnapshot.documentId,
+        systemData: result.previousLoserSnapshot.systemData,
+      };
+
+      const nextData = {
+        ...raw,
+        sourceId: raw.sourceId ?? ownerUserId,
+        // Detector fields (profileSlug etc.) first; merge-time projection
+        // overwrites title/preview/properties/documentId/systemData so unmerge
+        // restores the exact pre-merge entity state.
+        previousWinnerSnapshot: {
+          ...(raw.previousWinnerSnapshot ?? {}),
+          ...fullWinnerSnapshot,
+        },
+        previousLoserSnapshot: {
+          ...(raw.previousLoserSnapshot ?? {}),
+          ...fullLoserSnapshot,
+        },
+        materialized: {
+          ...(typeof raw.materialized === "object" && raw.materialized
+            ? raw.materialized
+            : {}),
+          merge: mergeStamp,
+        },
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+          data: nextData as unknown as Record<string, unknown>,
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Search/embeddings/realtime — mergeEntities is data-plane only.
+      const governanceWorkspaceId = proposal.workspaceId ?? null;
+      emitSideEffects({
+        subjectType: "entity",
+        action: "update",
+        subjectId: result.winnerId,
+        userId: ownerUserId,
+        workspaceId: governanceWorkspaceId,
+        data: { reason: "entity.merge", loserId: result.loserId },
+      });
+      emitSideEffects({
+        subjectType: "entity",
+        action: "delete",
+        subjectId: result.loserId,
+        userId: ownerUserId,
+        workspaceId: governanceWorkspaceId,
+        data: { reason: "entity.merge", winnerId: result.winnerId },
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,

@@ -1670,7 +1670,11 @@ federationRouter.post("/exchange", async (c) => {
   });
   if (!link)
     return c.json(
-      { error: "Federated identity is not linked on this Pod" },
+      {
+        error: "Federated identity is not linked on this Pod",
+        code: "FEDERATED_IDENTITY_NOT_LINKED",
+        remediation: "complete_identity_link_or_direct_sign_in",
+      },
       403
     );
   const user = await db.query.users.findFirst({

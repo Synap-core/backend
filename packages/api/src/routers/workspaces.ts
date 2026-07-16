@@ -40,6 +40,9 @@ import {
   users,
   createWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
+  ensureTeamPersonForMember,
+  detachTeamMemberFacet,
+  backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
@@ -1129,6 +1132,18 @@ export const workspacesRouter = router({
         ctx.userId
       );
 
+      // Team roster → person bridge (best-effort; never blocks membership)
+      void ensureTeamPersonForMember(dbConn, {
+        memberUserId: input.userId,
+        workspaceId: input.workspaceId,
+        ownerUserId: ctx.userId,
+      }).catch((err) => {
+        logger.warn(
+          { err, memberUserId: input.userId, workspaceId: input.workspaceId },
+          "Failed to ensure team person for member"
+        );
+      });
+
       // 3. Audit log
       auditLog({
         subjectType: "workspaceMember",
@@ -1257,6 +1272,22 @@ export const workspacesRouter = router({
         ctx.userId
       );
 
+      // Team roster → person bridge: soft-detach team-member facet (best-effort)
+      void detachTeamMemberFacet(dbConn, {
+        memberUserId: input.userId,
+        workspaceId: input.workspaceId,
+        ownerUserId: ctx.userId,
+      }).catch((err) => {
+        logger.warn(
+          {
+            err,
+            memberUserId: input.userId,
+            workspaceId: input.workspaceId,
+          },
+          "Failed to detach team-member facet on member remove"
+        );
+      });
+
       // 3. Audit log
       auditLog({
         subjectType: "workspaceMember",
@@ -1275,6 +1306,39 @@ export const workspacesRouter = router({
         status: "removed" as const,
         message: "Member removed successfully.",
       };
+    }),
+
+  /**
+   * Backfill person entities + team-member facets for all human workspace members.
+   * Owner/admin only. Idempotent (ensureTeamPersonForMember is safe to re-run).
+   */
+  backfillTeamPersonBridge: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+        columns: { role: true },
+      });
+
+      if (
+        !membership ||
+        (membership.role !== "owner" && membership.role !== "admin")
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Backfilling the team-person bridge requires owner or admin access.",
+        });
+      }
+
+      const dbConn = await getDb();
+      return runBackfillTeamPersonBridge(dbConn, {
+        workspaceId: input.workspaceId,
+        ownerUserId: ctx.userId,
+      });
     }),
 
   /**
@@ -1627,6 +1691,21 @@ export const workspacesRouter = router({
           },
           ctx.userId
         );
+        // Team roster → person bridge (best-effort; never blocks membership)
+        void ensureTeamPersonForMember(dbConn, {
+          memberUserId: ctx.userId,
+          workspaceId: invite.workspaceId,
+          ownerUserId: invite.invitedBy ?? ctx.userId,
+        }).catch((err) => {
+          logger.warn(
+            {
+              err,
+              memberUserId: ctx.userId,
+              workspaceId: invite.workspaceId,
+            },
+            "Failed to ensure team person for member on invite accept"
+          );
+        });
         auditLog({
           subjectType: "workspaceMember",
           action: "add",
@@ -1671,6 +1750,17 @@ export const workspacesRouter = router({
             },
             ctx.userId
           );
+          // Team roster → person bridge (best-effort; never blocks membership)
+          void ensureTeamPersonForMember(dbConn, {
+            memberUserId: ctx.userId,
+            workspaceId: ws.id,
+            ownerUserId: invite.invitedBy ?? ctx.userId,
+          }).catch((err) => {
+            logger.warn(
+              { err, memberUserId: ctx.userId, workspaceId: ws.id },
+              "Failed to ensure team person for member on pod invite accept"
+            );
+          });
         }
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({
@@ -2033,6 +2123,21 @@ export const workspacesRouter = router({
             ctx.userId
           );
           removed.push(wid);
+          // Team roster → person bridge: soft-detach team-member facet (best-effort)
+          void detachTeamMemberFacet(dbConn, {
+            memberUserId: input.userId,
+            workspaceId: wid,
+            ownerUserId: ctx.userId,
+          }).catch((err) => {
+            logger.warn(
+              {
+                err,
+                memberUserId: input.userId,
+                workspaceId: wid,
+              },
+              "Failed to detach team-member facet on removeFromPod"
+            );
+          });
         } catch (err) {
           errors.push({
             workspaceId: wid,
@@ -3651,6 +3756,21 @@ export const workspacesRouter = router({
           },
           podUser.id
         );
+        // Team roster → person bridge (best-effort; never blocks membership)
+        void ensureTeamPersonForMember(dbConn, {
+          memberUserId: podUser.id,
+          workspaceId: invite.workspaceId,
+          ownerUserId: invite.invitedBy ?? podUser.id,
+        }).catch((err) => {
+          logger.warn(
+            {
+              err,
+              memberUserId: podUser.id,
+              workspaceId: invite.workspaceId,
+            },
+            "Failed to ensure team person for member on CP invite accept"
+          );
+        });
         auditLog({
           subjectType: "workspaceMember",
           action: "add",
@@ -3690,6 +3810,17 @@ export const workspacesRouter = router({
             },
             podUser.id
           );
+          // Team roster → person bridge (best-effort; never blocks membership)
+          void ensureTeamPersonForMember(dbConn, {
+            memberUserId: podUser.id,
+            workspaceId: ws.id,
+            ownerUserId: invite.invitedBy ?? podUser.id,
+          }).catch((err) => {
+            logger.warn(
+              { err, memberUserId: podUser.id, workspaceId: ws.id },
+              "Failed to ensure team person for member on CP pod invite accept"
+            );
+          });
         }
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({

@@ -47,8 +47,8 @@ The LLM path (`capture.structure` → IS `/api/structure`) is a **competent extr
 
 **Critical gaps (why output is low-precision):**
 
-1. **No search-before-create.** Neither the structure prompt nor the agent's `SECTION_ORGANIC_STRUCTURING` tells the AI to search for an existing entity before making a new one. → **orphans + duplicates by construction.** Dedup is a _downstream, human-driven_ step (UI "link to X" chips), not AI-driven.
-2. **`existingEntityNames` is empty by default** (`capture.ts:279-289`) — the IS gets no context about what already exists unless the frontend passes it. So the LLM literally can't avoid dupes.
+1. **No search-before-create (agent tool loop).** Capture path now feeds Typesense names into structure + prompt prefers linking; agent organic path still lacks a real `search_unified` before create loop. → residual orphans/dupes under agent-only writes.
+2. **~~`existingEntityNames` empty by default~~ ✅ FIXED** — `capture.ts` populates names via Typesense before the IS call (and threads them as structure hints).
 3. **Relations are optional** in the schema → many entities stay orphaned; relations that do appear skew to generic `relates_to`.
 4. **Confidence is a weak signal** — a likely-duplicate gets confidence 0.4-0.5 but is still created.
 5. **Cheap model tier** — structure runs on the free/`action` tier (deepseek-flash); fine for extraction, weak for the reasoning that good dedup/linking needs.
@@ -90,18 +90,18 @@ Today CSV → `analyze-bulk-mapping` (LLM proposes column→property plan) + per
 
 ## 5. Consolidated roadmap (to "always qualitative import")
 
-| #   | Work                                                                      | Layer                  | Status                 |
-| --- | ------------------------------------------------------------------------- | ---------------------- | ---------------------- |
-| 1   | Markdown → entity + **linked document** (versioning, MinIO, no 100KB cap) | import + entity-create | **decided, not built** |
-| 2   | **Search-before-create** in agent + capture prompts                       | AI prompts             | not built (P1)         |
-| 3   | Populate `existingEntityNames`/candidates before IS call                  | capture.ts             | not built (P1)         |
-| 4   | Relation-required / anti-orphan in structure prompt+schema                | AI prompts             | not built (P2)         |
-| 5   | Confidence-driven pre-dedup before materialize                            | capture pipeline       | not built (P3)         |
-| 6   | Structure model tier eval (action → balanced)                             | config                 | not built (P4)         |
-| 7   | Source traceability (`extracted_from`)                                    | schema + prompts       | not built (P5)         |
-| 8   | CSV → multi-entity graph + auto-generated default view                    | import + views         | not built              |
-| 9   | **Actually run the AI path on the real vault** (validate, not audit)      | testing                | **next**               |
-| 10  | AI restructure step (Structure Steward) over imported notes               | new agent              | future                 |
+| #   | Work                                                                      | Layer                  | Status                                          |
+| --- | ------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------- |
+| 1   | Markdown → entity + **linked document** (versioning, MinIO, no 100KB cap) | import + entity-create | **SHIPPED** (op.content / materialize-document) |
+| 2   | **Search-before-create** in agent + capture prompts                       | AI prompts             | PARTIAL (capture hints yes; agent tool loop no) |
+| 3   | Populate `existingEntityNames`/candidates before IS call                  | capture.ts             | **SHIPPED**                                     |
+| 4   | Relation-required / anti-orphan in structure prompt+schema                | AI prompts             | not built (P2)                                  |
+| 5   | Confidence-driven pre-dedup before materialize                            | capture pipeline       | not built (P3)                                  |
+| 6   | Structure model tier eval (action → balanced)                             | config                 | not built (P4)                                  |
+| 7   | Source traceability (`extracted_from`)                                    | schema + prompts       | not built (P5)                                  |
+| 8   | CSV → multi-entity graph + auto-generated default view                    | import + views         | not built                                       |
+| 9   | **Actually run the AI path on the real vault** (validate, not audit)      | testing                | **next**                                        |
+| 10  | AI restructure step (Structure Steward) over imported notes               | new agent              | future                                          |
 
 **Done already (deterministic, live-validated):** graph composite proposals, governed import, folder-as-data + content-preservation, ref-resolution helpers (tested).
 

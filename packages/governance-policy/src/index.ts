@@ -21,9 +21,9 @@
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
- *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge),
- *                                    regardless of ANY override rung below
- *                                    (ownership, explicit autoApproveFor,
+ *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
+ *                                    merge), regardless of ANY override rung
+ *                                    below (ownership, explicit autoApproveFor,
  *                                     DEFAULT_AUTO_APPROVE, capability
  *                                     governance). EXCEPTION: caller opts in
  *                                     via `allowDestructiveAutoApprove` (the
@@ -124,11 +124,19 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "facet.detach",
 ];
 
-/** Actions that always require a proposal in agent-owned workspaces. */
+/**
+ * Actions that always require a proposal — hard floor in decideAgentPolicy
+ * (rung 2.5), regardless of ownership / autoApproveFor / DEFAULT_AUTO_APPROVE.
+ *
+ * Includes `merge` so entity near-duplicate merges (pod hygiene) and channel
+ * branch merges can never auto-execute. Format used by the floor is the bare
+ * action verb; event keys are `${subjectType}.${action}` (e.g. `entity.merge`).
+ */
 export const DESTRUCTIVE_ACTIONS: readonly string[] = [
   "delete",
   "archive",
   "purge",
+  "merge",
 ];
 
 /**
@@ -466,19 +474,20 @@ export function findMatchingPattern(
 
 /**
  * Validate a caller-supplied `autoApproveFor` list for entries that EXPLICITLY
- * name a DESTRUCTIVE action (delete/archive/purge). Used by the write-side gates
- * (agent-users governance PATCH, workspace settings writer) to reject a grant
- * BEFORE it is persisted.
+ * name a DESTRUCTIVE action (delete/archive/purge/merge). Used by the write-side
+ * gates (agent-users governance PATCH, workspace settings writer) to reject a
+ * grant BEFORE it is persisted.
  *
  * Only explicit destructive verbs are rejected — e.g. "delete", "purge",
- * "entity.delete", "document.archive". Wildcards ("*", "*.*", "entity.*") are
- * ALLOWED: the `decideAgentPolicy` DESTRUCTIVE_ACTIONS hard floor (rung 2.5) is
- * the real backstop — it blocks destructive auto-approval regardless of the
- * whitelist, so no wildcard can ever auto-approve a delete. Rejecting wildcards
- * here (an earlier iteration did) would break the built-in "Crazy" governance
- * preset, whose value is literally `["*"]`. This validator therefore only stops
- * an operator from EXPLICITLY listing a destructive verb — a setting the floor
- * would silently override anyway, so blocking it keeps the config honest.
+ * "entity.delete", "document.archive", "entity.merge". Wildcards ("*", "*.*",
+ * "entity.*") are ALLOWED: the `decideAgentPolicy` DESTRUCTIVE_ACTIONS hard
+ * floor (rung 2.5) is the real backstop — it blocks destructive auto-approval
+ * regardless of the whitelist, so no wildcard can ever auto-approve a
+ * delete/merge. Rejecting wildcards here (an earlier iteration did) would break
+ * the built-in "Crazy" governance preset, whose value is literally `["*"]`. This
+ * validator therefore only stops an operator from EXPLICITLY listing a
+ * destructive verb — a setting the floor would silently override anyway, so
+ * blocking it keeps the config honest.
  *
  * Entries are trimmed + lower-cased before matching. Returns the (original)
  * entries that failed validation (empty = all OK).
@@ -590,7 +599,7 @@ export interface AgentPolicyInput {
    * True when the acting agent is the owner of the target workspace
    * (workspace.linkedAgentId === agentUserId && workspaceType === "agent").
    * Ownership bypasses writesRequireProposal for non-destructive writes.
-   * Destructive actions (delete/archive/purge) still propose even for the owner.
+   * Destructive actions (delete/archive/purge/merge) still propose even for the owner.
    * ADMIN_ACTIONS always propose regardless of ownership.
    */
   isAgentOwnedWorkspace?: boolean;
@@ -647,8 +656,8 @@ export interface AgentPolicyInput {
    */
   forcePropose?: boolean;
   /**
-   * Explicit opt-in that lets a DESTRUCTIVE action (delete/archive/purge) be
-   * resolved to "execute" by a downstream override rung (ownership, explicit
+   * Explicit opt-in that lets a DESTRUCTIVE action (delete/archive/purge/merge)
+   * be resolved to "execute" by a downstream override rung (ownership, explicit
    * autoApproveFor, DEFAULT_AUTO_APPROVE, capability governance). Absent/false
    * (the default) → destructive actions ALWAYS propose, mirroring the
    * ADMIN_ACTIONS hard floor. This is the raw escape hatch for the future
@@ -685,7 +694,7 @@ export const PROPOSE_REASON = {
   SCOPE_IDENTITY_CHANGE:
     "This change alters the record's scope or identity and requires human approval.",
   DESTRUCTIVE_HARD_FLOOR:
-    "Destructive action (delete/archive/purge) always requires human approval.",
+    "Destructive action (delete/archive/purge/merge) always requires human approval.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -732,12 +741,12 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   }
 
   // 2.5 DESTRUCTIVE_ACTIONS hard floor — mirrors ADMIN_ACTIONS: a destructive
-  // action (delete/archive/purge) can NEVER be resolved to "execute" by ANY
-  // override rung below — ownership (rung 3), explicit autoApproveFor
+  // action (delete/archive/purge/merge) can NEVER be resolved to "execute" by
+  // ANY override rung below — ownership (rung 3), explicit autoApproveFor
   // (rung 4), capability governance (rung 2.7), or DEFAULT_AUTO_APPROVE
   // (rung 8). Without this floor, an operator whitelisting a broad pattern
   // like "entity.*" or "*" via autoApproveFor would silently auto-approve
-  // deletes (rung 4 had no destructive check, unlike rungs 3 and 6).
+  // deletes/merges (rung 4 had no destructive check, unlike rungs 3 and 6).
   // EXCEPTION: `allowDestructiveAutoApprove` is the raw opt-in for the future
   // "Crazy" mode. Default (absent/false) → always propose.
   // TODO: wire to a first-class Crazy mode instead of a raw boolean.

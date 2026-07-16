@@ -392,6 +392,85 @@ export interface CompositeProposalData extends ProposalDataLifecycle {
   summary?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Entity merge proposal (pod hygiene — near-duplicate → merge)
+// ---------------------------------------------------------------------------
+
+/**
+ * How the detector (or a human) decided these two entities are the same
+ * real-world subject. Surfaced in the review UI and audit trail.
+ */
+export type EntityMergeMethod =
+  | "strong_signal"
+  | "exact_title"
+  | "embedding"
+  | "manual";
+
+/** Property-level plan: fill empty winner fields from loser; list conflicts. */
+export interface EntityMergePropertyPlan {
+  /** Property keys the merge will copy from loser → winner (winner was empty). */
+  filled: string[];
+  /**
+   * Keys where both sides have a non-empty value. W0 never silent-overwrites —
+   * winner keeps its value; conflicts are listed for the reviewer.
+   */
+  conflicts: Array<{
+    key: string;
+    winnerValue: unknown;
+    loserValue: unknown;
+  }>;
+}
+
+/**
+ * Snapshot of an entity's identity fields + properties at proposal-create /
+ * pre-merge time. Captured so approve/revert can show a durable before state
+ * and full unmerge can restore projection fields without a live lookup.
+ */
+export interface EntityMergeSnapshot {
+  title?: string | null;
+  preview?: string | null;
+  description?: string | null;
+  profileSlug?: string | null;
+  documentId?: string | null;
+  properties?: Record<string, unknown>;
+  systemData?: Record<string, unknown>;
+}
+
+/**
+ * Entity-merge proposal data — pod hygiene near-duplicate → merge.
+ *
+ * ALWAYS proposal-gated (`entity.merge` is in DESTRUCTIVE_ACTIONS; never in
+ * DEFAULT_AUTO_APPROVE). On approve the executor (separate PR) runs
+ * EntityMergeService.merge and stamps `materialized.merge` for unmerge.
+ *
+ * Rides in `proposals.data` — no schema migration. Narrow with
+ * isEntityMergeProposalData() in the approve flow BEFORE other branches.
+ */
+export interface EntityMergeProposalData extends ProposalDataLifecycle {
+  winnerId: string;
+  loserId: string;
+  confidence: number;
+  method: EntityMergeMethod;
+  /** Signal types/values that matched (e.g. "email:a@b.com"). */
+  signalsMatched?: string[];
+  reasoning?: string;
+  summary?: string;
+  /**
+   * Entity owner userId — used by canReviewProposal (isOwner) so the data
+   * owner can approve their hygiene proposals. Also the userId mergeEntities
+   * runs as after admin review.
+   */
+  sourceId?: string;
+  /** Display titles resolved at proposal-create time (review UI). */
+  winnerTitle?: string;
+  loserTitle?: string;
+  propertyPlan?: EntityMergePropertyPlan;
+  /** Winner state BEFORE merge (for review + unmerge). */
+  previousWinnerSnapshot?: EntityMergeSnapshot;
+  /** Loser state BEFORE soft-delete (for unmerge). */
+  previousLoserSnapshot?: EntityMergeSnapshot;
+}
+
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -412,6 +491,45 @@ export interface ProposalMaterializedRecord {
   relationIds?: string[];
   /** Document ids CREATED by approval (revert → delete each). */
   documentIds?: string[];
+  /**
+   * Entity-merge materialization (pod hygiene). Stamped by the entity.merge
+   * approve executor so revert can full-unmerge: reverse signals/relations/
+   * links, restore facets, restore winner projection, undelete the loser.
+   *
+   * Full unmerge requires invertibility fields (`rewiredRelations` with prior
+   * endpoints, `previousWinnerSnapshot` on proposal data). Legacy stamps that
+   * only have `loserId` fall back to soft-undelete of the loser only.
+   */
+  merge?: {
+    winnerId: string;
+    loserId: string;
+    movedSignalIds?: string[];
+    movedExternalLinkIds?: string[];
+    movedFacetIds?: string[];
+    /** Facet ids created/attached on winner during merge (soft-detached on unmerge). */
+    winnerFacetIds?: string[];
+    /**
+     * Relations re-pointed loser → winner with prior endpoints for reverse.
+     * Preferred over legacy bare `rewiredRelationIds`.
+     */
+    rewiredRelations?: Array<{
+      id: string;
+      previousSourceEntityId: string | null;
+      previousTargetEntityId: string | null;
+    }>;
+    /** @deprecated Prefer `rewiredRelations` (carries prior endpoints). */
+    rewiredRelationIds?: string[];
+    /** message_links rows re-pointed loser → winner. */
+    rewiredMessageLinkIds?: string[];
+    /** Polymorphic links re-pointed loser → winner. */
+    rewiredLinkIds?: string[];
+    documentMoved?: boolean;
+    /**
+     * Relations dropped as self-loop/dedupe during merge — irreversible;
+     * recorded for audit only (cannot resurrect on unmerge).
+     */
+    deletedRelationIds?: string[];
+  };
 }
 
 /**
@@ -454,12 +572,14 @@ export interface ProposalDataLifecycle {
 
 /**
  * Union of all shapes stored in proposals.data.
- * Use isRequestShapedProposalData() to narrow in approve flow.
+ * Use isRequestShapedProposalData() / isEntityMergeProposalData() to narrow
+ * in the approve flow.
  */
 export type StoredProposalData =
   | RequestShapedProposalData
   | DocumentContentProposalData
-  | CompositeProposalData;
+  | CompositeProposalData
+  | EntityMergeProposalData;
 
 /**
  * Type guard: true when proposal.data is request-shaped (event flow).
@@ -512,6 +632,32 @@ export function isCompositeProposalData(
       o != null &&
       typeof o === "object" &&
       (o.op === "create_entity" || o.op === "create_relation")
+  );
+}
+
+/**
+ * Type guard: true when proposal.data is an entity-merge proposal
+ * (winner/loser + confidence + method). Use for the branch that calls
+ * EntityMergeService.merge on approval.
+ *
+ * Strict enough that a random payload with two entity ids won't match —
+ * requires winnerId, loserId, numeric confidence, and a known method string.
+ */
+export function isEntityMergeProposalData(
+  data: StoredProposalData | null | undefined | unknown
+): data is EntityMergeProposalData {
+  if (data == null || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  if (typeof d.winnerId !== "string" || !d.winnerId) return false;
+  if (typeof d.loserId !== "string" || !d.loserId) return false;
+  if (typeof d.confidence !== "number" || Number.isNaN(d.confidence))
+    return false;
+  const method = d.method;
+  return (
+    method === "strong_signal" ||
+    method === "exact_title" ||
+    method === "embedding" ||
+    method === "manual"
   );
 }
 

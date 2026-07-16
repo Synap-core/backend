@@ -29,6 +29,7 @@ export * from "./services/property-merging-service.js";
 export * from "./services/view-default-columns-service.js";
 export * from "./services/encryption-service.js";
 export * from "./services/entity-upsert-service.js";
+export * from "./services/entity-merge-service.js";
 export * from "./services/identity-resolution-service.js";
 export * from "./services/trusted-issuer-service.js";
 export * from "./services/federated-application-connection-service.js";
@@ -37,6 +38,7 @@ export * from "./services/user-provisioning.js";
 export * from "./services/pod-user-access.js";
 export * from "./services/capture-routing.js";
 export * from "./services/workspace-resolution-service.js";
+export * from "./services/team-person-bridge.js";
 
 // Export errors
 export * from "./errors/index.js";

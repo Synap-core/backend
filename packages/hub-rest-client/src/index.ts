@@ -76,6 +76,7 @@ export type {
   HubOrientProfile,
   HubOrientWorkspace,
   HubOrientProject,
+  HubOrientTeamRoster,
   HubOrientResult,
   HubOrientOptions,
   // Threads & Channels

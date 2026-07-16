@@ -19,6 +19,10 @@ import {
   PAGERANK_CENTRALITY_QUEUE,
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
+import {
+  POD_HYGIENE_NEAR_DUP_QUEUE,
+  POD_HYGIENE_NEAR_DUP_CRON,
+} from "./workers/pod-hygiene-near-dup.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 
@@ -107,6 +111,18 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "automation-pattern-detect", "0 3 * * *", {});
   logger.info(
     "Registered cron: automation-pattern-detect (daily at 3:00 AM UTC)"
+  );
+
+  // Pod hygiene near-dup scan (daily at 3:15 AM UTC — after pattern-detect).
+  // Files PENDING entity merge proposals only; never auto-merges.
+  await scheduleSafe(
+    boss,
+    POD_HYGIENE_NEAR_DUP_QUEUE,
+    POD_HYGIENE_NEAR_DUP_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: pod-hygiene.near-dup-scan (daily at 3:15 AM UTC)"
   );
 
   // Notification cleanup (daily at 2:00 AM UTC — expires/deletes old notifications)
