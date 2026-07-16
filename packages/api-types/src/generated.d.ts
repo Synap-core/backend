@@ -5367,6 +5367,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata?: Record<string, unknown>;
 					warnings?: string[];
 				};
+				dedupCandidates: Record<string, Array<{
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}>>;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -5395,14 +5408,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
 				formSpec: DynamicFormSpec | null;
-				dedupCandidates: Record<string, Array<{
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}>>;
 			} | {
 				extraction?: undefined;
+				dedupCandidates: Record<string, Array<{
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}>>;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -5431,12 +5451,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
 				formSpec: DynamicFormSpec | null;
-				dedupCandidates: Record<string, Array<{
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}>>;
 			} | {
 				extraction: {
 					kind: string;
@@ -5447,6 +5461,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degradedReason?: string | undefined;
 				degraded: boolean;
 				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -5475,17 +5502,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
 				formSpec: DynamicFormSpec | null;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
 			} | {
 				extraction?: undefined;
 				degradedReason?: string | undefined;
 				degraded: boolean;
 				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -5514,12 +5548,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
 				formSpec: DynamicFormSpec | null;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
 			};
 			meta: object;
 		}>;
@@ -10411,11 +10439,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		runOpenClawRuntimeAction: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				action: "restart" | "safe_update" | "rollback";
+				action: "rollback" | "restart" | "safe_update";
 			};
 			output: {
 				automated: boolean;
-				action: "restart" | "safe_update" | "rollback";
+				action: "rollback" | "restart" | "safe_update";
 				commands: string[];
 				message: string;
 			};
@@ -13549,7 +13577,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "normal" | "slow" | "fast" | undefined;
+						speed?: "normal" | "fast" | "slow" | undefined;
 					} | undefined;
 				} | undefined;
 				defaultTemplates?: Record<string, string> | undefined;
@@ -13615,7 +13643,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "normal" | "slow" | "fast" | undefined;
+						speed?: "normal" | "fast" | "slow" | undefined;
 					} | undefined;
 				} | undefined;
 			};
@@ -18289,7 +18317,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				steps: RecipeStep[];
 				linkedEnvironmentId: string | null;
 				linkedAppSlug: string | null;
-				onFailure: "continue" | "rollback" | "stop";
+				onFailure: "continue" | "stop" | "rollback";
 				rollbackRecipeId: string | null;
 				recipeTemplate: "custom" | "kamal" | "docker-compose" | "git-pull" | null;
 			};

@@ -63,6 +63,99 @@ means the write is queued for the user's review — like a PR, not a failure. Ke
 working; see `writes.md` for the full governance contract and `inline-patterns.md`
 for how to surface a proposal's review link in a Companion reply.
 
+## Escalation ladder (keep in a corner of your head)
+
+You can always escalate — never dead-end on "I can't." Full detail: `escalation-ladder.md`.
+
+- **L0 Reflexes** — recall before, capture after, proposed ≠ error
+- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions
+- **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
+- **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
+  define_role, create_property_def/profile, create_view, create_workspace, market.install.
+  **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace
+- **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.
+  Never crystallize a one-off that hasn't succeeded once
+
+**Gates:**
+
+- Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)
+- Success / repeatable pattern → one structural suggestion (question first if speculative)
+- Capture placement routes to EXISTING lenses only — never invent a workspace from capture
+
+---
+
+# Escalation ladder — discover → invent under proposal → crystallize after proof
+
+The always-on brief lives in `reflexes.md`. This file is the full HOW when you need more than the corner-of-your-head reminder.
+
+## Why it exists
+
+Agents fail in two ways: (1) dead-end ("I can't do that") when the substrate could express the need after discovery or a proposed meta change, and (2) silent invent (minting workspaces/profiles/views without checking what already exists). The ladder is the habit that prevents both. Soft teaching only — no hard tool filtering by tier.
+
+## Levels
+
+### L0 — Reflexes (always)
+
+Recall before non-trivial work (`synap_ask` / search). Capture durable learning after. Treat `"proposed"` as success-in-review, not an error. Orient once per session.
+
+### L1 — OPERATE on data
+
+Default mode: work with what already exists.
+
+- Capture free text, create/update entities, link, attach **known** facets
+- Start/update sessions when the work is a unit with a deliverable
+- Prefer existing profiles, views, capabilities, playbooks over inventing structure
+
+### L2 — DISCOVER before invent
+
+When the tool list or current schema doesn't express the need — **search before minting**:
+
+1. `list_profiles` / `list_views` / `list_capabilities({query})` in the active lenses
+2. `market.search({query, kind?})` over `capability` | `template` | `automation` | `cell`
+3. Load the relevant skill (`load_skill` / discover_tools) if the HOW is unclear
+
+Only if L2 returns empty for the real need do you climb to L3.
+
+### L3 — MUTATE the meta-model (proposal-gated)
+
+Extend the substrate so the need becomes expressible. Always governed — expect `"proposed"`.
+
+| Need               | Prefer               | Tool sketch                                                                             |
+| ------------------ | -------------------- | --------------------------------------------------------------------------------------- |
+| Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                            |
+| Field missing      | Existing property    | `create_property_def`                                                                   |
+| Kind missing       | Closest parent kind  | `create_profile` (extend, don't fork)                                                   |
+| View missing       | Existing view        | `list_views` first, then `create_view` (recovery or proactive)                          |
+| Domain missing     | **Template**         | `market.search(kind:template)` → install/propose **before** freehand `create_workspace` |
+| Capability missing | Marketplace          | `market.install` (always proposes for agents)                                           |
+
+**Template-before-workspace (hard rule in teaching):** new operational domains start as marketplace templates when one fits. Freehand workspace creation is last resort after the four workspace-design conditions hold (`workspace-design.md`). Capture never invents a workspace — placement only routes into existing lenses.
+
+### L4 — CRYSTALLIZE after proof
+
+After a one-off has succeeded and is clearly repeatable:
+
+- Session that worked → `promote_session_to_playbook`
+- Cell that presents well for a type/slot → `promote_cell_to_renderer`
+- Repeatable process authored deliberately → `create_playbook`
+
+Never crystallize a speculative or failed one-off. One structural suggestion at a time; if speculative, ask first (`creative-loop.md`).
+
+## Decision gates (cheat sheet)
+
+```
+Can I do it with existing data/tools?
+  yes → L1
+  no  → L2 discover
+         found → use / install (propose) / enable
+         empty → L3 propose meta change (never silent invent)
+Did a one-off just succeed and will recur?
+  yes → offer L4 (question if speculative)
+  no  → leave it as a one-off
+```
+
+Blocked path: **never** invent silently; **never** stop at a dead-end error — climb L2→L3 and propose. Success path: one clear structural nudge, not a cascade of schema changes.
+
 ---
 
 ## Mental model
@@ -689,21 +782,22 @@ and do not silently give up. Follow this order:
 4. **Found in the marketplace?** `market.install({slug, kind, version?})`. As
    an agent this ALWAYS lands as a reviewable proposal — never auto-installs,
    even with a grant on the verb itself. Share the `reviewUrl`; don't retry.
-5. **Truly nothing, anywhere?** Say precisely what's missing — the action,
-   not a vague "I can't do that." ("There's no capability for posting to
-   Slack in this workspace or the marketplace yet.") Offer to capture the gap
-   as a note so it's not lost.
+5. **Truly nothing, anywhere?** That is escalation-ladder **L2 empty → L3**:
+   say precisely what's missing (the action, not "I can't"), offer to capture
+   the gap, and if the need is structural (new capability package, template,
+   automation), propose via marketplace/install or meta tools — never
+   dead-end and never fabricate a result.
 
 <!-- brief:start -->
 
-When blocked: (1) `list_capabilities({query})` first — never assume today's
-list is the ceiling. (2) Found but DRAFT/no connection → tell the user
-exactly what to enable/connect and where; don't retry until they've acted.
-(3) Still nothing → `market.search({query, kind?})` the marketplace cache;
-`market.install` on a hit always proposes for an agent. (4) Truly nothing →
-say precisely what's missing, offer to capture the gap. Never fabricate a
-result, never silently give up. Provider calls can be 200-with-error-body —
-always check `result.success`/`result.error` before claiming success.
+When blocked (ladder L2→L3): (1) `list_capabilities({query})` first — never
+assume today's list is the ceiling. (2) Found but DRAFT/no connection → tell
+the user exactly what to enable/connect and where; don't retry until they've
+acted. (3) Still nothing → `market.search({query, kind?})`; `market.install`
+on a hit always proposes for an agent. (4) Truly nothing → say precisely
+what's missing, offer to capture the gap or propose L3 structure — never
+fabricate, never silent give-up. Provider 200-with-error-body: always check
+`result.success`/`result.error` before claiming success.
 
 <!-- brief:end -->
 
@@ -1035,6 +1129,8 @@ When the session is done **and the work was a repeatable process** (not a one-of
 ### The symmetry
 
 Sessions and cells are the two things you _do_; playbooks and renderers are the two things you _keep_. The instinct to build: **first do it once concretely, watch it work, then offer to crystallize it** — and let the user decide what becomes standing config. Never crystallize speculatively before the one-off has proven itself.
+
+This is escalation ladder **L4**: crystallize only after proof. Blocked/missing structure climbs L2→L3 first (`escalation-ladder.md`); L4 is the success path, not a substitute for discovery.
 
 ---
 
@@ -1772,7 +1868,11 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity.
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data.
 5. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
-6. **Only if all four held** → `create_workspace` (propose it — workspace creation is a deliberate move, offer it to the user; see `lenses.md`). Then declare how it lives in the graph (see `workspace-edges.md`).
+6. **Only if all four held** → **template first** (escalation ladder L3):
+   `market.search({query, kind: "template"})` and propose install of a matching
+   template before freehand `create_workspace`. Freehand create is last resort
+   and always proposed — a deliberate move, offer it to the user (see
+   `lenses.md`). Then declare how it lives in the graph (see `workspace-edges.md`).
 
 ## The CRM corollary — the load-bearing example
 

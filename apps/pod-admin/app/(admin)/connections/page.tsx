@@ -69,8 +69,19 @@ export default function ApplicationConnectionsPage() {
   }
 
   const data = connections.data;
+  // Backend list already applies effective (expiry-aware) status.
   const pendingRequests = (data?.requests ?? []).filter(
     (request) => request.status === "pending"
+  );
+  const expiredRequests = (data?.requests ?? []).filter(
+    (request) => request.status === "expired"
+  );
+  const otherRequests = (data?.requests ?? []).filter(
+    (request) =>
+      request.status !== "pending" &&
+      request.status !== "expired" &&
+      request.status !== "approved" &&
+      request.status !== "completed"
   );
   const activeConnections = (data?.connections ?? []).filter(
     (connection) => connection.status === "approved"
@@ -120,35 +131,67 @@ export default function ApplicationConnectionsPage() {
           <EmptyState label="No application requests are waiting for review." />
         ) : (
           pendingRequests.map((request) => (
-            <Card
+            <RequestRow
               key={request.id}
-              shadow="none"
-              className="border border-foreground/10 bg-content1"
-            >
-              <CardBody className="flex flex-row items-center justify-between gap-4 p-4">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {request.displayName}
-                  </p>
-                  <p className="mt-1 truncate font-mono text-xs text-foreground/55">
-                    {request.issuerUrl} · {request.requestedOrigin}
-                  </p>
-                </div>
-                <Button
-                  as={Link}
-                  href={`/connection-requests/${request.id}`}
-                  size="sm"
-                  className="min-h-10"
-                  variant="flat"
-                  endContent={<ExternalLink size={14} />}
-                >
-                  Review
-                </Button>
-              </CardBody>
-            </Card>
+              request={request}
+              actionLabel="Review"
+            />
           ))
         )}
       </section>
+
+      {expiredRequests.length > 0 ? (
+        <section className="mt-9 space-y-3" aria-labelledby="expired-requests">
+          <div className="flex items-center justify-between">
+            <h2
+              id="expired-requests"
+              className="text-sm font-medium text-foreground"
+            >
+              Expired requests
+            </h2>
+            <span className="text-xs text-foreground/50">
+              {expiredRequests.length}
+            </span>
+          </div>
+          <p className="max-w-2xl text-xs leading-5 text-foreground/55">
+            These handoffs timed out before approval. If an approved connection
+            already exists for the same app origin, the requester should use
+            Check connection in the app — not a new request.
+          </p>
+          {expiredRequests.map((request) => (
+            <RequestRow
+              key={request.id}
+              request={request}
+              actionLabel="View"
+              badge="expired"
+            />
+          ))}
+        </section>
+      ) : null}
+
+      {otherRequests.length > 0 ? (
+        <section className="mt-9 space-y-3" aria-labelledby="other-requests">
+          <div className="flex items-center justify-between">
+            <h2
+              id="other-requests"
+              className="text-sm font-medium text-foreground"
+            >
+              Other requests
+            </h2>
+            <span className="text-xs text-foreground/50">
+              {otherRequests.length}
+            </span>
+          </div>
+          {otherRequests.map((request) => (
+            <RequestRow
+              key={request.id}
+              request={request}
+              actionLabel="View"
+              badge={request.status}
+            />
+          ))}
+        </section>
+      ) : null}
 
       <section
         className="mt-9 space-y-3"
@@ -380,5 +423,53 @@ function EmptyState({ label }: { label: string }) {
       <ShieldCheck size={17} className="shrink-0" />
       {label}
     </div>
+  );
+}
+
+function RequestRow({
+  request,
+  actionLabel,
+  badge,
+}: {
+  request: {
+    id: string;
+    displayName: string;
+    issuerUrl: string;
+    requestedOrigin: string;
+    status: string;
+  };
+  actionLabel: string;
+  badge?: string;
+}) {
+  return (
+    <Card shadow="none" className="border border-foreground/10 bg-content1">
+      <CardBody className="flex flex-row items-center justify-between gap-4 p-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-medium">
+              {request.displayName}
+            </p>
+            {badge ? (
+              <Chip size="sm" variant="flat" color={statusColor(badge)}>
+                {badge}
+              </Chip>
+            ) : null}
+          </div>
+          <p className="mt-1 truncate font-mono text-xs text-foreground/55">
+            {request.issuerUrl} · {request.requestedOrigin}
+          </p>
+        </div>
+        <Button
+          as={Link}
+          href={`/connection-requests/${request.id}`}
+          size="sm"
+          className="min-h-10"
+          variant="flat"
+          endContent={<ExternalLink size={14} />}
+        >
+          {actionLabel}
+        </Button>
+      </CardBody>
+    </Card>
   );
 }

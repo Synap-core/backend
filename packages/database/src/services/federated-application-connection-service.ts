@@ -49,19 +49,41 @@ export type ApplicationConnectionRequestStatus =
   | "rejected"
   | "expired";
 
-function expiredStatus(
+/**
+ * Effective request status for owner UIs and requester polling.
+ * Exported so Pod Admin list/review use the same rules as status endpoints.
+ */
+export function effectiveApplicationConnectionRequestStatus(
   status: ApplicationConnectionRequestStatus,
   expiresAt: Date
 ): ApplicationConnectionRequestStatus {
-  // A decision is durable history, not an active handoff lease. In
-  // particular, do not turn a rejected request into “expired” after its
-  // handoff window: that would erase the owner’s explanation for the
-  // requester and make status polling contradictory.
-  if (status === "completed" || status === "rejected" || status === "expired") {
+  // Owner decisions and in-flight completion are durable history, not the
+  // short handoff lease used for awaiting_local_auth / pending. Demoting
+  // `approved` to `expired` after 30 minutes was the bug that left Pod Admin
+  // showing an approved connection while the CRM requester could never
+  // complete (status poll + complete both required a live handoff TTL).
+  if (
+    status === "completed" ||
+    status === "rejected" ||
+    status === "expired" ||
+    status === "approved" ||
+    status === "completing"
+  ) {
     return status;
   }
   return expiresAt > new Date() ? status : "expired";
 }
+
+/** @deprecated use effectiveApplicationConnectionRequestStatus */
+function expiredStatus(
+  status: ApplicationConnectionRequestStatus,
+  expiresAt: Date
+): ApplicationConnectionRequestStatus {
+  return effectiveApplicationConnectionRequestStatus(status, expiresAt);
+}
+
+/** Post-approval window for the requester browser to finish identity link. */
+const POST_APPROVAL_COMPLETION_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export type ApplicationConnectionCompletion = {
   receiptId: string;
@@ -201,6 +223,11 @@ export class FederatedApplicationConnectionService {
    */
   async approve(input: ApproveFederatedApplicationConnectionRequestInput) {
     const now = new Date();
+    // Keep the request completable long enough for the original CRM browser
+    // to return after owner review (which may happen near the handoff TTL).
+    const completionExpiresAt = new Date(
+      now.getTime() + POST_APPROVAL_COMPLETION_MS
+    );
     return db.transaction(async (tx) => {
       const [request] = await tx
         .update(federatedApplicationConnectionRequests)
@@ -208,6 +235,7 @@ export class FederatedApplicationConnectionService {
           status: "approved",
           reviewedBy: input.reviewerUserId,
           reviewedAt: now,
+          expiresAt: completionExpiresAt,
         })
         .where(
           and(
@@ -426,6 +454,10 @@ export class FederatedApplicationConnectionService {
     requestId: string;
     continuationHash: string;
   }) {
+    // Security boundary is the requester-held continuation hash + approved
+    // ledger row, not the pre-review handoff TTL. Requiring expiresAt > now
+    // here stranded owners who approved near expiry and requesters who
+    // returned later to an already-approved connection.
     const request =
       await db.query.federatedApplicationConnectionRequests.findFirst({
         where: and(
@@ -446,8 +478,7 @@ export class FederatedApplicationConnectionService {
                 new Date()
               )
             )
-          ),
-          gt(federatedApplicationConnectionRequests.expiresAt, new Date())
+          )
         ),
       });
     if (!request?.requestedByUserId || !request.approvedConnectionId)
@@ -524,8 +555,7 @@ export class FederatedApplicationConnectionService {
                 now
               )
             )
-          ),
-          gt(federatedApplicationConnectionRequests.expiresAt, now)
+          )
         )
       )
       .returning();

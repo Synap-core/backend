@@ -12,6 +12,7 @@ import {
   db,
   desc,
   eq,
+  and,
   FederatedApplicationConnectionService,
   federatedApplicationConnections,
   trustedIssuers,
@@ -29,6 +30,24 @@ const redeemRequestSchema = requestIdSchema.extend({
 });
 
 const connectionService = new FederatedApplicationConnectionService();
+
+/**
+ * Effective request status for owner UIs — must match
+ * `effectiveApplicationConnectionRequestStatus` in the database service.
+ * Owner decisions stay durable; only pre-decision handoffs expire.
+ */
+function effectiveRequestStatus(status: string, expiresAt: Date): string {
+  if (
+    status === "completed" ||
+    status === "rejected" ||
+    status === "expired" ||
+    status === "approved" ||
+    status === "completing"
+  ) {
+    return status;
+  }
+  return expiresAt > new Date() ? status : "expired";
+}
 
 async function canReviewPodApplicationConnections(
   userId: string
@@ -49,12 +68,39 @@ async function canReviewPodApplicationConnections(
   return membership?.role === "owner" || membership?.role === "admin";
 }
 
+async function matchingApprovedConnection(input: {
+  issuerUrl: string;
+  clientId: string;
+  origin: string;
+}): Promise<boolean> {
+  const issuer = await db.query.trustedIssuers.findFirst({
+    where: eq(trustedIssuers.issuerUrl, input.issuerUrl),
+    columns: { id: true },
+  });
+  if (!issuer) return false;
+  const connection = await db.query.federatedApplicationConnections.findFirst({
+    where: and(
+      eq(federatedApplicationConnections.issuerId, issuer.id),
+      eq(federatedApplicationConnections.clientId, input.clientId),
+      eq(federatedApplicationConnections.status, "approved")
+    ),
+    columns: { allowedOrigins: true },
+  });
+  return Boolean(connection?.allowedOrigins.includes(input.origin));
+}
+
 function reviewShape(
   request: NonNullable<
     Awaited<ReturnType<FederatedApplicationConnectionService["getRequest"]>>
   >,
-  canReview: boolean
+  canReview: boolean,
+  options?: { matchingApprovedConnection?: boolean }
 ) {
+  const effectiveStatus = effectiveRequestStatus(
+    request.status,
+    request.expiresAt
+  );
+  const matching = options?.matchingApprovedConnection === true && canReview;
   if (!canReview) {
     // The opaque callback and exact issuer/origin pair are an owner review
     // artifact. A requester or ordinary member only needs the current state
@@ -69,11 +115,12 @@ function reviewShape(
       requestedOrigin: "Visible to Pod owners and administrators",
       requestedCallbackUrl: "Visible to Pod owners and administrators",
       requestedScopes: [],
-      status: request.status,
+      status: effectiveStatus,
       decisionReason: request.decisionReason,
       expiresAt: request.expiresAt,
       reviewedAt: request.reviewedAt,
       canReview: false,
+      matchingApprovedConnection: false,
     };
   }
   return {
@@ -85,11 +132,12 @@ function reviewShape(
     requestedOrigin: request.requestedOrigin,
     requestedCallbackUrl: request.requestedCallbackUrl,
     requestedScopes: request.requestedScopes,
-    status: request.status,
+    status: effectiveStatus,
     decisionReason: request.decisionReason,
     expiresAt: request.expiresAt,
     reviewedAt: request.reviewedAt,
     canReview,
+    matchingApprovedConnection: matching,
   };
 }
 
@@ -143,7 +191,16 @@ export const applicationConnectionsRouter = router({
           message: "Connection request not found",
         });
       }
-      return reviewShape(request, canReview);
+      const matching =
+        canReview &&
+        (await matchingApprovedConnection({
+          issuerUrl: request.issuerUrl,
+          clientId: request.clientId,
+          origin: request.requestedOrigin,
+        }));
+      return reviewShape(request, canReview, {
+        matchingApprovedConnection: matching,
+      });
     }),
 
   list: podAdminProcedure.query(async () => {
@@ -176,12 +233,17 @@ export const applicationConnectionsRouter = router({
       // Owner inventory needs the proposal and its lifecycle, never either
       // browser-held capability hash. Keeping those out of the tRPC payload
       // avoids copying them into client caches or diagnostics.
+      // status is the effective (expiry-aware) status so the list never shows
+      // a timed-out handoff as still pending.
       requests: requests.map(
         ({
           continuationHash: _continuationHash,
           redemptionHash: _redemptionHash,
           ...request
-        }) => request
+        }) => ({
+          ...request,
+          status: effectiveRequestStatus(request.status, request.expiresAt),
+        })
       ),
     };
   }),

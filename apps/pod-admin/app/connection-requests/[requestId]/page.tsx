@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Alert,
   Button,
@@ -21,6 +21,7 @@ import { applicationConnectionCapabilities } from "../../_lib/application-connec
 export default function ConnectionRequestPage() {
   const params = useParams<{ requestId: string }>();
   const requestId = params.requestId;
+  const router = useRouter();
   const utils = trpc.useUtils();
   const request = trpc.applicationConnections.getReviewRequest.useQuery(
     { requestId },
@@ -32,6 +33,7 @@ export default function ConnectionRequestPage() {
     null
   );
   const [autoReturning, setAutoReturning] = useState(false);
+  const [declined, setDeclined] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -40,12 +42,25 @@ export default function ConnectionRequestPage() {
     }
   }, [request.data, request.isLoading, requestId]);
 
+  // Esc closes the review surface (treat as a dismissible card, not a trap).
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeReview();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- closeReview is stable enough for this page
+  }, []);
+
+  function closeReview() {
+    router.push("/connections");
+  }
+
   const approve = trpc.applicationConnections.approveRequest.useMutation({
     onSuccess: async (data) => {
-      // A reviewer may be a different owner/device than the requester. Only
-      // the browser that successfully redeemed the native Pod sign-in holds
-      // this Pod-Admin-origin marker, so an owner who merely approves stays
-      // here rather than being pushed into the external application.
       let isRequesterBrowser = false;
       try {
         isRequesterBrowser =
@@ -58,41 +73,68 @@ export default function ConnectionRequestPage() {
       setApprovedReturnUrl(data.returnUrl);
       setAutoReturning(isRequesterBrowser);
       setActionError(null);
-      await utils.applicationConnections.getReviewRequest.invalidate({
-        requestId,
-      });
+      await Promise.all([
+        utils.applicationConnections.getReviewRequest.invalidate({
+          requestId,
+        }),
+        utils.applicationConnections.list.invalidate(),
+      ]);
       if (isRequesterBrowser) {
-        // The URL contains only the public request correlation; completion
-        // still requires the requester browser's opaque continuation.
         window.setTimeout(() => window.location.assign(data.returnUrl), 900);
+      } else if (!isRequesterBrowser) {
+        // Owner reviewing from Apps & Connections: return to the inventory
+        // after a short success beat so the page does not feel stuck.
+        window.setTimeout(() => router.push("/connections"), 1_200);
       }
     },
-    onError: () =>
+    onError: (error) =>
       setActionError(
-        "We couldn’t approve this request. Refresh and try again."
+        error.message ||
+          "We couldn’t approve this request. Refresh and try again."
       ),
   });
   const reject = trpc.applicationConnections.rejectRequest.useMutation({
     onSuccess: async () => {
       setActionError(null);
-      await utils.applicationConnections.getReviewRequest.invalidate({
-        requestId,
-      });
+      setDeclined(true);
+      await Promise.all([
+        utils.applicationConnections.getReviewRequest.invalidate({
+          requestId,
+        }),
+        utils.applicationConnections.list.invalidate(),
+      ]);
+      window.setTimeout(() => router.push("/connections"), 900);
     },
-    onError: () =>
+    onError: (error) =>
       setActionError(
-        "We couldn’t decline this request. Refresh and try again."
+        error.message ||
+          "We couldn’t decline this request. Refresh and try again."
       ),
   });
 
   if (request.isLoading) return <Loading />;
   if (request.isError || !request.data) {
     return (
-      <Frame>
-        <Alert color="danger" title="We couldn’t open this connection request">
-          It may have expired, already been completed, or this Pod account does
-          not have access.
-        </Alert>
+      <Frame onDismiss={closeReview}>
+        <Card
+          shadow="none"
+          className="w-full max-w-3xl border border-foreground/10 bg-content1"
+        >
+          <CardBody className="gap-4 p-6">
+            <Alert
+              color="danger"
+              title="We couldn’t open this connection request"
+            >
+              It may have expired, already been completed, or this Pod account
+              does not have access.
+            </Alert>
+            <div className="flex justify-end">
+              <Button variant="flat" className="min-h-11" onPress={closeReview}>
+                Back to Apps &amp; Connections
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
       </Frame>
     );
   }
@@ -100,9 +142,12 @@ export default function ConnectionRequestPage() {
   const data = request.data;
   const canViewRequestDetails = data.canReview;
   const isPending =
-    !approvedReturnUrl &&
-    data.status === "pending" &&
-    new Date(data.expiresAt) > new Date();
+    !approvedReturnUrl && !declined && data.status === "pending";
+  const isExpired = data.status === "expired";
+  const matchingApproved = Boolean(
+    (data as { matchingApprovedConnection?: boolean })
+      .matchingApprovedConnection
+  );
   const isWorking = approve.isPending || reject.isPending;
   const expiresAt = new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
@@ -112,50 +157,69 @@ export default function ConnectionRequestPage() {
     data.status === "awaiting_local_auth"
       ? "Awaiting Pod sign-in"
       : data.status.charAt(0).toUpperCase() + data.status.slice(1);
+  const chipColor =
+    data.status === "approved" || matchingApproved
+      ? "success"
+      : data.status === "pending"
+        ? "warning"
+        : data.status === "rejected" || data.status === "expired"
+          ? "danger"
+          : "default";
 
   return (
-    <Frame>
-      <Card shadow="none" className="border border-foreground/10 bg-content1">
-        <CardHeader className="flex-col items-start gap-1 px-6 pb-3 pt-6">
+    <Frame onDismiss={closeReview}>
+      <Card
+        shadow="none"
+        className="w-full max-w-3xl border border-foreground/10 bg-content1"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connection-request-title"
+      >
+        <CardHeader className="flex-col items-start gap-1 px-6 pb-3 pt-5">
           <div className="flex w-full items-start justify-between gap-4">
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
                 Pod connection request
               </p>
               <h1
+                id="connection-request-title"
                 ref={headingRef}
                 tabIndex={-1}
-                className="mt-2 text-xl font-semibold tracking-tight outline-none"
+                className="mt-1.5 text-xl font-semibold tracking-tight outline-none"
               >
                 {canViewRequestDetails
                   ? `Review ${data.displayName}`
                   : "Connection request ready"}
               </h1>
             </div>
-            <Chip
-              color={
-                data.status === "approved"
-                  ? "success"
-                  : data.status === "pending"
-                    ? "warning"
-                    : "default"
-              }
-              variant="flat"
-              size="sm"
-            >
-              {statusLabel}
-            </Chip>
+            <div className="flex shrink-0 items-center gap-2">
+              <Chip color={chipColor} variant="flat" size="sm">
+                {matchingApproved && data.status !== "approved"
+                  ? "Already approved"
+                  : statusLabel}
+              </Chip>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                aria-label="Close review"
+                className="min-h-9 min-w-9"
+                onPress={closeReview}
+              >
+                <X size={16} />
+              </Button>
+            </div>
           </div>
-          <p className="max-w-xl text-sm leading-6 text-foreground/65">
+          <p className="max-w-2xl text-sm leading-6 text-foreground/65">
             {canViewRequestDetails
               ? "Review the external issuer and exact browser permission before changing this Pod’s trust configuration."
               : "Your local Pod sign-in prepared this request. A Pod owner or administrator must approve the external application; its registration details stay private to reviewers."}
           </p>
         </CardHeader>
         <Divider />
-        <CardBody className="gap-5 px-6 py-5">
+        <CardBody className="gap-4 px-6 py-4">
           {canViewRequestDetails ? (
-            <>
+            <dl className="grid gap-4 sm:grid-cols-2">
               <Detail label="Application client" value={data.clientId} mono />
               <Detail label="Issuer" value={data.issuerUrl} mono />
               <Detail
@@ -169,16 +233,20 @@ export default function ConnectionRequestPage() {
                 mono
               />
               <Detail
+                className="sm:col-span-2"
                 label="Connection allows"
                 value={applicationConnectionCapabilities(data.requestedScopes)}
               />
-            </>
-          ) : null}
-          <Detail label="Request expires" value={expiresAt} />
-          {canViewRequestDetails && data.publisherUrl ? (
-            <Detail label="Publisher" value={data.publisherUrl} />
-          ) : null}
-          {canViewRequestDetails ? (
+              <Detail label="Request expires" value={expiresAt} />
+              {data.publisherUrl ? (
+                <Detail label="Publisher" value={data.publisherUrl} />
+              ) : null}
+            </dl>
+          ) : (
+            <Detail label="Request expires" value={expiresAt} />
+          )}
+
+          {canViewRequestDetails && isPending ? (
             <Alert
               color="warning"
               variant="flat"
@@ -193,6 +261,22 @@ export default function ConnectionRequestPage() {
               issuer identity and their existing Pod identity.
             </Alert>
           ) : null}
+
+          {matchingApproved && !isPending && data.status !== "approved" ? (
+            <Alert
+              color="success"
+              variant="flat"
+              title="This app origin is already approved"
+              role="status"
+            >
+              A matching approved connection already exists for this issuer,
+              client, and browser origin. Ask the requester to return to the
+              application and choose <strong>Check connection</strong> — no new
+              approval is required. You can dismiss expired or duplicate
+              requests from the list.
+            </Alert>
+          ) : null}
+
           {actionError ? (
             <Alert
               color="danger"
@@ -202,13 +286,21 @@ export default function ConnectionRequestPage() {
               {actionError}
             </Alert>
           ) : null}
+
           {approvedReturnUrl ? (
             <Alert color="success" title="Connection approved" role="status">
               {autoReturning
                 ? "Returning to the requesting app now so it can finish the connection."
-                : "The requesting browser can now finish the connection. You can stay in Pod Admin; the requester’s app will resume when it checks the request."}
+                : "Approved. Returning to Apps & Connections. The requester’s browser can finish with Check connection."}
             </Alert>
           ) : null}
+
+          {declined ? (
+            <Alert color="default" title="Request declined" role="status">
+              Returning to Apps &amp; Connections.
+            </Alert>
+          ) : null}
+
           {!data.canReview ? (
             <Alert
               color="primary"
@@ -221,7 +313,20 @@ export default function ConnectionRequestPage() {
               can resume after approval without sharing your Pod credentials.
             </Alert>
           ) : null}
-          {!isPending && !approvedReturnUrl ? (
+
+          {isExpired && !matchingApproved && !approvedReturnUrl ? (
+            <Alert color="default" variant="flat" title="This request expired">
+              Approval requests are short-lived. Ask the application to start a
+              fresh connection request, then review that new entry here.
+            </Alert>
+          ) : null}
+
+          {!isPending &&
+          !approvedReturnUrl &&
+          !declined &&
+          !isExpired &&
+          data.status !== "approved" &&
+          !matchingApproved ? (
             <Alert
               color="default"
               variant="flat"
@@ -231,21 +336,31 @@ export default function ConnectionRequestPage() {
                 "Create a new request from the application if you still need to connect."}
             </Alert>
           ) : null}
+
           {data.canReview && isPending ? (
             <Textarea
               label="Reason if declining"
-              description="Required only if you decline, so the requester knows what to change."
+              description="Required only if you decline (at least 3 characters), so the requester knows what to change."
               value={reason}
               onValueChange={setReason}
               minRows={2}
-              maxRows={4}
+              maxRows={3}
+              isDisabled={isWorking}
             />
           ) : null}
         </CardBody>
-        {data.canReview && isPending ? (
-          <>
-            <Divider />
-            <CardFooter className="justify-end gap-2 px-6 py-4">
+        <Divider />
+        <CardFooter className="flex flex-wrap justify-end gap-2 px-6 py-4">
+          <Button
+            variant="flat"
+            className="min-h-11"
+            isDisabled={isWorking}
+            onPress={closeReview}
+          >
+            Close
+          </Button>
+          {data.canReview && isPending ? (
+            <>
               <Button
                 color="danger"
                 variant="flat"
@@ -269,26 +384,24 @@ export default function ConnectionRequestPage() {
               >
                 Approve connection
               </Button>
-            </CardFooter>
-          </>
-        ) : null}
+            </>
+          ) : null}
+          {approvedReturnUrl && autoReturning ? (
+            <Button
+              color="primary"
+              className="min-h-11"
+              endContent={<ExternalLink size={16} />}
+              onPress={() => window.location.assign(approvedReturnUrl)}
+            >
+              Open app in this browser
+            </Button>
+          ) : null}
+        </CardFooter>
       </Card>
-      {approvedReturnUrl && autoReturning ? (
-        <div className="mt-4 flex justify-end">
-          <Button
-            color="primary"
-            className="min-h-11"
-            endContent={<ExternalLink size={16} />}
-            onPress={() => window.location.assign(approvedReturnUrl)}
-          >
-            Open app in this browser
-          </Button>
-        </div>
-      ) : null}
-      <p className="mt-4 flex items-center gap-2 text-xs text-foreground/45">
-        <ExternalLink size={13} />
+      <p className="mt-3 max-w-3xl text-center text-xs text-foreground/45">
         This Pod-owned review uses your local Pod session only. It does not
-        expose a Pod session or external issuer token to the application.
+        expose a Pod session or external issuer token to the application. Click
+        outside the card or press Esc to close.
       </p>
     </Frame>
   );
@@ -298,37 +411,54 @@ function Detail({
   label,
   value,
   mono = false,
+  className,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  className?: string;
 }) {
   return (
-    <div>
-      <p className="text-xs font-medium text-foreground/50">{label}</p>
-      <p
-        className={`mt-1 break-all text-sm text-foreground ${mono ? "font-mono text-[12px]" : ""}`}
+    <div className={className}>
+      <dt className="text-xs font-medium text-foreground/50">{label}</dt>
+      <dd
+        className={`mt-1 break-all text-sm text-foreground ${mono ? "font-mono text-[12px] leading-5" : ""}`}
       >
         {value}
-      </p>
+      </dd>
     </div>
   );
 }
 
-function Frame({ children }: { children: React.ReactNode }) {
+function Frame({
+  children,
+  onDismiss,
+}: {
+  children: React.ReactNode;
+  onDismiss: () => void;
+}) {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl items-center px-5 py-10">
-      {children}
+    <main className="relative flex min-h-screen w-full items-center justify-center px-4 py-8">
+      {/* Backdrop — outside click closes the review surface */}
+      <button
+        type="button"
+        aria-label="Close connection request review"
+        className="absolute inset-0 cursor-default bg-background/80"
+        onClick={onDismiss}
+      />
+      <div className="relative z-10 flex w-full max-w-3xl flex-col items-center">
+        {children}
+      </div>
     </main>
   );
 }
 
 function Loading() {
   return (
-    <Frame>
-      <div className="flex w-full items-center justify-center gap-3 text-sm text-foreground/60">
+    <main className="flex min-h-screen w-full items-center justify-center px-5 py-10">
+      <div className="flex items-center justify-center gap-3 text-sm text-foreground/60">
         <Spinner size="sm" /> Loading Pod connection request…
       </div>
-    </Frame>
+    </main>
   );
 }
