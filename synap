@@ -611,10 +611,12 @@ $return_urls
       enabled: true
       config: {}
     passkey:
-      # The native Pod Admin login currently supports password/OIDC flow nodes.
-      # Keep passkeys disabled until its WebAuthn ceremony is implemented; an
-      # enabled but non-functional trigger is worse than an absent option.
-      enabled: false
+      # The WebAuthn ceremony IS implemented natively by the Pod Admin login:
+      # synap-app/packages/core/auth-ui/src/webauthn.ts drives both the passkey
+      # login and settings ceremonies against Kratos v1.3.1's flow nodes.
+      # Requires the passkey credentials block in identity.schema.json — without
+      # it Kratos accepts this config but the strategy silently does nothing.
+      enabled: true
       config:
         rp:
           display_name: "Synap"
@@ -678,6 +680,20 @@ identity:
     - id: default
       url: file:///etc/config/kratos/identity.schema.json
 session:
+  # Explicit, not defaulted. Kratos defaults session.lifespan to 24h, and that
+  # daily expiry was the ONLY reason the desktop app stored the user's password
+  # (to silently re-login each day) — a replayable secret at rest, guarded by a
+  # Touch ID prompt that was never actually enforced. 30 days removes the need:
+  # a session cookie is scoped and revocable server-side; a password is neither.
+  #
+  # ABSOLUTE, not sliding — verified against Kratos v1.3.1 source. /sessions/whoami
+  # calls RefreshCookie (session/handler.go:266), which only re-issues the COOKIE
+  # to match the session (session/manager_http.go:109-131); it never advances
+  # ExpiresAt. Extension happens only via the admin endpoint
+  # PATCH /admin/sessions/{id}/extend. So users re-login every 30 days regardless
+  # of activity. To make it sliding, the pod would have to call that admin
+  # endpoint (session.earliest_possible_extend then throttles the DB writes).
+  lifespan: 720h
   cookie:
     # Cookie domain: automatically set based on domain
     domain: ${cookie_domain}
