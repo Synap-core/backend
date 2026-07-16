@@ -855,6 +855,23 @@ export class IntelligenceHubClient {
      * form (mirror of the `targetProject*` routing fields — additive, null-safe).
      */
     formSpec?: DynamicFormSpec | null;
+    /**
+     * Soft meta-structure suggestions (display-only). Never materialize.
+     * Additive / optional — absent when the model has nothing to suggest.
+     */
+    architectureSuggestions?: Array<{
+      kind?:
+        | "workspace_template"
+        | "new_workspace"
+        | "project"
+        | "view"
+        | "role"
+        | "playbook";
+      title: string;
+      reason?: string;
+      confidence?: number;
+      payload?: Record<string, unknown>;
+    }>;
     /** Honesty markers when an input could not be fully extracted/structured. */
     degraded?: boolean;
     degradedReason?: string;

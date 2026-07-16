@@ -524,7 +524,7 @@ export const tools = {
       {
         name: "synap_define_role",
         description:
-          "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Use this ONLY when synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error.",
+          "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Escalation L3: call ONLY after synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed: may return 'proposed' — NEVER treat that as an error.",
         inputSchema: {
           type: "object",
           properties: {
@@ -801,7 +801,7 @@ export const tools = {
       {
         name: "synap_promote_cell_to_renderer",
         description:
-          "Bind a cell as a profile's renderer for a slot (list | detail | dashboard) — durable, consequential, so it's governed like any write. scope 'workspace' (default) sets a per-workspace overlay; scope 'pod' sets the profile's system default across all workspaces.",
+          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
         inputSchema: {
           type: "object",
           properties: {
@@ -840,7 +840,7 @@ export const tools = {
       {
         name: "synap_promote_session_to_playbook",
         description:
-          "Promote a validated focus session into a reusable Playbook (runtime → config): re-grants the capabilities the session used and records lineage.",
+          "Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): re-grants capabilities used and records lineage. May propose; never promote failed or speculative sessions.",
         inputSchema: {
           type: "object",
           properties: {
@@ -941,7 +941,7 @@ export const tools = {
       {
         name: "synap_capture",
         description:
-          "THE free-text write door: hand it anything worth remembering and the capture pipeline structures it into the right entities. Call it AFTER learning something durable — don't wait to be asked. Hint profileSlug to guide extraction; global:true stores a pod-wide runbook; use synap_create_entity when you already know the exact slug + fields.",
+          "THE free-text write door: hand it anything worth remembering and the capture pipeline structures it into the right entities. Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only — never invent a workspace from capture. Hint profileSlug to guide extraction; global:true stores a pod-wide runbook; use synap_create_entity when you already know the exact slug + fields.",
         inputSchema: {
           type: "object",
           properties: {
@@ -991,7 +991,7 @@ export const tools = {
       {
         name: "synap_create_workspace",
         description:
-          "Create a workspace from a definition (name + optional WorkspaceProposal definition object). Pass a stable proposalId for idempotency — same id + user returns the existing workspace.",
+          "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1069,7 +1069,7 @@ export const tools = {
       {
         name: "synap_create_view",
         description:
-          "Create a view in a workspace. Type controls layout: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes the view to one entity type.",
+          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call list_views first — don't duplicate. Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose.",
         inputSchema: {
           type: "object",
           properties: {

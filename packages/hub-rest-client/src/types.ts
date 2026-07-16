@@ -321,6 +321,23 @@ export interface CaptureStructureResponse {
   targetWorkspaceConfidence?: number | null;
   targetWorkspaceReason?: string | null;
   targetProjectId?: string | null;
+  /**
+   * Soft meta-structure suggestions (display-only chips). Never materialize.
+   * Additive — absent when the model has nothing to suggest.
+   */
+  architectureSuggestions?: Array<{
+    kind?:
+      | "workspace_template"
+      | "new_workspace"
+      | "project"
+      | "view"
+      | "role"
+      | "playbook";
+    title: string;
+    reason?: string;
+    confidence?: number;
+    payload?: Record<string, unknown>;
+  }>;
   dedupCandidates?: Record<
     string,
     Array<{

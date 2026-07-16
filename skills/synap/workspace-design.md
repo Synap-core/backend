@@ -24,7 +24,11 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity.
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data.
 5. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
-6. **Only if all four held** → `create_workspace` (propose it — workspace creation is a deliberate move, offer it to the user; see `lenses.md`). Then declare how it lives in the graph (see `workspace-edges.md`).
+6. **Only if all four held** → **template first** (escalation ladder L3):
+   `market.search({query, kind: "template"})` and propose install of a matching
+   template before freehand `create_workspace`. Freehand create is last resort
+   and always proposed — a deliberate move, offer it to the user (see
+   `lenses.md`). Then declare how it lives in the graph (see `workspace-edges.md`).
 
 ## The CRM corollary — the load-bearing example
 

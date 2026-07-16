@@ -23,3 +23,22 @@ workspaces, projects, and entity types before acting.
 means the write is queued for the user's review — like a PR, not a failure. Keep
 working; see `writes.md` for the full governance contract and `inline-patterns.md`
 for how to surface a proposal's review link in a Companion reply.
+
+## Escalation ladder (keep in a corner of your head)
+
+You can always escalate — never dead-end on "I can't." Full detail: `escalation-ladder.md`.
+
+- **L0 Reflexes** — recall before, capture after, proposed ≠ error
+- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions
+- **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
+- **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
+  define_role, create_property_def/profile, create_view, create_workspace, market.install.
+  **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace
+- **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.
+  Never crystallize a one-off that hasn't succeeded once
+
+**Gates:**
+
+- Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)
+- Success / repeatable pattern → one structural suggestion (question first if speculative)
+- Capture placement routes to EXISTING lenses only — never invent a workspace from capture

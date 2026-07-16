@@ -68,21 +68,22 @@ and do not silently give up. Follow this order:
 4. **Found in the marketplace?** `market.install({slug, kind, version?})`. As
    an agent this ALWAYS lands as a reviewable proposal — never auto-installs,
    even with a grant on the verb itself. Share the `reviewUrl`; don't retry.
-5. **Truly nothing, anywhere?** Say precisely what's missing — the action,
-   not a vague "I can't do that." ("There's no capability for posting to
-   Slack in this workspace or the marketplace yet.") Offer to capture the gap
-   as a note so it's not lost.
+5. **Truly nothing, anywhere?** That is escalation-ladder **L2 empty → L3**:
+   say precisely what's missing (the action, not "I can't"), offer to capture
+   the gap, and if the need is structural (new capability package, template,
+   automation), propose via marketplace/install or meta tools — never
+   dead-end and never fabricate a result.
 
 <!-- brief:start -->
 
-When blocked: (1) `list_capabilities({query})` first — never assume today's
-list is the ceiling. (2) Found but DRAFT/no connection → tell the user
-exactly what to enable/connect and where; don't retry until they've acted.
-(3) Still nothing → `market.search({query, kind?})` the marketplace cache;
-`market.install` on a hit always proposes for an agent. (4) Truly nothing →
-say precisely what's missing, offer to capture the gap. Never fabricate a
-result, never silently give up. Provider calls can be 200-with-error-body —
-always check `result.success`/`result.error` before claiming success.
+When blocked (ladder L2→L3): (1) `list_capabilities({query})` first — never
+assume today's list is the ceiling. (2) Found but DRAFT/no connection → tell
+the user exactly what to enable/connect and where; don't retry until they've
+acted. (3) Still nothing → `market.search({query, kind?})`; `market.install`
+on a hit always proposes for an agent. (4) Truly nothing → say precisely
+what's missing, offer to capture the gap or propose L3 structure — never
+fabricate, never silent give-up. Provider 200-with-error-body: always check
+`result.success`/`result.error` before claiming success.
 
 <!-- brief:end -->
 

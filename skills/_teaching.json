@@ -245,7 +245,23 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Reflexes: recall before work, capture after learning — the two habits every session."
+    "summary": "Reflexes: recall before, capture after, plus the short escalation ladder (discover → propose meta → crystallize after proof)."
+  },
+  "synap/escalation-ladder": {
+    "teachesTools": [
+      "list_profiles",
+      "list_capabilities",
+      "market.search",
+      "market.install",
+      "create_workspace",
+      "define_role",
+      "create_view",
+      "promote_session_to_playbook",
+      "promote_cell_to_renderer"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Full escalation ladder: L0 reflexes → L1 operate → L2 discover → L3 mutate meta (proposal) → L4 crystallize after proof."
   },
   "synap/scope": {
     "teachesTools": [],

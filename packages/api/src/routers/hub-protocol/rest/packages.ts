@@ -9,21 +9,16 @@
 import { z } from "zod";
 import type { HubHono } from "./_shared.js";
 import {
-  createCapabilityFromDefinition,
-  loadCapabilityTemplate,
-} from "../../../services/capabilities/create-from-definition.js";
-import { createLoopFromDefinition } from "../../../services/loops/create-from-definition.js";
-import {
   materializeWorkspaceCore,
   ComposeBaseUnavailableError,
   DependencyResolutionError,
   ComposeBaseNotFoundError,
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
+import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
 import type { WorkspaceDefinitionInput } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
-import { createHubProtocolCallerContext } from "../utils.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -170,15 +165,33 @@ export function registerPackagesRoutes(app: HubHono): void {
     const result: Record<string, unknown> = {};
 
     // ── Permission check ──────────────────────────────────────────────────
+    // Store the FULL package body as `definition` so the workspace/create
+    // approve executor can re-run materializeWorkspaceCore on approval.
+    // Name-only data was the Phase-0 bug: approve had nothing to materialize.
     const perm = await checkPermissionOrPropose({
       userId,
+      agentUserId,
       subjectType: "workspace",
       action: "create",
-      data: { name: body.workspaceName ?? body._meta?.slug ?? "untitled" },
+      data: {
+        name: body.workspaceName ?? body._meta?.slug ?? "untitled",
+        definition: body,
+        workspaceName: body.workspaceName,
+        templateId: body._meta?.slug,
+        packageSlug: body._meta?.slug,
+        workspaceType: body.workspaceType,
+        proposalId: body._meta?.slug,
+        createdBy: "provisioning",
+        source: "packages.apply",
+      },
     });
     if ("denied" in perm && perm.denied)
       return c.json({ error: perm.reason }, 403);
-    if ("proposalId" in perm)
+    if (
+      "proposalId" in perm &&
+      perm.proposalId &&
+      !("granted" in perm && perm.granted)
+    )
       return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
 
     // ── Steps 0-1: Resolve dependencies + create-or-compose (shared core) ──
@@ -279,283 +292,17 @@ export function registerPackagesRoutes(app: HubHono): void {
       );
     }
 
-    // ── Step 1b: Enroll the acting agent as a member of the workspace it just
-    // provisioned ─────────────────────────────────────────────────────────
-    // The hub key resolves to userId = the human owner (linkedUserId) and
-    // agentUserId = the agent user (key owner). createWorkspaceFromDefinition
-    // adds ONLY the human as owner/admin — the agent gets no member row. Without
-    // this, the agent's immediate onboarding writes (POST /api/hub/entities)
-    // fail the workspace-membership RBAC in checkPermissionOrPropose, which
-    // routes every write into a single deduped, contentless `workspace.join`
-    // proposal and DROPS the entity content. Enrolling the agent here (idempotent)
-    // lets those writes flow through as normal per-entity governance proposals.
-    //
-    // Role mirrors the canonical agent-membership logic (channels.ts): "owner"
-    // in agent-governed workspaces, "editor" elsewhere.
-    //
-    // SECURITY: only enrolls into the brand-new workspace this agent just
-    // provisioned for its own linked operator (userId owns it) — never a
-    // pre-existing workspace, so it can never broaden access. agentUserId is the
-    // authenticated key owner (set by the hub auth middleware), and we re-verify
-    // it is a real agent user before inserting.
-    if (agentUserId && workspaceId) {
-      try {
-        // Role mirrors the canonical agent-membership logic: "owner" in
-        // agent-governed workspaces, "editor" elsewhere.
-        const { db, workspaces, eq } = await import("@synap/database");
-        const [ws] = await db
-          .select({ settings: workspaces.settings })
-          .from(workspaces)
-          .where(eq(workspaces.id, workspaceId))
-          .limit(1);
-        const governanceMode = (
-          ws?.settings as { governanceMode?: string } | undefined
-        )?.governanceMode;
-        const role = governanceMode === "agent-owned" ? "owner" : "editor";
-        const { enrollAgentInWorkspace } =
-          await import("../../../services/enroll-agent-in-workspace.js");
-        result.agentMembership = await enrollAgentInWorkspace({
-          workspaceId,
-          agentUserId,
-          role,
-        });
-      } catch (e) {
-        // Non-fatal: onboarding writes would fall back to a join proposal, but
-        // the workspace itself was created successfully.
-        result.agentMembership = {
-          status: "error",
-          message: (e as Error).message,
-        };
-      }
-    }
-
-    const ctx = await createHubProtocolCallerContext(
-      userId,
-      c.get("scopes") ?? [],
-      workspaceId,
-      agentUserId
-    );
-
-    // ── Step 2: Capabilities ──────────────────────────────────────────────
-    if (body.capabilities?.length) {
-      const caps: unknown[] = [];
-      for (const cap of body.capabilities) {
-        try {
-          // Resolve a templateKey to its full CapabilityDefinition (DB-first,
-          // file fallback) — createCapabilityFromDefinition needs a full def,
-          // not a bare {key} stub. Mirrors the /capabilities/apply route.
-          const definition =
-            cap.definition ??
-            (cap.templateKey
-              ? await loadCapabilityTemplate(cap.templateKey, { workspaceId })
-              : undefined);
-          if (!definition) {
-            caps.push({
-              key: cap.templateKey ?? "inline",
-              status: "error",
-              message:
-                "capability requires a definition or a valid templateKey",
-            });
-            continue;
-          }
-          const r = await createCapabilityFromDefinition(
-            definition as any,
-            cap.params ?? {},
-            ctx
-          );
-          caps.push({
-            key: r.capabilityKey,
-            status: "created",
-            created: r.created,
-          });
-        } catch (e) {
-          caps.push({
-            key: cap.templateKey ?? "inline",
-            status: "error",
-            message: (e as Error).message,
-          });
-        }
-      }
-      result.capabilities = caps;
-    }
-
-    // ── Step 3: Automations ───────────────────────────────────────────────
-    if (body.automations?.length) {
-      const { automationsRouter } = await import("../../automations.js");
-      const {
-        db,
-        and,
-        eq,
-        isNull,
-        automations: automationsTable,
-      } = await import("@synap/database");
-      const caller = automationsRouter.createCaller(ctx as never);
-      const autos: unknown[] = [];
-      for (const a of body.automations) {
-        try {
-          // Idempotent reuse keyed on the stable natural key: name within
-          // scope — mirrors createCapabilityFromDefinition's automations step
-          // so a re-apply never double-creates.
-          const [existing] = await db
-            .select({ id: automationsTable.id })
-            .from(automationsTable)
-            .where(
-              and(
-                eq(automationsTable.name, a.name),
-                workspaceId
-                  ? eq(automationsTable.workspaceId, workspaceId)
-                  : isNull(automationsTable.workspaceId)
-              )
-            )
-            .limit(1);
-          if (existing) {
-            autos.push({ name: a.name, status: "reused", id: existing.id });
-            continue;
-          }
-          const r = await caller.create({
-            workspaceId,
-            name: a.name,
-            description: a.description,
-            triggerType: a.triggerType,
-            triggerConfig: a.triggerConfig,
-            flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
-            status: a.status,
-            agentUserId,
-            // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-            source: "intelligence",
-          } as any);
-          autos.push({ name: a.name, status: "created", id: (r as any).id });
-        } catch (e) {
-          autos.push({
-            name: a.name,
-            status: "error",
-            message: (e as Error).message,
-          });
-        }
-      }
-      result.automations = autos;
-    }
-
-    // ── Step 4: Playbooks ─────────────────────────────────────────────────
-    if (body.playbooks?.length) {
-      const { playbooksRouter } = await import("../../playbooks.js");
-      const {
-        db,
-        and,
-        eq,
-        playbooks: playbooksTable,
-      } = await import("@synap/database");
-      const caller = playbooksRouter.createCaller(ctx as never);
-      const pbs: unknown[] = [];
-      for (const p of body.playbooks) {
-        try {
-          // Idempotent reuse keyed on the stable natural key: name within
-          // scope — mirrors createCapabilityFromDefinition's playbooks step.
-          // Playbooks are workspace-scoped, so this only applies when a
-          // workspaceId is present (it always is by this point in /packages/apply).
-          if (workspaceId) {
-            const [existing] = await db
-              .select({ id: playbooksTable.id })
-              .from(playbooksTable)
-              .where(
-                and(
-                  eq(playbooksTable.name, p.name),
-                  eq(playbooksTable.workspaceId, workspaceId)
-                )
-              )
-              .limit(1);
-            if (existing) {
-              pbs.push({
-                name: p.name,
-                status: "reused",
-                playbookId: existing.id,
-              });
-              continue;
-            }
-          }
-          const r = await caller.create({
-            name: p.name,
-            description: p.description,
-            goalTemplate: p.goalTemplate,
-            params: p.params as any,
-            executor: p.executor,
-            inputStrategy: p.inputStrategy as any,
-            channelSpec: p.channelSpec as any,
-            schedule: p.schedule,
-            status: p.status,
-            agentUserId,
-            // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-            source: "intelligence",
-          } as any);
-          pbs.push({
-            name: p.name,
-            status: (r as any).status,
-            playbookId: (r as any).playbook?.id,
-            proposalId: (r as any).proposalId,
-          });
-        } catch (e) {
-          pbs.push({
-            name: p.name,
-            status: "error",
-            message: (e as Error).message,
-          });
-        }
-      }
-      result.playbooks = pbs;
-    }
-
-    // ── Step 5: Loops ─────────────────────────────────────────────────────
-    if (body.loops?.length) {
-      const loops: unknown[] = [];
-      for (const loop of body.loops) {
-        try {
-          const r = await createLoopFromDefinition(
-            (loop.definition ?? { key: loop.templateKey }) as any,
-            loop.params ?? {},
-            ctx
-          );
-          loops.push({ key: r.loopKey, status: "created", created: r.created });
-        } catch (e) {
-          loops.push({
-            key: loop.templateKey ?? "inline",
-            status: "error",
-            message: (e as Error).message,
-          });
-        }
-      }
-      result.loops = loops;
-    }
-
-    // ── Step 6: Link workspace entities to the project ────────────────────
-    // When a projectId is supplied (e.g. by `synap launch agent-os`), stamp
-    // every seed entity in the new workspace with `belongs_to_project` so the
-    // project lens unifies the workspace's data. Idempotent (unique index).
-    if (body.projectId && workspaceId) {
-      try {
-        const { db, entities, eq, linkEntityToProject } =
-          await import("@synap/database");
-        const rows = await db
-          .select({ id: entities.id })
-          .from(entities)
-          .where(eq(entities.workspaceId, workspaceId));
-        let linked = 0;
-        for (const row of rows) {
-          await linkEntityToProject(db, {
-            entityId: row.id,
-            projectId: body.projectId,
-            userId,
-            workspaceId,
-          });
-          linked++;
-        }
-        result.projectLink = {
-          status: "linked",
-          projectId: body.projectId,
-          entities: linked,
-        };
-      } catch (e) {
-        result.projectLink = { status: "error", message: (e as Error).message };
-      }
+    // ── Steps 1b–6: enroll agent + capabilities/automations/playbooks/loops
+    // + project links — ONE shared door with the workspace/create approve path.
+    if (workspaceId) {
+      const post = await applyPackagePostWorkspace({
+        workspaceId,
+        body,
+        userId,
+        agentUserId,
+        scopes: c.get("scopes") ?? [],
+      });
+      Object.assign(result, post);
     }
 
     return c.json(result, 201);

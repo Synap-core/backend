@@ -39,3 +39,5 @@ When the session is done **and the work was a repeatable process** (not a one-of
 ### The symmetry
 
 Sessions and cells are the two things you _do_; playbooks and renderers are the two things you _keep_. The instinct to build: **first do it once concretely, watch it work, then offer to crystallize it** — and let the user decide what becomes standing config. Never crystallize speculatively before the one-off has proven itself.
+
+This is escalation ladder **L4**: crystallize only after proof. Blocked/missing structure climbs L2→L3 first (`escalation-ladder.md`); L4 is the success path, not a substitute for discovery.

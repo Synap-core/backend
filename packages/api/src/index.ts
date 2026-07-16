@@ -477,6 +477,12 @@ registerRouter("cells", cellsRouter, {
   description:
     "ViewFrame cell marketplace lifecycle — install, uninstall, listInstalled",
 });
+import { cellInstancesRouter } from "./routers/cell-instances.js";
+registerRouter("cellInstances", cellInstancesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Per-surface cell instance placement and config",
+});
 registerRouter("channelGateway", channelGatewayRouter, {
   version: "1.0.0",
   source: "core",
@@ -519,6 +525,14 @@ registerRouter("trustedIssuers", trustedIssuersRouter, {
   version: "1.0.0",
   source: "core",
   description: "Trusted JWT issuer registry (CP-pod handshake)",
+});
+
+import { applicationConnectionsRouter } from "./routers/application-connections.js";
+registerRouter("applicationConnections", applicationConnectionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description:
+    "Pod-owner review of browser application connection requests (federation)",
 });
 
 import { sourceConfigsRouter } from "./routers/source-configs.js";
@@ -590,6 +604,63 @@ registerRouter("focusSessions", focusSessionsRouter, {
   source: "core",
   description: "Goal-bound focus sessions (list/get/create/update/close)",
 });
+
+import { toolsRouter } from "./routers/tools.js";
+registerRouter("tools", toolsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Tool definitions and invocation surface",
+});
+
+import { subscriptionsRouter } from "./routers/subscriptions.js";
+registerRouter("subscriptions", subscriptionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Pod subscription / billing surface",
+});
+
+import { playbooksRouter } from "./routers/playbooks.js";
+registerRouter("playbooks", playbooksRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Playbook session templates",
+});
+
+import { playbookRunsRouter } from "./routers/playbook-runs.js";
+registerRouter("playbookRuns", playbookRunsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Playbook run history",
+});
+
+import { agentRunsRouter } from "./routers/agent-runs.js";
+registerRouter("agentRuns", agentRunsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Agent run history",
+});
+
+import { activityRouter } from "./routers/activity.js";
+registerRouter("activity", activityRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Activity / timeline surface",
+});
+
+import { runsRouter } from "./routers/runs.js";
+registerRouter("runs", runsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Unified runs surface",
+});
+
+import { artifactsRouter } from "./routers/artifacts.js";
+registerRouter("artifacts", artifactsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Run artifacts",
+});
+
 export {
   resolveProviderCredential,
   resolveProviderCredentialsBatch,

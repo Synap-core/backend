@@ -119,6 +119,14 @@ Response:
 
 The executor goes through governance (see `governance.md`). Expect the same three `status` values.
 
+## Placement — existing lenses only
+
+Capture **never invents a workspace** (or other meta-structure) to "find a home"
+for extracted entities. Route into **existing** workspaces/projects/profiles the
+user already has — orient + list_profiles first when placement is ambiguous.
+Missing structure is an escalation-ladder L2→L3 conversation (discover, then
+propose), not a side effect of capture. See `reflexes.md` / `escalation-ladder.md`.
+
 ## When to use the pipeline vs. manual CRUD
 
 | Situation                                                        | Use                                                 |

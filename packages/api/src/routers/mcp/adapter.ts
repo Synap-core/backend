@@ -1230,21 +1230,80 @@ export async function executeMCPToolViaHubProtocol(
     }
 
     // ── Workspace & view creation ─────────────────────────────────────────────
+    // GOVERNED: workspace invent is a durable surface — agents always propose
+    // (workspace.create ∉ DEFAULT_AUTO_APPROVE). Operators (no agentUserId) are
+    // the authority and grant inline. On propose, the full definition rides in
+    // gate `data` so the workspace/create executor can materialize on approval.
     case "synap_create_workspace": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const { createWorkspaceFromDefinitionIdempotent } =
-        await import("../../services/workspace-creation-service.js");
-      const { workspaceId: newWsId, created } =
-        await createWorkspaceFromDefinitionIdempotent({
-          definition: (args.definition ?? {}) as Parameters<
-            typeof createWorkspaceFromDefinitionIdempotent
-          >[0]["definition"],
-          userId,
-          proposalId: args.proposalId as string | undefined,
-          workspaceName: args.name as string,
+      const name = args.name as string | undefined;
+      if (typeof name !== "string" || name.trim() === "") {
+        return ok({ error: "name is required" });
+      }
+      const definition = (args.definition ?? {}) as object;
+      const idempotencyKey = args.proposalId as string | undefined;
+      const { checkPermissionOrPropose } =
+        await import("../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        subjectType: "workspace",
+        action: "create",
+        source: "api",
+        data: {
+          name,
+          definition,
+          workspaceName: name,
+          proposalId: idempotencyKey,
           createdBy: "provisioning",
+          source: "mcp.synap_create_workspace",
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        return ok({ error: perm.reason, denied: true });
+      }
+      if (
+        "proposalId" in perm &&
+        perm.proposalId &&
+        !("granted" in perm && perm.granted)
+      ) {
+        return ok({
+          status: "proposed",
+          message:
+            "Workspace creation proposed for review (workspace invent is governed) — it materializes on approval.",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
         });
-      return ok({ workspaceId: newWsId, created });
+      }
+      // Granted (operator authority) → same materialize door as approve
+      // (deps/compose aware). Do NOT use createWorkspaceFromDefinitionIdempotent
+      // alone — it diverges from packages.apply / workspace/create approve.
+      const { materializeWorkspaceCore } =
+        await import("../../services/workspace-materialization-service.js");
+      const core = await materializeWorkspaceCore({
+        definition: definition as Parameters<
+          typeof materializeWorkspaceCore
+        >[0]["definition"],
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        proposalId: idempotencyKey,
+        workspaceName: name,
+        createdBy: "provisioning",
+      });
+      if (core.status === "resolved") {
+        return ok({
+          error:
+            "Workspace materialize returned resolved-without-create (unexpected)",
+        });
+      }
+      return ok({
+        status: "created",
+        workspaceId: core.workspaceId,
+        materializeStatus: core.status,
+        created: core.status === "created",
+      });
     }
 
     // Agnostic edge-declaration door (Enterprise-OS Wave 0). Set/merge the two

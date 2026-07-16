@@ -1107,6 +1107,13 @@ export const captureRouter = router({
           targetProjectConfidence:
             structureResult.targetProjectConfidence ?? null,
           formSpec: structureResult.formSpec ?? null,
+          // Soft meta-structure chips only — never materialize; omit when empty.
+          ...(structureResult.architectureSuggestions?.length
+            ? {
+                architectureSuggestions:
+                  structureResult.architectureSuggestions,
+              }
+            : {}),
           dedupCandidates: {} as Record<
             string,
             Array<{
@@ -1233,6 +1240,12 @@ export const captureRouter = router({
         targetProjectConfidence:
           structureResult.targetProjectConfidence ?? null,
         formSpec: structureResult.formSpec ?? null,
+        // Soft meta-structure chips only — never materialize; omit when empty.
+        ...(structureResult.architectureSuggestions?.length
+          ? {
+              architectureSuggestions: structureResult.architectureSuggestions,
+            }
+          : {}),
         dedupCandidates,
         // Additive: true when one or more dedup searches threw, so the caller
         // can distinguish "checked, no duplicates" from "didn't check". Omitted
