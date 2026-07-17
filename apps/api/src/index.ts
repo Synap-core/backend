@@ -378,10 +378,19 @@ app.get("/health", (c) => {
     version: "0.2.0-saas",
     // Published `@synap-core/api-types` version this pod's router was built
     // against. Clients compare its major via `assertApiTypesCompatible()` to
-    // detect stale pinned types. Kept in sync with
-    // packages/api-types/package.json#version by
-    // packages/api-types/scripts/check-and-bump.mjs — do not hand-edit.
-    apiTypesVersion: "1.21.1",
+    // detect stale pinned types.
+    //
+    // It is a LITERAL, and it only stays honest when the version bump goes
+    // through `packages/api-types/scripts/check-and-bump.mjs` (:166-170 is the
+    // sole writer of this line). Bump package.json by hand — as the 1.22.0
+    // regen did — and this silently keeps reporting the old version while the
+    // published package has moved on. It read 1.21.1 against a 1.22.0 package
+    // until this fix, so every client's compatibility check was answering
+    // against a version that no longer existed.
+    //
+    // DO NOT gate a deploy check on this field: it is not derived from the
+    // running build, so it looks identical whether or not a deploy landed.
+    apiTypesVersion: "1.22.0",
     mode: "multi-user",
     auth: "ory-stack",
   });
