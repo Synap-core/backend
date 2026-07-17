@@ -20,7 +20,12 @@
  * (api → jobs). This mirrors the established pattern in sync-push.ts / proactive-post.ts.
  */
 
-import { db, drizzleSql, notInArray } from "@synap/database";
+import {
+  db,
+  drizzleSql,
+  notInArray,
+  recordCatalogSyncStamp,
+} from "@synap/database";
 import { capabilityTemplateCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
@@ -73,12 +78,19 @@ async function fetchFromCP(): Promise<CPCapabilityTemplate[] | null> {
  * pod-local cache from the CP. On CP failure: leaves the existing cache intact.
  */
 export async function handleCapabilityTemplateSync(): Promise<void> {
+  // Staleness stamp key: this legacy worker mirrors a DIFFERENT cache
+  // (capability_template_cache) than cp-catalog-sync's `capability` kind, so it
+  // carries its own `capability-template` kind label — the two never collide.
+  const stampSource = cpUrl() ?? "unconfigured";
+  const stampKind = "capability-template";
+
   const items = await fetchFromCP();
 
   if (items === null) {
     logger.warn(
       "Control Plane unreachable — leaving capability_template_cache intact"
     );
+    await recordCatalogSyncStamp(stampSource, stampKind, "unreachable", 0);
     return;
   }
   if (items.length === 0) {
@@ -87,6 +99,7 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
     logger.info(
       "Control Plane returned 0 templates — leaving capability_template_cache intact"
     );
+    await recordCatalogSyncStamp(stampSource, stampKind, "empty", 0);
     return;
   }
 
@@ -134,6 +147,7 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
         "Pruned stale capability_template_cache entries"
       );
     }
+    await recordCatalogSyncStamp(stampSource, stampKind, "ok", rows.length);
   } catch (err) {
     logger.error({ err }, "Failed to upsert/prune capability_template_cache");
     throw err; // Let pg-boss retry; the cache is left as-is.

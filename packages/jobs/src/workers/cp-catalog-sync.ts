@@ -28,7 +28,14 @@
  * dependency — api → jobs).
  */
 
-import { db, drizzleSql, and, eq, notInArray } from "@synap/database";
+import {
+  db,
+  drizzleSql,
+  and,
+  eq,
+  notInArray,
+  recordCatalogSyncStamp,
+} from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
@@ -207,6 +214,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       { source, kind },
       "Catalog source unreachable — leaving cache intact"
     );
+    await recordCatalogSyncStamp(source, kind, "unreachable", 0);
     return;
   }
   if (entries.length === 0) {
@@ -214,6 +222,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       { source, kind },
       "Catalog source returned 0 entries — leaving cache intact"
     );
+    await recordCatalogSyncStamp(source, kind, "empty", 0);
     return;
   }
 
@@ -272,6 +281,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       { source, kind, upserted: rows.length, pruned: pruned.length },
       "Synced cp_catalog_cache"
     );
+    await recordCatalogSyncStamp(source, kind, "ok", rows.length);
   } catch (err) {
     logger.error(
       { err, source, kind },
