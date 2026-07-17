@@ -1441,15 +1441,17 @@ export const entitiesRouter = router({
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
         /**
-         * PRODUCT DECISION (scoped default): when a workspace is active, the
-         * list returns ONLY that workspace's entities by default — pod-wide
-         * (workspaceId IS NULL) rows are no longer mixed in, so a fresh
-         * workspace starts clean. Set `includePodWide: true` to restore the
-         * legacy union (this workspace's rows OR pod-wide globals). No data is
-         * migrated. Ignored for `globalOnly` and workspace-less callers (those
-         * already return pod-wide-only).
+         * PRODUCT DECISION (scoped default, 2026-06-15): when a workspace is
+         * active, the list returns ONLY that workspace's entities — pod-wide
+         * (workspaceId IS NULL) rows are NOT mixed in, so a focused workspace
+         * lens no longer bleeds pod-wide notes/captures. Defaults to `false`;
+         * an EXPLICITLY pod-scoped/global view (the CRM's pod-wide person/company
+         * reads, the user-floor Hub endpoints) passes `includePodWide: true` to
+         * restore the union (this workspace's rows OR pod-wide globals). No data
+         * is migrated. Ignored for `globalOnly` and workspace-less callers (those
+         * already return pod-wide-only / the full user floor).
          */
-        includePodWide: z.boolean().optional().default(true),
+        includePodWide: z.boolean().optional().default(false),
         /**
          * Explicit list lens. `undefined` falls back to ctx.workspaceId for
          * backwards compatibility; `null` returns the caller's pod-wide rows.

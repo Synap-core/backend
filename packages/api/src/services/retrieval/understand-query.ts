@@ -45,7 +45,7 @@ export interface QueryUnderstanding {
  * the workspace's REAL profiles by slug/name resemblance; a cue with no matching
  * profile contributes nothing.
  */
-const KIND_CUES: Record<string, string[]> = {
+export const KIND_CUES: Record<string, string[]> = {
   person: [
     "who",
     "whom",

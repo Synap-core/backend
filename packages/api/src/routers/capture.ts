@@ -224,7 +224,7 @@ async function semanticDedupCandidates(
   limit = 3
 ): Promise<DedupCandidate[]> {
   const text = content ? `${title}\n${content.slice(0, 500)}` : title;
-  const embedding = await embedQuery(text);
+  const { embedding } = await embedQuery(text);
   if (!embedding) return [];
 
   const vecLiteral = `[${embedding.join(",")}]`;

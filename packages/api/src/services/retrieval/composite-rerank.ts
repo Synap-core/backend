@@ -16,15 +16,33 @@ import type { PropertyHint } from "./understand-query.js";
 /** A single signal (property hit OR max recency) lifts a row up to this share of
  *  the position span — meaningful, but bounded. */
 export const SINGLE_FRACTION = 0.4;
-/** Property + temporal together are capped at this share, so even both maxed on
+/** A high-signal entity TYPE (knowledge / decision / north_star) lifts a row by
+ *  this smaller share — a modest salience nudge over untyped / note rows, never
+ *  enough to dominate the fused position. */
+export const SALIENCE_FRACTION = 0.2;
+/** All boosts together are capped at this share, so even every signal maxed on
  *  the bottom row cannot reach the top — RRF stays the primary ranking. */
 export const COMBINED_CAP = 0.5;
+
+/**
+ * Entity types that carry durable, high-signal knowledge — a "what do I know"
+ * query should surface these over an untyped capture or a raw `note`. Bounded
+ * so it only breaks ties in the recall pool, never overrides relevance.
+ */
+export const SALIENT_TYPES = new Set([
+  "knowledge",
+  "north_star",
+  "decision",
+  "devplane_decision_record",
+]);
 
 export interface RerankRow {
   id: string;
   /** Entity jsonb properties (the column type is `unknown`; cast at use). */
   properties: unknown;
   updatedAt: Date | string | null;
+  /** Entity type/profile slug — drives the bounded salience nudge (optional). */
+  type?: string | null;
 }
 
 export interface RerankOpts {
@@ -57,6 +75,11 @@ export function compositeRerank<T extends RerankRow>(
           recencyScore(row, opts.now, opts.eventTs?.get(row.id)) *
           span *
           SINGLE_FRACTION;
+      }
+      // Type salience — a modest, bounded nudge for high-signal knowledge types
+      // over untyped / note rows. Additive with the others, then jointly capped.
+      if (row.type && SALIENT_TYPES.has(row.type)) {
+        boost += span * SALIENCE_FRACTION;
       }
       boost = Math.min(boost, span * COMBINED_CAP);
       return { row, i, score: n - i + boost }; // fused position is primary
