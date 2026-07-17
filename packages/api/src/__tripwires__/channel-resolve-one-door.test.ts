@@ -39,12 +39,6 @@ import { join, relative } from "path";
 const ALLOWLIST_SUFFIXES = [
   join("utils", "personal-channel.ts"),
   join("repositories", "channel-repository.ts"),
-  // Legacy, MANUALLY-run "Unified Feeds Migration" tooling (not cron-invoked) that
-  // provisioned per-type feed channels BEFORE the unified one-feed-per-user model
-  // the resolvers now enforce. Superseded, not a live duplication vector; the
-  // channels_user_feed_uniq index converges them if re-run. Retire in Wave 5.
-  join("migrations", "migrate-morning-briefing.ts"),
-  join("migrations", "migrate-weekly-digest.ts"),
 ];
 
 // A Drizzle INSERT that materialises a singleton channel:
