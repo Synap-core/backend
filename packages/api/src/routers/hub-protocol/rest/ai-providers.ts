@@ -15,76 +15,24 @@
 import { z } from "zod";
 import { db, eq } from "@synap/database";
 import { aiProviders } from "@synap/database/schema";
-import {
-  encryptServiceKey,
-  decryptServiceKey,
-  isEncryptedServiceKey,
-} from "@synap/database";
+import { encryptServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { hasScope, type HubHono } from "./_shared.js";
+import {
+  pushProvidersToIS,
+  resolveISAdminEndpoint,
+} from "../../../utils/push-providers-to-is.js";
 
 const logger = createLogger({ module: "hub-ai-providers" });
 
 // ── IS sync ───────────────────────────────────────────────────────────────────
-
-const IS_URL = process.env.INTELLIGENCE_HUB_URL;
-const IS_ADMIN_KEY =
-  process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? process.env.ADMIN_API_KEY;
+// Payload construction + endpoint/key resolution live in the shared
+// pushProvidersToIS() door. Best-effort here: the DB write has committed, so an
+// IS that is down must not fail the request — log and move on.
 
 async function syncToIS(): Promise<void> {
-  if (!IS_URL || !IS_ADMIN_KEY) {
-    logger.warn("IS_URL or IS_ADMIN_KEY not set — skipping provider sync");
-    return;
-  }
-  const rows = await db.query.aiProviders.findMany({
-    orderBy: (t, { asc }) => [asc(t.priority)],
-  });
-  const providers = rows.map((p) => {
-    const decryptedKey =
-      p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
-        ? decryptServiceKey(p.encryptedApiKey)
-        : (p.encryptedApiKey ?? undefined);
-    return {
-      id: p.providerId,
-      name: p.name,
-      baseUrl: p.baseUrl,
-      apiKeyEnvVar: p.apiKeyEnvVar,
-      ...(decryptedKey ? { apiKey: decryptedKey } : {}),
-      enabled: p.enabled,
-      priority: p.priority,
-      tags: (p.tags as string[]) ?? [],
-      models: (p.models as object[]) ?? [],
-    };
-  });
-  const enabledIds = rows
-    .filter((p) => p.enabled)
-    .sort((a, b) => a.priority - b.priority)
-    .map((p) => p.providerId);
-
   try {
-    const res = await fetch(`${IS_URL}/admin/providers`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Admin-Key": IS_ADMIN_KEY,
-      },
-      body: JSON.stringify({
-        providers,
-        routing: {
-          default: enabledIds[0] ?? "",
-          fallbackChain: enabledIds,
-          perRoute: {},
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      logger.warn(
-        { status: res.status, body: text },
-        "IS provider sync failed"
-      );
-    }
+    await pushProvidersToIS();
   } catch (err) {
     logger.warn({ err }, "IS provider sync request failed");
   }
@@ -223,18 +171,22 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const providerId = c.req.param("id");
-    if (!IS_URL || !IS_ADMIN_KEY) {
+    const { endpoint, adminKey } = await resolveISAdminEndpoint();
+    if (!adminKey) {
       return c.json({ error: "IS not configured" }, 503);
     }
     try {
-      const res = await fetch(`${IS_URL}/admin/providers/${providerId}/test`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Admin-Key": IS_ADMIN_KEY,
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
+      const res = await fetch(
+        `${endpoint}/admin/providers/${providerId}/test`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Admin-Key": adminKey,
+          },
+          signal: AbortSignal.timeout(15_000),
+        }
+      );
       const body = (await res.json()) as {
         ok?: boolean;
         models?: string[];
