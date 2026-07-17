@@ -19,6 +19,40 @@ export default function NewConnectionRequestPage() {
   );
 }
 
+/**
+ * Map a redeem failure to its real cause. The server preserves a distinct
+ * message per cause (federated-application-connection-service.ts) even though
+ * tRPC flattens them all to a CONFLICT code, so we switch on the message.
+ *
+ * A missing `error.data` means the request never reached a tRPC procedure
+ * (network drop or a 5xx that isn't tRPC-shaped) — a different failure from a
+ * dead link, and it must not be reported as one.
+ *
+ * The server collapses "someone else redeemed it" and "already connected" into
+ * one "already been redeemed" message, so we cannot distinguish them here; we
+ * pick the already-connected copy because "Check connection" is a safe next
+ * step in either case.
+ */
+function redeemErrorMessage(error: {
+  message: string;
+  data?: { code?: string } | null;
+}): string {
+  if (!error.data) {
+    return "Couldn't reach your Pod to finish setup. Check your connection and try again.";
+  }
+  const message = error.message ?? "";
+  if (message.includes("was not found")) {
+    return "This setup link doesn't match anything on this Pod. Return to the app and start the connection again.";
+  }
+  if (message.includes("has expired")) {
+    return "This setup link timed out (they're valid 30 minutes). Return to the app and start again — nothing was lost.";
+  }
+  if (message.includes("already been redeemed")) {
+    return "This app is already connected to your Pod. Return to the app and choose Check connection.";
+  }
+  return "This setup link couldn't be completed. Return to the app and start the connection again.";
+}
+
 function NewConnectionRequestContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -56,9 +90,7 @@ function NewConnectionRequestContent() {
         );
         return;
       }
-      setError(
-        "This setup link is no longer available. Return to the application and start the connection again."
-      );
+      setError(redeemErrorMessage(error));
     },
   });
 

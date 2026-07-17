@@ -18,6 +18,8 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  TrustedIssuerService,
+  TRUSTED_ISSUER_CAPABILITIES,
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -28,6 +30,7 @@ import {
   ensureCaptureAgent,
   reconcileCapabilitiesToTemplates,
   notifyCapabilityUpdatesAvailable,
+  normalizeIssuerUrl,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 
@@ -182,6 +185,62 @@ async function seedDefaultCorsOrigins(): Promise<void> {
     logger.info({ added: toAdd }, "Seeded default platform CORS origins");
   } catch (err) {
     logger.warn({ err }, "Failed to seed default CORS origins (non-fatal)");
+  }
+}
+
+/**
+ * Seed the Control Plane as a built-in trusted issuer.
+ *
+ * Without this, a self-hosted pod never auto-trusts the CP: federated sign-in
+ * only works if the issuer happened to be provisioned by luck. The issuer URL
+ * is derived from CONTROL_PLANE_URL (the same value the pod uses to reach the
+ * CP) and granted the canonical bootstrap capability set — the exact scopes
+ * `bootstrapIssuerCapabilities` grants in the federation router (user exchange
+ * + identity link + membership grant + source-config write).
+ *
+ * Skipped silently when CONTROL_PLANE_URL is unset — a self-hosted pod with no
+ * Control Plane is a legitimate configuration. Idempotent (`seedBuiltIn` only
+ * adds missing built-in scopes, never removes operator-approved ones) and
+ * non-fatal, exactly like the neighbouring seedDefaultCorsOrigins hook.
+ */
+async function seedControlPlaneIssuer(): Promise<void> {
+  const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
+  if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to trust
+
+  try {
+    const issuerUrl = normalizeIssuerUrl(controlPlaneUrl);
+    if (!issuerUrl) {
+      logger.warn(
+        { controlPlaneUrl },
+        "CONTROL_PLANE_URL is not a valid HTTPS issuer URL — skipping CP trusted-issuer seed"
+      );
+      return;
+    }
+
+    await new TrustedIssuerService().seedBuiltIn([
+      {
+        issuerUrl,
+        displayName: "Synap Control Plane",
+        description:
+          "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Seeded from CONTROL_PLANE_URL.",
+        allowedScopes: [
+          TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+          TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
+          TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
+          TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
+        ],
+      },
+    ]);
+
+    logger.info(
+      { issuerUrl },
+      "Seeded Control Plane as built-in trusted issuer"
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed Control Plane trusted issuer (non-fatal)"
+    );
   }
 }
 
@@ -452,6 +511,7 @@ export async function runStartupHooks(): Promise<void> {
 
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod
+  await seedControlPlaneIssuer(); // Deterministically trust the CP for federated sign-in
   await loadCorsOrigins();
   await configureN8NWebhook();
   await configureLangFlow();
@@ -483,9 +543,11 @@ export async function runStartupHooks(): Promise<void> {
     );
   }
 
-  // Trusted issuers are established explicitly through the generic federation
-  // bootstrap or by a local Pod owner. No startup seeding: a fresh Pod starts
-  // with no knowledge of any external issuer.
+  // Trusted issuers other than the Control Plane are established explicitly
+  // through the generic federation bootstrap or by a local Pod owner — a fresh
+  // Pod starts with no knowledge of any external issuer. The one exception is
+  // the Control Plane itself, seeded above from CONTROL_PLANE_URL when set, so
+  // a self-hosted pod deterministically trusts the CP for federated sign-in.
 
   // LOCAL MODE: ensure the operator user + personal workspace exist in the DB.
   // Must run before verifyPodAdminInvariant so the invariant check sees a user.

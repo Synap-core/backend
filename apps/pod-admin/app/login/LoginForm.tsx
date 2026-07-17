@@ -258,9 +258,20 @@ function FlowFields({
         if (type === "button" || type === "submit") {
           // Password remains the ordinary form submission below. Other Kratos
           // method triggers carry their exact name/value pair to the flow.
+          //
+          // Skip WebAuthn/passkey triggers: pod-admin has no WebAuthn ceremony
+          // (no navigator.credentials, no @synap-core/auth-ui), so clicking one
+          // POSTs the password-shaped form and Kratos rejects it with
+          // "identifier missing, password missing". The codebase rule is that an
+          // enabled but non-functional trigger is worse than an absent option;
+          // the real fix (wiring runPasskeyLogin from @synap-core/auth-ui) is a
+          // follow-up.
           if (
             node.group === "password" ||
-            (name === "method" && attrs.value === "password")
+            (name === "method" && attrs.value === "password") ||
+            node.group === "webauthn" ||
+            node.group === "passkey" ||
+            name.includes("passkey")
           ) {
             return null;
           }
