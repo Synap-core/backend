@@ -41,6 +41,8 @@ import {
   enrichmentProviderRegistry,
   getMessagingConnector,
   resolveNangoConnector,
+  resolveNangoConnectorResult,
+  migrateNangoEnvToVault,
   resolvePodConnectorWorkspace,
   type UnipileConnector,
 } from "../connectors/index.js";
@@ -49,6 +51,7 @@ import {
   pullToImport,
 } from "../services/connector-import-bridge.js";
 import { materializeConnectorTools } from "../connectors/materialize-tools.js";
+import { detachNangoConnectionRegistry } from "../services/capabilities/capability-nango-sync.js";
 
 /**
  * Returns a configured NangoConnector when self-hosted Nango is available,
@@ -440,13 +443,37 @@ export const connectorsRouter = router({
   providers: protectedProcedure
     .input(cpUrlInput)
     .query(async ({ ctx, input }) => {
-      const localNango = await getLocalNango();
-      if (localNango) {
-        const integrations = await localNango.listIntegrations();
-        const connections = await localNango.listConnections(ctx.userId);
+      const local = await resolveNangoConnectorResult();
+
+      // A Nango that is configured-but-unreadable is NOT "no connectors". Report
+      // the fault instead of falling through to the CP or to an empty list —
+      // both of those render as "this pod has no connectors", which sends the
+      // operator looking for a missing feature instead of a broken credential.
+      if (!local.ok && local.reason !== "not-configured") {
+        return {
+          providers: [],
+          connectorLimit: -1,
+          tier: "local",
+          nangoStatus: "error" as const,
+          nangoError: { reason: local.reason, message: local.error },
+        };
+      }
+
+      if (local.ok) {
+        const declared = await local.connector.listIntegrationsResult();
+        if (!declared.ok) {
+          return {
+            providers: [],
+            connectorLimit: -1,
+            tier: "local",
+            nangoStatus: "error" as const,
+            nangoError: { reason: declared.reason, message: declared.error },
+          };
+        }
+        const connections = await local.connector.listConnections(ctx.userId);
         const connectedProviders = new Set(connections.map((c) => c.provider));
         return {
-          providers: integrations.map((i) => ({
+          providers: declared.integrations.map((i) => ({
             id: i.uniqueKey,
             provider: i.provider,
             displayName: i.displayName,
@@ -454,14 +481,21 @@ export const connectorsRouter = router({
           })),
           connectorLimit: -1,
           tier: "local",
+          nangoStatus: "ok" as const,
         };
       }
 
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
-        // Neither local Nango nor CP is configured — return empty list so the
-        // UI shows "no connectors" rather than an error.
-        return { providers: [], connectorLimit: -1, tier: "local" };
+        // Genuinely nothing configured: no Nango credential AND no CP. This is a
+        // real, legitimate state ("this pod offers no connectors") — the only
+        // one that may render as an empty list.
+        return {
+          providers: [],
+          connectorLimit: -1,
+          tier: "local",
+          nangoStatus: "ok" as const,
+        };
       }
 
       const cp = await getControlPlaneSettings();
@@ -479,6 +513,7 @@ export const connectorsRouter = router({
         providers: result.providers,
         connectorLimit: limit,
         tier,
+        nangoStatus: "ok" as const,
       };
     }),
 
@@ -692,6 +727,7 @@ export const connectorsRouter = router({
       const localNango = await getLocalNango();
       if (localNango) {
         await localNango.revokeConnection(input.connectionId);
+        await detachNangoConnectionRegistry(input.connectionId);
         return { success: true };
       }
 
@@ -1141,6 +1177,21 @@ export const connectorsRouter = router({
 
       return { success: true };
     }),
+
+  /**
+   * Migrate the pod's `NANGO_*` env credential into the vault (idempotent).
+   *
+   * The path off the deprecated env tier: copies the existing env key into the
+   * vault so it hot-reloads and the `.env` value can be removed on the next
+   * deploy without stranding the pod. No-op when the vault already holds a key
+   * or env supplies none — safe to run any number of times.
+   */
+  migrateNangoToVault: podAdminProcedure.mutation(async () => {
+    // No cache bust needed: the Nango credential is resolved fresh from the
+    // vault on every call (`resolveNangoConnectorResult`), so the freshly-
+    // vaulted key wins on the very next resolve.
+    return migrateNangoEnvToVault();
+  }),
 
   /**
    * Enrich an entity using an external enrichment provider (Apify, Apollo.io).

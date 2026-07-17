@@ -280,6 +280,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "default_renderers",
     addedBy: "0112_profiles_default_renderers.sql",
   },
+  // Query-understanding vocabulary (0197): plural + synonyms drive data-driven
+  // type-word matching in understandQuery. Absence means a pod is on a pre-0197
+  // schema where the catalog builder's `p.plural`/`p.synonyms` reads reference a
+  // missing column (understandQuery still works via the KIND_CUES fallback).
+  {
+    table: "profiles",
+    column: "plural",
+    addedBy: "0197_profile_vocabulary.sql",
+  },
+  {
+    table: "profiles",
+    column: "synonyms",
+    addedBy: "0197_profile_vocabulary.sql",
+  },
 
   // api_keys
   {

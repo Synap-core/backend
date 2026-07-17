@@ -176,4 +176,27 @@ describe("ask router", () => {
       expect.objectContaining({ workspaceId: "ws-9" })
     );
   });
+
+  // ── parseOnly: the palette's "route without retrieving" fast path ──────────
+  it("parseOnly returns understanding + routing and runs NO retrieval", async () => {
+    const r = await ask({
+      ...baseParams,
+      catalog: [{ slug: "person", displayName: "Person", plural: "people" }],
+      query: "show all people",
+      parseOnly: true,
+    });
+    // Not a single store was touched.
+    expect(retrieveMock).not.toHaveBeenCalled();
+    expect(searchFullTextMock).not.toHaveBeenCalled();
+    expect(searchFactsMock).not.toHaveBeenCalled();
+    // understandQuery is NOT mocked, so this is the REAL inference — the palette
+    // reads profileTypes to route "show all people" → the person listing.
+    expect(r.understanding.profileTypes).toContain("person");
+    // Glass-box routing is still classified — an enumerative lead is structured.
+    expect(r.routedTo).toContain("structured");
+    expect(r.primary).toBe("structured");
+    // No retrieval ran → no answers, nothing degraded.
+    expect(r.answers).toEqual([]);
+    expect(r.degraded).toEqual([]);
+  });
 });

@@ -246,6 +246,9 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "profile_kind" text NOT NULL DEF
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "applicable_kinds" text[];
 -- AI teaching substrate (mig 0183).
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "ai_posture" jsonb;
+-- Query-understanding vocabulary (mig 0197).
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "plural" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "synonyms" text[];
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -3358,7 +3361,6 @@ INSERT INTO "_migrations" ("filename") VALUES
   ('0030_fix_thread_entities_documents_schema.sql'),
   ('0031_add_document_sessions_columns.sql'),
   ('0031_system_settings.sql'),
-  ('0032_add_entities_search_vector.sql'),
   ('0032_ai_agent_users.sql'),
   ('0033_relation_defs_profile_relations.sql'),
   ('0033_secrets_vault.sql'),

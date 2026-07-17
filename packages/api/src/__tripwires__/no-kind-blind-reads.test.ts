@@ -39,7 +39,6 @@ const FROZEN: Record<string, number> = {
   "packages/api/src/routers/entities.ts": 3,
   "packages/api/src/routers/file-upload.ts": 1,
   "packages/api/src/routers/hub.ts": 2,
-  "packages/api/src/routers/search.ts": 2,
   "packages/api/src/routers/webhooks-inbound.ts": 1,
   "packages/api/src/services/event-end/run-event-end.ts": 1,
   "packages/api/src/services/event-sync/run-event-sync.ts": 1,

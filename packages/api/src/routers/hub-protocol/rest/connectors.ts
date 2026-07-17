@@ -9,9 +9,13 @@
 
 import { createRoute, z } from "@hono/zod-openapi";
 import { db, workspaceMembers, eq, and } from "@synap/database";
-import { resolveNangoConnector } from "../../../connectors/index.js";
+import {
+  resolveNangoConnector,
+  resolveNangoConnectorResult,
+} from "../../../connectors/index.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { materializeConnectorTools } from "../../../connectors/materialize-tools.js";
+import { detachNangoConnectionRegistry } from "../../../services/capabilities/capability-nango-sync.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -56,6 +60,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
                         "unreachable",
                         "unauthenticated",
                         "malformed",
+                        // Resolver-level faults: the credential likely exists and
+                        // could not be read. Distinct from "not configured", so a
+                        // broken vault is not reported as an absent one.
+                        "vault-unreadable",
+                        "db-unavailable",
                       ]),
                       message: z.string(),
                     })
@@ -79,10 +88,25 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolved = await resolveNangoConnectorResult();
+      if (!resolved.ok) {
+        // A configured-but-unreadable Nango is a 200 `error` status, NOT a 503
+        // "not configured". The two demand opposite fixes (restore the vault
+        // key vs. connect Nango), and reporting the first as the second is the
+        // exact false diagnosis this door exists to prevent.
+        if (resolved.reason === "not-configured") {
+          return c.json({ error: "Nango not configured" }, 503);
+        }
+        return c.json(
+          {
+            providers: [],
+            nangoStatus: "error" as const,
+            nangoError: { reason: resolved.reason, message: resolved.error },
+          },
+          200
+        );
       }
+      const connector = resolved.connector;
       const userId = c.get("userId") as string;
       const [declared, connections] = await Promise.all([
         connector.listIntegrationsResult(),
@@ -690,6 +714,9 @@ export function registerConnectorsRoutes(app: HubHono): void {
       const { connectionId } = c.req.valid("param");
       try {
         await connector.revokeConnection(connectionId);
+        // Self-heal: drop the connection-registry pointer rows + mark sourced
+        // entities disconnected, so a revoke takes effect immediately.
+        await detachNangoConnectionRegistry(connectionId);
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(
@@ -762,6 +789,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
       const { connectionId } = c.req.valid("json");
       try {
         await connector.revokeConnection(connectionId);
+        await detachNangoConnectionRegistry(connectionId);
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(

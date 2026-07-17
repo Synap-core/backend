@@ -211,7 +211,6 @@ import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
-import { searchRouter } from "./routers/search.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
 import { workspacesRouter } from "./routers/workspaces.js";
@@ -346,11 +345,6 @@ registerRouter("capabilities", capabilitiesRouter, {
   version: "1.0.0",
   source: "core",
   description: "Feature and service discovery",
-});
-registerRouter("search", searchRouter, {
-  version: "1.0.0",
-  source: "core",
-  description: "Full-text and semantic search",
 });
 registerRouter("relations", relationsRouter, {
   version: "1.0.0",

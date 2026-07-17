@@ -491,43 +491,111 @@ export async function resolveVaultReferences(
 }
 
 /**
- * Resolve a service credential secret by serviceId.
- * Returns the decrypted JSON config for the service, or null if not found.
+ * Outcome of a service-credential lookup.
+ *
+ * `absent` ("you never configured this") is a NORMAL state. The other three are
+ * FAULTS — the credential may well exist and be unreadable. Collapsing them into
+ * one `null` is what let a broken vault masquerade as an empty one: the caller
+ * silently fell through to the env tier and the pod kept working, so the fault
+ * stayed invisible until the env tier was removed and every failure alike
+ * surfaced as "you never configured Nango".
+ */
+export type ServiceSecretResult =
+  | { ok: true; config: Record<string, string> }
+  | {
+      ok: false;
+      reason: "absent" | "vault-unavailable" | "undecryptable" | "db-error";
+      error: string;
+    };
+
+/**
+ * Resolve a service credential secret by serviceId, distinguishing "not
+ * configured" from "configured but unreadable". Never throws.
+ *
  * Only works for server-encrypted secrets (encryptionMode='server').
+ */
+export async function getServiceSecretResult(
+  serviceId: string,
+  userId: string
+): Promise<ServiceSecretResult> {
+  if (!isServerVaultAvailable()) {
+    logger.warn(
+      { serviceId },
+      "VAULT_SERVER_KEY not configured — cannot read service secret"
+    );
+    return {
+      ok: false,
+      reason: "vault-unavailable",
+      error: "VAULT_SERVER_KEY is not configured on this pod",
+    };
+  }
+
+  let secret;
+  try {
+    const db = await getDb();
+    secret = await db.query.secrets.findFirst({
+      where: and(
+        eq(secrets.userId, userId),
+        eq(secrets.serviceId, serviceId),
+        eq(secrets.encryptionMode, "server")
+      ),
+      columns: {
+        id: true,
+        encryptedData: true,
+        iv: true,
+        authTag: true,
+        deletedAt: true,
+      },
+    });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error({ serviceId, error }, "Vault read failed — database error");
+    return { ok: false, reason: "db-error", error };
+  }
+
+  if (!secret || secret.deletedAt) {
+    return {
+      ok: false,
+      reason: "absent",
+      error: `No '${serviceId}' credential stored for this user`,
+    };
+  }
+
+  // `decryptConfig` swallows its own failure and returns null (it does not
+  // throw) — so a null here means the row EXISTS and could not be read, almost
+  // always a rotated or mismatched VAULT_SERVER_KEY. Loud, because "reconnect
+  // it" is the wrong advice: reconnecting writes a second unreadable row.
+  const config = decryptConfig({
+    encryptedData: secret.encryptedData!,
+    iv: secret.iv!,
+    authTag: secret.authTag!,
+  });
+  if (!config) {
+    const error =
+      "decryption returned null — VAULT_SERVER_KEY may have rotated or the blob is corrupt";
+    logger.error(
+      { serviceId, secretId: secret.id },
+      "Vault secret exists but could not be decrypted — VAULT_SERVER_KEY may have rotated"
+    );
+    return { ok: false, reason: "undecryptable", error };
+  }
+  return { ok: true, config };
+}
+
+/**
+ * Compat wrapper over {@link getServiceSecretResult} — returns the config, or
+ * null for EVERY failure.
+ *
+ * Prefer `getServiceSecretResult` in new code. This exists so the callers that
+ * genuinely only branch on "do I have a config?" stay unchanged; it deliberately
+ * keeps the lossy shape rather than leaving those call sites to hand-roll it.
  */
 export async function getServiceSecret(
   serviceId: string,
   userId: string
 ): Promise<Record<string, string> | null> {
-  if (!isServerVaultAvailable()) return null;
-
-  const db = await getDb();
-  const secret = await db.query.secrets.findFirst({
-    where: and(
-      eq(secrets.userId, userId),
-      eq(secrets.serviceId, serviceId),
-      eq(secrets.encryptionMode, "server")
-    ),
-    columns: {
-      id: true,
-      encryptedData: true,
-      iv: true,
-      authTag: true,
-      deletedAt: true,
-    },
-  });
-
-  if (!secret || secret.deletedAt) return null;
-
-  try {
-    return decryptConfig({
-      encryptedData: secret.encryptedData!,
-      iv: secret.iv!,
-      authTag: secret.authTag!,
-    });
-  } catch {
-    return null;
-  }
+  const result = await getServiceSecretResult(serviceId, userId);
+  return result.ok ? result.config : null;
 }
 
 /**

@@ -21,13 +21,24 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.1)
  */
 
-import { getDb, or, and, isNull, eq, inArray, gt, desc } from "@synap/database";
+import {
+  getDb,
+  or,
+  and,
+  isNull,
+  isNotNull,
+  eq,
+  inArray,
+  gt,
+  desc,
+} from "@synap/database";
 import {
   tools,
   skills,
   intelligenceCommands,
   secrets,
   vaultGrants,
+  links,
   type ToolVerbCatalogEntry,
   type ProviderVerbSpec,
 } from "@synap/database/schema";
@@ -329,6 +340,35 @@ export async function listCapabilities(
     }
   }
 
+  // Last-known connection state for PROVIDER tools, so an agent can tell
+  // "connected" from "needs connection". One batched query, no live Nango probe:
+  // a provider tool is connected iff a non-deleted connection-registry pointer
+  // row (secrets.accountHint) exists for THIS caller on a capability that has the
+  // tool as a member. Freshness is owned by Wave-5's disconnect self-heal + lazy
+  // reconciler; authoritative live state is behind the connectors door.
+  const providerToolIds = toolRows
+    .filter((r) => r.kind === "provider")
+    .map((r) => r.id);
+  const connectedProviderToolIds = new Set<string>();
+  if (providerToolIds.length > 0) {
+    const rows = await db
+      .selectDistinct({ toolId: links.fromId })
+      .from(links)
+      .innerJoin(secrets, eq(secrets.capabilityId, links.toId))
+      .where(
+        and(
+          eq(links.fromType, "tool"),
+          eq(links.toType, "capability"),
+          eq(links.linkType, "member_of"),
+          inArray(links.fromId, providerToolIds),
+          eq(secrets.userId, ctx.userId),
+          isNotNull(secrets.accountHint),
+          isNull(secrets.deletedAt)
+        )
+      );
+    for (const r of rows) connectedProviderToolIds.add(r.toolId);
+  }
+
   const toolCaps: Capability[] = toolRows.map((row) => ({
     kind: toolKindToCapabilityKind(row.kind),
     id: row.id,
@@ -343,6 +383,15 @@ export async function listCapabilities(
       row.kind,
       providerSpecByName
     ),
+    ...(row.kind === "provider"
+      ? {
+          connection: {
+            required: true,
+            connected: connectedProviderToolIds.has(row.id),
+            provider: row.credentialRef?.replace(/^nango:\/\//, "") ?? row.name,
+          },
+        }
+      : {}),
   }));
 
   // `kind='instruction'` rows are teaching prose (system-prompt text), not a

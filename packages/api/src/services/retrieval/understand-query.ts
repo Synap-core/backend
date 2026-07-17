@@ -20,6 +20,31 @@ export interface ProfileCatalogEntry {
   slug: string;
   displayName: string;
   description?: string;
+  /** The display name's plural form ("people" for Person). Data-driven (0197). */
+  plural?: string | null;
+  /** Alternate words that resolve to this profile ("who", "contact" → person). */
+  synonyms?: string[] | null;
+}
+
+/**
+ * Map a raw profile row to a catalog entry, carrying its query-understanding
+ * vocabulary. Returns null for a slug-less row (filtered by callers). ONE door
+ * so every `ask`/`retrieve` caller builds the catalog identically — including
+ * the plural/synonyms the type inference now consumes.
+ */
+export function toProfileCatalogEntry(p: {
+  slug?: string | null;
+  displayName?: string | null;
+  plural?: string | null;
+  synonyms?: string[] | null;
+}): ProfileCatalogEntry | null {
+  if (!p.slug) return null;
+  return {
+    slug: p.slug,
+    displayName: p.displayName ?? p.slug,
+    ...(p.plural ? { plural: p.plural } : {}),
+    ...(p.synonyms && p.synonyms.length > 0 ? { synonyms: p.synonyms } : {}),
+  };
 }
 
 export interface PropertyHint {
@@ -182,11 +207,38 @@ export function understandQuery(
   const bump = (slug: string, by: number) =>
     scored.set(slug, (scored.get(slug) ?? 0) + by);
 
-  // 1. Direct catalog match — the query names the profile (slug or display name).
+  // Plural-tolerant match of a single cue term against the query: a multi-word
+  // phrase must appear verbatim; a single word matches its singular or plural
+  // form. Mirrors the KIND_CUES matcher so catalog synonyms behave identically.
+  const cueHit = (term: string): boolean => {
+    const t = term.toLowerCase();
+    if (t.includes(" ")) return q.includes(t);
+    return (
+      tokenSet.has(t) ||
+      tokenSet.has(`${t}s`) ||
+      tokenSet.has(t.replace(/s$/, ""))
+    );
+  };
+
+  // 1. Direct catalog match — the query names the profile (slug, display name,
+  //    its declared plural, or a declared synonym).
   for (const p of catalog) {
     const name = p.displayName.toLowerCase();
     const slug = p.slug.toLowerCase();
-    if (q.includes(slug) || q.includes(name)) {
+    const plural = p.plural?.toLowerCase();
+    // Strong (3): the query names the profile — slug/name as a substring, or the
+    // declared plural as a substring or plural-tolerant token ("people").
+    if (
+      q.includes(slug) ||
+      q.includes(name) ||
+      (plural ? q.includes(plural) || cueHit(plural) : false)
+    ) {
+      bump(p.slug, 3);
+      continue;
+    }
+    // A declared synonym is curated, catalog-grounded vocabulary — the
+    // data-driven form of a KIND_CUE, and a strong signal ("who" → person).
+    if ((p.synonyms ?? []).some(cueHit)) {
       bump(p.slug, 3);
       continue;
     }

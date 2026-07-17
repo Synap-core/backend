@@ -26,9 +26,10 @@ import {
   type RetrieveResult,
   type RankComparison,
 } from "../retrieval/retrieve.js";
-import type {
-  ProfileCatalogEntry,
-  QueryUnderstanding,
+import {
+  understandQuery,
+  type ProfileCatalogEntry,
+  type QueryUnderstanding,
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
@@ -61,6 +62,15 @@ export interface AskParams {
    * answer. Defaults false.
    */
   compare?: boolean;
+  /**
+   * PARSE-ONLY fast path: return just the query understanding + glass-box routing
+   * WITHOUT running any retrieval (no store queries). For a caller that needs to
+   * turn "show all people" into a routed type BEFORE (or instead of) fetching
+   * results — e.g. a command palette completing/highlighting the type word.
+   * `answers` comes back empty and `verdict` is `"empty"` (nothing was
+   * retrieved). Additive — existing callers are unaffected. Defaults false.
+   */
+  parseOnly?: boolean;
 }
 
 export interface AskAnswer {
@@ -125,13 +135,32 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
-  const { query, userId, workspaceId, projectId, catalog, compare } = params;
+  const { query, userId, workspaceId, projectId, catalog, compare, parseOnly } =
+    params;
   const limit = params.limit ?? 10;
   const {
     substrates,
     primary: intent,
     structuredStatus,
   } = classifySubstrates(query);
+
+  // PARSE-ONLY: understanding + glass-box routing, NO retrieval. understandQuery
+  // is pure + deterministic — the same call retrieve() makes internally — so
+  // lifting it here gives a caller the full routing without touching any store.
+  if (parseOnly) {
+    return {
+      query,
+      routedTo: substrates,
+      intent,
+      // No retrieval ran, so the effective primary is the cued intent — there is
+      // no "which substrate actually answered" to fall back to.
+      primary: intent,
+      answers: [],
+      degraded: [],
+      understanding: understandQuery(query, catalog),
+      verdict: "empty",
+    };
+  }
 
   // Semantic always runs (the backbone). Procedural / episodic run only when
   // cued and each reports its own ok/error status. projectId narrows the

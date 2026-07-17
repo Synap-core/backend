@@ -38,6 +38,7 @@ import {
   retrieve,
   hybridRecall,
   type ProfileCatalogEntry,
+  toProfileCatalogEntry,
 } from "../../../services/retrieval/index.js";
 import {
   storeEntitySourceBlob,
@@ -953,9 +954,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
           userId,
           workspaceId: catalogWs,
         });
-        catalog = profileRows.flatMap((p) =>
-          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
-        );
+        catalog = profileRows.flatMap((p) => {
+          const entry = toProfileCatalogEntry(p);
+          return entry ? [entry] : [];
+        });
       }
 
       const result = await retrieve({

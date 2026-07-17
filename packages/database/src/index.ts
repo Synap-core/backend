@@ -75,6 +75,8 @@ export {
   resolveVaultSecret,
   resolveVaultReferences,
   getServiceSecret,
+  getServiceSecretResult,
+  type ServiceSecretResult,
   upsertServiceSecret,
   findRedeemableGrant,
   findCapabilityGrant,

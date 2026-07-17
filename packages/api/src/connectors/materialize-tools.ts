@@ -20,10 +20,8 @@
 import { db, eq, and, isNull } from "@synap/database";
 import { tools } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import {
-  createCapabilityFromDefinition,
-  loadCapabilityTemplate,
-} from "../services/capabilities/create-from-definition.js";
+import { createCapabilityFromDefinition } from "../services/capabilities/create-from-definition.js";
+import { fetchCPCapabilityTemplate } from "../services/capabilities/cp-template-client.js";
 import type { Context } from "../types/context.js";
 
 const logger = createLogger({ module: "materialize-tools" });
@@ -44,26 +42,30 @@ export interface MaterializableConnector {
 }
 
 /**
- * Provider → capability-template family key.
+ * Provider → capability-template family key: explicit OVERRIDES only.
  *
- * When a provider is connected, this names the family `CapabilityDefinition` that
- * gives the connection its VERBS + skills + grants (instead of a verb-less
- * `kind:'provider'` tool). The key resolves through `loadCapabilityTemplate`,
- * which fetches the definition from the Control Plane catalog (the source of
- * truth). A provider with NO family template degrades gracefully — the bare
- * provider tool is kept and no verbs are applied.
+ * The default is the CONVENTION `nango-<provider>` (see `providerTemplateKey`),
+ * so a new provider needs NO code change here — only a `nango-<provider>`
+ * `CapabilityDefinition` in the Control Plane catalog (data, not code). This map
+ * exists solely for the rare provider whose template key does NOT follow the
+ * convention. `google` matches the convention (`nango-google`) and is listed
+ * only to document its multi-API shape: ONE `google` integration (Gmail +
+ * Calendar + Drive via OAuth scopes); Gmail rides a Base-Url-Override to
+ * gmail.googleapis.com, Calendar/Drive use the provider-default host.
  */
 export const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
-  // The unified Google connection: ONE `google` integration (Gmail + Calendar +
-  // Drive via OAuth scopes) → the multi-API `nango-google` family. Gmail calls
-  // ride a Base-Url-Override to gmail.googleapis.com; Calendar/Drive use the
-  // provider-default host. This is the canonical Google path.
   google: "nango-google",
 };
 
-/** Resolve the family template key for a connected provider, or null. */
-export function providerTemplateKey(provider: string): string | null {
-  return PROVIDER_TEMPLATE_KEY[provider] ?? null;
+/**
+ * Resolve the family-template key for a connected provider. Returns the explicit
+ * override if one exists, else the `nango-<provider>` convention. Never null: an
+ * unknown provider yields a candidate key that `fetchCPCapabilityTemplate`
+ * simply fails to find in the CP catalog, and materialize degrades to the bare
+ * tool.
+ */
+export function providerTemplateKey(provider: string): string {
+  return PROVIDER_TEMPLATE_KEY[provider] ?? `nango-${provider}`;
 }
 
 export interface MaterializeResult {
@@ -190,11 +192,13 @@ export async function materializeConnectorTools(
     // derives + writes its verb catalog, and seeds skill grants. Providers
     // WITHOUT a family template degrade gracefully to the bare tool.
     const templateKey = providerTemplateKey(provider);
-    if (!templateKey) continue;
     try {
-      const def = await loadCapabilityTemplate(templateKey, {
-        workspaceId: null,
-      });
+      // Null (not throw) when this provider has no family template in the CP
+      // catalog — the common, expected case for a provider added by convention
+      // that the CP hasn't declared verbs for yet. Degrade quietly to the bare
+      // tool; only real apply failures below are warn-worthy.
+      const def = await fetchCPCapabilityTemplate(templateKey);
+      if (!def) continue;
       // Report what this connection can do — from the template's skills — for
       // ALL providers with a family (even already-verbed ones), so a poll on an
       // already-connected provider still learns its verbs.

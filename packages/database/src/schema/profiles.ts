@@ -70,6 +70,17 @@ export const profiles = pgTable(
     // e.g. "task", "project", "person" — NULL means no cross-workspace semantics.
     semanticSlug: text("semantic_slug"),
 
+    // Query-understanding vocabulary (data-driven type-word matching, migration
+    // 0197). `plural` is the display-name's plural form ("people" for Person);
+    // `synonyms` are alternate words that should resolve to this profile ("who",
+    // "contact", "colleague" → person). The retrieval engine's `understandQuery`
+    // matches a query against slug + displayName + these, so custom profiles
+    // ("podcast") become findable by name — the hardcoded KIND_CUES list is now
+    // only the fallback for pods whose profiles carry no vocabulary. NULL/empty
+    // means "no extra vocabulary" (fall back to slug/name + cues).
+    plural: text("plural"),
+    synonyms: text("synonyms").array(),
+
     // Scope (who can use this profile)
     scope: text("scope", {
       enum: [

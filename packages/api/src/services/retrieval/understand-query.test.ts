@@ -57,6 +57,39 @@ describe("understandQuery — type inference", () => {
   });
 });
 
+describe("understandQuery — data-driven vocabulary (0197 plural/synonyms)", () => {
+  // Irregular plural + a slug/name that does NOT substring-match it, and a slug
+  // no KIND_CUE covers — so ONLY the `plural` column can produce the match.
+  it("matches a custom profile by its declared irregular plural", () => {
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "goose", displayName: "Goose", plural: "geese" },
+    ];
+    const u = understandQuery("show all geese", catalog);
+    expect(u.profileTypes).toContain("goose");
+  });
+
+  // A declared synonym the slug/name/KIND_CUES don't cover — so ONLY the
+  // `synonyms` column can produce the match. This is the "show all podcasts"
+  // generalization the plan calls for: custom types findable by their own words.
+  it("matches a custom profile by a declared synonym (plural-tolerant)", () => {
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "recipe", displayName: "Recipe", synonyms: ["meal", "dish"] },
+    ];
+    const u = understandQuery("list my meals", catalog);
+    expect(u.profileTypes).toContain("recipe");
+  });
+
+  // Vocabulary is additive: a profile with no plural/synonyms still resolves by
+  // slug/name exactly as before (no regression for pods without the columns).
+  it("still resolves by name when no vocabulary is declared", () => {
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "project", displayName: "Project" },
+    ];
+    const u = understandQuery("show me the projects", catalog);
+    expect(u.profileTypes).toContain("project");
+  });
+});
+
 describe("understandQuery — property hints", () => {
   it("extracts a role hint from 'VP of Product'", () => {
     const u = understandQuery("who is the VP of Product", CATALOG);

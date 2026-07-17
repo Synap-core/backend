@@ -18,7 +18,6 @@ import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
-import { searchRouter } from "./routers/search.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
 import { workspacesRouter } from "./routers/workspaces.js";
@@ -70,6 +69,7 @@ import { runsRouter } from "./routers/runs.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
 import { automationsRouter } from "./routers/automations.js";
+import { knowledgeRouter } from "./routers/knowledge.js";
 
 /**
  * Core API Router
@@ -94,8 +94,8 @@ export const coreRouter = router({
   notifications: inboxRouter,
   intelligenceRegistry: intelligenceRegistryRouter,
   intelligence: intelligenceRouter,
+  knowledge: knowledgeRouter,
   capabilities: capabilitiesRouter,
-  search: searchRouter,
   relations: relationsRouter,
   graph: graphRouter,
   workspaces: workspacesRouter,

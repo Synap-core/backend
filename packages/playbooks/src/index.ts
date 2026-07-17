@@ -320,6 +320,20 @@ export interface Capability {
    * bridge yet). Consumers building a "runnable" projection must exclude these.
    */
   catalogOnly?: boolean;
+  /**
+   * For a provider-backed capability (a Nango `source-provider` tool): whether an
+   * external connection is required and whether one is currently known for the
+   * caller. This exists so an AGENT can tell "connected" from "needs connection"
+   * — a distinction the read-model previously omitted, leaving agents to infer it
+   * from `governance`, which is an approval fact, not a connection fact.
+   *
+   * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
+   * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
+   * authoritative live state and the connect/disconnect actions live behind the
+   * connectors door. Absent for capabilities that need no external connection
+   * (builtins, skills, commands, verb-less non-provider tools).
+   */
+  connection?: { required: boolean; connected: boolean; provider: string };
 }
 
 /**

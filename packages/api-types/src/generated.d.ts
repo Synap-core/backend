@@ -1847,6 +1847,27 @@ export interface PodProactiveDefaults {
 	};
 }
 /**
+ * Per (source, kind) staleness stamp written by the catalog-sync workers
+ * (cp-catalog-sync / capability-template-sync). Lets `/health` answer
+ * "template kind empty+stale for N syncs" without a new table — the stamps
+ * live under `pod_settings.settings.catalogSyncStamps`, keyed `${source}::${kind}`.
+ */
+/**
+ * `misconfigured` is distinct from `unreachable` on purpose: a 4xx from the
+ * catalog source means the pod asked for something the source will NEVER accept
+ * (e.g. a retired `category`) — a permanent, operator-fixable fault, not a
+ * transient outage. `/health` surfaces it as `catalog:<key>:misconfigured` so a
+ * 400 can never masquerade as "source temporarily unavailable".
+ */
+export type CatalogSyncStatus = "ok" | "empty" | "unreachable" | "misconfigured";
+export interface CatalogSyncStamp {
+	/** ISO timestamp of the last completed sync attempt (any outcome). */
+	lastSyncAt: string;
+	lastStatus: CatalogSyncStatus;
+	/** Entry count from the last attempt (0 when empty/unreachable). */
+	lastCount: number;
+}
+/**
  * Cell Instances Schema — The Universal Rendering Unit (persisted)
  *
  * A `cell_instance` is a concrete, addressable instance of a cell type living
@@ -4450,6 +4471,10 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
+export interface QueueHealth {
+	failed: number;
+	pastDue: number;
+}
 export interface ToolLog {
 	id?: string;
 	toolName?: string;
@@ -4475,6 +4500,117 @@ export interface ExecutionStats {
 	avgDurationMs?: number;
 	toolCallCount?: number;
 	[key: string]: unknown;
+}
+export interface PropertyHint {
+	/** Token(s) to match against an entity's serialized properties. */
+	value: string;
+	/** Optional property key the hint targets (e.g. "role"); undefined = any key. */
+	key?: string;
+}
+export interface QueryUnderstanding {
+	/** Inferred target profile slugs, most-likely first (may be empty). */
+	profileTypes: string[];
+	/** Soft property/value hints used to boost ranking (never a hard filter). */
+	propertyHints: PropertyHint[];
+	/** True when the query implies recency/temporal scope. */
+	temporal: boolean;
+	/** 0..1 confidence in the type inference. */
+	confidence: number;
+}
+export type RetrievalVerdict = "confident" | "ambiguous" | "empty";
+/** One ranked entry in an A/B comparison list (top-`limit`). */
+export interface RankedItem {
+	id: string;
+	title: string;
+	score: number;
+	rank: number;
+}
+/** An entity that appears in BOTH top-`limit` lists at a different rank. */
+export interface MovedItem {
+	id: string;
+	title: string;
+	baselineRank: number;
+	horizonRank: number;
+}
+/** The A/B comparison payload attached when `compare` is set. */
+export interface RankComparison {
+	baseline: RankedItem[];
+	horizon: RankedItem[];
+	diff: {
+		/** How many ids are shared between the two top-`limit` lists. */
+		overlapAtN: number;
+		/** Shared ids whose rank differs between the two strategies. */
+		moved: MovedItem[];
+	};
+}
+/**
+ * Substrate classification for the unified knowledge router (`ask`).
+ *
+ * Synap has four addressable memory kinds (see
+ * team/platform/unified-knowledge-access.mdx): SEMANTIC (relevance recall over
+ * the typed entity graph), STRUCTURED (an ENUMERATIVE typed listing — "what are
+ * my tasks"), PROCEDURAL (knowledge_keys — institutional how-to docs), EPISODIC
+ * (knowledge_facts — raw personal captures). The agent shouldn't pick a door;
+ * `ask` routes for it. This pure classifier decides WHICH substrate(s) a query
+ * touches, from cheap heuristics.
+ *
+ * SEMANTIC is the backbone and is ALWAYS queried (the entity graph answers most
+ * "what do I know about X"). STRUCTURED / procedural / episodic are ADDED only
+ * when their cues fire — so the common case stays a single SRE call, and we
+ * never silently miss the enumerative list, the how-to-doc, or the raw capture
+ * when the query clearly wants it.
+ *
+ * Matching is WORD-BOUNDARY, not raw substring: "deploy" must be the word
+ * "deploy", not the tail of "redeployment"; "remember" won't fire on
+ * "Remembrance Inc". And the cue lists deliberately avoid bare single-word nouns
+ * that collide with this product's own entity vocabulary ("deploy", "setup",
+ * "guide" are common entity names here) — a procedural intent is signalled by a
+ * PHRASE ("how to …", "set up", "steps to") or a distinctive noun ("runbook"),
+ * never by a lone verb that's just as likely an entity title. Over-routing only
+ * adds a cheap extra query; mis-labelling `primary` actively misleads, so we bias
+ * against false positives.
+ */
+export type SubstrateKind = "semantic" | "structured" | "procedural" | "episodic";
+/**
+ * A degradation tag on the response. Substrate outages use the substrate name;
+ * the semantic backbone additionally reports `"semantic:vector-down"` when its
+ * vector leg was EXPECTED but ran keyword-only (the embedding provider failed) —
+ * a partial degradation distinct from a whole-substrate error.
+ */
+export type DegradedTag = SubstrateKind | "semantic:vector-down";
+export interface AskAnswer {
+	substrate: SubstrateKind;
+	items: Record<string, unknown>[];
+	/** `ok` = the store answered (possibly with 0 items); `error` = it failed and items is NOT authoritative. */
+	status: "ok" | "error";
+}
+export interface AskResult {
+	query: string;
+	/** Substrates queried (semantic always present). */
+	routedTo: SubstrateKind[];
+	/** What the query's cues SUGGESTED (e.g. a "how to" → procedural). Glass-box intent. */
+	intent: SubstrateKind;
+	/**
+	 * The substrate that ACTUALLY answered — its block is listed first. Honest:
+	 * never points at a substrate that returned nothing. If the cued `intent`
+	 * substrate came back empty (e.g. "how to deploy" but the runbook lives as an
+	 * entity, not a procedural doc), `primary` falls back to whatever did answer.
+	 */
+	primary: SubstrateKind;
+	/** One answer block per queried substrate, primary first. */
+	answers: AskAnswer[];
+	/**
+	 * Degradation tags: substrates that ERRORED (their block carries
+	 * status:"error"; items unreliable), plus `"semantic:vector-down"` when the
+	 * semantic leg ran keyword-only because the embedding provider was down.
+	 */
+	degraded: DegradedTag[];
+	/** The semantic engine's query understanding (glass-box). */
+	understanding: QueryUnderstanding;
+	/** The semantic engine's CRAG verdict. */
+	verdict: RetrievalVerdict;
+	/** A/B ranker comparison — present only when `compare` was requested. */
+	comparison?: RankComparison;
 }
 /**
  * Capability-connection service — the SINGLE source of truth for CRUD over a
@@ -4734,6 +4870,24 @@ export interface Capability {
 	 * bridge yet). Consumers building a "runnable" projection must exclude these.
 	 */
 	catalogOnly?: boolean;
+	/**
+	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
+	 * external connection is required and whether one is currently known for the
+	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
+	 * — a distinction the read-model previously omitted, leaving agents to infer it
+	 * from `governance`, which is an approval fact, not a connection fact.
+	 *
+	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
+	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
+	 * authoritative live state and the connect/disconnect actions live behind the
+	 * connectors door. Absent for capabilities that need no external connection
+	 * (builtins, skills, commands, verb-less non-provider tools).
+	 */
+	connection?: {
+		required: boolean;
+		connected: boolean;
+		provider: string;
+	};
 }
 /**
  * One row of the connection × verb × grant matrix: a Tool's verb annotated with
@@ -4945,13 +5099,18 @@ export interface GraphEnvelope {
  * What happened to a single dependency during resolution.
  *   - `found`          — a matching artifact already existed on the pod.
  *   - `installed`      — a built-in `workspace` template was materialized now.
+ *   - `composed`       — the dependency is itself an OVERLAY (its template
+ *                        declares `compose`), so it was layered ADDITIVELY onto
+ *                        its base instead of being materialized as its own
+ *                        workspace. `workspaceId` is the BASE's id.
  *   - `required-absent`— required but not present, and not auto-installable (surfaced).
  *
  * (A `compose` base surfaces as `found`/`installed` — it's the base that is
  * found/installed; the OVERLAY is what composes onto it. The workspace-level
- * `status:"composed"` in the apply response captures that outcome.)
+ * `status:"composed"` in the apply response captures the TOP-LEVEL package's
+ * own overlay outcome; this `composed` action captures a DEPENDENCY's.)
  */
-export type PackageDependencyAction = "found" | "installed" | "required-absent";
+export type PackageDependencyAction = "found" | "installed" | "composed" | "required-absent";
 export interface ResolvedPackageDependency {
 	slug: string;
 	kind: PackageDependencyKind;
@@ -9261,6 +9420,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					database: any;
 					jobQueue: any;
 				};
+				degraded: string[];
+				signals: {
+					jobQueue: QueueHealth | null;
+					embeddings: {
+						lastUpdatedAt: string | null;
+						stale: boolean;
+					};
+					catalogSync: Record<string, CatalogSyncStamp>;
+				};
 			};
 			meta: object;
 		}>;
@@ -11184,6 +11352,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	knowledge: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		search: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				workspaceId?: string | null | undefined;
+				limit?: number | undefined;
+				parseOnly?: boolean | undefined;
+			};
+			output: AskResult;
+			meta: object;
+		}>;
+	}>>;
 	capabilities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
@@ -11549,89 +11738,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				available: boolean;
-			};
-			meta: object;
-		}>;
-	}>>;
-	search: import("@trpc/server").TRPCBuiltRouter<{
-		ctx: Context;
-		meta: object;
-		errorShape: {
-			message: string;
-			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
-			data: import("@trpc/server").TRPCDefaultErrorData;
-		};
-		transformer: true;
-	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-		entities: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				query: string;
-				type?: "note" | "project" | "document" | "task" | undefined;
-				limit?: number | undefined;
-			};
-			output: {
-				entities: {
-					[x: string]: unknown;
-				}[];
-			};
-			meta: object;
-		}>;
-		semantic: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				query: string;
-				type?: string | undefined;
-				limit?: number | undefined;
-				threshold?: number | undefined;
-			};
-			output: {
-				entities: {
-					id: unknown;
-					type: unknown;
-					title: unknown;
-					preview: unknown;
-					similarity: number;
-					createdAt: unknown;
-				}[];
-			};
-			meta: object;
-		}>;
-		related: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				entityId: string;
-				limit?: number | undefined;
-			};
-			output: {
-				entities: {
-					userId: string;
-					workspaceId: string | null;
-					agentUserId: string | null;
-					id: string;
-					type: string;
-					updatedAt: Date;
-					createdByUserId: string | null;
-					createdAt: Date;
-					correlationId: string | null;
-					profileId: string | null;
-					title: string | null;
-					preview: string | null;
-					documentId: string | null;
-					properties: unknown;
-					systemData: unknown;
-					version: number;
-					createdByKind: ProvenanceKind | null;
-					sourceProposalId: string | null;
-					deletedAt: Date | null;
-				}[];
-			};
-			meta: object;
-		}>;
-		byTags: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				tagIds: string[];
-				limit?: number | undefined;
-			};
-			output: {
-				entities: Record<string, unknown>[];
 			};
 			meta: object;
 		}>;
@@ -15200,6 +15306,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15232,6 +15340,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15277,6 +15387,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15312,6 +15424,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15466,6 +15580,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15516,6 +15632,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15558,6 +15676,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -15591,6 +15711,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
 					entityScope: "workspace" | "pod";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -17164,9 +17286,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cpUrl?: string | undefined;
 			} | undefined;
 			output: {
+				providers: never[];
+				connectorLimit: number;
+				tier: string;
+				nangoStatus: "error";
+				nangoError: {
+					reason: "vault-unreadable" | "db-unavailable";
+					message: string;
+				};
+			} | {
+				providers: never[];
+				connectorLimit: number;
+				tier: string;
+				nangoStatus: "error";
+				nangoError: {
+					reason: "unreachable" | "unauthenticated" | "malformed";
+					message: string;
+				};
+			} | {
 				providers: unknown[];
 				connectorLimit: number;
 				tier: string;
+				nangoStatus: "ok";
+				nangoError?: undefined;
 			};
 			meta: object;
 		}>;
@@ -17317,6 +17459,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+			};
+			meta: object;
+		}>;
+		migrateNangoToVault: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				migrated: boolean;
+				reason: "migrated" | "vault-already-set" | "no-env" | "no-owner" | "vault-unavailable";
 			};
 			meta: object;
 		}>;

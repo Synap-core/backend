@@ -25,7 +25,10 @@ import { entityDataNeighbors } from "../../services/object-graph/entity-data-gra
 import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
-import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
+import {
+  type ProfileCatalogEntry,
+  toProfileCatalogEntry,
+} from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
 import {
   db,
@@ -283,9 +286,10 @@ export async function executeMCPToolViaHubProtocol(
           userId,
           workspaceId: catalogWs,
         });
-        catalog = profileRows.flatMap((p) =>
-          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
-        );
+        catalog = profileRows.flatMap((p) => {
+          const entry = toProfileCatalogEntry(p);
+          return entry ? [entry] : [];
+        });
       }
       const compare = args.compare === true;
       // Retrieve across all substrates (same call as /knowledge/search).
@@ -1587,6 +1591,11 @@ export async function executeMCPToolViaHubProtocol(
         governance?: string;
         catalogOnly?: boolean;
         inputSchema?: Record<string, unknown>;
+        connection?: {
+          required: boolean;
+          connected: boolean;
+          provider: string;
+        };
         verbs?: Array<{
           id?: string;
           label?: string;
@@ -1596,18 +1605,27 @@ export async function executeMCPToolViaHubProtocol(
         }>;
       };
       const caps = capabilities as unknown as RunnableCap[];
-      const verbRunnable = caps.flatMap((cap) =>
-        cap.catalogOnly
-          ? []
-          : (cap.verbs ?? []).map((v) => ({
-              verbId: v.id,
-              label: v.label ?? v.id,
-              tool: cap.name,
-              enabled: cap.governance === "auto",
-              execMode: v.effectiveExecMode,
-              paramsSchema: v.paramsSchema,
-            }))
-      );
+      const verbRunnable = caps.flatMap((cap) => {
+        if (cap.catalogOnly) return [];
+        // A provider verb is only runnable when its connection is present:
+        // dispatching against a disconnected provider just 4xxs. Surface the
+        // gap explicitly (`needsConnection` + provider) so the agent connects
+        // first instead of guessing from `governance`.
+        const needsConnection = cap.connection?.required
+          ? !cap.connection.connected
+          : false;
+        return (cap.verbs ?? []).map((v) => ({
+          verbId: v.id,
+          label: v.label ?? v.id,
+          tool: cap.name,
+          enabled: cap.governance === "auto" && !needsConnection,
+          execMode: v.effectiveExecMode,
+          paramsSchema: v.paramsSchema,
+          ...(cap.connection?.required
+            ? { needsConnection, provider: cap.connection.provider }
+            : {}),
+        }));
+      });
       const standaloneRunnable = caps
         .filter(
           (cap) =>
@@ -1638,6 +1656,7 @@ export async function executeMCPToolViaHubProtocol(
             id: cap.id,
             name: cap.name,
             governance: cap.governance,
+            ...(cap.connection ? { connection: cap.connection } : {}),
             verbs: cap.verbs?.map((v) => ({ id: v.id, label: v.label })),
           }))
         : capabilities;

@@ -41,7 +41,10 @@ import {
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
-import { type ProfileCatalogEntry } from "../../../services/retrieval/index.js";
+import {
+  type ProfileCatalogEntry,
+  toProfileCatalogEntry,
+} from "../../../services/retrieval/index.js";
 
 const ArchiveKnowledgeResponseSchema = z
   .object({ success: z.boolean() })
@@ -689,9 +692,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         userId,
         workspaceId: catalogWs,
       });
-      catalog = profileRows.flatMap((p) =>
-        p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
-      );
+      catalog = profileRows.flatMap((p) => {
+        const entry = toProfileCatalogEntry(p);
+        return entry ? [entry] : [];
+      });
     }
 
     return ask({
@@ -923,9 +927,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           userId,
           workspaceId: catalogWs,
         });
-        catalog = profileRows.flatMap((p) =>
-          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
-        );
+        catalog = profileRows.flatMap((p) => {
+          const entry = toProfileCatalogEntry(p);
+          return entry ? [entry] : [];
+        });
       }
 
       const result = await ask({

@@ -104,6 +104,22 @@ export type NangoConnectionOwnerResult =
       error: string;
     };
 
+/**
+ * A user's live connections. Mirrors `NangoIntegrationsResult`: a failed LIST is
+ * never the same fact as "no connections". This distinction is load-bearing —
+ * any caller that DELETES rows for connections absent from the list (the
+ * reconciler's removal branch) MUST use this, never the `listConnections()`
+ * compat wrapper: that wrapper flattens both an HTTP error and a truncated page
+ * to `[]`, and treating an ambiguous `[]` as ground truth wipes live pointers.
+ */
+export type NangoConnectionsResult =
+  | { ok: true; connections: SyncConnectorConnection[] }
+  | {
+      ok: false;
+      reason: "unreachable" | "unauthenticated" | "malformed";
+      error: string;
+    };
+
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
 
@@ -223,30 +239,98 @@ export class NangoConnector implements SyncConnector {
     };
   }
 
+  /**
+   * A user's live connections, TYPED (fault ≠ empty) and PAGINATED. Prefer this
+   * over `listConnections()` on any path that deletes based on absence.
+   *
+   * Filters by end_user CLIENT-SIDE: the `?end_user_id=` query is BROKEN on the
+   * self-hosted Nango (returns 0 even for an exact match), so we page the env's
+   * full list and match `end_user.id` ourselves. Scope is the env (the secret
+   * key's environment) — this pod's own connections.
+   *
+   * `GET /connection` is PAGINATED (`@nangohq/types` GetPublicConnections:
+   * limit/page); reading only page 1 silently loses connections once a pod
+   * outgrows the default page size — so we walk pages until one comes back short.
+   */
+  async listConnectionsResult(userId: string): Promise<NangoConnectionsResult> {
+    const PAGE_SIZE = 100;
+    const MAX_PAGES = 50; // safety cap (≤ 5000 connections/env); avoids an unbounded loop.
+    const all: SyncConnectorConnection[] = [];
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        page: String(page),
+      });
+      let res: Response;
+      try {
+        res = await fetch(`${this.host}/connection?${params}`, {
+          headers: this.authHeaders(),
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "unreachable",
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return {
+          ok: false,
+          reason: "unauthenticated",
+          error: `Nango returned ${res.status}`,
+        };
+      }
+      if (!res.ok) {
+        return {
+          ok: false,
+          reason: "unreachable",
+          error: `Nango returned ${res.status}`,
+        };
+      }
+      const parsed = NangoConnectionsResponseSchema.safeParse(
+        await res.json().catch(() => null)
+      );
+      if (!parsed.success) {
+        return {
+          ok: false,
+          reason: "malformed",
+          error: "Nango /connection returned an unexpected shape",
+        };
+      }
+
+      const rows = parsed.data.connections;
+      for (const c of rows) {
+        if (c.end_user?.id !== userId) continue;
+        all.push({
+          connectionId: c.connection_id,
+          provider: c.provider_config_key,
+          userId,
+          createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+          lastSyncAt: c.last_fetched_at
+            ? new Date(c.last_fetched_at)
+            : undefined,
+        });
+      }
+      // Short page → last page. (An exactly-full final page costs one extra
+      // request that returns empty and also terminates — still correct.)
+      if (rows.length < PAGE_SIZE) break;
+    }
+
+    return { ok: true, connections: all };
+  }
+
+  /**
+   * Compat wrapper — a user's connections, or `[]` on ANY failure.
+   *
+   * Prefer `listConnectionsResult`. This exists so read-only callers that only
+   * need "which providers does this user have" stay unchanged; it deliberately
+   * keeps the lossy shape. NEVER use it to drive deletion — an ambiguous `[]`
+   * (HTTP error / truncation) would be read as "all revoked".
+   */
   async listConnections(userId: string): Promise<SyncConnectorConnection[]> {
-    // Fetch the env's connections and filter by end_user CLIENT-SIDE. We do NOT
-    // pass `?end_user_id=` because that filter is BROKEN on the self-hosted Nango
-    // (it returns 0 even when a connection with that exact end_user exists). The
-    // unfiltered list carries `end_user.id`, so we match on it ourselves. Scope is
-    // the env (the secret key's environment) — i.e. this pod's own connections.
-    const res = await fetch(`${this.host}/connection`, {
-      headers: this.authHeaders(),
-    });
-
-    if (!res.ok) return [];
-
-    const parsed = NangoConnectionsResponseSchema.safeParse(await res.json());
-    if (!parsed.success) return [];
-
-    return parsed.data.connections
-      .filter((c) => c.end_user?.id === userId)
-      .map((c) => ({
-        connectionId: c.connection_id,
-        provider: c.provider_config_key,
-        userId,
-        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
-        lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
-      }));
+    const result = await this.listConnectionsResult(userId);
+    return result.ok ? result.connections : [];
   }
 
   /**

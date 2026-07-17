@@ -30,6 +30,7 @@ export type {
 } from "./hybrid-recall.js";
 export {
   understandQuery,
+  toProfileCatalogEntry,
   type ProfileCatalogEntry,
   type PropertyHint,
   type QueryUnderstanding,
