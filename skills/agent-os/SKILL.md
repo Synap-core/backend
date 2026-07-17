@@ -31,8 +31,10 @@ You provision a full company OS in Synap: a **project** (the cross-cutting lens
 that ties everything together) plus the **domain workspaces** the user needs,
 each installed from a ready-made template and linked back to the project.
 
-The CLI equivalent is `synap launch agent-os`. As the AI, you do the same flow
-conversationally — **ask, don't assume.**
+The CLI equivalent is `synap launch` (bare — it runs the guided one-per-company
+setup and takes no template argument; `synap launch --list` shows what is
+launchable). As the AI, you do the same flow conversationally — **ask, don't
+assume.**
 
 ## The available domain templates
 
@@ -105,8 +107,13 @@ registry, and the browser) — **not** from repo files. The simplest path is the
 CLI, which does this whole flow end-to-end:
 
 ```bash
-synap launch agent-os   # asks project + domains, applies each template, links to the project
+synap launch          # asks project + domains, applies each template, links to the project
+synap launch --list   # what's launchable (local templates, no pod needed)
 ```
+
+There is no `agent-os` template slug and `synap launch` takes no positional
+template argument — the command is guided. Pass `--json` for machine-readable
+output.
 
 Conversationally (or programmatically), obtain each template's PackageDefinition
 from the package (`toPackageDefinition(slug)`) or the registry (`GET

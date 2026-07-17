@@ -35,14 +35,9 @@
  */
 
 import {
-  db,
-  eq,
-  workspaces,
-  reconcileWorkspaceFromDefinition,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   createWorkspaceFromDefinitionIdempotent,
   type CreateWorkspaceFromDefinitionResult,
@@ -52,6 +47,20 @@ import {
   type PackageDependencyResolverDefinition,
   type ResolvedPackageDependency,
 } from "./package-dependency-resolver.js";
+import { composeOntoBaseWorkspace } from "./compose-overlay.js";
+
+/**
+ * The compose mechanics now live in `compose-overlay.ts` — the ONE door shared
+ * with the resolver's TRANSITIVE compose (a `require`d dependency that itself
+ * declares `compose`). Re-exported here so existing importers
+ * (`hub-protocol/rest/packages.ts`, `proposals/approve-executors.ts`,
+ * `routers/workspaces.ts`) keep their `instanceof` checks working against the
+ * SAME class objects.
+ */
+export {
+  ComposeBaseNotFoundError,
+  ComposeOverlayError,
+} from "./compose-overlay.js";
 
 /**
  * A `compose` dependency was DECLARED but its base workspace could not be
@@ -77,32 +86,6 @@ export class DependencyResolutionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "DependencyResolutionError";
-  }
-}
-
-/**
- * The resolver returned a `composeTargetWorkspaceId`, but the workspace row was
- * gone by the time we loaded it (a delete/race between resolve and compose).
- * Hub mapped this to a 500 "Compose overlay failed"; tRPC mapped it to
- * NOT_FOUND — callers keep that mapping.
- */
-export class ComposeBaseNotFoundError extends Error {
-  constructor() {
-    super("compose base workspace not found");
-    this.name = "ComposeBaseNotFoundError";
-  }
-}
-
-/**
- * The compose overlay itself failed — `assertWorkspaceWrite` or
- * `reconcileWorkspaceFromDefinition` threw. Hub mapped this to a 500 "Compose
- * overlay failed"; tRPC let it propagate to a 500 — callers keep that, distinct
- * from a create-path failure so each door surfaces its original message.
- */
-export class ComposeOverlayError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ComposeOverlayError";
   }
 }
 
@@ -199,29 +182,13 @@ export async function materializeWorkspaceCore(
   // ── COMPOSE: layer this package ADDITIVELY onto the resolved base ────────
   if (resolveResult.composeTargetWorkspaceId) {
     const composeTargetWorkspaceId = resolveResult.composeTargetWorkspaceId;
-    // Write-gate the base (defense in depth: the resolver already restricts to
-    // editor+ memberships).
-    const [baseWs] = await db
-      .select({ id: workspaces.id, ownerId: workspaces.ownerId })
-      .from(workspaces)
-      .where(eq(workspaces.id, composeTargetWorkspaceId))
-      .limit(1);
-    if (!baseWs) throw new ComposeBaseNotFoundError();
-    let reconcile: ReconcileReport;
-    try {
-      await assertWorkspaceWrite(db, userId, {
-        workspaceId: baseWs.id,
-        ownerId: baseWs.ownerId,
-      });
-      reconcile = await reconcileWorkspaceFromDefinition({
-        workspaceId: composeTargetWorkspaceId,
-        userId,
-        definition,
-        mergeCapabilities: true,
-      });
-    } catch (e) {
-      throw new ComposeOverlayError((e as Error).message);
-    }
+    // The ONE compose door (shared with the resolver's transitive compose):
+    // loads + write-gates the base, then reconciles ADDITIVELY onto it.
+    const reconcile: ReconcileReport = await composeOntoBaseWorkspace({
+      composeTargetWorkspaceId,
+      userId,
+      definition,
+    });
     return {
       status: "composed",
       workspaceId: composeTargetWorkspaceId,

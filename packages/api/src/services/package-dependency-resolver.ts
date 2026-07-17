@@ -16,19 +16,44 @@
  *     then layers THIS package additively onto it via
  *     `reconcileWorkspaceFromDefinition` — no second workspace is created.
  *
+ * COMPOSE IS TRANSITIVE. A dependency template that ITSELF declares `compose`
+ * is an overlay, and it stays one no matter how it was reached. When we
+ * `require` such a template (e.g. `the-arch` requires `grants`, and `grants`
+ * declares `compose: operations`), we resolve ITS base first and layer it onto
+ * that base — we do NOT materialize it as a standalone workspace. Doing so used
+ * to create a rogue "Grants Pipeline" workspace whose `subtype: operations`
+ * then COLLIDED with the real Operations workspace in `findWorkspaceBySubtype`,
+ * making every later compose target a coin-flip between the two.
+ *
  * Semantics enforced here:
  *   - Only `kind:'workspace'` dependencies can be `compose`d.
- *   - At most ONE `compose` dependency per package (else a clear error).
+ *   - At most ONE `compose` dependency per package — at EVERY level, not just
+ *     the top (else a clear error).
  *   - Dependencies are processed deps-first (a base template's own dependencies
- *     are ensured before the base installs), with a slug-keyed cycle guard.
+ *     are ensured before the base installs/composes), with a slug-keyed cycle guard.
+ *
+ * A nested `compose` still never sets `composeTargetWorkspaceId`: that field is
+ * the TOP-LEVEL package's own overlay target (what the CALLER layers itself
+ * onto). A nested overlay is composed HERE, by this module, onto its own base.
  *
  * This is a pure composition layer: workspace materialization is delegated to
  * `createWorkspaceFromDefinitionIdempotent` (the canonical idempotent create
- * path) — never reimplemented here. Presence resolution is access-gated by
- * relation: a `compose` base only counts if the acting user has an editor+ role
- * on it (composing writes onto it, so it can never widen access), while a
- * `require` base only needs to be visible (nothing is written), so an existing
- * base is reused instead of a duplicate being installed.
+ * path) and overlay layering to `composeOntoBaseWorkspace` (the ONE compose
+ * door, shared with `materializeWorkspaceCore`) — neither is reimplemented here.
+ * Presence resolution is access-gated by relation: a `compose` base only counts
+ * if the acting user has an editor+ role on it (composing writes onto it, so it
+ * can never widen access), while a `require` base only needs to be visible
+ * (nothing is written), so an existing base is reused instead of a duplicate
+ * being installed.
+ *
+ * RECURSION SAFETY (why this does NOT route through `materializeWorkspaceCore`):
+ * that service's Step 0 IS `resolvePackageDependencies`. Calling it from here
+ * would re-enter the resolver with a FRESH `path` (ancestor chain) and a fresh
+ * `resolved` cache — defeating both the cycle guard and the diamond dedup that
+ * make this walk terminate, and double-recording `installed[]`. Instead the
+ * transitive compose reuses the base that step 3's EXISTING recursion already
+ * ensured under the SHARED guard, and calls only the compose primitive. No new
+ * recursion is introduced: the graph walk is still exactly step 3's.
  */
 
 import {
@@ -49,6 +74,7 @@ import {
   type WorkspaceYaml,
 } from "@synap-core/workspace-templates";
 import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
+import { composeOntoBaseWorkspace } from "./compose-overlay.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "package-dependency-resolver" });
@@ -60,13 +86,22 @@ const WRITE_ROLES = new Set(["owner", "admin", "editor"]);
  * What happened to a single dependency during resolution.
  *   - `found`          — a matching artifact already existed on the pod.
  *   - `installed`      — a built-in `workspace` template was materialized now.
+ *   - `composed`       — the dependency is itself an OVERLAY (its template
+ *                        declares `compose`), so it was layered ADDITIVELY onto
+ *                        its base instead of being materialized as its own
+ *                        workspace. `workspaceId` is the BASE's id.
  *   - `required-absent`— required but not present, and not auto-installable (surfaced).
  *
  * (A `compose` base surfaces as `found`/`installed` — it's the base that is
  * found/installed; the OVERLAY is what composes onto it. The workspace-level
- * `status:"composed"` in the apply response captures that outcome.)
+ * `status:"composed"` in the apply response captures the TOP-LEVEL package's
+ * own overlay outcome; this `composed` action captures a DEPENDENCY's.)
  */
-export type PackageDependencyAction = "found" | "installed" | "required-absent";
+export type PackageDependencyAction =
+  | "found"
+  | "installed"
+  | "composed"
+  | "required-absent";
 
 export interface ResolvedPackageDependency {
   slug: string;
@@ -191,10 +226,44 @@ async function findWorkspaceBySubtype(
 }
 
 /**
- * Ensure a `kind:'workspace'` dependency is present on the pod for `userId`,
- * installing it from its built-in template when absent. Recurses into the base
- * template's OWN dependencies first (topological, deps-first) under a slug-keyed
- * cycle guard.
+ * Enforce the compose constraints on ONE template's `dependencies[]` and return
+ * its single `compose` dep (or undefined). Applied at EVERY level of the graph —
+ * the top-level package AND each dependency template — so an overlay's own
+ * declaration is validated identically no matter how it is reached.
+ *
+ * `label` names the declaring template in the error (the package itself at the
+ * top level, the dependency's slug when nested).
+ */
+function assertSingleComposeDep(
+  deps: TemplateDependency[],
+  label?: string
+): TemplateDependency | undefined {
+  const composeDeps = deps.filter(
+    (d) => (d.relation ?? "require") === "compose"
+  );
+  const where = label ? ` (declared by "${label}")` : "";
+  if (composeDeps.length > 1) {
+    throw new Error(
+      `A package may declare at most one 'compose' dependency${where}; found ${composeDeps.length}: ${composeDeps
+        .map((d) => d.slug)
+        .join(", ")}`
+    );
+  }
+  const composeDep = composeDeps[0];
+  if (composeDep && (composeDep.kind ?? "workspace") !== "workspace") {
+    throw new Error(
+      `compose dependency "${composeDep.slug}" must be kind:'workspace' (got '${composeDep.kind}')${where}`
+    );
+  }
+  return composeDep;
+}
+
+/**
+ * Ensure a `kind:'workspace'` dependency is present on the pod for `userId`.
+ * Recurses into the template's OWN dependencies first (topological, deps-first)
+ * under a slug-keyed ancestor-path cycle guard, then either COMPOSES it onto its
+ * base (when the template is itself an overlay) or installs it from its built-in
+ * template.
  */
 async function ensureWorkspaceDependencyPresent(
   dep: { slug: string; relation: PackageDependencyRelation },
@@ -253,39 +322,86 @@ async function ensureWorkspaceDependencyPresent(
     });
   }
 
-  // 3. Ensure the base template's OWN dependencies first (deps-first). Add this
+  // 3. Ensure this template's OWN dependencies first (deps-first). Add this
   //    slug to the ancestor path while recursing, then remove it on exit so a
   //    SIBLING re-encountering it (a diamond) is dedup'd, not thrown.
-  //    NOTE: a nested `compose` is treated as presence-only (install-if-missing)
-  //    — compose semantics are TOP-LEVEL only; a base cannot inject an overlay
-  //    target. It never sets `composeTargetWorkspaceId` (see the outer loop).
+  //    A nested `compose` dep is ensured with the SAME editor+ write floor as a
+  //    top-level one (`relation` is forwarded), and its resolved base id is
+  //    captured below — that is what makes compose TRANSITIVE in step 4.
+  const baseDeps =
+    (tpl as WorkspaceYaml & { dependencies?: TemplateDependency[] })
+      .dependencies ?? [];
+  const ownComposeDep = assertSingleComposeDep(baseDeps, slug);
+  let ownComposeBase: ResolveResult | undefined;
+
   path.add(slug);
   try {
-    const baseDeps =
-      (tpl as WorkspaceYaml & { dependencies?: TemplateDependency[] })
-        .dependencies ?? [];
     for (const nested of baseDeps) {
       if ((nested.kind ?? "workspace") !== "workspace") continue;
-      await ensureWorkspaceDependencyPresent(
+      const nestedRes = await ensureWorkspaceDependencyPresent(
         { slug: nested.slug, relation: nested.relation ?? "require" },
         userId,
         path,
         resolved,
         installed
       );
+      if (ownComposeDep && nested.slug === ownComposeDep.slug) {
+        ownComposeBase = nestedRes;
+      }
     }
   } finally {
     path.delete(slug);
   }
 
-  // 4. Install the base via the canonical idempotent create path. The templates
-  //    package's WorkspaceDefinitionInput is structurally the create-path input;
-  //    cast across the two package boundaries as the boot reconcile hook does.
+  // The templates package's WorkspaceDefinitionInput is structurally the
+  // create/reconcile input; cast across the two package boundaries as the boot
+  // reconcile hook does.
   const { definition } = toWorkspaceDefinition(slug);
+
+  // 4a. TRANSITIVE COMPOSE — this template is an OVERLAY (it declares its own
+  //     `compose`), so it must be layered onto its base, NEVER materialized as
+  //     a standalone workspace (that is the rogue-workspace bug). The base was
+  //     just ensured by step 3 under the shared cycle guard; reuse its id.
+  if (ownComposeDep) {
+    if (!ownComposeBase?.workspaceId) {
+      // Base unresolvable → surface, never fatal, and never fall back to
+      // creating the overlay standalone (it would collide on subtype).
+      return record({
+        action: "required-absent",
+        message: `Overlay "${slug}" composes onto "${ownComposeDep.slug}", which could not be resolved — install "${ownComposeDep.slug}" first.`,
+      });
+    }
+    // The ONE compose door — same primitive `materializeWorkspaceCore` drives.
+    await composeOntoBaseWorkspace({
+      composeTargetWorkspaceId: ownComposeBase.workspaceId,
+      userId,
+      definition: definition as unknown as WorkspaceDefinitionInput,
+    });
+    return record({
+      workspaceId: ownComposeBase.workspaceId,
+      action: "composed",
+      message: `Overlay "${slug}" composed onto "${ownComposeDep.slug}".`,
+    });
+  }
+
+  // 4b. Install via the canonical idempotent create path.
+  //     `proposalId` is the BARE TEMPLATE SLUG — the same key the Hub door
+  //     (`POST /api/hub/packages/apply`, i.e. `synap launch`) writes as
+  //     `body._meta.slug`. The two doors MUST agree: this resolver used to
+  //     hand-roll `${slug}-v1`, so a template installed by `synap launch`
+  //     (key "builder-workspace") was invisible to a later `require` from this
+  //     resolver (key "builder-workspace-v1") → a DUPLICATE workspace. The
+  //     template registry is keyed by `meta.slug`, so `slug` here IS the same
+  //     identity `_meta.slug` carries. NOT the template's YAML
+  //     `workspace.proposalId`: that field is inert on the create path
+  //     (`createWorkspaceFromDefinition` never reads it) and is NOT unique —
+  //     `internal-runbook.yaml` declares `operations-v1`, which `operations`
+  //     itself derives, so keying on it would make installing internal-runbook
+  //     idempotently return the OPERATIONS workspace.
   const ws = await createWorkspaceFromDefinitionIdempotent({
     definition: definition as unknown as WorkspaceDefinitionInput,
     userId,
-    proposalId: `${slug}-v1`,
+    proposalId: slug,
     packageSlug: slug,
     templateId: slug,
     createdBy: "provisioning",
@@ -320,23 +436,8 @@ export async function resolvePackageDependencies(
   if (selfSlug) path.add(selfSlug);
   const resolved = new Map<string, ResolveResult>();
 
-  // ── Compose-cardinality + kind constraints ──────────────────────────────
-  const composeDeps = deps.filter(
-    (d) => (d.relation ?? "require") === "compose"
-  );
-  if (composeDeps.length > 1) {
-    throw new Error(
-      `A package may declare at most one 'compose' dependency; found ${composeDeps.length}: ${composeDeps
-        .map((d) => d.slug)
-        .join(", ")}`
-    );
-  }
-  const composeDep = composeDeps[0];
-  if (composeDep && (composeDep.kind ?? "workspace") !== "workspace") {
-    throw new Error(
-      `compose dependency "${composeDep.slug}" must be kind:'workspace' (got '${composeDep.kind}')`
-    );
-  }
+  // ── Compose-cardinality + kind constraints (same rule at every level) ────
+  const composeDep = assertSingleComposeDep(deps);
 
   const composeRequested = !!composeDep;
   let composeTargetWorkspaceId: string | undefined;

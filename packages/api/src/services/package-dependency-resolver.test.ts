@@ -20,6 +20,7 @@ const {
   mockGetWorkspaceTemplate,
   mockToWorkspaceDefinition,
   mockCreateWorkspace,
+  mockComposeOntoBase,
 } = vi.hoisted(() => ({
   mockDb: {
     select: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockGetWorkspaceTemplate: vi.fn(),
   mockToWorkspaceDefinition: vi.fn(),
   mockCreateWorkspace: vi.fn(),
+  mockComposeOntoBase: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -48,21 +50,38 @@ vi.mock("./workspace-creation-service.js", () => ({
   createWorkspaceFromDefinitionIdempotent: mockCreateWorkspace,
 }));
 
+vi.mock("./compose-overlay.js", () => ({
+  composeOntoBaseWorkspace: mockComposeOntoBase,
+}));
+
 import { resolvePackageDependencies } from "./package-dependency-resolver.js";
 
-/** Rows the mocked `db.select().from().innerJoin().where()` chain resolves to. */
-let selectRows: Array<{
+type MemberRow = {
   id: string;
   ownerId: string;
   createdAt: Date;
   role: string;
-}> = [];
+};
+
+/** Rows the mocked `db.select().from().innerJoin().where()` chain resolves to. */
+let selectRows: Array<MemberRow> = [];
+
+/**
+ * Per-call responses for the subtype lookup, consumed IN ORDER — one entry per
+ * `findWorkspaceBySubtype` call (the resolver issues exactly one per slug it
+ * visits, deps-first). Needed for multi-slug graphs, where a single flat
+ * `selectRows` would wrongly answer every slug identically. Falls back to
+ * `selectRows` once drained.
+ */
+let selectQueue: Array<Array<MemberRow>> = [];
 
 function selectChain() {
   const chain = {
     from: vi.fn(),
     innerJoin: vi.fn(),
-    where: vi.fn(() => Promise.resolve(selectRows)),
+    where: vi.fn(() =>
+      Promise.resolve(selectQueue.length ? selectQueue.shift()! : selectRows)
+    ),
   };
   chain.from.mockReturnValue(chain);
   chain.innerJoin.mockReturnValue(chain);
@@ -75,6 +94,7 @@ describe("resolvePackageDependencies", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     selectRows = [];
+    selectQueue = [];
     mockDb.select.mockImplementation(() => selectChain());
     mockGetWorkspaceTemplate.mockReturnValue(undefined);
     mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
@@ -82,6 +102,7 @@ describe("resolvePackageDependencies", () => {
       workspaceId: "ws-installed",
       created: true,
     });
+    mockComposeOntoBase.mockResolvedValue({});
   });
 
   it("1. no deps → composeRequested:false, installed:[]", async () => {
@@ -348,5 +369,288 @@ describe("resolvePackageDependencies", () => {
         workspaceId: "ws-viewer-only",
       }),
     ]);
+  });
+
+  // ── BUG A: `require` on an OVERLAY must COMPOSE, never create ─────────────
+  // `the-arch` requires `grants`; `grants` itself declares `compose: operations`.
+  // Before the fix, step 4 called the create path directly and materialized a
+  // rogue standalone "Grants Pipeline" workspace — which, because grants.yaml
+  // sets `subtype: operations`, then collided with the REAL Operations
+  // workspace in findWorkspaceBySubtype ("Multiple workspaces match dependency
+  // subtype") and made every later compose target a coin-flip.
+  describe("BUG A — transitive compose (a required dep that is itself an overlay)", () => {
+    /** grants = overlay on operations; operations = a plain base template. */
+    function arrangeTheArchGraph() {
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "grants") {
+          return {
+            dependencies: [
+              { slug: "operations", kind: "workspace", relation: "compose" },
+            ],
+          };
+        }
+        if (slug === "operations") return { dependencies: [] };
+        return undefined;
+      });
+      mockToWorkspaceDefinition.mockImplementation((slug: string) => ({
+        definition: { slug },
+      }));
+      mockCreateWorkspace.mockImplementation(
+        async (input: { templateId: string }) => ({
+          workspaceId: `ws-${input.templateId}`,
+          created: true,
+        })
+      );
+    }
+
+    it("A1. require:grants composes grants onto operations — NO rogue workspace created", async () => {
+      arrangeTheArchGraph();
+      selectRows = []; // nothing on the pod yet
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "grants", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+
+      // The overlay was composed onto the base, not created.
+      expect(mockComposeOntoBase).toHaveBeenCalledTimes(1);
+      expect(mockComposeOntoBase).toHaveBeenCalledWith({
+        composeTargetWorkspaceId: "ws-operations",
+        userId: USER,
+        definition: { slug: "grants" },
+      });
+
+      // The ONLY workspace created is the BASE (operations) — never grants.
+      expect(mockCreateWorkspace).toHaveBeenCalledTimes(1);
+      expect(mockCreateWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ templateId: "operations" })
+      );
+      const createdSlugs = mockCreateWorkspace.mock.calls.map(
+        (c) => (c[0] as { templateId: string }).templateId
+      );
+      expect(createdSlugs).not.toContain("grants");
+
+      // grants resolves TO THE BASE's workspace id, action "composed".
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "operations",
+          action: "installed",
+          workspaceId: "ws-operations",
+        }),
+        expect.objectContaining({
+          slug: "grants",
+          action: "composed",
+          workspaceId: "ws-operations",
+        }),
+      ]);
+
+      // A nested compose is composed HERE — it never becomes the TOP-LEVEL
+      // package's own overlay target.
+      expect(result.composeRequested).toBe(false);
+      expect(result.composeTargetWorkspaceId).toBeUndefined();
+    });
+
+    it("A2. existing writable operations base is reused as the compose target", async () => {
+      arrangeTheArchGraph();
+      // Lookup order: (1) subtype "grants" — MISSES, because grants.yaml sets
+      // `subtype: operations`, so no workspace ever carries subtype "grants";
+      // (2) subtype "operations" — hits the real Operations workspace.
+      selectQueue = [
+        [],
+        [
+          {
+            id: "ws-real-operations",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ],
+      ];
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "grants", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+
+      expect(mockCreateWorkspace).not.toHaveBeenCalled();
+      expect(mockComposeOntoBase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          composeTargetWorkspaceId: "ws-real-operations",
+        })
+      );
+      expect(result.installed).toContainEqual(
+        expect.objectContaining({
+          slug: "grants",
+          action: "composed",
+          workspaceId: "ws-real-operations",
+        })
+      );
+    });
+
+    it("A3. overlay whose base cannot be resolved → required-absent, never a rogue create", async () => {
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "grants") {
+          return {
+            dependencies: [
+              { slug: "operations", kind: "workspace", relation: "compose" },
+            ],
+          };
+        }
+        return undefined; // operations has NO built-in template
+      });
+      selectRows = [];
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "grants", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+
+      expect(mockCreateWorkspace).not.toHaveBeenCalled();
+      expect(mockComposeOntoBase).not.toHaveBeenCalled();
+      expect(result.installed).toContainEqual(
+        expect.objectContaining({
+          slug: "grants",
+          action: "required-absent",
+        })
+      );
+    });
+
+    it("A4. compose cardinality is enforced on a NESTED template too, not just top-level", async () => {
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "bad-overlay") {
+          return {
+            dependencies: [
+              { slug: "base-x", kind: "workspace", relation: "compose" },
+              { slug: "base-y", kind: "workspace", relation: "compose" },
+            ],
+          };
+        }
+        return { dependencies: [] };
+      });
+
+      await expect(
+        resolvePackageDependencies({
+          definition: {
+            dependencies: [
+              { slug: "bad-overlay", kind: "workspace", relation: "require" },
+            ],
+          },
+          userId: USER,
+        })
+      ).rejects.toThrow(/at most one 'compose'.*bad-overlay/s);
+    });
+
+    it("A5. the ancestor-path cycle guard still fires through a transitive compose", async () => {
+      // a --require--> b ; b --compose--> a  → a is its own ancestor.
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "a") {
+          return {
+            dependencies: [{ slug: "b", kind: "workspace", relation: "require" }],
+          };
+        }
+        if (slug === "b") {
+          return {
+            dependencies: [{ slug: "a", kind: "workspace", relation: "compose" }],
+          };
+        }
+        return undefined;
+      });
+      selectRows = [];
+
+      await expect(
+        resolvePackageDependencies({
+          definition: {
+            dependencies: [{ slug: "a", kind: "workspace", relation: "require" }],
+          },
+          userId: USER,
+        })
+      ).rejects.toThrow(/Cyclic/);
+    });
+  });
+
+  // ── BUG B: ONE idempotency-key convention across both doors ───────────────
+  // The Hub door (`POST /api/hub/packages/apply`, i.e. `synap launch`) writes
+  // `proposalId: body._meta.slug` — the BARE template slug. This resolver used
+  // to hand-roll `${slug}-v1`, so a template installed via `synap launch` was
+  // invisible to a later `require` here → a DUPLICATE workspace. Only templates
+  // whose slug ≠ subtype are exposed (the step-1 subtype lookup shields the
+  // rest); `builder-workspace` (subtype `builder`) is the live case.
+  describe("BUG B — resolver + Hub door agree on the idempotency key", () => {
+    it("B1. install uses the BARE template slug as proposalId (the Hub door's key)", async () => {
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+      mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+      selectRows = []; // subtype lookup misses (builder-workspace ≠ subtype "builder")
+
+      await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "builder-workspace", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(mockCreateWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ proposalId: "builder-workspace" })
+      );
+      // The old convention must be gone — it is what created the duplicate.
+      expect(mockCreateWorkspace).not.toHaveBeenCalledWith(
+        expect.objectContaining({ proposalId: "builder-workspace-v1" })
+      );
+    });
+
+    it("B2. a workspace already installed under the Hub's key is REUSED, not duplicated", async () => {
+      // Models createWorkspaceFromDefinitionIdempotent's real behaviour: it
+      // matches provisioning_proposal_id by EXACT equality. The pod already
+      // carries the row `synap launch` wrote under key "builder-workspace".
+      const podRows = new Map<string, string>([
+        ["builder-workspace", "ws-launched-by-cli"],
+      ]);
+      mockCreateWorkspace.mockImplementation(
+        async (input: { proposalId?: string }) => {
+          const hit = input.proposalId
+            ? podRows.get(input.proposalId)
+            : undefined;
+          if (hit) return { workspaceId: hit, created: false };
+          return { workspaceId: "ws-DUPLICATE", created: true };
+        }
+      );
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+      mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+      selectRows = [];
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "builder-workspace", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "builder-workspace",
+          action: "found",
+          workspaceId: "ws-launched-by-cli",
+        }),
+      ]);
+      expect(result.installed[0].workspaceId).not.toBe("ws-DUPLICATE");
+    });
   });
 });
