@@ -22,6 +22,7 @@ import {
   desc,
   and,
   or,
+  ilike,
   isNull,
   inArray,
   getDb,
@@ -1861,6 +1862,15 @@ export const entitiesRouter = router({
       // previously skipped the workspace filter) and the workspace branch
       // (which had no per-user guard on the NULL case).
       const conditions: any[] = [entityVisibleWhere(ctx.userId)];
+
+      // The advertised contract: input.query MATCHES. (This was silently
+      // ignored for months — every caller got recent entities regardless of
+      // text.) Lexical title match here; richer ranking belongs to the
+      // Typesense/SRE doors.
+      const trimmedQuery = input.query.trim();
+      if (trimmedQuery.length > 0) {
+        conditions.push(ilike(entities.title, `%${trimmedQuery}%`));
+      }
 
       if (input.profileSlug) {
         // Polymorphic (Kind + Facets): a role slug matches via the facet
