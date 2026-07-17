@@ -43,8 +43,25 @@ const logger: any = createLogger({ module: "retrieval" });
 export const MIN_VECTOR_SIMILARITY = 0.25;
 export const MAX_VECTOR_DISTANCE = 1 - MIN_VECTOR_SIMILARITY;
 
-/** Embed a query via the active Intelligence Service; null on any failure. */
-export async function embedQuery(query: string): Promise<number[] | null> {
+/**
+ * Result of a query embedding attempt. `embedding` is the vector or null;
+ * `degraded` distinguishes a PROVIDER FAILURE (unreachable / non-200 / threw —
+ * a vector was expected but couldn't be produced) from a legitimate null (the
+ * provider answered but returned no usable vector). Callers that must report
+ * "recall ran keyword-only because embeddings are DOWN" read `degraded`.
+ */
+export interface EmbedResult {
+  embedding: number[] | null;
+  degraded: boolean;
+}
+
+/**
+ * Embed a query via the active Intelligence Service. Never throws — a failure
+ * degrades to a keyword-only recall, but is reported (not swallowed): the
+ * provider being DOWN returns `{ embedding: null, degraded: true }` and logs at
+ * WARN with the cause, so an operator can see WHY the vector half dropped.
+ */
+export async function embedQuery(query: string): Promise<EmbedResult> {
   try {
     const { endpoint, apiKey } = await getDefaultActiveService();
     const res = await fetch(`${endpoint}/api/embeddings`, {
@@ -53,12 +70,24 @@ export async function embedQuery(query: string): Promise<number[] | null> {
       body: JSON.stringify({ text: query }),
       signal: AbortSignal.timeout(5_000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logger.warn(
+        { status: res.status },
+        "query embedding provider returned non-OK — recall degrades to Typesense-only"
+      );
+      return { embedding: null, degraded: true };
+    }
     const { embedding } = (await res.json()) as { embedding?: number[] };
-    return Array.isArray(embedding) && embedding.length > 0 ? embedding : null;
+    // A well-formed empty response is a LEGIT null (not a provider outage).
+    return Array.isArray(embedding) && embedding.length > 0
+      ? { embedding, degraded: false }
+      : { embedding: null, degraded: false };
   } catch (err) {
-    logger.debug({ err }, "query embedding unavailable — Typesense-only");
-    return null;
+    logger.warn(
+      { err },
+      "query embedding provider unreachable — recall degrades to Typesense-only"
+    );
+    return { embedding: null, degraded: true };
   }
 }
 
@@ -138,8 +167,13 @@ export async function hybridRecall(
   // ── pgvector (semantic) ─────────────────────────────────────────────────
   let vectorIds: string[] = [];
   let usedVector = false;
+  // A precomputed embedding (the retrieve.ts path) is reused as-is; only the
+  // legacy standalone path embeds here, and takes just the vector (its
+  // degraded flag isn't propagated — `usedVector` already reflects the outcome).
   const embedding =
-    params.embedding !== undefined ? params.embedding : await embedQuery(query);
+    params.embedding !== undefined
+      ? params.embedding
+      : (await embedQuery(query)).embedding;
   if (embedding) {
     try {
       const vecLiteral = `[${embedding.join(",")}]`;

@@ -32,6 +32,15 @@ import type {
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
+import { structuredLookup } from "./structured.js";
+
+/**
+ * A degradation tag on the response. Substrate outages use the substrate name;
+ * the semantic backbone additionally reports `"semantic:vector-down"` when its
+ * vector leg was EXPECTED but ran keyword-only (the embedding provider failed) —
+ * a partial degradation distinct from a whole-substrate error.
+ */
+export type DegradedTag = SubstrateKind | "semantic:vector-down";
 
 export interface AskParams {
   query: string;
@@ -76,8 +85,12 @@ export interface AskResult {
   primary: SubstrateKind;
   /** One answer block per queried substrate, primary first. */
   answers: AskAnswer[];
-  /** Substrates that ERRORED (their block carries status:"error"; items unreliable). */
-  degraded: SubstrateKind[];
+  /**
+   * Degradation tags: substrates that ERRORED (their block carries
+   * status:"error"; items unreliable), plus `"semantic:vector-down"` when the
+   * semantic leg ran keyword-only because the embedding provider was down.
+   */
+  degraded: DegradedTag[];
   /** The semantic engine's query understanding (glass-box). */
   understanding: QueryUnderstanding;
   /** The semantic engine's CRAG verdict. */
@@ -114,7 +127,11 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 export async function ask(params: AskParams): Promise<AskResult> {
   const { query, userId, workspaceId, projectId, catalog, compare } = params;
   const limit = params.limit ?? 10;
-  const { substrates, primary: intent } = classifySubstrates(query);
+  const {
+    substrates,
+    primary: intent,
+    structuredStatus,
+  } = classifySubstrates(query);
 
   // Semantic always runs (the backbone). Procedural / episodic run only when
   // cued and each reports its own ok/error status. projectId narrows the
@@ -156,18 +173,58 @@ export async function ask(params: AskParams): Promise<AskResult> {
     semantic = {
       entities: [],
       understanding: FALLBACK_UNDERSTANDING,
-      source: "hybrid",
+      // The whole leg errored, so no vector leg ran — reporting "hybrid" would
+      // falsely claim the vector half contributed. `degraded:["semantic"]` below
+      // already flags the outage; vector-down is a subset of that, not added here.
+      source: "typesense",
+      vectorDown: false,
       verdict: "empty",
     };
     semanticStatus = "error";
   }
+
+  // STRUCTURED substrate — an enumerative, typed listing dispatched through the
+  // SAME scoped door entities.list uses. The catalog-resolved profile slug comes
+  // from the semantic engine's own type inference (the top inferred profile), so
+  // "list my tasks" targets the real `task` slug; no resolved type ⇒ honestly
+  // empty (routed but nothing to enumerate).
+  let structured: Settled | null = null;
+  if (substrates.includes("structured")) {
+    const slug = semantic.understanding.profileTypes?.[0];
+    structured = slug
+      ? await settle(
+          structuredLookup({
+            profileSlug: slug,
+            userId,
+            workspaceId,
+            projectId,
+            status: slug === "task" ? structuredStatus : undefined,
+            limit,
+          })
+        )
+      : { status: "ok", items: [] };
+  }
+
   const [procedural, episodic] = await Promise.all([proceduralP, episodicP]);
 
   const answers: AskAnswer[] = [
     { substrate: "semantic", items: semantic.entities, status: semanticStatus },
   ];
-  const degraded: SubstrateKind[] = [];
+  const degraded: DegradedTag[] = [];
   if (semanticStatus === "error") degraded.push("semantic");
+  // Partial degradation: the semantic leg answered but its vector half was down
+  // (embedding provider failed), so ranking ran keyword-only. Distinct from a
+  // whole-substrate error — surfaced so a caller knows recall was weakened.
+  if (semanticStatus === "ok" && semantic.vectorDown)
+    degraded.push("semantic:vector-down");
+  if (structured) {
+    answers.push({
+      substrate: "structured",
+      items: structured.items,
+      status: structured.status,
+    });
+    if (structured.status === "error") degraded.push("structured");
+  }
   if (procedural) {
     answers.push({
       substrate: "procedural",
@@ -195,8 +252,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
     );
   const primary: SubstrateKind = answered(intent)
     ? intent
-    : ((["procedural", "episodic", "semantic"] as const).find(answered) ??
-      intent);
+    : ((["structured", "procedural", "episodic", "semantic"] as const).find(
+        answered
+      ) ?? intent);
 
   // Surface the most-relevant substrate first. Total-order comparator
   // (primary → 0, others → 1); stable sort preserves the natural

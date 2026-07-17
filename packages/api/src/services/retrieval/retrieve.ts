@@ -107,6 +107,13 @@ export interface RetrieveResult {
   /** Why these results — surfaced for glass-box debugging + eval. */
   understanding: QueryUnderstanding;
   source: "hybrid" | "typesense";
+  /**
+   * True when the vector leg was EXPECTED but didn't contribute — the embedding
+   * provider was down, or the pgvector query failed — so ranking ran keyword-only.
+   * Distinct from a legit `source:"typesense"` (nothing to embed). Lets the
+   * router flag `"semantic:vector-down"` honestly instead of a silent weak recall.
+   */
+  vectorDown: boolean;
   /** CRAG verdict on the result set. */
   verdict: RetrievalVerdict;
   /** A/B ranker comparison — present only when `compare` was requested. */
@@ -299,7 +306,8 @@ export async function retrieve(
   );
 
   const understanding = understandQuery(query, catalog);
-  const embedding = await embedQuery(query); // once; reused across fused passes
+  const embed = await embedQuery(query); // once; reused across fused passes
+  const embedding = embed.embedding;
 
   // Project focus lens — resolve the project's entity-id set ONCE (the project
   // entity + its belongs_to_project members), then constrain every recall pass
@@ -334,6 +342,10 @@ export async function retrieve(
   ]);
   const usedVector = passes.some((p) => p.usedVector);
   const source: "hybrid" | "typesense" = usedVector ? "hybrid" : "typesense";
+  // Vector was expected but didn't land: the provider was down (embed.degraded)
+  // OR we had an embedding yet every pgvector pass failed (usedVector false).
+  // A legit null embedding (nothing to embed) is NOT down.
+  const vectorDown = embed.degraded || (embedding !== null && !usedVector);
   const recallLists = passes.map((p) => p.ids);
 
   // 2. Graph signal — expand the top recall hits across the relation graph and
@@ -380,6 +392,8 @@ export async function retrieve(
             entities: rows2.slice(0, limit) as Record<string, unknown>[],
             understanding,
             source: r2.usedVector ? "hybrid" : "typesense",
+            vectorDown:
+              embed.degraded || (embedding !== null && !r2.usedVector),
             verdict: gradeResults(
               understanding,
               rows2.map((r) => r.type)
@@ -388,7 +402,13 @@ export async function retrieve(
         }
       }
     }
-    return { entities: [], understanding, source, verdict: "empty" };
+    return {
+      entities: [],
+      understanding,
+      source,
+      vectorDown,
+      verdict: "empty",
+    };
   }
 
   const ordered = await fetchOrdered(
@@ -508,6 +528,7 @@ export async function retrieve(
     entities: finalRows as Record<string, unknown>[],
     understanding,
     source,
+    vectorDown,
     verdict,
     ...(comparison ? { comparison } : {}),
   };

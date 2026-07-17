@@ -78,4 +78,77 @@ describe("classifySubstrates", () => {
     expect(classifySubstrates("").substrates).toEqual(["semantic"]);
     expect(classifySubstrates("   ").primary).toBe("semantic");
   });
+
+  // ── STRUCTURED: enumerative + a named profile → a typed listing (primary) ──
+  describe("structured (enumerative) routing", () => {
+    it("'list my tasks' routes to structured (primary), semantic still runs", () => {
+      const r = classifySubstrates("list my tasks");
+      expect(r.substrates).toContain("structured");
+      expect(r.substrates).toContain("semantic");
+      expect(r.primary).toBe("structured");
+    });
+
+    it("plural-tolerant: 'which deals are open' → structured", () => {
+      const r = classifySubstrates("which deals are open");
+      expect(r.primary).toBe("structured");
+    });
+
+    it("'who are my contacts' → structured (person cue)", () => {
+      expect(classifySubstrates("who are my contacts").primary).toBe(
+        "structured"
+      );
+    });
+
+    it("'what are my open tasks' carries the task status filter", () => {
+      const r = classifySubstrates("what are my open tasks");
+      expect(r.primary).toBe("structured");
+      expect(r.structuredStatus).toBe("open");
+    });
+
+    it("maps 'completed' / 'done' status words", () => {
+      expect(
+        classifySubstrates("list my completed tasks").structuredStatus
+      ).toBe("completed");
+      expect(classifySubstrates("show my done tasks").structuredStatus).toBe(
+        "done"
+      );
+    });
+
+    it("no status word → no structuredStatus", () => {
+      expect(
+        classifySubstrates("list my tasks").structuredStatus
+      ).toBeUndefined();
+    });
+
+    it("status is task-scoped: 'list my open companies' carries none", () => {
+      expect(
+        classifySubstrates("list my open companies").structuredStatus
+      ).toBeUndefined();
+    });
+
+    it("an enumerative lead WITHOUT a named profile stays semantic-only", () => {
+      const r = classifySubstrates("list everything interesting");
+      expect(r.substrates).toEqual(["semantic"]);
+      expect(r.primary).toBe("semantic");
+    });
+
+    it("a singular lookup ('what is the Acme deal') does NOT fire structured", () => {
+      // "what is" is not a collection lead — no enumerative intent.
+      const r = classifySubstrates("what is the Acme deal");
+      expect(r.substrates).not.toContain("structured");
+      expect(r.primary).toBe("semantic");
+    });
+
+    it("episodic suppresses structured: 'what did I note about the project'", () => {
+      const r = classifySubstrates("what did I note about the project");
+      expect(r.substrates).not.toContain("structured");
+      expect(r.primary).toBe("episodic");
+    });
+
+    it("procedural suppresses structured: 'how to list my tasks'", () => {
+      const r = classifySubstrates("how to list my tasks");
+      expect(r.substrates).not.toContain("structured");
+      expect(r.primary).toBe("procedural");
+    });
+  });
 });
