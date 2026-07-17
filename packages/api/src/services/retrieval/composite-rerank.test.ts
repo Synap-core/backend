@@ -79,4 +79,44 @@ describe("compositeRerank — bounded-nudge invariant (the over-boost guard)", (
     });
     expect(out.map((x) => x.id)).toEqual(["a", "b", "c"]);
   });
+
+  // ── Type salience (T2): a bounded nudge for high-signal knowledge types ──
+  it("a salient-type row rises over neighbours but does NOT overtake the top RRF hit", () => {
+    // On a realistic pool the 0.2-span nudge is a meaningful few positions; on a
+    // tiny pool it is deliberately sub-rank (bounded). Use n=10 note rows with a
+    // salient `decision` at the BOTTOM — it lifts past its neighbours yet the
+    // top RRF hit is untouchable (span-relative boost can't span the whole field).
+    const r: RerankRow[] = Array.from({ length: 10 }, (_, i) => ({
+      id: i === 0 ? "top" : `n${i}`,
+      properties: null,
+      updatedAt: daysAgo(100),
+      type: "note",
+    }));
+    r[9] = {
+      id: "decision",
+      properties: null,
+      updatedAt: daysAgo(100),
+      type: "decision",
+    };
+    const out = compositeRerank(r, {
+      propertyHints: [],
+      temporal: false,
+      now: NOW,
+    });
+    expect(out[0].id).toBe("top"); // salience is a nudge, not a partition
+    expect(out.findIndex((x) => x.id === "decision")).toBeLessThan(9); // but it rose
+  });
+
+  it("salience is inert for untyped / note rows (order unchanged)", () => {
+    const r: RerankRow[] = [
+      { id: "a", properties: null, updatedAt: daysAgo(100), type: "note" },
+      { id: "b", properties: null, updatedAt: daysAgo(100) },
+    ];
+    const out = compositeRerank(r, {
+      propertyHints: [],
+      temporal: false,
+      now: NOW,
+    });
+    expect(out.map((x) => x.id)).toEqual(["a", "b"]);
+  });
 });
