@@ -113,6 +113,15 @@ const PackageApplySchema = z.object({
   displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
   entityLinks: z.array(z.record(z.string(), z.unknown())).optional(),
   bentoLayout: z.array(z.record(z.string(), z.unknown())).optional(),
+  // The bento union splits into TWO wire fields (widgets → bentoLayout,
+  // views → bentoViewBlocks). This is a plain z.object, so an undeclared field
+  // is STRIPPED before the pod sees it. Declaring only bentoLayout silently
+  // dropped every view bento-block on the Hub / `synap launch` / packages-apply
+  // path (grants authors 2). The tRPC createFromDefinition door already declares
+  // it (workspaces.ts:2456) and the pod consumes it
+  // (create-workspace-from-definition.ts:1373) — this closes the inbound half of
+  // the bento seam whose outbound half shipped in bfdf0700.
+  bentoViewBlocks: z.array(z.record(z.string(), z.unknown())).optional(),
   profileEntityBentoTemplates: z
     .record(z.string(), z.record(z.string(), z.unknown()))
     .optional(),
