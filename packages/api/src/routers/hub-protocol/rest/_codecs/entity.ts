@@ -118,6 +118,27 @@ export const CreateEntityRequestSchema = z
       ])
       .optional()
       .describe("Origin signal for downstream attribution."),
+    externalRef: z
+      .object({
+        system: z
+          .string()
+          .trim()
+          .min(1)
+          .describe(
+            "Name of the external system this record is mirrored from. Opaque to Synap — any value your integration recognizes."
+          ),
+        id: z
+          .string()
+          .trim()
+          .min(1)
+          .describe(
+            "The record's stable id WITHIN that system. Case is preserved (it may be a hash or base64 segment)."
+          ),
+      })
+      .optional()
+      .describe(
+        "Durable identity of this record in an external system. A SEPARATE axis from `source`: `source` is how the write arrived (attribution), `externalRef` is which record it mirrors (identity). Re-posting the same externalRef converges onto the same entity instead of duplicating it. Both fields are trimmed, so a trailing space cannot fork identity."
+      ),
     sourceMessageId: z
       .string()
       .optional()

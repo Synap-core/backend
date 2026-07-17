@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractIdentitySignals,
+  externalRefSignal,
   normalizeIdentitySignal,
 } from "./identity-resolution-service.js";
 
@@ -103,6 +104,59 @@ describe("extractIdentitySignals", () => {
     const [signal] = extractIdentitySignals({ email: "Alice@Example.com" });
     expect(normalizeIdentitySignal(signal.type, signal.value)).toBe(
       "alice@example.com"
+    );
+  });
+
+  it("NEVER emits external_id — it is not derived from any property key", () => {
+    // The invariant that keeps the identity axis honest: external_id can only be
+    // minted from an explicit (system, id) pair, never inferred from a property.
+    // A property named `externalId` must not become a strong identity atom.
+    const signals = extractIdentitySignals({
+      externalId: "not-a-signal",
+      external_id: "also-not-a-signal",
+      system: "nope",
+      email: "alice@example.com",
+    });
+    expect(signals.every((s) => s.type !== "external_id")).toBe(true);
+  });
+});
+
+describe("externalRefSignal", () => {
+  it("mints the `${system}:${id}` external_id atom", () => {
+    expect(externalRefSignal({ system: "acme-crm", id: "REC-42" })).toEqual({
+      type: "external_id",
+      value: "acme-crm:REC-42",
+    });
+  });
+
+  it("agrees byte-for-byte with the format EntityUpsertService registers", () => {
+    // EntityUpsertService's cross-source lookup historically built this key
+    // inline as `${input.source}:${input.externalId}`. Both now mint through
+    // this door — if the format ever drifts, the two stop converging on the same
+    // entity_identity_signals row and re-imports silently duplicate.
+    const source = "acme-crm";
+    const externalId = "REC-42";
+    expect(externalRefSignal({ system: source, id: externalId }).value).toBe(
+      `${source}:${externalId}`
+    );
+  });
+
+  it("survives normalizeIdentitySignal with its case INTACT (opaque provider id)", () => {
+    // external_id is the one strong atom that must not be lowercased: an opaque
+    // id may carry a case-significant hash/base64 segment, and lowercasing on
+    // read (but not write, or vice-versa) would silently never match.
+    const signal = externalRefSignal({ system: "Acme-CRM", id: "aB9xYz==" });
+    expect(normalizeIdentitySignal(signal.type, signal.value)).toBe(
+      "Acme-CRM:aB9xYz=="
+    );
+  });
+
+  it("normalizes away a trailing space so it cannot fork identity", () => {
+    // Trimming happens at the wire codec; normalize is the second belt, so a
+    // padded value read back still hits the row written by the clean one.
+    const padded = externalRefSignal({ system: "acme-crm", id: "REC-42 " });
+    expect(normalizeIdentitySignal(padded.type, padded.value)).toBe(
+      normalizeIdentitySignal("external_id", "acme-crm:REC-42")
     );
   });
 });

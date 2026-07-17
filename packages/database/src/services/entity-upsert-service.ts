@@ -50,6 +50,8 @@ import { createLogger } from "@synap-core/core";
 import {
   resolveIdentity,
   registerIdentitySignals,
+  registerExternalLink,
+  externalRefSignal,
   normalizeIdentitySignal,
   extractIdentitySignals,
   type IdentitySignal,
@@ -96,8 +98,8 @@ export interface EntityUpsertResult {
   action: "created" | "updated" | "matched";
 }
 
-/** nangoConnectionId sentinel for non-OAuth imports */
-const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
+// The `direct-import` nangoConnectionId sentinel now lives with the external-link
+// write door (DIRECT_IMPORT_CONNECTION_ID in identity-resolution-service).
 
 /**
  * The drizzle db handle — the SAME shape `materializeEntity` requires (and that
@@ -226,10 +228,11 @@ export class EntityUpsertService {
     // same subject via the signal layer — belt to Step 1's external-links belt.
     const lookupSignals: IdentitySignal[] = [...normalizedSignals];
     if (input.externalId) {
-      lookupSignals.push({
-        type: "external_id",
-        value: `${input.source}:${input.externalId}`,
-      });
+      // Mint via the SSOT so this lookup and every other producer/reader of the
+      // external_id key agree byte-for-byte on the format.
+      lookupSignals.push(
+        externalRefSignal({ system: input.source, id: input.externalId })
+      );
     }
     if (lookupSignals.length > 0) {
       const resolution = await resolveIdentity(this.db, {
@@ -334,21 +337,20 @@ export class EntityUpsertService {
     return { entity, action: "created" };
   }
 
+  /**
+   * Delegates to the SSOT external-link write door (same insert, same
+   * `direct-import` sentinel, same onConflictDoNothing) so this service, the
+   * materializer and the governed create door all register identically.
+   */
   private async registerExternalLink(
     entityId: string,
     provider: string,
     externalId: string
   ): Promise<void> {
-    await this.db
-      .insert(entityExternalLinks)
-      .values({
-        entityId,
-        provider,
-        externalId,
-        nangoConnectionId: DIRECT_IMPORT_CONNECTION_ID,
-        status: "active",
-      })
-      .onConflictDoNothing();
+    await registerExternalLink(this.db, {
+      entityId,
+      ref: { system: provider, id: externalId },
+    });
   }
 
   private async registerSignals(

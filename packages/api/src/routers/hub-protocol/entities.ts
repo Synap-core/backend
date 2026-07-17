@@ -140,6 +140,17 @@ export const entitiesRouter = router({
             "raycast",
           ])
           .optional(),
+        /**
+         * Durable identity of this record in an external system — the IDENTITY
+         * axis, orthogonal to `source` (the attribution axis) above. Forwarded
+         * verbatim to the governed create door, which owns the dedup + link.
+         */
+        externalRef: z
+          .object({
+            system: z.string().min(1),
+            id: z.string().min(1),
+          })
+          .optional(),
         aiMetadata: z
           .object({
             messageId: z.string().optional(),
@@ -224,6 +235,9 @@ export const entitiesRouter = router({
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId: input.agentUserId,
+        // Identity axis: forward the external ref so the create door can converge
+        // a re-mirror of the same external record onto the same entity.
+        ...(input.externalRef ? { externalRef: input.externalRef } : {}),
         // Kind + Facets: the door owns facet-attach now (the ONE place) — it
         // attaches each role AFTER the entity materializes (or onto a dedup
         // match), through the governed `attachFacet` door, and reports a per-role

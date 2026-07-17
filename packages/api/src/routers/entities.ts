@@ -48,6 +48,8 @@ import {
   FacetKindMismatchError,
   extractIdentitySignals,
   registerIdentitySignals,
+  registerExternalLink,
+  externalRefSignal,
   resolveIdentity,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   resolveWorkspacePlacement,
@@ -691,6 +693,27 @@ export const entitiesRouter = router({
             "raycast",
           ])
           .optional(),
+        /**
+         * OPTIONAL durable identity of this row in some OTHER system.
+         *
+         * A SEPARATE AXIS from `source` above. `source` answers "which door did
+         * this write come through" (governance/attribution — a closed enum);
+         * `externalRef` answers "which record over there is this a mirror of"
+         * (identity — open, caller-supplied DATA). Any external system can
+         * mirror records here without the kernel knowing what it is.
+         *
+         * When set, the create is exact-matched against a prior mirror of the
+         * same record (user-scoped) and the resulting row is registered under an
+         * `external_id` identity signal + external link, so re-mirroring the same
+         * record converges instead of duplicating. Values are trimmed at the wire
+         * codec so a trailing space cannot fork identity.
+         */
+        externalRef: z
+          .object({
+            system: z.string().min(1),
+            id: z.string().min(1),
+          })
+          .optional(),
         /** AI reasoning for proposals */
         reasoning: z.string().optional(),
         /** Agent user ID when action is performed by an AI agent */
@@ -883,7 +906,16 @@ export const entitiesRouter = router({
       // (`proposedEntityId` must reuse its assigned id). Never blocks: a resolver
       // hiccup falls through to a normal create.
       if (!input.proposedEntityId) {
-        const dedupSignals = extractIdentitySignals(input.properties ?? {});
+        // The property-derived strong atoms, plus the caller's external ref as
+        // an `external_id` atom when supplied. Safe to look up here — and ONLY
+        // here — because the SECURITY GATE below re-checks that the matched row
+        // is visible to the caller before merging. (The strong signal index is
+        // global and `externalRef` is caller-supplied opaque data, so an
+        // ungated lookup would let a caller probe for another user's rows.)
+        const dedupSignals = [
+          ...extractIdentitySignals(input.properties ?? {}),
+          ...(input.externalRef ? [externalRefSignal(input.externalRef)] : []),
+        ];
         if (dedupSignals.length > 0) {
           try {
             const resolveDb = await getDb();
@@ -975,6 +1007,22 @@ export const entitiesRouter = router({
                   logger.warn(
                     { enrichErr, entityId: matchedId },
                     "[entities.create] dedup enrich failed — returning matched entity unenriched"
+                  );
+                }
+              }
+              // Bind this external record to the matched (and caller-visible)
+              // entity so the next mirror of it exact-matches. Idempotent
+              // (onConflictDoNothing) and advisory — never sink the merge.
+              if (input.externalRef) {
+                try {
+                  await registerExternalLink(resolveDb, {
+                    entityId: matchedId,
+                    ref: input.externalRef,
+                  });
+                } catch (linkErr) {
+                  logger.warn(
+                    { linkErr, entityId: matchedId },
+                    "[entities.create] external link registration failed on dedup match"
                   );
                 }
               }
@@ -1111,6 +1159,12 @@ export const entitiesRouter = router({
           // verbatim; a present key — including null — beats its legacy
           // `data.global ? null : workspaceId` derivation.
           resolvedWorkspaceId: resolvedEntityWorkspaceId,
+          // Carried so an approved proposal can still bind its external identity.
+          // NOTE: the proposal materializer worker (@synap/jobs) does not consume
+          // this key YET — on the proposal-gated path the ref is preserved in the
+          // proposal record but no link/signal is registered at materialization.
+          // Wiring that worker is a separate, deliberate change.
+          ...(input.externalRef ? { externalRef: input.externalRef } : {}),
         },
       });
 
@@ -1325,6 +1379,33 @@ export const entitiesRouter = router({
       // reaches it (imports, provisioning, automation/feed workers) feeds
       // resolveIdentity's strong path, not just this router. See
       // entity-repository.ts create() step 6.
+      //
+      // `external_id` is the exception: it is derived from (system, id), NOT
+      // from any property, so the create door cannot mint it. Register it here —
+      // the external link (exact re-mirror match) and the identity signal
+      // (cross-source resolution) — so a re-mirror of this record converges onto
+      // this row. Both are onConflictDoNothing; advisory, never sink the create.
+      if (input.externalRef && createdEntity?.id) {
+        try {
+          await Promise.all([
+            registerExternalLink(database, {
+              entityId: createdEntity.id,
+              ref: input.externalRef,
+            }),
+            registerIdentitySignals(
+              database,
+              createdEntity.id,
+              [externalRefSignal(input.externalRef)],
+              input.externalRef.system
+            ),
+          ]);
+        } catch (refErr) {
+          logger.warn(
+            { refErr, entityId: createdEntity.id },
+            "[entities.create] external ref registration failed — entity preserved"
+          );
+        }
+      }
 
       // 4. Emit .completed event + side-effects
       await auditLog({

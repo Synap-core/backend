@@ -34,6 +34,7 @@ import type { SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   entities,
+  entityExternalLinks,
   entityIdentitySignals,
   entityPropertyIndex,
   propertyDefs,
@@ -262,6 +263,110 @@ export function signalsFromExplicit(
   if (signals.externalId)
     out.push({ type: "external_id", value: signals.externalId });
   return out;
+}
+
+// ── External reference (mirrored identity from any other system) ────────────
+
+/**
+ * A row's identity in some OTHER system: `{ system, id }`.
+ *
+ * DELIBERATELY GENERIC. `system` is caller-supplied DATA (a provider name, a
+ * database name, a spreadsheet id — whatever the caller mirrors from), never
+ * kernel vocabulary and never an enum.
+ *
+ * This is the IDENTITY axis — "which record over there is this row a mirror
+ * of". It is ORTHOGONAL to `source`, the governance/attribution axis ("which
+ * door did this write come through"), which stays a closed enum. Two axes, two
+ * types; do not collapse them.
+ */
+export interface ExternalRef {
+  system: string;
+  id: string;
+}
+
+/** nangoConnectionId sentinel for non-OAuth / direct writes. */
+export const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
+
+/**
+ * Mint the `external_id` strong signal for an external reference — THE one
+ * place this key is constructed, so every producer (EntityUpsertService's
+ * cross-source path, the governed entity-create door, the materializer) and
+ * every reader agree byte-for-byte.
+ *
+ * Format `${system}:${id}` is preserved verbatim from the format
+ * EntityUpsertService has always registered, so both converge on the same rows.
+ * Note `normalizeIdentitySignal` deliberately does NOT lowercase `external_id`
+ * (an opaque provider id may be case-significant) — it only trims.
+ */
+export function externalRefSignal(ref: ExternalRef): IdentitySignal {
+  return { type: "external_id", value: `${ref.system}:${ref.id}` };
+}
+
+/**
+ * Exact-match lookup of an entity by its external reference, SCOPED TO THE
+ * ACTING USER — the read side of the external-link idempotency door.
+ *
+ * ⚠️ THE USER PREDICATE IS LOAD-BEARING. `entity_external_links` has a GLOBAL
+ * unique index on (provider, external_id) and carries no user column, so a bare
+ * lookup on that pair can return an entity belonging to a DIFFERENT user. Since
+ * `system`/`id` are caller-supplied opaque strings, an unscoped lookup would let
+ * any caller probe for — and silently write onto / read back — another user's
+ * row. We therefore join through to `entities` and pin `entities.user_id` to the
+ * acting user; ownership lives on the entity, which is the only place it exists.
+ *
+ * Consequence of the global unique index (schema issue, out of scope here): when
+ * user B already owns the (system, id) pair, user A's lookup correctly misses and
+ * A creates their own entity, but A's `registerExternalLink` then hits the unique
+ * conflict and no-ops — so A's row carries no link. A is never leaked B's data
+ * (the invariant that matters); A just re-resolves via the signal layer or
+ * re-creates. Fixing that needs the index to become (user_id, provider,
+ * external_id) — a migration, deliberately not made here.
+ */
+export async function findEntityIdByExternalRef(
+  db: Db,
+  params: { userId: string; ref: ExternalRef }
+): Promise<string | undefined> {
+  const rows = await db
+    .select({ entityId: entityExternalLinks.entityId })
+    .from(entityExternalLinks)
+    .innerJoin(entities, eq(entities.id, entityExternalLinks.entityId))
+    .where(
+      and(
+        eq(entityExternalLinks.provider, params.ref.system),
+        eq(entityExternalLinks.externalId, params.ref.id),
+        // The scope predicate — never removable. See the doc block above.
+        eq(entities.userId, params.userId),
+        isNull(entities.deletedAt)
+      )
+    )
+    .limit(1);
+  return rows[0]?.entityId;
+}
+
+/**
+ * The SINGLE write door for external links: insert, skipping a pair another
+ * entity already owns (onConflictDoNothing — idempotent, and never steals a
+ * link). Lifted from EntityUpsertService's private method so the upsert service,
+ * the materializer and the governed create door all register identically.
+ */
+export async function registerExternalLink(
+  db: Db,
+  params: {
+    entityId: string;
+    ref: ExternalRef;
+    nangoConnectionId?: string;
+  }
+): Promise<void> {
+  await db
+    .insert(entityExternalLinks)
+    .values({
+      entityId: params.entityId,
+      provider: params.ref.system,
+      externalId: params.ref.id,
+      nangoConnectionId: params.nangoConnectionId ?? DIRECT_IMPORT_CONNECTION_ID,
+      status: "active",
+    })
+    .onConflictDoNothing();
 }
 
 /**

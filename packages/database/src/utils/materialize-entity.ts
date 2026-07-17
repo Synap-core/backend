@@ -33,8 +33,12 @@ import { EntityRepository } from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import {
   extractIdentitySignals,
+  externalRefSignal,
+  findEntityIdByExternalRef,
+  registerExternalLink,
   registerIdentitySignals,
   resolveIdentity,
+  type ExternalRef,
 } from "../services/identity-resolution-service.js";
 import { DEFAULT_RELATION_DEFS } from "./default-relation-defs.js";
 import { linkEntityToProject } from "./entity-project-membership.js";
@@ -72,9 +76,11 @@ export interface EntityProvenance {
  * Dedup policy (per-type hook):
  *  - 'none'            — always create (default).
  *  - 'natural-key'     — reuse an existing row matching user + type + title.
- *  - 'identity-signal' — cross-source identity resolution (EntityUpsertService).
- *                        NOT yet wired here (needs source/externalId/signals the
- *                        materializer input does not carry) — see TODO below.
+ *  - 'identity-signal' — cross-source identity resolution. Strong property
+ *                        signals (email/phone/url/…) via the SSOT resolver, plus
+ *                        an exact external-ref match when the caller supplies
+ *                        `input.externalRef` (the identity axis this input now
+ *                        carries — previously the gap that left this unwired).
  */
 export type EntityDedupPolicy = "none" | "natural-key" | "identity-signal";
 
@@ -92,6 +98,24 @@ export interface MaterializeEntityInput {
   userId: string;
   /** Store properties as-is (trusted seed data) — skips schema enforcement. */
   skipValidation?: boolean;
+  /**
+   * OPTIONAL durable identity of this row in some OTHER system — `{system, id}`.
+   * Generic by construction: `system` is caller-supplied DATA, never kernel
+   * vocabulary. Orthogonal to the `source` governance axis.
+   *
+   * READ (dedup): consulted only under `dedup: 'identity-signal'` — the policy
+   * that owns cross-source identity. The row is exact-matched by external ref
+   * FIRST (user-scoped), before any property-signal resolution.
+   *
+   * WRITE (registration): whenever it is supplied, a created or reused row gets
+   * an external link + an `external_id` signal, so the next mirror of the same
+   * record resolves back to it. `external_id` is not derivable from properties,
+   * so `EntityRepository.create`'s own signal registration cannot mint it — this
+   * is the only door that can.
+   *
+   * Omit it and every code path here behaves exactly as it did before.
+   */
+  externalRef?: ExternalRef;
 }
 
 export interface MaterializeEntityOptions {
@@ -169,6 +193,48 @@ export async function materializeEntity(
       return { entity: existing, reused: true };
     }
   } else if (dedup === "identity-signal") {
+    // ── External-ref exact match (mirrors EntityUpsertService step 1) ───────
+    // Runs FIRST and only when the caller supplied an externalRef: the cheapest,
+    // most certain answer to "have I mirrored this exact record before?".
+    // USER-SCOPED at the SSOT (findEntityIdByExternalRef joins entities and pins
+    // user_id) because entity_external_links' unique index is global and carries
+    // no owner — see that function's doc block.
+    if (input.externalRef) {
+      const linkedId = await findEntityIdByExternalRef(db, {
+        userId: input.userId,
+        ref: input.externalRef,
+      });
+      if (linkedId) {
+        const existing = await db.query.entities.findFirst({
+          where: eq(entities.id, linkedId),
+        });
+        if (existing) {
+          // Enrich on reuse, exactly as the signal path below does: register the
+          // record's own signals + the external_id key against the matched row
+          // (onConflictDoNothing — idempotent), then backfill project membership.
+          await registerIdentitySignals(
+            db,
+            existing.id,
+            [
+              ...extractIdentitySignals(input.properties),
+              externalRefSignal(input.externalRef),
+            ],
+            input.externalRef.system
+          );
+          if (projectId) {
+            await linkEntityToProject(db, {
+              entityId: existing.id,
+              projectId,
+              userId: input.userId,
+              workspaceId: input.workspaceId ?? null,
+            });
+          }
+          return { entity: existing, reused: true };
+        }
+        // Link points at a deleted/missing row — fall through to the signal path.
+      }
+    }
+
     // Cross-source identity resolution via the SSOT (IdentityResolutionService).
     // STRONG path only: extract the globally-unique atoms (email/phone/url/…)
     // from the entity's properties and look them up. No name/userScope is passed
@@ -235,6 +301,27 @@ export async function materializeEntity(
     },
     input.userId
   );
+
+  // ── External identity: link + external_id signal (idempotent) ────────────
+  // Registered for ANY dedup policy when the caller supplied an externalRef —
+  // `external_id` is derived from (system, id), never from a property, so
+  // EntityRepository.create's property-driven signal registration cannot mint
+  // it. Both writes are onConflictDoNothing, so a pair already owned by another
+  // row is skipped rather than stolen.
+  if (input.externalRef) {
+    await Promise.all([
+      registerExternalLink(db, {
+        entityId: entity.id,
+        ref: input.externalRef,
+      }),
+      registerIdentitySignals(
+        db,
+        entity.id,
+        [externalRefSignal(input.externalRef)],
+        input.externalRef.system
+      ),
+    ]);
+  }
 
   // ── Invariant 3: project-link (idempotent) ───────────────────────────────
   if (projectId) {
