@@ -778,3 +778,6 @@ export {
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
 export type { ConnectionSelector } from "./connectors/external-dispatch.js";
+// Nango's API shape (connection_id ≠ end_user.id) belongs in the connector, not
+// in routes — apps/api's Nango webhook needs it to attribute a sync correctly.
+export { NangoConnector } from "./connectors/NangoConnector.js";

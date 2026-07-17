@@ -92,6 +92,18 @@ export type NangoIntegrationsResult =
       error: string;
     };
 
+/**
+ * Who a Nango connection belongs to. Mirrors `NangoIntegrationsResult`: a failed
+ * LOOKUP is never the same fact as "no end user".
+ */
+export type NangoConnectionOwnerResult =
+  | { ok: true; userId: string | null }
+  | {
+      ok: false;
+      reason: "unreachable" | "unauthenticated" | "malformed";
+      error: string;
+    };
+
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
 
@@ -235,6 +247,66 @@ export class NangoConnector implements SyncConnector {
         createdAt: c.created_at ? new Date(c.created_at) : new Date(),
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
       }));
+  }
+
+  /**
+   * Resolve the end user a Nango connection belongs to.
+   *
+   * `connection_id` and `end_user.id` are DIFFERENT fields: Connect-flow
+   * connection ids are Nango-generated. Treating them as interchangeable
+   * attributes data to a user that does not exist.
+   *
+   * `ok:true, userId:null` means Nango ANSWERED and the connection has no end
+   * user. `ok:false` means we could not ask — never present that as emptiness,
+   * or a transient outage silently drops the sync.
+   */
+  async resolveConnectionUserId(
+    connectionId: string
+  ): Promise<NangoConnectionOwnerResult> {
+    // Filter server-side on `connectionId`: `GET /connection` is PAGINATED
+    // (@nangohq/types GetPublicConnections: limit/page), so scanning the first
+    // page silently loses attribution once a pod outgrows it.
+    const params = new URLSearchParams({ connectionId });
+    let res: Response;
+    try {
+      res = await fetch(`${this.host}/connection?${params}`, {
+        headers: this.authHeaders(),
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        reason: "unauthenticated",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    const parsed = NangoConnectionsResponseSchema.safeParse(
+      await res.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return {
+        ok: false,
+        reason: "malformed",
+        error: "Nango /connection returned an unexpected shape",
+      };
+    }
+    const match = parsed.data.connections.find(
+      (c) => c.connection_id === connectionId
+    );
+    return { ok: true, userId: match?.end_user?.id ?? null };
   }
 
   async revokeConnection(connectionId: string): Promise<void> {

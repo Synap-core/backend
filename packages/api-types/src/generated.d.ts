@@ -17258,7 +17258,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		getMessagingConfig: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				workspaceId?: string | undefined;
+			} | undefined;
 			output: {
 				configured: boolean;
 				hasDsn: boolean;
@@ -17295,7 +17297,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		getNangoConfig: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				workspaceId?: string | undefined;
+			} | undefined;
 			output: {
 				configured: boolean;
 				hasSecretKey: boolean;

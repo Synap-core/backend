@@ -20,7 +20,7 @@ import {
   EventRepository,
 } from "@synap/database";
 import { entityExternalLinks } from "@synap/database/schema";
-import { verifyCpJwtWithTrust } from "@synap/api";
+import { verifyCpJwtWithTrust, NangoConnector } from "@synap/api";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import crypto from "crypto";
@@ -529,7 +529,7 @@ connectorsRouter.post("/pull-sync", async (c) => {
 // Nango webhook payload shape:
 //   { from, type, connectionId, providerConfigKey, model, success, ... }
 //
-// connectionId is set to the userId (from end_user.id in createSession).
+// `connectionId` is Nango's own id for the connection — NOT the end user.
 // ---------------------------------------------------------------------------
 
 const NangoWebhookSchema = z.object({
@@ -587,9 +587,37 @@ connectorsRouter.post("/nango-webhook", async (c) => {
     return c.json({ ok: true, skipped: true });
   }
 
-  // connectionId = userId (we set end_user.id = userId in createSession)
-  const userId = connectionId;
   const nangoHost = process.env.NANGO_HOST ?? "http://localhost:3003";
+
+  // `connectionId` is NOT the user. Connect-flow connection ids are generated
+  // by Nango; `end_user.id` is what we stamp. Ask Nango who owns this
+  // connection rather than assuming, and skip rather than attribute the sync to
+  // a user that does not exist.
+  const owner = await new NangoConnector({
+    host: nangoHost,
+    secretKey: nangoKey,
+  }).resolveConnectionUserId(connectionId);
+
+  // Could not ASK Nango → 500 so Nango retries. Returning 200 here would ack the
+  // webhook and drop the sync permanently on a transient blip.
+  if (!owner.ok) {
+    logger.error(
+      { connectionId, provider: providerConfigKey, reason: owner.reason },
+      "nango-webhook: could not resolve the connection's end_user"
+    );
+    return c.json({ error: `Cannot resolve connection: ${owner.reason}` }, 500);
+  }
+
+  // Nango answered and the connection has no end user — nothing to attribute to.
+  if (!owner.userId) {
+    logger.warn(
+      { connectionId, provider: providerConfigKey, model },
+      "nango-webhook: connection has no end_user — skipping ingest"
+    );
+    return c.json({ ok: true, skipped: true });
+  }
+
+  const userId = owner.userId;
 
   logger.info(
     { userId, provider: providerConfigKey, model },

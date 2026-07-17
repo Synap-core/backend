@@ -97,6 +97,107 @@ function isPodReadableWorkspace(settings: unknown): boolean {
   return visibility === "pod_visible" || visibility === "pod_joinable";
 }
 
+/**
+ * CLIENT-SAFE `workspaces.settings` keys — the ONE allowlist for every
+ * user-facing read door (`workspaces.list`, `workspaces.get`).
+ *
+ * WHY AN ALLOWLIST (not a denylist): `settings` is an unencrypted JSONB blob
+ * that anything can write via `as Record<string, unknown>` casts. It had
+ * accumulated SEVEN plaintext credentials — `nango.secretKey`,
+ * `messaging.unipile{ApiKey,Dsn,WebhookSecret}`, `enrichment.{apifyToken,
+ * apolloApiKey}`, `controlPlane.telegramBotToken` — and NOT ONE of them is
+ * declared in the `WorkspaceSettings` type. A denylist would have missed every
+ * single one, and would fail open for the next key someone adds. So: every key
+ * must be opt-in, justified by a real consumer read.
+ *
+ * Deliberately NOT allowlisted (and why):
+ *   - `nango` / `messaging` / `enrichment` / `controlPlane` — credential bags.
+ *   - `mcpServers` — command/args/url/env (arbitrary secret bag). Has its own
+ *     membership-gated door: `getMcpServers`.
+ *   - `corsAllowedOrigins` / `rolePermissions` / `validationRules` — security
+ *     policy, zero client consumers.
+ *
+ * Mirrors the Hub REST allowlist (`hub-protocol/rest/workspaces.ts:489-509`)
+ * plus the keys the browser/app genuinely read (each verified by grepping
+ * consumers in `browser/`, `synap-app/`, `relay-app/`).
+ *
+ * NOTE: pod-admin doors (`adminGet`, `adminListAll`) intentionally return the
+ * blob unprojected — a pod admin already has direct DB access, so projecting
+ * there would buy no confidentiality while hiding config from the admin UI.
+ */
+const CLIENT_SAFE_SETTINGS_KEYS = [
+  // ── Hub REST parity (workspace directory / capability source contract) ──
+  "workspaceSubtype",
+  "onboarding",
+  "workspaceVisibility",
+  "workspaceCapabilities",
+  "sourceRoles",
+  "defaultSources",
+  "appId",
+  "packageSlug",
+  "systemSlug",
+  // ── UI layout / view-id caches (non-sensitive ids + layout config) ──
+  "layout", // browser useTemplateIntegration, workspace-proposal
+  "mainWhiteboardId", // whiteboard resolution (workspaces.get documents this)
+  "profileBentoViewIds", // ActivityBar → profile bento view
+  "profileEntityBentoTemplates", // seeds entity bento on first open
+  "profileRenderers", // CellStudioApp / DeskKeepMenu renderer overlay
+  "sidebarItems", // telegram SidebarDrawer
+  "installedPacks", // ProfilePackBrowserCell / WorkspaceSection badges
+  // ── Agent / governance config surfaced in the settings UI ──
+  "intelligenceServiceId", // AgentSystemsSection, AgentsTab, WorkspaceIntelligenceTabs
+  "agentPersonality", // AgentsTab, WorkspaceIntelligenceTabs
+  "agentModelPreferences", // intelligence ModelsTab
+  "governanceMode", // WorkspaceIntelligenceTabs
+  "aiGovernance", // governance settings tabs (policy config, NOT a credential)
+  "proactiveAi", // proactive AI preferences
+  // ── App-specific, non-sensitive ──
+  "devplane", // devplane hooks: localTerminalEnabled
+  "crm_4_entity_migration_v1", // crm migration marker
+  "proposalId", // use-workspace-setup matches a workspace to its proposal
+] as const;
+
+/**
+ * Keys whose VALUE needs its own allowlist rather than being shipped whole.
+ *
+ * `settings` is written by raw SQL in places (see `devplane.ts`), so a subtree
+ * can carry fields the `WorkspaceSettings` type never declares — checking the
+ * type is not enough, and allowlisting the container would ship them.
+ */
+const CLIENT_SAFE_SETTINGS_SUBKEYS: Record<string, readonly string[]> = {
+  // `devplane.userProviders.{userId}.{provider}.apiKeyVaultRef` is raw-SQL
+  // written and undeclared: it maps every member to the AI providers they
+  // configured, plus the secret UUIDs. Only the terminal flag is client-safe.
+  devplane: ["localTerminalEnabled"],
+};
+
+/**
+ * Project a workspace row's `settings` down to `CLIENT_SAFE_SETTINGS_KEYS`.
+ * Returns the row with `settings` replaced — never mutates the input.
+ */
+function projectWorkspaceSettings<T extends { settings?: unknown }>(
+  workspace: T
+): T {
+  const raw = workspace.settings;
+  if (!raw || typeof raw !== "object") return workspace;
+  const source = raw as Record<string, unknown>;
+  const safe: Record<string, unknown> = {};
+  for (const key of CLIENT_SAFE_SETTINGS_KEYS) {
+    if (!(key in source)) continue;
+    const leaves = CLIENT_SAFE_SETTINGS_SUBKEYS[key];
+    const value = source[key];
+    if (leaves && value && typeof value === "object" && !Array.isArray(value)) {
+      const inner = value as Record<string, unknown>;
+      const picked: Record<string, unknown> = {};
+      for (const leaf of leaves) if (leaf in inner) picked[leaf] = inner[leaf];
+      safe[key] = picked;
+      continue;
+    }
+    safe[key] = value;
+  }
+  return { ...workspace, settings: safe };
+}
+
 async function notifyCpInviteSync(input: {
   type: "workspace" | "pod";
   inviteToken: string;
@@ -338,7 +439,9 @@ export const workspacesRouter = router({
           if (s.appId !== appIdFilter) continue;
         }
         byId.set(workspace.id, {
-          ...workspace,
+          // `with: { workspace: true }` hydrates EVERY column — project the
+          // settings blob down to the client-safe allowlist before it ships.
+          ...projectWorkspaceSettings(workspace),
           role: m.role,
           joinedAt: m.joinedAt,
           accessKind: "member",
@@ -357,7 +460,10 @@ export const workspacesRouter = router({
           if (s.appId !== appIdFilter) continue;
         }
         byId.set(workspace.id, {
-          ...workspace,
+          // Pod-visible path: the caller is a NON-MEMBER. This query has no
+          // `columns:` filter, so without the projection a stranger got the
+          // whole settings blob (credentials included) plus role "viewer".
+          ...projectWorkspaceSettings(workspace),
           role: "viewer",
           joinedAt: undefined,
           accessKind: "pod_visible",
@@ -408,7 +514,11 @@ export const workspacesRouter = router({
       }
 
       if (!membership && podReadable) {
-        return { ...workspace, role: "viewer", accessKind: "pod_visible" };
+        return {
+          ...projectWorkspaceSettings(workspace),
+          role: "viewer",
+          accessKind: "pod_visible",
+        };
       }
       if (!membership) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
@@ -483,7 +593,7 @@ export const workspacesRouter = router({
               ?.mainWhiteboardId
           );
           return {
-            ...updatedWorkspace,
+            ...projectWorkspaceSettings(updatedWorkspace),
             role: membership.role,
             accessKind: "member",
           };
@@ -492,7 +602,11 @@ export const workspacesRouter = router({
 
       // Return workspace (may or may not have mainWhiteboardId depending on whiteboard creation status)
       // Frontend should check for mainWhiteboardId and handle missing whiteboard case
-      return { ...workspace, role: membership.role, accessKind: "member" };
+      return {
+        ...projectWorkspaceSettings(workspace),
+        role: membership.role,
+        accessKind: "member",
+      };
     }),
 
   /**
@@ -909,6 +1023,10 @@ export const workspacesRouter = router({
         .where(eq(workspaceMembers.workspaceId, input.id));
 
       return {
+        // podAdminProcedure: settings intentionally NOT projected through
+        // CLIENT_SAFE_SETTINGS_KEYS — a pod admin already has direct DB access,
+        // so projecting buys no confidentiality and would hide config from the
+        // admin UI. The projection guards the USER-facing doors (list/get).
         ...workspace,
         memberCount: memberCount[0]?.count ?? 0,
         // Admins have no role in the workspace (they're managing it externally)
@@ -934,6 +1052,7 @@ export const workspacesRouter = router({
 
     const countMap = new Map(counts.map((c) => [c.workspaceId, c.count]));
 
+    // podAdminProcedure: settings intentionally NOT projected — see adminGet.
     return allWorkspaces.map((ws) => ({
       ...ws,
       memberCount: countMap.get(ws.id) ?? 0,

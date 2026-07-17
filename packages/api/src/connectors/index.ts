@@ -160,19 +160,62 @@ registerMessagingType("unipile", async ({ ownerId, settings }) => {
 // `new NangoConnector()` sites now route through here, killing the dual path.
 
 /**
- * Resolve a configured `NangoConnector`, checking env vars first then
- * `workspace.settings.nango` as fallback. Returns null when neither configures
- * a secret key (pod must use CP-managed Nango).
+ * Resolve a configured `NangoConnector`. Returns null when nothing configures a
+ * secret key (pod must use CP-managed Nango).
+ *
+ * Precedence — VAULT → env → `workspace.settings.nango`, mirroring the Unipile
+ * messaging resolver above:
+ *   1. Vault (server-encrypted, serviceId='nango-connector', keyed by the
+ *      workspace ownerId) — where `saveNangoConfig` now writes.
+ *   2. NANGO_* env vars (the registry's shared instance is env-configured).
+ *   3. `workspace.settings.nango` — LEGACY plaintext. Kept deliberately: no
+ *      migration in this wave, and live/self-hosted pods still depend on it.
+ *      Do NOT remove without migrating those values into the vault first.
  */
-export async function resolveNangoConnector(): Promise<NangoConnector | null> {
-  // The registry's shared instance is env-configured; prefer it when live.
-  if (nangoConnector.isConfigured()) return nangoConnector;
+/**
+ * The ONE workspace whose owner pod-infra connector credentials are vaulted
+ * under, and whose legacy `settings` are read.
+ *
+ * These credentials are POD-WIDE: one Nango key serves every workspace. An
+ * unordered `findFirst()` lets the writer and this resolver land on different
+ * rows — which both produces "saved but not configured" and, because owning ANY
+ * workspace cleared the write gate, let a self-created workspace's owner become
+ * the pod's connector config. Pinning to the oldest workspace makes writer and
+ * reader resolve the same identity by construction.
+ */
+export async function resolvePodConnectorWorkspace(): Promise<{
+  id: string;
+  ownerId: string | null;
+  settings: unknown;
+} | null> {
+  const database = await getDb();
+  const ws = await database.query.workspaces.findFirst({
+    orderBy: (w, { asc }) => [asc(w.createdAt)],
+    columns: { id: true, settings: true, ownerId: true },
+  });
+  return ws ?? null;
+}
 
+export async function resolveNangoConnector(): Promise<NangoConnector | null> {
   try {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
+    const ws = await resolvePodConnectorWorkspace();
+
+    // 1. Vault first.
+    if (ws?.ownerId) {
+      const vaultCfg = await getServiceSecret("nango-connector", ws.ownerId);
+      if (vaultCfg?.secretKey) {
+        return new NangoConnector({
+          secretKey: vaultCfg.secretKey,
+          host: vaultCfg.host,
+          connectUrl: vaultCfg.connectUrl,
+        });
+      }
+    }
+
+    // 2. Env (shared instance).
+    if (nangoConnector.isConfigured()) return nangoConnector;
+
+    // 3. Legacy plaintext settings fallback.
     const cfg = ((ws?.settings as Record<string, unknown>)?.nango ?? {}) as {
       secretKey?: string;
       host?: string;
@@ -186,7 +229,8 @@ export async function resolveNangoConnector(): Promise<NangoConnector | null> {
       });
     }
   } catch {
-    // DB not ready — env-only fallback (already null here).
+    // DB not ready — fall back to the env-configured shared instance.
+    if (nangoConnector.isConfigured()) return nangoConnector;
   }
   return null;
 }

@@ -30,6 +30,10 @@ import {
   desc,
   entityExternalLinks,
   drizzleSql,
+  upsertServiceSecret,
+  getServiceSecret,
+  isServerVaultAvailable,
+  getWorkspaceMembership,
 } from "@synap/database";
 import { entities, workspaces, workspaceMembers } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -37,6 +41,7 @@ import {
   enrichmentProviderRegistry,
   getMessagingConnector,
   resolveNangoConnector,
+  resolvePodConnectorWorkspace,
   type UnipileConnector,
 } from "../connectors/index.js";
 import {
@@ -87,6 +92,59 @@ async function resolveImportWorkspaceId(
     });
   }
   return membership.workspaceId;
+}
+
+/**
+ * Resolve the pod's connector-config workspace.
+ *
+ * A connector credential is POD infrastructure, not workspace content: one
+ * Nango key serves every workspace. So membership in a workspace is the WRONG
+ * gate — `workspaces.create` sets `ownerId: ctx.userId` and auto-adds the
+ * creator as owner, so any authenticated user could self-grant owner and clear
+ * a per-workspace check. These procedures are `podAdminProcedure` instead, and
+ * the identity is pinned to the same workspace the resolver reads
+ * (`resolvePodConnectorWorkspace`) so the two cannot disagree.
+ */
+async function requirePodConnectorWorkspace(): Promise<{
+  id: string;
+  ownerId: string | null;
+  settings: unknown;
+}> {
+  const ws = await resolvePodConnectorWorkspace();
+  if (!ws)
+    throw new TRPCError({ code: "NOT_FOUND", message: "No workspace found" });
+  return ws;
+}
+
+/**
+ * The user the vault stores a workspace's pod-infra credentials under.
+ * Convention: `workspace.ownerId` (see `connectors/index.ts:215,232`).
+ */
+function vaultOwnerFor(ws: { ownerId: string | null }): string {
+  if (!ws.ownerId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Workspace has no owner; cannot store connector credentials in the vault.",
+    });
+  }
+  return ws.ownerId;
+}
+
+/**
+ * Fail LOUDLY when the server vault is unavailable rather than silently
+ * writing a plaintext credential into `workspace.settings` — silent fallback is
+ * exactly the bug class this wave removes. `VAULT_SERVER_KEY` is strict-required
+ * in deploy (`${VAULT_SERVER_KEY:?…}`), so this only trips on a misconfigured pod.
+ */
+function assertVaultWritable(): void {
+  if (!isServerVaultAvailable()) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Server vault unavailable (VAULT_SERVER_KEY unset) — refusing to store credentials in plaintext workspace settings.",
+    });
+  }
 }
 
 async function getEnrichmentKeys(): Promise<{
@@ -739,10 +797,22 @@ export const connectorsRouter = router({
   }),
 
   /**
-   * Save enrichment provider API keys to workspace settings.
+   * Save enrichment provider API keys.
    * Pass undefined to leave an existing key unchanged; pass empty string to clear it.
+   *
+   * SECURITY: requires admin/owner of the named workspace — see
+   * `requirePodConnectorWorkspace`.
+   *
+   * ⚠️ STORAGE DEBT: these keys still land in the PLAINTEXT `settings.enrichment`
+   * blob. Unlike nango/messaging, enrichment has NO established vault serviceId
+   * or vault-reading resolver, so moving it is a design decision (new serviceId
+   * convention + a rewrite of `getEnrichmentKeys` and the providers status
+   * endpoint) rather than a mirror of an existing pattern — deliberately left
+   * for a follow-up wave. The read-door projection (`CLIENT_SAFE_SETTINGS_KEYS`
+   * in workspaces.ts) already stops these keys reaching clients; this gate stops
+   * arbitrary users writing them.
    */
-  saveEnrichmentKeys: protectedProcedure
+  saveEnrichmentKeys: podAdminProcedure
     .input(
       z.object({
         apolloApiKey: z.string().optional(),
@@ -751,14 +821,7 @@ export const connectorsRouter = router({
     )
     .mutation(async ({ input }) => {
       const database = await getDb();
-      const ws = await database.query.workspaces.findFirst({
-        columns: { id: true, settings: true },
-      });
-      if (!ws)
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No workspace found",
-        });
+      const ws = await requirePodConnectorWorkspace();
 
       const existing = ((ws.settings as Record<string, unknown>)?.enrichment ??
         {}) as Record<string, unknown>;
@@ -784,37 +847,81 @@ export const connectorsRouter = router({
 
   /**
    * Get messaging service configuration status (keys are never returned to the client).
+   *
+   * Reads VAULT → `settings.messaging` → env, matching the Unipile resolver's
+   * precedence. Kept in step with `saveMessagingConfig` (which now writes to the
+   * vault) so a fresh save doesn't report "not configured".
+   *
+   * `workspaceId` is optional for backwards compatibility; when omitted this
+   * keeps the legacy unordered `findFirst()` behaviour.
    */
-  getMessagingConfig: protectedProcedure.query(async () => {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
-      {}) as Record<string, unknown>;
-    const hasDsn =
-      !!(cfg.unipileDsn as string | undefined) || !!process.env.UNIPILE_DSN;
-    const hasApiKey =
-      !!(cfg.unipileApiKey as string | undefined) ||
-      !!process.env.UNIPILE_API_KEY;
-    const hasWebhookSecret =
-      !!(cfg.unipileWebhookSecret as string | undefined) ||
-      !!process.env.UNIPILE_WEBHOOK_SECRET;
-    const fromEnv = !cfg.unipileDsn && !cfg.unipileApiKey;
-    return {
-      configured: hasDsn && hasApiKey,
-      hasDsn,
-      hasApiKey,
-      hasWebhookSecret,
-      fromEnv,
-    };
-  }),
+  getMessagingConfig: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const database = await getDb();
+      // Same rule as getNangoConfig: a caller-supplied workspaceId must be
+      // backed by membership of that workspace.
+      if (input?.workspaceId) {
+        const membership = await getWorkspaceMembership(
+          database,
+          input.workspaceId,
+          ctx.userId
+        );
+        if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      const ws = await database.query.workspaces.findFirst({
+        ...(input?.workspaceId
+          ? { where: eq(workspaces.id, input.workspaceId) }
+          : {}),
+        columns: { settings: true, ownerId: true },
+      });
+
+      const vaultCfg = ws?.ownerId
+        ? await getServiceSecret("messaging-connector", ws.ownerId)
+        : null;
+      const cfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
+        {}) as Record<string, unknown>;
+
+      const hasDsn =
+        !!vaultCfg?.dsn ||
+        !!(cfg.unipileDsn as string | undefined) ||
+        !!process.env.UNIPILE_DSN;
+      const hasApiKey =
+        !!vaultCfg?.apiKey ||
+        !!(cfg.unipileApiKey as string | undefined) ||
+        !!process.env.UNIPILE_API_KEY;
+      const hasWebhookSecret =
+        !!vaultCfg?.webhookSecret ||
+        !!(cfg.unipileWebhookSecret as string | undefined) ||
+        !!process.env.UNIPILE_WEBHOOK_SECRET;
+      const fromEnv =
+        !vaultCfg?.dsn &&
+        !vaultCfg?.apiKey &&
+        !cfg.unipileDsn &&
+        !cfg.unipileApiKey;
+      return {
+        configured: hasDsn && hasApiKey,
+        hasDsn,
+        hasApiKey,
+        hasWebhookSecret,
+        fromEnv,
+      };
+    }),
 
   /**
-   * Save messaging service credentials to workspace settings.
+   * Save messaging (Unipile) credentials to the VAULT (server-encrypted).
    * Pass undefined to leave a key unchanged; pass empty string to clear it.
+   *
+   * SECURITY: requires admin/owner of the named workspace — see
+   * `requirePodConnectorWorkspace`.
+   *
+   * STORAGE: writes the vault secret `(workspace.ownerId, "messaging-connector")`
+   * with fields `dsn` / `apiKey` / `webhookSecret` — the EXACT shape the Unipile
+   * resolver already reads first (`connectors/index.ts` registerMessagingType
+   * "unipile"). The legacy plaintext `settings.messaging` is left untouched (no
+   * migration in this wave); the resolver still falls back to it.
    */
-  saveMessagingConfig: protectedProcedure
+  saveMessagingConfig: podAdminProcedure
     .input(
       z.object({
         unipileDsn: z.string().optional(),
@@ -823,37 +930,32 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const database = await getDb();
-      const ws = await database.query.workspaces.findFirst({
-        columns: { id: true, settings: true },
-      });
-      if (!ws)
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No workspace found",
-        });
+      const ws = await requirePodConnectorWorkspace();
+      assertVaultWritable();
+      const ownerId = vaultOwnerFor(ws);
 
-      const existing = ((ws.settings as Record<string, unknown>)?.messaging ??
-        {}) as Record<string, unknown>;
-      const merged = {
-        ...existing,
-        ...(input.unipileDsn !== undefined
-          ? { unipileDsn: input.unipileDsn || null }
-          : {}),
-        ...(input.unipileApiKey !== undefined
-          ? { unipileApiKey: input.unipileApiKey || null }
-          : {}),
-        ...(input.unipileWebhookSecret !== undefined
-          ? { unipileWebhookSecret: input.unipileWebhookSecret || null }
-          : {}),
-      };
+      const existing =
+        (await getServiceSecret("messaging-connector", ownerId)) ?? {};
+      const merged: Record<string, string> = { ...existing };
+      // Input names are Unipile-flavoured; the vault fields are the generic
+      // dsn/apiKey/webhookSecret the resolver expects.
+      const fieldMap = [
+        ["dsn", input.unipileDsn],
+        ["apiKey", input.unipileApiKey],
+        ["webhookSecret", input.unipileWebhookSecret],
+      ] as const;
+      for (const [field, value] of fieldMap) {
+        if (value === undefined) continue;
+        if (value === "") delete merged[field];
+        else merged[field] = value;
+      }
 
-      await database
-        .update(workspaces)
-        .set({
-          settings: drizzleSql`COALESCE(settings, '{}'::jsonb) || ${JSON.stringify({ messaging: merged })}::jsonb`,
-        })
-        .where(eq(workspaces.id, ws.id));
+      await upsertServiceSecret(
+        "messaging-connector",
+        ownerId,
+        "Messaging (Unipile)",
+        merged
+      );
 
       return { success: true };
     }),
@@ -925,34 +1027,84 @@ export const connectorsRouter = router({
 
   /**
    * Get Nango self-hosted configuration status (secrets never returned).
+   *
+   * Reads VAULT → env → `settings.nango`, the same precedence as
+   * `resolveNangoConnector()`. Keeping this in step with the resolver is what
+   * stops the "saved but not configured" ghost: `saveNangoConfig` now writes to
+   * the vault, so a settings-only status check would report "not configured"
+   * immediately after a successful save.
+   *
+   * `workspaceId` is optional for backwards compatibility with existing callers;
+   * when omitted this keeps the legacy unordered `findFirst()` behaviour. Pass
+   * it to get a status that matches the workspace you saved to.
    */
-  getNangoConfig: protectedProcedure.query(async () => {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cfg = ((ws?.settings as Record<string, unknown>)?.nango ??
-      {}) as Record<string, unknown>;
-    const hasSecretKey =
-      !!(cfg.secretKey as string | undefined) || !!process.env.NANGO_SECRET_KEY;
-    const fromEnv = !cfg.secretKey && !!process.env.NANGO_SECRET_KEY;
-    return {
-      configured: hasSecretKey,
-      hasSecretKey,
-      host: (cfg.host as string | undefined) ?? process.env.NANGO_HOST ?? null,
-      connectUrl:
-        (cfg.connectUrl as string | undefined) ??
-        process.env.NANGO_CONNECT_URL ??
-        null,
-      fromEnv,
-    };
-  }),
+  getNangoConfig: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const database = await getDb();
+      // A caller-supplied workspaceId is a lens, never a grant: require
+      // membership of THAT workspace before reporting its connector status
+      // (host / connectUrl / fromEnv is infrastructure detail).
+      if (input?.workspaceId) {
+        const membership = await getWorkspaceMembership(
+          database,
+          input.workspaceId,
+          ctx.userId
+        );
+        if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      const ws = await database.query.workspaces.findFirst({
+        ...(input?.workspaceId
+          ? { where: eq(workspaces.id, input.workspaceId) }
+          : {}),
+        columns: { settings: true, ownerId: true },
+      });
+
+      const vaultCfg = ws?.ownerId
+        ? await getServiceSecret("nango-connector", ws.ownerId)
+        : null;
+      const cfg = ((ws?.settings as Record<string, unknown>)?.nango ??
+        {}) as Record<string, unknown>;
+
+      const hasSecretKey =
+        !!vaultCfg?.secretKey ||
+        !!process.env.NANGO_SECRET_KEY ||
+        !!(cfg.secretKey as string | undefined);
+      const fromEnv =
+        !vaultCfg?.secretKey &&
+        !cfg.secretKey &&
+        !!process.env.NANGO_SECRET_KEY;
+      return {
+        configured: hasSecretKey,
+        hasSecretKey,
+        host:
+          vaultCfg?.host ??
+          process.env.NANGO_HOST ??
+          (cfg.host as string | undefined) ??
+          null,
+        connectUrl:
+          vaultCfg?.connectUrl ??
+          process.env.NANGO_CONNECT_URL ??
+          (cfg.connectUrl as string | undefined) ??
+          null,
+        fromEnv,
+      };
+    }),
 
   /**
-   * Save self-hosted Nango credentials to workspace settings.
+   * Save self-hosted Nango credentials to the VAULT (server-encrypted).
    * Pass undefined to leave a key unchanged; pass empty string to clear it.
+   *
+   * SECURITY: requires admin/owner of the named workspace. Previously this was
+   * an ungated `protectedProcedure` writing to an arbitrary workspace picked by
+   * an unordered `findFirst()` — see `resolvePodConnectorWorkspace`.
+   *
+   * STORAGE: writes to the vault under `(workspace.ownerId, "nango-connector")`,
+   * NOT into the plaintext `settings.nango` JSONB blob. Existing `settings.nango`
+   * values are deliberately left in place (no migration in this wave) — the
+   * resolver still falls back to them, so live/self-hosted pods keep working.
    */
-  saveNangoConfig: protectedProcedure
+  saveNangoConfig: podAdminProcedure
     .input(
       z.object({
         secretKey: z.string().optional(),
@@ -961,37 +1113,30 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const database = await getDb();
-      const ws = await database.query.workspaces.findFirst({
-        columns: { id: true, settings: true },
-      });
-      if (!ws)
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No workspace found",
-        });
+      const ws = await requirePodConnectorWorkspace();
+      assertVaultWritable();
+      const ownerId = vaultOwnerFor(ws);
 
-      const existing = ((ws.settings as Record<string, unknown>)?.nango ??
-        {}) as Record<string, unknown>;
-      const merged = {
-        ...existing,
-        ...(input.secretKey !== undefined
-          ? { secretKey: input.secretKey || null }
-          : {}),
-        ...(input.host !== undefined ? { host: input.host || null } : {}),
-        ...(input.connectUrl !== undefined
-          ? { connectUrl: input.connectUrl || null }
-          : {}),
-      };
+      // Merge over what the vault already holds, so an omitted field is
+      // "leave unchanged" and an empty string clears it — same contract as before.
+      const existing =
+        (await getServiceSecret("nango-connector", ownerId)) ?? {};
+      const merged: Record<string, string> = { ...existing };
+      for (const key of ["secretKey", "host", "connectUrl"] as const) {
+        const value = input[key];
+        if (value === undefined) continue;
+        if (value === "") delete merged[key];
+        else merged[key] = value;
+      }
 
-      await database
-        .update(workspaces)
-        .set({
-          settings: drizzleSql`COALESCE(settings, '{}'::jsonb) || ${JSON.stringify({ nango: merged })}::jsonb`,
-        })
-        .where(eq(workspaces.id, ws.id));
+      await upsertServiceSecret(
+        "nango-connector",
+        ownerId,
+        "Nango (self-hosted)",
+        merged
+      );
 
-      // Bust the local nango cache so next call re-reads from DB
+      // Bust the local nango cache so next call re-resolves
       cpSettingsCache = null;
 
       return { success: true };
