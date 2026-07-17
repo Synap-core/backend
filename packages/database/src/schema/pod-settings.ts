@@ -40,7 +40,18 @@ export interface PodProactiveDefaults {
  * "template kind empty+stale for N syncs" without a new table — the stamps
  * live under `pod_settings.settings.catalogSyncStamps`, keyed `${source}::${kind}`.
  */
-export type CatalogSyncStatus = "ok" | "empty" | "unreachable";
+/**
+ * `misconfigured` is distinct from `unreachable` on purpose: a 4xx from the
+ * catalog source means the pod asked for something the source will NEVER accept
+ * (e.g. a retired `category`) — a permanent, operator-fixable fault, not a
+ * transient outage. `/health` surfaces it as `catalog:<key>:misconfigured` so a
+ * 400 can never masquerade as "source temporarily unavailable".
+ */
+export type CatalogSyncStatus =
+  | "ok"
+  | "empty"
+  | "unreachable"
+  | "misconfigured";
 export interface CatalogSyncStamp {
   /** ISO timestamp of the last completed sync attempt (any outcome). */
   lastSyncAt: string;

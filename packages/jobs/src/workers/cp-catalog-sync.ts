@@ -10,14 +10,28 @@
  * list, never a schema or verb change):
  *
  *   - capability → GET {source}/api/marketplace/capabilities
- *   - automation → GET {source}/api/packages?category=automation
- *   - template   → GET {source}/api/packages?category=template
+ *   - automation → GET {source}/api/packages?category=workflow
+ *   - template   → GET {source}/api/packages?category=workspace
  *   - cell       → GET {source}/api/marketplace/cells
  *
+ * NOTE on the package `category`: the pod's internal marketplace `kind`
+ * vocabulary (capability | automation | template | cell — what agents'
+ * `market.search(kind:…)` and the cache's `kind` column speak) predates the
+ * CP's `0049_package_vocabulary` migration. The CP's live `PACKAGE_TYPES` are
+ * now `workspace | capability | skill | workflow | view | cell` — `template`
+ * and `automation` are RETIRED and a request with `category=template` returns
+ * HTTP 400. So the OUTBOUND CP query maps kind → the CP's live category
+ * (automation→workflow, template→workspace); the cache still STORES
+ * kind=automation|template, unchanged, so nothing downstream is orphaned.
+ *
  * Runs on a schedule (every 10 minutes) AND once on startup, same as
- * capability-template-sync. Resilience contract, identical to that worker:
- *   - source unreachable / non-2xx / timeout (8s) → log + leave that source's
- *     existing cache rows INTACT (never wipe).
+ * capability-template-sync. Resilience contract:
+ *   - 5xx / network error / timeout (8s) → transient: log at warn + leave that
+ *     source's existing cache rows INTACT (never wipe).
+ *   - 4xx → misconfiguration: the request itself is wrong (e.g. a retired
+ *     category) and will NEVER self-heal on retry. Log LOUDLY at error + stamp
+ *     `misconfigured` (distinct from `unreachable`) so an operator sees it;
+ *     cache still left intact (never wipe).
  *   - source returns 0 entries for a kind → no-op for that (source, kind) —
  *     likely a hiccup, not an intentional empty catalog.
  *   - upsert + prune is scoped per (source, kind): a failure/empty response on
@@ -79,24 +93,47 @@ function catalogSources(): string[] {
   return url ? [url] : [];
 }
 
-/** Shared 8s-timeout GET, tolerant of any failure — returns `null` on error. */
-async function safeFetchJson(url: string): Promise<unknown | null> {
+/**
+ * Outcome of one source fetch. The two failure variants are split on purpose:
+ *   - `transient` (5xx / network / timeout) → the source may recover; leave the
+ *     cache intact quietly.
+ *   - `clientError` (4xx) → the REQUEST is wrong and will never succeed on
+ *     retry (e.g. a retired `category`); surface it loudly.
+ * A silent `null` for both — the old shape — let a permanent 400 masquerade as
+ * a temporary outage for the cache's whole life, which is exactly the bug that
+ * kept `market.search(kind:'template')` returning "nothing" since 0049.
+ */
+type SourceFetch<T> =
+  | { ok: true; data: T }
+  | { ok: false; clientError: false }
+  | { ok: false; clientError: true; status: number };
+
+/** Shared 8s-timeout GET. Distinguishes a 4xx (permanent) from a transient failure. */
+async function safeFetchJson(url: string): Promise<SourceFetch<unknown>> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    return await res.json();
+    if (!res.ok) {
+      // 4xx = the request is malformed/unacceptable — will never self-heal.
+      // 5xx (and anything else non-2xx) = server-side, treat as transient.
+      if (res.status >= 400 && res.status < 500) {
+        return { ok: false, clientError: true, status: res.status };
+      }
+      return { ok: false, clientError: false };
+    }
+    return { ok: true, data: await res.json() };
   } catch {
-    return null;
+    // Network error / timeout / abort — transient, leave cache intact.
+    return { ok: false, clientError: false };
   }
 }
 
-/** GET {source}/api/marketplace/capabilities → CatalogEntry[] | null. */
+/** GET {source}/api/marketplace/capabilities → SourceFetch<CatalogEntry[]>. */
 async function fetchCapabilities(
   source: string
-): Promise<CatalogEntry[] | null> {
-  const body = (await safeFetchJson(
-    `${source}/api/marketplace/capabilities`
-  )) as {
+): Promise<SourceFetch<CatalogEntry[]>> {
+  const result = await safeFetchJson(`${source}/api/marketplace/capabilities`);
+  if (!result.ok) return result;
+  const body = result.data as {
     capabilities?: Array<{
       key: string;
       name: string;
@@ -105,25 +142,34 @@ async function fetchCapabilities(
       definition?: Record<string, unknown>;
     }>;
   } | null;
-  if (!body) return null;
-  const list = Array.isArray(body.capabilities) ? body.capabilities : [];
-  return list.map((c) => ({
-    slug: c.key,
-    name: c.name,
-    description: c.description ?? null,
-    version: c.version ?? null,
-    definition: c.definition ?? null,
-  }));
+  const list = Array.isArray(body?.capabilities) ? body.capabilities : [];
+  return {
+    ok: true,
+    data: list.map((c) => ({
+      slug: c.key,
+      name: c.name,
+      description: c.description ?? null,
+      version: c.version ?? null,
+      definition: c.definition ?? null,
+    })),
+  };
 }
 
-/** GET {source}/api/packages?category={category} → CatalogEntry[] | null (list view — no `definition`). */
+/**
+ * GET {source}/api/packages?category={category} → SourceFetch<CatalogEntry[]>
+ * (list view — no `definition`). `category` is the CP's LIVE `PACKAGE_TYPES`
+ * vocabulary (`workspace` / `workflow`), NOT the pod's internal cache `kind` —
+ * see fetchKind for the mapping and the header note.
+ */
 async function fetchPackages(
   source: string,
-  category: "automation" | "template"
-): Promise<CatalogEntry[] | null> {
-  const body = (await safeFetchJson(
+  category: "workspace" | "workflow"
+): Promise<SourceFetch<CatalogEntry[]>> {
+  const result = await safeFetchJson(
     `${source}/api/packages?category=${category}&limit=100`
-  )) as {
+  );
+  if (!result.ok) return result;
+  const body = result.data as {
     packages?: Array<{
       slug: string;
       displayName: string;
@@ -134,28 +180,32 @@ async function fetchPackages(
       tags?: string[];
     }>;
   } | null;
-  if (!body) return null;
-  const list = Array.isArray(body.packages) ? body.packages : [];
-  return list.map((p) => ({
-    slug: p.slug,
-    name: p.displayName,
-    description: p.description ?? null,
-    version: p.version ?? null,
-    tier: p.requiredTier ?? null,
-    vendor: p.vendorId ?? null,
-    tags: p.tags ?? null,
-    // List view omits the definition body by design — null here means a
-    // per-slug GET /api/packages/:slug/:version fetch is required at install
-    // time (Wave 3b's concern).
-    definition: null,
-  }));
+  const list = Array.isArray(body?.packages) ? body.packages : [];
+  return {
+    ok: true,
+    data: list.map((p) => ({
+      slug: p.slug,
+      name: p.displayName,
+      description: p.description ?? null,
+      version: p.version ?? null,
+      tier: p.requiredTier ?? null,
+      vendor: p.vendorId ?? null,
+      tags: p.tags ?? null,
+      // List view omits the definition body by design — null here means a
+      // per-slug GET /api/packages/:slug/:version fetch is required at install
+      // time (Wave 3b's concern).
+      definition: null,
+    })),
+  };
 }
 
-/** GET {source}/api/marketplace/cells → CatalogEntry[] | null. */
-async function fetchCells(source: string): Promise<CatalogEntry[] | null> {
-  const body = (await safeFetchJson(
-    `${source}/api/marketplace/cells?limit=100`
-  )) as {
+/** GET {source}/api/marketplace/cells → SourceFetch<CatalogEntry[]>. */
+async function fetchCells(
+  source: string
+): Promise<SourceFetch<CatalogEntry[]>> {
+  const result = await safeFetchJson(`${source}/api/marketplace/cells?limit=100`);
+  if (!result.ok) return result;
+  const body = result.data as {
     cells?: Array<{
       key: string;
       name: string;
@@ -168,38 +218,43 @@ async function fetchCells(source: string): Promise<CatalogEntry[] | null> {
       author?: string;
     }>;
   } | null;
-  if (!body) return null;
-  const list = Array.isArray(body.cells) ? body.cells : [];
-  return list.map((cell) => ({
-    // Cells aren't independently versioned/sluggable in the CP today — scope
-    // the cache slug to the owning package so two packages' same-named cell
-    // never collides under the (source, kind, slug) unique index.
-    slug: `${cell.packageSlug}/${cell.key}`,
-    name: cell.name,
-    vendor: cell.author ?? null,
-    definition: {
-      key: cell.key,
-      code: cell.code,
-      deps: cell.deps,
-      previewCode: cell.previewCode,
-      defaultSize: cell.defaultSize,
-      configSchema: cell.configSchema,
-      packageSlug: cell.packageSlug,
-    },
-  }));
+  const list = Array.isArray(body?.cells) ? body.cells : [];
+  return {
+    ok: true,
+    data: list.map((cell) => ({
+      // Cells aren't independently versioned/sluggable in the CP today — scope
+      // the cache slug to the owning package so two packages' same-named cell
+      // never collides under the (source, kind, slug) unique index.
+      slug: `${cell.packageSlug}/${cell.key}`,
+      name: cell.name,
+      vendor: cell.author ?? null,
+      definition: {
+        key: cell.key,
+        code: cell.code,
+        deps: cell.deps,
+        previewCode: cell.previewCode,
+        defaultSize: cell.defaultSize,
+        configSchema: cell.configSchema,
+        packageSlug: cell.packageSlug,
+      },
+    })),
+  };
 }
 
 async function fetchKind(
   source: string,
   kind: CatalogKind
-): Promise<CatalogEntry[] | null> {
+): Promise<SourceFetch<CatalogEntry[]>> {
   switch (kind) {
     case "capability":
       return fetchCapabilities(source);
+    // Map the pod's internal cache `kind` → the CP's LIVE `category`
+    // (PACKAGE_TYPES after migration 0049). The cache still stores
+    // kind=automation|template — only the outbound CP query is translated.
     case "automation":
-      return fetchPackages(source, "automation");
+      return fetchPackages(source, "workflow");
     case "template":
-      return fetchPackages(source, "template");
+      return fetchPackages(source, "workspace");
     case "cell":
       return fetchCells(source);
   }
@@ -207,9 +262,21 @@ async function fetchKind(
 
 /** Sync one (source, kind) pair: upsert fetched rows, prune stale ones. Never throws. */
 async function syncOne(source: string, kind: CatalogKind): Promise<void> {
-  const entries = await fetchKind(source, kind);
+  const result = await fetchKind(source, kind);
 
-  if (entries === null) {
+  if (!result.ok) {
+    if (result.clientError) {
+      // 4xx: the pod is asking for a category/kind the source no longer
+      // accepts (e.g. a retired `category`). This will NEVER self-heal on
+      // retry — surface it loudly and stamp it distinctly so `/health` and an
+      // operator can tell it apart from a transient outage. Cache left intact.
+      logger.error(
+        { source, kind, status: result.status },
+        "Catalog source REJECTED the request (4xx) — the pod asked for a category/kind the Control Plane no longer accepts. This will NOT self-heal; fix the request vocabulary in cp-catalog-sync.ts. Cache left intact."
+      );
+      await recordCatalogSyncStamp(source, kind, "misconfigured", 0);
+      return;
+    }
     logger.warn(
       { source, kind },
       "Catalog source unreachable — leaving cache intact"
@@ -217,6 +284,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     await recordCatalogSyncStamp(source, kind, "unreachable", 0);
     return;
   }
+  const entries = result.data;
   if (entries.length === 0) {
     logger.info(
       { source, kind },
