@@ -66,6 +66,36 @@ async function readEmbeddingFreshness(): Promise<Date | null> {
   }
 }
 
+/**
+ * Readiness probes fire at LB/orchestrator frequency; the two soft-signal
+ * aggregates above scan pgboss.job and entity_vectors (no updated_at index),
+ * so their results are memoized for a minute — staleness signals measured in
+ * hours don't need per-probe freshness, and the probe must never become its
+ * own load source (review finding S2).
+ */
+const SIGNAL_CACHE_MS = 60_000;
+let signalCache: {
+  at: number;
+  queue: QueueHealth | null;
+  freshness: Date | null;
+} | null = null;
+
+async function readSoftSignals(): Promise<{
+  queue: QueueHealth | null;
+  freshness: Date | null;
+}> {
+  const now = Date.now();
+  if (signalCache && now - signalCache.at < SIGNAL_CACHE_MS) {
+    return { queue: signalCache.queue, freshness: signalCache.freshness };
+  }
+  const [queue, freshness] = await Promise.all([
+    readQueueHealth(),
+    readEmbeddingFreshness(),
+  ]);
+  signalCache = { at: now, queue, freshness };
+  return { queue, freshness };
+}
+
 /** Catalog kinds whose last sync is empty/unreachable AND older than the stale window. */
 function staleCatalogReasons(
   stamps: Record<string, CatalogSyncStamp>,
@@ -97,15 +127,14 @@ export const healthRouter = router({
    */
   ready: publicProcedure.query(async () => {
     const now = Date.now();
-    const [checks, queueHealth, embeddingLast, catalogStamps] =
-      await Promise.all([
-        Promise.allSettled([checkDatabase(), checkJobQueue()]),
-        readQueueHealth(),
-        readEmbeddingFreshness(),
-        getCatalogSyncStamps().catch(
-          () => ({}) as Record<string, CatalogSyncStamp>
-        ),
-      ]);
+    const [checks, softSignals, catalogStamps] = await Promise.all([
+      Promise.allSettled([checkDatabase(), checkJobQueue()]),
+      readSoftSignals(),
+      getCatalogSyncStamps().catch(
+        () => ({}) as Record<string, CatalogSyncStamp>
+      ),
+    ]);
+    const { queue: queueHealth, freshness: embeddingLast } = softSignals;
 
     const databaseOk = checks[0].status === "fulfilled";
     const jobQueueOk = checks[1].status === "fulfilled";

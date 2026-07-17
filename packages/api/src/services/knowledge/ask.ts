@@ -117,6 +117,9 @@ const FALLBACK_UNDERSTANDING: QueryUnderstanding = {
   propertyHints: [],
   temporal: false,
   confidence: 0,
+  // Total retrieval failure — nothing was understood, so there is no residual
+  // free-text to hand a caller.
+  cleanedQuery: "",
 };
 
 /**
@@ -228,7 +231,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
             workspaceId,
             projectId,
             status: slug === "task" ? structuredStatus : undefined,
-            limit,
+            // Enumeration promises the COMPLETE set, not the recall top-k —
+            // "list all my companies" / "how many tasks" must not silently
+            // truncate at the semantic limit (review finding S1). 200 is the
+            // sanity ceiling, not a relevance cut.
+            limit: Math.max(limit, 200),
           })
         )
       : { status: "ok", items: [] };
