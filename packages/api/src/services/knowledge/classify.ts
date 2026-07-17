@@ -51,6 +51,16 @@ const ENUMERATIVE_CUES = [
   "all the",
 ];
 
+/**
+ * Query-leading interrogatives that make a profile-naming query enumerative
+ * even without a phrase cue — covers "what tasks are open right now" /
+ * "what's on my plate", where "what" attaches directly to the noun instead of
+ * forming "what are". Lead-anchored so mid-sentence "what" (e.g. "remember
+ * what the task said") never triggers; the structured lane still additionally
+ * requires a KIND_CUES profile match, so bare "what happened?" stays semantic.
+ */
+const ENUMERATIVE_LEAD_RE = /^\s*what(?:'s|s)?\b/;
+
 /** Phrases / distinctive nouns that signal a how-to / runbook intent (knowledge_keys). */
 const PROCEDURAL_CUES = [
   "how do",
@@ -153,7 +163,7 @@ export function classifySubstrates(query: string): SubstrateRoute {
   // "what did I note about the project" stays episodic rather than listing every
   // project. Enumerative + typed = the user wants the whole set, not fuzzy top-k.
   const enumerative =
-    ENUMERATIVE_RE.some((re) => re.test(q)) &&
+    (ENUMERATIVE_RE.some((re) => re.test(q)) || ENUMERATIVE_LEAD_RE.test(q)) &&
     Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues));
   const structured = enumerative && !procedural && !episodic;
 

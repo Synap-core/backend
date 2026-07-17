@@ -93,6 +93,17 @@ describe("classifySubstrates", () => {
       expect(r.primary).toBe("structured");
     });
 
+    it("leading 'what' + profile noun: 'what tasks are open right now' → structured with status", () => {
+      const r = classifySubstrates("what tasks are open right now");
+      expect(r.primary).toBe("structured");
+      expect(r.structuredStatus).toBe("open");
+    });
+
+    it("mid-sentence 'what' does not trigger the lead cue: 'remember what the task said' stays episodic", () => {
+      const r = classifySubstrates("remember what the task said");
+      expect(r.substrates).not.toContain("structured");
+    });
+
     it("'who are my contacts' → structured (person cue)", () => {
       expect(classifySubstrates("who are my contacts").primary).toBe(
         "structured"
