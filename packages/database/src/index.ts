@@ -55,6 +55,7 @@ export * from "./utils/persist-assistant-reply.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/insert-pending-proposal.js";
 export * from "./utils/facet-visibility.js";
+export * from "./utils/catalog-sync-stamps.js";
 
 // Server-side vault encryption
 export {

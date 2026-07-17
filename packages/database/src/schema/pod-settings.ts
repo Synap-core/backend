@@ -34,9 +34,25 @@ export interface PodProactiveDefaults {
   };
 }
 
+/**
+ * Per (source, kind) staleness stamp written by the catalog-sync workers
+ * (cp-catalog-sync / capability-template-sync). Lets `/health` answer
+ * "template kind empty+stale for N syncs" without a new table — the stamps
+ * live under `pod_settings.settings.catalogSyncStamps`, keyed `${source}::${kind}`.
+ */
+export type CatalogSyncStatus = "ok" | "empty" | "unreachable";
+export interface CatalogSyncStamp {
+  /** ISO timestamp of the last completed sync attempt (any outcome). */
+  lastSyncAt: string;
+  lastStatus: CatalogSyncStatus;
+  /** Entry count from the last attempt (0 when empty/unreachable). */
+  lastCount: number;
+}
+
 export interface PodSettingsBlob {
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
+  catalogSyncStamps?: Record<string, CatalogSyncStamp>;
   [k: string]: unknown;
 }
 
