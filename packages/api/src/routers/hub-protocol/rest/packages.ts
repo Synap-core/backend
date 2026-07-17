@@ -112,6 +112,15 @@ const PackageApplySchema = z.object({
   suggestedRelations: z.array(z.record(z.string(), z.unknown())).optional(),
   displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
   entityLinks: z.array(z.record(z.string(), z.unknown())).optional(),
+  // Authored dashboard-view name for the bento. Emitted by BOTH converters
+  // (define.ts toWorkspaceDefinition + toPackageDefinition) and consumed by the
+  // pod (create-workspace-from-definition.ts: `name: definition.bentoViewName ??
+  // "Home"`). A plain z.object STRIPS any undeclared key, so omitting this
+  // silently renamed every Hub / `synap launch` / packages-apply install's bento
+  // view to "Home" while the tRPC door (which declares it) kept the real name.
+  // Sibling field of bentoViewBlocks, one drop away — parity guarded in
+  // workspace-templates/scripts/check-converters.mjs (converter half).
+  bentoViewName: z.string().optional(),
   bentoLayout: z.array(z.record(z.string(), z.unknown())).optional(),
   // The bento union splits into TWO wire fields (widgets → bentoLayout,
   // views → bentoViewBlocks). This is a plain z.object, so an undeclared field

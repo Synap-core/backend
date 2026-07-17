@@ -71,13 +71,81 @@ import {
 import {
   getWorkspaceTemplate,
   toWorkspaceDefinition,
+  toPackageDefinition,
   type WorkspaceYaml,
 } from "@synap-core/workspace-templates";
 import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
+import {
+  applyPackagePostWorkspace,
+  type PackagePostWorkspaceBody,
+} from "./package-apply-post-workspace.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "package-dependency-resolver" });
+
+/**
+ * Seed a materialized DEPENDENCY's post-workspace layers.
+ *
+ * A dependency is materialized from `toWorkspaceDefinition(slug)` (§4a/§4b),
+ * which — by design — carries only the workspace shape (profiles/views/bento):
+ * it DROPS the `capabilities` / `automations` / `playbooks` / `loops` layers
+ * that `toPackageDefinition(slug)` emits. So a `require: grants` dependency stood
+ * up its workspace but silently never got its 4 grant capabilities, on BOTH
+ * install doors (the resolver runs under Hub `packages/apply` AND tRPC
+ * `createFromDefinition`). The post-workspace layers only ran for the TOP-LEVEL
+ * package a Hub apply targeted — never for its dependencies.
+ *
+ * Fix: after a dependency is NEWLY materialized, run the SAME shared door
+ * (`applyPackagePostWorkspace`) that a top-level Hub apply runs, with the dep's
+ * OWN `toPackageDefinition`. A required dependency now gets exactly the treatment
+ * a directly-installed package gets — one door, symmetric on both sides.
+ *
+ * Idempotent + non-fatal: the shared door reuses existing capabilities by key,
+ * governed writes may return `proposed` (normal), and a failure here must never
+ * abort the install — the workspace already exists.
+ */
+async function seedDependencyPostWorkspace(
+  workspaceId: string,
+  slug: string,
+  userId: string,
+  agentUserId: string | undefined
+): Promise<void> {
+  let pkg: ReturnType<typeof toPackageDefinition>;
+  try {
+    pkg = toPackageDefinition(slug);
+  } catch {
+    return; // slug has no package form (should not happen for a resolved dep)
+  }
+  // `toPackageDefinition` emits `capabilities` (from the template's
+  // `integrations`) and `playbooks` — the two post-workspace layers a template
+  // authors. Both are dropped by `toWorkspaceDefinition`; these are what we seed.
+  const hasLayers = !!pkg.capabilities?.length || !!pkg.playbooks?.length;
+  if (!hasLayers) return;
+
+  try {
+    const result = await applyPackagePostWorkspace({
+      workspaceId,
+      body: pkg as unknown as PackagePostWorkspaceBody,
+      userId,
+      agentUserId,
+      // The resolver runs under both an operator (tRPC) and an agent (Hub)
+      // install; capability creation is `checkPermissionOrPropose`-governed, so
+      // it self-scopes (created for an authorized owner, else proposed). No
+      // agent scopes to forward on the operator path.
+      scopes: [],
+    });
+    logger.info(
+      { slug, workspaceId, layers: Object.keys(result) },
+      "dependency post-workspace layers seeded"
+    );
+  } catch (err) {
+    logger.warn(
+      { err, slug, workspaceId },
+      "dependency post-workspace layers failed (non-fatal — workspace already exists)"
+    );
+  }
+}
 
 /** Editor+ roles that may host a compose overlay (write-gate floor). */
 const WRITE_ROLES = new Set(["owner", "admin", "editor"]);
@@ -270,7 +338,8 @@ async function ensureWorkspaceDependencyPresent(
   userId: string,
   path: Set<string>,
   resolved: Map<string, ResolveResult>,
-  installed: ResolvedPackageDependency[]
+  installed: ResolvedPackageDependency[],
+  agentUserId: string | undefined
 ): Promise<ResolveResult> {
   const { slug } = dep;
 
@@ -343,7 +412,8 @@ async function ensureWorkspaceDependencyPresent(
         userId,
         path,
         resolved,
-        installed
+        installed,
+        agentUserId
       );
       if (ownComposeDep && nested.slug === ownComposeDep.slug) {
         ownComposeBase = nestedRes;
@@ -377,6 +447,16 @@ async function ensureWorkspaceDependencyPresent(
       userId,
       definition: definition as unknown as WorkspaceDefinitionInput,
     });
+    // The overlay's own capabilities/automations/playbooks/loops attach to the
+    // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
+    // Operations). composeOntoBaseWorkspace reconciles only the workspace shape,
+    // so seed the post-workspace layers here — the same door a top-level apply runs.
+    await seedDependencyPostWorkspace(
+      ownComposeBase.workspaceId,
+      slug,
+      userId,
+      agentUserId
+    );
     return record({
       workspaceId: ownComposeBase.workspaceId,
       action: "composed",
@@ -406,6 +486,18 @@ async function ensureWorkspaceDependencyPresent(
     templateId: slug,
     createdBy: "provisioning",
   });
+  // Only for a NEWLY created dependency: `toWorkspaceDefinition` (used just above)
+  // drops the capabilities/automations/playbooks/loops layers, so seed them via
+  // the shared door. A `found` (idempotent reuse) already went through this on
+  // its first creation — skip to avoid needless governed re-writes.
+  if (ws.created) {
+    await seedDependencyPostWorkspace(
+      ws.workspaceId,
+      slug,
+      userId,
+      agentUserId
+    );
+  }
   return record({
     workspaceId: ws.workspaceId,
     action: ws.created ? "installed" : "found",
@@ -466,7 +558,8 @@ export async function resolvePackageDependencies(
       userId,
       path,
       resolved,
-      installed
+      installed,
+      input.agentUserId
     );
 
     if (relation === "compose" && res.workspaceId) {

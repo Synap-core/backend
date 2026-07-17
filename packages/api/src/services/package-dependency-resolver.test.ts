@@ -19,16 +19,20 @@ const {
   mockDb,
   mockGetWorkspaceTemplate,
   mockToWorkspaceDefinition,
+  mockToPackageDefinition,
   mockCreateWorkspace,
   mockComposeOntoBase,
+  mockApplyPostWorkspace,
 } = vi.hoisted(() => ({
   mockDb: {
     select: vi.fn(),
   },
   mockGetWorkspaceTemplate: vi.fn(),
   mockToWorkspaceDefinition: vi.fn(),
+  mockToPackageDefinition: vi.fn(),
   mockCreateWorkspace: vi.fn(),
   mockComposeOntoBase: vi.fn(),
+  mockApplyPostWorkspace: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -44,6 +48,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("@synap-core/workspace-templates", () => ({
   getWorkspaceTemplate: mockGetWorkspaceTemplate,
   toWorkspaceDefinition: mockToWorkspaceDefinition,
+  toPackageDefinition: mockToPackageDefinition,
 }));
 
 vi.mock("./workspace-creation-service.js", () => ({
@@ -52,6 +57,10 @@ vi.mock("./workspace-creation-service.js", () => ({
 
 vi.mock("./compose-overlay.js", () => ({
   composeOntoBaseWorkspace: mockComposeOntoBase,
+}));
+
+vi.mock("./package-apply-post-workspace.js", () => ({
+  applyPackagePostWorkspace: mockApplyPostWorkspace,
 }));
 
 import { resolvePackageDependencies } from "./package-dependency-resolver.js";
@@ -98,6 +107,14 @@ describe("resolvePackageDependencies", () => {
     mockDb.select.mockImplementation(() => selectChain());
     mockGetWorkspaceTemplate.mockReturnValue(undefined);
     mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+    // Default: a package with NO post-workspace layers, so seeding is a no-op
+    // and the existing graph tests are unaffected. Tests that assert seeding
+    // override this to return capabilities.
+    mockToPackageDefinition.mockReturnValue({
+      capabilities: [],
+      playbooks: [],
+    });
+    mockApplyPostWorkspace.mockResolvedValue({});
     mockCreateWorkspace.mockResolvedValue({
       workspaceId: "ws-installed",
       created: true,
@@ -455,6 +472,67 @@ describe("resolvePackageDependencies", () => {
       expect(result.composeTargetWorkspaceId).toBeUndefined();
     });
 
+    it("A6. a composed overlay SEEDS its own capabilities onto the base via the shared door", async () => {
+      // The real bug this closes: `toWorkspaceDefinition` (used to materialize a
+      // dep) drops grants' 4 capabilities, so a `require: grants` stood up the
+      // workspace but never its grant capabilities — on BOTH install doors.
+      arrangeTheArchGraph();
+      selectRows = [];
+      mockToPackageDefinition.mockImplementation((slug: string) =>
+        slug === "grants"
+          ? {
+              capabilities: [{ templateKey: "stellar-grant-client" }],
+              playbooks: [],
+            }
+          : { capabilities: [], playbooks: [] }
+      );
+
+      await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "grants", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        agentUserId: "agent-9",
+        selfSlug: "the-arch",
+      });
+
+      // grants' capabilities are seeded onto the BASE (operations) workspace it
+      // composed onto — via the ONE shared post-workspace door, carrying the
+      // acting agent identity.
+      expect(mockApplyPostWorkspace).toHaveBeenCalledTimes(1);
+      expect(mockApplyPostWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "ws-operations",
+          userId: USER,
+          agentUserId: "agent-9",
+          body: expect.objectContaining({
+            capabilities: [{ templateKey: "stellar-grant-client" }],
+          }),
+        })
+      );
+    });
+
+    it("A7. a base template with NO post-workspace layers does not call the shared door", async () => {
+      // operations (a plain base, no integrations) must not trigger a needless
+      // governed write. Default toPackageDefinition returns empty layers.
+      arrangeTheArchGraph();
+      selectRows = [];
+
+      await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "operations", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+
+      expect(mockApplyPostWorkspace).not.toHaveBeenCalled();
+    });
+
     it("A2. existing writable operations base is reused as the compose target", async () => {
       arrangeTheArchGraph();
       // Lookup order: (1) subtype "grants" — MISSES, because grants.yaml sets
@@ -560,12 +638,16 @@ describe("resolvePackageDependencies", () => {
       mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
         if (slug === "a") {
           return {
-            dependencies: [{ slug: "b", kind: "workspace", relation: "require" }],
+            dependencies: [
+              { slug: "b", kind: "workspace", relation: "require" },
+            ],
           };
         }
         if (slug === "b") {
           return {
-            dependencies: [{ slug: "a", kind: "workspace", relation: "compose" }],
+            dependencies: [
+              { slug: "a", kind: "workspace", relation: "compose" },
+            ],
           };
         }
         return undefined;
@@ -575,7 +657,9 @@ describe("resolvePackageDependencies", () => {
       await expect(
         resolvePackageDependencies({
           definition: {
-            dependencies: [{ slug: "a", kind: "workspace", relation: "require" }],
+            dependencies: [
+              { slug: "a", kind: "workspace", relation: "require" },
+            ],
           },
           userId: USER,
         })
@@ -599,7 +683,11 @@ describe("resolvePackageDependencies", () => {
       await resolvePackageDependencies({
         definition: {
           dependencies: [
-            { slug: "builder-workspace", kind: "workspace", relation: "require" },
+            {
+              slug: "builder-workspace",
+              kind: "workspace",
+              relation: "require",
+            },
           ],
         },
         userId: USER,
@@ -637,7 +725,11 @@ describe("resolvePackageDependencies", () => {
       const result = await resolvePackageDependencies({
         definition: {
           dependencies: [
-            { slug: "builder-workspace", kind: "workspace", relation: "require" },
+            {
+              slug: "builder-workspace",
+              kind: "workspace",
+              relation: "require",
+            },
           ],
         },
         userId: USER,
