@@ -63,10 +63,13 @@ export async function structuredLookup(
 ): Promise<Record<string, unknown>[]> {
   const { profileSlug, userId, workspaceId, projectId, status, limit } = params;
 
-  // SAME floor + lens as entities.list: a pinned workspace → that workspace only
-  // (pod-wide rows do NOT bleed into a focused lens — the 2026-06-15 decision and
-  // the includePodWide=false default); a project lens → the full user floor,
-  // narrowed by projectLensWhere below; no lens → the whole user floor.
+  // SAME floor doors as entities.list, but the enumerative lane INCLUDES
+  // pod-wide rows even under a workspace lens: "what tasks are open" asks
+  // about MY tasks, and task/person/company are pod-scoped by design
+  // (entityScope 'pod' = visible in all workspaces, workspaceId NULL) — a
+  // focused lens without globals returned 1 of 10 open tasks in live
+  // verification. The 2026-06-15 no-bleed decision still governs BROWSE
+  // (includePodWide=false default); enumeration is a user-floor question.
   const floor = projectId
     ? accessScopeWhere({
         workspaceIdColumn: entities.workspaceId,
@@ -74,11 +77,9 @@ export async function structuredLookup(
         ownerColumn: entities.userId,
         userId,
       })
-    : workspaceLensWhere(
-        entities.workspaceId,
-        userId,
-        workspaceId ?? undefined
-      );
+    : workspaceLensWhere(entities.workspaceId, userId, workspaceId ?? undefined, {
+        includeGlobals: true,
+      });
 
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     userId,
