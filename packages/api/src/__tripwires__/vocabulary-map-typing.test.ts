@@ -164,8 +164,16 @@ interface Violation {
 const RECORD_STRING_LITERAL =
   /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*:\s*Record<\s*string\s*,[^=]*?=\s*\{/g;
 
-function scan(file: string): Violation[] {
-  const raw = readFileSync(file, "utf8");
+/**
+ * THE trip predicate — the one implementation. Tests below drive THIS function
+ * with source strings; `scan` drives it with file contents. That sharing is
+ * load-bearing: the "behavioral proof" tests previously re-implemented the
+ * predicate INLINE and never called the scanner, so breaking the scanner left
+ * them green while test 1 passed vacuously (0 violations = pass). Two spellings
+ * of one rule is the exact bug this file exists to guard — it must not live in
+ * this file's own tests.
+ */
+function scanSource(raw: string, name: string): Violation[] {
   const src = stripComments(raw);
   const violations: Violation[] = [];
   for (const m of src.matchAll(RECORD_STRING_LITERAL)) {
@@ -180,7 +188,7 @@ function scan(file: string): Violation[] {
       const isSubset = lowered.every((k) => members.includes(k));
       if (isSubset && hits.length >= MIN_VOCABULARY_MEMBERS_TO_FLAG) {
         violations.push({
-          file: relative(REPO_PACKAGES, file),
+          file: name,
           line: src.slice(0, m.index!).split("\n").length,
           identifier: m[1],
           vocabulary: vocab,
@@ -191,6 +199,11 @@ function scan(file: string): Violation[] {
     }
   }
   return violations;
+}
+
+/** File-reading wrapper. No rule logic here — it all lives in `scanSource`. */
+function scan(file: string): Violation[] {
+  return scanSource(readFileSync(file, "utf8"), relative(REPO_PACKAGES, file));
 }
 
 describe("tripwire — closed vocabularies are never typed `Record<string, …>`", () => {
@@ -219,38 +232,39 @@ describe("tripwire — closed vocabularies are never typed `Record<string, …>`
 
   it("detects the historical scopeMap regression if it is reintroduced", () => {
     // Behavioral proof the rule actually fires — a guard nobody has seen fail is
-    // a guard nobody knows works.
+    // a guard nobody knows works. This drives `scanSource`, the SAME predicate
+    // test 1 runs over the tree: break the rule and this test goes red too.
     const regression = `
       const scopeMap: Record<string, string> = {
         SYSTEM: "system", SHARED: "shared", WORKSPACE: "workspace", USER: "user",
       };
     `;
-    const body = readObjectBody(regression, regression.indexOf("{"));
-    const keys = topLevelKeys(body!).map((k) => k.toLowerCase());
-    expect(keys).toEqual(["system", "shared", "workspace", "user"]);
-    expect(
-      keys.every((k) => CLOSED_VOCABULARIES.ProfileScope.includes(k))
-    ).toBe(true);
+    const violations = scanSource(regression, "regression.fixture.ts");
+    expect(violations).toHaveLength(1);
+    expect(violations[0].identifier).toBe("scopeMap");
+    expect(violations[0].vocabulary).toBe("ProfileScope");
+    expect(violations[0].keys.map((k) => k.toLowerCase())).toEqual([
+      "system",
+      "shared",
+      "workspace",
+      "user",
+    ]);
   });
 
   it("does NOT flag legitimate open-vocabulary maps", () => {
-    // The 4 real maps a name-based rule would have false-positived on.
+    // The 4 real maps a name-based rule would have false-positived on. Also
+    // driven through `scanSource` — an inline re-implementation here could
+    // disagree with the real rule and still print green.
     for (const open of [
       `const BUILTIN_VERBS: Record<string, Handler> = { "entity.create": h, "entity.read": h };`,
       `const INTEGRATION_HUB_SCOPES: Record<string, string[]> = { google: [], slack: [] };`,
       `const byKind: Record<string, number> = {};`,
       `const SCHEME_ALLOWED_KINDS: Record<string, readonly string[]> = { https: [], mailto: [] };`,
     ]) {
-      const body = readObjectBody(open, open.indexOf("{"));
-      const keys = topLevelKeys(body ?? "").map((k) => k.toLowerCase());
-      const trips = Object.values(CLOSED_VOCABULARIES).some(
-        (members) =>
-          keys.length > 0 &&
-          keys.every((k) => members.includes(k)) &&
-          keys.filter((k) => members.includes(k)).length >=
-            MIN_VOCABULARY_MEMBERS_TO_FLAG
-      );
-      expect(trips, `false positive on: ${open}`).toBe(false);
+      expect(
+        scanSource(open, "open.fixture.ts"),
+        `false positive on: ${open}`
+      ).toEqual([]);
     }
   });
 });

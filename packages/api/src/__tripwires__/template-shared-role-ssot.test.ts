@@ -132,6 +132,12 @@ interface RoleProfileShape {
   slug: string;
   scope?: string;
   profileKind?: string;
+  applicableKinds?: string[];
+  displayName?: string;
+  icon?: string;
+  color?: string;
+  description?: string;
+  semanticSlug?: string;
   properties?: Array<{
     slug?: unknown;
     valueType?: unknown;
@@ -182,6 +188,79 @@ function propertyDefFingerprint(p: PropShape): string {
       : null,
     defaultValue: p.constraints?.defaultValue ?? null,
   });
+}
+
+/**
+ * ROW-LEVEL fields — the columns of the ONE pod-wide profile row, as opposed to
+ * its property defs. Every one of these is written ONLY on the create path
+ * (`create-workspace-from-definition.ts:916-936`, and the same in
+ * `reconcile-workspace-from-definition.ts:241-262`): on reuse the engine does
+ * `created = resolution.profile` and skips the create entirely, so a reusing
+ * template's values for these are NEVER applied to the row.
+ *
+ * WHY ROW-LEVEL DIVERGENCE IS ALWAYS A CONFLICT — AND PROPERTY EXTRAS ARE NOT
+ * --------------------------------------------------------------------------
+ * Rule (b) allows a reusing template to declare EXTRA properties because there
+ * is a real mechanism for them: they land as workspace OVERLAYS (workspace_id =
+ * the reusing workspace). Divergence there has a legitimate meaning.
+ *
+ * Row-level fields have NO overlay mechanism. There is one row and one value.
+ * So when two templates state different values for one of these, the loser's
+ * statement is not "scoped differently" — it is simply FALSE on every pod, and
+ * which one loses is decided by install order. There is no authoring intent
+ * that a divergence here could legitimately express; it is always a mistake.
+ * That is what makes "all declared row-level values must agree" the right rule
+ * and not mere byte-identity pedantry.
+ *
+ * ON "COSMETIC" FIELDS (icon/color/displayName/description) — the decision:
+ * they are CONFLICTS, for two independent reasons.
+ *   1. `description` and `displayName` are what a human AND an agent read to
+ *      decide whether to attach this role (they are served in the profile
+ *      digest — `hub-protocol/rest/profiles.ts:53`, `discover.ts`). Two
+ *      templates describing one row differently is a disagreement about what
+ *      the role MEANS, which is precisely this file's thesis.
+ *   2. `icon`/`color` are NOT inert even on the reuse path — a fact that
+ *      contradicts the "cosmetic and therefore harmless" framing. They are ALSO
+ *      read into `profileHintsMap` (`create-workspace-from-definition.ts:952`)
+ *      and fed to `buildDefaultProfileBentoBlocks` (:1313) to build the
+ *      REUSING workspace's own auto-bento. So they resolve TWICE, differently:
+ *      the row keeps the creator's value while the reusing workspace's widgets
+ *      keep the reuser's. marketing's `lead` was live proof — a `yellow` row
+ *      rendered by `green` widgets. Divergence here does not just lose; it
+ *      produces an internally inconsistent pod.
+ *
+ * ABSENCE IS NOT A CONFLICT. A template that OMITS a row-level field makes no
+ * claim, and no claim cannot contradict one. That is what lets a consumer stop
+ * redeclaring what it does not own (the correct fix when this rule goes red)
+ * without the guard treating the deletion as a new divergence. Rule (d) is what
+ * keeps that escape honest for `applicableKinds`.
+ */
+const ROW_LEVEL_FIELDS = [
+  "profileKind",
+  "applicableKinds",
+  "displayName",
+  "icon",
+  "color",
+  "description",
+  "semanticSlug",
+] as const;
+
+/**
+ * Canonical, comparable form of ONE row-level field, or `null` for "not
+ * declared" (= no claim, skipped). `applicableKinds` is compared ORDER-
+ * INSENSITIVELY: it is a SET of attachable kinds, so `[company, person]` and
+ * `[person, company]` are the same claim. That is not a nicety — foundation vs
+ * grants declare `client`/`partner`/`sponsor` in opposite orders, and an
+ * order-sensitive compare would red 3 slugs that in fact agree perfectly.
+ */
+function rowFieldValue(p: RoleProfileShape, field: string): string | null {
+  const raw = (p as unknown as Record<string, unknown>)[field];
+  if (raw === undefined || raw === null) return null;
+  if (field === "applicableKinds") {
+    if (!Array.isArray(raw)) return null;
+    return JSON.stringify([...(raw as string[])].sort());
+  }
+  return JSON.stringify(raw);
 }
 
 const templates = listWorkspaceTemplates();
@@ -254,6 +333,79 @@ describe("workspace-templates — shared ecosystem role SSOT", () => {
         );
       }
     }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
+
+  it("(c) never declares the same shared profile with CONFLICTING ROW-LEVEL fields across templates (absence = no claim)", () => {
+    // sharedSlug → field → declaredValue → templates declaring it.
+    // Two values for one (sharedSlug, field) = two templates asserting
+    // contradictory facts about ONE pod-wide row. Only the create-path template
+    // wins; the other's assertion is dead — and, for icon/color, half-dead in a
+    // way that leaves the pod internally inconsistent. See ROW_LEVEL_FIELDS.
+    const decls = new Map<string, Map<string, Map<string, string[]>>>();
+    for (const tpl of templates) {
+      const tplSlug = templateSlug(tpl);
+      for (const p of profilesOf(tpl)) {
+        if (!isSharedScope(p.scope)) continue;
+        const perProfile =
+          decls.get(p.slug) ?? new Map<string, Map<string, string[]>>();
+        for (const field of ROW_LEVEL_FIELDS) {
+          const value = rowFieldValue(p, field);
+          if (value === null) continue; // omitted = makes no claim
+          const perField =
+            perProfile.get(field) ?? new Map<string, string[]>();
+          perField.set(value, [...(perField.get(value) ?? []), tplSlug]);
+          perProfile.set(field, perField);
+        }
+        decls.set(p.slug, perProfile);
+      }
+    }
+
+    const violations: string[] = [];
+    for (const [slug, perProfile] of decls) {
+      for (const [field, perField] of perProfile) {
+        if (perField.size <= 1) continue;
+        const detail = [...perField.entries()]
+          .map(([value, carriers]) => `[${carriers.join(", ")}] => ${value}`)
+          .join("  VS  ");
+        violations.push(
+          `shared '${slug}.${field}' is declared with ${perField.size} DIFFERENT values — ` +
+            `there is ONE pod-wide row and no overlay mechanism for row-level fields, so the ` +
+            `losing template's value is simply false on every pod and which one loses depends ` +
+            `on apply order. The fix is for the template that does NOT own this slug to stop ` +
+            `redeclaring it (omitting = no claim), NOT to relax this rule: ${detail}`
+        );
+      }
+    }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
+
+  it("(d) every shared ROLE slug has applicableKinds declared by at least one template", () => {
+    // The totality guard that makes rule (c)'s "absence = no claim" sound.
+    // Without it, the cheapest way to green a red (c) on `applicableKinds` is to
+    // DELETE the field from both templates — which type-checks, passes (c), and
+    // silently produces an UNRESTRICTED role: `FacetRepository.attach` only
+    // enforces applicableKinds `if (applicableKinds && applicableKinds.length > 0)`
+    // (`facet-repository.ts:145-158`), so an empty one lets any kind wear the hat.
+    // Deleting the claim everywhere must therefore be red, not green.
+    const declared = new Map<string, boolean>();
+    for (const tpl of templates) {
+      for (const p of profilesOf(tpl)) {
+        if (!isSharedScope(p.scope)) continue;
+        if (normalizeKind(p.profileKind) !== "role") continue;
+        const has =
+          Array.isArray(p.applicableKinds) && p.applicableKinds.length > 0;
+        declared.set(p.slug, (declared.get(p.slug) ?? false) || has);
+      }
+    }
+    const violations = [...declared.entries()]
+      .filter(([, has]) => !has)
+      .map(
+        ([slug]) =>
+          `shared role '${slug}' has NO template declaring a non-empty applicableKinds — ` +
+            `the pod-wide row would accept ANY entity kind as this role (FacetRepository.attach ` +
+            `skips the gate when applicableKinds is empty). The template that OWNS this role must declare it.`
+      );
     expect(violations, violations.join("\n")).toEqual([]);
   });
 });
