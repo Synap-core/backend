@@ -52,14 +52,21 @@ const ENUMERATIVE_CUES = [
 ];
 
 /**
- * Query-leading interrogatives that make a profile-naming query enumerative
- * even without a phrase cue — covers "what tasks are open right now" /
- * "what's on my plate", where "what" attaches directly to the noun instead of
- * forming "what are". Lead-anchored so mid-sentence "what" (e.g. "remember
- * what the task said") never triggers; the structured lane still additionally
- * requires a KIND_CUES profile match, so bare "what happened?" stays semantic.
+ * Query-leading interrogative that makes a profile-naming query enumerative
+ * even without a phrase cue — covers "what tasks are open right now", where
+ * "what" attaches directly to the noun instead of forming "what are".
+ * Lead-anchored so mid-sentence "what" ("remember what the task said") never
+ * triggers, and it only counts when a PLURAL profile noun appears — a set is
+ * being requested. Singular lookups ("what is the Acme deal") stay semantic.
  */
 const ENUMERATIVE_LEAD_RE = /^\s*what(?:'s|s)?\b/;
+
+/** True when any KIND_CUES single-word cue appears in PLURAL form. */
+function namesPluralKind(tokenSet: Set<string>): boolean {
+  return Object.values(KIND_CUES).some((cues) =>
+    cues.some((c) => !c.includes(" ") && !c.endsWith("s") && tokenSet.has(`${c}s`))
+  );
+}
 
 /** Phrases / distinctive nouns that signal a how-to / runbook intent (knowledge_keys). */
 const PROCEDURAL_CUES = [
@@ -163,7 +170,8 @@ export function classifySubstrates(query: string): SubstrateRoute {
   // "what did I note about the project" stays episodic rather than listing every
   // project. Enumerative + typed = the user wants the whole set, not fuzzy top-k.
   const enumerative =
-    (ENUMERATIVE_RE.some((re) => re.test(q)) || ENUMERATIVE_LEAD_RE.test(q)) &&
+    (ENUMERATIVE_RE.some((re) => re.test(q)) ||
+      (ENUMERATIVE_LEAD_RE.test(q) && namesPluralKind(tokenSet))) &&
     Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues));
   const structured = enumerative && !procedural && !episodic;
 
