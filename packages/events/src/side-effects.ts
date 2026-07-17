@@ -219,26 +219,42 @@ registerReactor(sessionRecapReactor);
  * This is fire-and-forget — failures in side-effects don't affect
  * the CRUD response. pg-boss handles retries automatically.
  *
- * Error semantics (preserved from the original inline implementation):
- * the entire reactor sequence runs inside ONE try/catch. Reactors run
- * sequentially in registration order; if a reactor throws, the remaining
- * reactors are skipped and the error is logged (non-fatal). This is NOT
- * per-reactor isolation — it matches the prior behavior exactly.
+ * Error semantics: reactors run sequentially in registration order, each in
+ * its OWN try/catch. A throwing reactor is logged (with its id) and skipped —
+ * it can no longer starve the reactors after it (before this, ONE shared
+ * try/catch meant reactor 1 throwing aborted embedding + automation enqueues,
+ * the 2026-07-16 silent-failure shape). Ordering is otherwise unchanged.
  */
 export async function emitSideEffects(
   payload: SideEffectPayload
 ): Promise<void> {
+  let boss: ReturnType<typeof getBoss>;
   try {
-    const boss = getBoss();
-    for (const reactor of getReactors()) {
-      if (reactor.match && !reactor.match(payload)) continue;
-      await reactor.handler(payload, { boss });
-    }
+    boss = getBoss();
   } catch (error) {
-    // Side-effects are non-critical — log and move on
+    // No queue → nothing can be enqueued; log once and bail (non-fatal).
     logger.warn(
       { err: error, subjectType: payload.subjectType, action: payload.action },
-      "Failed to enqueue side-effects (non-fatal)"
+      "Failed to enqueue side-effects: pg-boss unavailable (non-fatal)"
     );
+    return;
+  }
+
+  for (const reactor of getReactors()) {
+    if (reactor.match && !reactor.match(payload)) continue;
+    try {
+      await reactor.handler(payload, { boss });
+    } catch (error) {
+      // One reactor failing must not starve the rest — isolate and continue.
+      logger.warn(
+        {
+          err: error,
+          reactorId: reactor.id,
+          subjectType: payload.subjectType,
+          action: payload.action,
+        },
+        "Side-effect reactor failed (non-fatal, skipping)"
+      );
+    }
   }
 }
