@@ -16,88 +16,26 @@ import { router, podProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, drizzleSql } from "@synap/database";
 import { aiProviders } from "@synap/database/schema";
-import {
-  encryptServiceKey,
-  decryptServiceKey,
-  isEncryptedServiceKey,
-} from "@synap/database";
+import { encryptServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import {
+  pushProvidersToIS,
+  resolveISAdminEndpoint,
+} from "../utils/push-providers-to-is.js";
 
 const logger = createLogger({ module: "ai-providers" });
 
 // ── IS admin push ─────────────────────────────────────────────────────────
-
-const IS_URL = process.env.INTELLIGENCE_HUB_URL;
-const IS_ADMIN_KEY =
-  process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? process.env.ADMIN_API_KEY;
+// Payload construction + endpoint/key resolution live in the shared
+// pushProvidersToIS() door. The CRUD mutations treat the sync as best-effort:
+// the DB write has already committed, so an IS that is down must not fail the
+// request — log and move on.
 
 async function syncToIS(): Promise<void> {
-  if (!IS_URL || !IS_ADMIN_KEY) {
-    logger.warn("IS_URL or IS_ADMIN_KEY not set — skipping provider sync");
-    return;
-  }
-
-  const rows = await db.query.aiProviders.findMany({
-    orderBy: (t, { asc }) => [asc(t.priority)],
-  });
-
-  const providers = rows.map((p) => {
-    const decryptedKey =
-      p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
-        ? decryptServiceKey(p.encryptedApiKey)
-        : (p.encryptedApiKey ?? undefined);
-
-    return {
-      id: p.providerId,
-      name: p.name,
-      baseUrl: p.baseUrl,
-      apiKeyEnvVar: p.apiKeyEnvVar,
-      ...(decryptedKey ? { apiKey: decryptedKey } : {}),
-      enabled: p.enabled,
-      priority: p.priority,
-      tags: (p.tags as string[]) ?? [],
-      models: (p.models as object[]) ?? [],
-      ...(p.rateLimit ? { rateLimit: p.rateLimit } : {}),
-      ...(p.extraBody ? { extraBody: p.extraBody } : {}),
-      ...(p.systemPromptPrefix
-        ? { systemPromptPrefix: p.systemPromptPrefix }
-        : {}),
-    };
-  });
-
-  const enabledIds = rows
-    .filter((p) => p.enabled)
-    .sort((a, b) => a.priority - b.priority)
-    .map((p) => p.providerId);
-
-  const routing = {
-    default: enabledIds[0] ?? "",
-    fallbackChain: enabledIds,
-    perRoute: {},
-  };
-
   try {
-    const res = await fetch(`${IS_URL}/admin/providers`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Admin-Key": IS_ADMIN_KEY,
-      },
-      body: JSON.stringify({ providers, routing }),
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      logger.warn(
-        { status: res.status, body: text },
-        "IS provider sync failed"
-      );
-    } else {
-      logger.info({ count: providers.length }, "Providers synced to IS");
-    }
+    await pushProvidersToIS();
   } catch (err) {
-    logger.warn({ err }, "IS provider sync request failed (IS may be down)");
+    logger.warn({ err }, "IS provider sync failed (IS may be down)");
   }
 }
 
@@ -259,7 +197,8 @@ export const aiProvidersRouter = router({
   probe: podProcedure
     .input(z.object({ providerId: z.string() }))
     .mutation(async ({ input }) => {
-      if (!IS_URL || !IS_ADMIN_KEY) {
+      const { endpoint, adminKey } = await resolveISAdminEndpoint();
+      if (!adminKey) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: "IS not configured",
@@ -267,10 +206,10 @@ export const aiProvidersRouter = router({
       }
 
       const res = await fetch(
-        `${IS_URL}/admin/providers/${input.providerId}/test`,
+        `${endpoint}/admin/providers/${input.providerId}/test`,
         {
           method: "POST",
-          headers: { "X-Admin-Key": IS_ADMIN_KEY },
+          headers: { "X-Admin-Key": adminKey },
           signal: AbortSignal.timeout(15_000),
         }
       ).catch((err) => {
