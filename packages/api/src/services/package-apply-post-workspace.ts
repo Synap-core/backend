@@ -110,6 +110,14 @@ export async function applyPackagePostWorkspace(
     userId,
     scopes,
     workspaceId,
+    // sourceMessageId + sessionId are not applicable here; `agentUserId` is the
+    // 6th positional arg. Passing it in the 4th slot (a prior bug) nulled
+    // ctx.agentUserId, so the loop layer's playbooks/automations materialized
+    // with agentUserId=undefined → checkPermissionOrPropose auto-applied for an
+    // AGENT install instead of proposing (a governance-membrane bypass). The
+    // acting agent identity must reach the shared door's caller context.
+    undefined,
+    undefined,
     agentUserId
   );
 
