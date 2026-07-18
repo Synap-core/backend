@@ -293,13 +293,19 @@ async function fetchSuperwhisperCandidates(
   return (await sql`
     SELECT id, type, title, workspace_id, document_id,
            properties->>'sourceFileDocumentId' AS source_file_document_id,
-           created_at
+           -- The keep-days window keys on DICTATION time, not row creation:
+           -- the whole corpus was bulk-(re)imported in one window on
+           -- 2026-07-15, so created_at is the import instant. Superwhisper
+           -- stamps the real moment in properties.datetime (ISO, present on
+           -- all rows — verified live); created_at is only the fallback.
+           COALESCE((properties->>'datetime')::timestamptz, created_at) AS created_at
     FROM entities
     WHERE deleted_at IS NULL
       AND type = 'note'
       AND properties->>'source' = ${SUPERWHISPER_SOURCE}
       AND workspace_id IS NULL
-      AND created_at < ${cutoff.toISOString()}
+      AND COALESCE((properties->>'datetime')::timestamptz, created_at) < ${cutoff.toISOString()}
+    -- ORDER BY the output alias — Postgres resolves it to the COALESCE above.
     ORDER BY created_at ASC
   `) as unknown as CandidateRow[];
 }
