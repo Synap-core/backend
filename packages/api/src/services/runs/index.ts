@@ -106,6 +106,7 @@ async function listAutomationRuns(
       // The automation's ONE durable run channel (runs-substrate rule) — same
       // for every run of this automation, bound via contextObjectId.
       channelId: channels.id,
+      replayOf: automationRuns.replayOf,
     })
     .from(automationRuns)
     .innerJoin(automations, eq(automations.id, automationRuns.automationId))
@@ -141,6 +142,7 @@ async function listAutomationRuns(
     subjectEntityId: null,
     channelId: r.channelId ?? null,
     correlationId: null,
+    replayOf: r.replayOf ?? null,
     summary:
       typeof r.outputSummary?.summary === "string"
         ? (r.outputSummary.summary as string)
@@ -170,6 +172,7 @@ async function listPlaybookRuns(
       channelId: focusSessions.channelId,
       subjectEntityId: focusSessions.subjectEntityId,
       projectId: focusSessions.projectId,
+      replayOf: playbookRuns.replayOf,
     })
     .from(playbookRuns)
     .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
@@ -205,6 +208,7 @@ async function listPlaybookRuns(
     subjectEntityId: r.subjectEntityId ?? null,
     channelId: r.channelId ?? null,
     correlationId: null,
+    replayOf: r.replayOf ?? null,
     summary: r.summary ?? null,
     error: r.error ?? null,
   }));
@@ -274,6 +278,7 @@ async function listCaptureRuns(
       subjectEntityId: firstEntity ?? null,
       channelId: null,
       correlationId: r.correlationId ?? null,
+      replayOf: null,
       summary:
         typeof data.summary === "string" ? (data.summary as string) : null,
       error: null,
@@ -336,6 +341,7 @@ async function listSessionRuns(
     subjectEntityId: r.subjectEntityId ?? null,
     channelId: r.channelId ?? null,
     correlationId: null,
+    replayOf: null,
     summary: null,
     error: null,
   }));

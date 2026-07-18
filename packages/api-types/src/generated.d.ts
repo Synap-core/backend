@@ -5366,6 +5366,8 @@ export interface UnifiedRun {
 	channelId: string | null;
 	/** The correlationId that groups a capture's whole story (capture only). */
 	correlationId: string | null;
+	/** The run this one replays (automation/playbook lineage; null otherwise). */
+	replayOf: string | null;
 	summary: string | null;
 	error: string | null;
 }
