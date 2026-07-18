@@ -53,6 +53,9 @@ x-backend-env: &backend-env
   # Optional legacy integration endpoint. It is never an authentication or
   # federation default; trusted issuers are explicitly owner-approved.
   CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
+  # Shared secret for the CP /internal/* push door (project-directory sync).
+  # Unset = sync disabled (normal for self-hosted pods).
+  SYNAP_POD_INTERNAL_KEY: ${SYNAP_POD_INTERNAL_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
