@@ -112,6 +112,36 @@ export class FederatedApplicationConnectionService {
     if (!input.requestId) {
       throw new Error("Application connection request id is required");
     }
+    // Idempotent re-prompt: retire any prior awaiting_local_auth handoff for the
+    // same (client, origin, subject) so a user who bounces through recovery
+    // doesn't leave the owner a pile of identical pending requests to choose
+    // between. Only the pre-review handoff state is retired — approved/pending
+    // rows are the requester's to complete (via the resume flow) and are never
+    // clobbered here.
+    await db
+      .update(federatedApplicationConnectionRequests)
+      .set({ status: "expired" })
+      .where(
+        and(
+          eq(
+            federatedApplicationConnectionRequests.clientId,
+            input.clientId
+          ),
+          eq(
+            federatedApplicationConnectionRequests.requestedOrigin,
+            input.requestedOrigin
+          ),
+          eq(
+            federatedApplicationConnectionRequests.issuerSubject,
+            input.issuerSubject
+          ),
+          isNull(federatedApplicationConnectionRequests.requestedByUserId),
+          eq(
+            federatedApplicationConnectionRequests.status,
+            "awaiting_local_auth"
+          )
+        )
+      );
     const [created] = await db
       .insert(federatedApplicationConnectionRequests)
       .values({
