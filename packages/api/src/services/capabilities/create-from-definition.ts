@@ -159,6 +159,11 @@ export interface CapabilityAutomationDef {
   };
   status?: "draft" | "active" | "paused" | "error";
   metadata?: Record<string, unknown>;
+  /** Per-automation persistent config/state — resolves `{{automation.state.*}}`
+   * (e.g. the grant-provision automation's clientsFolderId/grantTemplateFileId).
+   * `automations.create` accepts it (routers/automations.ts:188); without this
+   * the prefill is dropped when a capability seeds its automations. */
+  state?: Record<string, unknown>;
 }
 
 /** Definition the applier accepts — the shared contract plus optional playbooks + automations. */
@@ -708,6 +713,7 @@ export async function createCapabilityFromDefinition(
         flowDefinition: a.flowDefinition,
         status: a.status ?? "draft",
         metadata: a.metadata,
+        state: a.state,
       });
       createdAutomations.push({
         name: a.name,
