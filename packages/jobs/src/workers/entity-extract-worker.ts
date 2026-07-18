@@ -324,6 +324,25 @@ interface FeedConfig {
   enrichmentEnabled: boolean;
   agentConfig: Record<string, unknown>;
   feedArchetype?: string; // archetype slug from source_config.metadata (e.g. "leads")
+  /**
+   * The entity KIND this feed materializes each item into. Defaults to
+   * "bookmark" (the generic saved-item kind). A radar feed sets this to the kind
+   * it grows — e.g. "competitor" — so the SAME fetch→classify→dedup→create
+   * pipeline populates a domain knowledge base (self-generating KB) instead of
+   * only bookmarks. Dedup already routes through identity signals (see
+   * createEntityFromItem `dedup: "identity-signal"`), so a rediscovered company
+   * resolves to its existing entity by `website` rather than duplicating.
+   */
+  targetProfileSlug: string;
+  /**
+   * When true, map each item's `url` onto the entity's `website` property so
+   * identity-signal dedup can match a rediscovered site to its existing entity.
+   * Opt-in and correct ONLY when the item URL IS the entity's canonical site
+   * (e.g. an Exa company-search radar). A news/article/trend radar leaves this
+   * false — an article URL is not a website identity, and treating it as one
+   * would wrongly collapse two items from the same domain into one entity.
+   */
+  urlAsWebsite: boolean;
 }
 
 async function resolveFeedConfig(
@@ -367,6 +386,18 @@ async function resolveFeedConfig(
       providerTypeAsFeed ??
       "rss";
 
+    // The kind this feed grows. A radar subscription sets targetProfileSlug (e.g.
+    // "competitor"); a plain researcher feed omits it and defaults to "bookmark".
+    const targetProfileSlug =
+      (params.targetProfileSlug as string | undefined) ??
+      (config.targetProfileSlug as string | undefined) ??
+      (agentConfig.targetProfileSlug as string | undefined) ??
+      "bookmark";
+    const urlAsWebsite =
+      (params.urlAsWebsite ??
+        config.urlAsWebsite ??
+        agentConfig.urlAsWebsite) === true;
+
     let minRelevanceScore: number;
     const relevanceFromAgent = agentConfig.minRelevanceScore as
       | number
@@ -405,6 +436,8 @@ async function resolveFeedConfig(
         true,
       agentConfig,
       feedArchetype,
+      targetProfileSlug,
+      urlAsWebsite,
     };
   } catch (err) {
     logger.debug(
@@ -418,6 +451,8 @@ async function resolveFeedConfig(
     minRelevanceScore: 0,
     enrichmentEnabled: true,
     agentConfig: {},
+    targetProfileSlug: "bookmark",
+    urlAsWebsite: false,
   };
 }
 
@@ -431,7 +466,9 @@ async function createEntityFromItem(
   classification: ClassificationResult | undefined,
   sourceConfigId: string,
   database: Awaited<ReturnType<typeof getDb>>,
-  eventRepo: EventRepository
+  eventRepo: EventRepository,
+  targetProfileSlug: string,
+  urlAsWebsite: boolean
 ): Promise<string> {
   const props: Record<string, unknown> = {
     url: item.url,
@@ -440,6 +477,11 @@ async function createEntityFromItem(
     topics: classification?.topics?.map((t) => t.name) ?? [],
     relevanceScore: classification?.relevanceScore ?? 1.0,
   };
+
+  // For a company-style radar, the item URL IS the entity's canonical site —
+  // surface it as `website` so identity-signal dedup resolves a rediscovered
+  // company to its existing entity instead of duplicating it.
+  if (urlAsWebsite && /^https?:\/\//.test(item.url)) props.website = item.url;
 
   if (item.excerpt) props.excerpt = item.excerpt;
   if (item.imageUrl) props.imageUrl = item.imageUrl;
@@ -452,20 +494,20 @@ async function createEntityFromItem(
   if (typeof rawBody === "string") props.bodyText = rawBody;
 
   // Provenance = system: an automated feed-ingestion pipeline created this
-  // bookmark (no human clicked, no agent authored it). Funnel through the
+  // entity (no human clicked, no agent authored it). Funnel through the
   // governed materializer so provenance is stamped explicitly rather than
   // defaulting to "human".
   // D1: the feed's workspace is a CONTEXT signal, not a hard pin — route the
-  // bookmark's placement through the one door so a pod-scope kind lands pod-wide
+  // entity's placement through the one door so a pod-scope kind lands pod-wide
   // (NULL) while a workspace-scoped one stays in the feed's lens.
   const resolvedWorkspaceId = await resolveImportEntityPlacement(database, {
     userId,
-    profileSlug: "bookmark",
+    profileSlug: targetProfileSlug,
     sourceWorkspaceId: workspaceId ?? null,
   });
   const { entity } = await materializeEntity(
     {
-      profileSlug: "bookmark",
+      profileSlug: targetProfileSlug,
       title: item.title.slice(0, 500),
       preview: item.excerpt?.slice(0, 1000),
       properties: props,
@@ -694,7 +736,9 @@ export async function handleEntityExtract(job: {
           classification,
           configId,
           database,
-          eventRepo
+          eventRepo,
+          feedConfig.targetProfileSlug,
+          feedConfig.urlAsWebsite
         );
         result.itemsCreated++;
 

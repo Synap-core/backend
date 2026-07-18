@@ -17,6 +17,13 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { listRuns, getRun } from "../services/runs/index.js";
 
 const flowType = z.enum(["automation", "playbook", "capture", "session"]);
+const runStatus = z.enum([
+  "running",
+  "completed",
+  "failed",
+  "proposed",
+  "cancelled",
+]);
 
 export const runsRouter = router({
   /** Newest-first run feed across flows (or one flow via `flowType`/`flowId`).

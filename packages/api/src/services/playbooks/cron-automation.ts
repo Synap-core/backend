@@ -43,30 +43,118 @@ function readSchedule(value: unknown): PlaybookSchedule | null {
   return { cron: s.cron, enabled: s.enabled === true };
 }
 
+/** Narrowed view of the JSONB `subject_profile` column — the kind-binding. */
+function readSubjectProfile(
+  value: unknown
+): { profileSlug: string; filter?: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const s = value as { profileSlug?: unknown; filter?: unknown };
+  if (typeof s.profileSlug !== "string" || s.profileSlug.trim() === "")
+    return null;
+  return {
+    profileSlug: s.profileSlug,
+    ...(typeof s.filter === "string" ? { filter: s.filter } : {}),
+  };
+}
+
 /**
- * Build the single-node `playbook_run` flow definition that drives a playbook
- * from a backing automation. Shared with the workspace-definition materializer
- * so both paths emit the exact node shape the `playbook_run` executor expects.
+ * Build the backing flow definition that drives a playbook from a cron
+ * automation. Shared with the workspace-definition materializer so both paths
+ * emit the exact node shapes the executor expects.
+ *
+ * Two shapes, selected by `subjectProfile`:
+ *   - NO subject kind → ONE `playbook_run` node (a single scheduled run — the
+ *     original, unchanged behaviour).
+ *   - WITH a subject kind → `query → loop → playbook_run`: the schedule scans
+ *     EVERY entity of that kind and runs the playbook once per entity, binding
+ *     the iterated entity as the run's subject. This is the "bind to a KIND →
+ *     scan them all on a schedule" radar materialization. It reuses the existing
+ *     `query`/`loop`/`playbook_run` nodes — NO new fan-out engine, NO radar
+ *     table, NO second scheduler.
  */
 export function buildPlaybookRunFlowDefinition(
   playbookId: string,
-  opts?: { playbookName?: string; paramsMapping?: Record<string, string> }
+  opts?: {
+    playbookName?: string;
+    paramsMapping?: Record<string, string>;
+    /** When set, fan the schedule out over every entity of this kind. */
+    subjectProfile?: { profileSlug?: string; filter?: string } | null;
+  }
 ): FlowDefinition {
+  const runData = {
+    label: opts?.playbookName ?? "Run playbook",
+    playbookId,
+    playbookName: opts?.playbookName,
+    paramsMapping: opts?.paramsMapping,
+  };
+
+  const profileSlug = opts?.subjectProfile?.profileSlug?.trim();
+  if (!profileSlug) {
+    // Single scheduled run — unchanged.
+    return {
+      nodes: [
+        {
+          id: "playbook-run",
+          type: "playbook_run",
+          position: { x: 0, y: 0 },
+          data: runData,
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  // Kind-bound schedule → fan out. The `query` node lists the kind (executor
+  // caps it at 100), the `loop` iterates (also capped at 100 — same guard), and
+  // the loop-body `playbook_run` binds the iterated entity as its subject via
+  // the `entityId` param alias (see executePlaybookRun's subject resolution). A
+  // kind larger than 100 is truncated with an executor warn today; paginated
+  // batching beyond that is a deliberate follow-up, not a second engine.
   return {
     nodes: [
       {
-        id: "playbook-run",
-        type: "playbook_run",
+        id: "radar-query",
+        type: "query",
         position: { x: 0, y: 0 },
         data: {
-          label: opts?.playbookName ?? "Run playbook",
-          playbookId,
-          playbookName: opts?.playbookName,
-          paramsMapping: opts?.paramsMapping,
+          label: `Find all ${profileSlug}`,
+          profileSlug,
+          filter: opts?.subjectProfile?.filter ?? "",
+          limit: 100,
+        },
+      },
+      {
+        id: "radar-loop",
+        type: "loop",
+        position: { x: 0, y: 120 },
+        data: {
+          label: `For each ${profileSlug}`,
+          // Canonical step-output path: steps.<nodeId>.output.<field>.
+          iteratorExpression: "steps.radar-query.output.entities",
+          itemVariable: "item",
+        },
+      },
+      {
+        id: "playbook-run",
+        type: "playbook_run",
+        position: { x: 0, y: 240 },
+        data: {
+          ...runData,
+          // Bind the iterated entity as the run's subject.
+          paramsMapping: {
+            ...(opts?.paramsMapping ?? {}),
+            entityId: "{{loop.item.id}}",
+          },
         },
       },
     ],
-    edges: [],
+    edges: [
+      // query → loop: topological ordering (query runs first; the loop reads its
+      // output via iteratorExpression, not the edge).
+      { id: "radar-e-query-loop", source: "radar-query", target: "radar-loop" },
+      // loop → playbook_run: makes playbook_run the loop BODY (per-item dispatch).
+      { id: "radar-e-loop-run", source: "radar-loop", target: "playbook-run" },
+    ],
   };
 }
 
@@ -89,7 +177,12 @@ export interface CronAutomationCtx {
 export async function materializePlaybookCronAutomation(
   playbook: Pick<
     Playbook,
-    "id" | "workspaceId" | "name" | "schedule" | "flowAutomationId"
+    | "id"
+    | "workspaceId"
+    | "name"
+    | "schedule"
+    | "flowAutomationId"
+    | "subjectProfile"
   >,
   ctx: CronAutomationCtx
 ): Promise<string | null> {
@@ -118,6 +211,9 @@ export async function materializePlaybookCronAutomation(
 
   const flowDefinition = buildPlaybookRunFlowDefinition(playbook.id, {
     playbookName: playbook.name,
+    // A kind-bound playbook fans out over every entity of the kind; an unbound
+    // one stays a single scheduled run.
+    subjectProfile: readSubjectProfile(playbook.subjectProfile),
   });
   const nextRunAt = computeNextRunAt(schedule.cron, new Date());
 

@@ -63,6 +63,13 @@ export interface ListRunsInput {
   flowId?: string;
   /** Narrow to a workspace / project / entity lens (within the user floor). */
   scope?: RunScope;
+  /**
+   * Filter to one lifecycle status, pushed down into EACH ledger's own vocabulary
+   * (so "Running" is a DB predicate, not a client filter over a truncated page —
+   * the runs-feed truncation bug). A ledger that cannot produce the requested
+   * status contributes nothing. Omit for all statuses.
+   */
+  status?: RunStatus;
   /** Per-flow cap before the merge; the merged result is also capped. */
   limit?: number;
 }
@@ -84,14 +91,60 @@ function sessionStatus(s: string): RunStatus {
   }
 }
 
+// ── Status-filter mappers (normalised RunStatus → each ledger's own vocabulary) ─
+// Each returns the concrete column values matching the normalised filter; an
+// EMPTY array means the ledger can never produce that status (skip the query).
+
+function automationStatusValues(status: RunStatus): string[] {
+  switch (status) {
+    case "running":
+    case "completed":
+    case "failed":
+    case "cancelled":
+      return [status];
+    case "proposed":
+      return []; // automation_runs has no "proposed"
+  }
+}
+
+function playbookStatusValues(status: RunStatus): string[] {
+  switch (status) {
+    case "running":
+    case "completed":
+    case "failed":
+    case "proposed":
+      return [status];
+    case "cancelled":
+      return []; // playbook_runs has no "cancelled"
+  }
+}
+
+function sessionStatusValues(status: RunStatus): string[] {
+  switch (status) {
+    case "running":
+      return ["active", "paused", "forming", "scheduled"];
+    case "completed":
+      return ["closed"];
+    case "failed":
+      return ["failed"];
+    case "cancelled":
+      return ["cancelled"];
+    case "proposed":
+      return []; // focus_sessions is never "proposed"
+  }
+}
+
 // ── Per-ledger adapters (list) ───────────────────────────────────────────────
 
 async function listAutomationRuns(
   userId: string,
   flowId: string | undefined,
   scope: RunScope,
-  limit: number
+  limit: number,
+  status?: RunStatus
 ): Promise<UnifiedRun[]> {
+  const statusValues = status ? automationStatusValues(status) : null;
+  if (statusValues && statusValues.length === 0) return [];
   const rows = await db
     .select({
       id: automationRuns.id,
@@ -130,7 +183,8 @@ async function listAutomationRuns(
         flowId ? eq(automationRuns.automationId, flowId) : undefined,
         scope.workspaceId
           ? eq(automationRuns.workspaceId, scope.workspaceId)
-          : undefined
+          : undefined,
+        statusValues ? inArray(automationRuns.status, statusValues) : undefined
       )
     )
     .orderBy(desc(automationRuns.startedAt))
@@ -166,8 +220,11 @@ async function listPlaybookRuns(
   userId: string,
   flowId: string | undefined,
   scope: RunScope,
-  limit: number
+  limit: number,
+  status?: RunStatus
 ): Promise<UnifiedRun[]> {
+  const statusValues = status ? playbookStatusValues(status) : null;
+  if (statusValues && statusValues.length === 0) return [];
   const rows = await db
     .select({
       id: playbookRuns.id,
@@ -204,7 +261,8 @@ async function listPlaybookRuns(
           : undefined,
         scope.subjectEntityId
           ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
-          : undefined
+          : undefined,
+        statusValues ? inArray(playbookRuns.status, statusValues) : undefined
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -236,8 +294,11 @@ async function listPlaybookRuns(
 async function listCaptureRuns(
   userId: string,
   scope: RunScope,
-  limit: number
+  limit: number,
+  status?: RunStatus
 ): Promise<UnifiedRun[]> {
+  // Capture runs are always "completed"; any other status filter excludes them.
+  if (status && status !== "completed") return [];
   // A capture run = one auto-approved `capture.graph` proposal. Its correlationId
   // (== the captureId) is the join key that also groups its ai_decision +
   // capture_trace events (surfaced in getRun's activity).
@@ -312,11 +373,18 @@ async function listCaptureRuns(
 async function listSessionRuns(
   userId: string,
   scope: RunScope,
-  limit: number
+  limit: number,
+  status?: RunStatus
 ): Promise<UnifiedRun[]> {
-  // Standalone agent/interactive sessions only — playbook- and automation-origin
-  // sessions already surface via their own ledgers, so we exclude them here to
-  // avoid double-counting: no playbookId, and no automation linkage on metadata.
+  const statusValues = status ? sessionStatusValues(status) : null;
+  if (statusValues && statusValues.length === 0) return [];
+  // Sessions that carry their OWN story — i.e. have NO playbook_runs row. This
+  // covers both standalone agent/interactive sessions AND playbook-linked sessions
+  // whose run row was never written (safety fallback, Wave 3.F/C): without this a
+  // session with a playbookId but no run row is invisible in BOTH ledgers. Sessions
+  // that DO have a run row surface via listPlaybookRuns and are excluded here via
+  // the LEFT JOIN (no double-count). Automation-origin sessions are still excluded
+  // by metadata (they surface via the automation ledger).
   const rows = await db
     .select({
       id: focusSessions.id,
@@ -330,13 +398,17 @@ async function listSessionRuns(
       channelId: focusSessions.channelId,
     })
     .from(focusSessions)
+    .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
     .where(
       and(
         userVisibleWhere(focusSessions.workspaceId, userId),
-        isNull(focusSessions.playbookId),
+        // No run row references this session → it is not double-counted by the
+        // playbook ledger, so surface it here (see block comment above).
+        isNull(playbookRuns.id),
         // metadata.automationId absent → not an automation-origin run session
         // (those already surface via the automation ledger — no double-count).
         drizzleSql`${focusSessions.metadata}->>'automationId' IS NULL`,
+        statusValues ? inArray(focusSessions.status, statusValues) : undefined,
         scope.workspaceId
           ? eq(focusSessions.workspaceId, scope.workspaceId)
           : undefined,
@@ -381,7 +453,7 @@ async function listSessionRuns(
  * `flowType` is set only that ledger is read; otherwise all four are merged.
  */
 export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
-  const { userId, flowType, flowId } = input;
+  const { userId, flowType, flowId, status } = input;
   const scope = input.scope ?? {};
   const perFlow = Math.min(input.limit ?? 25, 100);
 
@@ -391,14 +463,14 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
 
   const jobs: Array<Promise<UnifiedRun[]>> = [];
   if ((!flowType || flowType === "automation") && !automationExcluded)
-    jobs.push(listAutomationRuns(userId, flowId, scope, perFlow));
+    jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
   if (!flowType || flowType === "playbook")
-    jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow));
+    jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow, status));
   // capture/session have no per-flow id, so a flowId filter excludes them.
   if ((!flowType || flowType === "capture") && !flowId)
-    jobs.push(listCaptureRuns(userId, scope, perFlow));
+    jobs.push(listCaptureRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "session") && !flowId)
-    jobs.push(listSessionRuns(userId, scope, perFlow));
+    jobs.push(listSessionRuns(userId, scope, perFlow, status));
 
   const merged = (await Promise.all(jobs)).flat();
   // Dedupe by (flowType,id) — a defensive guard against a run row being
