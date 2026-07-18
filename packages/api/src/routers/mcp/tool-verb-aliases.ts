@@ -42,6 +42,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_promote_session_to_playbook: ["synap_promote_session_to_playbook"],
   synap_create_playbook: ["synap_create_playbook"],
   synap_list_playbooks: ["synap_list_playbooks"],
+  synap_match_playbooks: ["synap_match_playbooks"],
   synap_start_session: ["synap_start_session"],
   synap_update_session: ["synap_update_session"],
   synap_complete_session: ["synap_complete_session"],

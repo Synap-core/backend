@@ -390,7 +390,7 @@ app.get("/health", (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.22.0",
+    apiTypesVersion: "1.23.1",
     mode: "multi-user",
     auth: "ory-stack",
   });

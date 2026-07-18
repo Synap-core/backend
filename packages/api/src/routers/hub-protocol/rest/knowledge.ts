@@ -615,6 +615,13 @@ export function registerKnowledgeRoutes(app: HubHono): void {
      * `comparison` block. READ-ONLY: does not change the normal answer.
      */
     compare: z.boolean().optional(),
+    /**
+     * PARSE-ONLY fast path: return just the query understanding + glass-box
+     * routing, no retrieval. Mirrors the tRPC `knowledge.search` flag so REST
+     * callers (Raycast/CLI/hub clients) can route a query without paying full
+     * retrieval per keystroke.
+     */
+    parseOnly: z.boolean().optional(),
   });
 
   const rankedItemSchema = z.object({
@@ -671,10 +678,21 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       projectId?: string;
       limit?: number;
       compare?: boolean;
+      parseOnly?: boolean;
     },
     getCatalog: (wsId: string) => Promise<HubProtocolCaller>
   ) {
-    const workspaceId = body.workspaceId ?? null;
+    // Membership-gate the caller-supplied lens (see the list/get routes above):
+    // a hub key scoped to one workspace must not recall another workspace's
+    // knowledge by passing an arbitrary id — and knowledge_keys has NO user
+    // floor, so an unchecked lens would read foreign procedural docs. A
+    // non-member id degrades to pod-wide (null), matching the tRPC knowledge
+    // router's validateWorkspaceAccess semantics; the read is never 403'd.
+    let workspaceId = body.workspaceId ?? null;
+    if (workspaceId) {
+      const accessible = await getUserAccessibleWorkspaceIds(userId);
+      if (!accessible.includes(workspaceId)) workspaceId = null;
+    }
 
     // The semantic engine's CATALOG (type inference) needs a concrete workspace;
     // resolve the user's first accessible one when no lens is pinned.
@@ -707,6 +725,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       catalog,
       // Additive A/B diagnostic — attaches `comparison` only when set.
       compare: body.compare || undefined,
+      // Parse-only fast path — understanding + routing, no retrieval.
+      parseOnly: body.parseOnly || undefined,
     });
   }
 
@@ -910,7 +930,14 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!question) {
       return c.json({ error: "Missing query or question" }, 400);
     }
-    const workspaceId = body.workspaceId ?? null;
+    // Membership-gate the caller-supplied lens, exactly as handleRetrieval does
+    // (knowledge_keys has no user floor): a non-member id degrades to pod-wide
+    // (null) rather than leaking a foreign workspace's knowledge.
+    let workspaceId = body.workspaceId ?? null;
+    if (workspaceId) {
+      const accessible = await getUserAccessibleWorkspaceIds(userId);
+      if (!accessible.includes(workspaceId)) workspaceId = null;
+    }
 
     try {
       // Same catalog resolution + retrieval as /knowledge/ask (the ONE read door).

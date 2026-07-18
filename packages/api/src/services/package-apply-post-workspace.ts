@@ -41,6 +41,14 @@ export interface PackagePostWorkspaceBody {
     inputStrategy?: unknown;
     channelSpec?: unknown;
     schedule?: unknown;
+    /**
+     * Entity kind the playbook operates over → persisted to
+     * `playbooks.subject_profile` (forwarded to `playbooksRouter.create` below),
+     * making it matchable by `playbooks.matchForEntity`.
+     */
+    subjectProfile?: { profileSlug: string; filter?: Record<string, unknown> };
+    /** tool/skill keys this playbook grants (see materialization note below). */
+    grants?: string[];
     status?: string;
   }>;
   loops?: Array<{
@@ -243,10 +251,17 @@ export async function applyPackagePostWorkspace(
           inputStrategy: p.inputStrategy as never,
           channelSpec: p.channelSpec as never,
           schedule: p.schedule,
+          // Subject kind → `playbooks.subject_profile`; unlocks matchForEntity.
+          subjectProfile: p.subjectProfile as never,
           status: p.status,
           agentUserId,
           source: "intelligence",
         } as never);
+        // NOTE: `p.grants` is intentionally NOT forwarded here. `playbooksRouter.create`
+        // does not accept/materialize grants — they become `playbook --grants--> {tool|skill}`
+        // link edges via `createLinks`, exactly as `createLoopFromDefinition` (loops door)
+        // does in its own step. Wiring that link step at this door is a separate follow-up;
+        // the type carries `grants` so the data survives to this boundary for it.
         const rr = r as {
           status?: string;
           playbook?: { id?: string };

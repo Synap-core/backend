@@ -1053,6 +1053,31 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
+    case "synap_match_playbooks": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      let matchWsId = args.workspaceId as string | undefined;
+      if (!matchWsId) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        matchWsId = wsIds[0];
+      }
+      if (!matchWsId) return ok({ error: "No accessible workspace found" });
+      const matchCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        matchWsId,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const matchCaller = playbooksRouter.createCaller(matchCtx);
+      const result = await matchCaller.matchForEntity({
+        profileSlug: args.profileSlug as string,
+        entityId: args.entityId as string | undefined,
+        workspaceId: matchWsId,
+      });
+      return ok(result);
+    }
+
     case "synap_governance": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;

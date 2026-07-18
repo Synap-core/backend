@@ -90,6 +90,44 @@ describe("understandQuery — data-driven vocabulary (0197 plural/synonyms)", ()
   });
 });
 
+describe("understandQuery — cleanedQuery (residual free-text)", () => {
+  it("is empty when the type words are the whole intent", () => {
+    // "people" is the type, "show all" is enumerative framing → nothing remains.
+    expect(understandQuery("show all people", CATALOG).cleanedQuery).toBe("");
+  });
+
+  it("keeps the residual filter after the type word", () => {
+    const u = understandQuery("acme people", CATALOG);
+    expect(u.profileTypes).toContain("person");
+    expect(u.cleanedQuery).toBe("acme");
+  });
+
+  it("strips a matched synonym (plural-tolerant), keeping the residual", () => {
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "recipe", displayName: "Recipe", synonyms: ["meal", "dish"] },
+    ];
+    const u = understandQuery("acme meals", catalog);
+    expect(u.profileTypes).toContain("recipe");
+    expect(u.cleanedQuery).toBe("acme");
+  });
+
+  it("leaves a no-type-match query unchanged", () => {
+    // No type word, no filler, no property hint → nothing is removed.
+    const u = understandQuery("blue", CATALOG);
+    expect(u.profileTypes).toHaveLength(0);
+    expect(u.cleanedQuery).toBe("blue");
+  });
+
+  it("strips KIND_CUES vocabulary even with no matching catalog profile", () => {
+    // The no-vocabulary fallback: "people" is type-noun vocabulary, so it's
+    // stripped whether or not a `person` profile exists in the catalog.
+    const sparse: ProfileCatalogEntry[] = [
+      { slug: "note", displayName: "Note" },
+    ];
+    expect(understandQuery("show all people", sparse).cleanedQuery).toBe("");
+  });
+});
+
 describe("understandQuery — property hints", () => {
   it("extracts a role hint from 'VP of Product'", () => {
     const u = understandQuery("who is the VP of Product", CATALOG);

@@ -4516,6 +4516,17 @@ export interface QueryUnderstanding {
 	temporal: boolean;
 	/** 0..1 confidence in the type inference. */
 	confidence: number;
+	/**
+	 * The query with type/vocabulary words removed — the residual free-text a
+	 * routed listing should still be filtered by. Strips the matched type words
+	 * (slug/name/plural/synonym/KIND_CUE tokens that produced the profileType
+	 * hits), the property-hint value tokens, and enumerative/function framing
+	 * ("show all …", "who", "the"). "show all people" → "" (the type is the whole
+	 * intent); "acme people" → "acme". Empty string when nothing remains. Order
+	 * and casing of the surviving words are preserved. This is the contract
+	 * clients consume to split a query into {type, freeText}.
+	 */
+	cleanedQuery: string;
 }
 export type RetrievalVerdict = "confident" | "ambiguous" | "empty";
 /** One ranked entry in an A/B comparison list (top-`limit`). */
@@ -12897,6 +12908,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							description?: string | undefined;
 						}[] | undefined;
 						executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+						subjectProfile?: {
+							profileSlug: string;
+							filter?: Record<string, unknown> | undefined;
+						} | undefined;
 						grants?: {
 							kind: "command" | "tool" | "skill";
 							ref: string;
@@ -20086,6 +20101,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: unknown;
 				createdAt: Date;
 				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug: string;
+				workspaceId: string;
+				entityId?: string | undefined;
+			};
+			output: {
+				id: string;
+				name: string;
+				goalTemplate: string;
+				subjectProfileSlug: string;
+				params: unknown;
+				executor: PlaybookExecutorRef;
 			}[];
 			meta: object;
 		}>;

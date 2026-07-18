@@ -876,6 +876,32 @@ export const tools = {
         },
       },
       {
+        name: "synap_match_playbooks",
+        description:
+          "Given an entity's profile (e.g. 'post', 'deal', 'lead'), find active playbooks whose SUBJECT is that kind of entity — the Capture→Session matcher answering 'is there a playbook FOR this thing?'. Read-only. Returns candidates ({ id, name, goalTemplate, subjectProfileSlug, params, executor }); [] when none. Launch a returned candidate as an entity-bound session with synap_start_session (its id as templateId + the entity as subjectEntityId).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileSlug: {
+              type: "string",
+              description:
+                "The entity profile slug to match playbooks against (e.g. 'post', 'deal', 'lead', 'competitor').",
+            },
+            entityId: {
+              type: "string",
+              description:
+                "Optional UUID of the specific entity — round-trip it into synap_start_session as subjectEntityId once a playbook is chosen. Does not narrow the match (matching is by profile).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace ID to scope the lookup (optional — falls back to the user's first workspace). Pod-wide playbooks match regardless.",
+            },
+          },
+          required: ["profileSlug"],
+        },
+      },
+      {
         name: "synap_create_playbook",
         description:
           "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, run via synap_start_session with templateId. goalTemplate may contain {{param}} placeholders.",

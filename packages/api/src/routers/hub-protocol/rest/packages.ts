@@ -62,6 +62,17 @@ const PlaybookSchema = z.object({
   channelSpec: z.record(z.string(), z.unknown()).optional(),
   schedule: z.unknown().optional(),
   grants: z.array(z.string()).optional(),
+  // Which entity kind this playbook operates on. Load-bearing: `subject_profile`
+  // is what `playbooks.matchForEntity` keys on to surface a playbook for a
+  // captured entity. A plain z.object strips undeclared keys, so this MUST be
+  // declared here or template-seeded playbooks reach the DB with subject_profile
+  // NULL and never match.
+  subjectProfile: z
+    .object({
+      profileSlug: z.string(),
+      filter: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
   status: z.enum(["draft", "active", "paused"]).default("active"),
 });
 

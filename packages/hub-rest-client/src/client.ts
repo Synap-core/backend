@@ -1366,11 +1366,18 @@ export class HubRestClient {
     query: string;
     workspaceId?: string;
     limit?: number;
+    /**
+     * Return just the glass-box understanding + routing (no retrieval) — for a
+     * caller that routes a query before fetching results (e.g. a palette
+     * completing a type word). `answers` comes back empty.
+     */
+    parseOnly?: boolean;
   }): Promise<AskResponse> {
     return this.request<AskResponse>("POST", "/api/hub/knowledge/ask", {
       query: input.query,
       workspaceId: input.workspaceId ?? this.workspaceId,
       limit: input.limit,
+      parseOnly: input.parseOnly,
     });
   }
 

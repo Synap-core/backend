@@ -7,6 +7,7 @@ const u = (over: Partial<QueryUnderstanding> = {}): QueryUnderstanding => ({
   propertyHints: [],
   temporal: false,
   confidence: 0,
+  cleanedQuery: "",
   ...over,
 });
 

@@ -2672,6 +2672,18 @@ export const workspacesRouter = router({
                   executor: z
                     .enum(["is-agent", "external-agent", "hybrid"])
                     .optional(),
+                  /**
+                   * Entity kind the playbook operates over → persisted to
+                   * `playbooks.subject_profile`, making it matchable by
+                   * `playbooks.matchForEntity`. Forwarded into the LoopDefinition
+                   * below and materialized by `createLoopFromDefinition`.
+                   */
+                  subjectProfile: z
+                    .object({
+                      profileSlug: z.string(),
+                      filter: z.record(z.string(), z.unknown()).optional(),
+                    })
+                    .optional(),
                   grants: z
                     .array(
                       z.object({
@@ -3388,6 +3400,9 @@ export const workspacesRouter = router({
                   executor: pb.executor,
                   expectedOutputs:
                     pb.expectedOutputs as unknown as LoopPlaybookDef["expectedOutputs"],
+                  // Carry the subject kind → `createLoopFromDefinition` forwards it
+                  // to `playbooksRouter.create`, landing on `subject_profile`.
+                  subjectProfile: pb.subjectProfile,
                   grants: pb.grants?.map((g) => ({
                     kind: g.kind,
                     id: g.ref,

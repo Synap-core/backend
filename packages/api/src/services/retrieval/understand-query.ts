@@ -14,7 +14,7 @@
  * profiles). The IS can refine ambiguous cases in a later phase.
  */
 
-import { COMMON_STOPWORDS } from "./stopwords.js";
+import { COMMON_STOPWORDS, QUESTION_WORDS } from "./stopwords.js";
 
 export interface ProfileCatalogEntry {
   slug: string;
@@ -63,6 +63,17 @@ export interface QueryUnderstanding {
   temporal: boolean;
   /** 0..1 confidence in the type inference. */
   confidence: number;
+  /**
+   * The query with type/vocabulary words removed — the residual free-text a
+   * routed listing should still be filtered by. Strips the matched type words
+   * (slug/name/plural/synonym/KIND_CUE tokens that produced the profileType
+   * hits), the property-hint value tokens, and enumerative/function framing
+   * ("show all …", "who", "the"). "show all people" → "" (the type is the whole
+   * intent); "acme people" → "acme". Empty string when nothing remains. Order
+   * and casing of the surviving words are preserved. This is the contract
+   * clients consume to split a query into {type, freeText}.
+   */
+  cleanedQuery: string;
 }
 
 /**
@@ -127,6 +138,46 @@ export const KIND_CUES: Record<string, string[]> = {
   document: ["doc", "document", "report", "spec", "paper", "memo"],
   deal: ["deal", "opportunity", "pipeline"],
 };
+
+/**
+ * Single-word KIND_CUES vocabulary — the type-noun words themselves ("people",
+ * "company", "task"). Stripped from `cleanedQuery` whether or not a catalog
+ * profile matched, so the no-vocabulary fallback still reduces "show all people"
+ * to "" (the residual filter is empty). Multi-word cues are skipped to avoid
+ * fragmenting common words ("action item" → "action").
+ */
+const KIND_CUE_WORDS = new Set(
+  Object.values(KIND_CUES)
+    .flat()
+    .filter((c) => /^[a-z]+$/.test(c))
+);
+
+/**
+ * Enumerative / imperative framing words ("show all …", "list my …") plus
+ * function words and interrogatives — filler that frames a request but carries
+ * no filter signal. Stripped from `cleanedQuery` alongside the matched type
+ * words, leaving only the residual free-text a listing is filtered by.
+ */
+const CLEANED_QUERY_FILLER = new Set<string>([
+  ...COMMON_STOPWORDS,
+  ...QUESTION_WORDS,
+  "show",
+  "list",
+  "find",
+  "get",
+  "give",
+  "see",
+  "display",
+  "all",
+  "me",
+  "my",
+  "our",
+  "your",
+  "their",
+  "any",
+  "some",
+  "every",
+]);
 
 /** Role keywords worth surfacing as a property hint (targets a `role` property). */
 const ROLE_KEYWORDS = [
@@ -207,6 +258,19 @@ export function understandQuery(
   const bump = (slug: string, by: number) =>
     scored.set(slug, (scored.get(slug) ?? 0) + by);
 
+  // The catalog signals that produced each slug's hit — the words removed from
+  // cleanedQuery once we know which slugs made the final cut. Stored tokenized
+  // (multi-word names/synonyms split) so removal is per-word + plural-tolerant.
+  const termsBySlug = new Map<string, Set<string>>();
+  const addTerms = (slug: string, terms: Iterable<string>) => {
+    let set = termsBySlug.get(slug);
+    if (!set) {
+      set = new Set();
+      termsBySlug.set(slug, set);
+    }
+    for (const t of terms) for (const w of tokenize(t)) set.add(w);
+  };
+
   // Plural-tolerant match of a single cue term against the query: a multi-word
   // phrase must appear verbatim; a single word matches its singular or plural
   // form. Mirrors the KIND_CUES matcher so catalog synonyms behave identically.
@@ -234,24 +298,29 @@ export function understandQuery(
       (plural ? q.includes(plural) || cueHit(plural) : false)
     ) {
       bump(p.slug, 3);
+      addTerms(p.slug, plural ? [slug, name, plural] : [slug, name]);
       continue;
     }
     // A declared synonym is curated, catalog-grounded vocabulary — the
     // data-driven form of a KIND_CUE, and a strong signal ("who" → person).
     if ((p.synonyms ?? []).some(cueHit)) {
       bump(p.slug, 3);
+      addTerms(p.slug, p.synonyms ?? []);
       continue;
     }
     // singular/plural-tolerant: strip a trailing "s" from both sides of token match
     const nameWords = tokenize(name);
-    const hit = nameWords.some(
+    const matchedNameWords = nameWords.filter(
       (w) =>
         w.length > 3 &&
         (tokenSet.has(w) ||
           tokenSet.has(`${w}s`) ||
           tokenSet.has(w.replace(/s$/, "")))
     );
-    if (hit) bump(p.slug, 2);
+    if (matchedNameWords.length > 0) {
+      bump(p.slug, 2);
+      addTerms(p.slug, matchedNameWords);
+    }
   }
 
   // 2. Kind cues → map a canonical kind to the catalog profile that resembles it.
@@ -265,7 +334,13 @@ export function understandQuery(
         p.slug.toLowerCase().includes(kind) ||
         p.displayName.toLowerCase().includes(kind)
     );
-    if (match) bump(match.slug, 2);
+    if (match) {
+      bump(match.slug, 2);
+      addTerms(
+        match.slug,
+        cues.filter((cue) => !cue.includes(" "))
+      );
+    }
   }
 
   const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]);
@@ -281,10 +356,41 @@ export function understandQuery(
   // the scoring weights move together, keeping confidence auditable.
   const CONFIDENCE_SCALE = 4;
 
+  const propertyHints = extractPropertyHints(query);
+
+  // cleanedQuery: the original words minus (a) the type words that produced the
+  // FINAL profileTypes, (b) the property-hint value tokens, (c) the type-noun
+  // vocabulary (KIND_CUES) even when no catalog profile matched — the
+  // no-vocabulary fallback, and (d) enumerative/function framing. Matching is
+  // plural-tolerant; the surviving words keep their original order and casing.
+  const removal = new Set<string>();
+  for (const slug of profileTypes) {
+    for (const w of termsBySlug.get(slug) ?? []) removal.add(w);
+  }
+  for (const h of propertyHints)
+    for (const w of tokenize(h.value)) removal.add(w);
+  const norm = (w: string) => w.replace(/s$/, "");
+  const normRemoval = new Set([...removal].map(norm));
+  const isStripped = (key: string): boolean =>
+    CLEANED_QUERY_FILLER.has(key) ||
+    KIND_CUE_WORDS.has(key) ||
+    KIND_CUE_WORDS.has(norm(key)) ||
+    removal.has(key) ||
+    normRemoval.has(norm(key));
+
+  const cleanedQuery = query
+    .split(/\s+/)
+    .map((raw) => ({ raw, key: raw.toLowerCase().replace(/[^a-z0-9]+/g, "") }))
+    .filter(({ key }) => key.length > 0 && !isStripped(key))
+    .map(({ raw }) => raw)
+    .join(" ")
+    .trim();
+
   return {
     profileTypes,
-    propertyHints: extractPropertyHints(query),
+    propertyHints,
     temporal: TEMPORAL_RE.test(q),
     confidence: Math.min(1, topScore / CONFIDENCE_SCALE),
+    cleanedQuery,
   };
 }

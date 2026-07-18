@@ -79,6 +79,11 @@ export interface PackagePlaybook {
   };
   schedule?: { cron: string } | null;
   grants?: string[]; // tool/skill keys
+  /**
+   * The entity kind this playbook operates over, persisted to
+   * `playbooks.subject_profile` — makes it matchable by `playbooks.matchForEntity`.
+   */
+  subjectProfile?: { profileSlug: string; filter?: Record<string, unknown> };
   status?: "draft" | "active" | "paused";
 }
 

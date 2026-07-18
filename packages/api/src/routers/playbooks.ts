@@ -25,6 +25,7 @@ import {
   and,
   asc,
   desc,
+  drizzleSql,
   playbooks,
   focusSessions,
   automations,
@@ -904,6 +905,58 @@ export const playbooksRouter = router({
         )
         .orderBy(desc(playbooks.createdAt))
         .limit(input?.limit ?? 50);
+    }),
+
+  /**
+   * Match active playbooks whose subject is a given entity profile — the
+   * Capture→Session matcher. Given a captured/created entity's `profileSlug`,
+   * answer "is there a playbook FOR this kind of thing?" so the capture UI can
+   * offer to launch a session bound to that entity (via `instantiate`/`run`).
+   *
+   * Scoping is IDENTICAL to `list`: `AccessContext.from(ctx)` with no workspace
+   * lens → the user floor (all member workspaces + pod-wide globals). This is
+   * deliberate — a pod-wide (NULL-workspace) template-seeded playbook MUST match
+   * for any workspace's entity, and narrowing to a single workspace lens would
+   * drop globals (the `playbooks` VisibilityRule has `includeGlobalsInLens`
+   * off). Filter: status='active' AND subject_profile->>'profileSlug' = slug.
+   * Returns the lean candidate shape the capture picker needs; [] when none.
+   */
+  matchForEntity: workspaceProcedure
+    .input(
+      z.object({
+        profileSlug: z.string().min(1),
+        // Accepted so the caller can round-trip it into `instantiate`/`run` as
+        // `subjectId`; matching is by profile, so it does not narrow this query.
+        entityId: z.string().uuid().optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
+
+      const rows = await database
+        .select()
+        .from(playbooks)
+        .where(
+          and(
+            visibility,
+            eq(playbooks.status, "active"),
+            drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${input.profileSlug}`
+          )
+        )
+        .orderBy(desc(playbooks.updatedAt));
+
+      return rows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        goalTemplate: p.goalTemplate,
+        subjectProfileSlug:
+          (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
+          input.profileSlug,
+        params: p.params,
+        executor: p.executor,
+      }));
     }),
 
   /**

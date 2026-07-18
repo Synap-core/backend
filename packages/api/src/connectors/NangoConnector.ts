@@ -249,75 +249,70 @@ export class NangoConnector implements SyncConnector {
    * key's environment) — this pod's own connections.
    *
    * `GET /connection` is PAGINATED (`@nangohq/types` GetPublicConnections:
-   * limit/page); reading only page 1 silently loses connections once a pod
-   * outgrows the default page size — so we walk pages until one comes back short.
+   * limit/page). LIVE-VERIFIED against the deployed Nango (0.70.9): this
+   * endpoint is LIMIT-ONLY — it does NOT honor `page` (passing it returns zero
+   * connections) and returns no cursor. So we request a high limit in ONE shot;
+   * if we ever hit it exactly we log, because there is no supported way to page
+   * for the rest on this server version. (A prior `?page=` implementation
+   * silently returned 0 here and broke connection detection — hence the caps.)
    */
   async listConnectionsResult(userId: string): Promise<NangoConnectionsResult> {
-    const PAGE_SIZE = 100;
-    const MAX_PAGES = 50; // safety cap (≤ 5000 connections/env); avoids an unbounded loop.
-    const all: SyncConnectorConnection[] = [];
-
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        page: String(page),
+    const LIMIT = 1000; // far above any per-pod environment's connection count.
+    const params = new URLSearchParams({ limit: String(LIMIT) });
+    let res: Response;
+    try {
+      res = await fetch(`${this.host}/connection?${params}`, {
+        headers: this.authHeaders(),
       });
-      let res: Response;
-      try {
-        res = await fetch(`${this.host}/connection?${params}`, {
-          headers: this.authHeaders(),
-        });
-      } catch (err) {
-        return {
-          ok: false,
-          reason: "unreachable",
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-      if (res.status === 401 || res.status === 403) {
-        return {
-          ok: false,
-          reason: "unauthenticated",
-          error: `Nango returned ${res.status}`,
-        };
-      }
-      if (!res.ok) {
-        return {
-          ok: false,
-          reason: "unreachable",
-          error: `Nango returned ${res.status}`,
-        };
-      }
-      const parsed = NangoConnectionsResponseSchema.safeParse(
-        await res.json().catch(() => null)
-      );
-      if (!parsed.success) {
-        return {
-          ok: false,
-          reason: "malformed",
-          error: "Nango /connection returned an unexpected shape",
-        };
-      }
-
-      const rows = parsed.data.connections;
-      for (const c of rows) {
-        if (c.end_user?.id !== userId) continue;
-        all.push({
-          connectionId: c.connection_id,
-          provider: c.provider_config_key,
-          userId,
-          createdAt: c.created_at ? new Date(c.created_at) : new Date(),
-          lastSyncAt: c.last_fetched_at
-            ? new Date(c.last_fetched_at)
-            : undefined,
-        });
-      }
-      // Short page → last page. (An exactly-full final page costs one extra
-      // request that returns empty and also terminates — still correct.)
-      if (rows.length < PAGE_SIZE) break;
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        reason: "unauthenticated",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    const parsed = NangoConnectionsResponseSchema.safeParse(
+      await res.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return {
+        ok: false,
+        reason: "malformed",
+        error: "Nango /connection returned an unexpected shape",
+      };
     }
 
-    return { ok: true, connections: all };
+    const rows = parsed.data.connections;
+    if (rows.length >= LIMIT) {
+      // No cursor to page with on this version — surface rather than truncate silently.
+      console.warn(
+        `[nango] /connection returned ${rows.length} rows (limit ${LIMIT}); more may exist but this server version cannot page.`
+      );
+    }
+    const connections = rows
+      .filter((c) => c.end_user?.id === userId)
+      .map((c) => ({
+        connectionId: c.connection_id,
+        provider: c.provider_config_key,
+        userId,
+        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+        lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
+      }));
+    return { ok: true, connections };
   }
 
   /**
