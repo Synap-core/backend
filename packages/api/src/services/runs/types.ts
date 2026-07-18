@@ -83,4 +83,93 @@ export interface UnifiedRunDetail {
   trigger: { triggeredBy: string | null; payload: unknown } | null;
   /** The run's full output summary JSONB (automation only); null for other ledgers. */
   outputSummary: unknown;
+  /**
+   * Rich per-kind detail for a PLAYBOOK run — the objects it produced, the
+   * changes it proposed (created/updated/removed), who worked it, and its
+   * session card. Null for every other flow (additive; browsers infer absence).
+   *
+   * For automation runs the per-node story lives on `activity` (each step's
+   * `detail` gains `nodeLabel` / `nodeId` / `commandId`), so there is no
+   * automation-specific block here.
+   */
+  playbookDetail?: PlaybookRunDetail | null;
+}
+
+/**
+ * A playbook run's rich footprint. Every list is user-floored and capped; the
+ * session is the run's ONE focus session (playbook → one session per run).
+ */
+export interface PlaybookRunDetail {
+  /** The run's session card — its goal, stage, progress, expected/verified outputs. */
+  session: RunSessionCard | null;
+  /** Entities the session produced (`session --produced--> entity`), user-visible only. */
+  produced: RunProducedEntity[];
+  /** The session's proposals — the created/updated/removed ledger the run wrote (cap 50). */
+  proposals: RunProposalItem[];
+  /** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
+  agents: RunAgent[];
+}
+
+/** The session card behind a playbook run. */
+export interface RunSessionCard {
+  id: string;
+  goal: string;
+  status: string;
+  /** Active playbook stage key, or null for a stageless (progress-only) playbook. */
+  currentStage: string | null;
+  /** 0-100 progress, or null until the runner sets it. */
+  progress: number | null;
+  /** Declared deliverables ([{ kind, label, status? }]); shape-within-jsonb, passed through. */
+  expectedOutputs: unknown;
+  /** The single closing verification report JSONB, or null. */
+  verificationReport: unknown;
+  /** The session's room — where its message-level story lives. */
+  channelId: string | null;
+}
+
+/** An entity a playbook run's session produced. */
+export interface RunProducedEntity {
+  entityId: string;
+  title: string | null;
+  /** Entity type slug (entities.type, from the profile slug). */
+  type: string;
+  producedAt: Date;
+}
+
+/**
+ * One change a playbook run proposed. `changeKind` is a compact create/update/
+ * delete class DERIVED from `proposalType` where the vocabulary maps cleanly
+ * (create*, update/edit/merge, delete*); null when the type does not map — in
+ * which case read the raw `proposalType`. APPROVED/auto-approved proposals are
+ * included: "objects updated" ≈ resolved update-class proposals.
+ */
+export interface RunProposalItem {
+  id: string;
+  proposalType: string;
+  changeKind: "create" | "update" | "delete" | null;
+  status: string;
+  targetType: string;
+  targetId: string;
+  rejectionReason: string | null;
+  /** How many times a human revised this proposal before it resolved (the "AI got it wrong" signal). */
+  revisionCount: number;
+  createdAt: Date;
+  reviewedAt: Date | null;
+}
+
+/**
+ * A best-effort actor who worked a playbook run. Two honest signals are unioned:
+ *   - `proposal` — the FK-backed `proposals.agentUserId` (guaranteed an agent-user).
+ *   - `message`  — a `routedTeammateId` on an AI-agent message in the run's
+ *     channel (the documented agent-user id). Plain AI-agent messages are NOT
+ *     counted: their `userId` is the requesting owner, not the agent.
+ * `name` is null when the id does not resolve to a `users` row.
+ */
+export interface RunAgent {
+  /** users.id of the agent-user. */
+  id: string;
+  /** Display name (name / agentType / email) where resolvable; null otherwise. */
+  name: string | null;
+  /** Where the actor was observed. */
+  source: "proposal" | "message" | "both";
 }

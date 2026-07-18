@@ -28,8 +28,15 @@ import {
   proposals,
   events,
   channels,
+  links,
+  entities,
+  messages,
+  users,
 } from "@synap/database";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../../utils/user-visible-where.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import type {
   FlowType,
@@ -37,6 +44,10 @@ import type {
   UnifiedRun,
   RunActivityItem,
   UnifiedRunDetail,
+  PlaybookRunDetail,
+  RunProducedEntity,
+  RunProposalItem,
+  RunAgent,
 } from "./types.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
@@ -526,33 +537,46 @@ export async function getRun(
       .select()
       .from(automationStepRuns)
       .where(eq(automationStepRuns.runId, run.id));
-    const activity: RunActivityItem[] = steps
-      .map((s) => ({
-        id: s.id,
-        at: s.completedAt ?? s.startedAt ?? null,
-        kind: "step",
-        status: s.status,
-        label: s.nodeId,
-        hint: s.errorMessage ?? null,
-        detail: {
-          output: s.output,
-          resolvedInputs: s.resolvedInputs,
-          // Per-step timing for the RunDetailPanel duration bars.
-          startedAt: s.startedAt,
-          completedAt: s.completedAt,
-        },
-      }))
-      .sort(byAtAsc);
-    // Detail-only fields not carried on the list-row: the full trigger payload
-    // and the complete outputSummary JSONB (list keeps only outputSummary.summary).
+    // Detail-only fields not carried on the list-row: the full trigger payload,
+    // the complete outputSummary JSONB (list keeps only outputSummary.summary),
+    // and the definition snapshot — the source of the human node labels.
     const [meta] = await db
       .select({
         triggerPayload: automationRuns.triggerPayload,
         outputSummary: automationRuns.outputSummary,
+        definitionSnapshot: automationRuns.definitionSnapshot,
       })
       .from(automationRuns)
       .where(eq(automationRuns.id, run.id))
       .limit(1);
+    // nodeId → human label, from the snapshot the run executed (no new query —
+    // the snapshot rides on the run row). Falls back to the nodeId per step.
+    const nodeLabelById = buildNodeLabelMap(meta?.definitionSnapshot);
+    const activity: RunActivityItem[] = steps
+      .map((s) => {
+        const nodeLabel = nodeLabelById.get(s.nodeId) ?? null;
+        return {
+          id: s.id,
+          at: s.completedAt ?? s.startedAt ?? null,
+          kind: "step",
+          status: s.status,
+          // Human node name where the snapshot has one; the node id otherwise.
+          label: nodeLabel ?? s.nodeId,
+          hint: s.errorMessage ?? null,
+          detail: {
+            output: s.output,
+            resolvedInputs: s.resolvedInputs,
+            // Per-step timing for the RunDetailPanel duration bars.
+            startedAt: s.startedAt,
+            completedAt: s.completedAt,
+            // Per-node drill: raw id + resolved label + the command (if any).
+            nodeId: s.nodeId,
+            nodeLabel,
+            commandId: s.commandId ?? null,
+          },
+        };
+      })
+      .sort(byAtAsc);
     return {
       run,
       activity,
@@ -561,6 +585,7 @@ export async function getRun(
         payload: meta?.triggerPayload ?? null,
       },
       outputSummary: meta?.outputSummary ?? null,
+      playbookDetail: null,
     };
   }
 
@@ -571,7 +596,13 @@ export async function getRun(
     );
     if (!run || !run.correlationId)
       return run
-        ? { run, activity: [], trigger: null, outputSummary: null }
+        ? {
+            run,
+            activity: [],
+            trigger: null,
+            outputSummary: null,
+            playbookDetail: null,
+          }
         : null;
     const rows = await db
       .select({
@@ -607,7 +638,13 @@ export async function getRun(
         };
       })
       .sort(byAtAsc);
-    return { run, activity, trigger: null, outputSummary: null };
+    return {
+      run,
+      activity,
+      trigger: null,
+      outputSummary: null,
+      playbookDetail: null,
+    };
   }
 
   // playbook / session — the run's story is its channel; return the run with a
@@ -629,7 +666,329 @@ export async function getRun(
       detail: null,
     },
   ];
-  return { run, activity, trigger: null, outputSummary: null };
+  // Playbook runs get the rich per-kind footprint: produced / proposals / agents
+  // / session card. Session runs (no playbook_run row) keep the lifecycle-only
+  // shape — their story is their channel.
+  const playbookDetail =
+    flowType === "playbook"
+      ? await loadPlaybookRunDetail(userId, run.id)
+      : null;
+  return { run, activity, trigger: null, outputSummary: null, playbookDetail };
+}
+
+// ── Playbook run detail (produced / proposals / agents / session card) ────────
+
+/** Per-derivation caps — one run's detail stays a handful of bounded queries. */
+const RUN_PRODUCED_CAP = 200;
+const RUN_PROPOSAL_CAP = 50;
+const RUN_MESSAGE_SCAN_CAP = 500;
+
+/**
+ * A playbook run's rich footprint. The run's ONE session (playbook → one session
+ * per run) is the derivation anchor; every list is user-floored and capped.
+ */
+async function loadPlaybookRunDetail(
+  userId: string,
+  runId: string
+): Promise<PlaybookRunDetail> {
+  // The run's session card — user-floored (defense in depth; the run already is).
+  const [sess] = await db
+    .select({
+      id: focusSessions.id,
+      goal: focusSessions.goal,
+      status: focusSessions.status,
+      currentStage: focusSessions.currentStage,
+      progress: focusSessions.progress,
+      expectedOutputs: focusSessions.expectedOutputs,
+      verificationReport: focusSessions.verificationReport,
+      channelId: focusSessions.channelId,
+    })
+    .from(playbookRuns)
+    .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
+    .where(
+      and(
+        eq(playbookRuns.id, runId),
+        userVisibleWhere(focusSessions.workspaceId, userId)
+      )
+    )
+    .limit(1);
+
+  if (!sess) return { session: null, produced: [], proposals: [], agents: [] };
+
+  const [produced, proposalResult] = await Promise.all([
+    loadRunProduced([sess.id], userId),
+    loadRunProposals(sess.id, userId),
+  ]);
+  const agents = await loadRunAgents(
+    sess.channelId ?? null,
+    proposalResult.agentUserIds
+  );
+
+  return {
+    session: {
+      id: sess.id,
+      goal: sess.goal,
+      status: sess.status,
+      currentStage: sess.currentStage ?? null,
+      progress: sess.progress ?? null,
+      expectedOutputs: sess.expectedOutputs ?? null,
+      verificationReport: sess.verificationReport ?? null,
+      channelId: sess.channelId ?? null,
+    },
+    produced,
+    proposals: proposalResult.items,
+    agents,
+  };
+}
+
+/**
+ * Entities the session produced — the SAME `session --produced--> entity` query
+ * shape workflow-place's loadResults uses. Only entities the user can still see
+ * (visible + not deleted) are surfaced.
+ */
+async function loadRunProduced(
+  sessionIds: string[],
+  userId: string
+): Promise<RunProducedEntity[]> {
+  if (sessionIds.length === 0) return [];
+  const edges = await db
+    .select({ toId: links.toId, createdAt: links.createdAt })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        inArray(links.fromId, sessionIds),
+        eq(links.toType, "entity"),
+        eq(links.linkType, "produced"),
+        workspaceLensWhere(links.workspaceId, userId)
+      )
+    )
+    .orderBy(desc(links.createdAt))
+    .limit(RUN_PRODUCED_CAP);
+  if (edges.length === 0) return [];
+
+  const entityIds = [...new Set(edges.map((e) => e.toId))];
+  const rows = await db
+    .select({ id: entities.id, title: entities.title, type: entities.type })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, entityIds),
+        isNull(entities.deletedAt),
+        userVisibleWhere(entities.workspaceId, userId)
+      )
+    );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  const out: RunProducedEntity[] = [];
+  for (const e of edges) {
+    const ent = byId.get(e.toId);
+    if (!ent) continue;
+    out.push({
+      entityId: ent.id,
+      title: ent.title ?? null,
+      type: ent.type,
+      producedAt: e.createdAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * The proposalType → compact change class map. Honest: only where the vocabulary
+ * carries a create/update/delete intent. Unknowns (capability.run,
+ * messaging.external.send, run, join, import.graph, vault.request, …) map to
+ * null and the caller reads the raw proposalType.
+ */
+function deriveChangeKind(
+  proposalType: string
+): "create" | "update" | "delete" | null {
+  const t = proposalType.toLowerCase();
+  if (t === "delete" || t.startsWith("delete") || t.endsWith(".delete"))
+    return "delete";
+  if (
+    t === "create" ||
+    t === "create_composite" ||
+    t.startsWith("create") ||
+    t.endsWith(".create")
+  )
+    return "create";
+  if (
+    t === "update" ||
+    t === "edit" ||
+    t === "ai_edit" ||
+    t === "user_edit" ||
+    t === "merge" ||
+    t.endsWith(".update") ||
+    t.endsWith(".edit")
+  )
+    return "update";
+  return null;
+}
+
+/**
+ * The session's proposals — the created/updated/removed ledger, capped. Mirrors
+ * workflow-place's loadProposals shape; also harvests the distinct agent-user
+ * ids (proposals.agentUserId) so the caller can resolve "who worked it".
+ */
+async function loadRunProposals(
+  sessionId: string,
+  userId: string
+): Promise<{ items: RunProposalItem[]; agentUserIds: string[] }> {
+  const rows = await db
+    .select({
+      id: proposals.id,
+      proposalType: proposals.proposalType,
+      status: proposals.status,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      rejectionReason: proposals.rejectionReason,
+      revisionHistory: proposals.revisionHistory,
+      agentUserId: proposals.agentUserId,
+      createdAt: proposals.createdAt,
+      reviewedAt: proposals.reviewedAt,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.sessionId, sessionId),
+        userVisibleWhere(proposals.workspaceId, userId)
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(RUN_PROPOSAL_CAP);
+
+  const agentUserIds = [
+    ...new Set(rows.map((r) => r.agentUserId).filter((x): x is string => !!x)),
+  ];
+  const items: RunProposalItem[] = rows.map((r) => ({
+    id: r.id,
+    proposalType: r.proposalType,
+    changeKind: deriveChangeKind(r.proposalType),
+    status: r.status,
+    targetType: r.targetType,
+    targetId: r.targetId,
+    rejectionReason: r.rejectionReason ?? null,
+    revisionCount: Array.isArray(r.revisionHistory)
+      ? r.revisionHistory.length
+      : 0,
+    createdAt: r.createdAt,
+    reviewedAt: r.reviewedAt ?? null,
+  }));
+  return { items, agentUserIds };
+}
+
+/**
+ * Best-effort distinct actors who worked the run. Two reliable agent-user
+ * signals are unioned: proposal authors (proposals.agentUserId, FK-backed) and
+ * routed AI-agent message authors (messages.routedTeammateId) in the run's
+ * channel. Plain AI-agent messages are excluded — their `userId` is the
+ * requesting owner, not the agent. Names resolve via the same fields the
+ * proposal review UI uses (name / agentType / email); unresolved ids get a null
+ * name rather than being dropped.
+ */
+async function loadRunAgents(
+  channelId: string | null,
+  proposalAgentIds: string[]
+): Promise<RunAgent[]> {
+  const sources = new Map<string, Set<"proposal" | "message">>();
+  const mark = (id: string, src: "proposal" | "message") => {
+    let set = sources.get(id);
+    if (!set) sources.set(id, (set = new Set()));
+    set.add(src);
+  };
+  for (const id of proposalAgentIds) mark(id, "proposal");
+
+  if (channelId) {
+    // One bounded scan of the run's channel — routed AI-agent authors only.
+    const authorRows = await db
+      .selectDistinct({ teammateId: messages.routedTeammateId })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.channelId, channelId),
+          eq(messages.authorType, "ai_agent"),
+          isNull(messages.deletedAt),
+          drizzleSql`${messages.routedTeammateId} IS NOT NULL`
+        )
+      )
+      .limit(RUN_MESSAGE_SCAN_CAP);
+    for (const r of authorRows) if (r.teammateId) mark(r.teammateId, "message");
+  }
+
+  const ids = [...sources.keys()];
+  if (ids.length === 0) return [];
+
+  const userRows = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      userType: users.userType,
+      agentType: users.agentType,
+      agentMetadata: users.agentMetadata,
+    })
+    .from(users)
+    .where(inArray(users.id, ids));
+  const byId = new Map(userRows.map((u) => [u.id, u]));
+
+  return ids.map((id) => {
+    const u = byId.get(id);
+    const set = sources.get(id)!;
+    const source: RunAgent["source"] =
+      set.has("proposal") && set.has("message")
+        ? "both"
+        : set.has("proposal")
+          ? "proposal"
+          : "message";
+    return { id, name: u ? runAgentDisplayName(u) : null, source };
+  });
+}
+
+/** Same precedence the proposal review UI uses: name → agentType → email. */
+function runAgentDisplayName(row: {
+  name: string | null;
+  email: string;
+  userType: string;
+  agentType: string | null;
+  agentMetadata: { agentType?: string; description?: string } | null;
+}): string | null {
+  if (row.name) return row.name;
+  if (row.userType === "agent")
+    return (
+      row.agentType ??
+      row.agentMetadata?.agentType ??
+      row.agentMetadata?.description ??
+      row.email ??
+      null
+    );
+  return row.email || null;
+}
+
+/**
+ * nodeId → human label from an automation run's definition snapshot. Tolerant of
+ * a missing/partial snapshot (returns an empty map). Prefers `data.label`, then
+ * a command node's `commandTitle`, then a generic `name`.
+ */
+function buildNodeLabelMap(
+  snapshot: { flowDefinition?: { nodes?: unknown } | null } | null | undefined
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const nodes = snapshot?.flowDefinition?.nodes;
+  if (!Array.isArray(nodes)) return map;
+  for (const n of nodes) {
+    if (!n || typeof n !== "object") continue;
+    const node = n as { id?: unknown; data?: Record<string, unknown> };
+    if (typeof node.id !== "string") continue;
+    const d = node.data ?? {};
+    const label =
+      (typeof d.label === "string" && d.label) ||
+      (typeof d.commandTitle === "string" && d.commandTitle) ||
+      (typeof d.name === "string" && d.name) ||
+      null;
+    if (label) map.set(node.id, label);
+  }
+  return map;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
