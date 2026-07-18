@@ -216,7 +216,12 @@ export function renderSummary(input: {
     const total = steps.length || run.stepsCompleted + run.stepsFailed;
     const stepName = failedStep?.nodeId ? `"${failedStep.nodeId}"` : "a step";
     const header = `⚠️ ${name} failed at step ${stepName} — ${run.stepsCompleted} of ${total} steps`;
-    const error = firstErrorLine(failedStep?.errorMessage ?? run.errorMessage);
+    // safeLabel also strips chip syntax — an external error body echoing
+    // [[kind:id|label]] text must not render as an unintended chip.
+    const rawError = firstErrorLine(
+      failedStep?.errorMessage ?? run.errorMessage
+    );
+    const error = rawError ? safeLabel(rawError) : rawError;
     return error ? `${header}\n${error}` : header;
   }
 
@@ -314,13 +319,6 @@ export async function postRunSummary(
     const channelId = await resolveRunChannel(automation, run);
 
     const messageId = randomUUID();
-    const claimed = await db
-      .update(automationRuns)
-      .set({ summaryMessageId: messageId })
-      .where(and(eq(automationRuns.id, runId), SUMMARY_MESSAGE_UNCLAIMED))
-      .returning({ id: automationRuns.id });
-    if (claimed.length === 0) return; // another site already narrated this run.
-
     const messageHash = computeMessageHash(messageId, content);
     const groupKey = `runsummary.${automation.id}.${status}`;
     const messageMetadata = {
@@ -331,18 +329,33 @@ export async function postRunSummary(
       groupKey,
     };
 
-    await db.insert(messages).values({
-      id: messageId,
-      channelId,
-      role: MessageRole.SYSTEM,
-      authorType: MessageAuthorType.BOT,
-      messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
-      content,
-      userId: automation.createdBy,
-      previousHash: "",
-      hash: messageHash,
-      metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
+    // Claim + insert in ONE transaction: a failed message insert must roll the
+    // claim back, or the slot is burned forever with no message ever written
+    // (nothing retries once summary_message_id is non-NULL).
+    let claimedWon = false;
+    await db.transaction(async (tx) => {
+      const claimed = await tx
+        .update(automationRuns)
+        .set({ summaryMessageId: messageId })
+        .where(and(eq(automationRuns.id, runId), SUMMARY_MESSAGE_UNCLAIMED))
+        .returning({ id: automationRuns.id });
+      if (claimed.length === 0) return; // another site already narrated this run.
+      claimedWon = true;
+
+      await tx.insert(messages).values({
+        id: messageId,
+        channelId,
+        role: MessageRole.SYSTEM,
+        authorType: MessageAuthorType.BOT,
+        messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+        content,
+        userId: automation.createdBy,
+        previousHash: "",
+        hash: messageHash,
+        metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
+      });
     });
+    if (!claimedWon) return;
 
     emitRealtimeEvent({
       event: EventNames.CHAT_MESSAGE,
