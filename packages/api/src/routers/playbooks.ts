@@ -23,6 +23,7 @@ import {
   getDb,
   eq,
   and,
+  or,
   asc,
   desc,
   drizzleSql,
@@ -976,7 +977,18 @@ export const playbooksRouter = router({
           and(
             visibility,
             eq(playbooks.status, "active"),
-            drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ANY(${matchSlugs})`
+            // Match the subject KIND (plus any facet slugs) by scalar-equality.
+            // NOTE: do NOT use `= ANY(${matchSlugs})` — binding a JS array into
+            // the SQL template serializes it as a Postgres array literal, which
+            // the pod image's postgres.js driver faults on (same class of gotcha
+            // as `sql.json()` — see driver notes). An OR of scalar `=` params is
+            // the portable form (mirrors automations.matchForEntity).
+            or(
+              ...matchSlugs.map(
+                (slug) =>
+                  drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${slug}`
+              )
+            )
           )
         )
         .orderBy(desc(playbooks.updatedAt));

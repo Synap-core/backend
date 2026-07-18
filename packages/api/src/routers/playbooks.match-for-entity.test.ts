@@ -49,6 +49,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: mockGetDb,
     loadFacetSlugsBatch: mockLoadFacetSlugsBatch,
     and: vi.fn((...conditions) => ({ and: conditions.filter(Boolean) })),
+    or: vi.fn((...conditions) => ({ or: conditions.filter(Boolean) })),
     eq: vi.fn((column, value) => ({ eq: [column, value] })),
     desc: vi.fn((column) => ({ desc: column })),
     drizzleSql: vi.fn(
@@ -142,16 +143,20 @@ describe("playbooks.matchForEntity", () => {
     expect(mockScopedDb).toHaveBeenCalledTimes(1);
     expect(mockPredicate).toHaveBeenCalledTimes(1);
 
-    // WHERE composes the visibility predicate + status='active' + the
-    // subject_profile->>'profileSlug' = ANY(matchSet) filter. With no entityId
-    // the match set is just the requested kind slug: ANY(["post"]).
+    // WHERE composes the visibility predicate + status='active' + an OR of
+    // scalar `subject_profile->>'profileSlug' = <slug>` comparisons. With no
+    // entityId the match set is just the requested kind slug: OR(= "post").
     const where = chain._captured.where as { and: unknown[] };
     expect(where.and).toContainEqual({ __visibility: true });
     expect(where.and).toContainEqual(
       expect.objectContaining({ eq: expect.arrayContaining(["active"]) })
     );
     expect(where.and).toContainEqual(
-      expect.objectContaining({ values: expect.arrayContaining([["post"]]) })
+      expect.objectContaining({
+        or: expect.arrayContaining([
+          expect.objectContaining({ values: expect.arrayContaining(["post"]) }),
+        ]),
+      })
     );
 
     // No entityId → no facet resolution.
@@ -205,11 +210,17 @@ describe("playbooks.matchForEntity", () => {
       { userId: "user-1", workspaceId: WORKSPACE }
     );
 
-    // WHERE matches ANY of {kind slug, facet slugs} = ["person", "lead"].
+    // WHERE matches ANY of {kind slug, facet slugs} = ["person", "lead"] via an
+    // OR of scalar `=` comparisons (one per slug).
     const where = chain._captured.where as { and: unknown[] };
     expect(where.and).toContainEqual(
       expect.objectContaining({
-        values: expect.arrayContaining([["person", "lead"]]),
+        or: expect.arrayContaining([
+          expect.objectContaining({
+            values: expect.arrayContaining(["person"]),
+          }),
+          expect.objectContaining({ values: expect.arrayContaining(["lead"]) }),
+        ]),
       })
     );
   });
