@@ -19,6 +19,7 @@ import {
   hasScope,
   logger,
   rejectAgentReviewer,
+  resolveProposalId,
   type HubHono,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
@@ -244,11 +245,12 @@ export function registerProposalsRoutes(app: HubHono): void {
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
+      const resolvedId = await resolveProposalId(userId, proposalId);
       const ctx = await createHubProtocolCallerContext(userId, scopes);
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      const result = await caller.get({ proposalId });
+      const result = await caller.get({ proposalId: resolvedId });
       return c.json(result);
     } catch (err) {
       logger.error({ err, proposalId }, "getProposal failed");
@@ -257,7 +259,9 @@ export function registerProposalsRoutes(app: HubHono): void {
           ? 404
           : err instanceof TRPCError && err.code === "FORBIDDEN"
             ? 403
-            : 500;
+            : err instanceof TRPCError && err.code === "BAD_REQUEST"
+              ? 400
+              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code
@@ -283,9 +287,13 @@ export function registerProposalsRoutes(app: HubHono): void {
       summary?: string;
     };
     try {
+      const resolvedId = await resolveProposalId(
+        c.get("userId") as string,
+        proposalId
+      );
       const caller = await getCaller(c);
       const result = await caller.proposals.updateProposal({
-        proposalId,
+        proposalId: resolvedId,
         data: body.data,
         summary: body.summary,
       });
@@ -336,11 +344,12 @@ export function registerProposalsRoutes(app: HubHono): void {
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
+      const resolvedId = await resolveProposalId(userId, proposalId);
       const ctx = await createHubProtocolCallerContext(userId, scopes);
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      const result = await caller.revert({ proposalId, reason });
+      const result = await caller.revert({ proposalId: resolvedId, reason });
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "revertProposal failed");
@@ -381,18 +390,22 @@ export function registerProposalsRoutes(app: HubHono): void {
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
+      // Accept the git-style short id the CLI shows — resolve it to the full uuid.
+      const resolvedId = await resolveProposalId(userId, proposalId);
       const ctx = await createHubProtocolCallerContext(userId, scopes);
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      await caller.approve({ proposalId });
+      await caller.approve({ proposalId: resolvedId });
       // Re-fetch so the caller sees the post-execution state in ONE round trip —
       // e.g. a capability.run's data.runResult (success + returned data, or the
       // exact denial reason like "Capability is not approved") — instead of the
       // bare {success:true} the executor itself returns (execution outcome is
       // persisted onto the proposal row, not returned from the mutation call).
-      const proposal = await caller.get({ proposalId }).catch(() => null);
-      return c.json({ success: true, proposalId, proposal }, 200);
+      const proposal = await caller
+        .get({ proposalId: resolvedId })
+        .catch(() => null);
+      return c.json({ success: true, proposalId: resolvedId, proposal }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "approveProposal failed");
       const code =
@@ -440,12 +453,13 @@ export function registerProposalsRoutes(app: HubHono): void {
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
+      const resolvedId = await resolveProposalId(userId, proposalId);
       const ctx = await createHubProtocolCallerContext(userId, scopes);
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      await caller.reject({ proposalId, reason });
-      return c.json({ success: true, proposalId }, 200);
+      await caller.reject({ proposalId: resolvedId, reason });
+      return c.json({ success: true, proposalId: resolvedId }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "rejectProposal failed");
       const code =

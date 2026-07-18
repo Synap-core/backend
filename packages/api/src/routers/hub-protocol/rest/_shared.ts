@@ -8,11 +8,13 @@
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
+import { TRPCError } from "@trpc/server";
 import {
   db,
   users,
   workspaces,
   workspaceMembers,
+  proposals,
   eq,
   and,
   drizzleSql,
@@ -117,6 +119,62 @@ export function rejectAgentReviewer(
     },
     403
   );
+}
+
+const PROPOSAL_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A bare hex prefix (git-style short id) — the CLI shows `id.slice(0, 8)`. */
+const PROPOSAL_PREFIX_RE = /^[0-9a-f]{4,35}$/i;
+
+/**
+ * Resolve a proposal handle into its full UUID.
+ *
+ * The CLI DISPLAYS and suggests 8-char id prefixes (git-style — `id.slice(0, 8)`
+ * on every `proposals list` / approve line), but `proposals.id` is a `uuid`
+ * column: feeding a bare prefix into the canonical `WHERE id = $1` lookup makes
+ * Postgres throw on invalid-uuid syntax → HTTP 500 on EVERY approve/reject. This
+ * turns a prefix into the unique full id it names, scoped to the caller's OWN
+ * proposals, so the short ids the CLI prints are valid handles everywhere. A full
+ * uuid passes straight through (no query).
+ *
+ * Throws TRPCError NOT_FOUND (no match / not a plausible id) or BAD_REQUEST
+ * (ambiguous prefix) — handlers map both to the right HTTP status.
+ */
+export async function resolveProposalId(
+  userId: string,
+  raw: string
+): Promise<string> {
+  if (PROPOSAL_UUID_RE.test(raw)) return raw;
+  if (!PROPOSAL_PREFIX_RE.test(raw)) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No proposal matches "${raw}"`,
+    });
+  }
+  // `raw` is validated to [0-9a-f] only — it carries no LIKE wildcards to escape.
+  const rows = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.createdBy, userId),
+        drizzleSql`${proposals.id}::text LIKE ${`${raw}%`}`
+      )
+    )
+    .limit(2);
+  if (rows.length === 0) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No proposal matches "${raw}"`,
+    });
+  }
+  if (rows.length > 1) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Ambiguous proposal id "${raw}" — provide more characters`,
+    });
+  }
+  return rows[0].id;
 }
 
 /**

@@ -4989,15 +4989,17 @@ export interface CreateCapabilityResult {
 		}[];
 		playbooks: {
 			name: string;
-			status: "created" | "reused" | "proposed";
+			status: "created" | "reused" | "proposed" | "error";
 			playbookId: string | null;
 			proposalId: string | null;
+			message?: string;
 		}[];
 		automations: {
 			name: string;
-			status: "created" | "reused" | "proposed";
+			status: "created" | "reused" | "proposed" | "error";
 			automationId: string | null;
 			proposalId: string | null;
+			message?: string;
 		}[];
 	};
 	proposals: string[];
