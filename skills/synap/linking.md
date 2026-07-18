@@ -122,6 +122,7 @@ GET /api/hub/graph/traverse?entityId={id}&maxDepth=2
 
 ## Common mistakes
 
+- **Spinning up a new project instead of linking into an existing one.** A project is a **commitment with gravity**, not a folder for a task, plan, repo, or theme (those are entities). Before `create_project`, search existing projects and file the entity into one via `belongs_to_project` (Way 1 `projectId`, or Way 2 relation). Near-duplicate project names are rejected server-side with the existing candidates, and an agent-created project also requires **≥5 existing entities** as evidence.
 - **Creating an orphan, then forgetting to link it.** Every `POST /entities` should include properties that link, OR be immediately followed by a `POST /relations`. Never close the operation with a disconnected node.
 - **Double-linking.** If you set `properties.projectId` AND also `POST /relations` with type `belongs_to_project`, the auto-sync already did it. Don't duplicate.
 - **Using `related_to` when a specific verb fits.** `related_to` is the fallback. `authored_by`, `depends_on`, `references` carry more meaning to both the user and downstream views.

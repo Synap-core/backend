@@ -16,6 +16,10 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   proposals,
+  projects,
+  ProjectRepository,
+  EventRepository,
+  sql,
   skills,
   documents,
   documentVersions,
@@ -722,6 +726,106 @@ export function registerApproveExecutors(): void {
         settings: innerData.settings as Record<string, unknown> | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,
       });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── project / archive ─────────────────────────────────────────────────────────
+  // The librarian archiver (packages/jobs) files these: a stale ACTIVE project
+  // (>30d old, zero belongs_to_project members, zero project_members) is proposed
+  // for archival. On approval the project's status flips to `archived`.
+  //
+  // Runs the flip via ProjectRepository.update as the project's OWNER (not the
+  // approver) — mirrors entity/merge's "act as the data owner" so it works for
+  // POD-WIDE (null-workspace) projects too (workspaceProcedure requires a
+  // workspace, so the direct-router path can't archive a pod-wide project). The
+  // proposal data is flat (insertPendingProposal), so the project id is read from
+  // proposal.targetId.
+  registerProposalExecutor({
+    key: "project/archive",
+    async execute({ proposal, userId, input, deps }) {
+      const projectId = proposal.targetId;
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { id: true, userId: true, workspaceId: true, status: true },
+      });
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project to archive no longer exists",
+        });
+      }
+
+      // Workspace-scoped projects: verify the approver has workspace access.
+      if (project.workspaceId) {
+        const membership = await getWorkspaceMembership(
+          db,
+          project.workspaceId,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+      }
+
+      if (project.status !== "archived") {
+        const eventRepo = new EventRepository(sql);
+        const projectRepo = new ProjectRepository(db, eventRepo);
+        // Act as the OWNER — ProjectRepository.update gates on userId, and
+        // pod-wide projects are owned by their creator.
+        await projectRepo.update(
+          projectId,
+          { status: "archived" },
+          project.userId
+        );
+
+        auditLog({
+          subjectType: "project",
+          action: "update",
+          phase: "completed",
+          subjectId: projectId,
+          userId: project.userId,
+          workspaceId: project.workspaceId ?? undefined,
+        });
+
+        emitSideEffects({
+          subjectType: "project",
+          action: "update",
+          subjectId: projectId,
+          userId: project.userId,
+          workspaceId: project.workspaceId ?? undefined,
+        });
+      }
 
       await db
         .update(proposals)

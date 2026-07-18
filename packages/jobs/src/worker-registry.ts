@@ -177,6 +177,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "shared",
   },
   {
+    id: "librarian-archiver",
+    name: "Librarian Project Archiver",
+    description:
+      "Daily at 03:45 UTC, proposes archival of stale ACTIVE projects (>30 days old with zero belongs_to_project members and zero project_members). Files one PENDING project/archive proposal per project; never auto-archives.",
+    triggers: ["cron:45 3 * * *"],
+    outputs: ["proposal.created"],
+    category: "shared",
+  },
+  {
     id: "webhook-broker",
     name: "Webhook Broker",
     description: "Delivers events to external webhook subscribers",

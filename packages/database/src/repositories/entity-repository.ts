@@ -244,6 +244,19 @@ export class EntityRepository extends BaseRepository<
       );
     }
 
+    // 1a-pre. Ghost-project door (P1 guardrail e). A project is a COMMITMENT
+    // WITH GRAVITY held in the `projects` TABLE — never an entity. Pre-0151
+    // fossils created `project`-profile entities via this generic door, orphan
+    // rows that bypass the projects table AND the (a)–(d) project guardrails
+    // (dedup / provenance / gravity). Block CREATE only — update/read of the
+    // remaining fossils stay allowed (this is the create path; update is
+    // separate). Route the caller to the real project door.
+    if (profile.slug === "project") {
+      throw new Error(
+        "Projects are not entities. Use the project door (MCP synap_create_project / POST /api/hub/projects) — agent creation requires evidenceEntityIds (≥5). To group work, link entities to an existing project via belongs_to_project."
+      );
+    }
+
     // 1a. Role profiles are hats, never things (Kind + Facets). A create
     // aimed at a role profile is transparently adapted to the same shape
     // ConvertToFacetOp produces: the entity is created on the role's single

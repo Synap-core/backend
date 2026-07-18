@@ -9,16 +9,22 @@ import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import {
   projects,
+  entities,
   eq,
   desc,
   and,
   or,
   isNull,
   isNotNull,
+  inArray,
   getDb,
   EventRepository,
   sql,
   ProjectRepository,
+  findProjectDedupCandidates,
+  assessEvidenceGravity,
+  buildNearMatchMessage,
+  buildProjectProvenance,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -26,6 +32,37 @@ import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
+
+/**
+ * Count how many of `entityIds` actually exist and are visible to `userId`,
+ * using the canonical entity access floor (`accessScopeWhere`) — never a
+ * request-supplied predicate. Backs the agent evidence-gravity check so an
+ * agent cannot claim gravity with ids it can't see or that don't exist.
+ */
+async function countVisibleEntities(
+  db: Awaited<ReturnType<typeof getDb>>,
+  userId: string,
+  entityIds: string[]
+): Promise<number> {
+  if (entityIds.length === 0) return 0;
+  const rows = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, entityIds),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+        })
+      )
+    );
+  return new Set(rows.map((r) => r.id)).size;
+}
 export const projectsRouter = router({
   /**
    * List all projects for the current user
@@ -126,9 +163,71 @@ export const projectsRouter = router({
         status: z.enum(["active", "archived", "completed"]).default("active"),
         settings: z.record(z.string(), z.unknown()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Agent gravity evidence: existing entity ids that would belong to this
+         * project. Required (≥5, caller-visible) for AGENT-initiated creates;
+         * ignored for human creators. See `assessEvidenceGravity`.
+         */
+        evidenceEntityIds: z.array(z.string().uuid()).max(500).optional(),
+        /**
+         * Internal provenance hint for which door originated the create. Defaults
+         * to "trpc"; the MCP handler forwards "mcp". Only labels metadata.
+         */
+        door: z.enum(["trpc", "hub-rest", "mcp"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const isAgent = !!ctx.agentUserId;
+      const door = input.door ?? "trpc";
+
+      // ── Agent guardrails (P1) — run BEFORE the governance gate so an agent is
+      // told to reuse / gather evidence instead of silently filing a duplicate
+      // project proposal. Human creators skip this entirely.
+      if (isAgent) {
+        const match = await findProjectDedupCandidates(db, {
+          userId: ctx.userId,
+          name: input.name,
+        });
+
+        // Exact-normalized match → reuse idempotently; never a second project.
+        if (match.exact) {
+          return {
+            status: "deduped" as const,
+            projectId: match.exact.id,
+            reusedProjectId: match.exact.id,
+          };
+        }
+
+        // Gravity: a project is a commitment. Require ≥5 caller-visible entities.
+        const evidence = input.evidenceEntityIds ?? [];
+        const visibleCount = await countVisibleEntities(
+          db,
+          ctx.userId,
+          evidence
+        );
+        const gravity = assessEvidenceGravity({
+          providedCount: evidence.length,
+          visibleCount,
+          near: match.near,
+        });
+        if (!gravity.ok) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: gravity.message,
+          });
+        }
+
+        // Gravity satisfied but a near-duplicate exists → do NOT proceed
+        // silently; surface the candidate so the agent reuses it.
+        if (match.near.length > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: buildNearMatchMessage(match.near),
+          });
+        }
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         // Bug fix (object-proposal manifest W1): forward the acting agent
@@ -139,7 +238,13 @@ export const projectsRouter = router({
         workspaceId: ctx.workspaceId,
         subjectType: "project",
         action: "create",
-        data: { name: input.name },
+        // Carry the agent's gravity evidence into the proposal for the reviewer.
+        data: {
+          name: input.name,
+          ...(isAgent && input.evidenceEntityIds
+            ? { evidenceEntityIds: input.evidenceEntityIds }
+            : {}),
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -153,7 +258,6 @@ export const projectsRouter = router({
         };
       }
 
-      const db = await getDb();
       const eventRepo = new EventRepository(sql);
       const projectRepo = new ProjectRepository(db, eventRepo);
 
@@ -166,9 +270,23 @@ export const projectsRouter = router({
           metadata: input.metadata,
           userId: ctx.userId,
           workspaceId: ctx.workspaceId ?? null,
+          provenance: buildProjectProvenance({
+            door,
+            agentUserId: ctx.agentUserId,
+            evidenceEntityIds: input.evidenceEntityIds,
+          }),
         },
         ctx.userId
       );
+
+      // Idempotent reuse (exact-name match) emits no create side-effects.
+      if (created.deduped) {
+        return {
+          status: "deduped" as const,
+          projectId: created.id,
+          reusedProjectId: created.id,
+        };
+      }
 
       auditLog({
         subjectType: "project",
@@ -187,7 +305,13 @@ export const projectsRouter = router({
         workspaceId: ctx.workspaceId,
       });
 
-      return { status: "created", projectId: created.id };
+      return {
+        status: "created",
+        projectId: created.id,
+        ...(created.dedupCandidates
+          ? { dedupCandidates: created.dedupCandidates }
+          : {}),
+      };
     }),
 
   /**

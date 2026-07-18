@@ -1471,6 +1471,13 @@ export async function executeMCPToolViaHubProtocol(
       const result = await projectCaller.create({
         name: args.name as string,
         description: args.description as string | undefined,
+        // Provenance: this create came through the MCP door.
+        door: "mcp",
+        // Gravity evidence — the tRPC create enforces ≥5 caller-visible ids for
+        // agent callers (projectCtx carries the agent identity).
+        evidenceEntityIds: Array.isArray(args.evidenceEntityIds)
+          ? (args.evidenceEntityIds as string[])
+          : undefined,
       });
       return ok(result);
     }

@@ -24,6 +24,10 @@ import {
   POD_HYGIENE_NEAR_DUP_CRON,
 } from "./workers/pod-hygiene-near-dup.js";
 import {
+  LIBRARIAN_ARCHIVER_QUEUE,
+  LIBRARIAN_ARCHIVER_CRON,
+} from "./workers/librarian-archiver.js";
+import {
   AUTOMATION_RUN_REAPER_QUEUE,
   AUTOMATION_RUN_REAPER_CRON,
 } from "./workers/automation-run-reaper.js";
@@ -137,6 +141,18 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info(
     "Registered cron: pod-hygiene.near-dup-scan (daily at 3:15 AM UTC)"
+  );
+
+  // Librarian project archiver (daily at 3:45 AM UTC — after near-dup at 3:15).
+  // Proposes archival of stale 0-gravity active projects; never auto-archives.
+  await scheduleSafe(
+    boss,
+    LIBRARIAN_ARCHIVER_QUEUE,
+    LIBRARIAN_ARCHIVER_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: librarian.project-archiver (daily at 3:45 AM UTC)"
   );
 
   // Notification cleanup (daily at 2:00 AM UTC — expires/deletes old notifications)

@@ -10,6 +10,11 @@ import { projects } from "../schema/projects.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Project } from "../schema/projects.js";
+import {
+  findProjectDedupCandidates,
+  type ProjectProvenance,
+  type ProjectDedupCandidate,
+} from "../utils/project-guardrails.js";
 
 export interface CreateProjectInput {
   id?: string;
@@ -20,7 +25,24 @@ export interface CreateProjectInput {
   metadata?: Record<string, unknown>;
   userId: string;
   workspaceId?: string | null;
+  /**
+   * Provenance stamp (who/where this create came from). Threaded from each
+   * creation door and recorded into `metadata.provenance`. When omitted, any
+   * `metadata.provenance` already on `metadata` is preserved.
+   */
+  provenance?: ProjectProvenance;
 }
+
+/**
+ * A created project, plus dedup signals for the caller:
+ *  - `deduped: true` ⇒ an exact-normalized-name match existed and this is the
+ *    EXISTING project (idempotent create; nothing was inserted).
+ *  - `dedupCandidates` ⇒ near-duplicate active projects (surfaced, not blocked).
+ */
+export type CreateProjectResult = Project & {
+  deduped?: boolean;
+  dedupCandidates?: ProjectDedupCandidate[];
+};
 
 export interface UpdateProjectInput {
   name?: string;
@@ -40,10 +62,49 @@ export class ProjectRepository extends BaseRepository<
   }
 
   /**
-   * Create a new project
+   * Create a new project.
+   *
+   * Dedup-before-create (the ONE door): an exact-normalized-name match among the
+   * user's ACTIVE projects makes this idempotent — the existing project is
+   * returned (`deduped: true`) and nothing is inserted. Near-duplicate active
+   * projects are surfaced on the result (`dedupCandidates`) but never block a
+   * human create. Provenance is stamped into `metadata.provenance`.
+   *
    * Emits: projects.create.completed
    */
-  async create(data: CreateProjectInput, userId: string): Promise<Project> {
+  async create(
+    data: CreateProjectInput,
+    userId: string
+  ): Promise<CreateProjectResult> {
+    const match = await findProjectDedupCandidates(this.db, {
+      userId,
+      name: data.name,
+    });
+
+    // Exact-normalized match → idempotent reuse. Return the existing row; no
+    // second project is minted (this is what agents-per-repo/-task tripped on).
+    if (match.exact) {
+      const [existing] = await this.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, match.exact.id));
+      if (existing) {
+        return {
+          ...existing,
+          deduped: true,
+          ...(match.near.length > 0 ? { dedupCandidates: match.near } : {}),
+        };
+      }
+      // Row vanished between load and re-read (rare race) → fall through and insert.
+    }
+
+    // Stamp provenance into metadata. An explicit `provenance` param wins; else
+    // any provenance already carried on `metadata` (e.g. via a proposal) stays.
+    const metadata: Record<string, unknown> = {
+      ...(data.metadata ?? {}),
+      ...(data.provenance ? { provenance: data.provenance } : {}),
+    };
+
     const [project] = await this.db
       .insert(projects)
       .values({
@@ -52,14 +113,16 @@ export class ProjectRepository extends BaseRepository<
         description: data.description,
         status: data.status || "active",
         settings: data.settings || {},
-        metadata: data.metadata || {},
+        metadata,
         userId,
         workspaceId: data.workspaceId ?? null,
       })
       .returning();
 
     await this.emitCompleted("create", project, userId);
-    return project;
+    return match.near.length > 0
+      ? { ...project, dedupCandidates: match.near }
+      : project;
   }
 
   /**

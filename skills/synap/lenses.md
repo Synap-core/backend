@@ -25,7 +25,7 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 
 1. `synap lens` — am I scoped where this work belongs?
 2. If unsure what exists → `synap orient` — it returns a **light lens map**: the projects and the workspaces (names + ids), so you see the shape without a data dump. Never guess IDs. Drill into a workspace's profiles or a project's contents only when you actually need them.
-3. **Connect or create:** if the right project / workspace / session doesn't exist yet, create it. A **session is the normal per-task move**. Creating a **workspace (a new operational domain) is a deliberate, expected move as the work grows** — not something to avoid.
+3. **Connect or create:** if the right project / workspace / session doesn't exist yet, create it. A **session is the normal per-task move**. Creating a **workspace (a new operational domain) is a deliberate, expected move as the work grows** — not something to avoid. A **project, though, is a COMMITMENT WITH GRAVITY**: search existing projects first (`synap orient`) and prefer **linking into an existing one** via `belongs_to_project`. Only create a new project for a real initiative that ties work together — never for a task, plan, repo, or theme (those are entities), and **never for the pod owner's own company** (the company _is_ the pod, not a project inside it). An agent-created project must cite **≥5 existing entities** as evidence or the backend rejects it, and near-duplicate names are rejected with the existing candidates.
 
 **Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.
 

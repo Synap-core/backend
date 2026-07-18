@@ -3397,6 +3397,12 @@ export interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
+export interface ProjectDedupCandidate {
+	id: string;
+	name: string;
+	/** Token-set overlap score with the requested name. */
+	score: number;
+}
 export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
@@ -21165,14 +21171,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: "active" | "completed" | "archived" | undefined;
 				settings?: Record<string, unknown> | undefined;
 				metadata?: Record<string, unknown> | undefined;
+				evidenceEntityIds?: string[] | undefined;
+				door?: "trpc" | "mcp" | "hub-rest" | undefined;
 			};
 			output: {
-				status: string;
+				status: "deduped";
 				projectId: string;
-				proposalId: string;
+				reusedProjectId: string;
+				proposalId?: undefined;
 			} | {
 				status: string;
 				projectId: string;
+				proposalId: string;
+				reusedProjectId?: undefined;
+			} | {
+				dedupCandidates?: ProjectDedupCandidate[] | undefined;
+				status: string;
+				projectId: string;
+				reusedProjectId?: undefined;
 				proposalId?: undefined;
 			};
 			meta: object;

@@ -106,6 +106,31 @@ describe("EntityRepository", () => {
         })
       );
     });
+
+    // P1 guardrail (e): a project is a first-class `projects` TABLE row, never
+    // an entity. The generic entity-create door must reject profileSlug
+    // "project" (the pre-0151 ghost-project fossil door) BEFORE any insert.
+    it("rejects a create resolving to the 'project' profile with the project-door guidance", async () => {
+      vi.spyOn(
+        ProfileResolutionService.prototype,
+        "resolveProfile"
+      ).mockResolvedValue({ id: "profile-project", slug: "project" } as any);
+
+      await expect(
+        entityRepo.create(
+          {
+            title: "Some Initiative",
+            profileSlug: "project",
+            workspaceId: "workspace-1",
+            userId: "user-1",
+          },
+          "user-1"
+        )
+      ).rejects.toThrow(/Projects are not entities/);
+
+      // Guard fires before the insert — no ghost row is written.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
   });
 
   describe("update", () => {

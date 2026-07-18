@@ -1078,7 +1078,7 @@ export const tools = {
       {
         name: "synap_create_project",
         description:
-          "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional).",
+          "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. If a same/similar project already exists it is reused (or surfaced) — reuse it instead of making a near-duplicate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1088,6 +1088,12 @@ export const tools = {
               type: "string",
               description:
                 "The project's HOME workspace (optional — falls back to the user's first workspace if omitted).",
+            },
+            evidenceEntityIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "REQUIRED for agents: ≥5 existing, visible entity ids that would belong to this project (its gravity). Fewer/invalid ⇒ rejected with guidance to store as an entity or reuse an existing project.",
             },
           },
           required: ["name"],

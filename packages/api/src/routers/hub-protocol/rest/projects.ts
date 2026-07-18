@@ -26,6 +26,10 @@ import {
   ProjectRepository,
   EventRepository,
   sql,
+  findProjectDedupCandidates,
+  assessEvidenceGravity,
+  buildNearMatchMessage,
+  buildProjectProvenance,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -49,7 +53,40 @@ const CreateProjectSchema = z.object({
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   workspaceId: z.string().uuid().optional(),
+  /**
+   * Agent gravity evidence: existing entity ids that would belong to this
+   * project. Required (≥5, caller-visible) for AGENT-initiated creates; ignored
+   * for human/operator creators.
+   */
+  evidenceEntityIds: z.array(z.string().uuid()).max(500).optional(),
 });
+
+/**
+ * Count how many `entityIds` exist and are visible to `userId` via the canonical
+ * entity access floor — backs the agent evidence-gravity check on this door.
+ */
+async function countVisibleEntities(
+  userId: string,
+  entityIds: string[]
+): Promise<number> {
+  if (entityIds.length === 0) return 0;
+  const rows = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, entityIds),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+        })
+      )
+    );
+  return new Set(rows.map((r) => r.id)).size;
+}
 
 const UpdateProjectSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -510,17 +547,66 @@ export function registerProjectsRoutes(app: HubHono): void {
   app.post("/projects", async (c) => {
     const userId = c.get("userId");
     const body = CreateProjectSchema.parse(await c.req.json());
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const isAgent = !!agentUserId;
+
+    // ── Agent guardrails (P1) — dedup + gravity before the governance gate.
+    if (isAgent) {
+      const match = await findProjectDedupCandidates(db, {
+        userId,
+        name: body.name,
+      });
+
+      // Exact-normalized match → reuse idempotently; never a second project.
+      if (match.exact) {
+        return c.json(
+          {
+            status: "deduped",
+            projectId: match.exact.id,
+            reusedProjectId: match.exact.id,
+          },
+          200
+        );
+      }
+
+      const evidence = body.evidenceEntityIds ?? [];
+      const visibleCount = await countVisibleEntities(userId, evidence);
+      const gravity = assessEvidenceGravity({
+        providedCount: evidence.length,
+        visibleCount,
+        near: match.near,
+      });
+      if (!gravity.ok) {
+        return c.json({ error: gravity.message }, 400);
+      }
+
+      // Gravity satisfied but a near-duplicate exists → surface it, don't create.
+      if (match.near.length > 0) {
+        return c.json(
+          {
+            error: buildNearMatchMessage(match.near),
+            dedupCandidates: match.near,
+          },
+          409
+        );
+      }
+    }
 
     const perm = await checkPermissionOrPropose({
       userId,
       // Bug fix (object-proposal manifest W1): forward the auto-injected agent
       // identity so an agent-authored project create is GOVERNED (routes to a
       // proposal) instead of auto-applying. Undefined for operator requests.
-      agentUserId: c.get("agentUserId") as string | undefined,
+      agentUserId,
       workspaceId: body.workspaceId ?? undefined,
       subjectType: "project",
       action: "create",
-      data: { name: body.name },
+      data: {
+        name: body.name,
+        ...(isAgent && body.evidenceEntityIds
+          ? { evidenceEntityIds: body.evidenceEntityIds }
+          : {}),
+      },
     });
 
     if ("denied" in perm && perm.denied) {
@@ -542,9 +628,21 @@ export function registerProjectsRoutes(app: HubHono): void {
         metadata: body.metadata,
         userId,
         workspaceId: body.workspaceId ?? null,
+        provenance: buildProjectProvenance({
+          door: "hub-rest",
+          agentUserId,
+          evidenceEntityIds: body.evidenceEntityIds,
+        }),
       },
       userId
     );
+
+    if (row.deduped) {
+      return c.json(
+        { status: "deduped", projectId: row.id, reusedProjectId: row.id },
+        200
+      );
+    }
 
     return c.json(row, 201);
   });

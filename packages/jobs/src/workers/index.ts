@@ -128,6 +128,10 @@ import {
   handlePodHygieneNearDupScan,
   POD_HYGIENE_NEAR_DUP_QUEUE,
 } from "./pod-hygiene-near-dup.js";
+import {
+  handleLibrarianArchiver,
+  LIBRARIAN_ARCHIVER_QUEUE,
+} from "./librarian-archiver.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -192,6 +196,7 @@ const ALL_QUEUES = [
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
+  LIBRARIAN_ARCHIVER_QUEUE,
 ];
 
 /**
@@ -526,6 +531,11 @@ export async function registerAllWorkers(): Promise<void> {
     handlePodHygieneNearDupScan()
   );
   logger.info("Registered worker: pod-hygiene.near-dup-scan");
+
+  await boss.work(LIBRARIAN_ARCHIVER_QUEUE, async () =>
+    handleLibrarianArchiver()
+  );
+  logger.info("Registered worker: librarian.project-archiver");
 
   logger.info("All workers registered");
 }
