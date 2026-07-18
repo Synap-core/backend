@@ -451,7 +451,13 @@ export async function getRun(
         status: s.status,
         label: s.nodeId,
         hint: s.errorMessage ?? null,
-        detail: { output: s.output, resolvedInputs: s.resolvedInputs },
+        detail: {
+          output: s.output,
+          resolvedInputs: s.resolvedInputs,
+          // Per-step timing for the RunDetailPanel duration bars (2.D-fe).
+          startedAt: s.startedAt,
+          completedAt: s.completedAt,
+        },
       }))
       .sort(byAtAsc);
     // Detail-only fields not carried on the list-row: the full trigger payload
