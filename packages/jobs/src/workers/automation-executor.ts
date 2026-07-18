@@ -75,6 +75,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { postRunSummary } from "../utils/post-run-summary.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -1992,6 +1993,8 @@ async function executeAutomationFlow(params: {
       .where(eq(automationRuns.id, runId));
     // Genuine finish (trivially) — close a freshly-opened session.
     await closeSessionIfOwned();
+    // Narrate the terminal run (idempotent, non-throwing — Wave 3.N1).
+    await postRunSummary(runId);
     return {};
   }
 
@@ -2898,6 +2901,10 @@ async function executeAutomationFlow(params: {
     // freshly-opened session; a channel-reused session is left for the channel.
     await closeSessionIfOwned();
 
+    // Narrate the terminal run (idempotent, non-throwing — Wave 3.N1). Reads the
+    // now-final run row itself, so success vs. failure is derived from the row.
+    await postRunSummary(runId);
+
     return outputSummary ?? {};
   } // end executeSortedNodes
 }
@@ -2985,6 +2992,10 @@ export async function handleAutomationExecute(job: {
           RUN_NOT_DELAY_SUSPENDED
         )
       );
+    // Narrate the failed run before rethrow (idempotent, non-throwing — Wave
+    // 3.N1). A run that threw before writing a terminal status never reached the
+    // genuine-finish narration site, so this is its only summary hook.
+    await postRunSummary(runId);
     throw err; // Rethrow so pg-boss still records the job failure.
   }
 }

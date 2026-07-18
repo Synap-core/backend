@@ -517,6 +517,15 @@ export const automationRuns = pgTable(
     /** Soft self-reference to the run this one replays (schema support only). */
     replayOf: uuid("replay_of"),
 
+    /**
+     * The one run-narration summary message posted for this run (Wave 3.N1).
+     * NULL until `postRunSummary` claims it; the claim
+     * (`SET summary_message_id=$mid WHERE id=$runId AND summary_message_id IS NULL`)
+     * is the exactly-once guard so the finalizer and the reaper can never both
+     * post for the same terminal run. Soft ref to `messages.id`.
+     */
+    summaryMessageId: uuid("summary_message_id"),
+
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),

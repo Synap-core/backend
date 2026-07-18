@@ -26,6 +26,7 @@ import {
   focusSessions,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { postRunSummary } from "../utils/post-run-summary.js";
 
 const logger = createLogger({ module: "automation-run-reaper" });
 
@@ -102,6 +103,13 @@ export async function handleAutomationRunReaper(): Promise<void> {
         )
         .returning({ id: focusSessions.id });
       sessionsClosed += closed.length;
+
+      // 3. Narrate the timed-out run into its channel (idempotent, non-throwing
+      //    — Wave 3.N1). `reason: "timeout"` forces the timeout copy/class even
+      //    though the row now reads `failed`. Respects narrationMode `off`;
+      //    `failures`/`changes` post it (a timeout is a failure). The internal
+      //    claim guarantees no double-post if the executor also finalized.
+      await postRunSummary(id, { reason: "timeout" });
     }
 
     logger.info(

@@ -2056,6 +2056,7 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp wi
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;  -- 0198 (per-run executed definition)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;  -- 0198 (replay lineage; soft self-ref)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "summary_message_id" uuid;  -- 0199 (run-narration summary claim slot; soft ref to messages.id)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");
