@@ -38,6 +38,7 @@ export * from "./services/user-provisioning.js";
 export * from "./services/pod-user-access.js";
 export * from "./services/capture-routing.js";
 export * from "./services/workspace-resolution-service.js";
+export * from "./services/project-resolution-service.js";
 export * from "./services/team-person-bridge.js";
 
 // Export errors
