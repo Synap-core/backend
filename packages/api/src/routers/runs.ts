@@ -41,6 +41,8 @@ export const runsRouter = router({
             subjectEntityId: z.string().uuid().optional(),
           })
           .optional(),
+        /** Filter to one lifecycle status, pushed down per ledger (server-side). */
+        status: runStatus.optional(),
         limit: z.number().min(1).max(100).optional(),
       })
     )

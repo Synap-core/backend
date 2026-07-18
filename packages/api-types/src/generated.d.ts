@@ -20831,6 +20831,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					projectId?: string | undefined;
 					subjectEntityId?: string | undefined;
 				} | undefined;
+				status?: "completed" | "running" | "failed" | "cancelled" | "proposed" | undefined;
 				limit?: number | undefined;
 			};
 			output: {

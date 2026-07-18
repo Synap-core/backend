@@ -4,9 +4,20 @@
  * Creates a focus session (goal-bound work session) with governance gating.
  * Idempotent by correlationId. Emits realtime events for browser mirroring.
  */
-import { db, focusSessions, eq, and } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  playbooks,
+  playbookRuns,
+  eq,
+  and,
+} from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
+
+/** RFC-4122 UUID shape — templateId may be a legacy free-text template name. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CreateFocusSessionParams {
   userId: string;
@@ -125,6 +136,20 @@ export async function createFocusSession(
     };
   }
 
+  // If `templateId` is a real Playbook id, this session IS a playbook run: wire
+  // the canonical `playbookId` + a `playbook_runs` ledger row so it surfaces in
+  // the runs feed. Writing ONLY the deprecated `templateId` (legacy behavior, kept
+  // below for compat) produced disconnected "ghost" sessions that ran forever with
+  // no ledger row. A non-UUID / free-text templateId resolves to no playbook →
+  // unchanged legacy behavior. (Guard the UUID first — comparing a uuid column to
+  // free text throws in Postgres.)
+  const playbook =
+    templateId && UUID_RE.test(templateId)
+      ? ((await db.query.playbooks.findFirst({
+          where: eq(playbooks.id, templateId),
+        })) ?? null)
+      : null;
+
   const [created] = await db
     .insert(focusSessions)
     .values({
@@ -135,12 +160,35 @@ export async function createFocusSession(
       goal,
       correlationId: correlationId ?? null,
       templateId,
+      playbookId: playbook?.id ?? null,
       expectedOutputs,
       channelId,
       agentIds,
       status: "active",
     })
     .returning();
+
+  // Insert the playbook_runs ledger row (status "running") for the new session so
+  // the runs feed sees it. Mirrors run-playbook.ts's executeSingleRun insert
+  // (executor + definition snapshot), minus the executor dispatch — starting a
+  // session is "I'm working on this playbook", not a full executor run.
+  if (playbook) {
+    await db.insert(playbookRuns).values({
+      workspaceId,
+      playbookId: playbook.id,
+      sessionId: created.id,
+      executor: playbook.executor,
+      status: "running",
+      createdBy: agentUserId ?? userId,
+      definitionSnapshot: {
+        version: playbook.version,
+        goalTemplate: playbook.goalTemplate,
+        stages: playbook.stages,
+        params: playbook.params,
+        expectedOutputs: playbook.expectedOutputs,
+      },
+    });
+  }
 
   emitHubRealtimeEvent({
     eventType: "focus_session.create.completed",

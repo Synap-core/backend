@@ -34,6 +34,13 @@ import {
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
 
 const FlowTypeSchema = z.enum(["automation", "playbook", "capture", "session"]);
+const RunStatusSchema = z.enum([
+  "running",
+  "completed",
+  "failed",
+  "proposed",
+  "cancelled",
+]);
 
 // ── Wire schemas ─────────────────────────────────────────────────────────────
 
@@ -95,6 +102,8 @@ export function registerRunsRoutes(app: HubHono): void {
     const ft = c.req.query("flowType");
     const parsedFt = ft ? FlowTypeSchema.safeParse(ft) : null;
     const flowId = c.req.query("flowId") || undefined;
+    const st = c.req.query("status");
+    const parsedSt = st ? RunStatusSchema.safeParse(st) : null;
     const limitRaw = Number(c.req.query("limit"));
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
 
@@ -102,6 +111,7 @@ export function registerRunsRoutes(app: HubHono): void {
       userId,
       flowType: parsedFt?.success ? parsedFt.data : undefined,
       flowId,
+      status: parsedSt?.success ? parsedSt.data : undefined,
       limit,
     });
     return c.json({ runs });

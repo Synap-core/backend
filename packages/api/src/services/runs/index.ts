@@ -95,7 +95,18 @@ function sessionStatus(s: string): RunStatus {
 // Each returns the concrete column values matching the normalised filter; an
 // EMPTY array means the ledger can never produce that status (skip the query).
 
-function automationStatusValues(status: RunStatus): string[] {
+type AutomationRunStatus = "running" | "completed" | "failed" | "cancelled";
+type PlaybookRunStatusValue = "running" | "completed" | "failed" | "proposed";
+type FocusSessionStatus =
+  | "active"
+  | "paused"
+  | "closed"
+  | "forming"
+  | "scheduled"
+  | "failed"
+  | "cancelled";
+
+function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
   switch (status) {
     case "running":
     case "completed":
@@ -107,7 +118,7 @@ function automationStatusValues(status: RunStatus): string[] {
   }
 }
 
-function playbookStatusValues(status: RunStatus): string[] {
+function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
   switch (status) {
     case "running":
     case "completed":
@@ -119,7 +130,7 @@ function playbookStatusValues(status: RunStatus): string[] {
   }
 }
 
-function sessionStatusValues(status: RunStatus): string[] {
+function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
   switch (status) {
     case "running":
       return ["active", "paused", "forming", "scheduled"];
