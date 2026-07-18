@@ -18881,6 +18881,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug: string;
+				workspaceId: string;
+				entityId?: string | undefined;
+			};
+			output: {
+				id: string;
+				name: string;
+				description: string | undefined;
+				triggerSummary: string;
+			}[];
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;

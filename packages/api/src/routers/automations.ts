@@ -23,11 +23,12 @@ import {
   or,
   isNull,
   desc,
+  drizzleSql,
   automations,
   automationRuns,
   automationStepRuns,
 } from "@synap/database";
-import type { FlowDefinition } from "@synap/database";
+import type { AutomationTriggerConfig, FlowDefinition } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -86,6 +87,16 @@ function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
   return null;
 }
 
+/**
+ * One-line human summary of an entity-create trigger for a UI card. When the
+ * trigger carries a `filters.profileSlug` it names that profile; an absent
+ * filter means the automation fires on ANY entity creation.
+ */
+function summarizeEntityCreateTrigger(config: AutomationTriggerConfig): string {
+  const slug = config.filters?.profileSlug as string | undefined;
+  return slug ? `On ${slug} created` : "On any entity created";
+}
+
 export const automationsRouter = router({
   // ── List automations ────────────────────────────────────────────────────────
 
@@ -133,6 +144,84 @@ export const automationsRouter = router({
         .limit(input?.limit ?? 50);
 
       return { automations: rows };
+    }),
+
+  // ── Match automations that would fire on creating an entity profile ─────────
+
+  /**
+   * Match active automations whose event-trigger would fire on the creation of
+   * a given entity profile — the Capture→Automation matcher, mirror of
+   * `playbooks.matchForEntity`. Given a captured/created entity's `profileSlug`,
+   * answer "is there an automation that reacts to creating this kind of thing?"
+   * so the capture done-state can surface + offer to run it.
+   *
+   * PREDICATE — an automation "would fire on entity.create of profileSlug X"
+   * when (source of truth: packages/jobs/src/workers/automation-trigger-matcher.ts):
+   *   • status='active' AND triggerType='event'                (matcher :306-310)
+   *   • triggerConfig.eventPattern matches the fixed operational event
+   *     `entity.create.completed` (events event-types.ts ENTITY_CREATED).
+   *     `matchPattern` (:59) accepts it exactly OR via trailing wildcard, so the
+   *     matching stored patterns are exactly:
+   *       `entity.create.completed` | `entity.create.*` | `entity.*`
+   *   • the profileSlug filter passes. Entity events have NO
+   *     `matchTriggerSpecificFilters` branch (:112) — profileSlug is a GENERIC
+   *     filter (event-types.ts filterKeys:["profileSlug"]) stored at
+   *     `triggerConfig.filters.profileSlug` and matched by exact equality
+   *     (`matchFilters` :78, applied at :419). An absent filter matches EVERY
+   *     profileSlug.
+   *
+   * SCOPING — `scopedDb(AccessContext.from(ctx)).predicate(automations)` yields
+   * the access-layer user floor (never leaks cross-user), narrowed with
+   * `or(isNull(workspaceId), eq(workspaceId, input.workspaceId))` EXACTLY like
+   * `list`/`get` above: pod-wide (NULL-workspace) globals are KEPT, the target
+   * workspace is included, other workspaces (which can never fire for this
+   * entity) are excluded. Returns the lean card shape; [] when none.
+   */
+  matchForEntity: protectedProcedure
+    .input(
+      z.object({
+        profileSlug: z.string().min(1),
+        // Round-tripped by the caller into `trigger`/a run as the subject;
+        // matching is by profile, so it does not narrow this query.
+        entityId: z.string().uuid().optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        automations
+      );
+
+      const rows = await database
+        .select()
+        .from(automations)
+        .where(
+          and(
+            visibility,
+            // Same narrow as `list`: keep pod-wide (NULL) globals + the target
+            // workspace; exclude other workspaces.
+            or(
+              isNull(automations.workspaceId),
+              eq(automations.workspaceId, input.workspaceId)
+            ),
+            eq(automations.status, "active"),
+            eq(automations.triggerType, "event"),
+            // eventPattern ∈ the set matchPattern accepts for the fixed
+            // `entity.create.completed` event.
+            drizzleSql`${automations.triggerConfig}->>'eventPattern' = ANY(ARRAY['entity.create.completed','entity.create.*','entity.*'])`,
+            // filters.profileSlug absent (fires for any) OR equals the request.
+            drizzleSql`(${automations.triggerConfig}->'filters'->>'profileSlug' IS NULL OR ${automations.triggerConfig}->'filters'->>'profileSlug' = ${input.profileSlug})`
+          )
+        )
+        .orderBy(desc(automations.updatedAt));
+
+      return rows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description ?? undefined,
+        triggerSummary: summarizeEntityCreateTrigger(a.triggerConfig),
+      }));
     }),
 
   // ── Get single automation ───────────────────────────────────────────────────
