@@ -15,6 +15,10 @@ import {
   type ProjectProvenance,
   type ProjectDedupCandidate,
 } from "../utils/project-guardrails.js";
+import {
+  slugifyProjectName,
+  uniquifyProjectSlug,
+} from "../utils/project-slug.js";
 
 export interface CreateProjectInput {
   id?: string;
@@ -105,11 +109,26 @@ export class ProjectRepository extends BaseRepository<
       ...(data.provenance ? { provenance: data.provenance } : {}),
     };
 
+    // Slug (P4-lite W0): generated here — the ONE creation door — via the ONE
+    // slugify helper, uniquified against the user's existing slugs. The partial
+    // unique index (user_id, slug) is the final arbiter on a rare race.
+    const existingSlugRows: Array<{ slug: string | null }> = await this.db
+      .select({ slug: projects.slug })
+      .from(projects)
+      .where(eq(projects.userId, userId));
+    const slug = uniquifyProjectSlug(
+      slugifyProjectName(data.name),
+      existingSlugRows
+        .map((r) => r.slug)
+        .filter((s): s is string => typeof s === "string" && s.length > 0)
+    );
+
     const [project] = await this.db
       .insert(projects)
       .values({
         id: data.id,
         name: data.name,
+        slug,
         description: data.description,
         status: data.status || "active",
         settings: data.settings || {},
