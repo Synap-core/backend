@@ -51,6 +51,7 @@ import type {
 } from "@synap/playbooks";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 
+import { createLogger } from "@synap-core/core";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -59,6 +60,8 @@ import { capabilityContainersRouter } from "../../routers/capability-containers.
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { interpolateDeep, interpolateString } from "../_shared/interpolate.js";
+
+const logger = createLogger({ module: "create-capability-from-definition" });
 
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
 
@@ -198,15 +201,17 @@ export interface CreateCapabilityResult {
     }[];
     playbooks: {
       name: string;
-      status: "created" | "reused" | "proposed";
+      status: "created" | "reused" | "proposed" | "error";
       playbookId: string | null;
       proposalId: string | null;
+      message?: string;
     }[];
     automations: {
       name: string;
-      status: "created" | "reused" | "proposed";
+      status: "created" | "reused" | "proposed" | "error";
       automationId: string | null;
       proposalId: string | null;
+      message?: string;
     }[];
   };
   proposals: string[];
@@ -625,49 +630,70 @@ export async function createCapabilityFromDefinition(
     }
     const playbooksCaller = playbooksRouter.createCaller(ctx as never);
     for (const p of def.playbooks ?? []) {
-      // Idempotent reuse keyed on the stable natural key: name within scope.
-      const [existing] = await db
-        .select({ id: playbooksTable.id })
-        .from(playbooksTable)
-        .where(
-          and(
-            eq(playbooksTable.name, p.name),
-            eq(playbooksTable.workspaceId, workspaceId)
+      // Per-item isolation: a single playbook that fails to create must NOT abort
+      // the rest of the apply — the remaining playbooks, the automations (step 4b),
+      // and crucially the container + member-attach (step 5) must still run.
+      // Mirrors the sibling per-item try/catch in applyPackagePostWorkspace's
+      // body.automations/playbooks loops. Without it, one failing item left the
+      // capability half-materialized (an empty container, missing later items).
+      try {
+        // Idempotent reuse keyed on the stable natural key: name within scope.
+        const [existing] = await db
+          .select({ id: playbooksTable.id })
+          .from(playbooksTable)
+          .where(
+            and(
+              eq(playbooksTable.name, p.name),
+              eq(playbooksTable.workspaceId, workspaceId)
+            )
           )
-        )
-        .limit(1);
-      if (existing) {
+          .limit(1);
+        if (existing) {
+          createdPlaybooks.push({
+            name: p.name,
+            status: "reused",
+            playbookId: existing.id,
+            proposalId: null,
+          });
+          continue;
+        }
+
+        const result = await playbooksCaller.create({
+          name: p.name,
+          description: p.description,
+          goalTemplate: p.goalTemplate,
+          params: p.params,
+          inputStrategy: p.inputStrategy,
+          channelSpec: p.channelSpec,
+          expectedOutputs: p.expectedOutputs,
+          stages: p.stages,
+          subjectProfile: p.subjectProfile,
+          schedule: p.schedule,
+          executor: p.executor ?? "is-agent",
+          status: p.status ?? "draft",
+        });
+
+        if (result.proposalId) proposals.push(result.proposalId);
         createdPlaybooks.push({
           name: p.name,
-          status: "reused",
-          playbookId: existing.id,
-          proposalId: null,
+          status: result.status === "proposed" ? "proposed" : "created",
+          playbookId: result.playbook?.id ?? null,
+          proposalId: result.proposalId,
         });
-        continue;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { err, capabilityKey: def.key, playbook: p.name },
+          "capability playbook create failed (isolated — apply continues)"
+        );
+        createdPlaybooks.push({
+          name: p.name,
+          status: "error",
+          playbookId: null,
+          proposalId: null,
+          message,
+        });
       }
-
-      const result = await playbooksCaller.create({
-        name: p.name,
-        description: p.description,
-        goalTemplate: p.goalTemplate,
-        params: p.params,
-        inputStrategy: p.inputStrategy,
-        channelSpec: p.channelSpec,
-        expectedOutputs: p.expectedOutputs,
-        stages: p.stages,
-        subjectProfile: p.subjectProfile,
-        schedule: p.schedule,
-        executor: p.executor ?? "is-agent",
-        status: p.status ?? "draft",
-      });
-
-      if (result.proposalId) proposals.push(result.proposalId);
-      createdPlaybooks.push({
-        name: p.name,
-        status: result.status === "proposed" ? "proposed" : "created",
-        playbookId: result.playbook?.id ?? null,
-        proposalId: result.proposalId,
-      });
     }
   }
 
@@ -680,47 +706,69 @@ export async function createCapabilityFromDefinition(
   if ((def.automations?.length ?? 0) > 0) {
     const automationsCaller = automationsRouter.createCaller(ctx as never);
     for (const a of def.automations ?? []) {
-      // Idempotent reuse keyed on the stable natural key: name within scope
-      // (workspace-scoped when a workspaceId is present, else pod-wide/NULL).
-      const [existing] = await db
-        .select({ id: automationsTable.id })
-        .from(automationsTable)
-        .where(
-          and(
-            eq(automationsTable.name, a.name),
-            workspaceId
-              ? eq(automationsTable.workspaceId, workspaceId)
-              : isNull(automationsTable.workspaceId)
+      // Per-item isolation: one automation that fails to create must NOT abort the
+      // rest of the apply. Before this guard, a single throw here aborted the whole
+      // `createCapabilityFromDefinition` — so any automations AFTER the failing one,
+      // AND step 5 (container creation + member-attach + vault stamping), silently
+      // never ran, leaving the capability half-materialized (a member-less container
+      // and a partial automation set that only completed over repeated re-applies).
+      // Mirrors the sibling per-item try/catch in applyPackagePostWorkspace.
+      try {
+        // Idempotent reuse keyed on the stable natural key: name within scope
+        // (workspace-scoped when a workspaceId is present, else pod-wide/NULL).
+        const [existing] = await db
+          .select({ id: automationsTable.id })
+          .from(automationsTable)
+          .where(
+            and(
+              eq(automationsTable.name, a.name),
+              workspaceId
+                ? eq(automationsTable.workspaceId, workspaceId)
+                : isNull(automationsTable.workspaceId)
+            )
           )
-        )
-        .limit(1);
-      if (existing) {
+          .limit(1);
+        if (existing) {
+          createdAutomations.push({
+            name: a.name,
+            status: "reused",
+            automationId: existing.id,
+            proposalId: null,
+          });
+          continue;
+        }
+
+        const created = await automationsCaller.create({
+          workspaceId: workspaceId ?? null,
+          name: a.name,
+          description: a.description,
+          triggerType: a.triggerType,
+          triggerConfig: a.triggerConfig ?? {},
+          flowDefinition: a.flowDefinition,
+          status: a.status ?? "draft",
+          metadata: a.metadata,
+          state: a.state,
+        });
         createdAutomations.push({
           name: a.name,
-          status: "reused",
-          automationId: existing.id,
+          status: "created",
+          automationId: created?.id ?? null,
           proposalId: null,
         });
-        continue;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { err, capabilityKey: def.key, automation: a.name },
+          "capability automation create failed (isolated — apply continues)"
+        );
+        createdAutomations.push({
+          name: a.name,
+          status: "error",
+          automationId: null,
+          proposalId: null,
+          message,
+        });
       }
-
-      const created = await automationsCaller.create({
-        workspaceId: workspaceId ?? null,
-        name: a.name,
-        description: a.description,
-        triggerType: a.triggerType,
-        triggerConfig: a.triggerConfig ?? {},
-        flowDefinition: a.flowDefinition,
-        status: a.status ?? "draft",
-        metadata: a.metadata,
-        state: a.state,
-      });
-      createdAutomations.push({
-        name: a.name,
-        status: "created",
-        automationId: created?.id ?? null,
-        proposalId: null,
-      });
     }
   }
 
