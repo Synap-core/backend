@@ -52,6 +52,7 @@ import {
   resolveIdentity,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   resolveWorkspacePlacement,
+  resolveProjectPlacement,
 } from "@synap/database";
 import {
   entities,
@@ -1062,6 +1063,18 @@ export const entitiesRouter = router({
       });
       const resolvedEntityWorkspaceId = entityPlacement.workspaceId;
 
+      // Project placement — the deterministic sibling door (explicit input.projectId
+      // → producing session's project). Rung 1 (explicit) preserves the historical
+      // inline behavior exactly; rung 2 (session) is the additive gain. An
+      // AI-guessed project never routes through here — that stays a propose/advisory
+      // chip, never an auto-link (belongs_to_project WIDENS cross-workspace access).
+      const projectPlacement = await resolveProjectPlacement(placementDb, {
+        userId: ctx.userId,
+        explicitProjectId: input.projectId,
+        sessionId: ctx.sessionId,
+      });
+      const resolvedProjectId = projectPlacement.projectId;
+
       // 1. Emit .requested event — records intent regardless of outcome
       const requestedEvent = await auditLog({
         subjectType: "entity",
@@ -1097,7 +1110,7 @@ export const entitiesRouter = router({
         requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         sessionId: ctx.sessionId ?? undefined,
-        projectId: input.projectId ?? undefined,
+        projectId: resolvedProjectId ?? undefined,
         data: {
           id: entityId,
           profileSlug,
@@ -1277,14 +1290,15 @@ export const entitiesRouter = router({
           .onConflictDoNothing();
       }
 
-      // Membership: file the entity into the active project lens (the project
-      // mirror of workspaceId) on the granted inline path. The proposal path is
-      // covered by checkPermissionOrPropose threading projectId → the materializer.
-      // Idempotent via relations_belongs_to_project_unique.
-      if (input.projectId && createdEntity?.id) {
+      // Membership: file the entity into the DETERMINISTICALLY resolved project
+      // lens (the project mirror of workspaceId) on the granted inline path. The
+      // proposal path is covered by checkPermissionOrPropose threading the same
+      // resolvedProjectId → the materializer. Idempotent via
+      // relations_belongs_to_project_unique.
+      if (resolvedProjectId && createdEntity?.id) {
         await linkEntityToProject(database, {
           entityId: createdEntity.id,
-          projectId: input.projectId,
+          projectId: resolvedProjectId,
           userId: ctx.userId,
           workspaceId: entityWorkspaceId ?? null,
         });

@@ -43,6 +43,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   linkEntityToProject,
+  resolveProjectPlacement,
   stampProvenance,
 } from "@synap/database";
 import {
@@ -55,7 +56,6 @@ import {
   workspaceMembers,
   users,
   proposals,
-  focusSessions,
   relations,
   projectMembers,
 } from "@synap/database/schema";
@@ -939,25 +939,24 @@ async function linkSessionProduced(
     );
   }
 
-  // 2. Project membership (entity → belongs_to_project → project). Priority:
-  //    explicit proposal.projectId (lens-context) > producing session's project.
-  let projectId = proposal.projectId ?? null;
-  if (!projectId && proposal.sessionId) {
-    const session = await sharedDb.query.focusSessions.findFirst({
-      where: eq(focusSessions.id, proposal.sessionId),
-      columns: { projectId: true },
-    });
-    projectId = session?.projectId ?? null;
-  }
-  if (projectId) {
+  // 2. Project membership (entity → belongs_to_project → project) — resolved
+  //    through the ONE deterministic door (explicit proposal.projectId → the
+  //    producing session's project). Only DETERMINISTIC context stamps
+  //    membership; an AI-guessed project never reaches here.
+  const placement = await resolveProjectPlacement(sharedDb, {
+    userId,
+    explicitProjectId: proposal.projectId,
+    sessionId: proposal.sessionId,
+  });
+  if (placement.projectId) {
     await linkEntityToProject(db, {
       entityId,
-      projectId,
+      projectId: placement.projectId,
       userId,
       workspaceId: workspaceId ?? null,
     });
     logger.info(
-      { projectId, entityId },
+      { projectId: placement.projectId, entityId, rung: placement.rung },
       "Linked entity --belongs_to_project--> project"
     );
   }
