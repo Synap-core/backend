@@ -129,7 +129,7 @@ const createInputSchema = z.object({
   status: playbookStatusSchema.default("draft"),
 });
 
-const updateInputSchema = z.object({
+export const updateInputSchema = z.object({
   id: z.string().uuid(),
   agentUserId: z.string().uuid().optional(),
   source: z.string().optional(),

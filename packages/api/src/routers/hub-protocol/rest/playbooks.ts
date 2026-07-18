@@ -39,6 +39,10 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         (c.get("agentUserId") as string | undefined);
       const caller = await getCaller(c);
       const result = await caller.playbooks.update({
+        // The resolved owner — the acting identity the auth middleware set.
+        // Mirrors `promote`; the hub `update` needs it (ctx.userId is not typed
+        // on scopedProcedure).
+        userId: c.get("userId") as string,
         id: c.req.param("id"),
         agentUserId,
         source: body.source as string | undefined,

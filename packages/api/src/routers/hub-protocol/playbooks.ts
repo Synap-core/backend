@@ -11,7 +11,10 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { playbooksRouter as regularPlaybooksRouter } from "../playbooks.js";
+import {
+  playbooksRouter as regularPlaybooksRouter,
+  updateInputSchema,
+} from "../playbooks.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 
 export const hubPlaybooksRouter = router({
@@ -52,5 +55,30 @@ export const hubPlaybooksRouter = router({
         source: "intelligence",
         reasoning: input.reasoning,
       });
+    }),
+
+  /**
+   * Update a playbook's definition (governed diff) — the door the analyzer
+   * persona / in-app editor uses over the Hub. Delegates to the regular
+   * `playbooks.update`, which gates on the LOADED playbook's workspace and runs
+   * `checkPermissionOrPropose` — agent callers get `status: 'proposed'`,
+   * operators the executed result. `userId` is the resolved owner (the REST seam
+   * passes `c.get("userId")`), mirroring `promote`; `ctx.userId` is not reliably
+   * typed on `scopedProcedure`.
+   */
+  update: scopedProcedure(["hub-protocol.write"])
+    .input(updateInputSchema.extend({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const { userId, ...rest } = input;
+      const callerContext = await createHubProtocolCallerContext(
+        userId,
+        ctx.scopes || [],
+        undefined,
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        rest.agentUserId ?? undefined
+      );
+      const caller = regularPlaybooksRouter.createCaller(callerContext);
+      return caller.update(rest);
     }),
 });
