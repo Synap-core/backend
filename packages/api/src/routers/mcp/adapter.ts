@@ -1234,24 +1234,32 @@ export async function executeMCPToolViaHubProtocol(
         aiWorkspaceReason: (
           structured as { targetWorkspaceReason?: string | null }
         ).targetWorkspaceReason,
-        // File into the active project lens (belongs_to_project) when the caller
-        // passed a projectId, OR when structure resolved a target project — so
-        // capture fills the lens it was invoked in (execute already stamps the
-        // edge; the adapter just never wired it through).
-        ...(() => {
-          const pid =
-            (args.projectId as string | undefined) ??
-            ((structured as { targetProjectId?: string | null })
-              .targetProjectId ||
-              undefined);
-          return pid ? { projectId: pid } : {};
-        })(),
+        // Explicit caller-provided projectId is a deliberate pin (rung 1) and
+        // still auto-links. The AI's structure-RESOLVED target, however, must NOT
+        // silently become an auto-link: `belongs_to_project` WIDENS cross-workspace
+        // access, so the AI's guess rides the SAME propose/advisory lane as every
+        // other surface — execute records it as a suggestion (chip), never links
+        // it, unless a DETERMINISTIC rung (explicit / session / relational)
+        // independently resolves the same project.
+        ...(args.projectId ? { projectId: args.projectId as string } : {}),
+        aiProjectId: (structured as { targetProjectId?: string | null })
+          .targetProjectId,
+        aiProjectConfidence: (
+          structured as { targetProjectConfidence?: number | null }
+        ).targetProjectConfidence,
+        aiProjectReason: (structured as { targetProjectReason?: string | null })
+          .targetProjectReason,
       });
       // execute() returns movedToWorkspace / pendingWorkspaceSwitch when routing
       // engaged — surface them at the top level for the caller.
       const ex = executed as {
         movedToWorkspace?: string;
         pendingWorkspaceSwitch?: unknown;
+        project?: {
+          projectId: string;
+          rung: number | null;
+          status: "linked" | "proposed";
+        };
       };
       return ok({
         structured,
@@ -1261,6 +1269,17 @@ export async function executeMCPToolViaHubProtocol(
           : {}),
         ...(ex.pendingWorkspaceSwitch
           ? { pendingWorkspaceSwitch: ex.pendingWorkspaceSwitch }
+          : {}),
+        // State what happened on the project axis: linked-by-context (which rung)
+        // vs proposed (AI suggestion awaiting confirmation) vs nothing (omitted).
+        ...(ex.project
+          ? {
+              project: ex.project,
+              projectDisposition:
+                ex.project.status === "linked"
+                  ? `linked by context (rung ${ex.project.rung})`
+                  : "proposed (AI suggestion — confirm to file)",
+            }
           : {}),
       });
     }
