@@ -81,7 +81,10 @@ import {
 } from "../services/workspace-materialization-service.js";
 // Loop materialization (playbooks + automation triggers) flows through the ONE
 // shared loop applier — the same one the standalone POST /loops/apply door uses.
-import { createLoopFromDefinition } from "../services/loops/create-from-definition.js";
+import {
+  applyPackagePostWorkspace,
+  type PackagePostWorkspaceBody,
+} from "../services/package-apply-post-workspace.js";
 import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
 
 const logger = createLogger({ module: "workspaces" });
@@ -2742,6 +2745,23 @@ export const workspacesRouter = router({
               )
               .optional(),
             /**
+             * Capability integrations (→ tools + skills + vault + capability-
+             * embedded automations/playbooks). This is the operational bundle:
+             * `toPackageDefinition` emits it from a template's `integrations:`
+             * list. Installed via the SHARED `applyPackagePostWorkspace` door
+             * (same as Hub `/packages/apply`) so the browser install path carries
+             * capabilities too — before this it installed none.
+             */
+            capabilities: z
+              .array(
+                z.object({
+                  templateKey: z.string().optional(),
+                  definition: z.record(z.string(), z.unknown()).optional(),
+                  params: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            /**
              * Template-composition dependencies — resolved BEFORE the workspace
              * step, mirroring PackageApplySchema in the Hub packages route
              * (`POST /packages/apply`). A `compose` dependency layers this
@@ -3369,90 +3389,97 @@ export const workspacesRouter = router({
             }
           }
 
-          // ── Materialize playbooks + automation triggers ─────────────────────────
-          // The workspace `{playbooks · automations}` sub-contract IS an autonomy
-          // loop. Build a `LoopDefinition` from it and apply it through the ONE
-          // shared loop-materialization primitive (`createLoopFromDefinition`) —
-          // the SAME applier the standalone `POST /loops/apply` door uses. This
-          // routes EVERY playbook + trigger through the governed router callers
-          // (zero raw inserts here), so the playbook-schedule cron sugar, grants
-          // links, and governance are all identical to the standalone path.
-          //
-          // The sub-contract has no template-local playbook `ref` (it keys
-          // triggers by `action.playbookSlug` = the playbook NAME), so we use the
-          // playbook name as the loop ref and rewrite each trigger's slug → ref.
+          // ── Post-workspace layers (capabilities + the autonomy loop) ────────────
+          // ONE shared door with Hub `POST /packages/apply` — `applyPackagePostWorkspace`.
+          // The `{playbooks · automations}` sub-contract IS an autonomy loop, so it is
+          // passed as ONE `loops[]` entry (the shared door runs the SAME governed
+          // `createLoopFromDefinition` primitive) — preserving the playbook-trigger
+          // semantics — while `capabilities` (→ tools + skills + vault + capability-
+          // embedded automations/playbooks) install alongside. Before this the tRPC/
+          // browser door installed NO capabilities and hand-rolled the loop inline; now
+          // both doors converge on the one door. `definition.tools` is intentionally
+          // dropped: tools arrive through capabilities (the governed substrate) — the old
+          // inline `tools` TODO is retired here.
           const playbookDefs = input.definition.playbooks;
           const automationDefs = input.definition.automations;
-          if (
+          const capabilityDefs = (
+            input.definition as {
+              capabilities?: PackagePostWorkspaceBody["capabilities"];
+            }
+          ).capabilities;
+          const hasLoop =
             (playbookDefs && playbookDefs.length > 0) ||
-            (automationDefs && automationDefs.length > 0)
-          ) {
-            try {
-              const loopDef: LoopDefinition = {
-                key: `workspace-${result.workspaceId}`,
-                name: "Workspace loop",
-                playbooks: (playbookDefs ?? []).map((pb) => ({
-                  ref: pb.name,
-                  name: pb.name,
-                  goalTemplate: pb.goalTemplate,
-                  description: pb.description,
-                  params: pb.params as unknown as LoopPlaybookDef["params"],
-                  executor: pb.executor,
-                  expectedOutputs:
-                    pb.expectedOutputs as unknown as LoopPlaybookDef["expectedOutputs"],
-                  // Carry the subject kind → `createLoopFromDefinition` forwards it
-                  // to `playbooksRouter.create`, landing on `subject_profile`.
-                  subjectProfile: pb.subjectProfile,
-                  grants: pb.grants?.map((g) => ({
-                    kind: g.kind,
-                    id: g.ref,
+            (automationDefs && automationDefs.length > 0);
+          if (hasLoop || (capabilityDefs && capabilityDefs.length > 0)) {
+            // The sub-contract has no template-local playbook `ref` (it keys triggers
+            // by `action.playbookSlug` = the playbook NAME), so we use the playbook
+            // name as the loop ref and rewrite each trigger's slug → ref.
+            const loopDef: LoopDefinition | undefined = hasLoop
+              ? {
+                  key: `workspace-${result.workspaceId}`,
+                  name: "Workspace loop",
+                  playbooks: (playbookDefs ?? []).map((pb) => ({
+                    ref: pb.name,
+                    name: pb.name,
+                    goalTemplate: pb.goalTemplate,
+                    description: pb.description,
+                    params: pb.params as unknown as LoopPlaybookDef["params"],
+                    executor: pb.executor,
+                    expectedOutputs:
+                      pb.expectedOutputs as unknown as LoopPlaybookDef["expectedOutputs"],
+                    // Carry the subject kind → `createLoopFromDefinition` forwards it
+                    // to `playbooksRouter.create`, landing on `subject_profile`.
+                    subjectProfile: pb.subjectProfile,
+                    grants: pb.grants?.map((g) => ({
+                      kind: g.kind,
+                      id: g.ref,
+                    })),
                   })),
-                })),
-                triggers: (automationDefs ?? []).map((auto) => ({
-                  name: auto.name,
-                  description: auto.description,
-                  trigger: {
-                    type: auto.trigger.type,
-                    cron: auto.trigger.cron,
-                    eventType: auto.trigger.eventType,
-                  },
-                  playbookRef: auto.action.playbookSlug,
-                  params: auto.action.params,
-                })),
-              };
+                  triggers: (automationDefs ?? []).map((auto) => ({
+                    name: auto.name,
+                    description: auto.description,
+                    trigger: {
+                      type: auto.trigger.type,
+                      cron: auto.trigger.cron,
+                      eventType: auto.trigger.eventType,
+                    },
+                    playbookRef: auto.action.playbookSlug,
+                    params: auto.action.params,
+                  })),
+                }
+              : undefined;
 
-              // Scope the applier to the NEWLY created workspace (ctx may carry a
-              // different active workspace from the request header).
-              const loopCtx = {
-                ...ctx,
+            try {
+              const post = await applyPackagePostWorkspace({
                 workspaceId: result.workspaceId,
-              } as typeof ctx;
-              const loopResult = await createLoopFromDefinition(
-                loopDef,
-                {},
-                loopCtx
-              );
-
-              logger.info(
-                {
-                  workspaceId: result.workspaceId,
-                  playbooks: loopResult.created.playbooks.length,
-                  triggers: loopResult.created.triggers.length,
+                body: {
+                  capabilities: capabilityDefs,
+                  loops: loopDef
+                    ? [
+                        {
+                          definition: loopDef as unknown as Record<
+                            string,
+                            unknown
+                          >,
+                        },
+                      ]
+                    : undefined,
                 },
-                "createFromDefinition: materialized loop (playbooks + triggers)"
+                userId: ctx.userId,
+                agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+                scopes: [],
+              });
+              logger.info(
+                { workspaceId: result.workspaceId, layers: Object.keys(post) },
+                "createFromDefinition: post-workspace layers applied (shared door)"
               );
             } catch (err) {
               logger.warn(
                 { err, workspaceId: result.workspaceId },
-                "Failed to materialize loop (playbooks/automations, non-fatal)"
+                "Failed to apply post-workspace layers (capabilities/loop, non-fatal)"
               );
             }
           }
-
-          // TODO: Materialize tool templates (definition.tools) — insert rows into the
-          // tools table using the same schema as ToolTemplate (name, kind, description,
-          // credentialRequired → credentialRef, inputSchema). Pod-wide (workspaceId null)
-          // by default since tools are capability integrations, not workspace-scoped.
 
           // Enqueue workspace-init for default whiteboard/commands
           // (skips default views when packageSlug is set)
