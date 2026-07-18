@@ -23,6 +23,10 @@ import {
   POD_HYGIENE_NEAR_DUP_QUEUE,
   POD_HYGIENE_NEAR_DUP_CRON,
 } from "./workers/pod-hygiene-near-dup.js";
+import {
+  AUTOMATION_RUN_REAPER_QUEUE,
+  AUTOMATION_RUN_REAPER_CRON,
+} from "./workers/automation-run-reaper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 
@@ -102,6 +106,16 @@ export async function registerCronSchedules(): Promise<void> {
   // Automation cron scheduler (every 1 minute — checks due cron-triggered automations)
   await scheduleSafe(boss, "automation-cron-scheduler", "* * * * *", {});
   logger.info("Registered cron: automation-cron-scheduler (every 1min)");
+
+  // Automation run reaper (every ~5min — finalizes stale "running" automation
+  // runs orphaned by a setup-window throw or worker death; delay-suspended exempt)
+  await scheduleSafe(
+    boss,
+    AUTOMATION_RUN_REAPER_QUEUE,
+    AUTOMATION_RUN_REAPER_CRON,
+    {}
+  );
+  logger.info("Registered cron: automation-run-reaper (every 5min)");
 
   // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});

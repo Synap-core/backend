@@ -43,6 +43,10 @@ import {
 import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
 import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
+import {
+  handleAutomationRunReaper,
+  AUTOMATION_RUN_REAPER_QUEUE,
+} from "./automation-run-reaper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleVaultGrantExpiry,
@@ -154,6 +158,7 @@ const ALL_QUEUES = [
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
+  AUTOMATION_RUN_REAPER_QUEUE,
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
@@ -333,6 +338,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleAutomationCronScheduler()
   );
   logger.info("Registered worker: automation-cron-scheduler");
+
+  // Automation run reaper (cron: every ~5min — finalizes stale "running" runs
+  // orphaned by a setup-window throw or worker death; delay-suspended runs exempt)
+  await boss.work(AUTOMATION_RUN_REAPER_QUEUE, async () =>
+    handleAutomationRunReaper()
+  );
+  logger.info("Registered worker: automation-run-reaper");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

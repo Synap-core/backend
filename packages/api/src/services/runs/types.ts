@@ -49,6 +49,13 @@ export interface UnifiedRun {
   replayOf: string | null;
   summary: string | null;
   error: string | null;
+  /** Who/what triggered the run (userId or "system"); null where the ledger has none. */
+  triggeredBy: string | null;
+  /** Steps that completed / failed (automation runs only; null for other ledgers). */
+  stepsCompleted: number | null;
+  stepsFailed: number | null;
+  /** The definition version this run executed (from definitionSnapshot); null if unsnapshotted. */
+  definitionVersion: number | null;
 }
 
 /**
@@ -72,4 +79,8 @@ export interface RunActivityItem {
 export interface UnifiedRunDetail {
   run: UnifiedRun;
   activity: RunActivityItem[];
+  /** The trigger that started this run — its principal + full payload (automation only). */
+  trigger: { triggeredBy: string | null; payload: unknown } | null;
+  /** The run's full output summary JSONB (automation only); null for other ledgers. */
+  outputSummary: unknown;
 }

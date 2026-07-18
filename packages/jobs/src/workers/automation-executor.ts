@@ -75,6 +75,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
   resolveIntelligenceService,
@@ -2936,15 +2937,40 @@ export async function handleAutomationExecute(job: {
     return;
   }
 
-  await executeAutomationFlow({
-    automationId,
-    runId,
-    workspaceId,
-    ownerId: automation.createdBy,
-    payload: (run.triggerPayload as Record<string, unknown>) ?? {},
-    automationContext,
-    completedNodeIds,
-  });
+  // Defensive finalizer (fail-fast honesty): if the flow throws before writing a
+  // terminal status — a cycle throw, or an infra error in the setup window — mark
+  // the run failed with the real error instead of leaving it "running" until the
+  // reaper (the reaper is the guarantee; this just avoids a ~45-min lie). Guarded
+  // on status still 'running' AND not delay-suspended (the delay path RETURNS, it
+  // never throws, so a suspended run should never reach here — the guard is
+  // belt-and-suspenders and keeps this write idempotent under pg-boss retry).
+  try {
+    await executeAutomationFlow({
+      automationId,
+      runId,
+      workspaceId,
+      ownerId: automation.createdBy,
+      payload: (run.triggerPayload as Record<string, unknown>) ?? {},
+      automationContext,
+      completedNodeIds,
+    });
+  } catch (err) {
+    await db
+      .update(automationRuns)
+      .set({
+        status: "failed",
+        errorMessage: err instanceof Error ? err.message : String(err),
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(automationRuns.id, runId),
+          eq(automationRuns.status, "running"),
+          RUN_NOT_DELAY_SUSPENDED
+        )
+      );
+    throw err; // Rethrow so pg-boss still records the job failure.
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

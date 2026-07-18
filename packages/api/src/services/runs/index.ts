@@ -103,6 +103,13 @@ async function listAutomationRuns(
       workspaceId: automationRuns.workspaceId,
       error: automationRuns.errorMessage,
       outputSummary: automationRuns.outputSummary,
+      triggeredBy: automationRuns.triggeredBy,
+      stepsCompleted: automationRuns.stepsCompleted,
+      stepsFailed: automationRuns.stepsFailed,
+      // NULL snapshot → NULL version (tolerant); ::int for a numeric field.
+      definitionVersion: drizzleSql<
+        number | null
+      >`(${automationRuns.definitionSnapshot}->>'version')::int`,
       // The automation's ONE durable run channel (runs-substrate rule) — same
       // for every run of this automation, bound via contextObjectId.
       channelId: channels.id,
@@ -148,6 +155,10 @@ async function listAutomationRuns(
         ? (r.outputSummary.summary as string)
         : null,
     error: r.error ?? null,
+    triggeredBy: r.triggeredBy ?? null,
+    stepsCompleted: r.stepsCompleted ?? null,
+    stepsFailed: r.stepsFailed ?? null,
+    definitionVersion: r.definitionVersion ?? null,
   }));
 }
 
@@ -173,6 +184,10 @@ async function listPlaybookRuns(
       subjectEntityId: focusSessions.subjectEntityId,
       projectId: focusSessions.projectId,
       replayOf: playbookRuns.replayOf,
+      // NULL snapshot → NULL version (tolerant); ::int for a numeric field.
+      definitionVersion: drizzleSql<
+        number | null
+      >`(${playbookRuns.definitionSnapshot}->>'version')::int`,
     })
     .from(playbookRuns)
     .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
@@ -211,6 +226,10 @@ async function listPlaybookRuns(
     replayOf: r.replayOf ?? null,
     summary: r.summary ?? null,
     error: r.error ?? null,
+    triggeredBy: null,
+    stepsCompleted: null,
+    stepsFailed: null,
+    definitionVersion: r.definitionVersion ?? null,
   }));
 }
 
@@ -282,6 +301,10 @@ async function listCaptureRuns(
       summary:
         typeof data.summary === "string" ? (data.summary as string) : null,
       error: null,
+      triggeredBy: null,
+      stepsCompleted: null,
+      stepsFailed: null,
+      definitionVersion: null,
     };
   });
 }
@@ -344,6 +367,10 @@ async function listSessionRuns(
     replayOf: null,
     summary: null,
     error: null,
+    triggeredBy: null,
+    stepsCompleted: null,
+    stepsFailed: null,
+    definitionVersion: null,
   }));
 }
 
@@ -427,7 +454,25 @@ export async function getRun(
         detail: { output: s.output, resolvedInputs: s.resolvedInputs },
       }))
       .sort(byAtAsc);
-    return { run, activity };
+    // Detail-only fields not carried on the list-row: the full trigger payload
+    // and the complete outputSummary JSONB (list keeps only outputSummary.summary).
+    const [meta] = await db
+      .select({
+        triggerPayload: automationRuns.triggerPayload,
+        outputSummary: automationRuns.outputSummary,
+      })
+      .from(automationRuns)
+      .where(eq(automationRuns.id, run.id))
+      .limit(1);
+    return {
+      run,
+      activity,
+      trigger: {
+        triggeredBy: run.triggeredBy,
+        payload: meta?.triggerPayload ?? null,
+      },
+      outputSummary: meta?.outputSummary ?? null,
+    };
   }
 
   if (flowType === "capture") {
@@ -435,7 +480,10 @@ export async function getRun(
       () => listCaptureRuns(userId, {}, 200),
       id
     );
-    if (!run || !run.correlationId) return run ? { run, activity: [] } : null;
+    if (!run || !run.correlationId)
+      return run
+        ? { run, activity: [], trigger: null, outputSummary: null }
+        : null;
     const rows = await db
       .select({
         id: events.id,
@@ -470,7 +518,7 @@ export async function getRun(
         };
       })
       .sort(byAtAsc);
-    return { run, activity };
+    return { run, activity, trigger: null, outputSummary: null };
   }
 
   // playbook / session — the run's story is its channel; return the run with a
@@ -492,7 +540,7 @@ export async function getRun(
       detail: null,
     },
   ];
-  return { run, activity };
+  return { run, activity, trigger: null, outputSummary: null };
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
