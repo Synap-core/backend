@@ -342,7 +342,15 @@ export const automationsRouter = router({
       // request-supplied workspaceId (that gates nothing).
       const existing = await database.query.automations.findFirst({
         where: eq(automations.id, input.id),
-        columns: { id: true, workspaceId: true, createdBy: true },
+        columns: {
+          id: true,
+          workspaceId: true,
+          createdBy: true,
+          version: true,
+          flowDefinition: true,
+          triggerType: true,
+          triggerConfig: true,
+        },
       });
       if (!existing) {
         throw new TRPCError({
@@ -389,6 +397,21 @@ export const automationsRouter = router({
       if (input.status !== undefined) updates.status = input.status;
       if (input.metadata !== undefined) updates.metadata = input.metadata;
       if (input.state !== undefined) updates.state = input.state;
+
+      // D3c: bump the monotonic definition version when a definition-affecting
+      // field actually changes (compared against the loaded row, so a rename or
+      // status toggle doesn't inflate it). Stamped into each run's
+      // definitionSnapshot so "what ran" can be diffed against "today".
+      const definitionChanged =
+        (updates.flowDefinition !== undefined &&
+          JSON.stringify(updates.flowDefinition) !==
+            JSON.stringify(existing.flowDefinition)) ||
+        (updates.triggerType !== undefined &&
+          updates.triggerType !== existing.triggerType) ||
+        (updates.triggerConfig !== undefined &&
+          JSON.stringify(updates.triggerConfig) !==
+            JSON.stringify(existing.triggerConfig));
+      if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
 
       await database
         .update(automations)

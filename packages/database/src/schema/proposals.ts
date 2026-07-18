@@ -32,6 +32,18 @@ export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
 
 /**
+ * One entry in a proposal's `revision_history` — a before/after snapshot of a
+ * `reviseProposal` edit. `before` holds only the fields the patch changed, with
+ * their prior values; `patch` is the applied change. `by` is the actor id.
+ */
+export interface ProposalRevision {
+  at: string;
+  by: string | null;
+  before: Record<string, unknown>;
+  patch: Record<string, unknown>;
+}
+
+/**
  * Universal Proposals Table
  *
  * Stores all pending update requests (proposals) for any entity type.
@@ -102,6 +114,12 @@ export const proposals = pgTable(
     correlationId: uuid("correlation_id"),
     requestedEventId: uuid("requested_event_id"),
     sessionId: uuid("session_id"),
+    // Workflow attribution spine (D3a): the automation step run + flow node that
+    // produced this proposal. Soft references (no FK) — the same pattern as
+    // sessionId/correlationId above; automation_step_runs cascade-delete with
+    // their run, so a soft ref keeps the proposal row durable as a trace.
+    stepRunId: uuid("step_run_id"),
+    nodeId: text("node_id"),
     // Project lens-context (project-centric-scope): the active project (or a
     // surface override) at proposal time. At materialization the worker stamps
     // `entity --belongs_to_project--> project` from this (falling back to the
@@ -116,6 +134,13 @@ export const proposals = pgTable(
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     rejectionReason: text("rejection_reason"),
     comments: jsonb("comments").default("[]"),
+    // Revision history (D3b): append-only before/after snapshots of every
+    // reviseProposal edit — the "human corrected the AI" quality signal the
+    // analyzer loop feeds on. Each entry: { at, by, before, patch }.
+    revisionHistory: jsonb("revision_history")
+      .$type<ProposalRevision[]>()
+      .notNull()
+      .default([]),
 
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -159,6 +184,7 @@ export const proposals = pgTable(
     ),
     sessionIdIdx: index("proposals_session_id_idx").on(table.sessionId),
     projectIdIdx: index("proposals_project_id_idx").on(table.projectId),
+    stepRunIdIdx: index("idx_proposals_step_run_id").on(table.stepRunId),
   })
 );
 
@@ -180,11 +206,14 @@ export interface Proposal {
   correlationId: string | null;
   requestedEventId: string | null;
   sessionId: string | null;
+  stepRunId: string | null;
+  nodeId: string | null;
   expiresAt: Date | null;
   reviewedBy: string | null;
   reviewedAt: Date | null;
   rejectionReason: string | null;
   comments: unknown;
+  revisionHistory: ProposalRevision[];
   createdAt: Date;
   updatedAt: Date;
 }

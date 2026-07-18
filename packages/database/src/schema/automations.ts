@@ -20,6 +20,7 @@ import {
   timestamp,
   jsonb,
   integer,
+  numeric,
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
@@ -419,6 +420,12 @@ export const automations = pgTable(
       .default("draft"),
     errorMessage: text("error_message"),
 
+    // Monotonic definition version (D3c). Bumped on a governed update that
+    // changes a definition-affecting field (flowDefinition/triggerType/
+    // triggerConfig); a run snapshots it into automation_runs.definitionSnapshot.
+    // Distinct from the legacy free-form metadata.version bag.
+    version: integer("version").notNull().default(1),
+
     // Execution stats
     lastRunAt: timestamp("last_run_at", { mode: "date", withTimezone: true }),
     nextRunAt: timestamp("next_run_at", { mode: "date", withTimezone: true }),
@@ -500,6 +507,16 @@ export const automationRuns = pgTable(
     stepsFailed: integer("steps_failed").default(0).notNull(),
     outputSummary: jsonb("output_summary").$type<Record<string, unknown>>(),
 
+    // The automation definition this run executed (D3c) —
+    // { version, flowDefinition }. Plain JSON snapshot so "what ran" survives
+    // later edits to the automation. Stamped once at execution start.
+    definitionSnapshot: jsonb("definition_snapshot").$type<{
+      version: number;
+      flowDefinition: FlowDefinition;
+    }>(),
+    /** Soft self-reference to the run this one replays (schema support only). */
+    replayOf: uuid("replay_of"),
+
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -548,6 +565,12 @@ export const automationStepRuns = pgTable(
       .default({})
       .notNull(),
     errorMessage: text("error_message"),
+
+    // Per-step token/cost attribution (D3, cheap-now). Populated only where node
+    // execution surfaces usage; NULL otherwise (IS-side telemetry, out of scope
+    // for Wave 1). numeric maps to string in Drizzle.
+    tokensUsed: integer("tokens_used"),
+    costUsd: numeric("cost_usd"),
 
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     completedAt: timestamp("completed_at", {

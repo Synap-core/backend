@@ -84,6 +84,10 @@ export interface AutomationGovernanceOpts {
   /** The focus session this run opened (see openRunSession) — stamped onto
    *  the created proposal so it groups under the session's reviewable card. */
   sessionId?: string;
+  /** Workflow attribution (D3a): the executing step run + flow node id, stamped
+   *  onto the proposal so a rejected proposal traces to the exact step. */
+  stepRunId?: string;
+  nodeId?: string;
 }
 
 /**
@@ -109,6 +113,8 @@ export async function checkAutomationWriteOrPropose(
     automationRunId,
     correlationId,
     sessionId,
+    stepRunId,
+    nodeId,
   } = opts;
 
   // Map action → required RBAC permission (canonical map in @synap/governance-policy).
@@ -181,6 +187,8 @@ export async function checkAutomationWriteOrPropose(
       automationRunId,
       correlationId,
       sessionId,
+      stepRunId,
+      nodeId,
     });
   }
 
@@ -206,6 +214,9 @@ async function proposeAutomationWrite(opts: {
   /** The focus session this run opened — stamped onto the proposal row so it
    *  groups under the session's reviewable card. */
   sessionId?: string;
+  /** Workflow attribution (D3a): the executing step run + flow node id. */
+  stepRunId?: string;
+  nodeId?: string;
 }): Promise<{ proposed: true; proposalId: string }> {
   const {
     agentUserId,
@@ -217,6 +228,8 @@ async function proposeAutomationWrite(opts: {
     automationRunId,
     correlationId,
     sessionId,
+    stepRunId,
+    nodeId,
   } = opts;
 
   const singularType = subjectType.endsWith("s")
@@ -251,6 +264,8 @@ async function proposeAutomationWrite(opts: {
     agentUserId,
     correlationId: resolvedCorrelationId,
     sessionId: sessionId ?? null,
+    stepRunId: stepRunId ?? null,
+    nodeId: nodeId ?? null,
   });
 
   // Supplementary realtime nudge — the Reactions queue itself is DB-driven, so

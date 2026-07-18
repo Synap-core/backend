@@ -53,6 +53,14 @@ export const playbookRuns = pgTable(
     summary: text("summary"),
     /** Executor-reported error on failure. */
     error: text("error"),
+    /**
+     * The resolved playbook definition this run executed (D3c) —
+     * { version, goalTemplate, stages, params, expectedOutputs }. Plain JSON
+     * snapshot so "what ran" survives later edits to the playbook config.
+     */
+    definitionSnapshot: jsonb("definition_snapshot"),
+    /** Soft self-reference to the run this one replays (schema support only). */
+    replayOf: uuid("replay_of"),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

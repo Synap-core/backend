@@ -1086,6 +1086,47 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "ai_posture",
     addedBy: "0183_ai_teaching_substrate_columns.sql",
   },
+
+  // WORKFLOW-AS-PLACE Wave 1 attribution spine (0198): step→proposal
+  // attribution, proposal revision history, workflow-definition versioning, and
+  // per-run definition snapshots. Absence means a pod is on a pre-0198 schema
+  // where the executor's proposal step-refs / version bumps / snapshot writes
+  // would hit missing columns.
+  {
+    table: "proposals",
+    column: "step_run_id",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "proposals",
+    column: "revision_history",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "playbooks",
+    column: "version",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "automations",
+    column: "version",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "playbook_runs",
+    column: "definition_snapshot",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "automation_runs",
+    column: "definition_snapshot",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "automation_step_runs",
+    column: "tokens_used",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

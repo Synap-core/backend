@@ -21,6 +21,7 @@ import {
   text,
   jsonb,
   timestamp,
+  integer,
   index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -50,6 +51,14 @@ export const playbooks = pgTable(
     expectedOutputs: jsonb("expected_outputs").notNull().default([]),
     /** PlaybookStage[] — first-class ordered stages (empty = progress-only). */
     stages: jsonb("stages").notNull().default([]),
+    /**
+     * Monotonic definition version (D3c). Bumped on a governed update that
+     * changes a definition-affecting field (goalTemplate/stages/params/
+     * inputStrategy/channelSpec/expectedOutputs). A run snapshots this into
+     * playbook_runs.definitionSnapshot so "what ran" can be diffed against
+     * "the definition today".
+     */
+    version: integer("version").notNull().default(1),
     /** PlaybookSchedule | null — { cron, enabled }. */
     schedule: jsonb("schedule"),
     executor: text("executor", {

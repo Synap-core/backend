@@ -1702,6 +1702,9 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "requested_event_id" uuid;
 -- (proposals.session_id REFERENCES focus_sessions — added after the
 --  focus_sessions section below; FK target is created later in this file.)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "project_id" uuid;  -- 0138 (project lens-context)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "step_run_id" uuid;  -- 0198 (workflow attribution: soft ref → automation_step_runs)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "node_id" text;  -- 0198 (workflow attribution: producing flow node)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "revision_history" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0198 (edit before/after history)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
@@ -1718,6 +1721,10 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_target"
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_thread_id"
   ON "proposals" ("thread_id");
+
+CREATE INDEX IF NOT EXISTS "idx_proposals_step_run_id"
+  ON "proposals" ("step_run_id")
+  WHERE "step_run_id" IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_command_run_id"
   ON "proposals" ("command_run_id");
@@ -2004,6 +2011,7 @@ ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "state" jsonb NOT NULL DEFAUL
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "version" integer NOT NULL DEFAULT 1;  -- 0198 (workflow-definition versioning)
 
 CREATE INDEX IF NOT EXISTS "automations_workspace_id_idx"
   ON "automations" ("workspace_id");
@@ -2046,6 +2054,8 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "steps_failed" integer DE
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "output_summary" jsonb;
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;  -- 0198 (per-run executed definition)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;  -- 0198 (replay lineage; soft self-ref)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");
@@ -2078,6 +2088,8 @@ ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "output" jsonb DEFAU
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "error_message" text;
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone;
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_used" integer;  -- 0198 (per-step token attribution)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "cost_usd" numeric;  -- 0198 (per-step cost attribution)
 
 CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
   ON "automation_step_runs" ("run_id");
@@ -3611,6 +3623,9 @@ CREATE INDEX IF NOT EXISTS idx_playbooks_flow_automation_id ON playbooks (flow_a
 ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS subject_profile jsonb;
 -- First-class playbook stages (0159): PlaybookStage[] (empty = progress-only).
 ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS stages jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Workflow-definition versioning (0198): monotonic counter bumped on a governed
+-- definition change; the per-run definition_snapshot diffs against it.
+ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS "links" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -3661,6 +3676,9 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_session_id"
   WHERE "session_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
   ON "playbook_runs" ("workspace_id", "status");
+-- Per-run executed definition snapshot + replay lineage (0198).
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;
 
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the

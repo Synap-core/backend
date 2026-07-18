@@ -17,6 +17,7 @@ import {
   desc,
   drizzleSql,
 } from "@synap/database";
+import type { ProposalRevision } from "@synap/database";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -79,21 +80,57 @@ export async function reviseProposal(params: {
   proposalId: string;
   summary?: string;
   reasoning?: string;
+  /** The actor filing the revision — recorded as `by` on the history entry. */
+  actorId?: string | null;
 }): Promise<void> {
   const patch: { summary?: string; reasoning?: string } = {};
   if (params.summary !== undefined) patch.summary = params.summary;
   if (params.reasoning !== undefined) patch.reasoning = params.reasoning;
 
-  await db
-    .update(proposals)
-    .set({
-      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(proposals.id, params.proposalId),
-        eq(proposals.status, ProposalStatus.PENDING)
+  // Read-then-write in one transaction so the before/after snapshot is captured
+  // atomically against a concurrent revision. Load the current data payload to
+  // record the prior values of only the fields this patch changes (D3b — the
+  // "human corrected the AI" quality signal the analyzer loop feeds on).
+  await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ data: proposals.data })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.id, params.proposalId),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
       )
-    );
+      .limit(1);
+    // No pending row → nothing to revise (the UPDATE below is also a no-op).
+    if (!existing) return;
+
+    const prior = (existing.data ?? {}) as Record<string, unknown>;
+    const before: Record<string, unknown> = {};
+    for (const key of Object.keys(patch)) {
+      before[key] = prior[key];
+    }
+    const revision: ProposalRevision = {
+      at: new Date().toISOString(),
+      by: params.actorId ?? null,
+      before,
+      patch,
+    };
+
+    // postgres.js 3.4.8 sql.json() is broken on the pod image — always
+    // JSON.stringify + ::jsonb. In Drizzle .set() use drizzleSql, not raw sql.
+    await tx
+      .update(proposals)
+      .set({
+        data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+        revisionHistory: drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([revision])}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(proposals.id, params.proposalId),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
+      );
+  });
 }

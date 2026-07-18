@@ -1136,6 +1136,26 @@ export const playbooksRouter = router({
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
 
+      // D3c: bump the monotonic definition version when a definition-affecting
+      // field actually changes (compared against the loaded row, so a no-op
+      // save doesn't inflate it). The version is stamped into each run's
+      // definitionSnapshot so "what ran" can be diffed against "today".
+      const DEFINITION_FIELDS = [
+        "goalTemplate",
+        "stages",
+        "params",
+        "inputStrategy",
+        "channelSpec",
+        "expectedOutputs",
+      ] as const;
+      const definitionChanged = DEFINITION_FIELDS.some(
+        (f) =>
+          set[f] !== undefined &&
+          JSON.stringify(set[f]) !==
+            JSON.stringify((existing as Record<string, unknown>)[f])
+      );
+      if (definitionChanged) set.version = (existing.version ?? 1) + 1;
+
       const [updated] = await database
         .update(playbooks)
         .set(set)

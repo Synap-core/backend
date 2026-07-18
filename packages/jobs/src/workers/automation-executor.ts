@@ -582,7 +582,12 @@ async function executeOutputStep(
   context: StepContext,
   workspaceId: string,
   automationContext: ExecutionPayload["automationContext"],
-  ownerId: string
+  ownerId: string,
+  // Workflow attribution (D3a): the executing flow node + its step-run row, so a
+  // governed write becomes a proposal that traces back to the exact step. In a
+  // loop body the step run is the loop node's (no per-child row), while nodeId
+  // is the child node — the closest honest attribution.
+  attribution?: { nodeId?: string; stepRunId?: string }
 ): Promise<Record<string, unknown>> {
   // Deep-resolve all template variables in config
   const config = deepResolveTemplates(data.config, context) as Record<
@@ -650,6 +655,8 @@ async function executeOutputStep(
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,
+        stepRunId: attribution?.stepRunId,
+        nodeId: attribution?.nodeId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_create denied by governance: ${gate.reason}`);
@@ -719,6 +726,8 @@ async function executeOutputStep(
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,
+        stepRunId: attribution?.stepRunId,
+        nodeId: attribution?.nodeId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_update denied by governance: ${gate.reason}`);
@@ -985,6 +994,8 @@ async function executeOutputStep(
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,
+        stepRunId: attribution?.stepRunId,
+        nodeId: attribution?.nodeId,
       });
       if ("denied" in gate) {
         throw new Error(`session_update denied by governance: ${gate.reason}`);
@@ -1724,6 +1735,15 @@ async function executePlaybookRun(
       status: "running",
       input: resolvedParams,
       createdBy: ownerId,
+      // D3c: snapshot the definition this run executed so it survives later
+      // edits to the playbook config and can be diffed against the current row.
+      definitionSnapshot: {
+        version: playbook.version,
+        goalTemplate: playbook.goalTemplate,
+        stages: playbook.stages,
+        params: playbook.params,
+        expectedOutputs: playbook.expectedOutputs,
+      },
     })
     .returning();
 
@@ -1870,6 +1890,21 @@ async function executeAutomationFlow(params: {
   }
 
   const flow = automation.flowDefinition as FlowDefinition;
+
+  // D3c: snapshot the definition this run executed, once at first execution.
+  // Guarded on the existing value so a delay-resumption re-entry (same runId)
+  // never re-stamps. Covers every trigger path — all funnel through here.
+  if (!run.definitionSnapshot) {
+    await db
+      .update(automationRuns)
+      .set({
+        definitionSnapshot: {
+          version: automation.version,
+          flowDefinition: flow,
+        },
+      })
+      .where(eq(automationRuns.id, runId));
+  }
 
   // ── Open (or resume) a focus session for this run ──────────────────────────
   // Every non-playbook-delegate automation run gets a session so all proposals
@@ -2246,7 +2281,8 @@ async function executeAutomationFlow(params: {
                 context,
                 workspaceId,
                 runContext,
-                ownerId
+                ownerId,
+                { nodeId: node.id, stepRunId: stepRun.id }
               );
               break;
             }
@@ -2350,7 +2386,8 @@ async function executeAutomationFlow(params: {
                           context,
                           workspaceId,
                           runContext,
-                          ownerId
+                          ownerId,
+                          { nodeId: childNode.id, stepRunId: stepRun.id }
                         );
                         break;
                       case "condition": {

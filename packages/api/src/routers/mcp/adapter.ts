@@ -1591,6 +1591,7 @@ export async function executeMCPToolViaHubProtocol(
         proposalId,
         summary: args.summary as string | undefined,
         reasoning: args.reasoning as string | undefined,
+        actorId: userId,
       });
       return ok({ success: true, proposalId });
     }

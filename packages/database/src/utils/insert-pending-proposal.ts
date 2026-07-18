@@ -48,6 +48,10 @@ export interface InsertPendingProposalInput {
   requestedEventId?: string | null;
   sessionId?: string | null;
   projectId?: string | null;
+  /** Workflow attribution (D3a): the automation step run + flow node that
+   *  produced this proposal. Both optional — non-automation proposals omit them. */
+  stepRunId?: string | null;
+  nodeId?: string | null;
   /** Explicit expiry; defaults to now + PROPOSAL_TTL_DAYS when omitted. */
   expiresAt?: Date | null;
 }
@@ -91,6 +95,8 @@ export async function insertPendingProposal(
         : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.stepRunId ? { stepRunId: input.stepRunId } : {}),
+      ...(input.nodeId ? { nodeId: input.nodeId } : {}),
     })
     .returning();
 
