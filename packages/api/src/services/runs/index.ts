@@ -809,6 +809,9 @@ function deriveChangeKind(
   if (
     t === "create" ||
     t === "create_composite" ||
+    // Structured imports create entities (import-orchestrator stamps
+    // "import.graph" with the sessionId set, so it reaches this ledger).
+    t === "import.graph" ||
     t.startsWith("create") ||
     t.endsWith(".create")
   )
