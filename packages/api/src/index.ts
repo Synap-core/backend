@@ -149,6 +149,10 @@ export {
 } from "./utils/jwks-client.js";
 export { normalizeIssuerUrl } from "./utils/issuer-url-safety.js";
 export {
+  fetchFederationMetadata,
+  type FederationMetadata,
+} from "./utils/federation-metadata-client.js";
+export {
   APPLICATION_CONNECTION_SCOPES,
   normalizeApplicationClientId,
   normalizeApplicationOrigin,

@@ -31,6 +31,7 @@ import {
   reconcileCapabilitiesToTemplates,
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
+  fetchFederationMetadata,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 
@@ -188,15 +189,31 @@ async function seedDefaultCorsOrigins(): Promise<void> {
   }
 }
 
+/** Canonical bootstrap scopes granted to the CP as a trusted issuer. */
+const CP_BOOTSTRAP_SCOPES = [
+  TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+  TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
+  TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
+  TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
+];
+
 /**
  * Seed the Control Plane as a built-in trusted issuer.
  *
  * Without this, a self-hosted pod never auto-trusts the CP: federated sign-in
- * only works if the issuer happened to be provisioned by luck. The issuer URL
- * is derived from CONTROL_PLANE_URL (the same value the pod uses to reach the
- * CP) and granted the canonical bootstrap capability set — the exact scopes
- * `bootstrapIssuerCapabilities` grants in the federation router (user exchange
- * + identity link + membership grant + source-config write).
+ * only works if the issuer happened to be provisioned by luck.
+ *
+ * The CP's federation issuer identity is DELIBERATELY independent from the
+ * pod's CONTROL_PLANE_URL (its outbound transport URL): the CP signs assertions
+ * with `getControlPlaneIssuerUrl()` (CP_ISSUER_URL / api.${APP_DOMAIN}), which
+ * legitimately differs under multi-region / custom-domain / internal-hostname /
+ * self-hosted-split deployments. So we DISCOVER the declared issuer by fetching
+ * `${CONTROL_PLANE_URL}/federation/metadata` over the SSRF-safe client and seed
+ * THAT `iss` (plus the CP's declared scopes). On ANY failure — fetch error,
+ * non-2xx, malformed body, or a CP too old to serve the endpoint — we fall back
+ * to the historical behavior: derive the issuer from CONTROL_PLANE_URL and use
+ * the hardcoded bootstrap scope set. We do NOT require issuer == transport
+ * origin; decoupling them is the whole point.
  *
  * Skipped silently when CONTROL_PLANE_URL is unset — a self-hosted pod with no
  * Control Plane is a legitimate configuration. Idempotent (`seedBuiltIn` only
@@ -208,7 +225,33 @@ async function seedControlPlaneIssuer(): Promise<void> {
   if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to trust
 
   try {
-    const issuerUrl = normalizeIssuerUrl(controlPlaneUrl);
+    // Prefer the CP-DECLARED issuer (transport URL may differ from signing iss).
+    let issuerUrl: string | null = null;
+    let allowedScopes: string[] = CP_BOOTSTRAP_SCOPES;
+    let source: "declared" | "transport" = "declared";
+
+    try {
+      const metadata = await fetchFederationMetadata(controlPlaneUrl);
+      issuerUrl = metadata.issuer;
+      allowedScopes = metadata.scopes;
+    } catch (discoveryErr) {
+      // CP too old, unreachable, or malformed metadata — fall back to deriving
+      // the issuer from the transport URL (historical behavior).
+      source = "transport";
+      issuerUrl = normalizeIssuerUrl(controlPlaneUrl);
+      allowedScopes = CP_BOOTSTRAP_SCOPES;
+      logger.warn(
+        {
+          controlPlaneUrl,
+          err:
+            discoveryErr instanceof Error
+              ? discoveryErr.message
+              : String(discoveryErr),
+        },
+        "Federation metadata discovery failed — falling back to CONTROL_PLANE_URL as the issuer"
+      );
+    }
+
     if (!issuerUrl) {
       logger.warn(
         { controlPlaneUrl },
@@ -222,18 +265,15 @@ async function seedControlPlaneIssuer(): Promise<void> {
         issuerUrl,
         displayName: "Synap Control Plane",
         description:
-          "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Seeded from CONTROL_PLANE_URL.",
-        allowedScopes: [
-          TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
-          TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
-          TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
-          TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
-        ],
+          source === "declared"
+            ? "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Discovered from /federation/metadata."
+            : "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Seeded from CONTROL_PLANE_URL.",
+        allowedScopes,
       },
     ]);
 
     logger.info(
-      { issuerUrl },
+      { issuerUrl, source, scopeCount: allowedScopes.length },
       "Seeded Control Plane as built-in trusted issuer"
     );
   } catch (err) {

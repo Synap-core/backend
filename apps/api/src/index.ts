@@ -45,6 +45,8 @@ import {
   chatStreamApp,
   openaiCompatApp,
   webhooksInboundRouter,
+  fetchFederationMetadata,
+  normalizeIssuerUrl,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -1627,6 +1629,57 @@ void (async () => {
     apiLogger.debug(
       { err: err instanceof Error ? err.message : String(err) },
       "Kratos CORS coherence probe could not reach kratos (will retry on next boot)"
+    );
+  }
+})();
+
+// Control Plane federation-issuer coherence tripwire — non-fatal.
+//
+// Mirrors the Kratos CORS check above, for a different drift class. The CP signs
+// federation assertions with `getControlPlaneIssuerUrl()` (its CP_ISSUER_URL /
+// api.${APP_DOMAIN} identity), which is DELIBERATELY independent from the pod's
+// CONTROL_PLANE_URL transport value. `seedControlPlaneIssuer` now discovers the
+// declared issuer via /federation/metadata so the seed self-corrects, but this
+// probe surfaces the divergence LOUDLY at boot so an operator can see it — the
+// symptom otherwise is silent 401s on every federated /exchange.
+//
+// Read-only diagnostics: it fetches the CP's declared issuer and compares it to
+// the transport-derived origin. It does NOT mutate the trusted-issuer registry.
+// Skipped when CONTROL_PLANE_URL is unset (self-hosted without a CP).
+void (async () => {
+  const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
+  if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to probe
+
+  const transportIssuer = normalizeIssuerUrl(controlPlaneUrl);
+  try {
+    const metadata = await fetchFederationMetadata(controlPlaneUrl);
+    if (transportIssuer && metadata.issuer !== transportIssuer) {
+      apiLogger.warn(
+        {
+          declaredIssuer: metadata.issuer,
+          transportIssuer,
+          controlPlaneUrl,
+        },
+        "Control Plane federation-issuer coherence: DRIFT — the CP signs with a " +
+          "different issuer than CONTROL_PLANE_URL implies. Federated sign-in " +
+          "relies on the DISCOVERED issuer (seeded from /federation/metadata); " +
+          "verify the CP's CP_ISSUER_URL if this is unexpected."
+      );
+    } else {
+      apiLogger.info(
+        { issuer: metadata.issuer },
+        "Control Plane federation-issuer coherence check passed"
+      );
+    }
+  } catch (err) {
+    // Don't block boot on a probe failure — the CP may be unreachable or too
+    // old to serve /federation/metadata; the seed already fell back gracefully.
+    apiLogger.debug(
+      {
+        err: err instanceof Error ? err.message : String(err),
+        controlPlaneUrl,
+      },
+      "Control Plane federation-issuer coherence probe could not fetch metadata (non-fatal)"
     );
   }
 })();
