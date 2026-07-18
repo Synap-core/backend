@@ -10,27 +10,36 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockDb, mockGetDb, mockScopedDb, mockPredicate, mockAccessFrom } =
-  vi.hoisted(() => {
-    const predicate = vi.fn(() => ({ __visibility: true }));
-    return {
-      mockPredicate: predicate,
-      mockScopedDb: vi.fn(() => ({ predicate })),
-      mockAccessFrom: vi.fn((ctx: unknown) => ({ __access: ctx })),
-      mockDb: {
-        query: {
-          // workspaceProcedure middleware membership + archive checks
-          workspaceMembers: {
-            findFirst: vi.fn().mockResolvedValue({ role: "editor" }),
-          },
-          workspaces: {
-            findFirst: vi.fn().mockResolvedValue({ archivedAt: null }),
-          },
+const {
+  mockDb,
+  mockGetDb,
+  mockScopedDb,
+  mockPredicate,
+  mockAccessFrom,
+  mockLoadFacetSlugsBatch,
+} = vi.hoisted(() => {
+  const predicate = vi.fn(() => ({ __visibility: true }));
+  return {
+    mockPredicate: predicate,
+    mockScopedDb: vi.fn(() => ({ predicate })),
+    mockAccessFrom: vi.fn((ctx: unknown) => ({ __access: ctx })),
+    // Facet-slug resolver — canonical visibility-scoped read. Default: no
+    // facets (empty map) so kind-only tests are untouched.
+    mockLoadFacetSlugsBatch: vi.fn(async () => new Map<string, string[]>()),
+    mockDb: {
+      query: {
+        // workspaceProcedure middleware membership + archive checks
+        workspaceMembers: {
+          findFirst: vi.fn().mockResolvedValue({ role: "editor" }),
+        },
+        workspaces: {
+          findFirst: vi.fn().mockResolvedValue({ archivedAt: null }),
         },
       },
-      mockGetDb: vi.fn(),
-    };
-  });
+    },
+    mockGetDb: vi.fn(),
+  };
+});
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -38,6 +47,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: mockDb,
     getDb: mockGetDb,
+    loadFacetSlugsBatch: mockLoadFacetSlugsBatch,
     and: vi.fn((...conditions) => ({ and: conditions.filter(Boolean) })),
     eq: vi.fn((column, value) => ({ eq: [column, value] })),
     desc: vi.fn((column) => ({ desc: column })),
@@ -88,6 +98,7 @@ describe("playbooks.matchForEntity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPredicate.mockReturnValue({ __visibility: true });
+    mockLoadFacetSlugsBatch.mockResolvedValue(new Map<string, string[]>());
     mockDb.query.workspaceMembers.findFirst.mockResolvedValue({
       role: "editor",
     });
@@ -132,14 +143,74 @@ describe("playbooks.matchForEntity", () => {
     expect(mockPredicate).toHaveBeenCalledTimes(1);
 
     // WHERE composes the visibility predicate + status='active' + the
-    // subject_profile->>'profileSlug' filter carrying the requested slug.
+    // subject_profile->>'profileSlug' = ANY(matchSet) filter. With no entityId
+    // the match set is just the requested kind slug: ANY(["post"]).
     const where = chain._captured.where as { and: unknown[] };
     expect(where.and).toContainEqual({ __visibility: true });
     expect(where.and).toContainEqual(
       expect.objectContaining({ eq: expect.arrayContaining(["active"]) })
     );
     expect(where.and).toContainEqual(
-      expect.objectContaining({ values: expect.arrayContaining(["post"]) })
+      expect.objectContaining({ values: expect.arrayContaining([["post"]]) })
+    );
+
+    // No entityId → no facet resolution.
+    expect(mockLoadFacetSlugsBatch).not.toHaveBeenCalled();
+  });
+
+  it("widens the match set with an entity's facet-role slugs when entityId is given", async () => {
+    // The captured entity is a `person` (kind) wearing a `lead` role-facet.
+    // A playbook whose subject is the facet role (`Enrich this lead`) must now
+    // surface even though the caller passes only the KIND slug.
+    const ENTITY = "00000000-0000-4000-8000-0000000000aa";
+    mockLoadFacetSlugsBatch.mockResolvedValue(
+      new Map<string, string[]>([[ENTITY, ["lead"]]])
+    );
+    const chain = selectChain([
+      {
+        id: "pb-lead",
+        name: "Enrich this lead",
+        goalTemplate: "Enrich {{subject}}",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: { profileSlug: "lead" },
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      profileSlug: "person",
+      entityId: ENTITY,
+      workspaceId: WORKSPACE,
+    });
+
+    // The facet-subject playbook surfaces via the widened match set.
+    expect(result).toEqual([
+      {
+        id: "pb-lead",
+        name: "Enrich this lead",
+        goalTemplate: "Enrich {{subject}}",
+        subjectProfileSlug: "lead",
+        params: [],
+        executor: "is-agent",
+      },
+    ]);
+
+    // Facets resolved through the canonical visibility-scoped door, with the
+    // caller's workspace lens + user floor.
+    expect(mockLoadFacetSlugsBatch).toHaveBeenCalledWith(
+      expect.anything(),
+      [ENTITY],
+      { userId: "user-1", workspaceId: WORKSPACE }
+    );
+
+    // WHERE matches ANY of {kind slug, facet slugs} = ["person", "lead"].
+    const where = chain._captured.where as { and: unknown[] };
+    expect(where.and).toContainEqual(
+      expect.objectContaining({
+        values: expect.arrayContaining([["person", "lead"]]),
+      })
     );
   });
 

@@ -454,7 +454,7 @@ export async function getRun(
         detail: {
           output: s.output,
           resolvedInputs: s.resolvedInputs,
-          // Per-step timing for the RunDetailPanel duration bars (2.D-fe).
+          // Per-step timing for the RunDetailPanel duration bars.
           startedAt: s.startedAt,
           completedAt: s.completedAt,
         },

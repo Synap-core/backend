@@ -36,6 +36,7 @@ import {
   vaultGrants,
   workspaceMembers,
   links,
+  loadFacetSlugsBatch,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -919,15 +920,31 @@ export const playbooksRouter = router({
    * deliberate — a pod-wide (NULL-workspace) template-seeded playbook MUST match
    * for any workspace's entity, and narrowing to a single workspace lens would
    * drop globals (the `playbooks` VisibilityRule has `includeGlobalsInLens`
-   * off). Filter: status='active' AND subject_profile->>'profileSlug' = slug.
-   * Returns the lean candidate shape the capture picker needs; [] when none.
+   * off).
+   *
+   * FACET-AWARE (the funnel-entry fix): a captured entity is ONE kind (e.g.
+   * `person`) but may wear role-facets (`lead`, `competitor`), and playbooks are
+   * keyed to EITHER a kind or a role slug (`subjectProfile.profileSlug`). The
+   * capture caller passes only the KIND slug, so a playbook whose subject is a
+   * facet-role (`Enrich this lead`, `Qualify this lead`, `Research Competitor`)
+   * would never surface. When `entityId` is given we resolve that entity's live
+   * facet-role slugs and match on the UNION {passed kind slug} ∪ {facet slugs}.
+   * This is what makes the `entityId` input load-bearing (previously accepted
+   * only to round-trip into `instantiate`/`run`). Facet reads go through the
+   * canonical `loadFacetSlugsBatch` — the SAME workspace-lens + owner-floor door
+   * every other facet read uses, never a raw `entity_facets` query.
+   *
+   * Filter: status='active' AND subject_profile->>'profileSlug' = ANY(matchSet).
+   * With no `entityId` (or no facets) the set is just `[profileSlug]`, so the
+   * match is unchanged (backward compatible). Returns the lean candidate shape
+   * the capture picker needs; [] when none.
    */
   matchForEntity: workspaceProcedure
     .input(
       z.object({
         profileSlug: z.string().min(1),
-        // Accepted so the caller can round-trip it into `instantiate`/`run` as
-        // `subjectId`; matching is by profile, so it does not narrow this query.
+        // When provided, its live facet-role slugs WIDEN the match set (below);
+        // also round-tripped by the caller into `instantiate`/`run` as `subjectId`.
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
       })
@@ -936,6 +953,22 @@ export const playbooksRouter = router({
       const database = await getDb();
       const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
 
+      // Build the match set: the passed KIND slug plus, when an entity is given,
+      // its live facet-role slugs (deduped). loadFacetSlugsBatch enforces the
+      // canonical facet visibility lens (this workspace's facets + pod-wide,
+      // owner-floored), so a caller can only widen the set with facets it can see.
+      const matchSlugs = [input.profileSlug];
+      if (input.entityId) {
+        const facetSlugsByEntity = await loadFacetSlugsBatch(
+          database,
+          [input.entityId],
+          { userId: ctx.userId, workspaceId: ctx.workspaceId }
+        );
+        for (const slug of facetSlugsByEntity.get(input.entityId) ?? []) {
+          if (!matchSlugs.includes(slug)) matchSlugs.push(slug);
+        }
+      }
+
       const rows = await database
         .select()
         .from(playbooks)
@@ -943,7 +976,7 @@ export const playbooksRouter = router({
           and(
             visibility,
             eq(playbooks.status, "active"),
-            drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${input.profileSlug}`
+            drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ANY(${matchSlugs})`
           )
         )
         .orderBy(desc(playbooks.updatedAt));
