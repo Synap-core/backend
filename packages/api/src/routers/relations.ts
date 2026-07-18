@@ -71,7 +71,13 @@ import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { VISIBLE_TO, accessScopeWhere } from "../utils/project-scope.js";
+import {
+  VISIBLE_TO,
+  BELONGS_TO_PROJECT,
+  accessScopeWhere,
+} from "../utils/project-scope.js";
+import { emitAiCorrection } from "../utils/ai-feedback-events.js";
+import { AI_KIND } from "../lib/ai-events.js";
 import { auditLog } from "../utils/audit-log.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
@@ -1377,6 +1383,44 @@ export const relationsRouter = router({
       });
 
       await relationRepo.delete(input.id, ctx.userId);
+
+      // Feedback signal (project dimension) — a human unfiled an entity from a
+      // project that an AI project-placement decision had chosen. Join key is the
+      // source entity's correlationId (the decision's id). Best-effort + swallow-
+      // never-throw (mirrors the entity-reroute correction) — never fail the
+      // delete. Discriminated by `dim: "project"` + AI_KIND.PROJECT so the future
+      // shared reader can filter it apart from workspace (route) corrections.
+      if (
+        relationToDelete.type === BELONGS_TO_PROJECT &&
+        relationToDelete.sourceEntityId
+      ) {
+        try {
+          const sourceEntity = await database.query.entities.findFirst({
+            where: eq(entities.id, relationToDelete.sourceEntityId),
+            columns: { correlationId: true },
+          });
+          if (sourceEntity?.correlationId) {
+            await emitAiCorrection({
+              action: "unfile",
+              userId: ctx.userId,
+              subjectId: relationToDelete.sourceEntityId,
+              workspaceId: relationToDelete.workspaceId,
+              data: {
+                kind: AI_KIND.PROJECT,
+                dim: "project",
+                entityId: relationToDelete.sourceEntityId,
+                fromProjectId: relationToDelete.targetEntityId,
+                correlationId: sourceEntity.correlationId,
+              },
+            });
+          }
+        } catch (err) {
+          console.warn(
+            "[relations.delete] ai_correction (project) emit failed (delete preserved):",
+            err
+          );
+        }
+      }
 
       // 2b. Reverse-sync: if this relation type maps to a property, auto-clear it.
       // Only entity↔entity relations map to entity_id properties — skip when an
