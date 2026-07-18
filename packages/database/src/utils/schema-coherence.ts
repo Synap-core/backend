@@ -1152,6 +1152,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "cost_usd",
     addedBy: "0198_workflow_attribution_spine.sql",
   },
+  // P4-lite W0 — cross-pod project refs. NOTE: `projects` is created by 0151,
+  // not the baseline, so this tripwire is the column's only startup guard.
+  {
+    table: "projects",
+    column: "slug",
+    addedBy: "0200_project_slug.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

@@ -2079,7 +2079,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "closed" | "paused" | "cancelled" | "forming" | "scheduled";
+			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -2246,7 +2246,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -2258,6 +2257,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -7418,7 +7418,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -7472,7 +7472,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -8118,7 +8118,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -8172,7 +8172,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -8219,7 +8219,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -8273,7 +8273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -8330,7 +8330,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -8384,7 +8384,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -17945,7 +17945,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
+				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -17955,8 +17955,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "ai" | "governance" | "inbox";
-					priority: "normal" | "low" | "high" | "urgent";
+					category: "data" | "system" | "governance" | "ai" | "inbox";
+					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -21119,6 +21119,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					name: string;
 					description: string | null;
+					slug: string | null;
 					status: "active" | "completed" | "archived";
 					settings: unknown;
 					metadata: unknown;
@@ -21137,6 +21138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					name: string;
 					description: string | null;
+					slug: string | null;
 					status: "active" | "completed" | "archived";
 					settings: unknown;
 					metadata: unknown;
@@ -21161,6 +21163,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "completed" | "archived";
 					metadata: unknown;
 					description: string | null;
+					slug: string | null;
 					settings: unknown;
 				};
 			};

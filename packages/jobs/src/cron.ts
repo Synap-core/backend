@@ -16,6 +16,10 @@ import {
   CP_CATALOG_SYNC_CRON,
 } from "./workers/cp-catalog-sync.js";
 import {
+  CP_PROJECT_SYNC_QUEUE,
+  CP_PROJECT_SYNC_CRON,
+} from "./workers/cp-project-sync.js";
+import {
   PAGERANK_CENTRALITY_QUEUE,
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
@@ -240,6 +244,16 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: cp-catalog-sync (every 10min)");
   await sendSafe(boss, CP_CATALOG_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-catalog-sync");
+
+  // CP project directory sync — announce the pod's full project list to the
+  // Control Plane every 30 minutes (reconcile), AND once now on startup so a
+  // freshly provisioned pod appears in the directory without waiting. Project
+  // CRUD additionally enqueues one-off runs via the repository trigger (see
+  // workers/index.ts). No-ops when the pod has no CP config (self-hosted).
+  await scheduleSafe(boss, CP_PROJECT_SYNC_QUEUE, CP_PROJECT_SYNC_CRON, {});
+  logger.info("Registered cron: cp-project-sync (every 30min)");
+  await sendSafe(boss, CP_PROJECT_SYNC_QUEUE, {});
+  logger.info("Enqueued startup run: cp-project-sync");
 
   // PageRank centrality (every 6h + one startup run so a cold pod populates
   // entity_centrality without waiting for the first tick — this is also the

@@ -11,7 +11,9 @@ import {
   timestamp,
   jsonb,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const projects = pgTable(
   "projects",
@@ -27,6 +29,14 @@ export const projects = pgTable(
     // Project info
     name: text("name").notNull(),
     description: text("description"),
+
+    /**
+     * Cross-pod addressable ref (P4-lite W0). Generated from `name` by the ONE
+     * slugify door (`slugifyProjectName` in utils/project-slug.ts), unique per
+     * user (partial index below), mirrored to the CP `pod_projects` directory.
+     * Nullable: legacy rows are backfilled by migration 0200.
+     */
+    slug: text("slug"),
 
     // Status
     status: text("status", {
@@ -50,6 +60,9 @@ export const projects = pgTable(
   (table) => ({
     userIdIdx: index("projects_user_id_idx").on(table.userId),
     statusIdx: index("projects_status_idx").on(table.status),
+    userSlugUniq: uniqueIndex("projects_user_slug_uniq")
+      .on(table.userId, table.slug)
+      .where(sql`${table.slug} IS NOT NULL`),
   })
 );
 
