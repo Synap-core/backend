@@ -211,6 +211,11 @@ export function fixtureSqlFilters(matchers: FixtureMatcher[]): {
 // IO / execution
 // ────────────────────────────────────────────────────────────────────────────
 
+/** timestamptz columns arrive as Date, computed columns as string — accept both. */
+function isoDate(v: Date | string): string {
+  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
 interface CandidateRow {
   id: string;
   type: string;
@@ -218,7 +223,7 @@ interface CandidateRow {
   workspace_id: string | null;
   document_id: string | null;
   source_file_document_id: string | null;
-  created_at: Date;
+  created_at: Date | string;
 }
 
 interface SweepReport {
@@ -421,9 +426,11 @@ async function main(): Promise<void> {
     blobFailures: 0,
     searchJobsEnqueued: 0,
     searchEnqueueSkipped: false,
-    oldest: candidates.length ? candidates[0].created_at.toISOString() : null,
+    // postgres.js returns COMPUTED columns (the COALESCE dictation-time) as
+    // strings, not Dates — the documented pod gotcha. Normalize either shape.
+    oldest: candidates.length ? isoDate(candidates[0].created_at) : null,
     newest: candidates.length
-      ? candidates[candidates.length - 1].created_at.toISOString()
+      ? isoDate(candidates[candidates.length - 1].created_at)
       : null,
     samples: candidates.slice(0, 10).map((r) => ({
       id: r.id,
