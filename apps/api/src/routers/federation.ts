@@ -1590,17 +1590,17 @@ federationRouter.post("/exchange", async (c) => {
     ? await new TrustedIssuerService().getByUrl(candidateIssuerUrl)
     : null;
   if (!issuer || issuer.status !== "approved") {
-    const requestedClient =
-      typeof decoded.azp === "string"
-        ? normalizeApplicationClientId(decoded.azp)
-        : null;
+    // The issuer itself is missing/unapproved — trusting the issuer is the
+    // prerequisite that failed, regardless of whether a signed `azp` rode
+    // along. APPLICATION_CONNECTION_APPROVAL_REQUIRED means "issuer IS trusted
+    // but this app connection/origin isn't" and is owned solely by
+    // requireRegisteredApplicationConnection below — never named here, or the
+    // client sends the owner to approve an origin that won't unblock sign-in.
     return c.json(
       {
         error:
           "This Pod needs owner approval before the issuer can be used for sign-in",
-        code: requestedClient
-          ? "APPLICATION_CONNECTION_APPROVAL_REQUIRED"
-          : "ISSUER_APPROVAL_REQUIRED",
+        code: "ISSUER_APPROVAL_REQUIRED",
         recovery: "direct_pod_sign_in",
       },
       403
@@ -1637,9 +1637,7 @@ federationRouter.post("/exchange", async (c) => {
       {
         error:
           "This Pod needs owner approval before the issuer can be used for sign-in",
-        code: claims.data.azp
-          ? "APPLICATION_CONNECTION_APPROVAL_REQUIRED"
-          : "ISSUER_APPROVAL_REQUIRED",
+        code: "ISSUER_APPROVAL_REQUIRED",
         recovery: "direct_pod_sign_in",
       },
       403
