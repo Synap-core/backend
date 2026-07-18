@@ -2855,7 +2855,9 @@ async function executeAutomationFlow(params: {
           }
         : null;
 
-    // Update run with final status
+    // Update run with final status. Guarded on status='running' so a late
+    // writer can never overwrite a verdict the finalizer/reaper already
+    // recorded (an unguarded write here was the retry-overwrite hole).
     const finalStatus = stepsFailed > 0 ? "failed" : "completed";
     await db
       .update(automationRuns)
@@ -2866,7 +2868,9 @@ async function executeAutomationFlow(params: {
         completedAt: new Date(),
         ...(outputSummary ? { outputSummary } : {}),
       })
-      .where(eq(automationRuns.id, runId));
+      .where(
+        and(eq(automationRuns.id, runId), eq(automationRuns.status, "running"))
+      );
 
     // Update automation stats
     await db
@@ -2934,6 +2938,18 @@ export async function handleAutomationExecute(job: {
   });
   if (!run) {
     logger.error({ runId }, "Automation run not found");
+    return;
+  }
+  // Duplicate-delivery guard: pg-boss retries this queue by default, and a
+  // finalized run means the body already executed (or the finalizer/reaper
+  // recorded an honest failure). Re-executing would duplicate side effects and
+  // could overwrite that verdict — skip instead. Delay-resume is unaffected
+  // (a suspended run's row stays 'running').
+  if (run.status !== "running") {
+    logger.warn(
+      { runId, status: run.status },
+      "Skipping automation execution: run already finalized"
+    );
     return;
   }
 

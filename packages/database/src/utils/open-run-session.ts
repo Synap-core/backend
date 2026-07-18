@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql as drizzleSql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 
@@ -75,7 +75,23 @@ export async function openRunSession(
   };
 
   const reusedId = await findReusableRunSession();
-  if (reusedId) return { sessionId: reusedId, reused: true };
+  if (reusedId) {
+    // Stamp the CURRENT occupant onto the reused session: the run reaper closes
+    // orphaned sessions by metadata.automationRunId, so a reused session must
+    // always name the run using it NOW — otherwise reaping the original (dead)
+    // run would close a room a healthy successor run is mid-flight in.
+    if (input.automationRunId) {
+      await db
+        .update(focusSessions)
+        .set({
+          metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+            { automationRunId: input.automationRunId }
+          )}::jsonb`,
+        })
+        .where(eq(focusSessions.id, reusedId));
+    }
+    return { sessionId: reusedId, reused: true };
+  }
 
   const metadata: Record<string, unknown> = {
     source: input.source,
