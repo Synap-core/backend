@@ -95,6 +95,7 @@ import {
   registerUiRoutes,
   registerArtifactsRoutes,
   registerRunsRoutes,
+  registerWorkflowsRoutes,
   registerResolveRoutes,
   registerGraphRoutes,
   registerCentralityRoutes,
@@ -557,6 +558,7 @@ registerAgentSkillsRoutes(app); // /agent-skills*
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
+registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow place)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window

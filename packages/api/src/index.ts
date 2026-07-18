@@ -655,6 +655,13 @@ registerRouter("runs", runsRouter, {
   description: "Unified runs surface",
 });
 
+import { workflowsRouter } from "./routers/workflows.js";
+registerRouter("workflows", workflowsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Workflow-place aggregation surface",
+});
+
 import { artifactsRouter } from "./routers/artifacts.js";
 registerRouter("artifacts", artifactsRouter, {
   version: "1.0.0",

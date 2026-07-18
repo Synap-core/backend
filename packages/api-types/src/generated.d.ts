@@ -966,6 +966,17 @@ export interface GraphPreferences {
 	showMinimap?: boolean;
 }
 /**
+ * One entry in a proposal's `revision_history` — a before/after snapshot of a
+ * `reviseProposal` edit. `before` holds only the fields the patch changed, with
+ * their prior values; `patch` is the applied change. `by` is the actor id.
+ */
+export interface ProposalRevision {
+	at: string;
+	by: string | null;
+	before: Record<string, unknown>;
+	patch: Record<string, unknown>;
+}
+/**
  * Skills Schema
  *
  * The canonical skills table — merged from the (now-dropped) agent_skills table.
@@ -2949,6 +2960,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		version: import("drizzle-orm/pg-core").PgColumn<{
+			name: "version";
+			tableName: "playbooks";
+			dataType: "number";
+			columnType: "PgInteger";
+			data: number;
+			driverParam: string | number;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		schedule: import("drizzle-orm/pg-core").PgColumn<{
 			name: "schedule";
 			tableName: "playbooks";
@@ -3436,6 +3464,7 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
+export type ProjectResolutionRung = 1 | 2 | 3 | 4;
 export interface BackfillTeamPersonBridgeResult {
 	scanned: number;
 	created: number;
@@ -5361,6 +5390,120 @@ export interface UnifiedRunDetail {
 	run: UnifiedRun;
 	activity: RunActivityItem[];
 }
+/** Which workflow kind this place aggregates. */
+export type WorkflowKind = "automation" | "playbook";
+/**
+ * The workflow definition summary — kind-discriminated. Detail routers already
+ * serve the full graph/stages; this is the header a place needs, plus the
+ * monotonic `version` (D3c) so "which definition is live" is legible.
+ */
+export interface WorkflowDefinition {
+	id: string;
+	kind: WorkflowKind;
+	name: string;
+	description: string | null;
+	status: string;
+	version: number;
+	updatedAt: Date;
+	/** Ordered stage summaries (empty/absent for a progress-only playbook). */
+	stages?: {
+		key: string;
+		label: string;
+	}[];
+	/** Subject profile selector ({ profileSlug, filter? }) or null. */
+	subjectProfile?: unknown | null;
+	/** Which "hands" run this playbook (is-agent / external-agent / hybrid). */
+	executor?: string;
+	/** Trigger discriminant (event / cron / webhook / manual). */
+	triggerType?: string;
+	/** Node count in the flow graph (not the full graph — detail routers serve that). */
+	nodeCount?: number;
+}
+/**
+ * A run of the workflow, enriched with the attribution-spine fields (D3c) that
+ * `UnifiedRun` does not carry: whether the run snapshotted its executed
+ * definition, and the run it replays (lineage).
+ */
+export interface WorkflowPlaceRun extends UnifiedRun {
+	hasDefinitionSnapshot: boolean;
+	replayOf: string | null;
+}
+/** A focus-session instance of the workflow. */
+export interface WorkflowSession {
+	id: string;
+	goal: string;
+	status: string;
+	startedAt: Date;
+	closedAt: Date | null;
+	channelId: string | null;
+	subjectEntityId: string | null;
+	projectId: string | null;
+	currentStage: string | null;
+	progress: number | null;
+}
+/** A channel that holds the workflow's activity. */
+export interface WorkflowChannel {
+	id: string;
+	title: string | null;
+	channelType: string;
+	contextObjectType: string | null;
+	contextObjectId: string | null;
+}
+/**
+ * An entity produced by one of the workflow's sessions — the
+ * `session --produced--> entity` provenance edge (the capture-back path writes
+ * this exact shape). Only entities the user can still see are surfaced.
+ */
+export interface WorkflowResult {
+	entityId: string;
+	sessionId: string;
+	title: string | null;
+	/** Entity type slug (entities.type, populated from the profile slug). */
+	type: string;
+	producedAt: Date;
+}
+/**
+ * A proposal attributed to the workflow via its sessions — now enriched with
+ * the Wave-1 `stepRunId`/`nodeId` step attribution when present.
+ */
+export interface WorkflowProposal {
+	id: string;
+	proposalType: string;
+	status: string;
+	targetType: string;
+	targetId: string;
+	sessionId: string | null;
+	stepRunId: string | null;
+	nodeId: string | null;
+	createdAt: Date;
+	reviewedAt: Date | null;
+}
+/** One workflow's place — its runs, sessions, channels, results, proposals. */
+export interface WorkflowPlace {
+	definition: WorkflowDefinition;
+	runs: WorkflowPlaceRun[];
+	sessions: WorkflowSession[];
+	channels: WorkflowChannel[];
+	results: WorkflowResult[];
+	proposals: WorkflowProposal[];
+}
+/** One entry in the workflow's derived event feed (a focus-session event). */
+export interface WorkflowFeedItem {
+	id: string;
+	at: Date;
+	/** The event action — the `events.type` column (NOT `action`). */
+	type: string;
+	/** The focus session this event is about (events.subjectId). */
+	sessionId: string;
+	data: Record<string, unknown> | null;
+	correlationId: string | null;
+}
+/** A page of the workflow's event feed, newest-first, cursor-paginated. */
+export interface WorkflowPlaceFeed {
+	items: WorkflowFeedItem[];
+	/** Opaque cursor for the next (older) page, or null when exhausted. */
+	nextCursor: string | null;
+}
 /**
  * Core API Router
  */
@@ -5845,6 +5988,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiWorkspaceId?: string | null | undefined;
 				aiWorkspaceConfidence?: number | null | undefined;
 				aiWorkspaceReason?: string | null | undefined;
+				aiProjectId?: string | null | undefined;
+				aiProjectConfidence?: number | null | undefined;
+				aiProjectReason?: string | null | undefined;
 				sessionId?: string | undefined;
 			};
 			output: {
@@ -5859,6 +6005,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning: string;
 				reviewPath: string;
 				reviewUrl: string;
+			} | {
+				project: {
+					projectId: string;
+					rung: ProjectResolutionRung | null;
+					status: "linked";
+				};
+				pendingWorkspaceSwitch?: {
+					suggestedWorkspaceId: string;
+					reason: string | null;
+					confidence: number | null;
+				} | undefined;
+				movedToWorkspace?: string | undefined;
+				facetsFailed?: {
+					entityId: string;
+					roleSlug: string;
+					reason: string;
+				}[] | undefined;
+				created: {
+					deduplicated?: true | undefined;
+					propertiesDropped?: true | undefined;
+					degradedFrom?: string | undefined;
+					tempId: string;
+					entityId: string;
+					profileSlug: string;
+					linked: boolean;
+				}[];
+				relations: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					relationType: string;
+				}[];
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				status?: undefined;
+				message?: undefined;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				summary?: undefined;
+				reasoning?: undefined;
+				reviewPath?: undefined;
+				reviewUrl?: undefined;
+			} | {
+				project: {
+					projectId: string;
+					rung: null;
+					status: "proposed";
+				};
+				pendingWorkspaceSwitch?: {
+					suggestedWorkspaceId: string;
+					reason: string | null;
+					confidence: number | null;
+				} | undefined;
+				movedToWorkspace?: string | undefined;
+				facetsFailed?: {
+					entityId: string;
+					roleSlug: string;
+					reason: string;
+				}[] | undefined;
+				created: {
+					deduplicated?: true | undefined;
+					propertiesDropped?: true | undefined;
+					degradedFrom?: string | undefined;
+					tempId: string;
+					entityId: string;
+					profileSlug: string;
+					linked: boolean;
+				}[];
+				relations: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					relationType: string;
+				}[];
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				status?: undefined;
+				message?: undefined;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				summary?: undefined;
+				reasoning?: undefined;
+				reviewPath?: undefined;
+				reviewUrl?: undefined;
 			} | {
 				pendingWorkspaceSwitch?: {
 					suggestedWorkspaceId: string;
@@ -8274,7 +8500,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposedByUserId: string | null;
 					commandRunId: string | null;
 					requestedEventId: string | null;
+					stepRunId: string | null;
+					nodeId: string | null;
 					comments: unknown;
+					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
 					authorName?: string;
 					targetName?: string;
@@ -8313,7 +8542,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposedByUserId: string | null;
 					commandRunId: string | null;
 					requestedEventId: string | null;
+					stepRunId: string | null;
+					nodeId: string | null;
 					comments: unknown;
+					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
 					authorName?: string;
 					targetName?: string;
@@ -8350,7 +8582,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposedByUserId: string | null;
 				commandRunId: string | null;
 				requestedEventId: string | null;
+				stepRunId: string | null;
+				nodeId: string | null;
 				comments: unknown;
+				revisionHistory: ProposalRevision[];
 				request: UpdateRequest;
 				authorName?: string;
 				targetName?: string;
@@ -12941,6 +13176,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						credentialRequired?: boolean | undefined;
 						inputSchema?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					capabilities?: {
+						templateKey?: string | undefined;
+						definition?: Record<string, unknown> | undefined;
+						params?: Record<string, unknown> | undefined;
 					}[] | undefined;
 					dependencies?: {
 						slug: string;
@@ -18612,6 +18852,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					flowDefinition: FlowDefinition;
 					status: "error" | "active" | "paused" | "draft";
 					errorMessage: string | null;
+					version: number;
 					lastRunAt: Date | null;
 					nextRunAt: Date | null;
 					runCount: number;
@@ -18657,6 +18898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					patternConfidence?: number;
 					description?: string;
 				};
+				version: number;
 				description: string | null;
 				createdBy: string;
 				triggerType: "event" | "cron" | "webhook" | "manual";
@@ -18775,6 +19017,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stepsCompleted: number;
 					stepsFailed: number;
 					outputSummary: Record<string, unknown> | null;
+					definitionSnapshot: {
+						version: number;
+						flowDefinition: FlowDefinition;
+					} | null;
+					replayOf: string | null;
 					startedAt: Date;
 					completedAt: Date | null;
 				}[];
@@ -18800,6 +19047,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerPayload: Record<string, unknown>;
 					stepsCompleted: number;
 					stepsFailed: number;
+					definitionSnapshot: {
+						version: number;
+						flowDefinition: FlowDefinition;
+					} | null;
+					replayOf: string | null;
 				};
 				steps: {
 					id: string;
@@ -18810,6 +19062,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					resolvedInputs: Record<string, unknown>;
 					output: Record<string, unknown>;
 					errorMessage: string | null;
+					tokensUsed: number | null;
+					costUsd: string | null;
 					startedAt: Date | null;
 					completedAt: Date | null;
 				}[];
@@ -20093,6 +20347,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelSpec: unknown;
 				expectedOutputs: unknown;
 				stages: unknown;
+				version: number;
 				schedule: unknown;
 				executor: PlaybookExecutorRef;
 				status: "active" | "paused" | "archived" | "draft";
@@ -20132,6 +20387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				status: "active" | "paused" | "archived" | "draft";
 				metadata: unknown;
+				version: number;
 				description: string | null;
 				createdBy: string;
 				params: unknown;
@@ -20299,6 +20555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					status: "active" | "paused" | "archived" | "draft";
 					metadata: unknown;
+					version: number;
 					description: string | null;
 					createdBy: string;
 					params: unknown;
@@ -20345,6 +20602,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					completedAt: Date | null;
 					startedAt: Date;
 					createdBy: string;
+					definitionSnapshot: unknown;
+					replayOf: string | null;
 					playbookId: string;
 					executor: PlaybookRunExecutorRef;
 					summary: string | null;
@@ -20442,6 +20701,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: unknown;
 				summary: string | null;
 				error: string | null;
+				definitionSnapshot: unknown;
+				replayOf: string | null;
 				startedAt: Date;
 				completedAt: Date | null;
 				createdBy: string;
@@ -20549,6 +20810,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: UnifiedRunDetail | null;
+			meta: object;
+		}>;
+	}>>;
+	workflows: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		place: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "playbook" | "automation";
+				id: string;
+			};
+			output: WorkflowPlace | null;
+			meta: object;
+		}>;
+		placeFeed: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "playbook" | "automation";
+				id: string;
+				cursor?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: WorkflowPlaceFeed;
 			meta: object;
 		}>;
 	}>>;

@@ -66,6 +66,7 @@ import { playbookRunsRouter } from "./routers/playbook-runs.js";
 import { agentRunsRouter } from "./routers/agent-runs.js";
 import { activityRouter } from "./routers/activity.js";
 import { runsRouter } from "./routers/runs.js";
+import { workflowsRouter } from "./routers/workflows.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
 import { automationsRouter } from "./routers/automations.js";
@@ -145,6 +146,7 @@ export const coreRouter = router({
   agentRuns: agentRunsRouter,
   activity: activityRouter,
   runs: runsRouter,
+  workflows: workflowsRouter,
   artifacts: artifactsRouter,
   projects: projectsRouter,
 });
