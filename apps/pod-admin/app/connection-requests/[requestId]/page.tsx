@@ -88,11 +88,19 @@ export default function ConnectionRequestPage() {
         window.setTimeout(() => router.push("/connections"), 1_200);
       }
     },
-    onError: (error) =>
+    onError: (error) => {
+      if (
+        redirectToLoginIfUnauthorized(
+          error,
+          `/connection-requests/${requestId}`
+        )
+      )
+        return;
       setActionError(
         error.message ||
           "We couldn’t approve this request. Refresh and try again."
-      ),
+      );
+    },
   });
   const reject = trpc.applicationConnections.rejectRequest.useMutation({
     onSuccess: async () => {
@@ -106,11 +114,19 @@ export default function ConnectionRequestPage() {
       ]);
       window.setTimeout(() => router.push("/connections"), 900);
     },
-    onError: (error) =>
+    onError: (error) => {
+      if (
+        redirectToLoginIfUnauthorized(
+          error,
+          `/connection-requests/${requestId}`
+        )
+      )
+        return;
       setActionError(
         error.message ||
           "We couldn’t decline this request. Refresh and try again."
-      ),
+      );
+    },
   });
 
   // Expired session → login (bring them back to this exact review), not a dead
