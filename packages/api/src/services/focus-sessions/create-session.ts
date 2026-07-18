@@ -150,45 +150,51 @@ export async function createFocusSession(
         })) ?? null)
       : null;
 
-  const [created] = await db
-    .insert(focusSessions)
-    .values({
-      workspaceId,
-      projectId,
-      subjectEntityId,
-      userId,
-      goal,
-      correlationId: correlationId ?? null,
-      templateId,
-      playbookId: playbook?.id ?? null,
-      expectedOutputs,
-      channelId,
-      agentIds,
-      status: "active",
-    })
-    .returning();
+  // Session + its playbook_runs ledger row land in ONE transaction: the
+  // correlationId idempotency check returns the existing session on retry, so
+  // a partial state (session without its run row) could never be repaired.
+  const created = await db.transaction(async (tx) => {
+    const [session] = await tx
+      .insert(focusSessions)
+      .values({
+        workspaceId,
+        projectId,
+        subjectEntityId,
+        userId,
+        goal,
+        correlationId: correlationId ?? null,
+        templateId,
+        playbookId: playbook?.id ?? null,
+        expectedOutputs,
+        channelId,
+        agentIds,
+        status: "active",
+      })
+      .returning();
 
-  // Insert the playbook_runs ledger row (status "running") for the new session so
-  // the runs feed sees it. Mirrors run-playbook.ts's executeSingleRun insert
-  // (executor + definition snapshot), minus the executor dispatch — starting a
-  // session is "I'm working on this playbook", not a full executor run.
-  if (playbook) {
-    await db.insert(playbookRuns).values({
-      workspaceId,
-      playbookId: playbook.id,
-      sessionId: created.id,
-      executor: playbook.executor,
-      status: "running",
-      createdBy: agentUserId ?? userId,
-      definitionSnapshot: {
-        version: playbook.version,
-        goalTemplate: playbook.goalTemplate,
-        stages: playbook.stages,
-        params: playbook.params,
-        expectedOutputs: playbook.expectedOutputs,
-      },
-    });
-  }
+    // The playbook_runs ledger row (status "running") so the runs feed sees the
+    // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
+    // definition snapshot), minus the executor dispatch — starting a session is
+    // "I'm working on this playbook", not a full executor run.
+    if (playbook) {
+      await tx.insert(playbookRuns).values({
+        workspaceId,
+        playbookId: playbook.id,
+        sessionId: session.id,
+        executor: playbook.executor,
+        status: "running",
+        createdBy: agentUserId ?? userId,
+        definitionSnapshot: {
+          version: playbook.version,
+          goalTemplate: playbook.goalTemplate,
+          stages: playbook.stages,
+          params: playbook.params,
+          expectedOutputs: playbook.expectedOutputs,
+        },
+      });
+    }
+    return session;
+  });
 
   emitHubRealtimeEvent({
     eventType: "focus_session.create.completed",

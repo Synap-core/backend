@@ -19056,6 +19056,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						flowDefinition: FlowDefinition;
 					} | null;
 					replayOf: string | null;
+					summaryMessageId: string | null;
 					startedAt: Date;
 					completedAt: Date | null;
 				}[];
@@ -19086,6 +19087,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						flowDefinition: FlowDefinition;
 					} | null;
 					replayOf: string | null;
+					summaryMessageId: string | null;
 				};
 				steps: {
 					id: string;
