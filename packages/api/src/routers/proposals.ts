@@ -35,6 +35,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   linkEntityToProject,
+  resolveProjectPlacement,
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
   isFacetVisibleForLens,
@@ -46,7 +47,6 @@ import type { EventRecord } from "@synap/database";
 import {
   ProposalStatus,
   workspaces,
-  focusSessions,
   entityFacets,
   profiles,
 } from "@synap/database/schema";
@@ -155,19 +155,18 @@ async function stampProjectMembership(
   userId: string
 ): Promise<void> {
   if (entityIds.length === 0) return;
-  let projectId = proposal.projectId ?? null;
-  if (!projectId && proposal.sessionId) {
-    const session = await db.query.focusSessions.findFirst({
-      where: eq(focusSessions.id, proposal.sessionId),
-      columns: { projectId: true },
-    });
-    projectId = session?.projectId ?? null;
-  }
-  if (!projectId) return;
+  // The ONE deterministic door (explicit proposal.projectId → producing
+  // session's project). Only real context stamps membership on approve.
+  const placement = await resolveProjectPlacement(db, {
+    userId,
+    explicitProjectId: proposal.projectId,
+    sessionId: proposal.sessionId,
+  });
+  if (!placement.projectId) return;
   for (const entityId of entityIds) {
     await linkEntityToProject(db, {
       entityId,
-      projectId,
+      projectId: placement.projectId,
       userId,
       workspaceId: proposal.workspaceId ?? null,
     });

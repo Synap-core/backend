@@ -43,6 +43,14 @@ export const AI_KIND = {
   EXTRACT: "extract",
   /** A whole capture graph (decision) / a revert (correction). */
   CAPTURE: "capture",
+  /**
+   * PROJECT placement (decision) / an unfile (correction) — the cross-cutting
+   * dimension. A DISTINCT kind (not `route`) so the workspace routing-memory +
+   * observability queries, which filter `kind = route`, never mistake a project
+   * placement for a workspace route. Project events additionally carry
+   * `data.dim: "project"` so a future shared reader can filter by dimension.
+   */
+  PROJECT: "project",
 } as const;
 export type AiKind = (typeof AI_KIND)[keyof typeof AI_KIND];
 

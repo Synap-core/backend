@@ -24,6 +24,7 @@ export default defineConfig({
       "src/__tests__/facet-visibility.test.ts",
       "src/__tests__/profile-scope-conditions.test.ts",
       "src/services/workspace-resolution-service.test.ts",
+      "src/services/project-resolution-service.test.ts",
       "src/services/federated-assertion-receipt-service.test.ts",
       "src/services/user-provisioning.test.ts",
     ],

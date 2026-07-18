@@ -51,6 +51,7 @@ import {
   extractIdentitySignals,
   resolveRolePayload,
   resolveWorkspacePlacement,
+  resolveProjectPlacement,
   type ResolutionRung,
 } from "@synap/database";
 import {
@@ -1460,6 +1461,19 @@ export const captureRouter = router({
         /** One-line justification for the AI's workspace pick (surfaced in ASK). */
         aiWorkspaceReason: z.string().nullish(),
         /**
+         * The AI-suggested PROJECT (from /capture/structure's targetProjectId).
+         * This is ADVISORY only — NEVER auto-linked. `belongs_to_project` WIDENS
+         * cross-workspace access, so an AI guess must be confirmed by the user
+         * before it stamps membership. When no deterministic project resolves and
+         * this clears the confidence floor, it is recorded on the capture proposal
+         * as a suggestion (surfaced as a chip), never linked.
+         */
+        aiProjectId: z.string().uuid().nullish(),
+        /** Confidence (0..1) in the AI's project pick — gates the advisory record. */
+        aiProjectConfidence: z.number().nullish(),
+        /** One-line justification for the AI's project pick (surfaced in the chip). */
+        aiProjectReason: z.string().nullish(),
+        /**
          * Active focus session (from the `X-Session-Id` header). When set, every
          * captured entity is linked to it via `session --produced--> entity` —
          * the SAME edge the entities router emits inline. This is what scopes
@@ -1616,6 +1630,37 @@ export const captureRouter = router({
         }
       }
 
+      // ── Project placement (deterministic door) ───────────────────────────
+      // Resolve WHICH project (if any) these captured entities file into, through
+      // the one deterministic door: explicit input.projectId (rung 1, the pinned
+      // lens — preserves today's behavior exactly) → the producing session's
+      // project (rung 2) → relational gravity among the existing entities this
+      // batch links to (rung 4). NO AI rung: `belongs_to_project` WIDENS
+      // cross-workspace access, so an AI-guessed project is NEVER auto-linked —
+      // it becomes an advisory chip instead (below). rung 3 (channel) is absent
+      // here (a tRPC capture carries no channel context).
+      const batchRelatedEntityIds = input.entities
+        .map((e) => e.existingEntityId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      const projectPlacement = await resolveProjectPlacement(database, {
+        userId,
+        explicitProjectId: input.projectId,
+        sessionId: input.sessionId,
+        relatedEntityIds: batchRelatedEntityIds,
+      });
+      const resolvedProjectId = projectPlacement.projectId;
+      // AI advisory: only when NO deterministic project resolved AND the AI's
+      // pick clears the confidence floor. Recorded on the capture proposal (a
+      // suggestion), NEVER linked and NEVER threaded into the governance gate —
+      // so it can only stamp membership after the user confirms it.
+      const AI_PROJECT_SUGGESTION_MIN_CONFIDENCE = 0.6;
+      const aiProjectAdvisoryId =
+        !resolvedProjectId &&
+        input.aiProjectId &&
+        (input.aiProjectConfidence ?? 0) >= AI_PROJECT_SUGGESTION_MIN_CONFIDENCE
+          ? input.aiProjectId
+          : null;
+
       // ── Governance gate (entity.create) ──────────────────────────────────
       //
       // Capture is a WRITE door like every other, so the workspace's
@@ -1685,7 +1730,9 @@ export const captureRouter = router({
         correlationId: captureId,
         sessionId: input.sessionId ?? ctx.sessionId ?? undefined,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
-        projectId: input.projectId ?? undefined,
+        // Deterministic only — an AI-suggested project must never ride the gate
+        // into a stamp-on-approve auto-link.
+        projectId: resolvedProjectId ?? undefined,
         reasoning: `Capture — ${captureSummary}`,
         data: {
           operations: gateOperations,
@@ -2073,11 +2120,13 @@ export const captureRouter = router({
         }
       }
 
-      // Project membership (lens-context): file the captured entities into the
-      // active project. Capture materializes directly (not via proposal
-      // approval), so the membership write lands here — the project mirror of
-      // how `workspaceId` is stamped on the entity. Idempotent, best-effort.
-      if (input.projectId) {
+      // Project membership (deterministic lens-context): file the captured
+      // entities into the DETERMINISTICALLY resolved project. Capture
+      // materializes directly (not via proposal approval), so the membership
+      // write lands here — the project mirror of how `workspaceId` is stamped on
+      // the entity. An AI-guessed project is NOT here (it's advisory only, below).
+      // Idempotent, best-effort.
+      if (resolvedProjectId) {
         // Link ALL captured entities — fresh AND dedup-merged. If you capture
         // something into a project and it merges into an existing entity, that
         // entity now belongs to the project too (linkEntityToProject is
@@ -2086,7 +2135,7 @@ export const captureRouter = router({
         for (const entityId of entityIdsToLink) {
           await linkEntityToProject(database, {
             entityId,
-            projectId: input.projectId,
+            projectId: resolvedProjectId,
             userId,
             workspaceId: workspaceId ?? null,
           });
@@ -2155,7 +2204,12 @@ export const captureRouter = router({
             userId,
             reviewedBy: userId,
             workspaceId: workspaceId ?? null,
-            projectId: input.projectId ?? null,
+            // The deterministically-resolved project (already LINKED above), or —
+            // when none resolved — the AI's advisory suggestion. This is an
+            // auto_approved RECORD (createAutoApprovedProposal never stamps
+            // membership), so the advisory id is surfaced/traceable but NOT
+            // linked; only a user-confirmed project ever becomes a real edge.
+            projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
             targetType: "entity",
             targetId: randomUUID(),
             proposalType: "capture.graph",
@@ -2252,6 +2306,40 @@ export const captureRouter = router({
                 mode: input.workspaceRouting ?? "auto",
                 applied: Boolean(routing?.movedToWorkspace),
                 currentWorkspaceId: ctx.workspaceId,
+              },
+            });
+          }
+
+          // Project-placement decision (the cross-cutting dimension). Emitted
+          // with a DISTINCT `kind` (AI_KIND.PROJECT) + `data.dim: "project"` so
+          // the workspace routing-memory + observability queries — which filter
+          // `kind = route` — never mistake it for a workspace route. Two firing
+          // conditions: a rung 2-4 DETERMINISTIC auto-link landed (chosen +
+          // applied), or the AI's suggestion was recorded as an advisory proposed
+          // pick (proposed, not yet linked). rung 1 (explicit user pin) is user
+          // intent, not an AI decision, so it is not recorded here.
+          const projectAutoLinked =
+            Boolean(resolvedProjectId) && (projectPlacement.rung ?? 0) >= 2;
+          if (projectAutoLinked || aiProjectAdvisoryId) {
+            await emitAiDecision({
+              action: "project",
+              userId,
+              workspaceId: workspaceId ?? null,
+              correlationId,
+              data: {
+                kind: AI_KIND.PROJECT,
+                dim: "project",
+                chosenProjectId: resolvedProjectId ?? aiProjectAdvisoryId,
+                rung: projectAutoLinked ? projectPlacement.rung : null,
+                reason: projectAutoLinked
+                  ? projectPlacement.reason
+                  : (input.aiProjectReason ?? null),
+                confidence: projectAutoLinked
+                  ? 1
+                  : (input.aiProjectConfidence ?? null),
+                // Advisory (proposed) vs a landed deterministic auto-link.
+                applied: projectAutoLinked,
+                proposed: Boolean(aiProjectAdvisoryId),
               },
             });
           }
@@ -2367,6 +2455,27 @@ export const captureRouter = router({
         ...(routing?.pendingWorkspaceSwitch
           ? { pendingWorkspaceSwitch: routing.pendingWorkspaceSwitch }
           : {}),
+        // Project disposition — what happened on the project axis, so a surface
+        // (or the MCP adapter) can state it: a DETERMINISTIC auto-link landed
+        // (rung 1-4), an AI suggestion was proposed (advisory, awaiting confirm),
+        // or nothing. Only present when the project axis engaged at all.
+        ...(resolvedProjectId
+          ? {
+              project: {
+                projectId: resolvedProjectId,
+                rung: projectPlacement.rung,
+                status: "linked" as const,
+              },
+            }
+          : aiProjectAdvisoryId
+            ? {
+                project: {
+                  projectId: aiProjectAdvisoryId,
+                  rung: null,
+                  status: "proposed" as const,
+                },
+              }
+            : {}),
       };
     }),
 
