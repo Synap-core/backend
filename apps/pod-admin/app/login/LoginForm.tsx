@@ -276,14 +276,14 @@ function FlowFields({
             return null;
           }
           const value = typeof attrs.value === "string" ? attrs.value : "";
+          // WebAuthn/passkey triggers already returned null above, so no
+          // passkey label branch is reachable here.
           const label =
             typeof attrs.label === "string"
               ? attrs.label
-              : node.group === "webauthn" || name.includes("passkey")
-                ? "Sign in with passkey"
-                : value
-                  ? `Continue with ${value}`
-                  : "Continue";
+              : value
+                ? `Continue with ${value}`
+                : "Continue";
           return (
             <Button
               key={`${name}-${idx}`}
