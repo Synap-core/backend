@@ -299,7 +299,7 @@ async function fetchSuperwhisperCandidates(
       AND type = 'note'
       AND properties->>'source' = ${SUPERWHISPER_SOURCE}
       AND workspace_id IS NULL
-      AND created_at < ${cutoff}
+      AND created_at < ${cutoff.toISOString()}
     ORDER BY created_at ASC
   `) as unknown as CandidateRow[];
 }
