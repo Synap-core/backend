@@ -16,6 +16,7 @@ import {
 } from "@heroui/react";
 import { Check, ExternalLink, ShieldAlert, X } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
 
 export default function ConnectionRequestPage() {
@@ -112,7 +113,19 @@ export default function ConnectionRequestPage() {
       ),
   });
 
-  if (request.isLoading) return <Loading />;
+  // Expired session → login (bring them back to this exact review), not a dead
+  // "we couldn't open this request" error.
+  useEffect(() => {
+    if (request.isError) {
+      redirectToLoginIfUnauthorized(
+        request.error,
+        `/connection-requests/${requestId}`
+      );
+    }
+  }, [request.isError, request.error, requestId]);
+  const isAuthRedirecting = request.error?.data?.code === "UNAUTHORIZED";
+
+  if (request.isLoading || isAuthRedirecting) return <Loading />;
   if (request.isError || !request.data) {
     return (
       <Frame onDismiss={closeReview}>

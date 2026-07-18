@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner } from "@heroui/react";
 import { ExternalLink, ShieldCheck, ShieldOff } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
 
 function statusColor(
@@ -42,7 +43,16 @@ export default function ApplicationConnectionsPage() {
     revoke.mutate({ id: connection.id });
   }
 
-  if (connections.isLoading) {
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (connections.isError) {
+      redirectToLoginIfUnauthorized(connections.error, "/connections");
+    }
+  }, [connections.isError, connections.error]);
+  const isAuthRedirecting =
+    connections.error?.data?.code === "UNAUTHORIZED";
+
+  if (connections.isLoading || isAuthRedirecting) {
     return (
       <div className="flex min-h-64 items-center justify-center">
         <Spinner label="Loading application connections" />
