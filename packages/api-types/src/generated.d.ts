@@ -5464,7 +5464,10 @@ export interface WorkflowResult {
 }
 /**
  * A proposal attributed to the workflow via its sessions — now enriched with
- * the Wave-1 `stepRunId`/`nodeId` step attribution when present.
+ * the Wave-1 `stepRunId`/`nodeId` step attribution when present, plus the two
+ * quality signals the Wave 5 analyzer reads: why a proposal was rejected, and
+ * what the human changed before approving (the strongest "the AI got this
+ * wrong" signal).
  */
 export interface WorkflowProposal {
 	id: string;
@@ -5477,6 +5480,8 @@ export interface WorkflowProposal {
 	nodeId: string | null;
 	createdAt: Date;
 	reviewedAt: Date | null;
+	rejectionReason: string | null;
+	revisionHistory: unknown[];
 }
 /** One workflow's place — its runs, sessions, channels, results, proposals. */
 export interface WorkflowPlace {

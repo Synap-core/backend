@@ -392,6 +392,8 @@ async function loadProposals(
       nodeId: proposals.nodeId,
       createdAt: proposals.createdAt,
       reviewedAt: proposals.reviewedAt,
+      rejectionReason: proposals.rejectionReason,
+      revisionHistory: proposals.revisionHistory,
     })
     .from(proposals)
     .where(
@@ -413,6 +415,8 @@ async function loadProposals(
     nodeId: r.nodeId ?? null,
     createdAt: r.createdAt,
     reviewedAt: r.reviewedAt ?? null,
+    rejectionReason: r.rejectionReason ?? null,
+    revisionHistory: Array.isArray(r.revisionHistory) ? r.revisionHistory : [],
   }));
 }
 
