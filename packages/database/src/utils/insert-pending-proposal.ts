@@ -48,7 +48,7 @@ export interface InsertPendingProposalInput {
   requestedEventId?: string | null;
   sessionId?: string | null;
   projectId?: string | null;
-  /** Workflow attribution (D3a): the automation step run + flow node that
+  /** Workflow attribution: the automation step run + flow node that
    *  produced this proposal. Both optional — non-automation proposals omit them. */
   stepRunId?: string | null;
   nodeId?: string | null;

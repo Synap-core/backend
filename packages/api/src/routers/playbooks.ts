@@ -46,6 +46,7 @@ import type {
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { stableStringify } from "../utils/stable-stringify.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import {
   listCapabilities,
@@ -1151,8 +1152,8 @@ export const playbooksRouter = router({
       const definitionChanged = DEFINITION_FIELDS.some(
         (f) =>
           set[f] !== undefined &&
-          JSON.stringify(set[f]) !==
-            JSON.stringify((existing as Record<string, unknown>)[f])
+          stableStringify(set[f]) !==
+            stableStringify((existing as Record<string, unknown>)[f])
       );
       if (definitionChanged) set.version = (existing.version ?? 1) + 1;
 

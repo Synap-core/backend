@@ -5397,7 +5397,7 @@ export type WorkflowKind = "automation" | "playbook";
 /**
  * The workflow definition summary — kind-discriminated. Detail routers already
  * serve the full graph/stages; this is the header a place needs, plus the
- * monotonic `version` (D3c) so "which definition is live" is legible.
+ * monotonic `version` so "which definition is live" is legible.
  */
 export interface WorkflowDefinition {
 	id: string;
@@ -5422,13 +5422,12 @@ export interface WorkflowDefinition {
 	nodeCount?: number;
 }
 /**
- * A run of the workflow, enriched with the attribution-spine fields (D3c) that
+ * A run of the workflow, enriched with the one attribution field
  * `UnifiedRun` does not carry: whether the run snapshotted its executed
- * definition, and the run it replays (lineage).
+ * definition.
  */
 export interface WorkflowPlaceRun extends UnifiedRun {
 	hasDefinitionSnapshot: boolean;
-	replayOf: string | null;
 }
 /** A focus-session instance of the workflow. */
 export interface WorkflowSession {
@@ -5465,9 +5464,9 @@ export interface WorkflowResult {
 	producedAt: Date;
 }
 /**
- * A proposal attributed to the workflow via its sessions — now enriched with
- * the Wave-1 `stepRunId`/`nodeId` step attribution when present, plus the two
- * quality signals the Wave 5 analyzer reads: why a proposal was rejected, and
+ * A proposal attributed to the workflow via its sessions — enriched with
+ * the `stepRunId`/`nodeId` step attribution when present, plus the two
+ * quality signals the analyzer reads: why a proposal was rejected, and
  * what the human changed before approving (the strongest "the AI got this
  * wrong" signal).
  */

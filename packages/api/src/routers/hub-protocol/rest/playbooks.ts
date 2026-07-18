@@ -18,7 +18,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
    *         subjectProfile?, schedule?, executor?, status? }
    *
-   * Governed mirror of `playbooks.update` (WORKFLOW-AS-PLACE, D4) — the door the
+   * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
    * auto-applied for an agent caller: `checkPermissionOrPropose` decides
    * approve-vs-propose from the LOADED playbook's workspace, exactly as the

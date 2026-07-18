@@ -101,7 +101,8 @@ export async function reviseProposal(params: {
           eq(proposals.status, ProposalStatus.PENDING)
         )
       )
-      .limit(1);
+      .limit(1)
+      .for("update");
     // No pending row → nothing to revise (the UPDATE below is also a no-op).
     if (!existing) return;
 

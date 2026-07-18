@@ -9,8 +9,8 @@
  * Reuse, not fork:
  *   - `runs` come from the runs substrate's `listRuns({flowType, flowId})` — the
  *     same UnifiedRun the browser Runs view and `synap diagnose` read — enriched
- *     here only with the Wave-1 attribution fields (definitionSnapshot presence,
- *     replayOf) that UnifiedRun does not carry.
+ *     here only with the definitionSnapshot-presence flag that UnifiedRun does
+ *     not carry.
  *   - the user floor is `userVisibleWhere` everywhere — the identical predicate
  *     the runs substrate uses; a specific-workflow read never widens it.
  *
@@ -237,7 +237,6 @@ async function loadRuns(
           .select({
             id: automationRuns.id,
             hasSnapshot: drizzleSql<boolean>`${automationRuns.definitionSnapshot} IS NOT NULL`,
-            replayOf: automationRuns.replayOf,
           })
           .from(automationRuns)
           .where(inArray(automationRuns.id, runIds))
@@ -245,20 +244,15 @@ async function loadRuns(
           .select({
             id: playbookRuns.id,
             hasSnapshot: drizzleSql<boolean>`${playbookRuns.definitionSnapshot} IS NOT NULL`,
-            replayOf: playbookRuns.replayOf,
           })
           .from(playbookRuns)
           .where(inArray(playbookRuns.id, runIds));
 
   const metaById = new Map(meta.map((m) => [m.id, m]));
-  return runs.map((r) => {
-    const m = metaById.get(r.id);
-    return {
-      ...r,
-      hasDefinitionSnapshot: m?.hasSnapshot ?? false,
-      replayOf: m?.replayOf ?? null,
-    };
-  });
+  return runs.map((r) => ({
+    ...r,
+    hasDefinitionSnapshot: metaById.get(r.id)?.hasSnapshot ?? false,
+  }));
 }
 
 // ── Channels ─────────────────────────────────────────────────────────────────
@@ -466,6 +460,9 @@ function encodeCursor(c: FeedCursor): string {
   return Buffer.from(`${c.ts.getTime()}:${c.id}`, "utf8").toString("base64url");
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function decodeCursor(raw: string | undefined): FeedCursor | null {
   if (!raw) return null;
   try {
@@ -474,7 +471,9 @@ function decodeCursor(raw: string | undefined): FeedCursor | null {
     if (sep < 0) return null;
     const ms = Number(decoded.slice(0, sep));
     const id = decoded.slice(sep + 1);
-    if (!Number.isFinite(ms) || !id) return null;
+    // The id is cast to ::uuid in SQL — a tampered cursor must degrade to
+    // "no cursor" (first page), not a raw Postgres cast error.
+    if (!Number.isFinite(ms) || !UUID_RE.test(id)) return null;
     return { ts: new Date(ms), id };
   } catch {
     return null;

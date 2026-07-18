@@ -10,6 +10,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { stableStringify } from "../utils/stable-stringify.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -398,19 +399,19 @@ export const automationsRouter = router({
       if (input.metadata !== undefined) updates.metadata = input.metadata;
       if (input.state !== undefined) updates.state = input.state;
 
-      // D3c: bump the monotonic definition version when a definition-affecting
+      // Bump the monotonic definition version when a definition-affecting
       // field actually changes (compared against the loaded row, so a rename or
       // status toggle doesn't inflate it). Stamped into each run's
       // definitionSnapshot so "what ran" can be diffed against "today".
       const definitionChanged =
         (updates.flowDefinition !== undefined &&
-          JSON.stringify(updates.flowDefinition) !==
-            JSON.stringify(existing.flowDefinition)) ||
+          stableStringify(updates.flowDefinition) !==
+            stableStringify(existing.flowDefinition)) ||
         (updates.triggerType !== undefined &&
           updates.triggerType !== existing.triggerType) ||
         (updates.triggerConfig !== undefined &&
-          JSON.stringify(updates.triggerConfig) !==
-            JSON.stringify(existing.triggerConfig));
+          stableStringify(updates.triggerConfig) !==
+            stableStringify(existing.triggerConfig));
       if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
 
       await database
