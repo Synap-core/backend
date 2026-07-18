@@ -19,6 +19,7 @@ import {
   slugifyProjectName,
   uniquifyProjectSlug,
 } from "../utils/project-slug.js";
+import { triggerCpProjectSync } from "../utils/cp-project-sync-trigger.js";
 
 export interface CreateProjectInput {
   id?: string;
@@ -139,6 +140,8 @@ export class ProjectRepository extends BaseRepository<
       .returning();
 
     await this.emitCompleted("create", project, userId);
+    // Announce to the CP project directory (fire-and-forget; W1).
+    triggerCpProjectSync();
     return match.near.length > 0
       ? { ...project, dedupCandidates: match.near }
       : project;
@@ -171,6 +174,8 @@ export class ProjectRepository extends BaseRepository<
     }
 
     await this.emitCompleted("update", project, userId);
+    // Announce to the CP project directory (fire-and-forget; W1).
+    triggerCpProjectSync();
     return project;
   }
 
@@ -196,5 +201,8 @@ export class ProjectRepository extends BaseRepository<
       { id } as Partial<Project> & { id: string },
       userId
     );
+    // Announce to the CP project directory (fire-and-forget; W1). Projects are
+    // hard-deleted, so the full-list push lets the CP tombstone the row.
+    triggerCpProjectSync();
   }
 }

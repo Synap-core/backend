@@ -121,6 +121,11 @@ import {
   CP_CATALOG_SYNC_QUEUE,
 } from "./cp-catalog-sync.js";
 import {
+  handleCpProjectSync,
+  CP_PROJECT_SYNC_QUEUE,
+} from "./cp-project-sync.js";
+import { registerCpProjectSyncTrigger } from "@synap/database";
+import {
   handlePageRankCentrality,
   PAGERANK_CENTRALITY_QUEUE,
 } from "./pagerank-centrality.js";
@@ -189,6 +194,7 @@ const ALL_QUEUES = [
   MEMORY_DECAY_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   CP_CATALOG_SYNC_QUEUE,
+  CP_PROJECT_SYNC_QUEUE,
   // Was MISSING while its worker+schedule existed — pg-boss v10 schedule() FK
   // violated → registerCronSchedules aborted → every cron after cal-backfill
   // in cron.ts silently never scheduled (found live 2026-07-12).
@@ -517,6 +523,22 @@ export async function registerAllWorkers(): Promise<void> {
   // above keeps running unchanged, this is additive per P2.4-B).
   await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
   logger.info("Registered worker: cp-catalog-sync");
+
+  // CP project directory sync (cron: every 30min + on startup + one-off pushes
+  // from ProjectRepository mutations). Announces the pod's full project list to
+  // the Control Plane `pod_projects` mirror (P4-lite W1). The IoC slot below is
+  // how @synap/database (which cannot import @synap/events) enqueues the
+  // one-offs — ProjectRepository.create/update/delete is the ONE trigger door.
+  await boss.work(CP_PROJECT_SYNC_QUEUE, async () => handleCpProjectSync());
+  registerCpProjectSyncTrigger(() => {
+    void boss.send(CP_PROJECT_SYNC_QUEUE, {}).catch((err) => {
+      logger.warn(
+        { err },
+        "cp-project-sync enqueue failed (reconcile cron will catch up)"
+      );
+    });
+  });
+  logger.info("Registered worker: cp-project-sync (+ repository trigger)");
 
   // PageRank centrality (cron: every 6h + on startup — recomputes global
   // PageRank over each user's relation graph into entity_centrality, which
