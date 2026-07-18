@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner } from "@heroui/react";
-import { ExternalLink, ShieldCheck, ShieldOff } from "lucide-react";
+import { ChevronDown, ExternalLink, ShieldCheck, ShieldOff } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
@@ -17,10 +17,33 @@ function statusColor(
   return "default";
 }
 
+/** Human label for a raw request status — no `awaiting_local_auth` in the UI. */
+function requestStateLabel(status: string): string {
+  switch (status) {
+    case "awaiting_local_auth":
+      return "waiting for app";
+    case "approved":
+      return "approved · finishing";
+    case "completing":
+      return "finishing";
+    case "pending":
+      return "needs review";
+    case "rejected":
+      return "declined";
+    case "completed":
+      return "done";
+    case "expired":
+      return "expired";
+    default:
+      return status;
+  }
+}
+
 export default function ApplicationConnectionsPage() {
   const connections = trpc.applicationConnections.list.useQuery();
   const utils = trpc.useUtils();
   const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
   const revoke = trpc.applicationConnections.revokeConnection.useMutation({
     onSuccess: async () => {
       setRevokeError(null);
@@ -79,32 +102,31 @@ export default function ApplicationConnectionsPage() {
   }
 
   const data = connections.data;
-  // Backend list already applies effective (expiry-aware) status.
-  const pendingRequests = (data?.requests ?? []).filter(
-    (request) => request.status === "pending"
+  const requests = data?.requests ?? [];
+  const conns = data?.connections ?? [];
+  // Ordered by what the owner cares about most, top to bottom:
+  // 1. what's working, 2. what needs YOU now, 3. what's mid-flight, then the
+  // archive (terminal/historical) collapsed at the bottom.
+  const approvedOrigins = conns.filter((c) => c.status === "approved");
+  const needsReview = requests.filter((r) => r.status === "pending");
+  // The app started a handoff but the person hasn't finished signing in / the
+  // app hasn't completed. Not owner-actionable — shown for visibility only.
+  const inProgress = requests.filter(
+    (r) =>
+      r.status === "awaiting_local_auth" ||
+      r.status === "approved" ||
+      r.status === "completing"
   );
-  const expiredRequests = (data?.requests ?? []).filter(
-    (request) => request.status === "expired"
+  // Archive: timed-out / declined / already-done requests + non-active
+  // connection records. Kept for audit but tucked away.
+  const archivedRequests = requests.filter(
+    (r) =>
+      r.status === "expired" ||
+      r.status === "rejected" ||
+      r.status === "completed"
   );
-  const otherRequests = (data?.requests ?? []).filter(
-    (request) =>
-      request.status !== "pending" &&
-      request.status !== "expired" &&
-      request.status !== "approved" &&
-      request.status !== "completed"
-  );
-  const activeConnections = (data?.connections ?? []).filter(
-    (connection) => connection.status === "approved"
-  );
-  const revokedConnections = (data?.connections ?? []).filter(
-    (connection) => connection.status === "revoked"
-  );
-  // These records are not created by the current approval flow, but keep an
-  // unexpected legacy state visible to an owner rather than silently hiding it.
-  const otherConnections = (data?.connections ?? []).filter(
-    (connection) =>
-      connection.status !== "approved" && connection.status !== "revoked"
-  );
+  const archivedConnections = conns.filter((c) => c.status !== "approved");
+  const archiveCount = archivedRequests.length + archivedConnections.length;
 
   return (
     <div className="max-w-[1100px] px-6 py-6">
@@ -126,88 +148,8 @@ export default function ApplicationConnectionsPage() {
         ) : null}
       </header>
 
-      <section className="space-y-3" aria-labelledby="pending-requests">
-        <div className="flex items-center justify-between">
-          <h2
-            id="pending-requests"
-            className="text-sm font-medium text-foreground"
-          >
-            Pending requests
-          </h2>
-          <span className="text-xs text-foreground/50">
-            {pendingRequests.length}
-          </span>
-        </div>
-        {pendingRequests.length === 0 ? (
-          <EmptyState label="No application requests are waiting for review." />
-        ) : (
-          pendingRequests.map((request) => (
-            <RequestRow
-              key={request.id}
-              request={request}
-              actionLabel="Review"
-            />
-          ))
-        )}
-      </section>
-
-      {expiredRequests.length > 0 ? (
-        <section className="mt-9 space-y-3" aria-labelledby="expired-requests">
-          <div className="flex items-center justify-between">
-            <h2
-              id="expired-requests"
-              className="text-sm font-medium text-foreground"
-            >
-              Expired requests
-            </h2>
-            <span className="text-xs text-foreground/50">
-              {expiredRequests.length}
-            </span>
-          </div>
-          <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            These origin-approval handoffs timed out. If this origin is already
-            under Approved browser origins, the app only needs Check connection
-            — not another request.
-          </p>
-          {expiredRequests.map((request) => (
-            <RequestRow
-              key={request.id}
-              request={request}
-              actionLabel="View"
-              badge="expired"
-            />
-          ))}
-        </section>
-      ) : null}
-
-      {otherRequests.length > 0 ? (
-        <section className="mt-9 space-y-3" aria-labelledby="other-requests">
-          <div className="flex items-center justify-between">
-            <h2
-              id="other-requests"
-              className="text-sm font-medium text-foreground"
-            >
-              Other requests
-            </h2>
-            <span className="text-xs text-foreground/50">
-              {otherRequests.length}
-            </span>
-          </div>
-          {otherRequests.map((request) => (
-            <RequestRow
-              key={request.id}
-              request={request}
-              actionLabel="View"
-              badge={request.status}
-            />
-          ))}
-        </section>
-      ) : null}
-
-      <section
-        className="mt-9 space-y-3"
-        aria-labelledby="approved-connections"
-      >
+      {/* 1 — What's working: approved browser origins, first. */}
+      <section className="space-y-3" aria-labelledby="approved-connections">
         <div className="flex items-center justify-between gap-3">
           <h2
             id="approved-connections"
@@ -216,7 +158,7 @@ export default function ApplicationConnectionsPage() {
             Approved browser origins
           </h2>
           <span className="text-xs text-foreground/50">
-            {activeConnections.length}
+            {approvedOrigins.length}
           </span>
         </div>
         <p className="max-w-2xl text-xs leading-5 text-foreground/55">
@@ -225,10 +167,10 @@ export default function ApplicationConnectionsPage() {
           still need membership. Identity providers are managed under Trust
           &amp; Keys.
         </p>
-        {activeConnections.length === 0 ? (
+        {approvedOrigins.length === 0 ? (
           <EmptyState label="No external browser origins have been allowed yet." />
         ) : (
-          activeConnections.map((connection) => (
+          approvedOrigins.map((connection) => (
             <ConnectionCard
               key={connection.id}
               connection={connection}
@@ -241,50 +183,111 @@ export default function ApplicationConnectionsPage() {
         )}
       </section>
 
-      {revokedConnections.length > 0 ? (
-        <section
-          className="mt-9 space-y-3"
-          aria-labelledby="revoked-connections"
-        >
-          <div className="flex items-center justify-between gap-3">
+      {/* 2 — What needs YOU now: pending requests to review & approve. */}
+      {needsReview.length > 0 ? (
+        <section className="mt-9 space-y-3" aria-labelledby="needs-review">
+          <div className="flex items-center justify-between">
             <h2
-              id="revoked-connections"
+              id="needs-review"
               className="text-sm font-medium text-foreground"
             >
-              Revoked connections
+              Needs your review
             </h2>
             <span className="text-xs text-foreground/50">
-              {revokedConnections.length}
+              {needsReview.length}
             </span>
           </div>
           <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            These origins are no longer allowed to call the Pod. Re-allowing
-            them requires a new owner-reviewed request from the app.
+            An app is waiting for you to allow its website. Review the request,
+            then approve or decline.
           </p>
-          {revokedConnections.map((connection) => (
-            <ConnectionCard key={connection.id} connection={connection} />
+          {needsReview.map((request) => (
+            <RequestRow
+              key={request.id}
+              request={request}
+              actionLabel="Review &amp; approve"
+            />
           ))}
         </section>
       ) : null}
 
-      {otherConnections.length > 0 ? (
-        <section
-          className="mt-9 space-y-3"
-          aria-labelledby="inactive-connections"
-        >
-          <h2
-            id="inactive-connections"
-            className="text-sm font-medium text-foreground"
-          >
-            Other connection records
-          </h2>
+      {/* 3 — Mid-flight: app started but hasn't finished. Not owner-actionable. */}
+      {inProgress.length > 0 ? (
+        <section className="mt-9 space-y-3" aria-labelledby="in-progress">
+          <div className="flex items-center justify-between">
+            <h2
+              id="in-progress"
+              className="text-sm font-medium text-foreground"
+            >
+              In progress
+            </h2>
+            <span className="text-xs text-foreground/50">
+              {inProgress.length}
+            </span>
+          </div>
           <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            These records are not active. They remain visible so a Pod owner can
-            audit all application registration history.
+            These apps started connecting but haven’t finished. There’s nothing
+            to approve yet — finish from the app, and it’ll move up to “Needs
+            your review” once it’s waiting on you.
           </p>
-          {otherConnections.map((connection) => (
-            <ConnectionCard key={connection.id} connection={connection} />
+          {inProgress.map((request) => (
+            <RequestRow
+              key={request.id}
+              request={request}
+              actionLabel="View"
+              badge={request.status}
+            />
           ))}
+        </section>
+      ) : null}
+
+      {/* 4 — Archive: terminal / historical, collapsed at the bottom. */}
+      {archiveCount > 0 ? (
+        <section className="mt-9 space-y-3" aria-labelledby="archive">
+          <button
+            type="button"
+            onClick={() => setShowArchive((v) => !v)}
+            aria-expanded={showArchive}
+            className="flex w-full items-center justify-between gap-2 py-1 text-left"
+          >
+            <span
+              id="archive"
+              className="text-sm font-medium text-foreground/70"
+            >
+              Expired &amp; declined
+            </span>
+            <span className="flex items-center gap-2 text-xs text-foreground/50">
+              {archiveCount}
+              <ChevronDown
+                size={15}
+                className={
+                  showArchive
+                    ? "rotate-180 transition-transform"
+                    : "transition-transform"
+                }
+              />
+            </span>
+          </button>
+          {showArchive ? (
+            <div className="space-y-3">
+              <p className="max-w-2xl text-xs leading-5 text-foreground/55">
+                Timed-out or declined requests and revoked origins, kept for
+                audit. If an origin here is already approved above, the app just
+                needs Check connection — not a new request.
+              </p>
+              {archivedRequests.map((request) => (
+                <RequestRow
+                  key={request.id}
+                  request={request}
+                  actionLabel="View"
+                  badge={request.status}
+                />
+              ))}
+              {archivedConnections.map((connection) => (
+                <ConnectionCard key={connection.id} connection={connection} />
+              ))}
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>
@@ -459,7 +462,7 @@ function RequestRow({
             </p>
             {badge ? (
               <Chip size="sm" variant="flat" color={statusColor(badge)}>
-                {badge}
+                {requestStateLabel(badge)}
               </Chip>
             ) : null}
           </div>
