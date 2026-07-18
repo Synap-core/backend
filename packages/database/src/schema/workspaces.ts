@@ -415,6 +415,36 @@ export interface WorkspaceComposedFromEntry {
   importedAt: string;
 }
 
+/**
+ * Opt-in configuration for an UNAUTHENTICATED public projection of a workspace's
+ * data (Hub Protocol REST `GET /public/projection`). Default-deny: a workspace
+ * serves a public projection ONLY when `enabled === true`.
+ *
+ * Deliberately product-agnostic — it names no product, role, or field literally.
+ * The workspace owner declares WHICH facet role-profiles are public (`roles`,
+ * matched against `entity_facets` → `profiles.slug`) and WHICH property keys may
+ * be projected (`fields`, an allowlist applied server-side to every row).
+ *
+ * SECURITY: the projection query filters by the FACET's `workspace_id`, never the
+ * entity's — pod-wide atoms (company/person) live in every lens, so only entities
+ * carrying an allowlisted facet IN this workspace are exposed. See the route.
+ */
+export interface PublicProjectionSettings {
+  /** Master switch. Anything other than the boolean `true` = not opted in = 404. */
+  enabled: boolean;
+  /**
+   * Allowlist of facet role-profile slugs (`profiles.slug`) whose holders are
+   * public. An entity qualifies only if it has a live facet in THIS workspace
+   * whose profile slug is in this list. Empty ⇒ nothing is public (default-deny).
+   */
+  roles: string[];
+  /**
+   * Allowlist of property keys that may appear in a projected row. Any key not
+   * listed is stripped server-side, even if present on the entity/facet.
+   */
+  fields: string[];
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -424,6 +454,13 @@ export interface WorkspaceSettings {
 
   /** Product-surface policy for a CRM workspace. */
   crm?: CrmWorkspacePolicy;
+
+  /**
+   * Opt-in configuration for an UNAUTHENTICATED public projection of this
+   * workspace's facet-scoped data. Absent / `enabled !== true` ⇒ no public
+   * surface (the route 404s). See {@link PublicProjectionSettings}.
+   */
+  publicProjection?: PublicProjectionSettings;
 
   // ─── Workspace Directory / Capability Source Contract ───────────────────────
   /**
