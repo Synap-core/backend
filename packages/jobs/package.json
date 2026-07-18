@@ -28,7 +28,8 @@
     "test": "vitest run",
     "test:unit": "vitest run -c vitest.unit.config.ts",
     "dev": "tsx src/dev.ts",
-    "index-entities": "tsx src/scripts/index-existing-entities.ts"
+    "index-entities": "tsx src/scripts/index-existing-entities.ts",
+    "pod-hygiene-sweep": "tsx src/scripts/pod-hygiene-sweep.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
