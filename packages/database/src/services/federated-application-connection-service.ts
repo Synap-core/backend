@@ -76,13 +76,6 @@ export function effectiveApplicationConnectionRequestStatus(
   return expiresAt > new Date() ? status : "expired";
 }
 
-/** @deprecated use effectiveApplicationConnectionRequestStatus */
-function expiredStatus(
-  status: ApplicationConnectionRequestStatus,
-  expiresAt: Date
-): ApplicationConnectionRequestStatus {
-  return effectiveApplicationConnectionRequestStatus(status, expiresAt);
-}
 
 /** Post-approval window for the requester browser to finish identity link. */
 const POST_APPROVAL_COMPLETION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -447,7 +440,10 @@ export class FederatedApplicationConnectionService {
         },
       });
     if (!request) return null;
-    const status = expiredStatus(request.status, request.expiresAt);
+    const status = effectiveApplicationConnectionRequestStatus(
+      request.status,
+      request.expiresAt
+    );
     if (status === "expired" && request.status !== "expired") {
       await db
         .update(federatedApplicationConnectionRequests)
