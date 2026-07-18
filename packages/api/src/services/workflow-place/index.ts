@@ -494,10 +494,15 @@ export async function getWorkflowPlaceFeed(
   const { kind, id, userId } = input;
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 100);
 
+  // Bounded like loadSessions: the feed covers the workflow's most recent
+  // sessions — an old long-lived workflow must not grow this into an
+  // unbounded IN-list.
   const sessionRows = await db
     .select({ id: focusSessions.id })
     .from(focusSessions)
-    .where(sessionScopeWhere(kind, id, userId));
+    .where(sessionScopeWhere(kind, id, userId))
+    .orderBy(desc(focusSessions.createdAt))
+    .limit(SESSION_CAP);
   const sessionIds = sessionRows.map((r) => r.id);
   if (sessionIds.length === 0) return { items: [], nextCursor: null };
 

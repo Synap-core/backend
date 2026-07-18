@@ -1099,6 +1099,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   },
   {
     table: "proposals",
+    column: "node_id",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "proposals",
     column: "revision_history",
     addedBy: "0198_workflow_attribution_spine.sql",
   },
@@ -1118,13 +1123,28 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0198_workflow_attribution_spine.sql",
   },
   {
+    table: "playbook_runs",
+    column: "replay_of",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
     table: "automation_runs",
     column: "definition_snapshot",
     addedBy: "0198_workflow_attribution_spine.sql",
   },
   {
+    table: "automation_runs",
+    column: "replay_of",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
     table: "automation_step_runs",
     column: "tokens_used",
+    addedBy: "0198_workflow_attribution_spine.sql",
+  },
+  {
+    table: "automation_step_runs",
+    column: "cost_usd",
     addedBy: "0198_workflow_attribution_spine.sql",
   },
 ];
