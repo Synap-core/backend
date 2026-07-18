@@ -101,33 +101,6 @@ export interface PackageLoop {
   params?: Record<string, string>;
 }
 
-// ─── Agent seeding ─────────────────────────────────────────────────────────
-
-export interface PackageAgent {
-  name: string;
-  agentType: string; // free string — "marketing-agent", "builder-agent", etc.
-  description?: string;
-  /** Skill keys this agent has access to */
-  skillKeys?: string[];
-  /** Tool keys this agent has access to */
-  toolKeys?: string[];
-  /** Provider configuration */
-  provider?: {
-    type: "ollama" | "openrouter" | "anthropic" | "openai";
-    model?: string;
-  };
-}
-
-// ─── Channel seeding ────────────────────────────────────────────────────────
-
-export interface PackageChannel {
-  name: string;
-  description?: string;
-  channelType: "GROUP" | "AGENT_COLLAB" | "THREAD" | "PERSONAL";
-  /** Agent IDs to add as members on creation */
-  memberAgentRefs?: string[]; // references PackageAgent.name
-}
-
 // ─── Onboarding spec (the per-workspace dynamic onboarding CONTEXT) ──────────
 //
 // Stored on `workspace.settings.onboarding`. The SHARED `onboard` skill (the
@@ -275,10 +248,6 @@ export interface PackageDefinition {
   playbooks?: PackagePlaybook[];
   /** Loops to seed (playbook + trigger bundles) */
   loops?: PackageLoop[];
-  /** Agent users/configs to create */
-  agents?: PackageAgent[];
-  /** Channels/rooms to create */
-  channels?: PackageChannel[];
   /**
    * Per-workspace onboarding context (the dynamic "what this workspace needs"
    * the shared `onboard` skill reads). Written to workspace.settings.onboarding.
