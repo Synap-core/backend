@@ -271,7 +271,16 @@ export function registerPackagesRoutes(app: HubHono): void {
       } else if (core.status === "created") {
         // Hub never passes deferCreate, so the core never returns "resolved".
         workspaceId = core.workspaceId;
-        result.workspace = { status: "created", workspaceId: core.workspaceId };
+        result.workspace = {
+          status: "created",
+          workspaceId: core.workspaceId,
+          // Set when an idempotent re-hit was additively synced to a newer
+          // template (W2b, `reconcileWorkspaceIfStale`) instead of a silent
+          // no-op — lets the CLI/agent caller see drift was picked up.
+          ...(core.created.reconciled
+            ? { reconciled: core.created.reconciled }
+            : {}),
+        };
         auditLog({
           subjectType: "workspace",
           subjectId: core.workspaceId,

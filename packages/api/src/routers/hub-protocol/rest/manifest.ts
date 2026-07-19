@@ -250,6 +250,9 @@ export function registerManifestRoutes(app: HubHono): void {
     summary: "AI agent capability manifest",
     description:
       "Static orientation document for AI agents. Returns view types, bento block kinds, AI inline pattern syntax, browser-native cell keys, and pointers to live discovery endpoints. No DB queries — safe to cache for the duration of an agent session.",
+    // Public, no-auth (skip-listed in hub-protocol-rest.ts) — same posture as
+    // /health and /openapi.json. Overrides the global bearerAuth requirement.
+    security: [],
     responses: {
       200: { description: "Manifest payload" },
     },

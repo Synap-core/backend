@@ -41,6 +41,7 @@ import {
   loadFacetSlugsBatch,
   type FacetVisibilityScope,
   workspaces,
+  ProfileRepository,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -487,4 +488,50 @@ export async function resolveByName(
       workspaceId: (row.workspaceId as string | null) ?? null,
     };
   });
+}
+
+/**
+ * Resolve a NAME to profile/role *types* (not entities). The meta-model dual of
+ * `resolveByName`: KIND_TABLE only knows entity/object kinds (entity, view,
+ * channel, ...), so a caller who types a profile slug (e.g. `client`, `person`)
+ * into a graph lookup dead-ends. This probes the `profiles` table so the caller
+ * can be routed to the right tool (list_profiles / attach_facet / define_role)
+ * instead of getting a bare "not found".
+ *
+ * Case-insensitive match on slug OR displayName (same intent as `resolveByName`'s
+ * `ilike`), scoped through the canonical `getAccessibleProfiles` visibility floor
+ * (SYSTEM + USER + the caller's member-workspace profiles) so a caller only
+ * resolves profile types it may see.
+ */
+export async function resolveProfileByName(
+  userId: string,
+  name: string,
+  limit = 5
+): Promise<
+  Array<{
+    slug: string;
+    displayName: string;
+    profileKind: "kind" | "role";
+    applicableKinds: string[] | null;
+  }>
+> {
+  const db = await getDb();
+  const repo = new ProfileRepository(db);
+  // Workspace-less floor: SYSTEM + USER + member-workspace profiles — reuse the
+  // profile router's canonical predicate rather than re-deriving scope here.
+  const accessible = await repo.getAccessibleProfiles(userId, "");
+  const needle = name.toLowerCase();
+  return accessible
+    .filter(
+      (p) =>
+        p.slug.toLowerCase() === needle ||
+        p.displayName.toLowerCase() === needle
+    )
+    .slice(0, limit)
+    .map((p) => ({
+      slug: p.slug,
+      displayName: p.displayName,
+      profileKind: (p.profileKind ?? "kind") as "kind" | "role",
+      applicableKinds: p.applicableKinds ?? null,
+    }));
 }

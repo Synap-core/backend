@@ -43,6 +43,23 @@ export interface ProfileApplyResolution {
    */
   conflict: { slug: string; existingKind: string; declaredKind: string } | null;
   /**
+   * ADVISORY divergence (unlike the structural `conflict` above). On a REUSE,
+   * the template declared a `scope`/`entityScope` that differs from the live
+   * row. Placement/visibility is owned by the FIRST creator — a later template
+   * must not silently flip it — but this is NOT structural like a kind mismatch,
+   * so the apply still REUSES the row and merely REPORTS the divergence. The
+   * live row is NEVER mutated on account of this (the promote branch's own
+   * same-user scope flip is a separate, legitimate write). `declaredEntityScope`
+   * is `null` when the template did not declare one (no opinion → not compared).
+   */
+  scopeConflict: {
+    slug: string;
+    existingScope: string;
+    declaredScope: string;
+    existingEntityScope: string;
+    declaredEntityScope: "pod" | "workspace" | null;
+  } | null;
+  /**
    * A same-slug profile was found but could NOT be promoted to shared. The
    * caller creates a fresh profile at `createScope` (forced to `workspace`)
    * instead. This is the ONE branch where the dedup keystone knowingly FAILS to
@@ -100,6 +117,21 @@ export async function resolveProfileForApply(
      * unavailable, so a `shared` create would hit the unique index).
      */
     declaredScope: string;
+    /**
+     * Whether the template AUTHOR explicitly declared `scope` (vs it being
+     * defaulted to `workspace` by normalization). Only an explicitly-declared
+     * scope that diverges is reported as a `scopeConflict` — a defaulted scope
+     * carries no authorial intent and must NOT raise advisory noise on every
+     * reuse of a system profile. Mirrors the `declaredEntityScope !== undefined`
+     * gate for the placement axis.
+     */
+    declaredScopeExplicit?: boolean;
+    /**
+     * Declared entity visibility from the template. `undefined`/omitted means
+     * the template has NO opinion on entity scope — it is then NOT compared for
+     * divergence on reuse (only `scope` is). Never mutates the live row.
+     */
+    declaredEntityScope?: "pod" | "workspace";
     /** Declared kind from the template. `undefined`/omitted means 'kind'. */
     declaredKind?: "kind" | "role";
     workspaceId: string;
@@ -113,6 +145,7 @@ export async function resolveProfileForApply(
     reused: false,
     promoted: false,
     conflict: null,
+    scopeConflict: null,
     promotionDeferred: false,
     deferredReason: null,
     createScope: opts.declaredScope,
@@ -131,6 +164,32 @@ export async function resolveProfileForApply(
       declaredKind: normalizeKind(declaredKind),
     },
   });
+
+  /**
+   * ADVISORY scope/entityScope divergence for a REUSE — the resolved row differs
+   * from what the template declared. Reused-and-reported, never mutated. Returns
+   * `null` when neither axis diverges. `entityScope` is only compared when the
+   * template actually declared one (`undefined` ⇒ no opinion on that axis).
+   */
+  const scopeDivergence = (
+    resolved: Profile
+  ): ProfileApplyResolution["scopeConflict"] => {
+    const existingEntityScope = resolved.entityScope ?? "workspace";
+    const scopeDiffers =
+      opts.declaredScopeExplicit === true &&
+      opts.declaredScope !== resolved.scope;
+    const entityScopeDiffers =
+      opts.declaredEntityScope !== undefined &&
+      opts.declaredEntityScope !== existingEntityScope;
+    if (!scopeDiffers && !entityScopeDiffers) return null;
+    return {
+      slug: opts.slug,
+      existingScope: resolved.scope,
+      declaredScope: opts.declaredScope,
+      existingEntityScope,
+      declaredEntityScope: opts.declaredEntityScope ?? null,
+    };
+  };
 
   /**
    * THE WORKSPACE-SEAT PROBE — the is_active-blind sibling of the pod-wide one.
@@ -214,7 +273,12 @@ export async function resolveProfileForApply(
         .grantAccess(accessible.id, opts.workspaceId)
         .catch(() => {});
     }
-    return { ...base, profile: accessible, reused: true };
+    return {
+      ...base,
+      profile: accessible,
+      reused: true,
+      scopeConflict: scopeDivergence(accessible),
+    };
   }
 
   // 2. Not accessible here — look pod-wide for ANY existing row with this slug
@@ -299,7 +363,12 @@ export async function resolveProfileForApply(
       // `shared` one.)
       await profileRepo.grantAccess(existing.id, opts.workspaceId);
     }
-    return { ...base, profile: existing, reused: true };
+    return {
+      ...base,
+      profile: existing,
+      reused: true,
+      scopeConflict: scopeDivergence(existing),
+    };
   }
 
   // Existing workspace-scoped, owned by the SAME actor → promote to shared so the
@@ -345,11 +414,16 @@ export async function resolveProfileForApply(
         throw err;
       }
     }
+    const promotedProfile = { ...existing, scope: ProfileScope.SHARED };
     return {
       ...base,
-      profile: { ...existing, scope: ProfileScope.SHARED },
+      profile: promotedProfile,
       reused: true,
       promoted: true,
+      // Advisory divergence vs the RESOLVED (post-flip) row — the same-user
+      // scope flip above is legitimate; entityScope is NOT changed by it, so a
+      // template declaring a different entityScope is reported-and-ignored here.
+      scopeConflict: scopeDivergence(promotedProfile),
     };
   }
 

@@ -81,7 +81,15 @@ export const DiscoverProfileSummarySchema = z.object({
   displayName: z.string(),
   scope: z
     .enum(["pod", "workspace"])
-    .describe("pod = visible in all workspaces; workspace = scoped to one"),
+    .describe(
+      "PLACEMENT (from entityScope): pod = entities visible in all workspaces; workspace = scoped to one. NOTE: this is placement, not visibility — the who-can-see axis is `visibility`."
+    ),
+  visibility: z
+    .enum(["system", "shared", "workspace", "user"])
+    .optional()
+    .describe(
+      "VISIBILITY (from the profile's scope column): who can use this profile type. Distinct from `scope` above, which is placement."
+    ),
   description: z.string().nullable().optional(),
   icon: z.string().nullable().optional(),
   profileKind: ProfileKindSchema.optional(),
@@ -94,7 +102,15 @@ const DiscoverProfileSchema = z.object({
   displayName: z.string(),
   scope: z
     .enum(["pod", "workspace"])
-    .describe("pod = visible in all workspaces; workspace = scoped to one"),
+    .describe(
+      "PLACEMENT (from entityScope): pod = entities visible in all workspaces; workspace = scoped to one. NOTE: this is placement, not visibility — the who-can-see axis is `visibility`."
+    ),
+  visibility: z
+    .enum(["system", "shared", "workspace", "user"])
+    .optional()
+    .describe(
+      "VISIBILITY (from the profile's scope column): who can use this profile type. Distinct from `scope` above, which is placement."
+    ),
   description: z.string().nullable().optional(),
   icon: z.string().nullable().optional(),
   profileKind: ProfileKindSchema.optional(),
@@ -198,6 +214,9 @@ export function registerDiscoverRoutes(app: HubHono): void {
         displayName: string;
         description?: string | null;
         entityScope?: string;
+        // Visibility axis (who can use the type) — distinct from entityScope
+        // (placement), which feeds discover's `scope` field.
+        scope?: string | null;
         icon?: string | null;
         profileKind?: "kind" | "role";
         applicableKinds?: string[] | null;
@@ -213,6 +232,12 @@ export function registerDiscoverRoutes(app: HubHono): void {
           slug: p.slug,
           displayName: p.displayName,
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
+          visibility: (p.scope ?? undefined) as
+            | "system"
+            | "shared"
+            | "workspace"
+            | "user"
+            | undefined,
           description: p.description ?? null,
           icon: p.icon ?? null,
           profileKind: p.profileKind ?? "kind",
@@ -279,6 +304,12 @@ export function registerDiscoverRoutes(app: HubHono): void {
           slug: p.slug,
           displayName: p.displayName,
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
+          visibility: (p.scope ?? undefined) as
+            | "system"
+            | "shared"
+            | "workspace"
+            | "user"
+            | undefined,
           description: p.description ?? null,
           icon: p.icon ?? null,
           profileKind: p.profileKind ?? "kind",

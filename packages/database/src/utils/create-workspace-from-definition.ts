@@ -152,6 +152,15 @@ export interface WorkspaceDefinitionInput {
     description?: string;
     scope?: string;
     /**
+     * Whether entities of this profile type are pod-wide (visible in ALL
+     * workspaces) or workspace-scoped. Threaded verbatim into
+     * `ProfileRepository.create` — omit to inherit the repo default
+     * (`"workspace"`), which is the unchanged behavior for templates that do not
+     * declare it. Product-neutral: any template may set this (it is no longer
+     * reachable only through the hardcoded `POD_WIDE_SLUGS` seed set).
+     */
+    entityScope?: "pod" | "workspace";
+    /**
      * Semantic identity tag for cross-workspace queries. Defaults to the profile's slug.
      * Set to null to mark this profile as private (no cross-workspace semantics).
      */
@@ -867,6 +876,8 @@ export async function createWorkspaceFromDefinition(
         resolution = await resolveProfileForApply(profileRepo, {
           slug: profile.slug,
           declaredScope: scope,
+          declaredScopeExplicit: profile.scope !== undefined,
+          declaredEntityScope: profile.entityScope,
           declaredKind: profile.profileKind,
           workspaceId,
           actorUserId: userId,
@@ -895,6 +906,15 @@ export async function createWorkspaceFromDefinition(
             ? "Promoted + reused profile (resolve-and-share)"
             : "Reusing accessible / pod-wide profile (granting access)"
         );
+        // ADVISORY: the template declared a scope/entityScope that diverges from
+        // the reused live row. The row is owned by its first creator and is NOT
+        // mutated — the declared scope is reported-and-ignored, not applied.
+        if (resolution!.scopeConflict) {
+          logger.warn(
+            { ...resolution!.scopeConflict },
+            "profile scope/entityScope divergence — reused existing row, declared scope NOT applied"
+          );
+        }
       } else {
         // Not found (or a match was deferred) → create it here.
         //
@@ -926,6 +946,9 @@ export async function createWorkspaceFromDefinition(
             // would collide with the very same-slug pod-wide row that made the
             // promotion impossible in the first place.
             scope: resolution!.createScope as ProfileScope,
+            // Template-declared entity visibility. `undefined` ⇒ repo default
+            // `"workspace"` (unchanged for templates that don't declare it).
+            entityScope: profile.entityScope,
             workspaceId,
             userId,
             // Pass explicit semanticSlug from template; auto-assignment for

@@ -68,12 +68,8 @@ import {
   type PackageDependencyRelation,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import {
-  getWorkspaceTemplate,
-  toWorkspaceDefinition,
-  toPackageDefinition,
-  type WorkspaceYaml,
-} from "@synap-core/workspace-templates";
+import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
+import type { PackageDefinitionOutput } from "@synap-core/workspace-templates";
 import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
 import {
@@ -85,43 +81,68 @@ import { createLogger } from "@synap-core/core";
 const logger = createLogger({ module: "package-dependency-resolver" });
 
 /**
+ * Outcome of seeding ONE dependency's post-workspace layers (capabilities +
+ * playbooks) — surfaced up through `ResolvedPackageDependency.seedOutcome` so
+ * a caller (CLI/browser) can see "3/4 capabilities seeded; X FAILED: <reason>"
+ * instead of the failure being swallowed into a log line only an operator
+ * with server access could see. Seeding itself stays NON-FATAL — the install
+ * still succeeds — but the outcome is now VISIBLE, never silent.
+ */
+export interface DependencySeedOutcome {
+  slug: string;
+  /** No `capabilities`/`playbooks` declared for this template — nothing to seed. */
+  status: "no-layers" | "seeded" | "failed";
+  /** Layer keys `applyPackagePostWorkspace` reported (e.g. ["capabilities","playbooks"]). */
+  layers?: string[];
+  /** Failure reason, set only when `status === "failed"`. */
+  error?: string;
+}
+
+/**
  * Seed a materialized DEPENDENCY's post-workspace layers.
  *
- * A dependency is materialized from `toWorkspaceDefinition(slug)` (§4a/§4b),
+ * A dependency is materialized from a workspace-shaped definition (§4a/§4b),
  * which — by design — carries only the workspace shape (profiles/views/bento):
  * it DROPS the `capabilities` / `automations` / `playbooks` / `loops` layers
- * that `toPackageDefinition(slug)` emits. So a `require: grants` dependency stood
- * up its workspace but silently never got its 4 grant capabilities, on BOTH
- * install doors (the resolver runs under Hub `packages/apply` AND tRPC
+ * that the PACKAGE-shaped definition emits. So a `require: grants` dependency
+ * stood up its workspace but silently never got its 4 grant capabilities, on
+ * BOTH install doors (the resolver runs under Hub `packages/apply` AND tRPC
  * `createFromDefinition`). The post-workspace layers only ran for the TOP-LEVEL
  * package a Hub apply targeted — never for its dependencies.
  *
  * Fix: after a dependency is NEWLY materialized, run the SAME shared door
  * (`applyPackagePostWorkspace`) that a top-level Hub apply runs, with the dep's
- * OWN `toPackageDefinition`. A required dependency now gets exactly the treatment
+ * OWN package definition. A required dependency now gets exactly the treatment
  * a directly-installed package gets — one door, symmetric on both sides.
  *
  * Idempotent + non-fatal: the shared door reuses existing capabilities by key,
  * governed writes may return `proposed` (normal), and a failure here must never
- * abort the install — the workspace already exists.
+ * abort the install — the workspace already exists. `preResolved` lets a
+ * caller that already resolved this slug's template (step 3/4 below) pass the
+ * SAME cache-first-resolved package definition through instead of resolving
+ * it a second time.
  */
 async function seedDependencyPostWorkspace(
   workspaceId: string,
   slug: string,
   userId: string,
-  agentUserId: string | undefined
-): Promise<void> {
-  let pkg: ReturnType<typeof toPackageDefinition>;
-  try {
-    pkg = toPackageDefinition(slug);
-  } catch {
-    return; // slug has no package form (should not happen for a resolved dep)
+  agentUserId: string | undefined,
+  preResolved?: PackageDefinitionOutput
+): Promise<DependencySeedOutcome> {
+  let pkg: PackageDefinitionOutput;
+  if (preResolved) {
+    pkg = preResolved;
+  } else {
+    const resolved = await resolveWorkspaceTemplate(slug);
+    if (!resolved) return { slug, status: "no-layers" }; // no package form — nothing to seed
+    pkg = resolved.packageDefinition;
   }
-  // `toPackageDefinition` emits `capabilities` (from the template's
+  // A package definition emits `capabilities` (from the template's
   // `integrations`) and `playbooks` — the two post-workspace layers a template
-  // authors. Both are dropped by `toWorkspaceDefinition`; these are what we seed.
+  // authors. Both are dropped by the workspace-shaped definition; these are
+  // what we seed.
   const hasLayers = !!pkg.capabilities?.length || !!pkg.playbooks?.length;
-  if (!hasLayers) return;
+  if (!hasLayers) return { slug, status: "no-layers" };
 
   try {
     const result = await applyPackagePostWorkspace({
@@ -139,11 +160,17 @@ async function seedDependencyPostWorkspace(
       { slug, workspaceId, layers: Object.keys(result) },
       "dependency post-workspace layers seeded"
     );
+    return { slug, status: "seeded", layers: Object.keys(result) };
   } catch (err) {
     logger.warn(
       { err, slug, workspaceId },
       "dependency post-workspace layers failed (non-fatal — workspace already exists)"
     );
+    return {
+      slug,
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -180,6 +207,12 @@ export interface ResolvedPackageDependency {
   action: PackageDependencyAction;
   /** Human context — set for `required-absent` (why it couldn't be satisfied). */
   message?: string;
+  /**
+   * Post-workspace layer (capabilities/playbooks) seed result for this
+   * dependency — set for `installed`/`composed` actions where seeding was
+   * attempted. Surfaces a failure that used to be swallowed into a log line.
+   */
+  seedOutcome?: DependencySeedOutcome;
 }
 
 /** The minimal slice of a `PackageDefinition` this resolver reads. */
@@ -359,7 +392,10 @@ async function ensureWorkspaceDependencyPresent(
   if (cached) return cached;
 
   // Record a fresh resolution once (both the cache and the UX `installed[]`).
-  const record = (res: ResolveResult): ResolveResult => {
+  const record = (
+    res: ResolveResult,
+    seedOutcome?: DependencySeedOutcome
+  ): ResolveResult => {
     resolved.set(slug, res);
     installed.push({
       slug,
@@ -368,6 +404,7 @@ async function ensureWorkspaceDependencyPresent(
       workspaceId: res.workspaceId,
       action: res.action,
       message: res.message,
+      seedOutcome,
     });
     return res;
   };
@@ -382,9 +419,11 @@ async function ensureWorkspaceDependencyPresent(
   );
   if (existing) return record({ workspaceId: existing.id, action: "found" });
 
-  // 2. Resolve the built-in template. Absent → surface (V1: built-in bases only).
-  const tpl = getWorkspaceTemplate(slug);
-  if (!tpl) {
+  // 2. Resolve the template — CACHE-FIRST (the freshest CP catalog entry a
+  //    synced pod knows about), frozen-bundle fallback on any cache miss.
+  //    Absent from BOTH → surface (V1: built-in/cached bases only).
+  const resolvedTemplate = await resolveWorkspaceTemplate(slug);
+  if (!resolvedTemplate) {
     return record({
       action: "required-absent",
       message: `No built-in workspace template "${slug}" — it must be installed on the pod first (V1 resolves built-in bases only).`,
@@ -397,9 +436,7 @@ async function ensureWorkspaceDependencyPresent(
   //    A nested `compose` dep is ensured with the SAME editor+ write floor as a
   //    top-level one (`relation` is forwarded), and its resolved base id is
   //    captured below — that is what makes compose TRANSITIVE in step 4.
-  const baseDeps =
-    (tpl as WorkspaceYaml & { dependencies?: TemplateDependency[] })
-      .dependencies ?? [];
+  const baseDeps = resolvedTemplate.dependencies;
   const ownComposeDep = assertSingleComposeDep(baseDeps, slug);
   let ownComposeBase: ResolveResult | undefined;
 
@@ -426,7 +463,8 @@ async function ensureWorkspaceDependencyPresent(
   // The templates package's WorkspaceDefinitionInput is structurally the
   // create/reconcile input; cast across the two package boundaries as the boot
   // reconcile hook does.
-  const { definition } = toWorkspaceDefinition(slug);
+  const definition =
+    resolvedTemplate.workspaceDefinition as unknown as WorkspaceDefinitionInput;
 
   // 4a. TRANSITIVE COMPOSE — this template is an OVERLAY (it declares its own
   //     `compose`), so it must be layered onto its base, NEVER materialized as
@@ -445,23 +483,27 @@ async function ensureWorkspaceDependencyPresent(
     await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: ownComposeBase.workspaceId,
       userId,
-      definition: definition as unknown as WorkspaceDefinitionInput,
+      definition,
     });
     // The overlay's own capabilities/automations/playbooks/loops attach to the
     // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
     // Operations). composeOntoBaseWorkspace reconciles only the workspace shape,
     // so seed the post-workspace layers here — the same door a top-level apply runs.
-    await seedDependencyPostWorkspace(
+    const seedOutcome = await seedDependencyPostWorkspace(
       ownComposeBase.workspaceId,
       slug,
       userId,
-      agentUserId
+      agentUserId,
+      resolvedTemplate.packageDefinition
     );
-    return record({
-      workspaceId: ownComposeBase.workspaceId,
-      action: "composed",
-      message: `Overlay "${slug}" composed onto "${ownComposeDep.slug}".`,
-    });
+    return record(
+      {
+        workspaceId: ownComposeBase.workspaceId,
+        action: "composed",
+        message: `Overlay "${slug}" composed onto "${ownComposeDep.slug}".`,
+      },
+      seedOutcome
+    );
   }
 
   // 4b. Install via the canonical idempotent create path.
@@ -479,29 +521,33 @@ async function ensureWorkspaceDependencyPresent(
   //     itself derives, so keying on it would make installing internal-runbook
   //     idempotently return the OPERATIONS workspace.
   const ws = await createWorkspaceFromDefinitionIdempotent({
-    definition: definition as unknown as WorkspaceDefinitionInput,
+    definition,
     userId,
     proposalId: slug,
     packageSlug: slug,
     templateId: slug,
     createdBy: "provisioning",
   });
-  // Only for a NEWLY created dependency: `toWorkspaceDefinition` (used just above)
-  // drops the capabilities/automations/playbooks/loops layers, so seed them via
-  // the shared door. A `found` (idempotent reuse) already went through this on
-  // its first creation — skip to avoid needless governed re-writes.
-  if (ws.created) {
-    await seedDependencyPostWorkspace(
-      ws.workspaceId,
-      slug,
-      userId,
-      agentUserId
-    );
-  }
-  return record({
-    workspaceId: ws.workspaceId,
-    action: ws.created ? "installed" : "found",
-  });
+  // Only for a NEWLY created dependency: the workspace-shaped definition (used
+  // just above) drops the capabilities/automations/playbooks/loops layers, so
+  // seed them via the shared door. A `found` (idempotent reuse) already went
+  // through this on its first creation — skip to avoid needless governed re-writes.
+  const seedOutcome = ws.created
+    ? await seedDependencyPostWorkspace(
+        ws.workspaceId,
+        slug,
+        userId,
+        agentUserId,
+        resolvedTemplate.packageDefinition
+      )
+    : undefined;
+  return record(
+    {
+      workspaceId: ws.workspaceId,
+      action: ws.created ? "installed" : "found",
+    },
+    seedOutcome
+  );
 }
 
 /**

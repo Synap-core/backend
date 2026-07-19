@@ -18,6 +18,7 @@ import { validateCreateVerbInput } from "./validate-create-verb.js";
 import {
   getObjectGraph,
   resolveByName,
+  resolveProfileByName,
   type GraphNeighbor,
   type GraphEnvelope,
 } from "../../services/object-graph/graph-service.js";
@@ -541,6 +542,9 @@ export async function executeMCPToolViaHubProtocol(
           slug: p.slug,
           displayName: p.displayName,
           entityScope: p.entityScope,
+          // Visibility axis (who can use this profile type) — distinct from
+          // entityScope (placement: where its entities live).
+          scope: p.scope ?? null,
           description: p.description ?? null,
           icon: p.icon ?? null,
           // Kind + Facets discriminator — lets an agent tell a primary type
@@ -658,8 +662,25 @@ export async function executeMCPToolViaHubProtocol(
           args.name as string,
           args.subtype as string | undefined
         );
-        if (matches.length === 0)
+        if (matches.length === 0) {
+          // The name matched no entity of this kind — but it may be a
+          // profile/role type name. Probe profiles and route the caller to the
+          // right tool instead of dead-ending.
+          const profileHits = await resolveProfileByName(
+            userId,
+            args.name as string
+          );
+          if (profileHits.length > 0) {
+            return ok({
+              error: `'${args.name}' is a profile/role, not a ${gKind}. get_graph resolves entities, not types.`,
+              candidates: profileHits,
+              hint: profileHits.some((p) => p.profileKind === "role")
+                ? "This is a role (facet). Use synap_list_profiles to inspect it, synap_attach_facet to attach it to an entity, or synap_define_role to edit it."
+                : "This is a kind. Use synap_list_profiles to inspect its schema, or synap_get_entities to list entities of this type.",
+            });
+          }
           return ok({ error: `No ${gKind} named '${args.name}'` });
+        }
         if (matches.length > 1)
           return ok({
             ambiguous: true,

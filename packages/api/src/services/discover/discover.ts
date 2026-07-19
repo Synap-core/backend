@@ -143,6 +143,10 @@ interface ProfileSample {
   name: string;
   profileKind: "kind" | "role";
   applicableKinds?: string[] | null;
+  /** Visibility — who can use the type (system|shared|workspace|user). */
+  scope?: string | null;
+  /** Placement — where its entities live (pod|workspace). */
+  entityScope?: string | null;
 }
 
 interface DiscoverWorkspace {
@@ -204,6 +208,8 @@ function trimProfiles(res: unknown): ProfileSample[] {
     displayName?: string;
     profileKind?: "kind" | "role";
     applicableKinds?: string[] | null;
+    scope?: string | null;
+    entityScope?: string | null;
   }>;
   return list.flatMap((p) =>
     p.slug
@@ -214,6 +220,9 @@ function trimProfiles(res: unknown): ProfileSample[] {
             // Kind + Facets discriminator (defaults to "kind" for legacy rows).
             profileKind: p.profileKind ?? "kind",
             applicableKinds: p.applicableKinds ?? null,
+            // Visibility (who can see) + placement (where entities live).
+            scope: p.scope ?? null,
+            entityScope: p.entityScope ?? null,
           },
         ]
       : []

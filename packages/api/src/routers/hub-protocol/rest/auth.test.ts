@@ -117,8 +117,19 @@ function buildTestApp(): HubHono {
 
   app.use("/*", async (c, next) => {
     const reqPath = c.req.path;
-    const skipAuthPaths = ["/health", "/openapi.json", "/docs"];
-    if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
+    // Mirrors the orchestrator's boundary-safe skip logic
+    // (hub-protocol-rest.ts): strip the known mount prefix, then exact-compare
+    // the de-prefixed path against skipAuthPaths.
+    const skipAuthPaths = ["/health", "/openapi.json", "/manifest", "/docs"];
+    const HUB_MOUNTS = ["/api/hub-protocol", "/api/hub"]; // longest first
+    const mount = HUB_MOUNTS.find(
+      (m) => reqPath === m || reqPath.startsWith(m + "/")
+    );
+    const rel = mount ? reqPath.slice(mount.length) || "/" : reqPath;
+    if (
+      skipAuthPaths.includes(rel) ||
+      rel.startsWith("/setup/agent/pending/")
+    ) {
       return next();
     }
 
@@ -178,6 +189,8 @@ const KEY_ROW = {
   createdAt: new Date("2026-01-01T00:00:00Z"),
   lastUsedAt: new Date("2026-04-01T00:00:00Z"),
   parentKeyId: null,
+  keyType: "hub_inbound",
+  workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 } as const;
 
 const JOIN_ROW = {
@@ -190,6 +203,8 @@ const JOIN_ROW = {
   lastUsedAt: KEY_ROW.lastUsedAt,
   parentKeyId: KEY_ROW.parentKeyId,
   isActive: KEY_ROW.isActive,
+  keyType: KEY_ROW.keyType,
+  workspaceId: KEY_ROW.workspaceId,
   userEmail: "alice@example.com",
   userName: "Alice",
 };
@@ -228,6 +243,8 @@ describe("/auth/status — happy path", () => {
       scopes: ["hub-protocol.read", "hub-protocol.write"],
       isActive: true,
       parentKeyId: null,
+      keyType: "hub_inbound",
+      workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     });
     // ISO strings, not Date objects (the wire schema declares string-datetime)
     expect(typeof body.createdAt).toBe("string");
@@ -315,6 +332,17 @@ describe("/openapi.json — public discovery", () => {
     const app = buildTestApp();
     const res = await app.request("/openapi.json");
     expect(res.status).toBe(200);
+  });
+
+  it("does NOT skip auth for a path that merely ends with a skip entry", async () => {
+    // Under the old `endsWith` predicate, `/foo/health` was a false skip (it
+    // ends with "/health"). The boundary-safe matcher requires an exact
+    // de-prefixed match, so this path must hit the auth check → 401.
+    const app = buildTestApp();
+    const res = await app.request("/foo/health");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.reason).toBe("no_auth");
   });
 
   it("returns OpenAPI 3.1 with the expected envelope schema and security scheme", async () => {

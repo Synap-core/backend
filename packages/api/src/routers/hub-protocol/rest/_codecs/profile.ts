@@ -19,6 +19,13 @@ export const WireProfileSchema = z
     description: z.string().nullable().optional(),
     parentProfileId: z.string().nullable().optional(),
     entityScope: z.enum(["pod", "workspace"]).optional(),
+    scope: z
+      .enum(["system", "shared", "workspace", "user"])
+      .nullable()
+      .optional()
+      .describe(
+        "Visibility — who can use this profile type. Distinct from entityScope (placement)."
+      ),
     workspaceId: z.string().nullable().optional(),
     defaultValues: z.record(z.string(), z.unknown()).optional(),
     uiHints: z.record(z.string(), z.unknown()).optional(),
@@ -66,6 +73,13 @@ export const WireProfileDigestSchema = z
     slug: z.string(),
     displayName: z.string(),
     entityScope: z.enum(["pod", "workspace"]).optional(),
+    scope: z
+      .enum(["system", "shared", "workspace", "user"])
+      .nullable()
+      .optional()
+      .describe(
+        "Visibility — who can use this profile type. Distinct from entityScope (placement)."
+      ),
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     profileKind: z

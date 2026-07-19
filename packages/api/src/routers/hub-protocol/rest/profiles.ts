@@ -50,7 +50,7 @@ export function registerProfilesRoutes(app: HubHono): void {
     responses: {
       200: {
         description:
-          "Array of profiles. Default: lightweight digest (id, slug, displayName, entityScope, description, icon, profileKind, applicableKinds). Pass ?detail=full for the complete row.",
+          "Array of profiles. Default: lightweight digest (id, slug, displayName, entityScope, scope, description, icon, profileKind, applicableKinds). `scope` = visibility (who can use the type); `entityScope` = placement (where its entities live). Pass ?detail=full for the complete row.",
         schema: z.union([
           z.array(WireProfileDigestSchema),
           z.array(WireProfileSchema),
@@ -126,7 +126,7 @@ export function registerProfilesRoutes(app: HubHono): void {
    * GET /profiles?userId=...&workspaceId=...&detail=full
    *
    * Default (no `detail` param): lightweight digest per profile —
-   *   { id, slug, displayName, entityScope, description, icon,
+   *   { id, slug, displayName, entityScope, scope, description, icon,
    *     profileKind, applicableKinds }
    * Pass `?detail=full` to receive the complete profile row.
    */
@@ -162,6 +162,7 @@ export function registerProfilesRoutes(app: HubHono): void {
           slug: string;
           displayName: string;
           entityScope?: string;
+          scope?: "system" | "shared" | "workspace" | "user" | null;
           description?: string | null;
           icon?: string | null;
           profileKind?: "kind" | "role";
@@ -172,6 +173,9 @@ export function registerProfilesRoutes(app: HubHono): void {
         slug: p.slug,
         displayName: p.displayName,
         entityScope: p.entityScope,
+        // Visibility axis (who can use this profile type) — distinct from
+        // entityScope (placement: where its entities live).
+        scope: p.scope ?? null,
         description: p.description ?? null,
         icon: p.icon ?? null,
         // An omitted discriminator is a legacy primary kind, never a role.

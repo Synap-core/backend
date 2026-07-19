@@ -116,6 +116,8 @@ export function registerAuthRoutes(app: HubHono): void {
           lastUsedAt: apiKeys.lastUsedAt,
           parentKeyId: apiKeys.parentKeyId,
           isActive: apiKeys.isActive,
+          keyType: apiKeys.keyType,
+          workspaceId: apiKeys.workspaceId,
           userEmail: users.email,
           userName: users.name,
         })
@@ -149,6 +151,8 @@ export function registerAuthRoutes(app: HubHono): void {
           lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
           parentKeyId: row.parentKeyId ?? null,
           isActive: row.isActive,
+          keyType: row.keyType,
+          workspaceId: row.workspaceId ?? null,
         },
         200
       );

@@ -36,6 +36,15 @@ export const AuthStatusSchema = z
     lastUsedAt: z.string().datetime().nullable(),
     parentKeyId: z.string().uuid().nullable(),
     isActive: z.boolean(),
+    // Keep the enum in sync with the `$type<>` union at api-keys.ts:56-58.
+    keyType: z.enum([
+      "hub_inbound",
+      "user_pat",
+      "system",
+      "service",
+      "is_internal",
+    ]),
+    workspaceId: z.string().uuid().nullable(),
   })
   .openapi("AuthStatus");
 

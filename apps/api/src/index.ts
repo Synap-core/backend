@@ -408,6 +408,25 @@ app.get("/", (c) => {
   });
 });
 
+// Public API discovery index. Points at the Hub Protocol surfaces so an
+// operator (or agent) can orient before holding a valid bearer. Exact `GET /api`
+// — Hono matches it before the deeper `/api/hub` sub-app mounts below; no
+// hub-auth middleware runs here (that lives inside hubProtocolRestApp only).
+app.get("/api", (c) =>
+  c.json({
+    service: "Synap Data Pod API",
+    hub: {
+      base: "/api/hub",
+      openapi: "/api/hub/openapi.json", // public, full route manifest
+      manifest: "/api/hub/manifest", // AI-agent capability manifest (public)
+      health: "/api/hub/health",
+      authStatus: "/api/hub/auth/status", // Bearer-gated introspection
+    },
+    aliases: ["/api/hub-protocol"],
+    version: "0.2.0-saas",
+  })
+);
+
 // Prometheus metrics endpoint (public, no auth)
 app.get("/metrics", async (c) => {
   const { getMetrics } = await import("@synap-core/core");

@@ -94,6 +94,20 @@ export interface ReconcileReport {
       existingKind: string;
       declaredKind: string;
     }>;
+    /**
+     * Declared `scope`/`entityScope` on a REUSED slug diverged from the live
+     * row. ADVISORY (unlike `conflicts`, which skips): the profile was still
+     * reused and the live row left untouched — the declared scope was NOT
+     * applied. Surfaced so `market install`/reconcile callers can decide whether
+     * to escalate; the first creator owns placement/visibility.
+     */
+    scopeConflicts: Array<{
+      slug: string;
+      existingScope: string;
+      declaredScope: string;
+      existingEntityScope: string;
+      declaredEntityScope: "pod" | "workspace" | null;
+    }>;
   };
   properties: {
     /** New overlay/base property-defs added. */
@@ -155,6 +169,7 @@ export async function reconcileWorkspaceFromDefinition(
       promoted: [],
       deferred: [],
       conflicts: [],
+      scopeConflicts: [],
     },
     properties: { added: [], skipped: [], enumsUpdated: [], conflicts: [] },
     views: { added: [], skipped: [], deferred: [] },
@@ -214,6 +229,8 @@ export async function reconcileWorkspaceFromDefinition(
     const resolution = await resolveProfileForApply(profileRepo, {
       slug: profile.slug,
       declaredScope: scope,
+      declaredScopeExplicit: profile.scope !== undefined,
+      declaredEntityScope: profile.entityScope,
       declaredKind: profile.profileKind,
       workspaceId,
       actorUserId: userId,
@@ -224,6 +241,11 @@ export async function reconcileWorkspaceFromDefinition(
       // Never overlay onto (or mutate) a different-kind profile — skip entirely.
       continue;
     }
+    // ADVISORY (unlike the kind conflict above, which skips): the reuse still
+    // proceeds, we just record that the declared scope/entityScope was NOT
+    // applied to the live row.
+    if (resolution.scopeConflict)
+      report.profiles.scopeConflicts.push(resolution.scopeConflict);
     let resolved = resolution.profile;
     let profileIsReused = resolution.reused;
     if (resolution.reused) {
@@ -250,6 +272,9 @@ export async function reconcileWorkspaceFromDefinition(
           // `workspace` on a deferred promotion, where a `shared` create would
           // collide with the same-slug pod-wide row that blocked the promotion.
           scope: resolution.createScope as ProfileScope,
+          // Template-declared entity visibility. `undefined` ⇒ repo default
+          // `"workspace"` (unchanged for templates that don't declare it).
+          entityScope: profile.entityScope,
           workspaceId,
           userId,
           semanticSlug: profile.semanticSlug,
@@ -513,6 +538,7 @@ export async function reconcileWorkspaceFromDefinition(
       profilesReused: report.profiles.reused.length,
       profilesPromoted: report.profiles.promoted.length,
       profileKindConflicts: report.profiles.conflicts.length,
+      profileScopeConflicts: report.profiles.scopeConflicts.length,
       propsAdded: report.properties.added.length,
       propConflicts: report.properties.conflicts.length,
       viewsAdded: report.views.added.length,

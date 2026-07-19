@@ -633,3 +633,163 @@ describe("resolveProfileForApply — template dedup + guard", () => {
     expect(repo.calls.grant).toHaveLength(0);
   });
 });
+
+describe("resolveProfileForApply — scope/entityScope divergence (advisory)", () => {
+  // Named default (Item 1): scope-divergence REUSES-AND-REPORTS (not skip);
+  // kind-divergence stays SKIP. The live row is NEVER mutated on account of a
+  // scope/entityScope divergence — the first creator owns placement/visibility.
+
+  it("reports a divergent declared entityScope on reuse but STILL reuses + never mutates the live row", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "s1",
+        scope: ProfileScope.SHARED,
+        profileKind: "role",
+        entityScope: "workspace",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredScope: "shared", // matches → no scope-axis divergence
+      declaredEntityScope: "pod", // diverges from the live "workspace"
+    });
+    expect(r.reused).toBe(true);
+    expect(r.profile?.id).toBe("s1");
+    expect(r.scopeConflict).toEqual({
+      slug: "client",
+      existingScope: ProfileScope.SHARED,
+      declaredScope: "shared",
+      existingEntityScope: "workspace",
+      declaredEntityScope: "pod",
+    });
+    // Reuse-and-report — the live row is untouched (no scope/entityScope write).
+    expect(repo.calls.update).toHaveLength(0);
+  });
+
+  it("reports a divergent declared scope on reuse (declared scope silently dropped is now surfaced)", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "sys1",
+        scope: ProfileScope.SYSTEM,
+        profileKind: "kind",
+        entityScope: "pod",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredKind: "kind",
+      declaredScope: "workspace", // diverges from the live "system"
+      declaredScopeExplicit: true, // author explicitly declared it
+    });
+    expect(r.reused).toBe(true);
+    expect(r.scopeConflict).toEqual({
+      slug: "client",
+      existingScope: ProfileScope.SYSTEM,
+      declaredScope: "workspace",
+      existingEntityScope: "pod",
+      declaredEntityScope: null, // template declared no entityScope
+    });
+    expect(repo.calls.update).toHaveLength(0);
+  });
+
+  it("does NOT flag a scope divergence when scope was DEFAULTED, not explicitly declared (no advisory noise)", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "sys1",
+        scope: ProfileScope.SYSTEM,
+        profileKind: "kind",
+        entityScope: "pod",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredKind: "kind",
+      declaredScope: "workspace", // normalization default, diverges from live "system"
+      declaredScopeExplicit: false, // template author declared NO scope
+    });
+    expect(r.reused).toBe(true);
+    expect(r.scopeConflict).toBeNull(); // defaulted scope carries no authorial intent
+  });
+
+  it("does NOT flag a scopeConflict when declared scope AND entityScope both match", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "s2",
+        scope: ProfileScope.SHARED,
+        profileKind: "role",
+        entityScope: "pod",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredScope: "shared",
+      declaredEntityScope: "pod",
+    });
+    expect(r.reused).toBe(true);
+    expect(r.scopeConflict).toBeNull();
+  });
+
+  it("does NOT compare the entityScope axis when the template omits entityScope (no opinion)", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "s3",
+        scope: ProfileScope.SHARED,
+        profileKind: "role",
+        entityScope: "pod",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredScope: "shared", // matches → scope axis fine
+      declaredEntityScope: undefined, // omitted → entityScope NOT compared
+    });
+    expect(r.reused).toBe(true);
+    expect(r.scopeConflict).toBeNull();
+  });
+
+  it("reports entityScope divergence on the promote branch but PRESERVES the legitimate same-user scope flip", async () => {
+    const repo = fakeRepo({
+      anyScope: [
+        mkProfile({
+          id: "w1",
+          scope: ProfileScope.WORKSPACE,
+          workspaceId: "wsA",
+          userId: "u1",
+          profileKind: "role",
+          entityScope: "workspace",
+        }),
+      ],
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      declaredEntityScope: "pod",
+    });
+    // The same-user promotion flip is untouched.
+    expect(r.promoted).toBe(true);
+    expect(r.profile?.scope).toBe(ProfileScope.SHARED);
+    expect(repo.calls.update).toContainEqual([
+      "w1",
+      { scope: ProfileScope.SHARED },
+    ]);
+    // entityScope was NOT changed by the flip → divergence reported.
+    expect(r.scopeConflict).toEqual({
+      slug: "client",
+      existingScope: ProfileScope.SHARED, // resolved (post-flip) row
+      declaredScope: "workspace",
+      existingEntityScope: "workspace",
+      declaredEntityScope: "pod",
+    });
+  });
+
+  it("sets NO scopeConflict when nothing matches (a fresh create has nothing to diverge from)", async () => {
+    const repo = fakeRepo({ anyScope: [] });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      slug: "podcast",
+      declaredKind: "kind",
+      declaredEntityScope: "pod",
+    });
+    expect(r.profile).toBeNull();
+    expect(r.scopeConflict).toBeNull();
+  });
+});

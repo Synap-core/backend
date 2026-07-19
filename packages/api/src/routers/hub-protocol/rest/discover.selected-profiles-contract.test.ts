@@ -31,6 +31,7 @@ function mockProfilesCaller() {
         slug: "task",
         displayName: "Task",
         entityScope: "workspace",
+        scope: "system",
         profileKind: "kind",
       },
       {
@@ -38,6 +39,7 @@ function mockProfilesCaller() {
         slug: "investor",
         displayName: "Investor",
         entityScope: "workspace",
+        scope: "shared",
         profileKind: "role",
         applicableKinds: ["person", "company"],
       },
@@ -86,6 +88,9 @@ describe("GET /discover?profileSlugs", () => {
       profiles: [
         {
           slug: "task",
+          // Placement axis (entityScope) vs the new visibility axis (scope column).
+          scope: "workspace",
+          visibility: "system",
           properties: [{ slug: "due-date", type: "date" }],
         },
       ],

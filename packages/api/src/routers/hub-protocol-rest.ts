@@ -202,12 +202,16 @@ app.use("/*", async (c, next) => {
   // use specialized auth (CP JWT and PROVISIONING_TOKEN respectively)
   // and run their own checks downstream.
   //
-  // Match logic: exact match OR suffix match (the path comes in mounted
-  // under `/api/hub/...`, so suffix-match is what catches it). Ordering
-  // is irrelevant since `.some()` is logical-OR.
+  // Match logic: the request path arrives mounted under `/api/hub/...` (or the
+  // `/api/hub-protocol/...` alias). We strip the known mount prefix, then
+  // exact-compare the de-prefixed path against `skipAuthPaths`. Boundary-safe:
+  // a future route ending in `/health`, `/docs`, etc. is NOT silently skipped.
   const skipAuthPaths = [
     "/health",
     "/openapi.json",
+    // Static, no-DB agent orientation doc — public by design (same posture as
+    // /openapi.json). Matched exactly as rel === "/manifest".
+    "/manifest",
     "/docs",
     "/entity-share/deliver",
     "/setup/agent",
@@ -223,14 +227,22 @@ app.use("/*", async (c, next) => {
     // Invite acceptance — the invitee has no API key yet; token is the capability
     "/setup/accept-invite",
   ];
+  // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
+  // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the
+  // `/api/hub-protocol` alias); a naive `===` against the unprefixed entries
+  // would never match the mounted request.
+  const HUB_MOUNTS = ["/api/hub-protocol", "/api/hub"]; // longest first
+  const mount = HUB_MOUNTS.find(
+    (m) => reqPath === m || reqPath.startsWith(m + "/")
+  );
+  const rel = mount ? reqPath.slice(mount.length) || "/" : reqPath;
   if (
-    skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p)) ||
+    skipAuthPaths.includes(rel) ||
     // The pending-agent review/approve/reject subtree is token-protected (the
     // secret keyId IS the capability) and opened in a browser with no auth
-    // header. `c.req.path` carries the mount prefix (/api/hub or
-    // /api/hub-protocol), so match by substring, NOT startsWith — a startsWith
-    // against the unprefixed path never matches the mounted request.
-    reqPath.includes("/setup/agent/pending/")
+    // header. Matched on the de-prefixed path — boundary-safe (no longer skips
+    // a route that merely contains the substring).
+    rel.startsWith("/setup/agent/pending/")
   ) {
     return next();
   }

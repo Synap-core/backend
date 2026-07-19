@@ -506,6 +506,15 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             defaultSources: settings.defaultSources ?? {},
             appId: settings.appId ?? null,
             packageSlug: settings.packageSlug ?? null,
+            // CP content-hash stamp ("h-<hash>") — the CLI/agent install door
+            // (Hub `/packages/apply`) needs this to detect template drift
+            // client-side, mirroring `packageSlug`'s projection above.
+            packageVersion: settings.packageVersion ?? null,
+            // Additive-pack installs (profile/view/bento) never set
+            // `packageSlug` — they carry their own identity here instead. The
+            // CLI unions this with `packageSlug` to match the browser's
+            // `useInstalledPackageSlugs` "installed" set (see that hook's doc).
+            installedPacks: settings.installedPacks ?? [],
             systemSlug: settings.systemSlug ?? null,
             entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
           };

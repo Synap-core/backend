@@ -69,7 +69,10 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
-import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
+import {
+  withWorkspaceProposalIdLock,
+  reconcileWorkspaceIfStale,
+} from "../services/workspace-creation-service.js";
 import { resolveWorkspaceExtends } from "../services/workspace-composition.js";
 import type { ResolvedPackageDependency } from "../services/package-dependency-resolver.js";
 import {
@@ -2857,7 +2860,27 @@ export const workspacesRouter = router({
       // trigger — every consumer that provisions on launch/signup picks up
       // template drift for free. Best-effort: a reconcile failure must never
       // break the (successful) idempotent return, so it is caught + logged.
-      const reconcileExisting = async (workspaceId: string) => {
+      //
+      // VERSION-AWARE (W2b): the actual compare-and-reconcile lives in the ONE
+      // shared `reconcileWorkspaceIfStale` (workspace-creation-service.ts) —
+      // the SAME entry point the Hub-door idempotent-create path
+      // (`createWorkspaceFromDefinitionIdempotent`) now also calls, so neither
+      // door reimplements the hash compare. When it can't compare (no
+      // `packageSlug`, or the resolved template carries no version signal —
+      // e.g. bundle fallback), fall back to the prior unconditional behavior
+      // (reconcile against the caller-supplied `input.definition`) — no
+      // regression for that edge.
+      const reconcileExisting = async (
+        workspaceId: string,
+        currentSettings: WorkspaceSettings | null
+      ) => {
+        const outcome = await reconcileWorkspaceIfStale({
+          workspaceId,
+          packageSlug: input.packageSlug,
+          currentSettings,
+          userId: ctx.userId,
+        });
+        if (outcome.checked) return outcome.report; // in sync (undefined) or freshly reconciled
         try {
           return await reconcileWorkspaceFromDefinition({
             workspaceId,
@@ -2979,7 +3002,7 @@ export const workspacesRouter = router({
               // workspaces to avoid racing an in-flight provisioning build.
               const reconciled =
                 provStatus === "active"
-                  ? await reconcileExisting(ws.id)
+                  ? await reconcileExisting(ws.id, wsSettings)
                   : undefined;
               return {
                 workspaceId: ws.id,
@@ -3080,7 +3103,7 @@ export const workspacesRouter = router({
               // avoid racing an in-flight provisioning build.
               const reconciled =
                 provStatus === "active"
-                  ? await reconcileExisting(ws.id)
+                  ? await reconcileExisting(ws.id, wsSettings)
                   : undefined;
               return {
                 status:

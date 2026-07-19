@@ -20,6 +20,7 @@ const {
   mockGetWorkspaceTemplate,
   mockToWorkspaceDefinition,
   mockToPackageDefinition,
+  mockResolveWorkspaceTemplate,
   mockCreateWorkspace,
   mockComposeOntoBase,
   mockApplyPostWorkspace,
@@ -30,6 +31,7 @@ const {
   mockGetWorkspaceTemplate: vi.fn(),
   mockToWorkspaceDefinition: vi.fn(),
   mockToPackageDefinition: vi.fn(),
+  mockResolveWorkspaceTemplate: vi.fn(),
   mockCreateWorkspace: vi.fn(),
   mockComposeOntoBase: vi.fn(),
   mockApplyPostWorkspace: vi.fn(),
@@ -45,10 +47,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap-core/workspace-templates", () => ({
-  getWorkspaceTemplate: mockGetWorkspaceTemplate,
-  toWorkspaceDefinition: mockToWorkspaceDefinition,
-  toPackageDefinition: mockToPackageDefinition,
+// The resolver goes through `resolveWorkspaceTemplate` (cache-first, bundle
+// fallback — see resolve-workspace-template.ts) instead of importing
+// `@synap-core/workspace-templates` directly. Mocked wholesale here so these
+// tests never touch the real cache DB read; the mock composes the SAME three
+// primitives (`mockGetWorkspaceTemplate`/`mockToWorkspaceDefinition`/
+// `mockToPackageDefinition`) the tests already configure per-scenario, so
+// existing test bodies are unchanged — only this wiring moved.
+vi.mock("./capabilities/resolve-workspace-template.js", () => ({
+  resolveWorkspaceTemplate: mockResolveWorkspaceTemplate,
 }));
 
 vi.mock("./workspace-creation-service.js", () => ({
@@ -120,6 +127,23 @@ describe("resolvePackageDependencies", () => {
       created: true,
     });
     mockComposeOntoBase.mockResolvedValue({});
+    // Compose `resolveWorkspaceTemplate`'s result from the SAME three
+    // primitives the tests configure — mirrors the real module's bundle-
+    // fallback branch (getWorkspaceTemplate → toWorkspaceDefinition +
+    // toPackageDefinition), so per-test mock setup is unchanged.
+    mockResolveWorkspaceTemplate.mockImplementation(async (slug: string) => {
+      const tpl = mockGetWorkspaceTemplate(slug);
+      if (!tpl) return null;
+      const { definition: workspaceDefinition } =
+        mockToWorkspaceDefinition(slug);
+      const packageDefinition = mockToPackageDefinition(slug);
+      return {
+        source: "bundle",
+        dependencies: tpl.dependencies ?? [],
+        workspaceDefinition,
+        packageDefinition,
+      };
+    });
   });
 
   it("1. no deps → composeRequested:false, installed:[]", async () => {
