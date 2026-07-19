@@ -426,17 +426,62 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       let enriched: Awaited<ReturnType<typeof enrichForWs>>;
       if (!acting.workspaceId) {
         const wsIds = await getUserAccessibleWorkspaceIds(acting.userId);
-        const settled = await Promise.allSettled(
-          wsIds.map((wsId) => enrichForWs(wsId))
+        // One caller per workspace (a cheap ctx object), reused for the list AND
+        // the detail fetch.
+        const callerForWs = new Map<
+          string,
+          ReturnType<typeof capabilitiesRouter.createCaller>
+        >();
+        const getCaller = async (wsId: string) => {
+          let caller = callerForWs.get(wsId);
+          if (!caller) {
+            const ctx = await createHubProtocolCallerContext(
+              acting.userId,
+              scopes,
+              wsId
+            );
+            caller = capabilitiesRouter.createCaller(ctx as never);
+            callerForWs.set(wsId, caller);
+          }
+          return caller;
+        };
+
+        // LIST across every accessible workspace, then dedup container ids
+        // BEFORE the per-container `.get()` enrichment. A pod-wide global
+        // container appears in EVERY workspace lens, so enriching per
+        // (workspace, container) was an O(W×C) N+1 that fetched the same detail
+        // repeatedly and deduped AFTER. Dedup first — keeping the first-seen
+        // workspace so the surviving object and its detail-caller match the
+        // prior dedup-after result — then fetch each unique container's detail
+        // exactly once. `containers.get` scopes by userVisibleWhere(userId), so
+        // the detail is identical regardless of which workspace's caller runs it.
+        const listed = await Promise.allSettled(
+          wsIds.map(async (wsId) => {
+            const caller = await getCaller(wsId);
+            const containers = await caller.containers.list({
+              workspaceId: wsId,
+            });
+            return containers.map((container) => ({ container, wsId }));
+          })
         );
         const seen = new Set<string>();
-        enriched = settled
+        const uniqueContainers = listed
           .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
-          .filter((container) => {
+          .filter(({ container }) => {
             if (seen.has(container.id)) return false;
             seen.add(container.id);
             return true;
           });
+        const settled = await Promise.allSettled(
+          uniqueContainers.map(async ({ container, wsId }) => {
+            const caller = await getCaller(wsId);
+            const detail = await caller.containers.get({ id: container.id });
+            return { ...container, members: detail.parts };
+          })
+        );
+        enriched = settled.flatMap((r) =>
+          r.status === "fulfilled" ? [r.value] : []
+        );
       } else {
         enriched = await enrichForWs(acting.workspaceId);
       }

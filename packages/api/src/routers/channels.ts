@@ -1898,7 +1898,7 @@ export const channelsRouter = router({
               objectId: attachEntityId,
               relationshipType: "used_as_context",
               userId: userId,
-              workspaceId: channel.workspaceId!,
+              workspaceId: channel.workspaceId,
             })
             .onConflictDoNothing();
         }
@@ -4540,7 +4540,11 @@ export const channelsRouter = router({
         where: eq(channels.id, input.channelId),
       });
 
-      if (!channel?.workspaceId) {
+      // A pod-wide channel (workspaceId = NULL) is a real channel, not a 404 —
+      // gate on existence, then let the nullable workspaceId flow into
+      // assertWorkspaceWrite (which handles the pod-wide / owner case) and the
+      // nullable channel_context_items.workspace_id column.
+      if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Channel not found",

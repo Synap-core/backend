@@ -139,7 +139,11 @@ const crossThreadNotifyReactor: Reactor = {
 // 5. Automation trigger matching — THE trigger hop (load-bearing, byte-identical)
 const automationTriggerMatchReactor: Reactor = {
   id: "automation-trigger-match",
-  match: (payload) => Boolean(payload.workspaceId),
+  // Fire on workspace-scoped events (unchanged) AND on pod-wide inbound messages
+  // (external_message with a null workspace — a pod-wide Discord turn). The worker
+  // matches a null-workspace event across the user's accessible workspaces (F1).
+  match: (payload) =>
+    Boolean(payload.workspaceId) || payload.subjectType === "external_message",
   async handler(payload, { boss }) {
     await boss.send("automation-trigger-match", {
       eventType: `${payload.subjectType}.${payload.action}.completed`,

@@ -16,9 +16,12 @@ import {
   eq,
   and,
   inArray,
+  drizzleSql,
   automations,
   automationRuns,
   playbookAutomations,
+  workspaceMembers,
+  workspaces,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -32,7 +35,13 @@ interface TriggerMatchPayload {
   eventType: string;
   subjectId: string;
   userId: string;
-  workspaceId: string;
+  /**
+   * Workspace the event happened in. `null` for a pod-wide inbound (a shared /
+   * external channel with `workspaceId = NULL`): the matcher then fans matching
+   * out across the acting user's accessible workspace floor instead of a single
+   * workspace. Wave-3 made this optional, so it is honestly nullable here.
+   */
+  workspaceId: string | null;
   data?: Record<string, unknown>;
   automationContext?: {
     automationRunId: string;
@@ -269,6 +278,32 @@ function matchTriggerSpecificFilters(
 }
 
 /**
+ * Workspace-ID floor for a pod-wide (null-workspace) inbound: the acting user's
+ * accessible workspaces — explicit memberships PLUS pod-visible / pod-joinable
+ * source workspaces. Mirrors `getUserAccessibleWorkspaceIds`
+ * (@synap/api → hub-protocol/rest/_shared), which is NOT importable from
+ * @synap/jobs without a circular @synap/api ← @synap/jobs dependency, so the
+ * canonical predicate is replicated here against the same tables.
+ */
+async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
+  const memberRows = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+  const ids = new Set(memberRows.map((r) => r.workspaceId));
+
+  const podReadable = await db
+    .select({ workspaceId: workspaces.id })
+    .from(workspaces)
+    .where(
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+    );
+  for (const row of podReadable) ids.add(row.workspaceId);
+
+  return Array.from(ids);
+}
+
+/**
  * Main handler: match an event against all active automations in the workspace.
  */
 export async function handleAutomationTriggerMatch(job: {
@@ -295,6 +330,19 @@ export async function handleAutomationTriggerMatch(job: {
   const chainIds = new Set(automationContext?.chainAutomationIds ?? []);
 
   // ── Find matching automations ──────────────────────────────────────────
+  // Pod-wide inbound: a null event workspace (a shared / external channel with
+  // `workspaceId = NULL`) means "match across the acting user's accessible
+  // workspace floor" — `eq(workspaceId, NULL)` matches nothing. A non-null event
+  // workspace keeps the exact single-workspace scope (unchanged). An empty floor
+  // yields `inArray(..., [])` = false, i.e. no matches.
+  const workspaceMatch =
+    workspaceId != null
+      ? eq(automations.workspaceId, workspaceId)
+      : inArray(
+          automations.workspaceId,
+          await getAccessibleWorkspaceFloor(userId)
+        );
+
   const activeAutomations = await db
     .select({
       id: automations.id,
@@ -304,7 +352,7 @@ export async function handleAutomationTriggerMatch(job: {
     .from(automations)
     .where(
       and(
-        eq(automations.workspaceId, workspaceId),
+        workspaceMatch,
         eq(automations.status, "active"),
         eq(automations.triggerType, "event")
       )
@@ -427,6 +475,11 @@ export async function handleAutomationTriggerMatch(job: {
       "Event matched automation trigger — creating run"
     );
 
+    // Pod-wide events (null event workspace) run each matched automation IN ITS
+    // OWN workspace; the eq() filter above guarantees this equals `workspaceId`
+    // for the non-null path, so that path is unchanged.
+    const runWorkspaceId = workspaceId ?? automation.workspaceId;
+
     const rootRunId =
       automationContext?.rootRunId ?? automationContext?.automationRunId;
 
@@ -434,7 +487,7 @@ export async function handleAutomationTriggerMatch(job: {
       .insert(automationRuns)
       .values({
         automationId: automation.id,
-        workspaceId,
+        workspaceId: runWorkspaceId,
         triggeredBy: automationContext ? "system" : userId,
         triggerPayload: {
           eventType,
@@ -451,7 +504,7 @@ export async function handleAutomationTriggerMatch(job: {
     await boss.send("automation-execute", {
       runId: run.id,
       automationId: automation.id,
-      workspaceId,
+      workspaceId: runWorkspaceId,
       // Pass chain context so the executor can tag output events
       automationContext: {
         automationRunId: run.id,
