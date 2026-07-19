@@ -47,6 +47,16 @@ function generateApiKey(prefix: string): string {
 
 export const apiKeysRouter = router({
   /**
+   * The canonical set of scopes a key may carry — the SAME `API_KEY_SCOPES` the
+   * `create` mutation validates against. The key-creation UI renders its scope
+   * options from this so it can never drift out of sync with the backend
+   * validator (which is exactly how the phantom `sync` scope shipped).
+   */
+  availableScopes: protectedProcedure.query(() => {
+    return { scopes: API_KEY_SCOPES as readonly string[] };
+  }),
+
+  /**
    * List API keys for the current user
    */
   list: protectedProcedure.query(async ({ ctx }) => {

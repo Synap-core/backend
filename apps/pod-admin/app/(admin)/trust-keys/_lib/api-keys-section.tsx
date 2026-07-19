@@ -102,8 +102,11 @@ const CATEGORY_LABEL: Record<KeyCategory, string> = {
 };
 
 /**
- * Single source of truth for valid scopes per key type.
- * Backend validator is in `packages/api/src/routers/api-keys.ts`. Keep in sync.
+ * Per-key-type curation: which scopes to OFFER for each key type. This is a
+ * presentation choice only — the backend (`apiKeys.availableScopes`, backed by
+ * `API_KEY_SCOPES`) is the source of truth for which scopes are VALID, and the
+ * dialog filters this list through it, so an entry the backend rejects is never
+ * shown. Keep entries here to the backend's known scopes.
  */
 const KEY_TYPE_SCOPES = {
   personal: [
@@ -119,7 +122,6 @@ const KEY_TYPE_SCOPES = {
     "data.write",
     "hub-protocol.read",
     "hub-protocol.write",
-    "sync",
     "setup.agent",
     "chat.stream",
     "realtime:observe",
@@ -607,8 +609,19 @@ function CreateKeyModal({
     );
   }
 
-  const availableScopes =
+  // The backend is the source of truth for which scopes are valid. We keep the
+  // per-key-type curation (which subset to OFFER) but filter it through the
+  // backend's canonical list, so a scope the validator doesn't accept can never
+  // be shown or selected — even if this local list drifts again.
+  const scopeQuery = trpc.apiKeys.availableScopes.useQuery(undefined, {
+    staleTime: 300_000,
+  });
+  const backendScopes = scopeQuery.data?.scopes;
+  const curated =
     kind === "system" ? KEY_TYPE_SCOPES.system : KEY_TYPE_SCOPES.personal;
+  const availableScopes = backendScopes
+    ? curated.filter((s) => backendScopes.includes(s))
+    : curated;
 
   return (
     <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
