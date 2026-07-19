@@ -2061,24 +2061,11 @@ async function executeAutomationFlow(params: {
 
   const flow = automation.flowDefinition as FlowDefinition;
 
-  // D3c: snapshot the definition this run executed, once at first execution.
-  // Guarded on the existing value so a delay-resumption re-entry (same runId)
-  // never re-stamps. `definitionSnapshot` being unset is therefore the exact
-  // "this is the run's FIRST execution" signal — reused for the precondition gate
-  // below (robust against BOTH delay-resume AND crash-redelivery, where job.data
-  // is the original with completedNodeIds/focusSessionId unset).
+  // `definitionSnapshot` unset is the exact "this is the run's FIRST execution"
+  // signal (robust against BOTH delay-resume AND crash-redelivery, where
+  // job.data is the original with completedNodeIds/focusSessionId unset) —
+  // consumed by the precondition gate, then flipped by the snapshot stamp.
   const isFirstExecution = !run.definitionSnapshot;
-  if (isFirstExecution) {
-    await db
-      .update(automationRuns)
-      .set({
-        definitionSnapshot: {
-          version: automation.version,
-          flowDefinition: flow,
-        },
-      })
-      .where(eq(automationRuns.id, runId));
-  }
 
   // ── Flow-level precondition (Wave 4.V3) ────────────────────────────────────
   // Evaluate BEFORE opening a session or running any step, so a precondition-
@@ -2088,6 +2075,12 @@ async function executeAutomationFlow(params: {
   // which have already passed the gate and may have run steps. The context here
   // is the trigger payload + the automation's snapshot state — the same values a
   // `condition` node reads.
+  //
+  // Ordering constraint: this gate MUST run before the snapshot stamp below —
+  // the stamp is what flips isFirstExecution off, so stamping first would let a
+  // crash in between skip the gate entirely on redelivery (the run would then
+  // execute steps its precondition said to skip). Gate-first means that crash
+  // window re-enters with isFirstExecution still true and re-evaluates.
   if (isFirstExecution && flow.precondition) {
     const preconditionContext: StepContext = {
       trigger: {
@@ -2124,6 +2117,22 @@ async function executeAutomationFlow(params: {
       await postRunSummary(runId);
       return {};
     }
+  }
+
+  // D3c: snapshot the definition this run executed, once at first execution
+  // (and only AFTER the precondition gate passed — see ordering note above).
+  // Guarded on the existing value so a delay-resumption re-entry (same runId)
+  // never re-stamps.
+  if (isFirstExecution) {
+    await db
+      .update(automationRuns)
+      .set({
+        definitionSnapshot: {
+          version: automation.version,
+          flowDefinition: flow,
+        },
+      })
+      .where(eq(automationRuns.id, runId));
   }
 
   // ── Open (or resume) a focus session for this run ──────────────────────────

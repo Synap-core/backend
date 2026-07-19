@@ -39,11 +39,15 @@ async function resolveGrantRefs(
     eq,
     isNull,
     or,
+    drizzleSql,
     tools: toolsTable,
     skills: skillsTable,
   } = await import("@synap/database");
   const resolved: { kind: "tool" | "skill"; id: string }[] = [];
   for (const name of grants) {
+    // When the name exists both workspace-scoped and pod-wide, the workspace
+    // row must win deterministically (false < true in Postgres ASC, so
+    // "workspaceId IS NULL" sorts workspace rows first).
     const [tool] = await db
       .select({ id: toolsTable.id })
       .from(toolsTable)
@@ -56,6 +60,7 @@ async function resolveGrantRefs(
           )
         )
       )
+      .orderBy(drizzleSql`${toolsTable.workspaceId} IS NULL`)
       .limit(1);
     if (tool) {
       resolved.push({ kind: "tool", id: tool.id });
@@ -73,6 +78,7 @@ async function resolveGrantRefs(
           )
         )
       )
+      .orderBy(drizzleSql`${skillsTable.workspaceId} IS NULL`)
       .limit(1);
     if (skill) resolved.push({ kind: "skill", id: skill.id });
     // else: unresolved grant ref — skipped, not fatal (name may not exist yet).
@@ -510,6 +516,11 @@ export async function applyPackagePostWorkspace(
   // enroll-agent step / workspace-creation-service proposalId-stamp use — not
   // the governed tRPC settings caller, which would PROPOSE (not apply) an
   // agent-driven settings change and leave placements deferred.
+  // KNOWN LIMIT: read-modify-write has a lost-update window if a concurrent
+  // writer touches settings between the SELECT and UPDATE (second install,
+  // enroll-agent, user edit). Accepted — installs are rare and re-apply is
+  // idempotent (re-running restores a lost placement); a server-side JSONB
+  // merge is the fix if this ever bites.
   if (body.actionPlacements?.length && workspaceId) {
     try {
       const resolved = await resolveActionPlacementRefs(

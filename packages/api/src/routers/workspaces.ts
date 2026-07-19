@@ -3831,9 +3831,17 @@ export const workspacesRouter = router({
           input.definition.playbooks?.length)
       ) {
         try {
+          // Same builder as the create/compose branches — reconcile definitions
+          // carry LOOP-style playbooks (grants as {kind, ref}[]), so the raw
+          // cast fed them into the graph-shaped applier where grants silently
+          // resolved to nothing. One builder = install and reconcile stay in
+          // lockstep (same loop routing, same grant materialization).
           await applyPackagePostWorkspace({
             workspaceId: input.workspaceId,
-            body: input.definition as unknown as PackagePostWorkspaceBody,
+            body: buildPostWorkspaceBodyFromDefinition(
+              input.definition as unknown as CreateDefinitionPostWorkspaceSlice,
+              input.workspaceId
+            ),
             userId: ctx.userId,
             agentUserId: (ctx as { agentUserId?: string }).agentUserId,
             scopes: [],

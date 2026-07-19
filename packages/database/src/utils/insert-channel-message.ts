@@ -100,12 +100,19 @@ export async function insertChannelMessage(
     .onConflictDoNothing()
     .returning({ id: messages.id });
 
-  const mirror = await mirrorMessageToBoundExternal({
-    channel,
-    channelId,
-    content,
-    authorType,
-  });
+  // Mirror ONLY when this call actually inserted the row. `msg === undefined`
+  // means the PK conflicted — a redelivered producer re-sent a deterministic
+  // id whose row (and mirror enqueue) already happened on the prior delivery;
+  // mirroring again would double-post to the bound external (Discord). The
+  // egress enqueue itself has no idempotency key, so this gate is the dedup.
+  const mirror = msg
+    ? await mirrorMessageToBoundExternal({
+        channel,
+        channelId,
+        content,
+        authorType,
+      })
+    : { mirrored: false, reason: "duplicate-insert-skipped" as const };
 
   return {
     messageId: msg?.id,
