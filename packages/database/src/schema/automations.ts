@@ -22,8 +22,9 @@ import {
   integer,
   numeric,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
@@ -132,7 +133,13 @@ export interface AutomationNodeBase {
     | "skill"
     | "capability"
     | "sub_automation"
-    | "playbook_run";
+    | "playbook_run"
+    | "entity_read"
+    | "related_entities"
+    | "compute"
+    | "select"
+    | "claim"
+    | "guard";
   position: { x: number; y: number };
 }
 
@@ -185,9 +192,14 @@ export interface OutputNodeDef extends AutomationNodeBase {
       | "notification"
       | "entity_create"
       | "entity_update"
+      | "facet_attach"
+      | "facet_update"
+      | "facet_detach"
+      | "relation_create"
       | "webhook"
       | "channel_message"
-      | "session_update";
+      | "session_update"
+      | "set_state";
     config: Record<string, unknown>;
   };
 }
@@ -235,6 +247,93 @@ export interface QueryNodeDef extends AutomationNodeBase {
     filter: string;
     limit: number;
     /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Read one entity by id within the automation's workspace/pod lens. */
+export interface EntityReadNodeDef extends AutomationNodeBase {
+  type: "entity_read";
+  data: {
+    label?: string;
+    entityId: string;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Traverse a bounded set of generic graph relations and project counterparties. */
+export interface RelatedEntitiesNodeDef extends AutomationNodeBase {
+  type: "related_entities";
+  data: {
+    label?: string;
+    entityId: string;
+    direction?: "outbound" | "inbound" | "both";
+    relationTypes?: string[];
+    propertyEquals?: Record<string, unknown>;
+    /** Exclude a known related entity (for example the trigger entity itself). */
+    excludeEntityId?: string;
+    limit?: number;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Finite numeric operations over literal or template-bound scalar values. */
+export interface ComputeNodeDef extends AutomationNodeBase {
+  type: "compute";
+  data: {
+    label?: string;
+    operation: "add" | "subtract" | "multiply" | "divide" | "coalesce" | "now";
+    left?: unknown;
+    right?: unknown;
+    /** First finite numeric value wins; useful for declarative fee precedence. */
+    values?: unknown[];
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Choose one typed value from a boolean produced by a prior deterministic step. */
+export interface SelectNodeDef extends AutomationNodeBase {
+  type: "select";
+  data: {
+    label?: string;
+    when: unknown;
+    ifTrue: unknown;
+    ifFalse: unknown;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/**
+ * Atomically reserves a durable, namespace-scoped key. This is a generic
+ * workflow primitive for one-time policy decisions (not a CRM concept): the
+ * run that first claims a key observes `claimed: true`; subsequent runs see
+ * `claimed: false`. Re-delivery of the owning run remains `claimed: true`.
+ */
+export interface ClaimNodeDef extends AutomationNodeBase {
+  type: "claim";
+  data: {
+    label?: string;
+    namespace: string;
+    key: string;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Structured, fail-closed business guard with an actionable retry reason. */
+export interface GuardNodeDef extends AutomationNodeBase {
+  type: "guard";
+  data: {
+    label?: string;
+    checks: Array<{
+      path: string;
+      exists?: boolean;
+      equals?: unknown;
+      arrayIncludes?: unknown;
+      lengthEquals?: number;
+      numberGte?: number;
+      numberLte?: number;
+      message: string;
+    }>;
     errorHandling?: NodeErrorHandling;
   };
 }
@@ -358,6 +457,12 @@ export type AutomationNode =
   | TransformNodeDef
   | FetchNodeDef
   | QueryNodeDef
+  | EntityReadNodeDef
+  | RelatedEntitiesNodeDef
+  | ComputeNodeDef
+  | SelectNodeDef
+  | ClaimNodeDef
+  | GuardNodeDef
   | MessagesQueryNodeDef
   | SwitchNodeDef
   | SkillNodeDef
@@ -498,6 +603,8 @@ export const automationRuns = pgTable(
       .notNull()
       .references(() => automations.id, { onDelete: "cascade" }),
     workspaceId: uuid("workspace_id"),
+    /** Entity the run was explicitly launched about, when applicable. */
+    subjectEntityId: uuid("subject_entity_id"),
     triggeredBy: text("triggered_by"), // userId or "system"
 
     triggerPayload: jsonb("trigger_payload")
@@ -556,6 +663,9 @@ export const automationRuns = pgTable(
     ),
     statusIdx: index("automation_runs_status_idx").on(table.status),
     startedAtIdx: index("automation_runs_started_at_idx").on(table.startedAt),
+    subjectEntityIdIdx: index("automation_runs_subject_entity_id_idx").on(
+      table.subjectEntityId
+    ),
   })
 );
 
@@ -610,6 +720,40 @@ export const automationStepRuns = pgTable(
 
 export type AutomationStepRun = typeof automationStepRuns.$inferSelect;
 export type NewAutomationStepRun = typeof automationStepRuns.$inferInsert;
+
+// ── Durable workflow claims ─────────────────────────────────────────────────
+
+/**
+ * A compact, generic exactly-one decision ledger. It deliberately stores no
+ * domain data: templates choose their namespace/key and use the boolean result
+ * in the graph. The composite unique index is the concurrency boundary.
+ */
+export const automationClaims = pgTable(
+  "automation_claims",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id"),
+    namespace: text("namespace").notNull(),
+    claimKey: text("claim_key").notNull(),
+    ownerRunId: uuid("owner_run_id")
+      .notNull()
+      .references(() => automationRuns.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    workspaceNamespaceKeyUniq: uniqueIndex(
+      "automation_claims_workspace_namespace_key_uniq"
+    ).on(
+      sql`COALESCE(${table.workspaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+      table.namespace,
+      table.claimKey
+    ),
+  })
+);
+
+export type AutomationClaim = typeof automationClaims.$inferSelect;
 
 // ── Drizzle relations (enables db.query.automations) ────────────────────────
 

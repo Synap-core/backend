@@ -38,6 +38,7 @@ const CapabilitySchema = z.object({
 });
 
 const AutomationSchema = z.object({
+  key: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
   triggerType: z.enum(["event", "cron", "webhook", "manual"]),
@@ -46,6 +47,7 @@ const AutomationSchema = z.object({
     .object({
       nodes: z.array(z.record(z.string(), z.unknown())),
       edges: z.array(z.record(z.string(), z.unknown())),
+      precondition: z.string().optional(),
     })
     .optional(),
   status: z.enum(["draft", "active", "paused"]).default("active"),
@@ -97,6 +99,19 @@ const ActionPlacementSchema = z.object({
   kind: z.enum(["capability", "playbook", "automation"]),
   ref: z.string(),
   label: z.string(),
+  when: z
+    .object({
+      requiredFacetSlugs: z.array(z.string().min(1)).min(1).optional(),
+      propertyEquals: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
+  confirmation: z
+    .object({
+      title: z.string().min(1),
+      description: z.string().optional(),
+      confirmLabel: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 
 const PackageApplySchema = z.object({
@@ -230,6 +245,7 @@ export function registerPackagesRoutes(app: HubHono): void {
         workspaceName: body.workspaceName,
         templateId: body._meta?.slug,
         packageSlug: body._meta?.slug,
+        packageVersion: body._meta?.version,
         workspaceType: body.workspaceType,
         proposalId: body._meta?.slug,
         createdBy: "provisioning",
@@ -274,6 +290,7 @@ export function registerPackagesRoutes(app: HubHono): void {
         workspaceName: body.workspaceName,
         templateId: body._meta?.slug ?? undefined,
         packageSlug: body._meta?.slug,
+        packageVersion: body._meta?.version,
         workspaceType: body.workspaceType,
       });
       // Surface the resolved dependency graph only when deps were declared —

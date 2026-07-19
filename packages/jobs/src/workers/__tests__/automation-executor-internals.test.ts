@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import type { AutomationEdge, AutomationNode } from "@synap/database";
 import {
   resolveTemplate,
+  deepResolveTemplates,
   evaluateCondition,
   topoSort,
   markDescendantsSkipped,
   seedResumeState,
+  executeSelectStep,
   shouldRunFlow,
   type StepContext,
   type LedgerStepRow,
@@ -68,6 +70,55 @@ describe("resolveTemplate", () => {
         ctx({ steps: { s: { output: { n: 5 } } } })
       )
     ).toBe("n=5");
+  });
+});
+
+describe("deepResolveTemplates", () => {
+  it("preserves native values for exact placeholders", () => {
+    const c = ctx({
+      steps: {
+        compute: { output: { amount: 42, active: true, data: { x: 1 } } },
+      },
+    });
+    expect(deepResolveTemplates("{{steps.compute.output.amount}}", c)).toBe(42);
+    expect(deepResolveTemplates("{{steps.compute.output.active}}", c)).toBe(
+      true
+    );
+    expect(deepResolveTemplates("{{steps.compute.output.data}}", c)).toEqual({
+      x: 1,
+    });
+  });
+
+  it("keeps embedded placeholders textual", () => {
+    const c = ctx({ steps: { compute: { output: { amount: 42 } } } });
+    expect(
+      deepResolveTemplates("Fee: {{steps.compute.output.amount}}", c)
+    ).toBe("Fee: 42");
+  });
+});
+
+describe("executeSelectStep", () => {
+  it("chooses a native typed value from a boolean step result", () => {
+    const c = ctx({ steps: { decision: { output: { result: true } } } });
+    expect(
+      executeSelectStep(
+        {
+          when: "{{steps.decision.output.result}}",
+          ifTrue: "first",
+          ifFalse: "subsequent",
+        },
+        c
+      )
+    ).toEqual({ value: "first" });
+  });
+
+  it("fails closed when the selection predicate is not boolean", () => {
+    expect(() =>
+      executeSelectStep(
+        { when: "{{trigger.payload.unknown}}", ifTrue: "yes", ifFalse: "no" },
+        ctx()
+      )
+    ).toThrow("select node: 'when' must resolve to a boolean");
   });
 });
 

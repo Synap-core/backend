@@ -23,6 +23,7 @@ const runStatus = z.enum([
   "failed",
   "proposed",
   "cancelled",
+  "skipped",
 ]);
 
 export const runsRouter = router({

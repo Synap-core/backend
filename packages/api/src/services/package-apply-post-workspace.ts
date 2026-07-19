@@ -130,6 +130,15 @@ export interface ActionPlacement {
   kind: "capability" | "playbook" | "automation";
   ref: string;
   label: string;
+  when?: {
+    requiredFacetSlugs?: string[];
+    propertyEquals?: Record<string, unknown>;
+  };
+  confirmation?: {
+    title: string;
+    description?: string;
+    confirmLabel?: string;
+  };
 }
 
 /**
@@ -195,6 +204,8 @@ async function resolveActionPlacementRefs(
 
 /** Stable identity of a placement — the idempotency key for the settings merge. */
 function placementKey(p: ActionPlacement): string {
+  // Ref is the durable action identity. Applicability/copy are mutable
+  // presentation policy and should be refreshed on reconcile, not duplicated.
   return `${p.profileSlug}::${p.surface}::${p.kind}::${p.ref}`;
 }
 
@@ -206,11 +217,16 @@ export interface PackagePostWorkspaceBody {
     params?: Record<string, unknown>;
   }>;
   automations?: Array<{
+    key?: string;
     name: string;
     description?: string;
     triggerType: "event" | "cron" | "webhook" | "manual";
     triggerConfig: Record<string, unknown>;
-    flowDefinition?: { nodes: unknown[]; edges: unknown[] };
+    flowDefinition?: {
+      nodes: unknown[];
+      edges: unknown[];
+      precondition?: string;
+    };
     status?: string;
   }>;
   playbooks?: Array<{
@@ -353,8 +369,10 @@ export async function applyPackagePostWorkspace(
     const {
       db,
       and,
+      or,
       eq,
       isNull,
+      drizzleSql,
       automations: automationsTable,
     } = await import("@synap/database");
     const caller = automationsRouter.createCaller(ctx as never);
@@ -366,7 +384,12 @@ export async function applyPackagePostWorkspace(
           .from(automationsTable)
           .where(
             and(
-              eq(automationsTable.name, a.name),
+              a.key
+                ? or(
+                    eq(automationsTable.name, a.name),
+                    drizzleSql`${automationsTable.metadata}->>'templateKey' = ${a.key}`
+                  )
+                : eq(automationsTable.name, a.name),
               workspaceId
                 ? eq(automationsTable.workspaceId, workspaceId)
                 : isNull(automationsTable.workspaceId)
@@ -374,7 +397,21 @@ export async function applyPackagePostWorkspace(
           )
           .limit(1);
         if (existing) {
-          autos.push({ name: a.name, status: "reused", id: existing.id });
+          // Template definitions are declarative ownership, not a one-time
+          // seed. Reconcile refreshes the same workflow row so a pod never
+          // silently keeps an obsolete graph after a template upgrade.
+          await caller.update({
+            id: existing.id,
+            workspaceId,
+            name: a.name,
+            description: a.description,
+            triggerType: a.triggerType,
+            triggerConfig: a.triggerConfig,
+            flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
+            status: a.status,
+            metadata: a.key ? { templateKey: a.key } : undefined,
+          } as never);
+          autos.push({ name: a.name, status: "updated", id: existing.id });
           continue;
         }
         const r = await caller.create({
@@ -385,6 +422,7 @@ export async function applyPackagePostWorkspace(
           triggerConfig: a.triggerConfig,
           flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
           status: a.status,
+          metadata: a.key ? { templateKey: a.key } : undefined,
           agentUserId,
           source: "intelligence",
         } as never);
@@ -401,6 +439,13 @@ export async function applyPackagePostWorkspace(
         });
       }
     }
+    const failed = autos.find(
+      (entry) => (entry as { status?: string }).status === "error"
+    );
+    if (failed)
+      throw new Error(
+        `Failed to apply an automation: ${(failed as { message?: string }).message ?? "unknown error"}`
+      );
     result.automations = autos;
   }
 
@@ -543,13 +588,20 @@ export async function applyPackagePostWorkspace(
         )
           ? (existingSettings.actionPlacements as ActionPlacement[])
           : [];
-        const seen = new Set(existingPlacements.map(placementKey));
         const merged = [...existingPlacements];
+        const indexByKey = new Map(
+          merged.map((placement, index) => [placementKey(placement), index])
+        );
         for (const p of resolved) {
           const key = placementKey(p);
-          if (!seen.has(key)) {
-            seen.add(key);
+          const existingIndex = indexByKey.get(key);
+          if (existingIndex === undefined) {
+            indexByKey.set(key, merged.length);
             merged.push(p);
+          } else {
+            // Reconcile is declarative: the latest template is authoritative
+            // for applicability/confirmation/copy of its stable action key.
+            merged[existingIndex] = p;
           }
         }
         await db

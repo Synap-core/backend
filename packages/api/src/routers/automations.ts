@@ -418,6 +418,7 @@ export const automationsRouter = router({
           .object({
             nodes: z.array(z.record(z.string(), z.unknown())),
             edges: z.array(z.record(z.string(), z.unknown())),
+            precondition: z.string().optional(),
           })
           .optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
@@ -827,6 +828,8 @@ export const automationsRouter = router({
       z.object({
         id: z.string().uuid(),
         workspaceId: z.string().uuid().nullable().optional(),
+        /** Durable entity lens for this run (separate from arbitrary payload). */
+        subjectEntityId: z.string().uuid().optional(),
         /** Optional payload to inject as trigger.payload in the execution context */
         payload: z.record(z.string(), z.unknown()).optional(),
       })
@@ -842,6 +845,12 @@ export const automationsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Automation not found",
+        });
+      }
+      if (input.workspaceId && input.workspaceId !== existing.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "workspaceId does not match the automation workspace.",
         });
       }
       // Gate on the row's real workspace — triggering is cross-workspace
@@ -862,12 +871,23 @@ export const automationsRouter = router({
           message: `Cannot trigger automation with status="${existing.status}". Activate it, or use a manual trigger type.`,
         });
       }
+      // Older generic action renderers send the entity in payload. Accept that
+      // compatibility shape, but only persist a UUID as the durable subject
+      // lens; callers can use the explicit input for new integrations.
+      const payloadSubject = z
+        .string()
+        .uuid()
+        .safeParse(input.payload?.entityId);
+      const subjectEntityId =
+        input.subjectEntityId ??
+        (payloadSubject.success ? payloadSubject.data : undefined);
 
       const [run] = await database
         .insert(automationRuns)
         .values({
           automationId: existing.id,
           workspaceId: existing.workspaceId,
+          subjectEntityId,
           triggeredBy: ctx.userId!,
           triggerPayload: {
             type: "manual",
@@ -883,7 +903,7 @@ export const automationsRouter = router({
       await boss.send("automation-execute", {
         runId: run.id,
         automationId: existing.id,
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: existing.workspaceId,
         automationContext: {
           automationRunId: run.id,
           automationId: existing.id,

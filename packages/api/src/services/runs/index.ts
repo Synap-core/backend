@@ -184,6 +184,7 @@ async function listAutomationRuns(
       startedAt: automationRuns.startedAt,
       completedAt: automationRuns.completedAt,
       workspaceId: automationRuns.workspaceId,
+      subjectEntityId: automationRuns.subjectEntityId,
       error: automationRuns.errorMessage,
       outputSummary: automationRuns.outputSummary,
       triggeredBy: automationRuns.triggeredBy,
@@ -214,6 +215,9 @@ async function listAutomationRuns(
         scope.workspaceId
           ? eq(automationRuns.workspaceId, scope.workspaceId)
           : undefined,
+        scope.subjectEntityId
+          ? eq(automationRuns.subjectEntityId, scope.subjectEntityId)
+          : undefined,
         statusValues ? inArray(automationRuns.status, statusValues) : undefined
       )
     )
@@ -230,7 +234,7 @@ async function listAutomationRuns(
     completedAt: r.completedAt ?? null,
     workspaceId: r.workspaceId ?? null,
     projectId: null,
-    subjectEntityId: null,
+    subjectEntityId: r.subjectEntityId ?? null,
     channelId: r.channelId ?? null,
     correlationId: null,
     replayOf: r.replayOf ?? null,
@@ -487,9 +491,10 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   const scope = input.scope ?? {};
   const perFlow = Math.min(input.limit ?? 25, 100);
 
-  // Automation runs carry no project/subject, so a project- or entity-focus lens
-  // excludes them entirely (rather than filtering to nothing per-query).
-  const automationExcluded = !!(scope.projectId || scope.subjectEntityId);
+  // Automation runs have no project lens, but do carry a durable entity subject.
+  // Only a project focus excludes them; entity focus is filtered in
+  // `listAutomationRuns` like every other ledger.
+  const automationExcluded = !!scope.projectId;
 
   const jobs: Array<Promise<UnifiedRun[]>> = [];
   if ((!flowType || flowType === "automation") && !automationExcluded)

@@ -130,6 +130,12 @@ interface CreateDefinitionPostWorkspaceSlice {
       params?: Record<string, unknown>;
     };
   }>;
+  /**
+   * Graph-flow automations from workspace templates. This stays separate from
+   * `automations` above: that historical field represents LOOP playbook
+   * triggers and has a different wire contract.
+   */
+  flowAutomations?: PackagePostWorkspaceBody["automations"];
   capabilities?: PackagePostWorkspaceBody["capabilities"];
   actionPlacements?: PackagePostWorkspaceBody["actionPlacements"];
 }
@@ -188,6 +194,7 @@ function buildPostWorkspaceBodyFromDefinition(
       }
     : undefined;
   return {
+    automations: definition.flowAutomations,
     capabilities: definition.capabilities,
     loops: loopDef
       ? [{ definition: loopDef as unknown as Record<string, unknown> }]
@@ -2839,6 +2846,29 @@ export const workspacesRouter = router({
                 })
               )
               .optional(),
+            /**
+             * Graph-flow template automations. This is deliberately not the
+             * legacy `automations` field above, which seeds LOOP playbook
+             * triggers with a different schema.
+             */
+            flowAutomations: z
+              .array(
+                z.object({
+                  name: z.string().min(1),
+                  description: z.string().optional(),
+                  triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+                  triggerConfig: z.record(z.string(), z.unknown()).optional(),
+                  flowDefinition: z
+                    .object({
+                      nodes: z.array(z.unknown()),
+                      edges: z.array(z.unknown()),
+                      precondition: z.string().optional(),
+                    })
+                    .optional(),
+                  status: z.enum(["draft", "active", "paused"]).optional(),
+                })
+              )
+              .optional(),
             /** Tool templates (registered integrations available to AI agents) */
             tools: z
               .array(
@@ -2910,6 +2940,24 @@ export const workspacesRouter = router({
                   kind: z.enum(["capability", "playbook", "automation"]),
                   ref: z.string(),
                   label: z.string(),
+                  when: z
+                    .object({
+                      requiredFacetSlugs: z
+                        .array(z.string().min(1))
+                        .min(1)
+                        .optional(),
+                      propertyEquals: z
+                        .record(z.string(), z.unknown())
+                        .optional(),
+                    })
+                    .optional(),
+                  confirmation: z
+                    .object({
+                      title: z.string().min(1),
+                      description: z.string().optional(),
+                      confirmLabel: z.string().min(1).optional(),
+                    })
+                    .optional(),
                 })
               )
               .optional(),
@@ -3648,6 +3696,7 @@ export const workspacesRouter = router({
           const hasPostWork = Boolean(
             postBody.capabilities?.length ||
             postBody.loops?.length ||
+            postBody.automations?.length ||
             postBody.actionPlacements?.length
           );
           if (hasPostWork) {
@@ -3664,10 +3713,15 @@ export const workspacesRouter = router({
                 "createFromDefinition: post-workspace layers applied (shared door)"
               );
             } catch (err) {
-              logger.warn(
+              logger.error(
                 { err, workspaceId: result.workspaceId },
-                "Failed to apply post-workspace layers (capabilities/loop, non-fatal)"
+                "Failed to apply declared post-workspace layers"
               );
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message:
+                  "Workspace was created but its declared workflow setup could not be completed. Reconcile it before use.",
+              });
             }
           }
 
@@ -3831,6 +3885,25 @@ export const workspacesRouter = router({
           /** Post-workspace layers are reconciled through the same generic door. */
           capabilities: z.array(z.record(z.string(), z.unknown())).optional(),
           playbooks: z.array(z.record(z.string(), z.unknown())).optional(),
+          /** Graph-flow templates, routed to the shared post-workspace applier. */
+          flowAutomations: z
+            .array(
+              z.object({
+                name: z.string().min(1),
+                description: z.string().optional(),
+                triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+                triggerConfig: z.record(z.string(), z.unknown()).optional(),
+                flowDefinition: z
+                  .object({
+                    nodes: z.array(z.unknown()),
+                    edges: z.array(z.unknown()),
+                    precondition: z.string().optional(),
+                  })
+                  .optional(),
+                status: z.enum(["draft", "active", "paused"]).optional(),
+              })
+            )
+            .optional(),
           /**
            * Entity-detail action placements → re-asserted into
            * `settings.actionPlacements` via the shared
@@ -3847,6 +3920,24 @@ export const workspacesRouter = router({
                 kind: z.enum(["capability", "playbook", "automation"]),
                 ref: z.string(),
                 label: z.string(),
+                when: z
+                  .object({
+                    requiredFacetSlugs: z
+                      .array(z.string().min(1))
+                      .min(1)
+                      .optional(),
+                    propertyEquals: z
+                      .record(z.string(), z.unknown())
+                      .optional(),
+                  })
+                  .optional(),
+                confirmation: z
+                  .object({
+                    title: z.string().min(1),
+                    description: z.string().optional(),
+                    confirmLabel: z.string().min(1).optional(),
+                  })
+                  .optional(),
               })
             )
             .optional(),
@@ -3886,6 +3977,7 @@ export const workspacesRouter = router({
         !input.dryRun &&
         (input.definition.capabilities?.length ||
           input.definition.playbooks?.length ||
+          input.definition.flowAutomations?.length ||
           input.definition.actionPlacements?.length)
       ) {
         try {
@@ -3905,10 +3997,15 @@ export const workspacesRouter = router({
             scopes: [],
           });
         } catch (err) {
-          logger.warn(
+          logger.error(
             { err, workspaceId: input.workspaceId },
-            "reconcileFromDefinition post-workspace layers failed (non-fatal)"
+            "reconcileFromDefinition post-workspace layers failed"
           );
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Workflow reconciliation did not complete. The existing workspace was left unchanged; retry after resolving the error.",
+          });
         }
       }
       return report;

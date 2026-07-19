@@ -605,6 +605,15 @@ export interface WorkspaceSettings {
     kind: "capability" | "playbook" | "automation";
     ref: string;
     label: string;
+    when?: {
+      requiredFacetSlugs?: string[];
+      propertyEquals?: Record<string, unknown>;
+    };
+    confirmation?: {
+      title: string;
+      description?: string;
+      confirmLabel?: string;
+    };
   }>;
 
   // ─── Intelligence service configuration ──────────────────────────────────────

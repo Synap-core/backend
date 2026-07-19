@@ -2032,6 +2032,7 @@ CREATE TABLE IF NOT EXISTS "automation_runs" (
   "id"              uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "automation_id"   uuid  NOT NULL REFERENCES "automations"("id") ON DELETE CASCADE,
   "workspace_id"    uuid  NOT NULL,
+  "subject_entity_id" uuid,
   "triggered_by"    text,
   "trigger_payload" jsonb NOT NULL DEFAULT '{}',
   "status"          text  NOT NULL DEFAULT 'running',
@@ -2045,6 +2046,7 @@ CREATE TABLE IF NOT EXISTS "automation_runs" (
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "automation_id" uuid REFERENCES "automations"("id") ON DELETE CASCADE;
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "subject_entity_id" uuid;
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "triggered_by" text;
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "trigger_payload" jsonb DEFAULT '{}';
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'running';
@@ -2066,6 +2068,9 @@ CREATE INDEX IF NOT EXISTS "automation_runs_status_idx"
 
 CREATE INDEX IF NOT EXISTS "automation_runs_started_at_idx"
   ON "automation_runs" ("started_at");
+
+CREATE INDEX IF NOT EXISTS "automation_runs_subject_entity_id_idx"
+  ON "automation_runs" ("subject_entity_id");
 
 CREATE TABLE IF NOT EXISTS "automation_step_runs" (
   "id"               uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2094,6 +2099,20 @@ ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "cost_usd" numeric; 
 
 CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
   ON "automation_step_runs" ("run_id");
+
+CREATE TABLE IF NOT EXISTS "automation_claims" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "workspace_id" uuid,
+  "namespace" text NOT NULL,
+  "claim_key" text NOT NULL,
+  "owner_run_id" uuid NOT NULL REFERENCES "automation_runs"("id") ON DELETE CASCADE,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "automation_claims_workspace_namespace_key_uniq"
+  ON "automation_claims" (
+    COALESCE("workspace_id", '00000000-0000-0000-0000-000000000000'::uuid),
+    "namespace", "claim_key"
+  );
 
 -- ─── 36. notifications + notification_preferences ────────────────────────────
 

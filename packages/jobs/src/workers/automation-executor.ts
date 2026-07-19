@@ -32,11 +32,16 @@ import {
   and,
   or,
   isNull,
+  inArray,
   desc,
   automations,
   automationRuns,
   automationStepRuns,
+  automationClaims,
   entities,
+  entityFacets,
+  profiles,
+  relations,
   users,
   messages,
   channels,
@@ -68,6 +73,7 @@ import type {
   NodeErrorHandling,
   CommandNodeDef,
   OutputNodeDef,
+  GuardNodeDef,
 } from "@synap/database";
 import { getBoss, emitSideEffects } from "@synap/events";
 import {
@@ -281,8 +287,19 @@ export function resolveTemplate(
 /**
  * Deep-resolve templates in any value (string, object, array).
  */
-function deepResolveTemplates(value: unknown, context: StepContext): unknown {
-  if (typeof value === "string") return resolveTemplate(value, context);
+export function deepResolveTemplates(
+  value: unknown,
+  context: StepContext
+): unknown {
+  if (typeof value === "string") {
+    // An exact placeholder is a value binding, not text interpolation. Preserve
+    // its native number/boolean/object shape for governed output verbs; only an
+    // embedded placeholder is rendered as a human string.
+    const exactReference = value.match(/^\{\{(.+?)\}\}$/);
+    return exactReference
+      ? resolveContextPath(exactReference[1], context)
+      : resolveTemplate(value, context);
+  }
   if (Array.isArray(value))
     return value.map((v) => deepResolveTemplates(v, context));
   if (value && typeof value === "object") {
@@ -1315,6 +1332,29 @@ async function executeOutputStep(
 
     case "relation_create":
       // config: { fromEntityId, toEntityId, relationType }
+      if (config.dedupe !== false) {
+        const [existing] = await db
+          .select({ id: relations.id })
+          .from(relations)
+          .where(
+            and(
+              eq(relations.sourceEntityId, config.fromEntityId as string),
+              eq(relations.targetEntityId, config.toEntityId as string),
+              eq(relations.type, config.relationType as string),
+              or(
+                eq(relations.workspaceId, workspaceId),
+                isNull(relations.workspaceId)
+              )
+            )
+          )
+          .limit(1);
+        if (existing)
+          return {
+            status: "skipped",
+            reason: "duplicate",
+            relationId: existing.id,
+          };
+      }
       return dispatchOutputVerb("graph.link", config, workspaceId, ownerId);
 
     default:
@@ -1630,6 +1670,332 @@ async function executeQueryStep(
     .limit(limit);
 
   return { entities: results, count: results.length };
+}
+
+function resolveBoundValue(value: unknown, context: StepContext): unknown {
+  if (typeof value !== "string") return value;
+  const exactReference = value.match(/^\{\{(.+?)\}\}$/);
+  return exactReference
+    ? resolveContextPath(exactReference[1], context)
+    : resolveTemplate(value, context);
+}
+
+async function executeEntityReadStep(
+  data: { entityId: string },
+  context: StepContext,
+  workspaceId: string
+): Promise<Record<string, unknown>> {
+  const entityId = resolveTemplate(data.entityId, context);
+  if (!entityId) throw new Error("entity_read node: entityId is required");
+
+  const [entity] = await db
+    .select({
+      id: entities.id,
+      type: entities.type,
+      title: entities.title,
+      preview: entities.preview,
+      properties: entities.properties,
+      workspaceId: entities.workspaceId,
+      createdAt: entities.createdAt,
+      updatedAt: entities.updatedAt,
+    })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
+      )
+    )
+    .limit(1);
+  if (!entity)
+    throw new Error(
+      "entity_read node: entity is not visible in this workspace"
+    );
+
+  const facets = await db
+    .select({
+      id: entityFacets.id,
+      slug: profiles.slug,
+      status: entityFacets.status,
+      properties: entityFacets.properties,
+      contextEntityId: entityFacets.contextEntityId,
+    })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(profiles.id, entityFacets.profileId))
+    .where(
+      and(
+        eq(entityFacets.entityId, entity.id),
+        isNull(entityFacets.deletedAt),
+        // Role facets follow the same workspace/pod lens as the entity. A
+        // workspace-local role must not influence a run elsewhere in the pod.
+        or(
+          eq(entityFacets.workspaceId, workspaceId),
+          isNull(entityFacets.workspaceId)
+        )
+      )
+    );
+
+  return {
+    entity: {
+      ...entity,
+      facets,
+      facetSlugs: facets.map((facet) => facet.slug),
+    },
+  };
+}
+
+async function executeRelatedEntitiesStep(
+  data: {
+    entityId: string;
+    direction?: "outbound" | "inbound" | "both";
+    relationTypes?: string[];
+    propertyEquals?: Record<string, unknown>;
+    excludeEntityId?: string;
+    limit?: number;
+  },
+  context: StepContext,
+  workspaceId: string
+): Promise<Record<string, unknown>> {
+  const entityId = resolveTemplate(data.entityId, context);
+  if (!entityId) throw new Error("related_entities node: entityId is required");
+  const direction = data.direction ?? "both";
+  const limit = Math.min(Math.max(Number(data.limit ?? 50), 1), 100);
+  const endpointPredicate =
+    direction === "outbound"
+      ? eq(relations.sourceEntityId, entityId)
+      : direction === "inbound"
+        ? eq(relations.targetEntityId, entityId)
+        : or(
+            eq(relations.sourceEntityId, entityId),
+            eq(relations.targetEntityId, entityId)
+          );
+  const relationRows = await db
+    .select({
+      id: relations.id,
+      type: relations.type,
+      sourceEntityId: relations.sourceEntityId,
+      targetEntityId: relations.targetEntityId,
+      metadata: relations.metadata,
+    })
+    .from(relations)
+    .where(
+      and(
+        endpointPredicate,
+        or(
+          eq(relations.workspaceId, workspaceId),
+          isNull(relations.workspaceId)
+        ),
+        data.relationTypes?.length
+          ? inArray(relations.type, data.relationTypes)
+          : undefined
+      )
+    )
+    .limit(limit);
+  const relatedIds = [
+    ...new Set(
+      relationRows
+        .map((relation) =>
+          relation.sourceEntityId === entityId
+            ? relation.targetEntityId
+            : relation.sourceEntityId
+        )
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const excludedEntityId = data.excludeEntityId
+    ? String(resolveTemplate(data.excludeEntityId, context) ?? "")
+    : "";
+  const visibleRelatedIds = excludedEntityId
+    ? relatedIds.filter((id) => id !== excludedEntityId)
+    : relatedIds;
+  if (visibleRelatedIds.length === 0)
+    return { entities: [], relations: [], count: 0 };
+
+  const conditions = [
+    inArray(entities.id, visibleRelatedIds),
+    or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId)),
+  ];
+  for (const [key, rawValue] of Object.entries(data.propertyEquals ?? {})) {
+    const value = resolveBoundValue(rawValue, context);
+    conditions.push(
+      drizzleSql`${entities.properties}->>${key} = ${String(value)}`
+    );
+  }
+  const related = await db
+    .select({
+      id: entities.id,
+      type: entities.type,
+      title: entities.title,
+      preview: entities.preview,
+      properties: entities.properties,
+      workspaceId: entities.workspaceId,
+    })
+    .from(entities)
+    .where(and(...conditions))
+    .limit(limit);
+  return { entities: related, relations: relationRows, count: related.length };
+}
+
+/**
+ * Atomically reserve a durable key for the current run. It is intentionally a
+ * domain-agnostic primitive: templates decide what the key means; the Pod only
+ * guarantees one winner and makes retries by that same run safe.
+ */
+async function executeClaimStep(
+  data: { namespace: string; key: string },
+  context: StepContext,
+  workspaceId: string,
+  runId: string
+): Promise<Record<string, unknown>> {
+  const namespace = String(
+    resolveTemplate(data.namespace, context) ?? ""
+  ).trim();
+  const claimKey = String(resolveTemplate(data.key, context) ?? "").trim();
+  if (!namespace || !claimKey) {
+    throw new Error("claim node requires a non-empty namespace and key");
+  }
+
+  const [inserted] = await db
+    .insert(automationClaims)
+    .values({ workspaceId, namespace, claimKey, ownerRunId: runId })
+    .onConflictDoNothing()
+    .returning({ id: automationClaims.id });
+  if (inserted)
+    return { claimed: true, claimId: inserted.id, ownerRunId: runId };
+
+  const [existing] = await db
+    .select({
+      id: automationClaims.id,
+      ownerRunId: automationClaims.ownerRunId,
+    })
+    .from(automationClaims)
+    .where(
+      and(
+        eq(automationClaims.namespace, namespace),
+        eq(automationClaims.claimKey, claimKey),
+        or(
+          eq(automationClaims.workspaceId, workspaceId),
+          isNull(automationClaims.workspaceId)
+        )
+      )
+    )
+    .limit(1);
+  if (!existing)
+    throw new Error("claim node could not read the conflicting claim");
+  // A restarted delivery of the winning run keeps its original decision.
+  return {
+    claimed: existing.ownerRunId === runId,
+    claimId: existing.id,
+    ownerRunId: existing.ownerRunId,
+  };
+}
+
+class WorkflowGuardBlockedError extends Error {
+  constructor(readonly detail: Record<string, unknown>) {
+    super(`WORKFLOW_GUARD_BLOCKED:${JSON.stringify(detail)}`);
+  }
+}
+
+function executeGuardStep(
+  data: GuardNodeDef["data"],
+  context: StepContext
+): Record<string, unknown> {
+  for (const check of data.checks) {
+    const value = resolveContextPath(check.path, context);
+    const expected = resolveBoundValue(check.equals, context);
+    const failed =
+      (check.exists !== undefined && (value != null) !== check.exists) ||
+      (check.equals !== undefined && value !== expected) ||
+      (check.arrayIncludes !== undefined &&
+        (!Array.isArray(value) ||
+          !value.includes(resolveBoundValue(check.arrayIncludes, context)))) ||
+      (check.lengthEquals !== undefined &&
+        (!Array.isArray(value) || value.length !== check.lengthEquals)) ||
+      (check.numberGte !== undefined &&
+        (!(typeof value === "number") || value < check.numberGte)) ||
+      (check.numberLte !== undefined &&
+        (!(typeof value === "number") || value > check.numberLte));
+    if (failed) {
+      throw new WorkflowGuardBlockedError({
+        code: "guard_failed",
+        path: check.path,
+        message: check.message,
+        actual: value,
+      });
+    }
+  }
+  return { status: "passed", checks: data.checks.length };
+}
+
+function executeComputeStep(
+  data: {
+    operation: "add" | "subtract" | "multiply" | "divide" | "coalesce" | "now";
+    left?: unknown;
+    right?: unknown;
+    values?: unknown[];
+  },
+  context: StepContext
+): Record<string, unknown> {
+  if (data.operation === "now") {
+    // Manual/event triggers carry a single invocation timestamp. Reusing it
+    // makes a delayed/retried step deterministic for the run; system-created
+    // runs without one retain the current-time fallback.
+    const triggeredAt = resolveContextPath(
+      "trigger.payload.timestamp",
+      context
+    );
+    const date = typeof triggeredAt === "string" ? new Date(triggeredAt) : null;
+    return {
+      result:
+        date && !Number.isNaN(date.getTime())
+          ? date.toISOString()
+          : new Date().toISOString(),
+    };
+  }
+  if (data.operation === "coalesce") {
+    for (const value of data.values ?? []) {
+      const candidate = Number(resolveBoundValue(value, context));
+      if (Number.isFinite(candidate)) return { result: candidate };
+    }
+    throw new Error("compute node: coalesce found no finite numeric value");
+  }
+  const left = Number(resolveBoundValue(data.left, context));
+  const right = Number(resolveBoundValue(data.right, context));
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    throw new Error("compute node: operands must resolve to finite numbers");
+  }
+  if (data.operation === "divide" && right === 0) {
+    throw new Error("compute node: cannot divide by zero");
+  }
+  const result =
+    data.operation === "add"
+      ? left + right
+      : data.operation === "subtract"
+        ? left - right
+        : data.operation === "multiply"
+          ? left * right
+          : left / right;
+  if (!Number.isFinite(result))
+    throw new Error("compute node: result is not finite");
+  return { result };
+}
+
+/**
+ * A finite, typed alternative to branching a whole graph just to select a
+ * value. It deliberately accepts only an already-resolved boolean, so it does
+ * not become an expression evaluator or a second condition grammar.
+ */
+export function executeSelectStep(
+  data: { when: unknown; ifTrue: unknown; ifFalse: unknown },
+  context: StepContext
+): Record<string, unknown> {
+  const when = resolveBoundValue(data.when, context);
+  if (typeof when !== "boolean") {
+    throw new Error("select node: 'when' must resolve to a boolean");
+  }
+  return {
+    value: resolveBoundValue(when ? data.ifTrue : data.ifFalse, context),
+  };
 }
 
 /**
@@ -2796,6 +3162,80 @@ async function executeAutomationFlow(params: {
                 limit: number;
               };
               output = await executeQueryStep(data, context, workspaceId);
+              break;
+            }
+
+            case "entity_read": {
+              output = await executeEntityReadStep(
+                node.data as { entityId: string },
+                context,
+                workspaceId
+              );
+              break;
+            }
+
+            case "related_entities": {
+              output = await executeRelatedEntitiesStep(
+                node.data as {
+                  entityId: string;
+                  direction?: "outbound" | "inbound" | "both";
+                  relationTypes?: string[];
+                  propertyEquals?: Record<string, unknown>;
+                  excludeEntityId?: string;
+                  limit?: number;
+                },
+                context,
+                workspaceId
+              );
+              break;
+            }
+
+            case "guard": {
+              output = executeGuardStep(
+                node.data as GuardNodeDef["data"],
+                context
+              );
+              break;
+            }
+
+            case "compute": {
+              output = executeComputeStep(
+                node.data as {
+                  operation:
+                    | "add"
+                    | "subtract"
+                    | "multiply"
+                    | "divide"
+                    | "coalesce"
+                    | "now";
+                  left?: unknown;
+                  right?: unknown;
+                  values?: unknown[];
+                },
+                context
+              );
+              break;
+            }
+
+            case "select": {
+              output = executeSelectStep(
+                node.data as {
+                  when: unknown;
+                  ifTrue: unknown;
+                  ifFalse: unknown;
+                },
+                context
+              );
+              break;
+            }
+
+            case "claim": {
+              output = await executeClaimStep(
+                node.data as { namespace: string; key: string },
+                context,
+                workspaceId,
+                runId
+              );
               break;
             }
 

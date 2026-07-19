@@ -80,23 +80,59 @@ export async function reconcileWorkspaceIfStale(opts: {
   packageSlug: string | undefined;
   currentSettings: WorkspaceSettings | null | undefined;
   userId: string;
+  /**
+   * Caller-supplied version fallback for slugs the cache-first
+   * `resolveWorkspaceTemplate` can't see — private templates never land in
+   * the pod's anonymous `cp_catalog_cache`, so `resolved?.version` is always
+   * empty for them and this function used to bail with `checked:false`,
+   * never stamping `settings.packageVersion`. The CLI fetches a private
+   * template's hash version from the authed CP `/mine` and passes it as
+   * `_meta.version` (Hub) → `packageVersion` (this service).
+   *
+   * FALLBACK ONLY: when `resolveWorkspaceTemplate` DOES resolve a version
+   * (public/cached templates), that value always wins over this one — a
+   * stale caller-supplied version must never override a fresh cache hit.
+   */
+  callerVersion?: string;
+  /** Paired fallback definition — used only when both `resolved` AND its
+   * `workspaceDefinition` are unavailable, so a reconcile write has
+   * something to apply. */
+  callerDefinition?: WorkspaceDefinitionInput;
 }): Promise<ReconcileIfStaleResult> {
-  const { workspaceId, packageSlug, currentSettings, userId } = opts;
+  const {
+    workspaceId,
+    packageSlug,
+    currentSettings,
+    userId,
+    callerVersion,
+    callerDefinition,
+  } = opts;
   if (!packageSlug) return { reconciled: false, checked: false };
 
   try {
     const resolved = await resolveWorkspaceTemplate(packageSlug);
-    if (!resolved?.version) return { reconciled: false, checked: false };
+    // Cache-first: the resolved version always wins when present. Fall back
+    // to the caller-supplied version ONLY when the cache yields nothing
+    // (private/uncached slug) — never the other way around.
+    const version = resolved?.version ?? callerVersion;
+    if (!version) return { reconciled: false, checked: false };
 
-    if (resolved.version === currentSettings?.packageVersion) {
-      return { reconciled: false, checked: true, version: resolved.version };
+    if (version === currentSettings?.packageVersion) {
+      return { reconciled: false, checked: true, version };
+    }
+
+    const workspaceDefinition = (resolved?.workspaceDefinition ??
+      callerDefinition) as WorkspaceDefinitionInput | undefined;
+    if (!workspaceDefinition) {
+      // Have a version to compare (caller-supplied) but nothing to
+      // reconcile with — report the drift without writing.
+      return { reconciled: false, checked: true, version };
     }
 
     const report = await reconcileWorkspaceFromDefinition({
       workspaceId,
       userId,
-      definition:
-        resolved.workspaceDefinition as unknown as WorkspaceDefinitionInput,
+      definition: workspaceDefinition,
     });
 
     // Stamp the new version so the NEXT idempotent hit short-circuits as
@@ -107,7 +143,7 @@ export async function reconcileWorkspaceIfStale(opts: {
         .set({
           settings: {
             ...(currentSettings ?? {}),
-            packageVersion: resolved.version,
+            packageVersion: version,
           } satisfies WorkspaceSettings,
         })
         .where(eq(workspaces.id, workspaceId));
@@ -122,7 +158,7 @@ export async function reconcileWorkspaceIfStale(opts: {
       reconciled: true,
       checked: true,
       report,
-      version: resolved.version,
+      version,
     };
   } catch (err) {
     logger.warn(
@@ -428,6 +464,8 @@ export async function createWorkspaceFromDefinitionIdempotent(
           packageSlug,
           currentSettings,
           userId,
+          callerVersion: packageVersion,
+          callerDefinition: definition,
         });
         logger.info(
           {
@@ -462,6 +500,8 @@ export async function createWorkspaceFromDefinitionIdempotent(
           packageSlug,
           currentSettings,
           userId,
+          callerVersion: packageVersion,
+          callerDefinition: definition,
         });
 
         // Adopt the identity so the NEXT call hits the fast path (step 1)

@@ -132,6 +132,15 @@ export interface MaterializeWorkspaceCoreInput {
   workspaceName?: string;
   templateId?: string;
   packageSlug?: string;
+  /**
+   * Caller-supplied version for `packageSlug` (Hub: `_meta.version`, fetched
+   * by the CLI from the authed CP `/mine` for private/uncached templates —
+   * `resolveWorkspaceTemplate`'s cache-first lookup never sees a private
+   * slug). Forwarded verbatim into `createWorkspaceFromDefinitionIdempotent`,
+   * which treats it as a FALLBACK: the cache-resolved version still wins
+   * whenever it is present (see that function + `reconcileWorkspaceIfStale`).
+   */
+  packageVersion?: string;
   workspaceType?: "personal" | "agent" | "project" | "operational";
   createdBy?: "user" | "provisioning" | "plugin";
 }
@@ -210,6 +219,7 @@ export async function materializeWorkspaceCore(
     workspaceName: input.workspaceName,
     templateId: input.templateId,
     packageSlug: input.packageSlug,
+    packageVersion: input.packageVersion,
     workspaceType: input.workspaceType,
     createdBy: input.createdBy,
   });
