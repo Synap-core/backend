@@ -35,6 +35,10 @@ import {
   type MergeMaterializedStamp,
   entities,
   links,
+  relations,
+  projectMembers,
+  and,
+  drizzleSql,
   type LinkEndpointType,
   type LinkType,
 } from "@synap/database";
@@ -798,7 +802,26 @@ export function registerApproveExecutors(): void {
         }
       }
 
-      if (project.status !== "archived") {
+      // Re-validate zero-gravity AT APPROVAL TIME: the librarian proposed this
+      // days ago possibly — if entities or members accrued since, the stale
+      // "0 links for 30 days" rationale no longer holds. No-op instead of
+      // archiving a now-active project (approval still closes the proposal).
+      const [{ linkCount }] = await db
+        .select({ linkCount: drizzleSql<number>`count(*)::int` })
+        .from(relations)
+        .where(
+          and(
+            eq(relations.targetEntityId, projectId),
+            eq(relations.type, "belongs_to_project")
+          )
+        );
+      const [{ memberCount }] = await db
+        .select({ memberCount: drizzleSql<number>`count(*)::int` })
+        .from(projectMembers)
+        .where(eq(projectMembers.projectId, projectId));
+      const gravityAppeared = Number(linkCount) > 0 || Number(memberCount) > 0;
+
+      if (!gravityAppeared && project.status !== "archived") {
         const eventRepo = new EventRepository(sql);
         const projectRepo = new ProjectRepository(db, eventRepo);
         // Act as the OWNER — ProjectRepository.update gates on userId, and

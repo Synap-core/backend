@@ -531,12 +531,21 @@ export async function registerAllWorkers(): Promise<void> {
   // one-offs — ProjectRepository.create/update/delete is the ONE trigger door.
   await boss.work(CP_PROJECT_SYNC_QUEUE, async () => handleCpProjectSync());
   registerCpProjectSyncTrigger(() => {
-    void boss.send(CP_PROJECT_SYNC_QUEUE, {}).catch((err) => {
-      logger.warn(
-        { err },
-        "cp-project-sync enqueue failed (reconcile cron will catch up)"
-      );
-    });
+    // singletonKey debounces mutation bursts: N project writes within the
+    // window collapse into one full-list push (each push is a full snapshot,
+    // so coalescing loses nothing; the 30-min reconcile is the backstop).
+    void boss
+      .send(
+        CP_PROJECT_SYNC_QUEUE,
+        {},
+        { singletonKey: "cp-project-sync-debounce", singletonSeconds: 30 }
+      )
+      .catch((err) => {
+        logger.warn(
+          { err },
+          "cp-project-sync enqueue failed (reconcile cron will catch up)"
+        );
+      });
   });
   logger.info("Registered worker: cp-project-sync (+ repository trigger)");
 

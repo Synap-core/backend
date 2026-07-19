@@ -383,6 +383,10 @@ export async function discover(
     ];
     if (projectId) conditions.push(eq(projects.id, projectId));
     if (workspaceId) conditions.push(eq(projects.workspaceId, workspaceId));
+    // Discovery surfaces (orient/CLI/MCP) show ACTIVE projects only — archiving
+    // must actually declutter. An explicitly-requested projectId is exempt so a
+    // direct lookup of an archived project still resolves.
+    if (!projectId) conditions.push(eq(projects.status, "active"));
     const rows = await db
       .select({
         id: projects.id,

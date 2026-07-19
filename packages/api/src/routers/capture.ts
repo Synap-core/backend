@@ -242,6 +242,9 @@ async function semanticDedupCandidates(
       .where(
         and(
           eq(entityVectors.userId, userId),
+          // Soft-deleted entities keep their vector rows (FK cascades only on
+          // hard delete) — never offer a deleted entity as a dedup/merge target.
+          isNull(entitiesTable.deletedAt),
           drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector <= ${MAX_VECTOR_DISTANCE}`,
           workspaceLensWhere(
             entitiesTable.workspaceId,

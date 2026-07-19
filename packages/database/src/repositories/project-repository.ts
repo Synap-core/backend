@@ -124,20 +124,44 @@ export class ProjectRepository extends BaseRepository<
         .filter((s): s is string => typeof s === "string" && s.length > 0)
     );
 
-    const [project] = await this.db
-      .insert(projects)
-      .values({
-        id: data.id,
-        name: data.name,
-        slug,
-        description: data.description,
-        status: data.status || "active",
-        settings: data.settings || {},
-        metadata,
-        userId,
-        workspaceId: data.workspaceId ?? null,
-      })
-      .returning();
+    let project: Project;
+    try {
+      const [inserted] = await this.db
+        .insert(projects)
+        .values({
+          id: data.id,
+          name: data.name,
+          slug,
+          description: data.description,
+          status: data.status || "active",
+          settings: data.settings || {},
+          metadata,
+          userId,
+          workspaceId: data.workspaceId ?? null,
+        })
+        .returning();
+      project = inserted;
+    } catch (err: unknown) {
+      // TOCTOU race: two concurrent creates of the same name both pass the
+      // dedup SELECT, compute the same slug, and the loser hits the partial
+      // unique index (user_id, slug) — Postgres 23505. Resolve it the way the
+      // dedup door would have: re-read and return the winner as `deduped`.
+      const pgCode = err as { code?: string; cause?: { code?: string } };
+      if (pgCode?.code === "23505" || pgCode?.cause?.code === "23505") {
+        const retry = await findProjectDedupCandidates(this.db, {
+          userId,
+          name: data.name,
+        });
+        if (retry.exact) {
+          const [winner] = await this.db
+            .select()
+            .from(projects)
+            .where(eq(projects.id, retry.exact.id));
+          if (winner) return { ...winner, deduped: true };
+        }
+      }
+      throw err;
+    }
 
     await this.emitCompleted("create", project, userId);
     // Announce to the CP project directory (fire-and-forget; W1).
