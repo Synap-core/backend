@@ -249,7 +249,7 @@ Defining a relation def is rarely worth it — `related_to` + a property usually
 
 ---
 
-## Common mistakes
+## Common mistakes — schema extension
 
 1. **Creating a profile that already exists (e.g., `meeting` when `event` fits).** Always inventory first.
 2. **Declaring properties inline on the profile object.** Properties are separate rows; use `POST /property-defs`.
@@ -261,7 +261,7 @@ Defining a relation def is rarely worth it — `related_to` + a property usually
 
 ---
 
-## When you need more
+## When you need more — schema extension
 
 - Full `valueType` reference + constraints + uiHints → **`property-types.md`**
 - Inheritance, overlay scope semantics, pod-wide caveats → **`property-types.md`** §Scope

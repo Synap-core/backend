@@ -1431,7 +1431,7 @@ An extraction that creates a duplicate "Sarah Chen", or a `person` titled "Unkno
 
 ---
 
-## Common mistakes
+## Common mistakes — core data operations
 
 1. **Creating orphan entities.** Always connect to at least one other entity on creation. Search first; if nothing links, reconsider whether this should be memory.
 2. **Guessing profile slugs.** Always `GET /profiles` first. `deal`, `capture`, and custom profiles may not exist in this workspace.
@@ -1942,7 +1942,7 @@ Every arrow above is one of the four edge types. That is the whole model: name t
 
 ---
 
-## When you need more
+## When you need more — core data operations
 
 - Linking conventions, auto-sync table, relation types → **`linking.md`**
 - Full governance whitelist, proposal lifecycle, agent users → **`governance.md`**

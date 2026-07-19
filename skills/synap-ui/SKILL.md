@@ -270,7 +270,7 @@ POST /api/hub/views/{bentoViewId}/arrange
 
 ---
 
-## Common mistakes
+## Common mistakes — UI generation
 
 1. **Creating a workspace without asking.** Always propose + confirm. Workspaces are too big to auto-commit.
 2. **Guessing widget kinds.** Always `GET /widget-definitions` first. A `kind` that isn't in the registry won't render.
@@ -313,7 +313,7 @@ These cell keys are registered in the browser app but may not appear in `GET /ap
 
 ---
 
-## When you need more
+## When you need more — UI generation
 
 - Full per-view-type `config` shapes → **`view-types.md`**
 - Complete widget/cell catalog + configSchemas → **`widget-catalog.md`**

@@ -1,4 +1,4 @@
-## Common mistakes
+## Common mistakes — UI generation
 
 1. **Creating a workspace without asking.** Always propose + confirm. Workspaces are too big to auto-commit.
 2. **Guessing widget kinds.** Always `GET /widget-definitions` first. A `kind` that isn't in the registry won't render.

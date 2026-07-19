@@ -1,4 +1,4 @@
-## When you need more
+## When you need more — UI generation
 
 - Full per-view-type `config` shapes → **`view-types.md`**
 - Complete widget/cell catalog + configSchemas → **`widget-catalog.md`**

@@ -1,4 +1,4 @@
-## When you need more
+## When you need more — schema extension
 
 - Full `valueType` reference + constraints + uiHints → **`property-types.md`**
 - Inheritance, overlay scope semantics, pod-wide caveats → **`property-types.md`** §Scope

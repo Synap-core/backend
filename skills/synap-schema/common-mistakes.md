@@ -1,4 +1,4 @@
-## Common mistakes
+## Common mistakes — schema extension
 
 1. **Creating a profile that already exists (e.g., `meeting` when `event` fits).** Always inventory first.
 2. **Declaring properties inline on the profile object.** Properties are separate rows; use `POST /property-defs`.

@@ -1,4 +1,4 @@
-## When you need more
+## When you need more — core data operations
 
 - Linking conventions, auto-sync table, relation types → **`linking.md`**
 - Full governance whitelist, proposal lifecycle, agent users → **`governance.md`**
