@@ -365,6 +365,7 @@ export type KnownGovernanceAction =
   | "invite"
   | "recap"
   | "declare_source"
+  | "configure_public_projection"
   | "write";
 
 /**
@@ -429,6 +430,9 @@ export function requiredPermissionFor(
     // Enterprise-OS Wave 0: declaring a workspace data edge
     // (synap_declare_workspace_source / Hub source-edges) is a governed write.
     action === "declare_source" ||
+    // Setting a workspace's public-projection config (Hub
+    // public-projection door) is a governed write — same editor+ floor.
+    action === "configure_public_projection" ||
     action === "write"
   ) {
     return "write";

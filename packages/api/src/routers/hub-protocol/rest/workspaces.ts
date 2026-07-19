@@ -237,6 +237,42 @@ export function registerWorkspacesRoutes(app: HubHono): void {
   });
 
   registerOpenApi(app, {
+    method: "patch",
+    path: "/workspaces/{workspaceId}/public-projection",
+    tags: ["Workspaces"],
+    summary: "Set workspace public-projection config",
+    description:
+      "Set the workspace's public-projection config: `enabled` (master " +
+      "switch), `roles` (facet role-profile slugs whose holders are public) and " +
+      "`fields` (property-key allowlist for a projected row). Writes ONLY the " +
+      "`publicProjection` settings key — all other settings are preserved, " +
+      "never clobbered. Editor+ membership required. GOVERNED: opting into an " +
+      "unauthenticated public surface goes through review — an agent caller " +
+      "gets `{ status: 'proposed', proposalId }` (applied on approval); an " +
+      "operator-authority caller applies immediately (`{ status: 'updated' }`).",
+    request: {
+      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      body: zOpenapi.object({
+        enabled: zOpenapi.boolean(),
+        roles: zOpenapi.array(zOpenapi.string()),
+        fields: zOpenapi.array(zOpenapi.string()).optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Applied public-projection config",
+        schema: zOpenapi.record(zOpenapi.string(), zOpenapi.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: {
+        description: "Forbidden — not an editor+ member",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
     method: "get",
     path: "/workspaces/{workspaceId}/governance",
     tags: ["Workspaces", "Governance"],
@@ -1332,6 +1368,112 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "PATCH /workspaces/:workspaceId/source-edges failed"
       );
       return c.json({ error: "Failed to declare workspace edges" }, 500);
+    }
+  });
+
+  /**
+   * PATCH /workspaces/:workspaceId/public-projection
+   *
+   * Agnostic door to SET a workspace's public-projection config — the opt-in
+   * `settings.publicProjection` block the read-side `GET /public/projection`
+   * route reads. Lets an agent (or a member whose role lacks `write`) declare
+   * WHICH facet role-profiles are public (`roles`) and WHICH property keys may be
+   * projected (`fields`) on an EXISTING workspace, without template authoring or
+   * the tRPC UI. Reuses the canonical non-clobbering `mergeSettings` path (via
+   * `setWorkspacePublicProjection`) and ONLY writes the single `publicProjection`
+   * key — no other settings key is touched.
+   *
+   * `/:workspaceId/public-projection` is a distinct literal suffix, so it never
+   * collides with the static `/workspaces/*` routes registered above.
+   */
+  app.patch("/workspaces/:workspaceId/public-projection", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const { PublicProjectionInputSchema, setWorkspacePublicProjection } =
+      await import("../../../services/workspace-projection-service.js");
+    const parsed = PublicProjectionInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: "Invalid public-projection config",
+          details: parsed.error.issues,
+        },
+        400
+      );
+    }
+
+    // GOVERNED write: opting a workspace into an UNAUTHENTICATED public
+    // projection changes what leaves the pod, so it goes through the review
+    // membrane, not immediate apply. `checkPermissionOrPropose` runs the
+    // canonical RBAC floor (action `configure_public_projection` → "write"
+    // permission = the same editor+ floor) and then the agent-governance ladder:
+    // an IS/agent caller (agentUserId set) routes to a PROPOSAL, applied on
+    // approval by the `workspace/configure_public_projection` executor; an
+    // operator-authority caller is GRANTED and applies immediately here.
+    // agentUserId is the acting agent identity set on an agent-key request (never
+    // a body field).
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const { checkPermissionOrPropose } = await import(
+      "../../../utils/permission-check.js"
+    );
+    const perm = await checkPermissionOrPropose({
+      userId,
+      agentUserId,
+      workspaceId,
+      subjectType: "workspace",
+      action: "configure_public_projection",
+      source: "intelligence",
+      data: parsed.data,
+    });
+    if ("denied" in perm && perm.denied) {
+      return c.json({ error: perm.reason }, 403);
+    }
+    if ("proposalId" in perm) {
+      return c.json({
+        status: "proposed",
+        workspaceId,
+        proposalId: perm.proposalId,
+        summary: perm.summary,
+        reviewPath: perm.reviewPath,
+        reviewUrl: perm.reviewUrl,
+      });
+    }
+
+    // Granted (operator authority) → apply immediately.
+    try {
+      const result = await setWorkspacePublicProjection(
+        workspaceId,
+        parsed.data,
+        agentUserId ?? userId
+      );
+      return c.json({
+        ok: true,
+        status: "updated",
+        workspaceId,
+        publicProjection: result,
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "PATCH /workspaces/:workspaceId/public-projection failed"
+      );
+      return c.json({ error: "Failed to set public-projection config" }, 500);
     }
   });
 

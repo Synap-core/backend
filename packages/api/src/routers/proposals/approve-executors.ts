@@ -2163,6 +2163,84 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── workspace / configure_public_projection ─────────────────────────────────
+  // A gated Hub `PATCH /workspaces/:id/public-projection` (agent-authored, or a
+  // member whose role lacks `write`) lands here on approval. Opting a workspace
+  // into an UNAUTHENTICATED public projection must go through review, not apply
+  // immediately — so this executor is what makes approval actually write the
+  // config. Materializes via the SAME `setWorkspacePublicProjection` apply fn the
+  // direct/auto-approve path uses — re-run as the APPROVER (userId) so the
+  // settings merge attributes to the reviewer. Without this executor the `*/*`
+  // catch-all would flip the proposal APPROVED (emit `.validated`) but NEVER
+  // write the config — the public surface would silently never open.
+  //
+  // DATA-SHAPE NOTE: the propose gate stores exactly `{ enabled, roles, fields }`
+  // in the proposal `data.data` — the full input `setWorkspacePublicProjection`
+  // needs. The target workspace is `proposal.workspaceId` (the SAME workspace the
+  // gate RBAC-checked, mirrors workspace/declare_source).
+  registerProposalExecutor({
+    key: "workspace/configure_public_projection",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace public-projection proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, so skip if
+      // this proposal was already materialized (a re-approve would re-write —
+      // harmless (mergeSettings is idempotent) but the guard mirrors the siblings).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { PublicProjectionInputSchema, setWorkspacePublicProjection } =
+        await import("../../services/workspace-projection-service.js");
+      const parsed = PublicProjectionInputSchema.safeParse({
+        enabled: innerData.enabled,
+        roles: innerData.roles,
+        fields: innerData.fields,
+      });
+      if (!parsed.success) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace public-projection proposal is missing a valid { enabled, roles, fields } config",
+        });
+      }
+
+      // Apply as the APPROVER — the same door the granted/direct path calls.
+      await setWorkspacePublicProjection(workspaceId, parsed.data, userId);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── messaging.external.send (proposalType-only) ─────────────────────────────
   registerProposalExecutor({
     key: "messaging.external.send",
