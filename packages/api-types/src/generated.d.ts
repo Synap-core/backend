@@ -718,6 +718,20 @@ export interface WorkspaceSettings {
 	 * Stored here for O(1) lookup on workspace open.
 	 */
 	homeDashboardViewId?: string;
+	/**
+	 * Template-declared entity-detail action placements. Authored on a template
+	 * (see `TemplateActionPlacement` in `@synap-core/workspace-templates`), merged
+	 * here by `applyPackagePostWorkspace`, and read by the browser entity-detail
+	 * cell to render dynamic actions. `ref` is a capability verb key, or a
+	 * playbook / automation row id (names are resolved to ids at merge time).
+	 */
+	actionPlacements?: Array<{
+		profileSlug: string;
+		surface: string;
+		kind: "capability" | "playbook" | "automation";
+		ref: string;
+		label: string;
+	}>;
 	intelligenceServiceId?: string;
 	intelligenceServiceOverrides?: {
 		chat?: string;
@@ -13535,6 +13549,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					capabilities?: Record<string, unknown>[] | undefined;
 					playbooks?: Record<string, unknown>[] | undefined;
+					actionPlacements?: {
+						profileSlug: string;
+						surface: string;
+						kind: "playbook" | "automation" | "capability";
+						ref: string;
+						label: string;
+					}[] | undefined;
 				};
 				dryRun?: boolean | undefined;
 			};
@@ -20229,8 +20250,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				workspaceId: string;
 				goal: string;
+				workspaceId?: string | null | undefined;
 				templateId?: string | undefined;
 				expectedOutputs?: {
 					kind: string;
@@ -20239,7 +20260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
-				projectId?: string | undefined;
+				projectId?: string | null | undefined;
 			};
 			output: {
 				userId: string;
@@ -20657,6 +20678,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "paused" | "archived" | "draft" | undefined;
+				contextSkill?: {
+					body: string;
+					name?: string | undefined;
+				} | undefined;
 			};
 			output: {
 				playbook: Playbook | null;

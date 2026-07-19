@@ -44,6 +44,7 @@ import {
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   type WorkspaceDefinitionInput,
+  type ReconcileReport,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type {
@@ -3002,26 +3003,63 @@ export const workspacesRouter = router({
         workspaceId: string,
         currentSettings: WorkspaceSettings | null
       ) => {
+        // ── 1. Additive profiles / property-defs / views / entityLinks sync.
         const outcome = await reconcileWorkspaceIfStale({
           workspaceId,
           packageSlug: input.packageSlug,
           currentSettings,
           userId: ctx.userId,
         });
-        if (outcome.checked) return outcome.report; // in sync (undefined) or freshly reconciled
-        try {
-          return await reconcileWorkspaceFromDefinition({
-            workspaceId,
-            userId: ctx.userId,
-            definition: input.definition as unknown as WorkspaceDefinitionInput,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, workspaceId },
-            "createFromDefinition: additive template reconcile failed (non-fatal)"
-          );
-          return undefined;
+        let report: ReconcileReport | undefined;
+        // Sync the post-workspace layers only when the template ACTUALLY drifted
+        // (a fresh reconcile happened) or when we couldn't version-compare —
+        // never on an in-sync no-op, so a reconnect re-trigger stays cheap.
+        let syncLayers: boolean;
+        if (outcome.checked) {
+          report = outcome.report; // in sync (undefined) or freshly reconciled
+          syncLayers = !!outcome.report;
+        } else {
+          try {
+            report = await reconcileWorkspaceFromDefinition({
+              workspaceId,
+              userId: ctx.userId,
+              definition:
+                input.definition as unknown as WorkspaceDefinitionInput,
+            });
+          } catch (err) {
+            logger.warn(
+              { err, workspaceId },
+              "createFromDefinition: additive template reconcile failed (non-fatal)"
+            );
+          }
+          syncLayers = true;
         }
+        // ── 2. Additive playbooks / capabilities / automations / actionPlacements
+        // sync — the post-workspace layers reconcileWorkspaceFromDefinition does
+        // NOT cover (it only touches profiles/views/entityLinks). The applier is
+        // idempotent by (name, workspaceId), so a re-install ADDS playbooks the
+        // template gained since first install (e.g. radars) WITHOUT duplicating
+        // existing ones. Mirrors the compose-overlay branch; non-fatal.
+        if (syncLayers) {
+          try {
+            await applyPackagePostWorkspace({
+              workspaceId,
+              body: buildPostWorkspaceBodyFromDefinition(
+                input.definition as CreateDefinitionPostWorkspaceSlice,
+                workspaceId
+              ),
+              userId: ctx.userId,
+              agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+              scopes: [],
+            });
+          } catch (err) {
+            logger.warn(
+              { err, workspaceId },
+              "createFromDefinition: post-workspace layer reconcile failed (non-fatal)"
+            );
+          }
+        }
+        return report;
       };
 
       // Serialise concurrent calls with the same (userId, proposalId) so a

@@ -16,6 +16,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.2)
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -28,6 +29,7 @@ import {
   desc,
   drizzleSql,
   playbooks,
+  skills,
   focusSessions,
   automations,
   playbookAutomations,
@@ -129,6 +131,19 @@ const createInputSchema = z.object({
   schedule: jsonValue.optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
+  /**
+   * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
+   * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
+   * linked to the playbook via a `documents` edge; the executor prepends its
+   * body to the kickoff. The CALLER generates the body (this mutation stays
+   * LLM-free). Optional — omit for playbooks whose goalTemplate is sufficient.
+   */
+  contextSkill: z
+    .object({
+      name: z.string().max(200).optional(),
+      body: z.string().min(1).max(20000),
+    })
+    .optional(),
 });
 
 export const updateInputSchema = z.object({
@@ -1061,6 +1076,7 @@ export const playbooksRouter = router({
           schedule: input.schedule,
           executor: input.executor,
           status: input.status,
+          contextSkill: input.contextSkill,
         },
       });
 
@@ -1102,6 +1118,45 @@ export const playbooksRouter = router({
       await materializePlaybookCronAutomation(created as Playbook, {
         userId: input.agentUserId ?? ctx.userId,
       });
+
+      // W6 Layer-2 context skill — persist the AI-generated "how to run this
+      // playbook" instruction as a non-runnable `instruction` skill and link it
+      // playbook→skill via a non-grant `documents` edge (kept OUT of the
+      // grantable/runnable set so it's never executed). Rides the playbook's
+      // approval exactly like the cron automation above (this direct-create path
+      // is only reached AFTER checkPermissionOrPropose granted). The executor
+      // reads the body directly at kickoff. Best-effort — never fail the create.
+      if (input.contextSkill?.body?.trim()) {
+        try {
+          const skillId = randomUUID();
+          await database.insert(skills).values({
+            id: skillId,
+            name: input.contextSkill.name ?? `${input.name} — how to run`,
+            kind: "instruction",
+            body: input.contextSkill.body,
+            scope: "workspace",
+            workspaceId: ctx.workspaceId,
+            userId: input.agentUserId ?? ctx.userId,
+            status: "active",
+            // Born-approved only for a trusted human author (mirrors
+            // insertSkillGoverned); an agent-authored body stays unapproved, but
+            // the executor reads it by link regardless of approval.
+            approved: !input.agentUserId,
+          });
+          await createLinks([
+            {
+              workspaceId: ctx.workspaceId,
+              fromType: "playbook",
+              fromId: (created as Playbook).id,
+              toType: "skill",
+              toId: skillId,
+              linkType: "documents",
+            },
+          ]);
+        } catch {
+          // Non-fatal: a context-skill hiccup must never fail the playbook create.
+        }
+      }
 
       return {
         playbook: created as Playbook,

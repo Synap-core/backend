@@ -16,7 +16,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getDb, messages, computeMessageHash } from "@synap/database";
+import {
+  getDb,
+  messages,
+  computeMessageHash,
+  skills,
+  links,
+  eq,
+  and,
+} from "@synap/database";
 import { MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
@@ -77,7 +85,37 @@ export class IsAgentExecutor implements Executor {
       stageSection = `\n\n${lines.join("\n")}`;
     }
 
-    const kickoff = `${base}${stageSection}`;
+    // Layer-2 CONTEXT SKILL — the AI-generated "how to run THIS playbook"
+    // instruction, linked to the playbook via a non-grant `documents` edge (kept
+    // out of the grantable/runnable set on purpose). Prepended to the kickoff so
+    // the agent gets the HOW alongside the goal. Absent ⇒ no prefix. Non-fatal:
+    // a lookup failure must never block the run.
+    let contextPrefix = "";
+    if (ctx.playbookId) {
+      try {
+        const [ctxSkill] = await db
+          .select({ body: skills.body })
+          .from(links)
+          .innerJoin(skills, eq(skills.id, links.toId))
+          .where(
+            and(
+              eq(links.fromType, "playbook"),
+              eq(links.fromId, ctx.playbookId),
+              eq(links.linkType, "documents"),
+              eq(links.toType, "skill"),
+              eq(skills.kind, "instruction")
+            )
+          )
+          .limit(1);
+        if (ctxSkill?.body?.trim()) {
+          contextPrefix = `## How to run this playbook\n${ctxSkill.body.trim()}\n\n`;
+        }
+      } catch {
+        // best-effort — fall through with no context prefix
+      }
+    }
+
+    const kickoff = `${contextPrefix}${base}${stageSection}`;
 
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal.

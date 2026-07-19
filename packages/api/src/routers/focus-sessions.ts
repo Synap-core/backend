@@ -243,22 +243,24 @@ export const focusSessionsRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        workspaceId: z.string(),
+        // A session can start on the personal floor. Space and project are
+        // optional associations, not a required parent hierarchy.
+        workspaceId: z.string().nullish(),
         goal: z.string().min(1).max(2000),
         templateId: z.string().optional(),
         expectedOutputs: z.array(expectedOutputItemSchema).default([]),
         channelId: z.string().uuid().optional(),
         agentIds: z.array(z.string()).default([]),
-        // Project this session belongs to (project-centric-scope). A session
-        // implies its project on the FE lens; persisted here so it survives.
-        projectId: z.string().uuid().optional(),
+        // Optional project association. The active work context stays
+        // independent from this persisted association.
+        projectId: z.string().uuid().nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const [created] = await db
         .insert(focusSessions)
         .values({
-          workspaceId: input.workspaceId,
+          workspaceId: input.workspaceId ?? null,
           userId: ctx.userId,
           goal: input.goal,
           templateId: input.templateId ?? null,

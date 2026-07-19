@@ -347,6 +347,7 @@ async function executeSingleRun(
     result = await resolveExecutor(playbook.executor).run({
       workspaceId: input.workspaceId,
       userId: actorId,
+      playbookId: playbook.id,
       sessionId: session.id,
       channelId: channel.id,
       goal: session.goal,

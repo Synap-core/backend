@@ -231,6 +231,12 @@ export interface LinkInput {
 export interface RunContext {
   workspaceId: string;
   userId: string;
+  /**
+   * The playbook this run executes. Optional — set by `runPlaybook`'s single
+   * constructor; lets an executor load the playbook's Layer-2 "context skill"
+   * (the AI-generated HOW-to-run-this-playbook instruction) and inject it.
+   */
+  playbookId?: string;
   /** The instantiated session this run drives. */
   sessionId: string;
   /** The channel room for the run. */

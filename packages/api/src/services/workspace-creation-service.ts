@@ -138,6 +138,21 @@ export async function reconcileWorkspaceIfStale(opts: {
  * `package-dependency-resolver.ts:178`. Adopting a pre-stamped workspace's
  * identity is itself a governed write (it mutates `provisioning_proposal_id`
  * + `settings`), so it gets the same floor a compose overlay write gets.
+ *
+ * DELIBERATELY kept at owner/admin/editor — NOT relaxed to "any visible
+ * membership" the way `findWorkspaceBySubtype(..., requireWrite: false)`
+ * (the dependency `require` path) is in `package-dependency-resolver.ts`.
+ * That path is safe to relax because REUSE writes nothing to the matched
+ * workspace — presence alone satisfies a `require` dependency. This path is
+ * different: on a hit, `createWorkspaceFromDefinitionIdempotent` immediately
+ * stamps `provisioning_proposal_id` + `settings.proposalId` onto the matched
+ * row (see the adopt block below) and may also run
+ * `reconcileWorkspaceFromDefinition` onto it. Both are writes, so a
+ * viewer-only member must not be able to trigger them by re-running an
+ * install — that would let a read-only membership silently mutate a
+ * workspace's identity/content. The union fix above (both tiers feed one
+ * role-filtered pool) closes the gap that used to make this floor miss
+ * legitimate owner/editor matches; it does not widen who may adopt.
  */
 const ADOPT_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
 
@@ -153,7 +168,14 @@ interface LegacyWorkspaceMatch {
  * misses them — and without this fallback, a reinstall DUPLICATES instead of
  * reconciling (the root cause this function fixes).
  *
- * Two tiers, tried in order, first hit wins:
+ * Two tiers, UNIONED (both always run, deduped by workspace id) — NOT tried
+ * in order with first-hit-wins, because that let tier 1 short-circuit tier 2:
+ * if `package_slug = slug` found a row but that row was later dropped by the
+ * `ADOPT_WRITE_ROLES` filter (e.g. a viewer-only membership on the packageSlug
+ * row), tier 2 never even ran, so a role-eligible subtype match was missed and
+ * the caller fell through to CREATE → duplicate workspace. Both tiers now feed
+ * the same candidate pool, which the role filter + tie-break below is applied
+ * to as one step:
  *   1. `workspaces.package_slug = slug` — the promoted column. Stamped OLDER
  *      than `provisioning_proposal_id` (dual-written from a later
  *      `settings.proposalId` follow-up merge), so it covers more legacy rows.
@@ -208,22 +230,30 @@ async function findLegacyWorkspaceMatch(
       and(eq(workspaceMembers.userId, userId), eq(workspaces.packageSlug, slug))
     );
 
-  const rows =
-    bySlug.length > 0
-      ? bySlug
-      : await db
-          .select(selectCols)
-          .from(workspaces)
-          .innerJoin(
-            workspaceMembers,
-            eq(workspaceMembers.workspaceId, workspaces.id)
-          )
-          .where(
-            and(
-              eq(workspaceMembers.userId, userId),
-              drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`
-            )
-          );
+  const bySubtype = await db
+    .select(selectCols)
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .where(
+      and(
+        eq(workspaceMembers.userId, userId),
+        drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`
+      )
+    );
+
+  // UNION both tiers (deduped by workspace id) BEFORE the role filter below —
+  // previously tier 2 (subtype) only ran when tier 1 (packageSlug) found ZERO
+  // rows, so a packageSlug row that the role filter would later drop (e.g. a
+  // viewer-only membership) silently suppressed a legitimate, role-eligible
+  // subtype match instead of falling through to it. Running both and merging
+  // first means the role filter + tie-break below sees every candidate from
+  // either predicate, never just whichever tier happened to hit first.
+  const byId = new Map<string, (typeof bySlug)[number]>();
+  for (const r of [...bySlug, ...bySubtype]) byId.set(r.id, r);
+  const rows = [...byId.values()];
 
   const matches = rows.filter((r) => ADOPT_WRITE_ROLES.has(r.role));
   if (matches.length === 0) return null;

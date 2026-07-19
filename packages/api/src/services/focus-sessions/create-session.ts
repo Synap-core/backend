@@ -23,8 +23,7 @@ export interface CreateFocusSessionParams {
   userId: string;
   /**
    * Workspace the session belongs to. Optional — a session may instead be
-   * anchored to a project (or the user floor). At least one of workspaceId /
-   * projectId must be provided. When null/undefined the governance membrane
+   * anchored to a project or live on the user floor. When null/undefined the governance membrane
    * treats it as a personal resource and auto-grants (no membership needed).
    */
   workspaceId?: string | null;
@@ -76,13 +75,6 @@ export async function createFocusSession(
     templateId = null,
     expectedOutputs = [],
   } = params;
-
-  if (!workspaceId && !projectId) {
-    throw Object.assign(
-      new Error("A focus session requires a workspaceId or a projectId"),
-      { code: "BAD_REQUEST" }
-    );
-  }
 
   // Idempotency: correlationId returns the existing session for this user,
   // scoped to the same workspace when one is given.

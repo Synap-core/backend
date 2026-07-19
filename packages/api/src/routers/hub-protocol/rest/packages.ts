@@ -251,6 +251,17 @@ export function registerPackagesRoutes(app: HubHono): void {
     // path also drives. This door owns only the mapping into `result.workspace`
     // / `result.dependencies`, the audit stamp, and the 4xx/5xx bodies below.
     let workspaceId: string | undefined;
+    // Reconcile outcome for the (only) idempotent-create path
+    // (`createWorkspaceFromDefinitionIdempotent`, surfaced via
+    // `core.created.outcome`) — used below to gate the post-workspace
+    // capabilities/automations/playbooks/loops re-seed. `undefined` for the
+    // `composed` branch (no such discriminator there) — the safe default,
+    // meaning "seed fully" (never skipped).
+    let postWorkspaceOutcome:
+      | "created"
+      | "reconciled"
+      | "unchanged"
+      | undefined;
     try {
       const core = await materializeWorkspaceCore({
         definition: body as unknown as WorkspaceDefinitionInput,
@@ -312,6 +323,7 @@ export function registerPackagesRoutes(app: HubHono): void {
       } else if (core.status === "created") {
         // Hub never passes deferCreate, so the core never returns "resolved".
         workspaceId = core.workspaceId;
+        postWorkspaceOutcome = core.created.outcome;
         result.workspace = {
           status: "created",
           workspaceId: core.workspaceId,
@@ -379,7 +391,22 @@ export function registerPackagesRoutes(app: HubHono): void {
 
     // ── Steps 1b–6: enroll agent + capabilities/automations/playbooks/loops
     // + project links — ONE shared door with the workspace/create approve path.
-    if (workspaceId) {
+    //
+    // Skip entirely when the idempotent-create path determined the workspace
+    // is already current (`postWorkspaceOutcome === "unchanged"`) — mirrors
+    // the `syncLayers` gate the tRPC `createFromDefinition` door's own
+    // `reconcileExisting` already applies (`routers/workspaces.ts` ~line
+    // 3016: `syncLayers = !!outcome.report` when `outcome.checked`, so an
+    // in-sync no-op never re-runs `applyPackagePostWorkspace`). The Hub REST
+    // door lacked this gate, so it re-seeded every capability (each a
+    // Control-Plane fetch, `cp-template-client.ts`) on EVERY apply — even a
+    // no-op reinstall — driving the 120s Hub-call timeout. `undefined`
+    // (the `composed` branch, which has no such discriminator) always runs,
+    // same as before this fix — a drifted/new install (version differs, or
+    // no stamp) is unaffected: `postWorkspaceOutcome` is only ever
+    // `"unchanged"` when `reconcileWorkspaceIfStale` did a real version
+    // comparison AND found no drift.
+    if (workspaceId && postWorkspaceOutcome !== "unchanged") {
       const post = await applyPackagePostWorkspace({
         workspaceId,
         body,
