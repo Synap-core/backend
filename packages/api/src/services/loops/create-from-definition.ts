@@ -85,7 +85,7 @@ export interface CreateLoopResult {
   created: {
     playbooks: {
       ref: string;
-      status: "created" | "proposed";
+      status: "created" | "proposed" | "reused";
       playbookId: string | null;
       proposalId: string | null;
     }[];
@@ -152,6 +152,53 @@ export async function createLoopFromDefinition(
   const playbookIdByRef = new Map<string, string>();
   const createdPlaybooks: CreateLoopResult["created"]["playbooks"] = [];
   for (const pb of def.playbooks) {
+    // Reuse-by-(workspaceId, name) BEFORE create — same dedup the graph-playbook
+    // applier uses (package-apply-post-workspace). Without it every repeat door
+    // (reconcileFromDefinition fires on each template version bump) would insert
+    // a duplicate playbook row AND a duplicate backing cron automation via
+    // `schedule` — a scheduled playbook would fire N times after N reconciles.
+    // Reuse still re-wires grants idempotently (createLinks is onConflict-safe).
+    if (workspaceId) {
+      const {
+        db,
+        and,
+        eq,
+        playbooks: playbooksTable,
+      } = await import("@synap/database");
+      const [existing] = await db
+        .select({ id: playbooksTable.id })
+        .from(playbooksTable)
+        .where(
+          and(
+            eq(playbooksTable.name, pb.name),
+            eq(playbooksTable.workspaceId, workspaceId)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        playbookIdByRef.set(pb.ref, existing.id);
+        createdPlaybooks.push({
+          ref: pb.ref,
+          status: "reused",
+          playbookId: existing.id,
+          proposalId: null,
+        });
+        if (pb.grants && pb.grants.length > 0) {
+          await createLinks(
+            pb.grants.map((g) => ({
+              workspaceId,
+              fromType: "playbook" as const,
+              fromId: existing.id,
+              toType: g.kind as "tool" | "skill" | "command",
+              toId: g.id,
+              linkType: "grants" as const,
+              metadata: {},
+            }))
+          );
+        }
+        continue;
+      }
+    }
     const result = await playbooksCaller.create({
       name: pb.name,
       description: pb.description,
