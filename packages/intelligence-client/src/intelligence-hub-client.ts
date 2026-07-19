@@ -94,8 +94,16 @@ export interface IntelligenceHubRequest {
   agentType?: string;
   agentConfig?: Record<string, unknown>;
   projectId?: string;
-  /** Active workspace (required for entity create/update – event chain) */
-  workspaceId?: string;
+  /**
+   * Active workspace lens for the turn.
+   *
+   * CONTRACT: a `null`/absent workspaceId means a POD-WIDE turn — the IS scopes
+   * its Hub reads to the caller's user floor (its accessible workspaces + globals)
+   * and the agent places each write in the workspace that fits per-signal. A
+   * non-null workspaceId pins the turn to that one workspace (reads + write
+   * placement), the prior behavior.
+   */
+  workspaceId?: string | null;
   /** ID of the user message that triggered this request — links proposals to the message */
   sourceMessageId?: string;
   /** Per-human AI agent user ID — used for proposal attribution in hub-protocol tool calls */

@@ -91,7 +91,12 @@ export interface ResolveOrCreateExternalChannelArgs {
   provider: string;
   externalId: string;
   userId: string;
-  workspaceId: string;
+  /**
+   * Workspace home for a freshly-created channel. `null` (Wave 3) creates the
+   * channel pod-level (no workspace pin) — `channels.workspaceId` is nullable —
+   * so a pod-wide inbound isn't forced into one workspace. Non-null pins it.
+   */
+  workspaceId: string | null;
   /** Channel title for a freshly-created row. */
   title: string;
   /** Participant display name (cached in metadata). */
@@ -274,7 +279,11 @@ export interface RecordInboundMessageArgs {
   /** External thread/channel id (the channel dedup key). */
   externalId: string;
   userId: string;
-  workspaceId: string;
+  /**
+   * Workspace home for a freshly-created channel (Wave 3). `null` records the
+   * inbound against a pod-level channel (no workspace pin); non-null pins it.
+   */
+  workspaceId: string | null;
   /** Message body. */
   text: string;
   /** Participant display name. */

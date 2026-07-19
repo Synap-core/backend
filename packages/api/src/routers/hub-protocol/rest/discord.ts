@@ -73,7 +73,10 @@ const AttachmentInputSchema = z.object({
 
 const IngestRequestSchema = z
   .object({
-    workspaceId: z.string().uuid(),
+    // Optional (Wave 3, pod-wide): when omitted the inbound is recorded against a
+    // pod-level (null-workspace) channel home — the "user floor" — instead of
+    // being pinned to one workspace. Provided → workspace-scoped, unchanged.
+    workspaceId: z.string().uuid().optional(),
     discordChannelId: z.string().min(1),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1).optional(),
@@ -98,7 +101,12 @@ const IngestResponseSchema = z
 
 const AgentTurnRequestSchema = z
   .object({
-    workspaceId: z.string().uuid(),
+    // Optional (Wave 3, pod-wide turn): when omitted the turn runs POD-WIDE — the
+    // agent reads across the caller's accessible workspaces + globals (the "user
+    // floor") and places each write in the workspace that fits the signal. When
+    // provided the turn is pinned to that one workspace exactly as before (the
+    // current pinned Discord bridge always passes it).
+    workspaceId: z.string().uuid().optional(),
     discordChannelId: z.string().min(1),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1),
@@ -205,9 +213,10 @@ export function registerDiscordRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
-    // workspaceId is a required field on IngestRequestSchema, so the membership
-    // branch of resolveActingContext returns it non-null.
-    const workspaceId = body.workspaceId;
+    // When workspaceId was provided it is membership-checked and returned here
+    // unchanged; when omitted (Wave 3, pod-wide) it resolves to null and the
+    // inbound is recorded against a pod-level channel home.
+    const workspaceId = acting.workspaceId;
 
     const callerKeyId = c.get("apiKeyId") as string | undefined;
 
@@ -281,9 +290,12 @@ export function registerDiscordRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
-    // workspaceId is a required field on AgentTurnRequestSchema, so the membership
-    // branch of resolveActingContext returns it non-null.
-    const workspaceId = body.workspaceId;
+    // CONTRACT (Wave 3): workspaceId is `string | null`. Provided → membership-
+    // checked and returned unchanged (turn PINNED to that workspace, byte-for-byte
+    // the prior behavior). Omitted → null, a POD-WIDE turn: the channel home is
+    // pod-level, the IS scopes reads to the user floor, and the agent places each
+    // write in the workspace that fits.
+    const workspaceId = acting.workspaceId;
 
     // ── Caller identity resolution (Option B) ──────────────────────────────────
     // The bridge authenticates with the OPERATOR key; `userId` above is the
@@ -385,7 +397,9 @@ export function registerDiscordRoutes(app: HubHono): void {
 
       const resolvedService = await resolveIntelligenceServiceByAgentId(
         agentId,
-        { userId, workspaceId, capability: "chat" }
+        // Service routing is a workspace HINT only; a pod-wide (null) turn has no
+        // specific lens, so pass undefined → env/default resolution, unchanged.
+        { userId, workspaceId: workspaceId ?? undefined, capability: "chat" }
       );
 
       // `reply` is what we return to the bot; `assistantContent` is the genuine
@@ -406,6 +420,12 @@ export function registerDiscordRoutes(app: HubHono): void {
             userId: actingUserId,
             agentId,
             agentType: "meta",
+            // CONTRACT: workspaceId is `string | null`. A null/absent workspaceId
+            // means a POD-WIDE turn — the IS scopes its Hub reads to the user floor
+            // (omits workspaceId → backend returns the caller's accessible
+            // workspaces + globals) and the agent places each write in the
+            // workspace that fits per-signal. A non-null workspaceId pins the turn
+            // to that one workspace for reads and write-placement, unchanged.
             workspaceId,
             agentUserId: callerAgentUserId ?? resolvedService.agentUserId,
             ...getPodCallback(),
