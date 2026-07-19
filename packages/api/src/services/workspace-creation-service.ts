@@ -167,6 +167,20 @@ export interface CreateWorkspaceFromDefinitionResult {
    * re-install, shared by BOTH doors (see that function's doc).
    */
   reconciled?: ReconcileReport;
+  /**
+   * Explicit discriminator so a caller never has to infer intent from
+   * `created`/`reconciled` alone — the E4 fix: `created:true` used to be
+   * returned for BOTH a genuine new workspace AND (before this field existed)
+   * could be misread as covering a reused-but-stale one, since the two were
+   * distinguishable only by also checking `reconciled`.
+   *   - `"created"`    — a new workspace was materialized just now.
+   *   - `"reconciled"` — the workspace already existed and drifted from the
+   *     resolved template, so `reconcileWorkspaceIfStale` wrote additive
+   *     changes onto it (see `reconciled` for the report).
+   *   - `"unchanged"`  — the workspace already existed and was already
+   *     current (or no version comparison was possible) — no write happened.
+   */
+  outcome: "created" | "reconciled" | "unchanged";
 }
 
 /**
@@ -275,6 +289,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
         return {
           workspaceId: ws.id,
           created: false,
+          outcome: reconciled ? "reconciled" : "unchanged",
           ...(reconciled && report ? { reconciled: report } : {}),
         };
       }
@@ -358,6 +373,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
     return {
       workspaceId: result.workspaceId,
       created: true,
+      outcome: "created",
     };
   });
 }

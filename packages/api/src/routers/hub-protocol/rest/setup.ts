@@ -51,11 +51,14 @@ import {
 } from "../../../services/hub-integration-registration.js";
 import {
   createAndVerifyHubInboundKey,
+  createAndVerifyServiceKey,
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
+import { API_KEY_SCOPES, isValidScope } from "@synap/database/schema";
 
 import { kratosAdmin } from "@synap/auth";
-import { logger, type HubHono } from "./_shared.js";
+import type { Context } from "hono";
+import { logger, type HubHono, type HubVariables } from "./_shared.js";
 
 /** Escape a user-derived value before interpolating it into an HTML string. */
 function escapeHtml(value: string): string {
@@ -200,6 +203,161 @@ function toPodAdminOrigin(origin: string): string {
   } catch {
     return origin;
   }
+}
+
+/**
+ * Provisioning auth for the product-neutral `/setup/service` door.
+ *
+ * Mirrors the auth preamble of `/setup/agent` (trusted-issuer JWT OR
+ * PROVISIONING_TOKEN OR a Hub API key with `setup.agent` scope OR a human-owned
+ * `hub-protocol.write` surface key). Kept as a standalone helper so `/setup/service`
+ * reuses the exact same gate WITHOUT touching `/setup/agent`.
+ *
+ * Returns either `{ ok: true, ... }` or `{ ok: false, response }` (a fully-formed
+ * 401/202/403 the caller should return verbatim).
+ */
+async function authenticateServiceSetupRequest(
+  c: Context<{ Variables: HubVariables }>
+): Promise<
+  | {
+      ok: true;
+      authMethod: "jwt" | "provisioning_token" | "api_key" | "api_key_surface";
+      jwtIssuerUrl: string | null;
+      surfaceKeyUserId?: string;
+    }
+  | { ok: false; response: Response }
+> {
+  const authHeader = c.req.header("authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7).trim()
+    : null;
+
+  if (!token) {
+    return {
+      ok: false,
+      response: c.json({ error: "Missing Authorization header" }, 401),
+    };
+  }
+
+  let jwtIssuerUrl: string | null = null;
+  const adminUrl = `${process.env.PUBLIC_URL ?? ""}/admin/trusted-issuers`;
+
+  // Try 1: generic issuer JWT verified against the Pod-local issuer registry.
+  try {
+    const decoded = jwt.decode(token);
+    if (decoded && typeof decoded === "object") {
+      const rawIssuer = (decoded as Record<string, unknown>).iss;
+      const iss =
+        typeof rawIssuer === "string" ? normalizeIssuerUrl(rawIssuer) : null;
+      if (iss && rawIssuer === iss) {
+        const issuerSvc = new TrustedIssuerService();
+        let issuer = await issuerSvc.getByUrl(iss);
+
+        if (!issuer) {
+          const derivedDisplayName = new URL(iss).hostname;
+          issuer = await issuerSvc.registerPending(iss, derivedDisplayName, {
+            requestedVia: "setup-service",
+          });
+          logger.warn(
+            { issuerUrl: iss, adminUrl },
+            "setup/service: unknown JWT issuer registered as pending — admin approval required"
+          );
+          return {
+            ok: false,
+            response: c.json(
+              { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
+              202
+            ),
+          };
+        }
+
+        if (issuer.status === "pending") {
+          return {
+            ok: false,
+            response: c.json(
+              { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
+              202
+            ),
+          };
+        }
+
+        if (issuer.status === "rejected" || issuer.status === "revoked") {
+          return {
+            ok: false,
+            response: c.json(
+              { error: "This issuer is not authorized on this pod." },
+              403
+            ),
+          };
+        }
+
+        if (issuer.status === "approved") {
+          if (!issuer.allowedScopes.includes("setup.agent")) {
+            return {
+              ok: false,
+              response: c.json(
+                { error: "This issuer is not authorized on this pod." },
+                403
+              ),
+            };
+          }
+          try {
+            const payload = await verifyIssuerJwt<{
+              type: string;
+              email?: string;
+              name?: string;
+            }>(token, iss);
+            if (
+              payload &&
+              (payload.type === "agent_setup" ||
+                payload.type === "addon_activate")
+            ) {
+              return { ok: true, authMethod: "jwt", jwtIssuerUrl: iss };
+            }
+          } catch {
+            // JWT verification failed — fall through to other auth methods
+          }
+        }
+      }
+    }
+  } catch {
+    // Not a valid JWT or issuer lookup failed — fall through
+  }
+
+  // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
+  const provisioningToken = process.env.PROVISIONING_TOKEN;
+  if (provisioningToken && token === provisioningToken) {
+    return { ok: true, authMethod: "provisioning_token", jwtIssuerUrl };
+  }
+
+  // Try 3: Hub Protocol API key with `setup.agent` scope (generic provisioning scope).
+  {
+    const keyRecord = await apiKeyService.validateApiKey(token);
+    if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
+      return { ok: true, authMethod: "api_key", jwtIssuerUrl };
+    }
+    // Path 4: any human-owned `hub-protocol.write` key can mint a service key
+    // owned by itself (the key's userId becomes the service key's owner).
+    if (keyRecord?.isActive && keyRecord.scope.includes("hub-protocol.write")) {
+      return {
+        ok: true,
+        authMethod: "api_key_surface",
+        jwtIssuerUrl,
+        surfaceKeyUserId: keyRecord.userId,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    response: c.json(
+      {
+        error:
+          "Invalid credentials. Accepted: a trusted-issuer JWT, PROVISIONING_TOKEN, a Hub API key with `setup.agent` scope, or a human-owned `hub-protocol.write` key.",
+      },
+      401
+    ),
+  };
 }
 
 export function registerSetupRoutes(app: HubHono): void {
@@ -717,6 +875,206 @@ export function registerSetupRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, agentType, flowId }, "setup/agent: failed");
+      return c.json({ error: "Internal server error", flowId }, 500);
+    }
+  });
+
+  /**
+   * POST /setup/service — mint a product-neutral `service` identity.
+   *
+   * Parallel to /setup/agent but WITHOUT any agent shaping: no `agentType`, no
+   * synthetic agent user, no forced scope bundle, no sibling revocation. The
+   * minted key is owned directly by a human (the pod owner, or a caller-named
+   * human via `linkedUserId`) and authenticates AS that owner — writes are
+   * operator-direct (whitelisted verbs apply direct; destructive/non-whitelisted
+   * still auto-queue as proposals via the existing governance gate).
+   *
+   * Body: { workspaceId: string, scopes?: string[], name?: string, linkedUserId?: string }
+   * Returns: { serviceKey, keyId, workspaceId, scopes, keyType: "service" }
+   */
+  app.post("/setup/service", async (c) => {
+    const flowId = randomUUID();
+
+    // ── Auth: same gate as /setup/agent (JWT / provisioning token / API key) ──
+    const auth = await authenticateServiceSetupRequest(c);
+    if (!auth.ok) return auth.response;
+    logger.info(
+      { authMethod: auth.authMethod },
+      "setup/service: authenticated"
+    );
+
+    // ── Parse body ────────────────────────────────────────────────────────────
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+
+    const workspaceId: string | undefined =
+      typeof body.workspaceId === "string" && body.workspaceId.trim()
+        ? body.workspaceId.trim()
+        : undefined;
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+
+    const name: string =
+      typeof body.name === "string" && body.name.trim()
+        ? body.name.trim()
+        : "Service Key";
+
+    // body.linkedUserId NAMES the owning human (→ the key's `userId`). It is NOT
+    // written to the key's `linkedUserId` column — that stays NULL so no agent
+    // remap fires (createAndVerifyServiceKey forces it null).
+    const namedOwnerUserId: string | undefined =
+      typeof body.linkedUserId === "string" && body.linkedUserId.trim()
+        ? body.linkedUserId.trim()
+        : undefined;
+
+    // ── Scopes: caller-declared, validated; default MINIMAL (never the agent bundle) ──
+    let scopes: ApiKeyScope[];
+    if (body.scopes === undefined) {
+      scopes = ["hub-protocol.read"];
+    } else if (
+      Array.isArray(body.scopes) &&
+      body.scopes.every((s: unknown) => typeof s === "string")
+    ) {
+      const invalid = (body.scopes as string[]).filter((s) => !isValidScope(s));
+      if (invalid.length > 0) {
+        return c.json(
+          {
+            error: `Invalid scope(s): ${invalid.join(", ")}. Valid scopes: ${API_KEY_SCOPES.join(", ")}`,
+          },
+          400
+        );
+      }
+      scopes =
+        body.scopes.length > 0
+          ? (body.scopes as ApiKeyScope[])
+          : ["hub-protocol.read"];
+    } else {
+      return c.json({ error: "scopes must be an array of strings" }, 400);
+    }
+
+    try {
+      // ── Verify the workspace exists ────────────────────────────────────────
+      const ws = await db.query.workspaces.findFirst({
+        where: (w, { eq: eqFn }) => eqFn(w.id, workspaceId),
+        columns: { id: true },
+      });
+      if (!ws) {
+        return c.json({ error: `Workspace ${workspaceId} not found` }, 404);
+      }
+
+      // ── Resolve the owning human ───────────────────────────────────────────
+      // Priority: an explicit surface-key caller owns the key it mints; else a
+      // caller-named human (body.linkedUserId); else the pod owner.
+      let ownerUserId: string | null = null;
+      if (auth.authMethod === "api_key_surface" && auth.surfaceKeyUserId) {
+        ownerUserId = auth.surfaceKeyUserId;
+      } else if (namedOwnerUserId) {
+        const named = await db.query.users.findFirst({
+          where: eq(users.id, namedOwnerUserId),
+          columns: { id: true, userType: true },
+        });
+        if (!named) {
+          return c.json(
+            { error: `linkedUserId ${namedOwnerUserId} is not a known user` },
+            400
+          );
+        }
+        ownerUserId = named.id;
+      } else {
+        const humanUser = await db.query.users.findFirst({
+          where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
+          columns: { id: true },
+        });
+        ownerUserId = humanUser?.id ?? null;
+      }
+
+      if (!ownerUserId) {
+        return c.json(
+          { error: "Could not resolve an owning user for the service key" },
+          400
+        );
+      }
+
+      // ── Owner must be a member of the bound workspace ──────────────────────
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.userId, ownerUserId),
+          eq(workspaceMembers.workspaceId, ws.id)
+        ),
+        columns: { id: true },
+      });
+      if (!membership) {
+        return c.json(
+          {
+            error: `User ${ownerUserId} is not a member of workspace ${workspaceId}`,
+          },
+          403
+        );
+      }
+
+      // ── Mint the service key — NO sibling revocation (K1 fix) ──────────────
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+      const registration = await createAndVerifyServiceKey(
+        apiKeyRepo,
+        {
+          keyName: name,
+          scope: scopes,
+          userId: ownerUserId,
+          workspaceId: ws.id,
+          description: `Product-neutral service key for workspace ${ws.id} — created via ${auth.authMethod}`,
+        },
+        ownerUserId,
+        ownerUserId
+      );
+      const registrationTrace = toRegistrationTrace(flowId, registration);
+      const { apiKey, plainKey } = registration;
+
+      if (registration.outcome !== "CONNECTED_VERIFIED") {
+        logger.error(
+          {
+            flowId,
+            ownerUserId,
+            workspaceId: ws.id,
+            authMethod: auth.authMethod,
+            verificationError: registration.verificationError,
+          },
+          "setup/service: key minted but verification failed"
+        );
+        return c.json(
+          {
+            error: "Key minted but verification failed",
+            code: "KEY_MINTED_BUT_VERIFICATION_FAILED",
+            registration: registrationTrace,
+          },
+          500
+        );
+      }
+
+      logger.info(
+        {
+          ownerUserId,
+          keyId: apiKey.id,
+          workspaceId: ws.id,
+          authMethod: auth.authMethod,
+          registration: registrationTrace,
+        },
+        "setup/service: service key created"
+      );
+
+      return c.json({
+        serviceKey: plainKey,
+        keyId: apiKey.id,
+        workspaceId: ws.id,
+        scopes,
+        keyType: "service" as const,
+        registration: registrationTrace,
+      });
+    } catch (err) {
+      logger.error({ err, flowId }, "setup/service: failed");
       return c.json({ error: "Internal server error", flowId }, 500);
     }
   });

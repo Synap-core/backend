@@ -215,6 +215,10 @@ app.use("/*", async (c, next) => {
     "/docs",
     "/entity-share/deliver",
     "/setup/agent",
+    // /setup/service uses the same specialized provisioning auth as /setup/agent
+    // (trusted-issuer JWT / PROVISIONING_TOKEN / setup.agent-scoped or
+    // hub-protocol.write key) — it runs its own checks downstream.
+    "/setup/service",
     "/setup/status",
     "/setup/magic-link",
     "/setup/first-admin",
@@ -360,6 +364,11 @@ app.use("/*", async (c, next) => {
     // so /auth/status (and any future introspection routes) can look up
     // metadata about the calling key without re-running bcrypt.
     c.set("apiKeyId", keyRecord.id);
+    // SERVICE-KEY WORKSPACE CONFINEMENT (Item 3): expose the key's type +
+    // workspace binding so the shared caller-context door can positively pin a
+    // bound `service` key to its workspace. Inert for every other key type.
+    c.set("keyType", keyRecord.keyType);
+    c.set("keyWorkspaceId", keyRecord.workspaceId ?? null);
     // Agent key identity remap: when a key has linkedUserId (= the human who
     // created the agent), remap the effective userId to the human so entity
     // ownership is attributed correctly. The agent (key owner) is tracked as
@@ -486,6 +495,9 @@ app.use(
   idempotencyMiddleware({
     skipPaths: [
       "/setup/agent",
+      // /setup/service returns a one-shot `serviceKey` secret — same
+      // replay-a-cached-secret hazard as /setup/agent. NEVER cache.
+      "/setup/service",
       "/entity-share/deliver",
       // /auth/exchange returns a Kratos session_token — same one-shot-secret
       // hazard as /setup/agent. Two replays of the same Idempotency-Key would

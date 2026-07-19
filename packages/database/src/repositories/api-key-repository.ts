@@ -20,8 +20,9 @@ export interface CreateApiKeyInput {
   /** When set, the rotation-check cron flags this key as due for rotation. */
   rotationScheduledAt?: Date;
   userId: string;
-  /** Categorical label for what this key is used for */
-  keyType?: "hub_inbound" | "user_pat" | "system" | "service";
+  /** Categorical label for what this key is used for. Keep in sync with the
+   * `$type<>` union on `apiKeys.keyType` (schema/api-keys.ts). */
+  keyType?: "hub_inbound" | "user_pat" | "system" | "service" | "is_internal";
   /** Human-readable explanation of this key's purpose */
   description?: string;
   /** Workspace tag — set when minted via apiKeys.createForWorkspace. */

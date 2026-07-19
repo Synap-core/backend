@@ -104,6 +104,18 @@ jobs:
       - name: Verify generated API types are up to date
         run: pnpm --filter @synap/api gen-types:check
 
+      # gen-types:check above only proves the COMMITTED generated.d.ts is
+      # fresh — it says nothing about whether that surface ever reached the
+      # PUBLISHED npm tarball, or whether synap-app's pinned range still
+      # resolves it. See check-publish-freshness.mjs's header for the full
+      # rationale. Network-degrades to a warning (never fails on a transient
+      # registry/GitHub blip) — only a genuine version/range drift fails.
+      - name: Check @synap-core/api-types publish freshness (drift tripwire)
+        run: node scripts/check-publish-freshness.mjs
+        working-directory: packages/api-types
+        env:
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+
       - name: Start API server for smoke tests
         run: |
           # Start server in background with test config

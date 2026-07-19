@@ -32,18 +32,36 @@ jobs:
       - name: Build API package
         run: cd synap-backend/packages/api && pnpm build
 
-      - name: Regenerate API types
-        run: cd synap-backend/packages/api && node scripts/gen-types.mjs
+      - name: Auto-bump @synap-core/types (patch)
+        run: cd synap-backend/packages/types && npm version patch --no-git-tag-version
+
+      # ONE bump authority for @synap-core/api-types (was: this workflow's own
+      # blind `npm version patch`, uncoordinated with
+      # packages/api-types/scripts/check-and-bump.mjs — two authorities that
+      # could disagree). check-and-bump.mjs regenerates generated.d.ts itself
+      # (do NOT also run `gen-types.mjs` as a separate prior step — it would
+      # make check-and-bump.mjs's own before/after diff compare identical
+      # freshly-regenerated content and never bump), diffs it against the
+      # committed version, and — only when the router surface actually
+      # changed — bumps package.json + src/version.ts + apps/api's /health
+      # literal together. `bumped` output gates the publish step below so a
+      # no-surface-change run never tries to re-publish an unchanged version
+      # (which `npm publish` would reject anyway).
+      - name: Drift-aware bump @synap-core/api-types (check-and-bump.mjs)
+        id: bump-api-types
+        run: |
+          cd synap-backend/packages/api-types
+          BEFORE=$(node -p "require('./package.json').version")
+          node scripts/check-and-bump.mjs
+          AFTER=$(node -p "require('./package.json').version")
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build api-types package
         run: cd synap-backend/packages/api-types && pnpm build
-
-      - name: Auto-bump patch versions
-        run: |
-          cd synap-backend/packages/types
-          npm version patch --no-git-tag-version
-          cd ../api-types
-          npm version patch --no-git-tag-version
 
       - name: Publish @synap-core/types
         run: cd synap-backend/packages/types && pnpm publish --no-git-checks
@@ -51,14 +69,25 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @synap-core/api-types
+        if: steps.bump-api-types.outputs.bumped == 'true'
         run: cd synap-backend/packages/api-types && pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # TODO (B1, deferred): once published, open a PR bumping synap-app's
+      # @synap-core/api-types pin to the new version (see
+      # check-publish-freshness.mjs's synap-app range check in ci.yml, which
+      # currently only DETECTS a stale pin — it does not fix it). Needs a
+      # cross-repo token (CROSS_REPO_TOKEN) with write access to synap-app.
 
       - name: Commit version bumps
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add synap-backend/packages/types/package.json synap-backend/packages/api-types/package.json
+          git add synap-backend/packages/types/package.json \
+                  synap-backend/packages/api-types/package.json \
+                  synap-backend/packages/api-types/src/version.ts \
+                  synap-backend/packages/api-types/src/generated.d.ts \
+                  synap-backend/apps/api/src/index.ts
           git commit -m "chore: auto-publish type packages [skip ci]" || true
           git push

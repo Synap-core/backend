@@ -16,6 +16,7 @@ import {
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
+import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import type { WorkspaceDefinitionInput } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
@@ -245,7 +246,26 @@ export function registerPackagesRoutes(app: HubHono): void {
       });
       // Surface the resolved dependency graph only when deps were declared —
       // matches the pre-refactor response (key omitted for no-dep applies).
-      if (body.dependencies?.length) result.dependencies = core.dependencies;
+      if (body.dependencies?.length) {
+        result.dependencies = core.dependencies;
+        // Top-level rollup of dependencies[].seedOutcome — the other silent-
+        // success gap: a caller previously had to scan the array itself to
+        // answer "did everything seed?". `attempted` counts every dependency
+        // seeding was actually run for (installed/composed with capabilities
+        // or playbooks to seed); a dep with no such layers ("no-layers") is
+        // NOT a failure and is excluded from `attempted`. Non-fatal semantics
+        // unchanged — this is a read-only summary, not a new failure mode.
+        const seedOutcomes = core.dependencies
+          .map((d) => d.seedOutcome)
+          .filter((o): o is DependencySeedOutcome => !!o);
+        result.seedSummary = {
+          attempted: seedOutcomes.length,
+          seeded: seedOutcomes.filter((o) => o.status === "seeded").length,
+          failed: seedOutcomes
+            .filter((o) => o.status === "failed")
+            .map((o) => ({ slug: o.slug, error: o.error ?? "unknown error" })),
+        };
+      }
       if (core.status === "composed") {
         workspaceId = core.workspaceId;
         result.workspace = {
@@ -274,6 +294,12 @@ export function registerPackagesRoutes(app: HubHono): void {
         result.workspace = {
           status: "created",
           workspaceId: core.workspaceId,
+          // Explicit discriminator (E4 fix) — `status:"created"` above is kept
+          // for backward-compat, but a caller should read `outcome` to tell a
+          // genuine new-workspace materialization apart from an idempotent
+          // re-hit that was reconciled or left unchanged. See
+          // `CreateWorkspaceFromDefinitionResult.outcome` for the derivation.
+          outcome: core.created.outcome,
           // Set when an idempotent re-hit was additively synced to a newer
           // template (W2b, `reconcileWorkspaceIfStale`) instead of a silent
           // no-op — lets the CLI/agent caller see drift was picked up.

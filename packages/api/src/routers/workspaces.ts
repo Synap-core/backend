@@ -2966,6 +2966,7 @@ export const workspacesRouter = router({
                 });
                 return {
                   status: "created" as const,
+                  outcome: "created" as const,
                   workspaceId: resumeResult.workspaceId,
                   profileIds: resumeResult.profileIds,
                   viewIds: resumeResult.viewIds,
@@ -3008,6 +3009,12 @@ export const workspacesRouter = router({
                 workspaceId: ws.id,
                 entityIds: [],
                 reconciled,
+                // E4 fix: explicit discriminator alongside `reconciled` so a
+                // caller doesn't have to infer "reused vs freshly reconciled"
+                // from presence/absence of the report.
+                outcome: reconciled
+                  ? ("reconciled" as const)
+                  : ("unchanged" as const),
               };
             }
           }
@@ -3083,6 +3090,7 @@ export const workspacesRouter = router({
                 });
                 return {
                   status: "created" as const,
+                  outcome: "created" as const,
                   workspaceId: resumeResult.workspaceId,
                   profileIds: resumeResult.profileIds,
                   viewIds: resumeResult.viewIds,
@@ -3112,6 +3120,16 @@ export const workspacesRouter = router({
                     : ("pending" as const),
                 workspaceId: ws.id,
                 reconciled,
+                // E4 fix: `status:"created"` above is the pre-existing
+                // (overloaded) field, kept for backward-compat. `outcome` is
+                // the honest discriminator: this branch is ALWAYS an
+                // idempotent re-hit of an already-existing workspace, never a
+                // fresh materialization — "reconciled" when drift was synced,
+                // "unchanged" when already current OR still pending (no
+                // version check was run for a pending workspace).
+                outcome: reconciled
+                  ? ("reconciled" as const)
+                  : ("unchanged" as const),
               };
             }
           }
@@ -3542,6 +3560,7 @@ export const workspacesRouter = router({
 
           return {
             status: "created" as const,
+            outcome: "created" as const,
             workspaceId: result.workspaceId,
             profileIds: result.profileIds,
             viewIds: result.viewIds,

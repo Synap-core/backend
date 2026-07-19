@@ -56,10 +56,14 @@ export const apiKeys = pgTable(
       .$type<
         "hub_inbound" | "user_pat" | "system" | "service" | "is_internal"
       >(), // Categorical purpose label
-    // 'service' is for service-account keys (e.g. the Eve dashboard's
-    // realtime-observer key). Service keys are owned by an agent-typed user
-    // (agentMetadata.agentType=eve) and carry the `realtime:observe` scope.
-    // Mint path is the same as other agents — POST /api/hub/setup/agent.
+    // 'service' is a first-class, product-neutral machine credential. Minted by
+    // POST /api/hub/setup/service (NOT /setup/agent), it is owned directly by a
+    // human user (the pod owner, or a caller-named human) — NOT a synthetic
+    // agent-typed user — with `linkedUserId` NULL so no agent identity remap
+    // fires: a service key authenticates AS its owner with its own explicit,
+    // caller-declared scopes (defaulting to minimal `hub-protocol.read`), bound
+    // to one `workspace_id`. Unlike agent keys, minting a second service key for
+    // the same owner does NOT revoke the first — multiple integrators coexist.
     //
     // 'is_internal' is the TRUSTED Intelligence-Service pod-read key. It is the
     // ONLY keyType that may activate the X-Delegated-Operator-Id auth gate (see

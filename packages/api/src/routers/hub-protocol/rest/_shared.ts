@@ -66,6 +66,17 @@ export type HubVariables = {
    * explicitly in the request body.
    */
   agentUserId?: string;
+  /**
+   * The authenticating key's `keyType` (e.g. "service", "hub_inbound"). Set by
+   * the auth middleware for Bearer callers. Used for SERVICE-KEY WORKSPACE
+   * CONFINEMENT (Item 3) — a bound `service` key is pinned to its workspace.
+   */
+  keyType?: string;
+  /**
+   * The `workspace_id` binding of the authenticating key (null if unbound). For
+   * a `service` key this is the confinement boundary applied at the shared door.
+   */
+  keyWorkspaceId?: string | null;
 };
 
 /**
@@ -423,12 +434,22 @@ export async function getCaller(
     );
   }
   const scopes = c.get("scopes") as string[];
+  // SERVICE-KEY CONFINEMENT (Item 3): thread the authenticating key's type +
+  // workspace binding so the shared door pins a bound `service` key to its
+  // workspace. Undefined for non-Bearer / non-service callers → passthrough.
+  const keyType = c.get("keyType") as string | undefined;
+  const keyWorkspaceId = c.get("keyWorkspaceId") as string | null | undefined;
   const ctx = await createHubProtocolCallerContext(
     userId,
     scopes,
     options?.workspaceId,
     options?.sourceMessageId,
-    options?.sessionId
+    options?.sessionId,
+    // agentUserId — getCaller deliberately never sets it (reads ride the auth
+    // middleware's identity floor); pass undefined to reach the confinement args.
+    undefined,
+    keyType,
+    keyWorkspaceId
   );
   return hubProtocolRouter.createCaller(ctx as any);
 }
