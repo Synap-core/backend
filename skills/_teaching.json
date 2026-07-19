@@ -82,6 +82,20 @@
     "alwaysOn": false,
     "summary": "CRM model (person/company/deal/client) + resolve-before-create discipline (dedupe, alias, never placeholder)."
   },
+  "synap/digesting-a-channel": {
+    "teachesTools": [
+      "search_unified",
+      "list_profiles",
+      "list_entities",
+      "create_entity",
+      "update_entity",
+      "propose_entity_graph",
+      "create_relation"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Digesting a chat channel: advise (don't bookkeep), structure any real signal into the shape that fits, resolve-before-create, and the role-aware people guard (teammates in an internal channel are never clients)."
+  },
   "synap/reading": {
     "teachesTools": ["search_unified", "memory_search"],
     "skillGroup": "core",

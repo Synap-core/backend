@@ -59,6 +59,51 @@ export const hubRelationsRouter = router({
     }),
 
   /**
+   * List relations at the USER FLOOR — no workspace lens.
+   * Requires: hub-protocol.read scope
+   *
+   * Pod-wide read: with NO workspaceId, the regular relations router's access
+   * seam (a NULL-lens `list`, or the userId-scoped `getRelated` for an entity)
+   * returns every relation the caller can see — all their workspaces + pod-wide
+   * globals. The workspace-required `listRelations` above is unchanged; this is
+   * the omitted-lens variant the REST door calls (the tRPC one keeps its 400).
+   */
+  listRelationsPodWide: scopedProcedure(["hub-protocol.read"])
+    .input(
+      z.object({
+        userId: z.string(),
+        entityId: z.string().uuid().optional(),
+        type: z.string().optional(),
+        limit: z.number().min(1).max(200).default(100),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      // NULL workspace lens → the regular `list` applies the user floor (every
+      // workspace the caller belongs to + pod-wide globals) through the access
+      // seam; `getRelated` is userId-scoped, so it is pod-wide by construction.
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        null
+      );
+      const caller = regularRelationsRouter.createCaller(callerContext);
+
+      if (input.entityId) {
+        return caller.getRelated({
+          entityId: input.entityId,
+          type: input.type,
+          direction: "both",
+          limit: input.limit,
+        });
+      }
+
+      return caller.list({
+        type: input.type,
+        limit: input.limit,
+      });
+    }),
+
+  /**
    * Create a relation between two entities
    * Requires: hub-protocol.write scope
    * Governance: generates a proposal (relation mutations are semantic; user should approve)

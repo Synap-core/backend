@@ -447,7 +447,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         }
       }
 
-      const callerWorkspaceId = workspaceIdParam ?? effectiveWsIds[0];
+      // When a workspace lens is PROVIDED, pin the caller to it (unchanged).
+      // When OMITTED, leave the caller lens NULL so the default list branch below
+      // resolves to the USER FLOOR (all accessible workspaces + pod-wide globals)
+      // via the tRPC `list` "no lens" path — instead of silently pinning to the
+      // first accessible workspace (`effectiveWsIds[0]`), which hid pod-wide reads.
+      const callerWorkspaceId = workspaceIdParam ?? null;
 
       const caller = await getCaller(c, {
         workspaceId: callerWorkspaceId,

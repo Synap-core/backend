@@ -33,6 +33,7 @@ import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
   resolveActingContext,
@@ -235,9 +236,10 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "(label/kind/granted/effectiveExecMode/govDefault), `governance`, and the " +
       "tool's `approved` state. Reuses the same `listCapabilities` adapter the " +
       "tRPC `playbooks.capabilityRegistry.list` exposes. Requires " +
-      "hub-protocol.read scope and a `workspaceId` query param.",
+      "hub-protocol.read scope. Pass `workspaceId` to scope to one workspace; " +
+      "OMIT it for the pod-wide read (all accessible workspaces + globals, deduped).",
     request: {
-      query: z.object({ workspaceId: z.string().uuid() }),
+      query: z.object({ workspaceId: z.string().uuid().optional() }),
     },
     responses: {
       200: {
@@ -251,8 +253,9 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
   });
 
   // ── GET /capabilities ──────────────────────────────────────────────────────
-  // Thin door over the tRPC `playbooks.capabilityRegistry.list` (a
-  // workspaceProcedure) — so a workspaceId is required. No business logic here.
+  // Door over the tRPC `playbooks.capabilityRegistry.list` (a workspaceProcedure).
+  // workspaceId is OPTIONAL: provided → scope to that workspace; omitted → fan out
+  // across the caller's accessible workspaces + pod-wide globals and merge (deduped).
   app.get("/capabilities", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json(
@@ -262,22 +265,54 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     }
 
     const workspaceId = c.req.query("workspaceId");
-    const wsCheck = z.string().uuid().safeParse(workspaceId);
-    if (!wsCheck.success) {
-      return c.json(
-        { error: "workspaceId query param (UUID) is required" },
-        400
-      );
+    // workspaceId is OPTIONAL now: present → validate + scope to it; absent →
+    // pod-wide read. Only reject a malformed (non-UUID) value that was supplied.
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
     }
 
     try {
       const acting = await resolveActingContext(c, { workspaceId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
+      const scopes = c.get("scopes") as string[];
+
+      // POD-WIDE (no workspace lens): the registry read is workspace-scoped
+      // (pod-wide globals + the one workspace), so fan out across every workspace
+      // the caller can access and merge, deduped by capability id. Mirrors the
+      // GET /entities `scope=all` merge.
+      if (!acting.workspaceId) {
+        const wsIds = await getUserAccessibleWorkspaceIds(acting.userId);
+        const settled = await Promise.allSettled(
+          wsIds.map(async (wsId) => {
+            const ctx = await createHubProtocolCallerContext(
+              acting.userId,
+              scopes,
+              wsId
+            );
+            return playbooksRouter
+              .createCaller(ctx as never)
+              .capabilityRegistry.list();
+          })
+        );
+        const seen = new Set<string>();
+        const capabilities = settled
+          .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+          .filter((cap) => {
+            if (seen.has(cap.id)) return false;
+            seen.add(cap.id);
+            return true;
+          });
+        return c.json({ capabilities }, 200);
+      }
+
       const ctx = await createHubProtocolCallerContext(
         acting.userId,
-        c.get("scopes") as string[],
-        workspaceId
+        scopes,
+        acting.workspaceId
       );
       const caller = playbooksRouter.createCaller(ctx as never);
       const capabilities = await caller.capabilityRegistry.list();
@@ -309,10 +344,12 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "the full dump; `limit` caps the result count (default 20 with a query). " +
       "No `kind` filter here — a container is a bundle, not a single-kind verb " +
       "(use the plain `/capabilities` list's `kind` filter for that axis). " +
-      "Requires hub-protocol.read scope and a `workspaceId` query param.",
+      "Requires hub-protocol.read scope. Pass `workspaceId` to scope to one " +
+      "workspace; OMIT it for the pod-wide read (all accessible workspaces + " +
+      "globals, deduped).",
     request: {
       query: z.object({
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
         query: z.string().optional(),
         limit: z.coerce.number().int().positive().optional(),
       }),
@@ -341,12 +378,13 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     }
 
     const workspaceId = c.req.query("workspaceId");
-    const wsCheck = z.string().uuid().safeParse(workspaceId);
-    if (!wsCheck.success) {
-      return c.json(
-        { error: "workspaceId query param (UUID) is required" },
-        400
-      );
+    // workspaceId is OPTIONAL: present → validate + scope to it; absent →
+    // pod-wide read. Only reject a malformed (non-UUID) value that was supplied.
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
     }
     const query = c.req.query("query")?.trim() || undefined;
     const limitCheck = z.coerce
@@ -360,23 +398,47 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, { workspaceId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const scopes = c.get("scopes") as string[];
 
-      const ctx = await createHubProtocolCallerContext(
-        acting.userId,
-        c.get("scopes") as string[],
-        workspaceId
-      );
-      const caller = capabilitiesRouter.createCaller(ctx as never);
-      const containers = await caller.containers.list({ workspaceId });
+      // Enrich a workspace's containers with their member parts (names + kinds)
+      // so the agent sees what each bundle holds, not just counts.
+      const enrichForWs = async (wsId: string) => {
+        const ctx = await createHubProtocolCallerContext(
+          acting.userId,
+          scopes,
+          wsId
+        );
+        const caller = capabilitiesRouter.createCaller(ctx as never);
+        const containers = await caller.containers.list({ workspaceId: wsId });
+        return Promise.all(
+          containers.map(async (container) => {
+            const detail = await caller.containers.get({ id: container.id });
+            return { ...container, members: detail.parts };
+          })
+        );
+      };
 
-      // Enrich each container with its member parts (names + kinds) so the agent
-      // sees what skills/connections each bundle holds, not just counts.
-      const enriched = await Promise.all(
-        containers.map(async (container) => {
-          const detail = await caller.containers.get({ id: container.id });
-          return { ...container, members: detail.parts };
-        })
-      );
+      // POD-WIDE (no workspace lens): the container read is workspace-scoped, so
+      // fan out across every accessible workspace and merge, deduped by container
+      // id. Mirrors the GET /entities `scope=all` merge. A provided workspaceId
+      // scopes to just that workspace (unchanged).
+      let enriched: Awaited<ReturnType<typeof enrichForWs>>;
+      if (!acting.workspaceId) {
+        const wsIds = await getUserAccessibleWorkspaceIds(acting.userId);
+        const settled = await Promise.allSettled(
+          wsIds.map((wsId) => enrichForWs(wsId))
+        );
+        const seen = new Set<string>();
+        enriched = settled
+          .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+          .filter((container) => {
+            if (seen.has(container.id)) return false;
+            seen.add(container.id);
+            return true;
+          });
+      } else {
+        enriched = await enrichForWs(acting.workspaceId);
+      }
 
       // Search (D1): rank containers against `query` using the SAME matcher the
       // registry's `list_capabilities(query)` uses — no second implementation.

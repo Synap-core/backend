@@ -100,17 +100,28 @@ export function registerRelationsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
-    // The hub-protocol listRelations procedure requires a workspace.
-    if (!workspaceId) {
-      return c.json({ error: "workspaceId is required" }, 400);
-    }
+    const entityId = c.req.query("entityId");
+    const type = c.req.query("type");
     try {
+      // No workspace lens → pod-wide user floor (all accessible workspaces +
+      // pod-wide globals). A provided workspaceId narrows to that workspace,
+      // unchanged. The pinned Discord bridge always passes a workspaceId, so its
+      // behavior is untouched.
+      if (!workspaceId) {
+        const caller = await getCaller(c, { userId });
+        const result = await caller.relations.listRelationsPodWide({
+          userId,
+          entityId,
+          type,
+        });
+        return c.json(result);
+      }
       const caller = await getCaller(c, { userId, workspaceId });
       const result = await caller.relations.listRelations({
         userId,
         workspaceId,
-        entityId: c.req.query("entityId"),
-        type: c.req.query("type"),
+        entityId,
+        type,
       });
       return c.json(result);
     } catch (err) {
