@@ -83,6 +83,22 @@ const LoopSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
 });
 
+// Entity-detail action placement. Authored on a template as
+// `settings.actionPlacements`, merged into `workspace.settings` by the shared
+// `applyPackagePostWorkspace` door and read by the browser entity-detail cell.
+// A plain z.object STRIPS undeclared keys, so — like `bentoViewBlocks` and
+// `subjectProfile` above — this MUST be declared or every Hub / `synap launch`
+// / packages-apply install silently dropped its authored placements while the
+// tRPC createFromDefinition door (workspaces.ts:2904) kept them. Mirrors
+// `TemplateActionPlacement` / the `ActionPlacement` applier type verbatim.
+const ActionPlacementSchema = z.object({
+  profileSlug: z.string(),
+  surface: z.string(),
+  kind: z.enum(["capability", "playbook", "automation"]),
+  ref: z.string(),
+  label: z.string(),
+});
+
 const PackageApplySchema = z.object({
   _meta: z
     .object({
@@ -166,6 +182,11 @@ const PackageApplySchema = z.object({
   automations: z.array(AutomationSchema).optional(),
   playbooks: z.array(PlaybookSchema).optional(),
   loops: z.array(LoopSchema).optional(),
+  // Entity-detail action placements — merged into `settings.actionPlacements`
+  // by `applyPackagePostWorkspace` AFTER playbooks/loops so their refs resolve
+  // to the rows this apply just created. Declared here (not stripped) so the
+  // Hub install path carries them, at parity with the tRPC door.
+  actionPlacements: z.array(ActionPlacementSchema).optional(),
   // Template-composition dependencies — resolved BEFORE the workspace step.
   // Mirrors TemplateDependency in @synap-core/workspace-templates verbatim.
   dependencies: z

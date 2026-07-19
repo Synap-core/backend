@@ -3793,6 +3793,25 @@ export const workspacesRouter = router({
           /** Post-workspace layers are reconciled through the same generic door. */
           capabilities: z.array(z.record(z.string(), z.unknown())).optional(),
           playbooks: z.array(z.record(z.string(), z.unknown())).optional(),
+          /**
+           * Entity-detail action placements → re-asserted into
+           * `settings.actionPlacements` via the shared
+           * `buildPostWorkspaceBodyFromDefinition` builder (which reads
+           * `definition.actionPlacements`). Without this zod field the placements
+           * are STRIPPED before the builder sees them, so a reconcile could never
+           * re-assert them. Mirrors the createFromDefinition shape (line 2904).
+           */
+          actionPlacements: z
+            .array(
+              z.object({
+                profileSlug: z.string(),
+                surface: z.string(),
+                kind: z.enum(["capability", "playbook", "automation"]),
+                ref: z.string(),
+                label: z.string(),
+              })
+            )
+            .optional(),
         }),
       })
     )
@@ -3828,7 +3847,8 @@ export const workspacesRouter = router({
       if (
         !input.dryRun &&
         (input.definition.capabilities?.length ||
-          input.definition.playbooks?.length)
+          input.definition.playbooks?.length ||
+          input.definition.actionPlacements?.length)
       ) {
         try {
           // Same builder as the create/compose branches — reconcile definitions

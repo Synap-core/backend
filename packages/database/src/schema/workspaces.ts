@@ -592,6 +592,21 @@ export interface WorkspaceSettings {
    */
   homeDashboardViewId?: string;
 
+  /**
+   * Template-declared entity-detail action placements. Authored on a template
+   * (see `TemplateActionPlacement` in `@synap-core/workspace-templates`), merged
+   * here by `applyPackagePostWorkspace`, and read by the browser entity-detail
+   * cell to render dynamic actions. `ref` is a capability verb key, or a
+   * playbook / automation row id (names are resolved to ids at merge time).
+   */
+  actionPlacements?: Array<{
+    profileSlug: string;
+    surface: string;
+    kind: "capability" | "playbook" | "automation";
+    ref: string;
+    label: string;
+  }>;
+
   // ─── Intelligence service configuration ──────────────────────────────────────
   intelligenceServiceId?: string; // Default for workspace
   intelligenceServiceOverrides?: {

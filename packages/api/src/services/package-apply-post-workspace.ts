@@ -558,7 +558,7 @@ export async function applyPackagePostWorkspace(
             settings: {
               ...existingSettings,
               actionPlacements: merged,
-            } as unknown as WorkspaceSettings,
+            } as WorkspaceSettings,
           })
           .where(eq(workspaces.id, workspaceId));
         result.actionPlacements = {

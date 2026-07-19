@@ -20,6 +20,11 @@ vi.mock("@synap/database", () => ({
   resolveDefaultIntelligenceEndpoint: resolveEndpointMock,
   entities: {},
   eq: vi.fn(),
+  // The worker loads live facets (Kind+Facets) before deciding to embed. No
+  // facets attached in these boundary cases → the embedding text is title-only,
+  // which is what the assertions below pin. Present so the mock covers every
+  // `@synap/database` export the worker destructures.
+  getEffectiveFacets: vi.fn(async () => []),
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
