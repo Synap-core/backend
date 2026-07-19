@@ -15,7 +15,97 @@ import {
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
+import { createLinks } from "./links/links-service.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
+
+/**
+ * Resolve a playbook's authored `grants` (tool/skill NAMES — see
+ * `PackagePostWorkspaceBody.playbooks[].grants`) into `{kind, id}` pairs,
+ * matching the same NAME-in-scope lookup `createCapabilityFromDefinition` uses
+ * to resolve a skill's `requires` (tool names → ids): workspace-scoped first,
+ * falling back to a pod-wide (workspaceId NULL) row. A name that resolves to
+ * neither a tool nor a skill is dropped rather than throwing — mirrors the
+ * per-item isolation the sibling loops/capabilities appliers use.
+ */
+async function resolveGrantRefs(
+  grants: string[],
+  workspaceId: string
+): Promise<{ kind: "tool" | "skill"; id: string }[]> {
+  if (grants.length === 0) return [];
+  const {
+    db,
+    and,
+    eq,
+    isNull,
+    or,
+    tools: toolsTable,
+    skills: skillsTable,
+  } = await import("@synap/database");
+  const resolved: { kind: "tool" | "skill"; id: string }[] = [];
+  for (const name of grants) {
+    const [tool] = await db
+      .select({ id: toolsTable.id })
+      .from(toolsTable)
+      .where(
+        and(
+          eq(toolsTable.name, name),
+          or(
+            eq(toolsTable.workspaceId, workspaceId),
+            isNull(toolsTable.workspaceId)
+          )
+        )
+      )
+      .limit(1);
+    if (tool) {
+      resolved.push({ kind: "tool", id: tool.id });
+      continue;
+    }
+    const [skill] = await db
+      .select({ id: skillsTable.id })
+      .from(skillsTable)
+      .where(
+        and(
+          eq(skillsTable.name, name),
+          or(
+            eq(skillsTable.workspaceId, workspaceId),
+            isNull(skillsTable.workspaceId)
+          )
+        )
+      )
+      .limit(1);
+    if (skill) resolved.push({ kind: "skill", id: skill.id });
+    // else: unresolved grant ref — skipped, not fatal (name may not exist yet).
+  }
+  return resolved;
+}
+
+/**
+ * Materialize a playbook's `grants` as `playbook --grants--> {tool|skill}` link
+ * edges — the same shape `createLoopFromDefinition` writes for a loop
+ * template's playbooks. `createLinks` is idempotent on the unique edge
+ * (from_type, from_id, to_type, to_id, link_type), so calling this on BOTH the
+ * newly-created AND the reused-playbook path never duplicates an edge.
+ */
+async function grantPlaybookLinks(
+  playbookId: string,
+  grants: string[] | undefined,
+  workspaceId: string
+): Promise<void> {
+  if (!grants || grants.length === 0) return;
+  const refs = await resolveGrantRefs(grants, workspaceId);
+  if (refs.length === 0) return;
+  await createLinks(
+    refs.map((r) => ({
+      workspaceId,
+      fromType: "playbook" as const,
+      fromId: playbookId,
+      toType: r.kind,
+      toId: r.id,
+      linkType: "grants" as const,
+      metadata: {},
+    }))
+  );
+}
 
 /** Minimal body slice the post-workspace layers read (PackageApply body). */
 export interface PackagePostWorkspaceBody {
@@ -242,6 +332,9 @@ export async function applyPackagePostWorkspace(
             )
             .limit(1);
           if (existing) {
+            // Reuse still ensures grants idempotently — a re-applied package
+            // must not leave a pre-existing playbook's grants unwired.
+            await grantPlaybookLinks(existing.id, p.grants, workspaceId);
             pbs.push({
               name: p.name,
               status: "reused",
@@ -265,16 +358,19 @@ export async function applyPackagePostWorkspace(
           agentUserId,
           source: "intelligence",
         } as never);
-        // NOTE: `p.grants` is intentionally NOT forwarded here. `playbooksRouter.create`
-        // does not accept/materialize grants — they become `playbook --grants--> {tool|skill}`
-        // link edges via `createLinks`, exactly as `createLoopFromDefinition` (loops door)
-        // does in its own step. Wiring that link step at this door is a separate follow-up;
-        // the type carries `grants` so the data survives to this boundary for it.
+        // `playbooksRouter.create` does not accept/materialize grants — they
+        // become `playbook --grants--> {tool|skill}` link edges via
+        // `createLinks`, exactly as `createLoopFromDefinition` (loops door)
+        // does in its own step. Only wire them when the playbook actually got
+        // an id (a proposed/governed-deferred playbook has none yet).
         const rr = r as {
           status?: string;
           playbook?: { id?: string };
           proposalId?: string;
         };
+        if (rr.playbook?.id) {
+          await grantPlaybookLinks(rr.playbook.id, p.grants, workspaceId);
+        }
         pbs.push({
           name: p.name,
           status: rr.status,
