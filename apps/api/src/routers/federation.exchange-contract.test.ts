@@ -28,6 +28,15 @@ const EXPECTED = [
   "FEDERATED_IDENTITY_NOT_LINKED",
   "ISSUER_APPROVAL_REQUIRED",
   "POD_ADMIN_URL_REQUIRED",
+  // Previously codeless failures. Without a code the client can only render
+  // "the exact reason wasn't reported" — blind for the signer AND the owner.
+  "ASSERTION_MALFORMED",
+  "ASSERTION_SIGNATURE_INVALID",
+  "ASSERTION_CLAIMS_INVALID",
+  "ASSERTION_ISSUER_MISMATCH",
+  "POD_IDENTITY_UNAVAILABLE",
+  "POD_SCOPE_ACCESS_DENIED",
+  "POD_SESSION_MINT_FAILED",
 ].sort();
 
 function emittedCodes(src: string): string[] {

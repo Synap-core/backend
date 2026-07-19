@@ -1582,7 +1582,13 @@ federationRouter.post("/exchange", async (c) => {
   if (!audience) return c.json({ error: "PUBLIC_URL is required" }, 500);
   const decoded = decodeShortLivedAssertion(parsed.data.assertion);
   if (!decoded) {
-    return c.json({ error: "Invalid federated user assertion" }, 401);
+    // Every /exchange failure carries a discrete code: without one the client
+    // can only say "the exact reason wasn't reported", which is a dead end for
+    // the person trying to sign in AND for the owner trying to diagnose it.
+    return c.json(
+      { error: "Invalid federated user assertion", code: "ASSERTION_MALFORMED" },
+      401
+    );
   }
   const candidateIssuerUrl =
     typeof decoded.iss === "string" ? canonicalIssuerUrl(decoded.iss) : null;
@@ -1616,18 +1622,42 @@ federationRouter.post("/exchange", async (c) => {
       { consumeJti: false }
     );
     if (!verifiedPayload) {
-      return c.json({ error: "Invalid federated user assertion" }, 401);
+      return c.json(
+        {
+          error: "Invalid federated user assertion",
+          code: "ASSERTION_SIGNATURE_INVALID",
+        },
+        401
+      );
     }
     payload = verifiedPayload;
   } catch {
-    return c.json({ error: "Invalid federated user assertion" }, 401);
+    return c.json(
+      {
+        error: "Invalid federated user assertion",
+        code: "ASSERTION_SIGNATURE_INVALID",
+      },
+      401
+    );
   }
   const claims = exchangeClaimsSchema.safeParse(payload);
   const issuerUrl = claims.success ? canonicalIssuerUrl(claims.data.iss) : null;
   if (!claims.success || !issuerUrl)
-    return c.json({ error: "Invalid federated user assertion" }, 401);
+    return c.json(
+      {
+        error: "Invalid federated user assertion",
+        code: "ASSERTION_CLAIMS_INVALID",
+      },
+      401
+    );
   if (issuerUrl !== issuer.issuerUrl)
-    return c.json({ error: "Invalid federated user assertion" }, 401);
+    return c.json(
+      {
+        error: "Invalid federated user assertion",
+        code: "ASSERTION_ISSUER_MISMATCH",
+      },
+      401
+    );
   const applicationAttempt = isApplicationFederationAttempt(c, claims.data.azp);
   if (
     !applicationAttempt &&
@@ -1680,18 +1710,32 @@ federationRouter.post("/exchange", async (c) => {
     columns: { id: true, kratosIdentityId: true },
   });
   if (!user?.kratosIdentityId)
-    return c.json({ error: "Pod identity is unavailable" }, 403);
+    return c.json(
+      {
+        error: "Pod identity is unavailable",
+        code: "POD_IDENTITY_UNAVAILABLE",
+      },
+      403
+    );
   const access = await accessForUser(user.id);
   if (!canUseScope(access, claims.data.requestedScope)) {
+    // The identity IS linked — this person simply has no membership for the
+    // requested workspace/project. Distinct from "not linked" so the UI can say
+    // "ask an owner for access" instead of re-running a connection ceremony.
     return c.json(
       {
         error: "Federated user has no active access to the requested Pod scope",
+        code: "POD_SCOPE_ACCESS_DENIED",
       },
       403
     );
   }
   const session = await mintKratosSession(user.kratosIdentityId);
-  if (!session) return c.json({ error: "Could not create Pod session" }, 503);
+  if (!session)
+    return c.json(
+      { error: "Could not create Pod session", code: "POD_SESSION_MINT_FAILED" },
+      503
+    );
   setSessionCookie(c, session.sessionToken);
   return c.json({
     success: true,
