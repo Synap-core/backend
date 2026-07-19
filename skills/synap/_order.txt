@@ -30,3 +30,8 @@ workspace-edges.md
 more.md
 viewframe-cells.md
 authentication.md
+response-style.md
+recap.md
+showing.md
+user-model.md
+north-star.md

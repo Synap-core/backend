@@ -8,31 +8,56 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Creative loop: cell→renderer, session→playbook (do-once → crystallize)."
+    "summary": "Creative loop: cell→renderer, session→playbook (do-once → crystallize).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/operating-mode-rules": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Operating mode: read→think→propose loop and the write model."
+    "summary": "Operating mode: read→think→propose loop and the write model.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/operating-mode": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Full operating-mode reference: core data operations walkthrough."
+    "summary": "Full operating-mode reference: core data operations walkthrough.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/governance-rules": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Governance essentials: status handling + reasoning field."
+    "summary": "Governance essentials: status handling + reasoning field.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/governance": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Full governance reference: whitelist, lifecycle, agent-user semantics."
+    "summary": "Full governance reference: whitelist, lifecycle, agent-user semantics.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/capabilities": {
     "teachesTools": [
@@ -46,13 +71,23 @@
     ],
     "skillGroup": "govern",
     "alwaysOn": false,
-    "summary": "Discover→check→run capabilities; the when-blocked reflex (search, then tell the user what's missing) instead of fabricating or giving up."
+    "summary": "Discover→check→run capabilities; the when-blocked reflex (search, then tell the user what's missing) instead of fabricating or giving up.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/capture": {
     "teachesTools": ["create_entity", "update_entity", "entity.create"],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Capture free text into the right entities without duplicating."
+    "summary": "Capture free text into the right entities without duplicating.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/linking-principle": {
     "teachesTools": [
@@ -63,7 +98,12 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Link discipline: connect entities to grow the graph."
+    "summary": "Link discipline: connect entities to grow the graph.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/linking": {
     "teachesTools": [
@@ -74,13 +114,23 @@
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Full linking reference (relation types, patterns)."
+    "summary": "Full linking reference (relation types, patterns).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/crm": {
     "teachesTools": ["propose_entity_graph", "create_entity", "update_entity"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "CRM model (person/company/deal/client) + resolve-before-create discipline (dedupe, alias, never placeholder)."
+    "summary": "CRM model (person/company/deal/client) + resolve-before-create discipline (dedupe, alias, never placeholder).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/digesting-a-channel": {
     "teachesTools": [
@@ -94,13 +144,23 @@
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Digesting a chat channel: advise (don't bookkeep), structure any real signal into the shape that fits, resolve-before-create, and the role-aware people guard (teammates in an internal channel are never clients)."
+    "summary": "Digesting a chat channel: advise (don't bookkeep), structure any real signal into the shape that fits, resolve-before-create, and the role-aware people guard (teammates in an internal channel are never clients).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/reading": {
     "teachesTools": ["search_unified", "memory_search"],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "The read door + reading discipline (ask, retrieve, ground)."
+    "summary": "The read door + reading discipline (ask, retrieve, ground).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/inline-patterns": {
     "teachesTools": [
@@ -117,7 +177,12 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Inline chip grammar: [[entity:ID|Name]], [[view:ID]], [[open:...]]."
+    "summary": "Inline chip grammar: [[entity:ID|Name]], [[view:ID]], [[open:...]].",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/writes": {
     "teachesTools": [
@@ -132,7 +197,12 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Entity + document writes: create/update, deep-merge, html-doc flow."
+    "summary": "Entity + document writes: create/update, deep-merge, html-doc flow.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/document-embeds": {
     "teachesTools": [
@@ -143,25 +213,45 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Document embed grammar: :::synap-entity/view/cell::: live references inside markdown."
+    "summary": "Document embed grammar: :::synap-entity/view/cell::: live references inside markdown.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/focus-sessions": {
     "teachesTools": ["create_proposal", "update_entity", "create_entity"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Focus sessions: when/how to propose, progress, correlationId."
+    "summary": "Focus sessions: when/how to propose, progress, correlationId.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/automations": {
     "teachesTools": ["create_automation", "list_commands"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Automations grammar (trigger/step/condition/delay/output/loop)."
+    "summary": "Automations grammar (trigger/step/condition/delay/output/loop).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/diagnostics": {
     "teachesTools": ["synap_diagnose"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Diagnose what an AI did (runs door): read a capture's trace + fixHints instead of guessing when it didn't do what you expected."
+    "summary": "Diagnose what an AI did (runs door): read a capture's trace + fixHints instead of guessing when it didn't do what you expected.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/workspace-design": {
     "teachesTools": [
@@ -172,7 +262,12 @@
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "The decision rule — is a concern a WORKSPACE (owns kinds + own team + native automations + stable) or a Facet (hat) / Project (initiative) / State (stage)? Plus the CRM corollary."
+    "summary": "The decision rule — is a concern a WORKSPACE (owns kinds + own team + native automations + stable) or a Facet (hat) / Project (initiative) / State (stage)? Plus the CRM corollary.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/workspace-edges": {
     "teachesTools": [
@@ -182,73 +277,133 @@
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "The edge taxonomy — provides/consumes (defaultSources), triggers (run-in-A→write-B), shares-subject (facets), spans (projects) — and the declare_workspace_source door to wire a live workspace into the graph."
+    "summary": "The edge taxonomy — provides/consumes (defaultSources), triggers (run-in-A→write-B), shares-subject (facets), spans (projects) — and the declare_workspace_source door to wire a live workspace into the graph.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/viewframe-cells": {
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "ViewFrame cell generation: esm.sh imports, SynapWidget bridge."
+    "summary": "ViewFrame cell generation: esm.sh imports, SynapWidget bridge.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/cli-operations": {
     "teachesTools": ["run_command", "get_logs"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "CLI execution via run_command/get_logs."
+    "summary": "CLI execution via run_command/get_logs.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/authentication": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Auth header + base URL conventions for the Hub Protocol."
+    "summary": "Auth header + base URL conventions for the Hub Protocol.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/common-mistakes": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Common mistakes to avoid across Synap tool calls."
+    "summary": "Common mistakes to avoid across Synap tool calls.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/graph-gardening": {
     "teachesTools": ["create_relation", "graph.link"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Garden the graph: writes should surface their relational impact."
+    "summary": "Garden the graph: writes should surface their relational impact.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/lenses": {
     "teachesTools": ["list_profiles", "synap_orient"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Lenses: workspace vs project vs pod-wide scoping."
+    "summary": "Lenses: workspace vs project vs pod-wide scoping.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/mental-model": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Mental model: entities, profiles, facets, workspaces at a glance."
+    "summary": "Mental model: entities, profiles, facets, workspaces at a glance.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/more": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Pointer to deeper references when the quick-reference isn't enough."
+    "summary": "Pointer to deeper references when the quick-reference isn't enough.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/multi-entity-capture": {
     "teachesTools": ["create_entity", "propose_entity_graph"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Capturing multiple related entities from one piece of free text."
+    "summary": "Capturing multiple related entities from one piece of free text.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/next-action": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Deciding the next action instead of just answering."
+    "summary": "Deciding the next action instead of just answering.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/quick-reference": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Quick reference: the 90% common patterns in 30 lines."
+    "summary": "Quick reference: the 90% common patterns in 30 lines.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/reflexes": {
     "teachesTools": [
@@ -259,7 +414,12 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Reflexes: recall before, capture after, plus the short escalation ladder (discover → propose meta → crystallize after proof)."
+    "summary": "Reflexes: recall before, capture after, plus the short escalation ladder (discover → propose meta → crystallize after proof).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/escalation-ladder": {
     "teachesTools": [
@@ -275,67 +435,193 @@
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Full escalation ladder: L0 reflexes → L1 operate → L2 discover → L3 mutate meta (proposal) → L4 crystallize after proof."
+    "summary": "Full escalation ladder: L0 reflexes → L1 operate → L2 discover → L3 mutate meta (proposal) → L4 crystallize after proof.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/scope": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Scope defaults: pod-wide unless a workspace/project lens is passed."
+    "summary": "Scope defaults: pod-wide unless a workspace/project lens is passed.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/work-flow": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "The work flow: question → research → decision → action."
+    "summary": "The work flow: question → research → decision → action.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap/worked-examples": {
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Worked examples across common Synap operations."
+    "summary": "Worked examples across common Synap operations.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/response-style": {
+    "teachesTools": [],
+    "skillGroup": "core",
+    "alwaysOn": true,
+    "summary": "Respond as a co-founder: direct answer first, proportional depth, one insight only when useful; never render Layer 1/2/3/4 as headers.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/recap": {
+    "teachesTools": [],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Session-boundary recap convention for multi-step tool work (What I did / Result / Next steps) — not stacked with a conversational reply.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/showing": {
+    "teachesTools": ["focus_surface", "place_on_whiteboard"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Show, don't just tell: open results on the user's screen with focus_surface (place_on_whiteboard for spatial PR review) — navigation, no proposal.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/user-model": {
+    "teachesTools": ["record_observation"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Durable user model in user_observation entities: read the loaded 'What I Know About You' block, silently record_observation on new durable patterns.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/north-star": {
+    "teachesTools": ["create_relation"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Align work to the workspace North Star: guide silently, name how an action advances it, link work items with the advances relation; never invent one.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/profiles": {
     "teachesTools": ["create_profile", "create_property_def", "list_profiles"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Schema extension: profiles + property defs."
+    "summary": "Schema extension: profiles + property defs.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/property-types": {
     "teachesTools": ["create_profile", "create_property_def", "list_profiles"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Schema: the property-type reference."
+    "summary": "Schema: the property-type reference.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/before-you-touch": {
     "teachesTools": ["list_profiles"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Before extending the schema: check what already exists."
+    "summary": "Before extending the schema: check what already exists.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap-schema/read-before-write": {
+    "teachesTools": [
+      "list_profiles",
+      "search_unified",
+      "get_profile",
+      "create_property_def"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Read & search before writing: MAP profiles → SEARCH duplicates → READ schema → WRITE real typed fields → CONNECT. Never write blind.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/common-mistakes": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Common schema-extension mistakes to avoid."
+    "summary": "Common schema-extension mistakes to avoid.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/creating-profiles": {
     "teachesTools": ["create_profile"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Creating a new profile (entity type)."
+    "summary": "Creating a new profile (entity type).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/discover-profiles": {
     "teachesTools": ["list_profiles"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Discover existing profiles before creating a new one."
+    "summary": "Discover existing profiles before creating a new one.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/entity-scope": {
     "teachesTools": ["create_profile"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Entity scope: pod-wide vs workspace-scoped profiles."
+    "summary": "Entity scope: pod-wide vs workspace-scoped profiles.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/extend-vs-create": {
     "teachesTools": [
@@ -349,126 +635,231 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "When to extend an existing profile, create a new one, or attach a facet (Kind + Facets, the deal precedent)."
+    "summary": "When to extend an existing profile, create a new one, or attach a facet (Kind + Facets, the deal precedent).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/more": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Pointer to deeper schema references."
+    "summary": "Pointer to deeper schema references.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/overlay-properties": {
     "teachesTools": ["create_property_def"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Workspace overlay properties (3-layer property scoping)."
+    "summary": "Workspace overlay properties (3-layer property scoping).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/property-defs": {
     "teachesTools": ["create_property_def"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Creating property definitions."
+    "summary": "Creating property definitions.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/relations": {
     "teachesTools": ["create_relation"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Defining custom relation types."
+    "summary": "Defining custom relation types.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-schema/worked-example": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Worked example: adding a new tracked type end-to-end."
+    "summary": "Worked example: adding a new tracked type end-to-end.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/views": {
     "teachesTools": ["create_view", "update_view", "list_views"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "View build flow + the view-type chooser."
+    "summary": "View build flow + the view-type chooser.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/view-list": {
     "teachesTools": ["create_view", "update_view", "list_views"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: the list of available view types."
+    "summary": "Reference: the list of available view types.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/creating-views": {
     "teachesTools": ["create_view", "update_view", "list_views"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: creating views (config shapes, worked examples)."
+    "summary": "Reference: creating views (config shapes, worked examples).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/view-types": {
     "teachesTools": ["create_view", "update_view", "list_views"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: per-view-type config shapes."
+    "summary": "Reference: per-view-type config shapes.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/widget-catalog": {
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: which cells/widgets exist to draw from."
+    "summary": "Reference: which cells/widgets exist to draw from.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/ai-companion": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "AI companion widget integration in views."
+    "summary": "AI companion widget integration in views.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/arranging-bento": {
     "teachesTools": ["create_view"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Arranging a bento layout after creation."
+    "summary": "Arranging a bento layout after creation.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/before-you-build": {
     "teachesTools": ["list_views"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Before building UI: check what views/dashboards already exist."
+    "summary": "Before building UI: check what views/dashboards already exist.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/bento-layouts": {
     "teachesTools": ["create_view"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Bento layout grid + block composition."
+    "summary": "Bento layout grid + block composition.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/bento-recipes": {
     "teachesTools": ["create_view"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: common bento layout recipes."
+    "summary": "Reference: common bento layout recipes.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/common-mistakes": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Common UI-build mistakes to avoid."
+    "summary": "Common UI-build mistakes to avoid.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/four-builds": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "The four things you can build: view, dashboard, widget, workspace."
+    "summary": "The four things you can build: view, dashboard, widget, workspace.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/more": {
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Pointer to deeper UI references."
+    "summary": "Pointer to deeper UI references.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/proposing-vs-extending": {
     "teachesTools": ["create_workspace"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Proposing a new workspace vs extending an existing one."
+    "summary": "Proposing a new workspace vs extending an existing one.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   },
   "synap-ui/workspaces": {
     "teachesTools": ["create_workspace"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Creating or proposing a workspace."
+    "summary": "Creating or proposing a workspace.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   }
 }

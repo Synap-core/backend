@@ -38,4 +38,6 @@ GET /api/hub/graph/traverse?entityId={id}&maxDepth=2&workspaceId={id}
 GET /api/hub/memory?userId={userId}&query={keywords}
 ```
 
+**Never claim absence without searching this turn.** Asked "what do you know about X", "is there an X", "anything on X" — you MUST `ask`/`search_unified` for X first (and `list_entities` on the matching profile for "how many / list all X"). Only after a search returns nothing may you say "I didn't find anything matching X" — never assert "X does not exist." A just-created entity is searchable within seconds, so a confident "nothing exists" without a search this turn is a hard failure.
+
 No SQL joins. The graph is the join.

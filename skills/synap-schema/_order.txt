@@ -1,5 +1,6 @@
 profiles.md
 before-you-touch.md
+read-before-write.md
 discover-profiles.md
 extend-vs-create.md
 creating-profiles.md

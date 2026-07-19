@@ -24,6 +24,8 @@ means the write is queued for the user's review — like a PR, not a failure. Ke
 working; see `writes.md` for the full governance contract and `inline-patterns.md`
 for how to surface a proposal's review link in a Companion reply.
 
+**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.
+
 ## Escalation ladder (keep in a corner of your head)
 
 You can always escalate — never dead-end on "I can't." Full detail: `escalation-ladder.md`.

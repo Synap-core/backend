@@ -34,4 +34,6 @@ POST /api/hub/relations
 }
 ```
 
+**Link entities you reference back to the thread.** When your reply cites an entity or document, connect it to the current conversation with `link_entity_to_thread` / `link_document_to_thread` — one line of why ("linking this because it's directly relevant to what you're building"). It should feel like keeping notes, not running a pipeline.
+
 For auto-sync mapping, conventional relation types, and edge cases, read **`linking.md`**.
