@@ -450,5 +450,81 @@ describe.skipIf(!SCHEMA_LOADS)(
         await sql`DELETE FROM capability_template_cache WHERE key = ${capKey}`;
       }
     });
+
+    it("D: a human-owned loop install creates playbooks before resolving its action placements", async () => {
+      const tag = `d-${suf}`;
+      const playbookName = `Human-owned template playbook ${tag}`;
+      let workspaceId: string | undefined;
+
+      try {
+        const created = await materializeWorkspaceCore({
+          definition: minimalDefinition(tag),
+          userId,
+          deferCreate: false,
+          workspaceName: `Contract WS ${tag}`,
+          createdBy: "provisioning",
+        });
+        expect(created.status).toBe("created");
+        if (created.status !== "created") throw new Error("unreachable");
+        workspaceId = created.workspaceId;
+
+        await applyPackagePostWorkspace({
+          workspaceId,
+          userId,
+          body: {
+            loops: [
+              {
+                definition: {
+                  key: `human-owned-loop-${tag}`,
+                  name: `Human-owned loop ${tag}`,
+                  playbooks: [
+                    {
+                      ref: "qualify",
+                      name: playbookName,
+                      goalTemplate: "Qualify the selected lead.",
+                      executor: "is-agent",
+                    },
+                  ],
+                  triggers: [],
+                },
+              },
+            ],
+            actionPlacements: [
+              {
+                profileSlug: "person",
+                surface: "entity-detail",
+                kind: "playbook",
+                ref: playbookName,
+                label: "Qualify lead",
+              },
+            ],
+          },
+        });
+
+        const [playbook] = await sql`
+          SELECT id FROM playbooks
+          WHERE workspace_id = ${workspaceId} AND name = ${playbookName}
+        `;
+        expect(playbook?.id).toBeTruthy();
+
+        const [workspace] = await sql`
+          SELECT settings FROM workspaces WHERE id = ${workspaceId}
+        `;
+        const placements = (
+          workspace?.settings as {
+            actionPlacements?: Array<{ ref?: string; label?: string }>;
+          }
+        ).actionPlacements;
+        expect(placements).toContainEqual({
+          profileSlug: "person",
+          surface: "entity-detail",
+          kind: "playbook",
+          ref: playbook.id,
+          label: "Qualify lead",
+        });
+      } finally {
+        await cleanupWorkspace(workspaceId);
+      }
+    });
   }
 );

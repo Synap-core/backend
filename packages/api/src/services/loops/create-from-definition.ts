@@ -102,6 +102,18 @@ export interface CreateLoopResult {
 // ── The applier ───────────────────────────────────────────────────────────────
 
 /**
+ * Template installation is an operator configuration write unless a real
+ * agent identity is present. Keeping this decision explicit prevents a caller
+ * context from accidentally turning a synchronous workspace install into a
+ * pending AI proposal.
+ */
+export function resolveLoopApplySource(
+  agentUserId: string | null | undefined
+): "agent" | "user" {
+  return agentUserId ? "agent" : "user";
+}
+
+/**
  * Apply a `LoopDefinition` (or a templateKey-loaded one), instantiating its
  * {playbooks · triggers} for the acting user/workspace in `ctx`.
  */
@@ -135,14 +147,15 @@ export async function createLoopFromDefinition(
   }
   const def = interpolateDeep(rawDef, effectiveParams);
 
-  // Acting provenance — when an AI agent applies the loop (agentUserId present
-  // on the caller ctx), forward it so each playbook/trigger create routes
-  // through checkPermissionOrPropose (propose, not auto-apply). An operator
-  // provision path (e.g. workspaces.createFromDefinition) carries no
-  // agentUserId, so it stays synchronous. Mirrors the hub automations caller's
-  // `source: agentUserId ? "agent" : "intelligence"`.
+  // Acting provenance — an explicit agent install remains AI-sourced and goes
+  // through its proposal policy. A human owner/admin applying a workspace
+  // template is configuration, not an AI action: it has already passed the
+  // owning workspace's RBAC gate, and must materialize synchronously so later
+  // template layers can resolve its playbooks by id. Labeling this branch as
+  // "intelligence" makes playbook.create proposal-gated, leaving no row for
+  // action placements to resolve during reconciliation.
   const agentUserId = ctx.agentUserId ?? undefined;
-  const source = agentUserId ? "agent" : "intelligence";
+  const source = resolveLoopApplySource(agentUserId);
 
   const proposals: string[] = [];
 

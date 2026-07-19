@@ -564,6 +564,14 @@ export async function applyPackagePostWorkspace(
         });
       }
     }
+    const failed = loops.find(
+      (entry) => (entry as { status?: string }).status === "error"
+    );
+    if (failed) {
+      throw new Error(
+        `Failed to apply a loop: ${(failed as { message?: string }).message ?? "unknown error"}`
+      );
+    }
     result.loops = loops;
   }
 

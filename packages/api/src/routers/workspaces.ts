@@ -4019,7 +4019,7 @@ export const workspacesRouter = router({
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message:
-              "Workflow reconciliation did not complete. The existing workspace was left unchanged; retry after resolving the error.",
+              "Workflow reconciliation did not complete. Earlier additive layers may have applied; after resolving the error, retry safely to finish the idempotent reconciliation.",
           });
         }
       }
