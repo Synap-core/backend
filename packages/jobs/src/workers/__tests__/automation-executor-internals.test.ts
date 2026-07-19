@@ -5,8 +5,11 @@ import {
   evaluateCondition,
   topoSort,
   markDescendantsSkipped,
+  seedResumeState,
   type StepContext,
+  type LedgerStepRow,
 } from "../automation-executor.js";
+import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 
 const ctx = (overrides: Partial<StepContext> = {}): StepContext => ({
   trigger: { payload: {} },
@@ -177,5 +180,74 @@ describe("markDescendantsSkipped (diamond fix)", () => {
     markDescendantsSkipped("B", edges, skipped, pruned);
     expect(skipped.has("B")).toBe(true); // B only reachable via the pruned edge
     expect(skipped.has("J")).toBe(false); // J still reachable via A (taken)
+  });
+});
+
+describe("seedResumeState (Wave 4.R resume-from-ledger)", () => {
+  const row = (
+    nodeId: string,
+    status: string,
+    output: unknown = null
+  ): LedgerStepRow => ({ nodeId, status, output });
+
+  it("is a no-op for a fresh run (no completedNodeIds, empty ledger)", () => {
+    const { completed, priorSteps } = seedResumeState(undefined, []);
+    expect(completed.size).toBe(0);
+    expect(priorSteps).toEqual({});
+  });
+
+  it("seeds completed nodes from the ledger even when job.data carries none (crash-retry)", () => {
+    // The F1 bug: a redelivered job has completedNodeIds undefined, so ONLY the
+    // ledger tells us step A already ran. Without this, A re-executes.
+    const { completed, priorSteps } = seedResumeState(undefined, [
+      row("A", "completed", { entityId: "e1" }),
+      row("B", "running"),
+    ]);
+    expect(completed.has("A")).toBe(true);
+    expect(completed.has("B")).toBe(false); // not completed → will re-run
+    expect(priorSteps.A).toEqual({ output: { entityId: "e1" } });
+    expect(priorSteps.B).toBeUndefined();
+  });
+
+  it("unions job.data completedNodeIds with the ledger", () => {
+    const { completed } = seedResumeState(["X"], [row("Y", "completed", {})]);
+    expect(completed.has("X")).toBe(true); // from job.data (delay-resume path)
+    expect(completed.has("Y")).toBe(true); // from ledger (crash-retry path)
+  });
+
+  it("does not seed context output for a completed row with no output", () => {
+    const { completed, priorSteps } = seedResumeState(undefined, [
+      row("A", "completed", null),
+    ]);
+    expect(completed.has("A")).toBe(true); // still skipped on resume
+    expect(priorSteps.A).toBeUndefined(); // but nothing to reload into context
+  });
+
+  it("ignores skipped/failed rows", () => {
+    const { completed } = seedResumeState(undefined, [
+      row("A", "skipped"),
+      row("B", "failed"),
+    ]);
+    expect(completed.size).toBe(0);
+  });
+});
+
+describe("deterministicUuidV5 (Wave 4.R idempotency key)", () => {
+  it("is stable for the same input (so a retry re-derives the same row id)", () => {
+    const key = "channel_message:run1:node1:-";
+    expect(deterministicUuidV5(key)).toBe(deterministicUuidV5(key));
+  });
+
+  it("differs per (run, node, iteration) and per kind", () => {
+    const a = deterministicUuidV5("channel_message:run1:node1:0");
+    const b = deterministicUuidV5("channel_message:run1:node1:1"); // next loop iter
+    const c = deterministicUuidV5("notification:run1:node1:0"); // other output kind
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+
+  it("produces a valid RFC-4122 v5 UUID string", () => {
+    expect(deterministicUuidV5("x")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
   });
 });

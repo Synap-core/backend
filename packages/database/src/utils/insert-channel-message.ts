@@ -37,6 +37,15 @@ export interface InsertChannelMessageParams {
   messageCategory?: MessageCategory;
   /** Pass the channel row to let the mirror skip a lookup. */
   channel?: MirrorChannelRef;
+  /**
+   * Explicit row id. Pass a DETERMINISTIC id (e.g. derived from run+node+iter)
+   * to make a retried insert idempotent: the row's primary key IS the
+   * idempotency key, so a redelivered producer conflicts on it and no-ops
+   * (`onConflictDoNothing` below) instead of duplicating the message. Omit for
+   * a fresh random id. The hash is always `computeMessageHash(id, content)`, so
+   * the tamper chain stays consistent whichever id is used.
+   */
+  id?: string;
 }
 
 export interface InsertChannelMessageResult {
@@ -67,8 +76,9 @@ export async function insertChannelMessage(
   // Canonical tamper-hash: computeMessageHash(id, content, previousHash="") —
   // the ONE formula (see message-hash.ts). Generate the id up front so the
   // stored hash matches the row's id (the previous `channelId:ts:content`
-  // formula was drift, not comparable to the tamper chain).
-  const id = randomUUID();
+  // formula was drift, not comparable to the tamper chain). A caller-supplied
+  // deterministic id (idempotency key) wins over a fresh random one.
+  const id = params.id ?? randomUUID();
   const hash = computeMessageHash(id, content);
 
   const [msg] = await database

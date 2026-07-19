@@ -49,7 +49,7 @@ import {
   EntityRepository,
   materializeEntity,
   eventRepository,
-  mirrorMessageToBoundExternal,
+  insertChannelMessage,
   openRunSession,
 } from "@synap/database";
 import {
@@ -60,7 +60,7 @@ import {
   MessageAuthorType,
 } from "@synap/database/schema";
 import type { AutomationTriggerConfig } from "@synap/database/schema";
-import { computeMessageHash, ChannelRepository } from "@synap/database";
+import { ChannelRepository } from "@synap/database";
 import type {
   FlowDefinition,
   AutomationNode,
@@ -75,6 +75,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { deterministicUuidV5 } from "../utils/deterministic-uuid.js";
 import { postRunSummary } from "../utils/post-run-summary.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
@@ -184,6 +185,51 @@ export function topoSort(
   }
 
   return sorted;
+}
+
+/** A completed-step-ledger row as far as resume seeding cares about it. */
+export interface LedgerStepRow {
+  nodeId: string;
+  status: string;
+  output: unknown;
+}
+
+/**
+ * Wave 4.R resume seed: reconstruct a run's progress from BOTH the crash/delay
+ * `completedNodeIds` (job.data) AND the durable step-run ledger, so a redelivered
+ * run skips finished steps instead of re-executing every side effect.
+ *
+ * Why the ledger union matters: a worker death mid-run makes pg-boss redeliver
+ * the ORIGINAL job.data (completedNodeIds undefined) — without reading the ledger
+ * the executor would re-run ALL steps (the F1 duplicate-effect bug). The
+ * delay-resume path already proved the reload machinery; this makes it
+ * unconditional.
+ *
+ * A step row seeds `context.steps` only when it is `completed` AND carries an
+ * output. Loop caveat: a loop writes ONE step row — a completed loop row skips
+ * the whole loop (correct); an incomplete one re-runs it (accepted at-least-once).
+ *
+ * Pure so it can be unit-tested; the executor passes the ledger rows it loaded.
+ */
+export function seedResumeState(
+  completedNodeIds: string[] | undefined,
+  ledgerRows: LedgerStepRow[]
+): {
+  completed: Set<string>;
+  priorSteps: Record<string, { output: Record<string, unknown> }>;
+} {
+  const completed = new Set(completedNodeIds ?? []);
+  const priorSteps: Record<string, { output: Record<string, unknown> }> = {};
+  for (const row of ledgerRows) {
+    if (row.status !== "completed") continue;
+    completed.add(row.nodeId);
+    if (row.output) {
+      priorSteps[row.nodeId] = {
+        output: row.output as Record<string, unknown>,
+      };
+    }
+  }
+  return { completed, priorSteps };
 }
 
 /**
@@ -597,6 +643,23 @@ async function executeOutputStep(
     unknown
   >;
 
+  // Wave 4.R idempotency: the side-effecting output steps below (notification,
+  // channel_message) derive their row id deterministically from (runId, nodeId,
+  // loop iteration) so a crash-redelivered run re-inserts the SAME id and
+  // conflicts on the primary key (onConflictDoNothing) instead of duplicating
+  // the effect — exactly-once per (run, node, iteration). `context.loop.index`
+  // is the loop iteration when this step runs inside a loop body, undefined
+  // otherwise (it threads through the existing per-item loop context — no new
+  // plumbing). `attribution.nodeId` is always supplied by both call sites; the
+  // undefined-guard just falls back to a random id rather than crashing.
+  const idemNodeId = attribution?.nodeId;
+  const outputIdemId = (kind: string): string | undefined =>
+    idemNodeId === undefined
+      ? undefined
+      : deterministicUuidV5(
+          `${kind}:${automationContext.automationRunId}:${idemNodeId}:${context.loop?.index ?? "-"}`
+        );
+
   switch (data.outputType) {
     case "entity_create": {
       const profileSlug = (config.profileSlug as string) ?? "note";
@@ -842,21 +905,26 @@ async function executeOutputStep(
         return { status: "skipped" };
       }
 
-      await db.insert(notifications).values({
-        id: randomUUID(),
-        workspaceId,
-        userId: ownerId,
-        type: "automation.notification",
-        title,
-        body,
-        category: category as any,
-        priority: priority as any,
-        status: "unread",
-        sourceType: "automation",
-        // entityId takes priority as sourceId so frontend can deep-link to the entity
-        sourceId: entityId ?? automationContext.automationId,
-        ...(groupKey ? { groupKey } : {}),
-      });
+      // Deterministic id (Wave 4.R) so a crash-redelivered run re-inserts the
+      // same notification and conflicts on the PK instead of duplicating it.
+      await db
+        .insert(notifications)
+        .values({
+          id: outputIdemId("notification") ?? randomUUID(),
+          workspaceId,
+          userId: ownerId,
+          type: "automation.notification",
+          title,
+          body,
+          category: category as any,
+          priority: priority as any,
+          status: "unread",
+          sourceType: "automation",
+          // entityId takes priority as sourceId so frontend can deep-link to the entity
+          sourceId: entityId ?? automationContext.automationId,
+          ...(groupKey ? { groupKey } : {}),
+        })
+        .onConflictDoNothing({ target: notifications.id });
 
       return { status: "sent", title, body };
     }
@@ -894,12 +962,6 @@ async function executeOutputStep(
         );
       }
 
-      // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
-      // (see @synap/database message-hash.ts). Generate the id up front so the
-      // stored hash matches the row's id.
-      const messageId = randomUUID();
-      const hash = computeMessageHash(messageId, content);
-
       // Tag proactive channel messages so the feed can identify their type
       // without needing to know which channel they came from.
       const proactiveType =
@@ -907,41 +969,37 @@ async function executeOutputStep(
           ? (metadata.proactiveType ?? config.proactiveType ?? "insight")
           : undefined;
 
-      const [msg] = await db
-        .insert(messages)
-        .values({
-          id: messageId,
-          channelId,
-          userId: "system",
-          role: "assistant",
-          content,
-          hash,
-          metadata: {
-            automationMessage: true,
-            ...(proactiveType ? { proactiveType, proactiveAi: true } : {}),
-            ...metadata,
-            ...automationContext,
-          } as (typeof messages.$inferInsert)["metadata"],
-        })
-        .returning({ id: messages.id });
-
-      // MIRROR: if this channel is bound to Discord, post the message out. An
-      // automation output is BOT-authored, so the mirror's firewall blocks it
-      // from any client-comms channel (team/feed only). No-ops for non-external
-      // channels (personal/feed). Never throws.
-      const mirror = await mirrorMessageToBoundExternal({
+      // ONE door (Wave 4.R): insertChannelMessage owns the canonical tamper-hash
+      // (computeMessageHash(id, content)) AND the Discord mirror + firewall — no
+      // hand-rolled insert. Pass a DETERMINISTIC id so a crash-redelivered run
+      // re-inserts the same id and no-ops on the PK (the door's
+      // onConflictDoNothing) instead of double-posting. The mirror is
+      // BOT-authored (authorType default) so the firewall blocks it from any
+      // client-comms channel (team/feed only) and no-ops on internal channels —
+      // same behavior the previous explicit mirror had.
+      const messageId = outputIdemId("channel_message") ?? randomUUID();
+      const result = await insertChannelMessage({
+        id: messageId,
         channelId,
         content,
-        authorType: MessageAuthorType.BOT,
+        metadata: {
+          automationMessage: true,
+          ...(proactiveType ? { proactiveType, proactiveAi: true } : {}),
+          ...metadata,
+          ...automationContext,
+        },
       });
-      if (mirror.mirrored) {
+      if (result.mirrored) {
         logger.info(
           { channelId },
           "automation channel_message mirrored to Discord"
         );
       }
 
-      return { status: "sent", messageId: msg.id, channelId };
+      // Return the deterministic id we inserted (not the door's result, which is
+      // undefined when the insert conflicted on a retry) so downstream steps get
+      // a stable reference either way.
+      return { status: "sent", messageId, channelId };
     }
 
     case "session_update": {
@@ -1782,18 +1840,19 @@ async function executePlaybookRun(
     }
   }
 
-  // 8. Insert a USER kickoff message into the channel
+  // 8. Insert a USER kickoff message into the channel through the ONE door
+  // (Wave 4.R) — it owns the canonical tamper-hash (computeMessageHash) and the
+  // external mirror. This is a HUMAN-authored user message on the run's freshly
+  // created THREAD channel (never external-bound), so the mirror no-ops; passing
+  // the explicit id keeps it available for the A2AI trigger below.
   const messageId = randomUUID();
-  const hash = computeMessageHash(messageId, goal);
-
-  await db.insert(messages).values({
+  await insertChannelMessage({
     id: messageId,
     channelId: channel.id,
-    role: MessageRole.USER,
     content: goal,
+    role: MessageRole.USER,
+    authorType: MessageAuthorType.HUMAN,
     userId: ownerId,
-    previousHash: "",
-    hash,
   });
 
   // 9. Trigger the Intelligence Hub via A2AI_TRIGGER job so it picks up the
@@ -2045,20 +2104,22 @@ async function executeAutomationFlow(params: {
       },
     };
 
-    // If resuming from delay, reload previously completed step outputs
-    if (alreadyCompleted.size > 0) {
-      const priorSteps = await db
-        .select()
-        .from(automationStepRuns)
-        .where(eq(automationStepRuns.runId, runId));
+    // Resume-from-ledger (Wave 4.R): reconstruct progress from the DURABLE step
+    // ledger, not just job.data. A crash-redelivered job arrives with the
+    // ORIGINAL job.data (completedNodeIds undefined), so we must load THIS run's
+    // completed step rows to know what already ran — otherwise every side effect
+    // re-executes (F1). Union them into `alreadyCompleted` (skips finished nodes
+    // below) and rebuild the prior-output context (what later steps read). A
+    // fresh run has no completed rows yet → this is a no-op.
+    const ledgerRows = await db
+      .select()
+      .from(automationStepRuns)
+      .where(eq(automationStepRuns.runId, runId));
 
-      for (const step of priorSteps) {
-        if (step.status === "completed" && step.output) {
-          context.steps[step.nodeId] = {
-            output: step.output as Record<string, unknown>,
-          };
-        }
-      }
+    const seeded = seedResumeState(completedNodeIds, ledgerRows);
+    for (const nodeId of seeded.completed) alreadyCompleted.add(nodeId);
+    for (const [nodeId, entry] of Object.entries(seeded.priorSteps)) {
+      context.steps[nodeId] = entry;
     }
 
     // Track which nodes to skip (condition branches not taken)

@@ -137,6 +137,10 @@ import {
   handleLibrarianArchiver,
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
+import {
+  handlePackageVersionBackfill,
+  PACKAGE_VERSION_BACKFILL_QUEUE,
+} from "./package-version-backfill.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -203,7 +207,23 @@ const ALL_QUEUES = [
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
   LIBRARIAN_ARCHIVER_QUEUE,
+  PACKAGE_VERSION_BACKFILL_QUEUE,
 ];
+
+/**
+ * Wave 4.R retry census (PHASE 4 F4): queues whose handler's terminal effect is
+ * an unguarded, non-idempotent message/digest insert AND whose work is recurring
+ * (a genuine miss is covered by the next scheduled tick) get retryLimit:0. A
+ * pg-boss redelivery would only re-post a duplicate (and re-bill the IS) with no
+ * recovery value. Narrow by design — most other side-effecting handlers either
+ * swallow their own errors (never retried) or benefit from retry (webhook
+ * delivery, whose consumers dedupe on X-Synap-Event-Id).
+ *
+ * feed-proactive-execute: `postDigest` inserts a digest message with a random id
+ * and no dedup, then a later non-guarded `updateFeedStatus` can still throw →
+ * retry re-posts the digest. The feed reschedules itself, so a lost tick self-heals.
+ */
+const NO_RETRY_QUEUES = new Set<string>(["feed-proactive-execute"]);
 
 /**
  * Register all pg-boss workers.
@@ -214,7 +234,18 @@ export async function registerAllWorkers(): Promise<void> {
 
   // Create all queues first (pg-boss v10 requires this before work/schedule)
   for (const name of ALL_QUEUES) {
-    await boss.createQueue(name);
+    await boss.createQueue(
+      name,
+      NO_RETRY_QUEUES.has(name) ? { name, retryLimit: 0 } : undefined
+    );
+    // createQueue is `ON CONFLICT DO NOTHING`, so a queue that already exists on
+    // the pod keeps its old policy. updateQueue forces the retry-free policy for
+    // the census queues on redeploy too (pg-boss resolves a job's retry as
+    // COALESCE(jobRetry, queueRetry, ctorDefault) — a queue policy of 0 wins over
+    // the boss.ts default of 3 for any send that doesn't set retryLimit itself).
+    if (NO_RETRY_QUEUES.has(name)) {
+      await boss.updateQueue(name, { name, retryLimit: 0 });
+    }
   }
   logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
 
@@ -567,6 +598,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleLibrarianArchiver()
   );
   logger.info("Registered worker: librarian.project-archiver");
+
+  // Package version backfill (cron: every 30min + on startup — self-heals
+  // pre-version-stamping workspaces so they stop showing "can't check for
+  // updates"; see the worker's header comment).
+  await boss.work(PACKAGE_VERSION_BACKFILL_QUEUE, async () =>
+    handlePackageVersionBackfill()
+  );
+  logger.info("Registered worker: package-version-backfill");
 
   logger.info("All workers registered");
 }
