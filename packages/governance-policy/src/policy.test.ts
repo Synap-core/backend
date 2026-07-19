@@ -69,6 +69,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
   recap: "write", // run-session-recap.ts recap write
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
+  configure_public_projection: "write", // workspace public-projection config door
   write: "write", // filesystem.write
 };
 

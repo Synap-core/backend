@@ -100,6 +100,7 @@ import {
   registerGraphRoutes,
   registerCentralityRoutes,
   registerObservabilityRoutes,
+  registerPublicProjectionRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -230,6 +231,12 @@ app.use("/*", async (c, next) => {
     "/auth/exchange",
     // Invite acceptance — the invitee has no API key yet; token is the capability
     "/setup/accept-invite",
+    // Public projection — an INTENTIONALLY unauthenticated, read-only surface for
+    // a workspace's opt-in public data. Safe to expose without a key because the
+    // handler is default-deny (404 unless settings.publicProjection.enabled ===
+    // true), facet-workspace-scoped (never returns pod-wide private entities), and
+    // field-whitelisted. It is the ONLY new unauth path.
+    "/public/projection",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the
@@ -587,6 +594,7 @@ registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window
 registerObservabilityRoutes(app); // /observability/routing-health — decision/correction routing analysis
+registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //
