@@ -2264,6 +2264,268 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── workspace / update ───────────────────────────────────────────────────────
+  // Hub `POST /packages/apply` with `targetWorkspaceId` set (install-onto-
+  // existing) proposes via `subjectType:"workspace", action:"update"` when the
+  // caller can't auto-approve (workspace.update ∈ ADMIN_ACTIONS). Without this
+  // executor the generic `*/*` catch-all only flipped the row APPROVED — the
+  // additive reconcile never ran. Re-runs the SAME `materializeWorkspaceCore`
+  // (targetWorkspaceId forces the `composeOntoBaseWorkspace` branch) the grant
+  // path drives, from the FULL package body the route already stores as
+  // `data.definition` (packages.ts:246-276), then the SAME phase-2
+  // `applyPackagePostWorkspace` layers — stamping the APPROVER as the acting
+  // userId (mirrors workspace/create's approve-as-authority above).
+  registerProposalExecutor({
+    key: "workspace/update",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const inner = ((proposal.data as Record<string, unknown>)?.data ??
+        proposal.data ??
+        {}) as Record<string, unknown>;
+      const targetWorkspaceId =
+        (inner.targetWorkspaceId as string | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+      if (!targetWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace update proposal is missing targetWorkspaceId",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const {
+        materializeWorkspaceCore,
+        ComposeBaseUnavailableError,
+        DependencyResolutionError,
+        ComposeBaseNotFoundError,
+        ComposeOverlayError,
+      } = await import("../../services/workspace-materialization-service.js");
+
+      const definition = (inner.definition ?? {}) as Record<string, unknown>;
+
+      let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
+      try {
+        core = await materializeWorkspaceCore({
+          definition:
+            definition as unknown as import("@synap/database").WorkspaceDefinitionInput,
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          selfSlug: inner.packageSlug as string | undefined,
+          targetWorkspaceId,
+          proposalId:
+            (inner.proposalId as string | undefined) ?? input.proposalId,
+          workspaceName: inner.workspaceName as string | undefined,
+          templateId: inner.templateId as string | undefined,
+          packageSlug: inner.packageSlug as string | undefined,
+          packageVersion: inner.packageVersion as string | undefined,
+          workspaceType: inner.workspaceType as
+            | "personal"
+            | "agent"
+            | "project"
+            | "operational"
+            | undefined,
+        });
+      } catch (e) {
+        if (
+          e instanceof DependencyResolutionError ||
+          e instanceof ComposeBaseUnavailableError ||
+          e instanceof ComposeOverlayError
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (e as Error).message,
+          });
+        }
+        if (e instanceof ComposeBaseNotFoundError) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: (e as Error).message,
+          });
+        }
+        throw e;
+      }
+
+      // targetWorkspaceId always forces the "composed" branch inside
+      // materializeWorkspaceCore (never "created"/"resolved") — narrow so the
+      // rest of this executor can read workspaceId unconditionally.
+      if (core.status !== "composed") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Workspace update materialize returned unexpected status "${core.status}" for a targeted install`,
+        });
+      }
+      const workspaceId = core.workspaceId;
+
+      const updatedData = {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: workspaceId,
+        materializeStatus: core.status,
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: updatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Phase 2: same post-workspace layers the grant path always runs after a
+      // "composed" outcome (packages.ts has no `unchanged` discriminator on
+      // that branch — it always re-seeds, see packages.ts:450).
+      try {
+        const { applyPackagePostWorkspace } =
+          await import("../../services/package-apply-post-workspace.js");
+        await applyPackagePostWorkspace({
+          workspaceId,
+          body: definition as Parameters<
+            typeof applyPackagePostWorkspace
+          >[0]["body"],
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          scopes: [],
+        });
+      } catch (e) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Workspace updated but package layers failed: ${(e as Error).message}`,
+        });
+      }
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: workspaceId };
+    },
+  });
+
+  // ── workspace / adopt ────────────────────────────────────────────────────────
+  // Hub `POST /pod/adopt` (`hub-protocol/rest/pod-adopt.ts`) proposes via
+  // `subjectType:"workspace", action:"adopt"` for agent callers under the same
+  // ADMIN_ACTIONS floor. Re-runs the SAME stamp-then-reconcile sequence the
+  // grant path performs inline: `WorkspaceRepository.mergeSettings` (lifts
+  // packageSlug/proposalId onto the workspace settings) then
+  // `reconcileWorkspaceFromDefinition({ mergeCapabilities: true })` — never
+  // destructive, never a second workspace. The template is re-resolved FRESH at
+  // approval time via `resolveWorkspaceTemplate` (mirrors the grant path, which
+  // also resolves at call time rather than trusting a stale snapshot) — only
+  // `templateSlug` needs to survive from propose to approve.
+  registerProposalExecutor({
+    key: "workspace/adopt",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const inner = ((proposal.data as Record<string, unknown>)?.data ??
+        proposal.data ??
+        {}) as Record<string, unknown>;
+      const templateSlug = inner.templateSlug as string | undefined;
+      const workspaceId =
+        (inner.workspaceId as string | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+      if (!templateSlug || !workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace adopt proposal is missing templateSlug or workspaceId",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { resolveWorkspaceTemplate } =
+        await import("../../services/capabilities/resolve-workspace-template.js");
+      const resolved = await resolveWorkspaceTemplate(templateSlug);
+      if (!resolved) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Unknown template: ${templateSlug}`,
+        });
+      }
+
+      const {
+        getDb,
+        eventRepository,
+        WorkspaceRepository,
+        reconcileWorkspaceFromDefinition,
+      } = await import("@synap/database");
+
+      const settingsPatch: Partial<
+        import("@synap/database").WorkspaceSettings
+      > = {
+        packageSlug: templateSlug,
+        proposalId: templateSlug,
+        ...(resolved.version ? { packageVersion: resolved.version } : {}),
+      };
+      const dbConn = await getDb();
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
+      // Approver is the authority — same as workspace/create above.
+      await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
+
+      const report = await reconcileWorkspaceFromDefinition({
+        workspaceId,
+        userId,
+        definition: resolved.workspaceDefinition as unknown as Parameters<
+          typeof reconcileWorkspaceFromDefinition
+        >[0]["definition"],
+        mergeCapabilities: true,
+      });
+
+      const updatedData = {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: workspaceId,
+        reconcile: {
+          profilesAdded: report.profiles.added.length,
+          propertiesAdded: report.properties.added.length,
+          viewsAdded: report.views.added.length,
+          entityLinksAdded: report.entityLinks.added.length,
+        },
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: updatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: workspaceId };
+    },
+  });
+
   // ── messaging.external.send (proposalType-only) ─────────────────────────────
   registerProposalExecutor({
     key: "messaging.external.send",

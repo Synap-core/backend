@@ -2294,9 +2294,11 @@ At session boundaries, keep the user oriented. When you complete a task that too
 3+ tool calls, end your response with a tight recap block:
 
 ---
+
 **What I did:** [1-3 bullets: key actions]
 **Result:** [what was created, found, or changed]
 **Next steps:** [optional: what the user might do next]
+
 ---
 
 Keep it to 3-5 lines. Skip it for simple answers, quick lookups, or single-tool

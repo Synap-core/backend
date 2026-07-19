@@ -103,6 +103,10 @@ const ActionPlacementSchema = z.object({
     .object({
       requiredFacetSlugs: z.array(z.string().min(1)).min(1).optional(),
       propertyEquals: z.record(z.string(), z.unknown()).optional(),
+      propertyAnyEquals: z
+        .record(z.string(), z.array(z.unknown()).min(1))
+        .optional(),
+      propertyNotEquals: z.record(z.string(), z.unknown()).optional(),
     })
     .optional(),
   confirmation: z
@@ -115,6 +119,16 @@ const ActionPlacementSchema = z.object({
 });
 
 const PackageApplySchema = z.object({
+  /**
+   * Unified pod configuration (Phase 3): install this template ONTO an
+   * existing workspace instead of creating a new one. Additive reconcile
+   * only — never destructive, never a second workspace. When present,
+   * `materializeWorkspaceCore` routes through the same `composeOntoBaseWorkspace`
+   * door a declared `compose` dependency uses, targeting THIS workspace
+   * regardless of what the template itself declares. Absent → behavior is
+   * exactly as before (create-new, or compose onto a declared dependency).
+   */
+  targetWorkspaceId: z.string().uuid().optional(),
   _meta: z
     .object({
       slug: z.string().optional(),
@@ -234,11 +248,19 @@ export function registerPackagesRoutes(app: HubHono): void {
     // Store the FULL package body as `definition` so the workspace/create
     // approve executor can re-run materializeWorkspaceCore on approval.
     // Name-only data was the Phase-0 bug: approve had nothing to materialize.
+    // Installing ONTO an existing workspace (targetWorkspaceId) is an UPDATE
+    // of that specific workspace, not a fresh "create" — pass its workspaceId
+    // so RBAC (`verifyPermission`) actually checks the caller's role on THAT
+    // row (a bare "create" check has no workspace lens to check against).
+    // `composeOntoBaseWorkspace` (reached below) still re-gates via
+    // `assertWorkspaceWrite` as defense in depth — this is the governance
+    // layer in front of it, same as every other write door.
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,
+      workspaceId: body.targetWorkspaceId ?? null,
       subjectType: "workspace",
-      action: "create",
+      action: body.targetWorkspaceId ? "update" : "create",
       data: {
         name: body.workspaceName ?? body._meta?.slug ?? "untitled",
         definition: body,
@@ -250,6 +272,9 @@ export function registerPackagesRoutes(app: HubHono): void {
         proposalId: body._meta?.slug,
         createdBy: "provisioning",
         source: "packages.apply",
+        ...(body.targetWorkspaceId
+          ? { targetWorkspaceId: body.targetWorkspaceId }
+          : {}),
       },
     });
     if ("denied" in perm && perm.denied)
@@ -292,6 +317,7 @@ export function registerPackagesRoutes(app: HubHono): void {
         packageSlug: body._meta?.slug,
         packageVersion: body._meta?.version,
         workspaceType: body.workspaceType,
+        targetWorkspaceId: body.targetWorkspaceId,
       });
       // Surface the resolved dependency graph only when deps were declared —
       // matches the pre-refactor response (key omitted for no-dep applies).

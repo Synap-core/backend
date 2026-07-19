@@ -133,6 +133,8 @@ export interface ActionPlacement {
   when?: {
     requiredFacetSlugs?: string[];
     propertyEquals?: Record<string, unknown>;
+    propertyAnyEquals?: Record<string, unknown[]>;
+    propertyNotEquals?: Record<string, unknown>;
   };
   confirmation?: {
     title: string;
@@ -145,9 +147,9 @@ export interface ActionPlacement {
  * Resolve each placement's `ref` for the browser: playbook/automation NAMES →
  * row ids (workspace-scoped, the same NAME-in-scope lookup the playbooks/
  * automations reuse-checks above use); capability refs (verb keys) pass through.
- * A playbook/automation ref that resolves to no row is DROPPED (not fatal) —
- * mirrors `resolveGrantRefs`. Returns placements with `ref` rewritten to an id
- * the browser can launch directly.
+ * A declared playbook/automation ref must resolve. Otherwise the template is
+ * incomplete and installation/reconciliation fails rather than caching a CRM
+ * workspace whose primary action silently disappeared.
  */
 async function resolveActionPlacementRefs(
   placements: ActionPlacement[],
@@ -179,8 +181,11 @@ async function resolveActionPlacementRefs(
           )
         )
         .limit(1);
-      if (row) resolved.push({ ...p, ref: row.id });
-      // else: unresolved playbook ref — skipped, not fatal.
+      if (!row)
+        throw new Error(
+          `Action placement references missing playbook "${p.ref}"`
+        );
+      resolved.push({ ...p, ref: row.id });
       continue;
     }
     if (p.kind === "automation") {
@@ -194,8 +199,11 @@ async function resolveActionPlacementRefs(
           )
         )
         .limit(1);
-      if (row) resolved.push({ ...p, ref: row.id });
-      // else: unresolved automation ref — skipped, not fatal.
+      if (!row)
+        throw new Error(
+          `Action placement references missing automation "${p.ref}"`
+        );
+      resolved.push({ ...p, ref: row.id });
       continue;
     }
   }
@@ -380,7 +388,10 @@ export async function applyPackagePostWorkspace(
     for (const a of body.automations) {
       try {
         const [existing] = await db
-          .select({ id: automationsTable.id })
+          .select({
+            id: automationsTable.id,
+            metadata: automationsTable.metadata,
+          })
           .from(automationsTable)
           .where(
             and(
@@ -409,7 +420,9 @@ export async function applyPackagePostWorkspace(
             triggerConfig: a.triggerConfig,
             flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
             status: a.status,
-            metadata: a.key ? { templateKey: a.key } : undefined,
+            metadata: a.key
+              ? { ...(existing.metadata ?? {}), templateKey: a.key }
+              : undefined,
           } as never);
           autos.push({ name: a.name, status: "updated", id: existing.id });
           continue;
@@ -622,10 +635,9 @@ export async function applyPackagePostWorkspace(
         result.actionPlacements = { status: "skipped", count: 0 };
       }
     } catch (e) {
-      result.actionPlacements = {
-        status: "error",
-        message: (e as Error).message,
-      };
+      throw new Error(
+        `Failed to apply action placements: ${(e as Error).message}`
+      );
     }
   }
 

@@ -270,6 +270,8 @@ export interface RelatedEntitiesNodeDef extends AutomationNodeBase {
     direction?: "outbound" | "inbound" | "both";
     relationTypes?: string[];
     propertyEquals?: Record<string, unknown>;
+    /** Match any supplied property/value set (OR across predicates). */
+    propertyAnyEquals?: Record<string, unknown[]>;
     /** Exclude a known related entity (for example the trigger entity itself). */
     excludeEntityId?: string;
     limit?: number;
@@ -308,6 +310,8 @@ export interface SelectNodeDef extends AutomationNodeBase {
  * workflow primitive for one-time policy decisions (not a CRM concept): the
  * run that first claims a key observes `claimed: true`; subsequent runs see
  * `claimed: false`. Re-delivery of the owning run remains `claimed: true`.
+ * Claims are released when that run terminally fails, so the same idempotent
+ * graph can be retried without wedging a record.
  */
 export interface ClaimNodeDef extends AutomationNodeBase {
   type: "claim";
@@ -328,10 +332,13 @@ export interface GuardNodeDef extends AutomationNodeBase {
       path: string;
       exists?: boolean;
       equals?: unknown;
+      notEquals?: unknown;
       arrayIncludes?: unknown;
       lengthEquals?: number;
       numberGte?: number;
       numberLte?: number;
+      /** At least one path/literal pair must match. */
+      anyOf?: Array<{ path: string; equals: unknown }>;
       message: string;
     }>;
     errorHandling?: NodeErrorHandling;

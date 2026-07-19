@@ -8,6 +8,7 @@ import {
   markDescendantsSkipped,
   seedResumeState,
   executeSelectStep,
+  resolveExecutionActor,
   shouldRunFlow,
   type StepContext,
   type LedgerStepRow,
@@ -119,6 +120,34 @@ describe("executeSelectStep", () => {
         ctx()
       )
     ).toThrow("select node: 'when' must resolve to a boolean");
+  });
+
+  it("accepts the explicit 0/1 output of a compute predicate", () => {
+    expect(
+      executeSelectStep({ when: 1, ifTrue: "first", ifFalse: "later" }, ctx())
+        .value
+    ).toBe("first");
+    expect(
+      executeSelectStep({ when: 0, ifTrue: "first", ifFalse: "later" }, ctx())
+        .value
+    ).toBe("later");
+  });
+});
+
+describe("resolveExecutionActor", () => {
+  it("uses the manual triggering member for record-bound workflow writes", () => {
+    expect(
+      resolveExecutionActor("business-developer", "automation-owner")
+    ).toBe("business-developer");
+  });
+
+  it("retains the automation owner for unattended runs", () => {
+    expect(resolveExecutionActor("system", "automation-owner")).toBe(
+      "automation-owner"
+    );
+    expect(resolveExecutionActor("automation", "automation-owner")).toBe(
+      "automation-owner"
+    );
   });
 });
 

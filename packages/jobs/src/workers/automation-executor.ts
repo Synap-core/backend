@@ -32,6 +32,7 @@ import {
   and,
   or,
   isNull,
+  isNotNull,
   inArray,
   desc,
   automations,
@@ -124,6 +125,19 @@ interface ExecutionPayload {
   };
   /** For delay resumption: skip nodes that were already executed */
   completedNodeIds?: string[];
+}
+
+/** Manual workflow writes act as the member who started the run; unattended
+ * system/automation runs retain the automation owner as their authorized actor. */
+export function resolveExecutionActor(
+  triggeredBy: string | null | undefined,
+  ownerId: string
+): string {
+  return typeof triggeredBy === "string" &&
+    triggeredBy !== "system" &&
+    triggeredBy !== "automation"
+    ? triggeredBy
+    : ownerId;
 }
 
 /** Context built up during execution — step outputs available to later steps */
@@ -408,13 +422,13 @@ async function dispatchOutputVerb(
   verbId: string,
   config: Record<string, unknown>,
   workspaceId: string,
-  ownerId: string
+  actingUserId: string
 ): Promise<Record<string, unknown>> {
   const dispatch = await dispatchViaCapabilityRouter({
     verbId,
     parameters: config,
     workspaceId,
-    userId: ownerId,
+    userId: actingUserId,
   });
   if (dispatch.kind === "deny") {
     throw new Error(`${verbId} refused by capability gate: ${dispatch.reason}`);
@@ -714,6 +728,7 @@ async function executeOutputStep(
   workspaceId: string,
   automationContext: ExecutionPayload["automationContext"],
   ownerId: string,
+  actingUserId: string,
   // Workflow attribution (D3a): the executing flow node + its step-run row, so a
   // governed write becomes a proposal that traces back to the exact step. In a
   // loop body the step run is the loop node's (no per-child row), while nodeId
@@ -899,7 +914,7 @@ async function executeOutputStep(
           workspaceId,
           skipEvent: true,
         },
-        ownerId
+        actingUserId
       );
 
       await emitSideEffects({
@@ -1309,7 +1324,7 @@ async function executeOutputStep(
         "entity_facet.attach",
         config,
         workspaceId,
-        ownerId
+        actingUserId
       );
 
     case "facet_update":
@@ -1318,7 +1333,7 @@ async function executeOutputStep(
         "entity_facet.update",
         config,
         workspaceId,
-        ownerId
+        actingUserId
       );
 
     case "facet_detach":
@@ -1327,7 +1342,7 @@ async function executeOutputStep(
         "entity_facet.detach",
         config,
         workspaceId,
-        ownerId
+        actingUserId
       );
 
     case "relation_create":
@@ -1355,7 +1370,12 @@ async function executeOutputStep(
             relationId: existing.id,
           };
       }
-      return dispatchOutputVerb("graph.link", config, workspaceId, ownerId);
+      return dispatchOutputVerb(
+        "graph.link",
+        config,
+        workspaceId,
+        actingUserId
+      );
 
     default:
       logger.warn({ outputType: data.outputType }, "Unknown output type");
@@ -1683,7 +1703,8 @@ function resolveBoundValue(value: unknown, context: StepContext): unknown {
 async function executeEntityReadStep(
   data: { entityId: string },
   context: StepContext,
-  workspaceId: string
+  workspaceId: string,
+  viewerUserId: string
 ): Promise<Record<string, unknown>> {
   const entityId = resolveTemplate(data.entityId, context);
   if (!entityId) throw new Error("entity_read node: entityId is required");
@@ -1731,6 +1752,12 @@ async function executeEntityReadStep(
         or(
           eq(entityFacets.workspaceId, workspaceId),
           isNull(entityFacets.workspaceId)
+        ),
+        // Pod-wide facets have a private owner floor; workspace-local facets
+        // are visible to members of this already-authorized workspace lens.
+        or(
+          isNotNull(entityFacets.workspaceId),
+          eq(entityFacets.userId, viewerUserId)
         )
       )
     );
@@ -1750,6 +1777,7 @@ async function executeRelatedEntitiesStep(
     direction?: "outbound" | "inbound" | "both";
     relationTypes?: string[];
     propertyEquals?: Record<string, unknown>;
+    propertyAnyEquals?: Record<string, unknown[]>;
     excludeEntityId?: string;
     limit?: number;
   },
@@ -1821,6 +1849,16 @@ async function executeRelatedEntitiesStep(
       drizzleSql`${entities.properties}->>${key} = ${String(value)}`
     );
   }
+  const anyPropertyMatches = Object.entries(
+    data.propertyAnyEquals ?? {}
+  ).flatMap(([key, rawValues]) =>
+    rawValues.map((rawValue) => {
+      const value = resolveBoundValue(rawValue, context);
+      return drizzleSql`${entities.properties}->>${key} = ${String(value)}`;
+    })
+  );
+  if (anyPropertyMatches.length > 0)
+    conditions.push(or(...anyPropertyMatches)!);
   const related = await db
     .select({
       id: entities.id,
@@ -1906,6 +1944,8 @@ function executeGuardStep(
     const failed =
       (check.exists !== undefined && (value != null) !== check.exists) ||
       (check.equals !== undefined && value !== expected) ||
+      (check.notEquals !== undefined &&
+        value === resolveBoundValue(check.notEquals, context)) ||
       (check.arrayIncludes !== undefined &&
         (!Array.isArray(value) ||
           !value.includes(resolveBoundValue(check.arrayIncludes, context)))) ||
@@ -1914,7 +1954,13 @@ function executeGuardStep(
       (check.numberGte !== undefined &&
         (!(typeof value === "number") || value < check.numberGte)) ||
       (check.numberLte !== undefined &&
-        (!(typeof value === "number") || value > check.numberLte));
+        (!(typeof value === "number") || value > check.numberLte)) ||
+      (check.anyOf !== undefined &&
+        !check.anyOf.some(
+          (candidate) =>
+            resolveContextPath(candidate.path, context) ===
+            resolveBoundValue(candidate.equals, context)
+        ));
     if (failed) {
       throw new WorkflowGuardBlockedError({
         code: "guard_failed",
@@ -1982,19 +2028,27 @@ function executeComputeStep(
 
 /**
  * A finite, typed alternative to branching a whole graph just to select a
- * value. It deliberately accepts only an already-resolved boolean, so it does
- * not become an expression evaluator or a second condition grammar.
+ * value. It accepts an already-resolved boolean, or the explicit 0/1 result of
+ * a numeric compute node, without becoming an expression evaluator.
  */
 export function executeSelectStep(
   data: { when: unknown; ifTrue: unknown; ifFalse: unknown },
   context: StepContext
 ): Record<string, unknown> {
   const when = resolveBoundValue(data.when, context);
-  if (typeof when !== "boolean") {
-    throw new Error("select node: 'when' must resolve to a boolean");
+  const predicate =
+    typeof when === "boolean"
+      ? when
+      : when === 0
+        ? false
+        : when === 1
+          ? true
+          : undefined;
+  if (predicate === undefined) {
+    throw new Error("select node: 'when' must resolve to a boolean or 0/1");
   }
   return {
-    value: resolveBoundValue(when ? data.ifTrue : data.ifFalse, context),
+    value: resolveBoundValue(predicate ? data.ifTrue : data.ifFalse, context),
   };
 }
 
@@ -2424,6 +2478,11 @@ async function executeAutomationFlow(params: {
     logger.error({ runId }, "Automation run not found");
     return {};
   }
+  // Manual runs execute under the authenticated workspace member who started
+  // them. Scheduled/system runs retain the automation owner. This keeps the
+  // generic workflow engine domain-agnostic while allowing shared workspaces
+  // to update records created by another member through the normal write gate.
+  const actingUserId = resolveExecutionActor(run.triggeredBy, ownerId);
 
   const flow = automation.flowDefinition as FlowDefinition;
 
@@ -2466,6 +2525,7 @@ async function executeAutomationFlow(params: {
         { runId, automationId, precondition: flow.precondition },
         "Automation precondition evaluated false — finalizing run as skipped"
       );
+
       // Guarded on status='running' (same invariant the finalizer/reaper use) so
       // a late writer can never overwrite the verdict.
       await db
@@ -2881,6 +2941,7 @@ async function executeAutomationFlow(params: {
                 workspaceId,
                 runContext,
                 ownerId,
+                actingUserId,
                 { nodeId: node.id, stepRunId: stepRun.id }
               );
               break;
@@ -2986,6 +3047,7 @@ async function executeAutomationFlow(params: {
                           workspaceId,
                           runContext,
                           ownerId,
+                          actingUserId,
                           { nodeId: childNode.id, stepRunId: stepRun.id }
                         );
                         break;
@@ -3169,7 +3231,8 @@ async function executeAutomationFlow(params: {
               output = await executeEntityReadStep(
                 node.data as { entityId: string },
                 context,
-                workspaceId
+                workspaceId,
+                ownerId
               );
               break;
             }
@@ -3181,6 +3244,7 @@ async function executeAutomationFlow(params: {
                   direction?: "outbound" | "inbound" | "both";
                   relationTypes?: string[];
                   propertyEquals?: Record<string, unknown>;
+                  propertyAnyEquals?: Record<string, unknown[]>;
                   excludeEntityId?: string;
                   limit?: number;
                 },
@@ -3544,6 +3608,15 @@ async function executeAutomationFlow(params: {
         and(eq(automationRuns.id, runId), eq(automationRuns.status, "running"))
       );
 
+    // Claims protect a live run from concurrent writers. Once a run has
+    // terminally failed, release only the claims it owns so a new manual run
+    // can retry the same idempotent graph instead of leaving the record stuck.
+    if (finalStatus === "failed") {
+      await db
+        .delete(automationClaims)
+        .where(eq(automationClaims.ownerRunId, runId));
+    }
+
     // Update automation stats
     await db
       .update(automations)
@@ -3661,6 +3734,9 @@ export async function handleAutomationExecute(job: {
           RUN_NOT_DELAY_SUSPENDED
         )
       );
+    await db
+      .delete(automationClaims)
+      .where(eq(automationClaims.ownerRunId, runId));
     // Narrate the failed run before rethrow (idempotent, non-throwing — Wave
     // 3.N1). A run that threw before writing a terminal status never reached the
     // genuine-finish narration site, so this is its only summary hook.

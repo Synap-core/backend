@@ -127,6 +127,16 @@ export interface MaterializeWorkspaceCoreInput {
    * `createWorkspaceFromDefinitionIdempotent` and returns `{status:"created"}`.
    */
   deferCreate?: boolean;
+  /**
+   * "Install onto existing" (unified pod configuration, Phase 3): when set,
+   * this OVERRIDES the resolved `compose` dependency base (if any) — the
+   * package is additively reconciled ONTO this workspace instead of creating
+   * a new one, regardless of whether it declares its own `compose` dependency.
+   * Never destructive: routes through the exact same `composeOntoBaseWorkspace`
+   * door a declared `compose` dependency does (write-gate + additive
+   * `reconcileWorkspaceFromDefinition`).
+   */
+  targetWorkspaceId?: string;
   // ── Idempotent-create passthrough (used only when !deferCreate && no compose) ──
   proposalId?: string;
   workspaceName?: string;
@@ -179,18 +189,26 @@ export async function materializeWorkspaceCore(
   }
   const dependencies = resolveResult.installed;
 
-  // A compose was requested but its base could not be resolved. Do NOT fall
-  // back to creating a rogue overlay workspace — surface the reason.
+  // A caller-supplied `targetWorkspaceId` (Phase 3: install-onto-existing)
+  // OVERRIDES the resolved `compose` dependency base — an explicit target
+  // always wins over whatever the package itself declared.
+  const composeTargetWorkspaceId =
+    input.targetWorkspaceId ?? resolveResult.composeTargetWorkspaceId;
+
+  // A compose was requested but its base could not be resolved, and no
+  // explicit target was supplied to fall back onto. Do NOT fall back to
+  // creating a rogue overlay workspace — surface the reason.
   if (
     resolveResult.composeRequested &&
-    !resolveResult.composeTargetWorkspaceId
+    !resolveResult.composeTargetWorkspaceId &&
+    !input.targetWorkspaceId
   ) {
     throw new ComposeBaseUnavailableError(dependencies);
   }
 
-  // ── COMPOSE: layer this package ADDITIVELY onto the resolved base ────────
-  if (resolveResult.composeTargetWorkspaceId) {
-    const composeTargetWorkspaceId = resolveResult.composeTargetWorkspaceId;
+  // ── COMPOSE / INSTALL-ONTO-EXISTING: layer this package ADDITIVELY onto
+  // the resolved (or caller-supplied) target workspace ─────────────────────
+  if (composeTargetWorkspaceId) {
     // The ONE compose door (shared with the resolver's transitive compose):
     // loads + write-gates the base, then reconciles ADDITIVELY onto it.
     const reconcile: ReconcileReport = await composeOntoBaseWorkspace({

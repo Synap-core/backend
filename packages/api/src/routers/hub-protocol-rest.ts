@@ -88,6 +88,8 @@ import {
   registerManifestRoutes,
   registerDiscoverRoutes,
   registerOrientRoutes,
+  registerPodConfigRoutes,
+  registerPodAdoptRoutes,
   registerKeysRoutes,
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
@@ -582,6 +584,8 @@ registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
 registerManifestRoutes(app); // /manifest
 registerDiscoverRoutes(app); // /discover
 registerOrientRoutes(app); // /orient
+registerPodConfigRoutes(app); // /pod/config
+registerPodAdoptRoutes(app); // /pod/adopt
 registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*

@@ -2831,6 +2831,7 @@ export const workspacesRouter = router({
             automations: z
               .array(
                 z.object({
+                  key: z.string().min(1).optional(),
                   name: z.string().min(1),
                   description: z.string().optional(),
                   trigger: z.object({
@@ -2854,6 +2855,7 @@ export const workspacesRouter = router({
             flowAutomations: z
               .array(
                 z.object({
+                  key: z.string().min(1).optional(),
                   name: z.string().min(1),
                   description: z.string().optional(),
                   triggerType: z.enum(["event", "cron", "webhook", "manual"]),
@@ -2947,6 +2949,12 @@ export const workspacesRouter = router({
                         .min(1)
                         .optional(),
                       propertyEquals: z
+                        .record(z.string(), z.unknown())
+                        .optional(),
+                      propertyAnyEquals: z
+                        .record(z.string(), z.array(z.unknown()).min(1))
+                        .optional(),
+                      propertyNotEquals: z
                         .record(z.string(), z.unknown())
                         .optional(),
                     })
@@ -3889,6 +3897,7 @@ export const workspacesRouter = router({
           flowAutomations: z
             .array(
               z.object({
+                key: z.string().min(1).optional(),
                 name: z.string().min(1),
                 description: z.string().optional(),
                 triggerType: z.enum(["event", "cron", "webhook", "manual"]),
@@ -3927,6 +3936,12 @@ export const workspacesRouter = router({
                       .min(1)
                       .optional(),
                     propertyEquals: z
+                      .record(z.string(), z.unknown())
+                      .optional(),
+                    propertyAnyEquals: z
+                      .record(z.string(), z.array(z.unknown()).min(1))
+                      .optional(),
+                    propertyNotEquals: z
                       .record(z.string(), z.unknown())
                       .optional(),
                   })
