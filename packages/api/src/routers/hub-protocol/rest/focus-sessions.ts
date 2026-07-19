@@ -37,6 +37,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -375,7 +376,22 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
-    const workspaceId = body.workspaceId ? acting.workspaceId : null;
+    // Item 3 Part 3: positively pin a bound service key to its workspace. A
+    // project-scoped session (no workspaceId) from a bound key still pins.
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string | null;
+    try {
+      workspaceId =
+        getConfinedWorkspace(c, body.workspaceId ? acting.workspaceId : null) ??
+        null;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).

@@ -67,6 +67,7 @@ import {
   verifyWorkspaceAccess,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 /** A single resolution suggestion / auto-connected facet (ids + names). */
 interface ResolutionSuggestion {
@@ -630,7 +631,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
       workspaceId: query.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    // Item 3 Part 3: confine a bound service key to its workspace (narrows this read).
+    const workspaceId = getConfinedWorkspace(c, acting.workspaceId);
 
     try {
       const scopes = c.get("scopes") as string[];
@@ -937,7 +940,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     const body = c.req.valid("json");
-    const workspaceId = body.workspaceId ?? null;
+    // Item 3 Part 3: confine a bound service key to its workspace (narrows this read).
+    const workspaceId =
+      getConfinedWorkspace(c, body.workspaceId ?? null) ?? null;
 
     try {
       // The CATALOG (for type inference) needs a concrete workspace — listProfiles
@@ -1100,6 +1105,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
       effectiveWorkspaceId = acting.workspaceId;
     }
 
+    // Item 3 Part 3: confine a bound service key to its workspace — clamp the
+    // resolved workspace, then feed it to the caller ctx and the re-supplied
+    // createEntity input below (input would otherwise win over the ctx pin).
+    effectiveWorkspaceId =
+      getConfinedWorkspace(c, effectiveWorkspaceId) ?? null;
+
     try {
       // body.agentUserId wins; fall back to the auto-injected context value so
       // agents using their own API key get proposal attribution without passing it.
@@ -1133,7 +1144,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // profile lands pod-wide — WITHOUT a pin. Passing the resolved default as
         // a pin here would wrongly workspace-pin pod-scope kinds (the four-door
         // bug). Only a caller-supplied `body.workspaceId` overrides entityScope.
-        ...(body.workspaceId ? { workspaceId: body.workspaceId } : {}),
+        ...(body.workspaceId
+          ? { workspaceId: effectiveWorkspaceId ?? undefined }
+          : {}),
         // Long-form body → linked document (versioned). Must be forwarded here
         // or it's silently dropped before the entity-create document flow.
         ...(body.content ? { content: body.content } : {}),
@@ -1365,6 +1378,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
           linkWorkspaceId = body.workspaceId;
         }
       }
+      // Item 3 Part 3: confine a bound service key to its workspace — clamp the
+      // resolved link workspace before it flows to the upload, the caller ctx,
+      // and the re-supplied relations input below.
+      linkWorkspaceId = getConfinedWorkspace(c, linkWorkspaceId) ?? null;
 
       // 1. Obtain the file entity id — either freshly uploaded (upload+link) or
       //    the pre-stored orphan the caller referenced (link-only). Upload lands
@@ -1567,6 +1584,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
 
+    // Item 3 Part 3: confine a bound service key to its workspace before the
+    // DIRECT storeEntitySourceBlob write.
+    workspaceId = getConfinedWorkspace(c, workspaceId) ?? null;
+
     try {
       const result = await storeEntitySourceBlob({
         database: db,
@@ -1716,9 +1737,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
 
+    // Item 3 Part 3: confine a bound service key to its workspace before the
+    // membership check and the DIRECT uploadBufferAsFileEntity write.
+    const workspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+
     // Writing a file into a workspace requires MEMBERSHIP — reads must not
     // authorize writes (same rule as the attachments route).
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json(
         { error: "Access denied: not a member of the target workspace" },
         403
@@ -1728,7 +1754,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     try {
       const uploaded = await uploadBufferAsFileEntity({
         userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         buffer,
         mimeType: body.mimeType,
         filename: body.filename,
@@ -1818,8 +1844,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
           return c.json({ error: "Access denied to requested workspace" }, 403);
         }
       }
+      // Item 3 Part 3: confine a bound service key to its workspace — clamp the
+      // resolved workspace before it flows to the caller ctx and the re-supplied
+      // targetWorkspaceId input below.
       const effectiveWorkspaceId =
-        target.workspaceId ?? body.workspaceId ?? null;
+        getConfinedWorkspace(
+          c,
+          target.workspaceId ?? body.workspaceId ?? null
+        ) ?? null;
       if (
         body.workspaceId &&
         target.workspaceId &&
@@ -1867,7 +1899,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         preview: body.preview,
         metadata: body.metadata,
-        ...(body.workspaceId ? { targetWorkspaceId: body.workspaceId } : {}),
+        ...(body.workspaceId
+          ? { targetWorkspaceId: effectiveWorkspaceId ?? undefined }
+          : {}),
         ...(body.deleteProperties
           ? { deleteProperties: body.deleteProperties }
           : {}),
@@ -2206,14 +2240,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      // Item 3 Part 3: attachFacet reads its workspace entirely from input, so
+      // clamp body.workspaceId for a bound service key before it flows in.
+      const confinedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
       const caller = await getCaller(c, { userId });
       const result = await caller.entities.attachFacet({
         userId,
         entityId,
         profileSlug: body.profileSlug,
         profileId: body.profileId,
-        ...(body.workspaceId !== undefined
-          ? { workspaceId: body.workspaceId }
+        ...(confinedWorkspaceId !== undefined
+          ? { workspaceId: confinedWorkspaceId }
           : {}),
         ...(body.contextEntityId !== undefined
           ? { contextEntityId: body.contextEntityId }
@@ -2298,14 +2335,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      // Item 3 Part 3: updateFacet reads its workspace entirely from input, so
+      // clamp body.workspaceId for a bound service key before it flows in.
+      const confinedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
       const caller = await getCaller(c, { userId });
       const result = await caller.entities.updateFacet({
         userId,
         facetId,
         status: body.status,
         properties: body.properties,
-        ...(body.workspaceId !== undefined
-          ? { workspaceId: body.workspaceId }
+        ...(confinedWorkspaceId !== undefined
+          ? { workspaceId: confinedWorkspaceId }
           : {}),
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),

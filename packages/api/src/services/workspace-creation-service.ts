@@ -133,6 +133,128 @@ export async function reconcileWorkspaceIfStale(opts: {
   }
 }
 
+/**
+ * Editor+ roles gate for legacy-identity ADOPTION — mirrors `WRITE_ROLES` in
+ * `package-dependency-resolver.ts:178`. Adopting a pre-stamped workspace's
+ * identity is itself a governed write (it mutates `provisioning_proposal_id`
+ * + `settings`), so it gets the same floor a compose overlay write gets.
+ */
+const ADOPT_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
+
+interface LegacyWorkspaceMatch {
+  id: string;
+  settings: WorkspaceSettings | null;
+}
+
+/**
+ * Fallback identity match for workspaces installed BEFORE migration 0039
+ * promoted `proposalId`/`packageSlug` to indexed columns. Those rows have
+ * `provisioning_proposal_id = NULL`, so the primary predicate in step 1 below
+ * misses them — and without this fallback, a reinstall DUPLICATES instead of
+ * reconciling (the root cause this function fixes).
+ *
+ * Two tiers, tried in order, first hit wins:
+ *   1. `workspaces.package_slug = slug` — the promoted column. Stamped OLDER
+ *      than `provisioning_proposal_id` (dual-written from a later
+ *      `settings.proposalId` follow-up merge), so it covers more legacy rows.
+ *   2. `settings->>'workspaceSubtype' = slug` — every built-in template sets
+ *      its subtype (24/24), so this covers rows the packageSlug tier misses.
+ *
+ * GUARDRAIL on tier 2: overlays deliberately set their subtype to their
+ * BASE's slug (`package-dependency-resolver.ts:234-237` documents the
+ * collision this caused before transitive compose was routed around this
+ * function entirely — see that module's file-header comment). A naive
+ * subtype match on an overlay's OWN slug would therefore silently adopt the
+ * BASE workspace as if it were the overlay.
+ *
+ * This is safe here because `createWorkspaceFromDefinitionIdempotent` is
+ * NEVER called for a compose-overlay package: `materializeWorkspaceCore`
+ * intercepts a resolved `composeTargetWorkspaceId` and routes to
+ * `composeOntoBaseWorkspace` before ever reaching this function, and the
+ * resolver's own transitive-compose step (§4a) does the same for a nested
+ * overlay. Every caller that reaches this fallback is therefore already a
+ * top-level STANDALONE install, by construction — not by inference from the
+ * input. If that invariant is ever violated, the `ADOPT_WRITE_ROLES` gate
+ * below is a floor, not a full guarantee: when ambiguous, "no match" (fall
+ * through to create) is the safe default, never a guess.
+ *
+ * Both tiers reuse the exact deterministic tie-break (prefer owned, then
+ * most-recently-created) and write-role floor `findWorkspaceBySubtype` in
+ * `package-dependency-resolver.ts` already established for the same
+ * `workspaceSubtype` predicate — mirrored here rather than imported, since
+ * that module imports `createWorkspaceFromDefinitionIdempotent` FROM this
+ * file and importing back would create a circular dependency.
+ */
+async function findLegacyWorkspaceMatch(
+  slug: string,
+  userId: string
+): Promise<LegacyWorkspaceMatch | null> {
+  const selectCols = {
+    id: workspaces.id,
+    ownerId: workspaces.ownerId,
+    createdAt: workspaces.createdAt,
+    settings: workspaces.settings,
+    role: workspaceMembers.role,
+  };
+
+  const bySlug = await db
+    .select(selectCols)
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .where(
+      and(eq(workspaceMembers.userId, userId), eq(workspaces.packageSlug, slug))
+    );
+
+  const rows =
+    bySlug.length > 0
+      ? bySlug
+      : await db
+          .select(selectCols)
+          .from(workspaces)
+          .innerJoin(
+            workspaceMembers,
+            eq(workspaceMembers.workspaceId, workspaces.id)
+          )
+          .where(
+            and(
+              eq(workspaceMembers.userId, userId),
+              drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`
+            )
+          );
+
+  const matches = rows.filter((r) => ADOPT_WRITE_ROLES.has(r.role));
+  if (matches.length === 0) return null;
+
+  matches.sort((a, b) => {
+    const aOwner = a.ownerId === userId ? 1 : 0;
+    const bOwner = b.ownerId === userId ? 1 : 0;
+    if (aOwner !== bOwner) return bOwner - aOwner;
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+
+  if (matches.length > 1) {
+    logger.warn(
+      {
+        slug,
+        userId,
+        count: matches.length,
+        chosen: matches[0].id,
+        candidates: matches.map((w) => w.id),
+      },
+      "findLegacyWorkspaceMatch: multiple legacy workspaces match fallback identity — chose deterministically (owner, then most-recent)"
+    );
+  }
+
+  const chosen = matches[0];
+  return {
+    id: chosen.id,
+    settings: (chosen.settings ?? null) as WorkspaceSettings | null,
+  };
+}
+
 export interface CreateWorkspaceFromDefinitionInput {
   /** WorkspaceProposal-shaped definition (profiles, views, bento, etc.). */
   definition: WorkspaceDefinitionInput;
@@ -288,6 +410,64 @@ export async function createWorkspaceFromDefinitionIdempotent(
         );
         return {
           workspaceId: ws.id,
+          created: false,
+          outcome: reconciled ? "reconciled" : "unchanged",
+          ...(reconciled && report ? { reconciled: report } : {}),
+        };
+      }
+    }
+
+    // ── 1b. Fallback match for PRE-version-stamping legacy workspaces ──────────
+    // Step 1 misses any workspace whose `provisioning_proposal_id` is NULL
+    // (installed before migration 0039's column promotion, or created via a
+    // door that never passed `proposalId`). Without this, such a workspace
+    // duplicates on every reinstall instead of reconciling. See
+    // `findLegacyWorkspaceMatch` for the two-tier predicate + overlay guardrail.
+    if (packageSlug) {
+      const fallback = await findLegacyWorkspaceMatch(packageSlug, userId);
+      if (fallback) {
+        const currentSettings = fallback.settings;
+        const { reconciled, report } = await reconcileWorkspaceIfStale({
+          workspaceId: fallback.id,
+          packageSlug,
+          currentSettings,
+          userId,
+        });
+
+        // Adopt the identity so the NEXT call hits the fast path (step 1)
+        // instead of re-running this fallback — mirrors the existing
+        // "stamp so next hit short-circuits" pattern used for packageVersion
+        // in `reconcileWorkspaceIfStale` above.
+        try {
+          await db
+            .update(workspaces)
+            .set({
+              provisioningProposalId: packageSlug,
+              settings: {
+                ...(currentSettings ?? {}),
+                proposalId: packageSlug,
+              } satisfies WorkspaceSettings,
+            })
+            .where(eq(workspaces.id, fallback.id));
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId: fallback.id, packageSlug },
+            "createWorkspaceFromDefinitionIdempotent: failed to adopt legacy workspace identity (non-fatal)"
+          );
+        }
+
+        logger.info(
+          {
+            userId,
+            packageSlug,
+            workspaceId: fallback.id,
+            reconciled,
+          },
+          "createFromDefinition: adopted legacy workspace via fallback identity match"
+        );
+
+        return {
+          workspaceId: fallback.id,
           created: false,
           outcome: reconciled ? "reconciled" : "unchanged",
           ...(reconciled && report ? { reconciled: report } : {}),

@@ -40,6 +40,7 @@ import {
   automations,
   cellInstances,
   artifacts,
+  relations,
 } from "@synap/database/schema";
 import { AccessContext, scopedDb } from "./index.js";
 // withVisibility is the internal composer (not part of the public barrel) — the
@@ -169,6 +170,42 @@ describe("two-user floor — workspace-shared rows ARE visible to both members",
       expect(qB.params).toContain(B);
     }
   );
+});
+
+describe("two-user floor — relations share only across a workspace boundary", () => {
+  it("admits a workspace-scoped edge for either workspace member", () => {
+    const qA = compile(
+      scopedDb(accessA.withLens("ws-shared")).predicate(relations)!
+    );
+    const qB = compile(
+      scopedDb(accessB.withLens("ws-shared")).predicate(relations)!
+    );
+
+    // The workspace branch is member-gated for both users; `relations.userId`
+    // appears only in the separate NULL-workspace privacy branch.
+    expect(qA.sql).toContain('"relations"."workspace_id" is not null');
+    expect(qB.sql).toContain('"relations"."workspace_id" is not null');
+    expect(qA.sql).toContain("workspace_members");
+    expect(qB.sql).toContain("workspace_members");
+    expect(qA.params).toContain("ws-shared");
+    expect(qB.params).toContain("ws-shared");
+    expect(qA.params).toContain(A);
+    expect(qB.params).toContain(B);
+  });
+
+  it("keeps a pod-wide edge on the author floor", () => {
+    const qA = compile(scopedDb(accessA.withLens(null)).predicate(relations)!);
+    const qB = compile(scopedDb(accessB.withLens(null)).predicate(relations)!);
+
+    // A relation with workspace_id NULL can satisfy only the author branch.
+    // Therefore B's predicate binds B, never A, against relations.user_id.
+    expect(qA.sql).toContain('"relations"."user_id"');
+    expect(qB.sql).toContain('"relations"."user_id"');
+    expect(qA.params).toContain(A);
+    expect(qA.params).not.toContain(B);
+    expect(qB.params).toContain(B);
+    expect(qB.params).not.toContain(A);
+  });
 });
 
 describe("two-user floor — an agent acting for A is floored to A", () => {

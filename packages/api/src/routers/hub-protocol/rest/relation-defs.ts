@@ -2,6 +2,8 @@
  * Hub Protocol REST — relation definitions
  */
 
+import { getConfinedWorkspace } from "../confine-workspace.js";
+
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 
 export function registerRelationDefsRoutes(app: HubHono): void {
@@ -50,10 +52,20 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       );
     }
     try {
-      const caller = await getCaller(c, { userId, workspaceId });
+      // SERVICE-KEY CONFINEMENT (Item 3): inner `relationDefs.create` is a
+      // scopedProcedure that reads `input.workspaceId` and rebuilds its OWN
+      // (unconfined) caller ctx from it — the getCaller ctx-clamp does not reach
+      // it. Positive-pin the value fed to BOTH the caller ctx and the input
+      // (mismatching body → 403).
+      const confinedWorkspaceId =
+        getConfinedWorkspace(c, workspaceId) ?? workspaceId;
+      const caller = await getCaller(c, {
+        userId,
+        workspaceId: confinedWorkspaceId,
+      });
       const result = await caller.relationDefs.create({
         userId,
-        workspaceId,
+        workspaceId: confinedWorkspaceId,
         slug: body.slug as string,
         displayName: body.displayName as string,
         description: body.description as string | undefined,
@@ -62,6 +74,13 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
+      // on `.code` (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "relationDefs.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

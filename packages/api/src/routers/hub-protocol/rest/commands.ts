@@ -6,6 +6,7 @@ import { realpathSync, existsSync } from "fs";
 import { resolve as resolvePath } from "path";
 
 import { z } from "@hono/zod-openapi";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { intelligenceCommands, asc, eq } from "@synap/database";
 
 import { AccessContext, scopedDb } from "../../../access/index.js";
@@ -353,8 +354,12 @@ export function registerCommandsRoutes(app: HubHono): void {
       unknown
     >;
 
-    // Rate limit: 10 commands per workspace per minute
-    const workspaceId = body.workspaceId as string | undefined;
+    // Rate limit: 10 commands per workspace per minute.
+    // Item 3 Part 3: confine a bound service key to its workspace first, so the
+    // rate-limit key and the downstream permission check both use the pinned ws.
+    const workspaceId =
+      getConfinedWorkspace(c, body.workspaceId as string | undefined) ??
+      undefined;
     if (workspaceId && !checkCommandRateLimit(workspaceId)) {
       return c.json(
         {

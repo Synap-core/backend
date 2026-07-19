@@ -41,6 +41,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 /**
  * Shared gate for Discord channel write operations (rename, pin).
@@ -332,14 +333,27 @@ export function registerChannelsRoutes(app: HubHono): void {
         400
       );
     }
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? undefined;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
     try {
       const caller = await getCaller(c, {
-        workspaceId: body.workspaceId,
+        workspaceId,
         userId: body.userId,
       });
       const result = await caller.channels.resolveOrCreateChannel({
         userId: body.userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         channelType: "thread",
         contextObjectId: body.contextObjectId,
         contextObjectType: body.contextObjectType,
@@ -437,15 +451,29 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
     }
 
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // body.workspaceId is a required non-null string here (guarded above).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
     try {
       const caller = await getCaller(c, {
-        workspaceId: body.workspaceId,
+        workspaceId,
         userId: body.userId,
       });
       const result = await caller.channels.triggerAI({
         channelId: body.channelId,
         userId: body.userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         systemPromptOverride: body.systemPromptOverride,
         skillId: body.skillId,
         entityId: body.entityId,
@@ -659,7 +687,21 @@ export function registerChannelsRoutes(app: HubHono): void {
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    // Item 3 Part 3: positively pin a bound service key to its workspace. The
+    // `if (!workspaceId)` guard below narrows the clamped value to a string.
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(c, acting.workspaceId);
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
     // Linking an EXTERNAL channel binds it to a workspace (and usually a client
     // entity); the shared upsert requires a workspace. A no-workspace link is not
     // supported on this door.

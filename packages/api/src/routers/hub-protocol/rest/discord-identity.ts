@@ -32,6 +32,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, users, workspaceMembers, eq, and, inArray } from "@synap/database";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import {
   resolveExistingExternalUser,
@@ -275,8 +276,12 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
     // Bind the acting identity + workspace, then require an OWNER/ADMIN role on
     // that workspace. resolveActingContext returns the membership role for the
     // resolved (authenticated) user — we trust THAT, not the request body.
+    // Item 3 Part 3: confine a bound service key to its workspace before resolving.
+    // (A service key would additionally need an owner/admin role — gated below.)
+    const confinedWorkspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? undefined;
     const acting = await resolveActingContext(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: confinedWorkspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     // Linking a Discord identity is a workspace owner/admin action. A workspace

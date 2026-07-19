@@ -27,6 +27,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getPodCallback } from "../../../utils/pod-callback.js";
 import {
   db,
@@ -208,8 +209,11 @@ export function registerDiscordRoutes(app: HubHono): void {
       );
     }
 
+    // Item 3 Part 3: confine a bound service key to its workspace before resolving.
+    const confinedWorkspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? undefined;
     const acting = await resolveActingContext(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: confinedWorkspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
@@ -285,8 +289,11 @@ export function registerDiscordRoutes(app: HubHono): void {
     }
 
     // Bind the acting identity + workspace to the authenticated bearer.
+    // Item 3 Part 3: confine a bound service key to its workspace before resolving.
+    const confinedWorkspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? undefined;
     const acting = await resolveActingContext(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: confinedWorkspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;

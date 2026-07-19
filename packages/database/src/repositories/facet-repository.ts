@@ -248,14 +248,18 @@ export class FacetRepository extends BaseRepository<
   }
 
   /** Soft-delete a facet. Never hard-deletes. */
-  async detach(facetId: string, userId: string): Promise<void> {
+  async detach(
+    facetId: string,
+    userId: string,
+    ownerUserId = userId
+  ): Promise<void> {
     const result = await this.db
       .update(entityFacets)
       .set({ deletedAt: new Date(), updatedAt: new Date() })
       .where(
         and(
           eq(entityFacets.id, facetId),
-          eq(entityFacets.userId, userId),
+          eq(entityFacets.userId, ownerUserId),
           isNull(entityFacets.deletedAt)
         )
       )
@@ -270,12 +274,13 @@ export class FacetRepository extends BaseRepository<
   async update(
     facetId: string,
     data: UpdateFacetInput,
-    userId: string
+    userId: string,
+    ownerUserId = userId
   ): Promise<EntityFacet> {
     const existing = await this.db.query.entityFacets.findFirst({
       where: and(
         eq(entityFacets.id, facetId),
-        eq(entityFacets.userId, userId),
+        eq(entityFacets.userId, ownerUserId),
         isNull(entityFacets.deletedAt)
       ),
     });
@@ -398,7 +403,11 @@ export class FacetRepository extends BaseRepository<
     // "Failed query" 500 instead of the idempotent existing-row return
     // (verified live).
     let cursor: unknown = error;
-    for (let depth = 0; cursor && typeof cursor === "object" && depth < 4; depth++) {
+    for (
+      let depth = 0;
+      cursor && typeof cursor === "object" && depth < 4;
+      depth++
+    ) {
       if ((cursor as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
       cursor = (cursor as { cause?: unknown }).cause;
     }

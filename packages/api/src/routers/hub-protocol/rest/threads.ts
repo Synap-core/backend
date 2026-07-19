@@ -59,6 +59,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
@@ -461,6 +462,20 @@ export function registerThreadsRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // CreateThreadRequestSchema requires workspaceId (z.string()).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
 
     const hasExternalKey =
       typeof body.externalSource === "string" &&
@@ -499,7 +514,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           .values({
             id: threadId,
             userId: body.userId,
-            workspaceId: body.workspaceId,
+            workspaceId,
             title: body.title ?? "New Thread",
             parentChannelId: body.parentChannelId ?? null,
             assignedAgentId: body.agentId ?? null,

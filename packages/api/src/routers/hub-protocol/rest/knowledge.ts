@@ -16,6 +16,7 @@
 
 import { z as zodCore } from "zod";
 import { createRoute, z } from "@hono/zod-openapi";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
   knowledgeKeysRepository,
   insertKnowledgeKeySchema,
@@ -329,6 +330,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string;
     const body = c.req.valid("json");
+    // Item 3 Part 3: confine a bound service key to its workspace before the write.
+    const workspaceId = getConfinedWorkspace(c, body.workspaceId);
 
     try {
       // Re-parse via the DB-side schema to defensively normalize before
@@ -340,7 +343,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         namespace: body.namespace,
         slug: body.slug,
         status: body.status ?? "active",
-        workspaceId: body.workspaceId ?? undefined,
+        workspaceId: workspaceId ?? undefined,
         author: body.author ?? authUserId,
       });
 

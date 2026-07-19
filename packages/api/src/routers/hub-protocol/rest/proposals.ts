@@ -4,6 +4,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "@hono/zod-openapi";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -513,6 +514,8 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // Item 3 Part 3: confine a bound service key to its workspace before the write.
+    const workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -526,7 +529,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         typeof body.data.changeType === "string";
       const { proposal } = await createEventBackedProposal({
         userId,
-        workspaceId: body.workspaceId ?? null,
+        workspaceId,
         targetType: body.targetType,
         targetId: body.targetId,
         proposalType: body.proposalType,

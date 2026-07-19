@@ -81,7 +81,6 @@ import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { auditLog } from "../utils/audit-log.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
-import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
@@ -142,6 +141,69 @@ function entityConnectionVisibilityWhere(
   });
 }
 
+/**
+ * Relation reads are shared inside a workspace, but pod-wide relations remain
+ * private to their author. Keep the lens derivation in one place so list,
+ * traversal, and statistics cannot accidentally disagree. An explicit input
+ * lens wins; otherwise the active workspace narrows the caller's user floor.
+ */
+function relationReadAccess(
+  ctx: {
+    userId?: string | null;
+    agentUserId?: string | null;
+    isHubProtocol?: boolean;
+    workspaceId?: string | null;
+    projectId?: string | null;
+  },
+  workspaceId?: string | null
+) {
+  const workspaceLens =
+    workspaceId !== undefined ? workspaceId : (ctx.workspaceId ?? undefined);
+  return AccessContext.from(ctx)
+    .withLens(workspaceLens)
+    .withProjectLens(ctx.projectId ?? undefined);
+}
+
+/**
+ * Resolve relation endpoints through the canonical entity access floor before
+ * an edge is placed or written. A relation can inherit a shared workspace from
+ * one endpoint, so accepting a private pod-wide endpoint here would otherwise
+ * expose its identifier and relation metadata to every workspace member.
+ *
+ * Missing and inaccessible endpoints intentionally share one error. This
+ * avoids turning the relation writer into an existence oracle for private data.
+ */
+export async function resolveVisibleRelationEndpoints(
+  database: typeof db,
+  userId: string,
+  endpointIds: readonly string[]
+): Promise<Array<{ id: string; workspaceId: string | null }>> {
+  const uniqueIds = [...new Set(endpointIds)];
+  const endpointRows = await database.query.entities.findMany({
+    where: and(
+      inArray(entities.id, uniqueIds),
+      isNull(entities.deletedAt),
+      accessScopeWhere({
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
+        userId,
+      })
+    ),
+    columns: { id: true, workspaceId: true },
+  });
+
+  const foundIds = new Set(endpointRows.map((endpoint) => endpoint.id));
+  if (uniqueIds.some((id) => !foundIds.has(id))) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "One or more relation endpoints are unavailable.",
+    });
+  }
+
+  return endpointRows;
+}
+
 /** Channels have their own visibility rules because a NULL workspace is private. */
 function channelConnectionVisibilityWhere(
   userId: string,
@@ -199,19 +261,18 @@ export const relationsRouter = router({
     .input(
       z.object({
         type: z.string().optional(),
+        /** Explicit read lens; omitted uses the active workspace header. */
+        workspaceId: z.string().uuid().nullable().optional(),
         limit: z.number().min(1).max(500).default(100),
         offset: z.number().min(0).default(0),
       })
     )
     .query(async ({ input, ctx }) => {
-      // Pod-wide-by-default through the access seam: the registered `workspace`
-      // rule applies the user floor (every workspace the caller belongs to +
-      // pod-wide globals); an active workspace header NARROWS to that workspace
-      // (== the prior `eq(workspaceId)`), no header = the full floor (instead of
-      // the old empty list that hung the cross-workspace graph). `?? undefined`
-      // (not `?? null`) so a workspace-less caller gets the floor, not globals-only.
+      // A caller can only narrow the generic shared-relation floor. `null`
+      // explicitly selects their own pod-wide relations; omitted means the
+      // active workspace (or the complete user floor when no header exists).
       const results = await scopedDb(
-        AccessContext.from(ctx).withLens(ctx.workspaceId ?? undefined)
+        relationReadAccess(ctx, input.workspaceId)
       ).findMany<typeof relations.$inferSelect>(relations, {
         where: input.type ? eq(relations.type, input.type) : undefined,
         orderBy: [desc(relations.createdAt)],
@@ -271,12 +332,12 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const access = relationReadAccess(ctx);
       // Build where clause based on direction
       let whereClause;
 
       if (input.direction === "both") {
         whereClause = and(
-          eq(relations.userId, ctx.userId),
           or(
             eq(relations.sourceEntityId, input.entityId),
             eq(relations.targetEntityId, input.entityId)
@@ -285,19 +346,19 @@ export const relationsRouter = router({
         );
       } else if (input.direction === "source") {
         whereClause = and(
-          eq(relations.userId, ctx.userId),
           eq(relations.sourceEntityId, input.entityId),
           input.type ? eq(relations.type, input.type) : undefined
         );
       } else {
         whereClause = and(
-          eq(relations.userId, ctx.userId),
           eq(relations.targetEntityId, input.entityId),
           input.type ? eq(relations.type, input.type) : undefined
         );
       }
 
-      const results = await db.query.relations.findMany({
+      const results = await scopedDb(access).findMany<
+        typeof relations.$inferSelect
+      >(relations, {
         where: whereClause,
         orderBy: [desc(relations.createdAt)],
         limit: input.limit,
@@ -322,13 +383,15 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const access = relationReadAccess(ctx);
       // Get relations first
       let relationRecords;
 
       if (input.direction === "both") {
-        relationRecords = await db.query.relations.findMany({
+        relationRecords = await scopedDb(access).findMany<
+          typeof relations.$inferSelect
+        >(relations, {
           where: and(
-            eq(relations.userId, ctx.userId),
             or(
               eq(relations.sourceEntityId, input.entityId),
               eq(relations.targetEntityId, input.entityId)
@@ -339,9 +402,10 @@ export const relationsRouter = router({
           limit: input.limit,
         });
       } else if (input.direction === "source") {
-        relationRecords = await db.query.relations.findMany({
+        relationRecords = await scopedDb(access).findMany<
+          typeof relations.$inferSelect
+        >(relations, {
           where: and(
-            eq(relations.userId, ctx.userId),
             eq(relations.sourceEntityId, input.entityId),
             input.type ? eq(relations.type, input.type) : undefined
           ),
@@ -349,9 +413,10 @@ export const relationsRouter = router({
           limit: input.limit,
         });
       } else {
-        relationRecords = await db.query.relations.findMany({
+        relationRecords = await scopedDb(access).findMany<
+          typeof relations.$inferSelect
+        >(relations, {
           where: and(
-            eq(relations.userId, ctx.userId),
             eq(relations.targetEntityId, input.entityId),
             input.type ? eq(relations.type, input.type) : undefined
           ),
@@ -388,11 +453,10 @@ export const relationsRouter = router({
       }
 
       // Fetch the actual entities
-      const relatedEntities = await db.query.entities.findMany({
-        where: and(
-          eq(entities.userId, ctx.userId),
-          or(...relatedEntityIds.map((id) => eq(entities.id, id)))
-        ),
+      const relatedEntities = await scopedDb(access).findMany<
+        typeof entities.$inferSelect
+      >(entities, {
+        where: and(or(...relatedEntityIds.map((id) => eq(entities.id, id)))),
       });
 
       return { entities: relatedEntities, configLinks };
@@ -408,6 +472,9 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const relationVisibility = scopedDb(relationReadAccess(ctx)).predicate(
+        relations
+      );
       // Use SQL COUNT to avoid loading all rows into memory
       const countByType = async (direction: "source" | "target") => {
         const col =
@@ -417,9 +484,7 @@ export const relationsRouter = router({
         const rows = await db
           .select({ type: relations.type })
           .from(relations)
-          .where(
-            and(eq(col, input.entityId), eq(relations.userId, ctx.userId))
-          );
+          .where(and(eq(col, input.entityId), relationVisibility));
         const counts: Record<string, number> = {};
         for (const r of rows) {
           counts[r.type] = (counts[r.type] ?? 0) + 1;
@@ -754,13 +819,11 @@ export const relationsRouter = router({
       // persists it (I3) and the materializer reads `data.workspaceId` back
       // verbatim — the auto-approved and proposal-gated paths place identically.
       const placementDb = await getDb();
-      const endpointRows = await placementDb.query.entities.findMany({
-        where: inArray(entities.id, [
-          input.sourceEntityId,
-          input.targetEntityId,
-        ]),
-        columns: { id: true, workspaceId: true },
-      });
+      const endpointRows = await resolveVisibleRelationEndpoints(
+        placementDb,
+        ctx.userId,
+        [input.sourceEntityId, input.targetEntityId]
+      );
       const relationWorkspaceId = inheritRelationWorkspaceId(
         endpointRows.map((e) => e.workspaceId),
         effectiveWorkspaceId
@@ -913,6 +976,7 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const relationAccess = relationReadAccess(ctx, input.workspaceId);
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
         input.workspaceId
@@ -925,26 +989,19 @@ export const relationsRouter = router({
         subjectSessions,
       ] = await Promise.all([
         // ── 1. Semantic graph relations ─────────────────────────────────────
-        db.query.relations.findMany({
-          // Owner-scoped by ctx.userId. The agent-key identity remap (hub/MCP)
-          // sets ctx.userId = the operator the agent acts for, so the agent sees
-          // the operator's relations graph WITHOUT widening visibility on a
-          // multi-user pod (the agent only ever sees ITS operator's data).
-          where: and(
-            eq(relations.userId, ctx.userId),
-            workspaceLensWhere(
-              relations.workspaceId,
-              ctx.userId,
-              input.workspaceId
+        scopedDb(relationAccess).findMany<typeof relations.$inferSelect>(
+          relations,
+          {
+            where: and(
+              or(
+                eq(relations.sourceEntityId, input.entityId),
+                eq(relations.targetEntityId, input.entityId)
+              )
             ),
-            or(
-              eq(relations.sourceEntityId, input.entityId),
-              eq(relations.targetEntityId, input.entityId)
-            )
-          ),
-          orderBy: [desc(relations.createdAt)],
-          limit: input.limit,
-        }),
+            orderBy: [desc(relations.createdAt)],
+            limit: input.limit,
+          }
+        ),
 
         // ── 2. Structural property links (both directions via index) ────────
         // Find entity_id properties pointing TO this entity and properties ON
@@ -1570,6 +1627,22 @@ export const relationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: effectiveWorkspaceId,
       });
+      const endpointIds = Array.from(
+        new Set(
+          input.relations.flatMap((relation) => [
+            relation.sourceEntityId,
+            relation.targetEntityId,
+          ])
+        )
+      );
+      // Validate every endpoint before this batch can create a relation
+      // definition or materialize an edge. The shared error prevents a caller
+      // from distinguishing a private endpoint from a nonexistent one.
+      const endpointRows = await resolveVisibleRelationEndpoints(
+        database,
+        ctx.userId,
+        endpointIds
+      );
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
@@ -1623,15 +1696,6 @@ export const relationsRouter = router({
       // this door. This also matches the single-create conflict-recovery
       // lookup a few lines up, which already resolves existence by
       // (source,target,type) alone, no workspaceId filter.
-      const endpointIds = Array.from(
-        new Set(
-          input.relations.flatMap((r) => [r.sourceEntityId, r.targetEntityId])
-        )
-      );
-      const endpointRows = await database.query.entities.findMany({
-        where: inArray(entities.id, endpointIds),
-        columns: { id: true, workspaceId: true },
-      });
       const endpointWorkspaceById = new Map(
         endpointRows.map((e) => [e.id, e.workspaceId])
       );

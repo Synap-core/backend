@@ -37,6 +37,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 const CreateBodySchema = z.object({
   workspaceId: z.string().uuid(),
@@ -186,7 +187,21 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     const body = parsed.data;
 
     const userId = (body.userId ?? (c.get("userId") as string)) as string;
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // The body schema requires workspaceId (z.string().uuid()).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     const actorResolution = await resolveActorId(body.agentUserId, userId);
@@ -199,7 +214,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId: body.agentUserId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         subjectType: "cell",
         action: "create",
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
@@ -208,7 +223,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           cellType: body.cellType,
           name: body.name,
           userId,
-          workspaceId: body.workspaceId,
+          workspaceId,
           config: body.config ?? {},
           isTemplate: body.isTemplate ?? false,
           sourceDocumentId: body.sourceDocumentId,
@@ -234,7 +249,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const [row] = await db
         .insert(cellInstances)
         .values({
-          workspaceId: body.workspaceId,
+          workspaceId,
           userId,
           cellType: body.cellType,
           config: body.config ?? {},
@@ -279,7 +294,21 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     const body = parsed.data;
 
     const userId = (body.userId ?? (c.get("userId") as string)) as string;
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // The body schema requires workspaceId (z.string().uuid()).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     const actorResolution = await resolveActorId(body.agentUserId, userId);
@@ -292,7 +321,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId: body.agentUserId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         subjectType: "cell",
         action: "create",
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
@@ -302,7 +331,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           name: body.name,
           html: body.html,
           userId,
-          workspaceId: body.workspaceId,
+          workspaceId,
           agentUserId: body.agentUserId,
         },
         reasoning: body.reasoning,
@@ -348,7 +377,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         .values({
           id: documentId,
           userId,
-          workspaceId: body.workspaceId,
+          workspaceId,
           title,
           type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
           storageUrl: metadata.url,
@@ -373,7 +402,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const [row] = await db
         .insert(cellInstances)
         .values({
-          workspaceId: body.workspaceId,
+          workspaceId,
           userId,
           cellType: "html-embed",
           config: {},
@@ -418,7 +447,21 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     const body = parsed.data;
 
     const userId = (body.userId ?? (c.get("userId") as string)) as string;
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // The body schema requires workspaceId (z.string().uuid()).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     const actorResolution = await resolveActorId(body.agentUserId, userId);
@@ -431,7 +474,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId: body.agentUserId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         subjectType: "cell",
         action: "update",
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
@@ -460,7 +503,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         .where(
           and(
             eq(cellInstances.id, id),
-            eq(cellInstances.workspaceId, body.workspaceId)
+            eq(cellInstances.workspaceId, workspaceId)
           )
         )
         .returning();

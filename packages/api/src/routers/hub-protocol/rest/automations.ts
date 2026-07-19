@@ -16,6 +16,8 @@ import {
 import { registerOpenApi } from "./_codecs/_register.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
+import { TRPCError } from "@trpc/server";
 
 export function registerAutomationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /automations* routes ────────────────────────────
@@ -170,7 +172,19 @@ export function registerAutomationsRoutes(app: HubHono): void {
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
+    // Service-key workspace confinement (Item 3): pin/clamp before the workspace
+    // reaches getCaller OR the re-supplied createAutomation input (input wins).
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(
+        c,
+        (body.workspaceId as string | null | undefined) ?? null
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     if (!body.name) {
       return c.json({ error: "name is required" }, 400);
     }
@@ -327,7 +341,19 @@ export function registerAutomationsRoutes(app: HubHono): void {
       unknown
     >;
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
+    // Service-key workspace confinement (Item 3): pin/clamp before the workspace
+    // reaches getCaller OR the re-supplied triggerAutomation input.
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(
+        c,
+        (body.workspaceId as string | null | undefined) ?? null
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }
@@ -366,7 +392,19 @@ export function registerAutomationsRoutes(app: HubHono): void {
     if (!body) return c.json({ error: "Invalid JSON" }, 400);
 
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = body.workspaceId as string;
+    // Service-key workspace confinement (Item 3): pin/clamp before the workspace
+    // reaches getCaller OR the re-supplied updateAutomation input.
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(
+        c,
+        body.workspaceId as string | undefined
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     if (!userId || !workspaceId) {
       return c.json({ error: "userId and workspaceId are required" }, 400);
     }
@@ -424,7 +462,19 @@ export function registerAutomationsRoutes(app: HubHono): void {
       unknown
     >;
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = body.workspaceId as string;
+    // Service-key workspace confinement (Item 3): pin/clamp before the workspace
+    // reaches getCaller OR the re-supplied activateAutomation input.
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(
+        c,
+        body.workspaceId as string | undefined
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     if (!userId || !workspaceId) {
       return c.json({ error: "userId and workspaceId are required" }, 400);
     }
@@ -458,7 +508,19 @@ export function registerAutomationsRoutes(app: HubHono): void {
       unknown
     >;
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = body.workspaceId as string;
+    // Service-key workspace confinement (Item 3): pin/clamp before the workspace
+    // reaches getCaller OR the re-supplied pauseAutomation input.
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(
+        c,
+        body.workspaceId as string | undefined
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     if (!userId || !workspaceId) {
       return c.json({ error: "userId and workspaceId are required" }, 400);
     }

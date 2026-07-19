@@ -175,9 +175,8 @@ registerVisibility({
 // rule delegating to `accessScopeWhere` (the canonical DATA-table resolver —
 // the same predicate documents.list / entities' entityVisibleWhere now use), so
 // a scopedDb read of either table is floored identically to the hand-rolled
-// path. `relations` carries a NOT-NULL `userId` owner, so it uses
-// `workspaceOwned` (owner floor AND workspace lens) — a NULL-workspace edge
-// stays owner-private instead of leaking pod-wide. `proposals` has NO human-
+// path. `relations` are shared when workspace-scoped, but a NULL-workspace edge
+// stays owner-private because it has no collaborative boundary. `proposals` has NO human-
 // owner column (its `createdBy` is the AGENT user id for AI-authored proposals),
 // so it CANNOT be floored by an owner column without hiding AI proposals from
 // the human reviewer; it stays on the flat `workspace` floor (pod-wide NULL OR a
@@ -221,14 +220,24 @@ registerVisibility({
 registerVisibility({
   table: relations,
   query: () => db.query.relations,
-  // `relations.userId` (NOT NULL) is the OWNER floor — the agent-key identity
-  // remap (hub/MCP) sets it to the operator the agent acts for, so a NULL-
-  // workspace (pod-personal) edge stays visible only to its owner instead of
-  // leaking pod-wide via the flat `workspace` rule's `IS NULL` branch.
+  // Workspace relations are collaboration data, while pod-wide relations have
+  // no collaborative boundary and stay private to their author. This mirrors
+  // entity-facet semantics: workspace rows follow membership; NULL rows retain
+  // an owner floor. A flat `workspace` rule would leak private pod-wide edges.
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: relations.workspaceId,
-    userColumn: relations.userId,
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(relations.workspaceId),
+          workspaceLensWhere(
+            relations.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(isNull(relations.workspaceId), eq(relations.userId, access.userId))
+      ),
   },
 });
 registerVisibility({

@@ -68,6 +68,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -785,9 +786,13 @@ export function registerCaptureRoutes(app: HubHono): void {
       typeof body.workspaceId === "string" && body.workspaceId
         ? body.workspaceId
         : undefined;
+    // Item 3 Part 3: confine a bound service key to its workspace — clamp the
+    // resolved workspace before it flows to the acting ctx, the createEntity
+    // input, and the DIRECT storeEntitySourceBlob write below.
+    const workspaceId = getConfinedWorkspace(c, workspaceIdField);
 
     const acting = await resolveActingContext(c, {
-      workspaceId: workspaceIdField,
+      workspaceId: workspaceId ?? undefined,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
@@ -814,7 +819,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     try {
       // Pod-wide: omit workspaceId pin so note entityScope lands null.
       const caller = await getCaller(c, {
-        workspaceId: workspaceIdField ?? null,
+        workspaceId: workspaceId ?? null,
         userId,
       });
       const created = await caller.entities.createEntity({
@@ -824,7 +829,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         ...(description ? { description } : {}),
         ...(content ? { content } : {}),
         properties,
-        ...(workspaceIdField ? { workspaceId: workspaceIdField } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
         ...(source ? { source: source as "cli" } : {}),
       });
 
@@ -846,7 +851,7 @@ export function registerCaptureRoutes(app: HubHono): void {
             buffer: fileBuffer,
             mimeType: fileMime,
             filename: fileName,
-            workspaceId: workspaceIdField ?? null,
+            workspaceId: workspaceId ?? null,
           });
           audio = {
             documentId: stored.documentId,

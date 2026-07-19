@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
   db,
   eq,
@@ -148,10 +149,15 @@ export function registerVaultRoutes(app: HubHono): void {
     }
 
     const userId = (body.agentUserId as string) ?? (c.get("userId") as string);
+    // Item 3 Part 3: clamp the RESOLVED workspace (incl. the x-workspace-id
+    // header fallback, Escape-C) for a bound service key before the write.
     const workspaceId =
-      (body.workspaceId as string | null | undefined) ??
-      c.req.header("x-workspace-id") ??
-      null;
+      getConfinedWorkspace(
+        c,
+        (body.workspaceId as string | null | undefined) ??
+          c.req.header("x-workspace-id") ??
+          null
+      ) ?? null;
 
     const accessLevel = body.accessLevel ?? "read";
     const ttl = body.ttl ?? 60;
@@ -583,10 +589,14 @@ export function registerVaultRoutes(app: HubHono): void {
       );
     }
 
+    // Item 3 Part 3: confine a bound service key before resolving/writing.
+    const confinedWorkspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? undefined;
+
     try {
       const acting = await resolveActingContext(c, {
         userId: body.agentUserId,
-        workspaceId: body.workspaceId,
+        workspaceId: confinedWorkspaceId,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 

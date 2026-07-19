@@ -21,6 +21,8 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
+import { TRPCError } from "@trpc/server";
 
 export function registerRelationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -151,9 +153,23 @@ export function registerRelationsRoutes(app: HubHono): void {
       reasoning?: string;
       sourceMessageId?: string;
     };
+    // Service-key workspace confinement (Item 3): pin/clamp the requested
+    // workspace before it reaches resolveActingContext and the re-supplied
+    // createRelation input (`relations.create` prefers input.workspaceId).
+    let requestedWorkspaceId: string | null | undefined;
+    try {
+      requestedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
     // Bind the acting identity + workspace to the authenticated principal, and
     // membership-check the workspace for the resolved user (closes the IDOR).
-    const acting = await resolveActingContext(c, body);
+    const acting = await resolveActingContext(c, {
+      ...body,
+      workspaceId: requestedWorkspaceId ?? undefined,
+    });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
     // The hub-protocol createRelation procedure requires a workspace.
@@ -215,13 +231,25 @@ export function registerRelationsRoutes(app: HubHono): void {
     } | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
+    // Service-key workspace confinement (Item 3): pin/clamp the requested
+    // workspace at the point of read. A bound service key that omits it is
+    // positive-pinned to its workspace (no pod-wide delete); a mismatch 403s.
+    let requestedWorkspaceId: string | null | undefined;
+    try {
+      requestedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
+
     // Bind the acting identity to the authenticated principal (closes the IDOR).
     // When workspaceId is given, membership-check it; when omitted the relation
     // is pod-wide (workspace = null) — preserve that without forcing resolution.
     const queryUserId = c.req.query("userId");
     let userId: string;
     let effectiveWorkspaceId: string | undefined;
-    if (!body.workspaceId) {
+    if (!requestedWorkspaceId) {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
       const isServiceKey = !!c.get("apiKeyId");
@@ -237,7 +265,7 @@ export function registerRelationsRoutes(app: HubHono): void {
     } else {
       const acting = await resolveActingContext(c, {
         userId: body.userId ?? queryUserId,
-        workspaceId: body.workspaceId,
+        workspaceId: requestedWorkspaceId,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       userId = acting.userId;

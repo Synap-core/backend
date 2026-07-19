@@ -28,6 +28,7 @@ import { scoreTextMatch } from "../../../services/capabilities/capability-regist
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -519,9 +520,17 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     const body = parsed.data;
 
     try {
+      // SERVICE-KEY CONFINEMENT (Item 3): positive-pin a bound service key to its
+      // workspace BEFORE the value reaches the acting-context resolve, the template
+      // load, or the caller ctx (a mismatching body → 403). The door ctx-clamp does
+      // NOT reach here — createCapabilityFromDefinition runs on a DIRECT
+      // createHubProtocolCallerContext (not getCaller), and the inner resources read
+      // the value we hand in.
+      const workspaceId = getConfinedWorkspace(c, body.workspaceId);
+
       // Trusted acting identity + workspace (closes the cross-tenant IDOR).
       const acting = await resolveActingContext(c, {
-        workspaceId: body.workspaceId,
+        workspaceId: workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
@@ -531,7 +540,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         definition =
           body.definition ??
           (await loadCapabilityTemplate(body.templateKey!, {
-            workspaceId: body.workspaceId ?? null,
+            workspaceId: workspaceId ?? null,
           }));
       } catch (loadErr) {
         return c.json(
@@ -546,7 +555,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       const ctx = await createHubProtocolCallerContext(
         acting.userId,
         c.get("scopes") as string[],
-        body.workspaceId ?? null
+        workspaceId ?? null
       );
 
       const result = await createCapabilityFromDefinition(
@@ -561,6 +570,14 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       );
       return c.json(result, 200);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: a bound service key targeting another workspace
+      // throws FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`
+      // (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "capabilities apply failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

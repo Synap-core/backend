@@ -21,6 +21,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 const UpdateDocumentBodySchema = z.object({
   userId: z.string(),
@@ -118,6 +119,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
           : {}),
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      // Item 3 Part 3: positively pin a bound service key to its workspace.
+      const workspaceId = getConfinedWorkspace(c, acting.workspaceId) ?? null;
       const actorResolution = await resolveActorId(
         body.agentUserId,
         acting.userId
@@ -127,14 +130,14 @@ export function registerDocumentsRoutes(app: HubHono): void {
       // resolveActorId kept for its validation side-effect; return value unused.
       const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
-        workspaceId: acting.workspaceId,
+        workspaceId,
         userId: acting.userId,
         sourceMessageId: body.sourceMessageId,
         sessionId,
       });
       const result = await caller.documents.createDocument({
         userId: acting.userId,
-        workspaceId: acting.workspaceId,
+        workspaceId,
         title: body.title,
         content: body.content ?? "",
         type: body.type ?? "markdown",
@@ -143,6 +146,13 @@ export function registerDocumentsRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // Item 3 Part 3: a bound service key targeting another workspace throws
+      // FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`.
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "createDocument failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

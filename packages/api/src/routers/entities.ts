@@ -63,6 +63,7 @@ import {
   profiles,
   profileWorkspaceAccess,
   entityFacets,
+  workspaceMembers,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
@@ -128,6 +129,32 @@ function entityLensWhere(
     and(isNull(entities.workspaceId), eq(entities.userId, userId)),
     workspaceBranch
   )!;
+}
+
+/**
+ * Workspace facets are shared operational state: an editor may update a role
+ * another member originally attached. Pod-wide facets remain private to their
+ * author. Repository writes still receive the original owner for their row
+ * predicate while audit/event provenance records the acting member.
+ */
+async function canWriteFacet(
+  facet: { userId: string; workspaceId: string | null },
+  userId: string
+): Promise<boolean> {
+  if (facet.userId === userId) return true;
+  if (!facet.workspaceId) return false;
+  const member = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, facet.workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { role: true },
+  });
+  return (
+    member?.role === "owner" ||
+    member?.role === "admin" ||
+    member?.role === "editor"
+  );
 }
 
 /**
@@ -2835,9 +2862,10 @@ export const entitiesRouter = router({
       const eventRepo = eventRepository;
       const facetRepo = new FacetRepository(database, eventRepo);
 
-      // Load the facet (floor: owned by the caller) to resolve entity + lens.
+      // A workspace-scoped role is shared operational state; a pod-wide role
+      // remains private to its creator.
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || existing.userId !== ctx.userId) {
+      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
@@ -2912,7 +2940,8 @@ export const entitiesRouter = router({
           properties: input.properties,
           workspaceId: input.workspaceId ?? undefined,
         },
-        ctx.userId
+        ctx.userId,
+        existing.userId
       );
 
       // 4. .completed + emit
@@ -2971,7 +3000,7 @@ export const entitiesRouter = router({
       const facetRepo = new FacetRepository(database, eventRepo);
 
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || existing.userId !== ctx.userId) {
+      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
@@ -3033,7 +3062,7 @@ export const entitiesRouter = router({
       }
 
       // 3. Write (soft-delete)
-      await facetRepo.detach(input.facetId, ctx.userId);
+      await facetRepo.detach(input.facetId, ctx.userId, existing.userId);
 
       // 4. .completed + emit
       await auditLog({

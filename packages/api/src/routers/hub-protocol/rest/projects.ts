@@ -39,6 +39,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
@@ -549,6 +550,20 @@ export function registerProjectsRoutes(app: HubHono): void {
     const body = CreateProjectSchema.parse(await c.req.json());
     const agentUserId = c.get("agentUserId") as string | undefined;
     const isAgent = !!agentUserId;
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // A mismatching bound key throws FORBIDDEN → surface 403 (this handler has
+    // no outer try/catch, so map it here).
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId);
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
 
     // ── Agent guardrails (P1) — dedup + gravity before the governance gate.
     if (isAgent) {
@@ -598,7 +613,7 @@ export function registerProjectsRoutes(app: HubHono): void {
       // identity so an agent-authored project create is GOVERNED (routes to a
       // proposal) instead of auto-applying. Undefined for operator requests.
       agentUserId,
-      workspaceId: body.workspaceId ?? undefined,
+      workspaceId: workspaceId ?? undefined,
       subjectType: "project",
       action: "create",
       data: {
@@ -627,7 +642,7 @@ export function registerProjectsRoutes(app: HubHono): void {
         settings: body.settings,
         metadata: body.metadata,
         userId,
-        workspaceId: body.workspaceId ?? null,
+        workspaceId: workspaceId ?? null,
         provenance: buildProjectProvenance({
           door: "hub-rest",
           agentUserId,

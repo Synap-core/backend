@@ -29,10 +29,13 @@
 import { z } from "@hono/zod-openapi";
 import { db, eq, skills } from "@synap/database";
 
+import { TRPCError } from "@trpc/server";
+
 import { skillsRouter } from "../../skills.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -262,16 +265,28 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       return c.json({ error: "code (or body) is required" }, 400);
     }
 
+    // Service-key workspace confinement (Item 3): pin/clamp the requested
+    // workspace at the point of read, before it flows to resolveActingContext,
+    // the caller ctx, OR the re-supplied `skills.create` input (input wins).
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
+
     try {
       const acting = await resolveActingContext(c, {
-        workspaceId: body.workspaceId,
+        workspaceId: workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
       const ctx = await createHubProtocolCallerContext(
         acting.userId,
         c.get("scopes") as string[],
-        body.workspaceId ?? null
+        workspaceId ?? null
       );
       const caller = skillsRouter.createCaller(ctx as never);
 
@@ -295,7 +310,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         category: body.category,
         executionMode: body.executionMode ?? "sync",
         timeoutSeconds: body.timeoutSeconds ?? 30,
-        workspaceId: body.workspaceId,
+        workspaceId: workspaceId ?? undefined,
         agentUserId,
       });
 

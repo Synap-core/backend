@@ -22,6 +22,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import type { Context } from "hono";
 
 export function resolveConfinedWorkspace(
   keyType: string | null | undefined,
@@ -41,4 +42,39 @@ export function resolveConfinedWorkspace(
     code: "FORBIDDEN",
     message: `Service key is confined to workspace ${keyWorkspaceId}`,
   });
+}
+
+/**
+ * Ergonomic per-site clamp for Hub REST handlers (Item 3 — Part 3, Model 2).
+ *
+ * The door ctx-clamp is defeated whenever a handler re-supplies `workspaceId`
+ * as a tRPC input (`input.workspaceId ?? ctx.workspaceId` → input wins) or
+ * writes directly, so confinement must be applied AT THE POINT OF READ. Call
+ * this on the RESOLVED workspace value (including any `x-workspace-id` header
+ * fallback) BEFORE it flows to a caller/ctx, a tRPC input, a repository, a
+ * service, a `db` write, or `checkPermissionOrPropose`. Assign the result to a
+ * local and route every downstream use through that local.
+ *
+ *   const workspaceId = getConfinedWorkspace(c, body.workspaceId);
+ *
+ * Reads `keyType`/`keyWorkspaceId` set by the hub auth middleware. Pure w.r.t.
+ * I/O; throws 403 (FORBIDDEN) for a bound service key targeting another ws.
+ * Structural context type — avoids importing `_shared` (circular).
+ */
+export function getConfinedWorkspace<
+  E extends { Variables: { keyType?: string; keyWorkspaceId?: string | null } },
+>(
+  c: Context<E>,
+  requested: string | null | undefined
+): string | null | undefined {
+  // Hono's Context is INVARIANT in its Env (the `set` method), so a concrete
+  // `Context<{Variables: HubVariables}>` is not assignable to a structural
+  // subset param. A generic constrained to "Variables includes keyType/
+  // keyWorkspaceId" is a covariant `extends` check that HubVariables satisfies,
+  // so every hub REST handler's `c` is accepted without coupling to _shared.
+  return resolveConfinedWorkspace(
+    c.get("keyType" as never) as string | null | undefined,
+    c.get("keyWorkspaceId" as never) as string | null | undefined,
+    requested
+  );
 }

@@ -28,8 +28,11 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { TRPCError } from "@trpc/server";
+
 import { toolsRouter } from "../../tools.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -403,20 +406,32 @@ export function registerToolsRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
+    // Service-key workspace confinement (Item 3): pin/clamp the requested
+    // workspace at the point of read, before it flows to resolveActingContext,
+    // the caller ctx, OR the re-supplied `tools.create` input (input wins).
+    let workspaceId: string | null | undefined;
+    try {
+      workspaceId = getConfinedWorkspace(c, body.workspaceId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
+
     try {
       // Trusted acting identity + workspace (closes the cross-tenant IDOR).
       // workspaceId may be omitted for pod-wide tools; only membership-check
       // when one is supplied (resolveActingContext otherwise picks the caller's
       // first workspace, which would wrongly scope a pod-wide tool).
       const acting = await resolveActingContext(c, {
-        workspaceId: body.workspaceId,
+        workspaceId: workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
       const ctx = await createHubProtocolCallerContext(
         acting.userId,
         c.get("scopes") as string[],
-        body.workspaceId ?? null
+        workspaceId ?? null
       );
       const caller = toolsRouter.createCaller(ctx as never);
 
@@ -430,7 +445,7 @@ export function registerToolsRoutes(app: HubHono): void {
         credentialRef: body.credentialRef,
         executor: body.executor ?? "is-agent",
         config: body.config,
-        workspaceId: body.workspaceId,
+        workspaceId: workspaceId ?? undefined,
         agentUserId:
           body.agentUserId ?? (c.get("agentUserId") as string | undefined),
         source: body.source,

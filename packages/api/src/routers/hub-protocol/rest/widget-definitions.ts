@@ -11,6 +11,8 @@ import {
   UpsertWidgetDefRequestSchema,
   WireWidgetDefSchema,
 } from "./_codecs/widget.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
+
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 
 export function registerWidgetDefinitionsRoutes(app: HubHono): void {
@@ -88,7 +90,15 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
     > | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
     const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
+    // SERVICE-KEY CONFINEMENT (Item 3): inner `widgetDefinitions.upsertWidgetDef`
+    // is a scopedProcedure that reads `input.workspaceId` (NOT ctx) — positive-pin
+    // the value BEFORE it flows to the caller ctx and the input (mismatching body
+    // → 403). The input is re-supplied via the `...body` spread below, so the
+    // clamped value must OVERRIDE `body.workspaceId` there.
+    const workspaceId = getConfinedWorkspace(
+      c,
+      (body.workspaceId as string | null | undefined) ?? null
+    );
     try {
       const caller = await getCaller(c, {
         userId,
@@ -98,9 +108,17 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
       const result = await caller.widgetDefinitions.upsertWidgetDef({
         ...body,
         userId,
+        workspaceId,
       } as Parameters<typeof caller.widgetDefinitions.upsertWidgetDef>[0]);
       return c.json(result);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
+      // on `.code` (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "widgetDefinitions.upsertWidgetDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

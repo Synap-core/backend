@@ -32,6 +32,10 @@ import {
   LIBRARIAN_ARCHIVER_CRON,
 } from "./workers/librarian-archiver.js";
 import {
+  PACKAGE_VERSION_BACKFILL_QUEUE,
+  PACKAGE_VERSION_BACKFILL_CRON,
+} from "./workers/package-version-backfill.js";
+import {
   AUTOMATION_RUN_REAPER_QUEUE,
   AUTOMATION_RUN_REAPER_CRON,
 } from "./workers/automation-run-reaper.js";
@@ -267,6 +271,22 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: pagerank-centrality (every 6h at :20)");
   await sendSafe(boss, PAGERANK_CENTRALITY_QUEUE, {});
   logger.info("Enqueued startup run: pagerank-centrality");
+
+  // Package version backfill — self-heals workspaces installed before
+  // `settings.packageVersion` existed, by stamping the version currently
+  // known for their `package_slug` in cp_catalog_cache. Every 30 minutes,
+  // AND once now on startup so newly-synced cache rows (from
+  // cp-catalog-sync's own startup run) can backfill immediately rather than
+  // waiting for the first tick.
+  await scheduleSafe(
+    boss,
+    PACKAGE_VERSION_BACKFILL_QUEUE,
+    PACKAGE_VERSION_BACKFILL_CRON,
+    {}
+  );
+  logger.info("Registered cron: package-version-backfill (every 30min)");
+  await sendSafe(boss, PACKAGE_VERSION_BACKFILL_QUEUE, {});
+  logger.info("Enqueued startup run: package-version-backfill");
 
   logger.info("All cron schedules registered");
 }

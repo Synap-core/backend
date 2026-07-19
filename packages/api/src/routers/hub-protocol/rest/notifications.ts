@@ -3,6 +3,7 @@
  */
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -67,9 +68,12 @@ export function registerNotificationsRoutes(app: HubHono): void {
       );
     }
 
+    // Item 3 Part 3: confine a bound service key to its workspace before the write.
+    const workspaceId = getConfinedWorkspace(c, body.workspaceId);
+
     try {
       const id = await NotificationService.create({
-        workspaceId: body.workspaceId,
+        workspaceId,
         userId: body.userId,
         type: body.type,
         sourceType: (body.sourceType ?? "system") as

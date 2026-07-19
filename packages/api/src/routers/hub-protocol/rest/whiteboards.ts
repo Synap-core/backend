@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 import { db, views, eq, and, or, isNull, isNotNull } from "@synap/database";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { emitBoardPlace } from "../../../services/capabilities/place-artboard-deck.js";
@@ -143,7 +144,11 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     const body = parsed.data;
     // Pin to the authenticated owner — never a body-supplied userId.
     const userId = c.get("userId") as string;
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    // Item 3 Part 3: confine a bound service key to its workspace. body.workspaceId
+    // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
+    const workspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -160,7 +165,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         subjectType: "whiteboard",
         action: "place",
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
@@ -236,7 +241,11 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     const body = parsed.data;
     // Pin to the authenticated owner — never a body-supplied userId.
     const userId = c.get("userId") as string;
-    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+    // Item 3 Part 3: confine a bound service key to its workspace. body.workspaceId
+    // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
+    const workspaceId =
+      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 

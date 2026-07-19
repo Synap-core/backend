@@ -26,6 +26,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -252,7 +253,23 @@ export function registerArtifactsRoutes(app: HubHono): void {
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    // Item 3 Part 3: positively pin a bound service key to its workspace.
+    // CreateBodySchema requires workspaceId (z.string().min(1)), so acting.workspaceId
+    // is a non-null string here. Both the governance gate AND the db.insert below
+    // route through this clamped value (previously line 301 used raw body.workspaceId).
+    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
+    let workspaceId: string;
+    try {
+      workspaceId = getConfinedWorkspace(c, acting.workspaceId) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      throw err;
+    }
 
     // Governance membrane — artifact.create goes through checkPermissionOrPropose.
     // If it's in DEFAULT_AUTO_APPROVE the membrane approves inline; otherwise it
@@ -297,8 +314,8 @@ export function registerArtifactsRoutes(app: HubHono): void {
         .insert(artifacts)
         .values({
           // CreateBodySchema requires workspaceId (z.string().min(1)); artifacts
-          // are workspace-scoped (artifacts.workspaceId is NOT NULL).
-          workspaceId: body.workspaceId,
+          // are workspace-scoped (artifacts.workspaceId is NOT NULL). Confined value.
+          workspaceId,
           userId,
           kind: body.kind,
           refId: body.refId ?? null,

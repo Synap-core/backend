@@ -14,6 +14,8 @@ import {
   WireProfileSchema,
   WirePropertyDefSchema,
 } from "./_codecs/profile.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
+
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   getCaller,
@@ -222,14 +224,20 @@ export function registerProfilesRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
+      // SERVICE-KEY CONFINEMENT (Item 3): the inner `profiles.createProfile` is a
+      // scopedProcedure that reads `input.workspaceId` (NOT ctx) — the getCaller
+      // ctx-clamp does not reach it. Positive-pin the value we feed to BOTH the
+      // caller ctx and the input (a mismatching body → 403).
+      const workspaceId =
+        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
       const caller = await getCaller(c, {
         userId: actorId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.createProfile({
         userId: body.userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         slug: body.slug,
         displayName: body.displayName,
         description: body.description,
@@ -241,6 +249,14 @@ export function registerProfilesRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: a bound service key targeting another workspace
+      // throws FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`
+      // (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "createProfile failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
@@ -290,14 +306,19 @@ export function registerProfilesRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
+      // SERVICE-KEY CONFINEMENT (Item 3): inner `profiles.setRenderer` is a
+      // scopedProcedure reading `input.workspaceId` (NOT ctx) — positive-pin the
+      // value fed to BOTH the caller ctx and the input (mismatching body → 403).
+      const workspaceId =
+        getConfinedWorkspace(c, body.workspaceId) ?? undefined;
       const caller = await getCaller(c, {
         userId: actorId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.setRenderer({
         userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         profileSlug: body.profileSlug,
         slot: body.slot,
         cellKey: body.cellKey,
@@ -308,6 +329,13 @@ export function registerProfilesRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
+      // on `.code` (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "profiles.setRenderer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
@@ -385,14 +413,19 @@ export function registerProfilesRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
+      // SERVICE-KEY CONFINEMENT (Item 3): inner `profiles.createPropertyDef` is a
+      // scopedProcedure reading `input.workspaceId` (NOT ctx) — positive-pin the
+      // value fed to BOTH the caller ctx and the input (mismatching body → 403).
+      const workspaceId =
+        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
       const caller = await getCaller(c, {
         userId: actorId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.createPropertyDef({
         userId: body.userId,
-        workspaceId: body.workspaceId,
+        workspaceId,
         profileId: body.profileId,
         slug: body.slug,
         valueType: body.valueType,
@@ -407,6 +440,13 @@ export function registerProfilesRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
+      // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
+      // on `.code` (bundled-build TRPCError identity defeats instanceof).
+      if ((err as { code?: unknown })?.code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
       logger.error({ err }, "createPropertyDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
