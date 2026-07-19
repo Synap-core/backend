@@ -65,6 +65,7 @@ import {
   channels,
   focusSessions,
   projectMembers,
+  projects,
 } from "@synap/database/schema";
 import { scopedDb, AccessContext } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
@@ -575,8 +576,11 @@ export const relationsRouter = router({
     }),
 
   /**
-   * Grant a user membership of an anchor entity (chantier α P2, GO-LIVE control #1)
-   * — the gated writer of `project_members`. AuthZ: only someone who can ADMINISTER
+   * Grant a user membership of an anchor (chantier α P2, GO-LIVE control #1)
+   * — the gated writer of `project_members`. The anchor MUST be a `projects` row:
+   * `project_members.project_id` FKs to `projects(id)` (post-0151 distinct id
+   * spaces), so an entity-id anchor is rejected with a typed error instead of a
+   * runtime FK violation. AuthZ: only someone who can ADMINISTER
    * the anchor may grant membership on it (else a user could add themselves to an
    * arbitrary anchor and read its exposed set). For a CLIENT principal: grant
    * membership on the client anchor and do NOT add them to the workspace — the
@@ -592,25 +596,31 @@ export const relationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
+      // Resolve the anchor from the PROJECTS table — NOT entities. Post-0151
+      // `projects.id` is a distinct id space and `project_members.project_id`
+      // FKs to `projects(id)`, so a membership grant on an entity-id anchor
+      // would violate the FK at insert time. Until entity anchors get their
+      // own membership store, only project anchors can carry members.
       const [anchorRow] = await database
         .select({
-          id: entities.id,
-          workspaceId: entities.workspaceId,
-          userId: entities.userId,
+          id: projects.id,
+          workspaceId: projects.workspaceId,
+          userId: projects.userId,
         })
-        .from(entities)
-        .where(eq(entities.id, input.anchorId))
+        .from(projects)
+        .where(eq(projects.id, input.anchorId))
         .limit(1);
       if (!anchorRow) {
         throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Anchor entity not found",
+          code: "BAD_REQUEST",
+          message:
+            "Anchor must be a project; entity anchors are not yet supported (no project found for the given anchor id).",
         });
       }
       if (!anchorRow.workspaceId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Anchor entity must be workspace-scoped",
+          message: "Anchor project must be workspace-scoped",
         });
       }
 
