@@ -254,7 +254,9 @@ async function isFirstSuccessAfterFailure(
     orderBy: desc(automationRuns.startedAt),
     columns: { status: true },
   });
-  return !!prev && prev.status !== "completed";
+  // A prior `skipped` run (precondition-gated, did no work) is NOT a failure to
+  // recover from — only a genuine non-`completed` terminal run counts.
+  return !!prev && prev.status !== "completed" && prev.status !== "skipped";
 }
 
 // ── The door ───────────────────────────────────────────────────────────────────
@@ -280,6 +282,11 @@ export async function postRunSummary(
     // `running`) — never narrate that as a failure. The reaper always stamps the
     // row terminal before calling, so its `timeout` path still passes here.
     if (run.status === "running") return;
+    // A precondition-`skipped` run (Wave 4.V3) did no work and is not a failure —
+    // narrate it quietly (the skipped run row itself is the record in the runs
+    // UI); posting a chat summary would be noise, and classifying it below would
+    // wrongly land it in the "failure" bucket.
+    if (run.status === "skipped") return;
 
     const automation = await db.query.automations.findFirst({
       where: eq(automations.id, run.automationId),

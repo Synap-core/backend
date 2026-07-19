@@ -6,6 +6,7 @@ import {
   topoSort,
   markDescendantsSkipped,
   seedResumeState,
+  shouldRunFlow,
   type StepContext,
   type LedgerStepRow,
 } from "../automation-executor.js";
@@ -249,5 +250,36 @@ describe("deterministicUuidV5 (Wave 4.R idempotency key)", () => {
     expect(deterministicUuidV5("x")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
+  });
+});
+
+describe("shouldRunFlow (Wave 4.V3 precondition early-exit)", () => {
+  it("runs when there is no precondition", () => {
+    expect(shouldRunFlow(undefined, ctx())).toBe(true);
+  });
+
+  it("runs when the precondition is empty/whitespace", () => {
+    expect(shouldRunFlow("", ctx())).toBe(true);
+    expect(shouldRunFlow("   ", ctx())).toBe(true);
+  });
+
+  it("runs when the precondition evaluates true against the trigger payload", () => {
+    const c = ctx({ trigger: { payload: { stage: "won" } } });
+    expect(shouldRunFlow("trigger.payload.stage === 'won'", c)).toBe(true);
+  });
+
+  it("skips (returns false) when the precondition evaluates false", () => {
+    const c = ctx({ trigger: { payload: { stage: "lost" } } });
+    expect(shouldRunFlow("trigger.payload.stage === 'won'", c)).toBe(false);
+  });
+
+  it("reads automation.state like a condition node does", () => {
+    const c = ctx({ automation: { id: "a1", state: { count: 5 } } });
+    expect(shouldRunFlow("automation.state.count >= 3", c)).toBe(true);
+    expect(shouldRunFlow("automation.state.count > 10", c)).toBe(false);
+  });
+
+  it("throws (fail-closed) on an unparseable precondition — never a silent run", () => {
+    expect(() => shouldRunFlow("not a comparison", ctx())).toThrow();
   });
 });

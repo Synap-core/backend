@@ -233,6 +233,24 @@ export function seedResumeState(
 }
 
 /**
+ * Wave 4.V3 flow precondition: decide whether a run may proceed. Returns true
+ * when there is no precondition (always run) or the precondition expression
+ * evaluates true against the run context; false → the run finalizes `skipped`
+ * before any step executes. Pure (delegates to the SAME `evaluateCondition`
+ * grammar the condition node uses) so it can be unit-tested.
+ *
+ * A precondition that cannot be parsed throws (evaluateCondition is fail-closed)
+ * — surfaced to the caller as a run failure, never silently treated as "run".
+ */
+export function shouldRunFlow(
+  precondition: string | undefined,
+  context: StepContext
+): boolean {
+  if (!precondition || !precondition.trim()) return true;
+  return evaluateCondition(precondition, context);
+}
+
+/**
  * Resolve template variables in a string.
  * Supports: {{trigger.payload.field}}, {{steps.stepId.output.field}}, {{loop.item}}
  */
@@ -355,6 +373,54 @@ async function dispatchViaCapabilityRouter(
   // persistence so a recurring run can't flood the proposal queue; an
   // unapproved verb returns a plain `deny` (fail-closed by the caller).
   return capabilityExecutor({ ...input, suppressProposal: true });
+}
+
+/**
+ * Wave 4.V2 declarative output → verb bridge. The native facet/relation output
+ * steps (facet_attach / facet_update / facet_detach / relation_create) never
+ * hand-roll an insert — they dispatch the corresponding governed builtin verb
+ * through the SAME canonical capability router a `capability` node uses, so the
+ * facet one-door (FacetRepository, via entities.*Facet) and the relation door
+ * (createLinks, via relations.create) stay the only write paths. Config is passed
+ * as the verb's parameters (already template-resolved by executeOutputStep); the
+ * verb's own Zod schema validates + strips. Maps the dispatch verdict to a node
+ * output, failing CLOSED on a governance refusal exactly like the skill/capability
+ * nodes (a mid-flow automation has no interactive review surface).
+ */
+async function dispatchOutputVerb(
+  verbId: string,
+  config: Record<string, unknown>,
+  workspaceId: string,
+  ownerId: string
+): Promise<Record<string, unknown>> {
+  const dispatch = await dispatchViaCapabilityRouter({
+    verbId,
+    parameters: config,
+    workspaceId,
+    userId: ownerId,
+  });
+  if (dispatch.kind === "deny") {
+    throw new Error(`${verbId} refused by capability gate: ${dispatch.reason}`);
+  }
+  if (dispatch.kind === "proposed") {
+    throw new Error(
+      `${verbId} requires human approval and cannot run inside an automation; output step refused.`
+    );
+  }
+  if (dispatch.kind === "not_found") {
+    throw new Error(`${verbId} could not be dispatched: ${dispatch.message}`);
+  }
+  if (dispatch.kind === "dry-run") {
+    return { status: "dry_run", verbId };
+  }
+  // kind === "run": surface the verb's own return flat (ONE `.output` rule) when
+  // it is an object (e.g. { status:'attached', facet } / { status:'updated', … }),
+  // else wrap a scalar/array so downstream steps always read `output.result`.
+  const result = dispatch.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return result as Record<string, unknown>;
+  }
+  return { result };
 }
 
 /**
@@ -1208,6 +1274,49 @@ async function executeOutputStep(
       return { status: "state_set", keys: Object.keys(patch) };
     }
 
+    // ── Kind + Facets / graph (Wave 4.V2) ─────────────────────────────────────
+    // Declarative wrappers over the governed builtin verbs — the config becomes
+    // the verb's params. Idempotency (safe under at-least-once redelivery):
+    //   facet_attach   → entity_facet.attach → FacetRepository.attach conflicts on
+    //     the (entity, profile, contextEntityId, workspace) unique index and
+    //     returns the existing row — a re-run re-attaches nothing.
+    //   facet_update   → entity_facet.update → property MERGE + status set; a
+    //     re-run writes the same values (naturally idempotent).
+    //   facet_detach   → entity_facet.detach → soft-delete; a re-run after the
+    //     facet is gone is a no-op (slug-resolution returns none → noop).
+    //   relation_create→ graph.link → relations.create → createLinks
+    //     (onConflictDoNothing) — a re-run inserts no duplicate edge.
+    case "facet_attach":
+      // config: { entityId, facetSlug, properties?, workspaceId?, contextEntityId? }
+      return dispatchOutputVerb(
+        "entity_facet.attach",
+        config,
+        workspaceId,
+        ownerId
+      );
+
+    case "facet_update":
+      // config: { facetId | (entityId + facetSlug), status?, properties?, workspaceId? }
+      return dispatchOutputVerb(
+        "entity_facet.update",
+        config,
+        workspaceId,
+        ownerId
+      );
+
+    case "facet_detach":
+      // config: { facetId | (entityId + facetSlug) }
+      return dispatchOutputVerb(
+        "entity_facet.detach",
+        config,
+        workspaceId,
+        ownerId
+      );
+
+    case "relation_create":
+      // config: { fromEntityId, toEntityId, relationType }
+      return dispatchOutputVerb("graph.link", config, workspaceId, ownerId);
+
     default:
       logger.warn({ outputType: data.outputType }, "Unknown output type");
       return { status: "unknown_output_type", outputType: data.outputType };
@@ -1954,8 +2063,12 @@ async function executeAutomationFlow(params: {
 
   // D3c: snapshot the definition this run executed, once at first execution.
   // Guarded on the existing value so a delay-resumption re-entry (same runId)
-  // never re-stamps. Covers every trigger path — all funnel through here.
-  if (!run.definitionSnapshot) {
+  // never re-stamps. `definitionSnapshot` being unset is therefore the exact
+  // "this is the run's FIRST execution" signal — reused for the precondition gate
+  // below (robust against BOTH delay-resume AND crash-redelivery, where job.data
+  // is the original with completedNodeIds/focusSessionId unset).
+  const isFirstExecution = !run.definitionSnapshot;
+  if (isFirstExecution) {
     await db
       .update(automationRuns)
       .set({
@@ -1965,6 +2078,52 @@ async function executeAutomationFlow(params: {
         },
       })
       .where(eq(automationRuns.id, runId));
+  }
+
+  // ── Flow-level precondition (Wave 4.V3) ────────────────────────────────────
+  // Evaluate BEFORE opening a session or running any step, so a precondition-
+  // gated run finalizes `skipped` (honestly distinct from a `completed` run that
+  // did work) without a single side effect. ONLY on the run's first execution
+  // (isFirstExecution) — never on a delay-resume or crash-redelivery re-entry,
+  // which have already passed the gate and may have run steps. The context here
+  // is the trigger payload + the automation's snapshot state — the same values a
+  // `condition` node reads.
+  if (isFirstExecution && flow.precondition) {
+    const preconditionContext: StepContext = {
+      trigger: {
+        payload: (run.triggerPayload as Record<string, unknown>) ?? {},
+      },
+      steps: {},
+      automation: {
+        id: automation.id,
+        state: (automation.state as Record<string, unknown> | null) ?? {},
+      },
+    };
+    // shouldRunFlow throws on an unparseable precondition (fail-closed) — that
+    // propagates out and the pg-boss handler's defensive finalizer marks the run
+    // failed, never a silent "run".
+    if (!shouldRunFlow(flow.precondition, preconditionContext)) {
+      logger.info(
+        { runId, automationId, precondition: flow.precondition },
+        "Automation precondition evaluated false — finalizing run as skipped"
+      );
+      // Guarded on status='running' (same invariant the finalizer/reaper use) so
+      // a late writer can never overwrite the verdict.
+      await db
+        .update(automationRuns)
+        .set({ status: "skipped", completedAt: new Date() })
+        .where(
+          and(
+            eq(automationRuns.id, runId),
+            eq(automationRuns.status, "running")
+          )
+        );
+      // Quiet narration: the `skipped` run row IS the record (surfaced in the
+      // runs UI); postRunSummary short-circuits a skipped run (no chat summary).
+      // Idempotent + non-throwing.
+      await postRunSummary(runId);
+      return {};
+    }
   }
 
   // ── Open (or resume) a focus session for this run ──────────────────────────

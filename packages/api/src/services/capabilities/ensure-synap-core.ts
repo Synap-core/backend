@@ -312,6 +312,20 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "entity.delete",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Soft-delete an entity via the governed entities.delete path (checkPermissionOrPropose). DESTRUCTIVE — always PROPOSES for a non-owner agent. Returns the deletion result or { status: 'proposed', proposalId }. Never hard-deletes.",
+      parameters: {
+        type: "object",
+        required: ["entityId"],
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
       name: "document.create",
       kind: "builtin",
       scope: "pod",
@@ -376,16 +390,35 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "entity_facet.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Update a role-facet's status/properties via the governed entities.updateFacet door (checkPermissionOrPropose). Target the facet by its id OR by (entityId + facetSlug) — the slug resolves to the entity's live facet. May return a proposal. Returns the facet or { status: 'proposed', proposalId }.",
+      parameters: {
+        type: "object",
+        properties: {
+          facetId: { type: "string", format: "uuid" },
+          entityId: { type: "string", format: "uuid" },
+          facetSlug: { type: "string" },
+          status: { type: "string" },
+          properties: { type: "object" },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
       name: "entity_facet.detach",
       kind: "builtin",
       scope: "pod",
       description:
-        "Detach (soft-delete) a role-facet by its id via the governed entities.detachFacet door (checkPermissionOrPropose). May return a proposal. Never deletes the entity — only the role-facet.",
+        "Detach (soft-delete) a role-facet via the governed entities.detachFacet door (checkPermissionOrPropose). Target by its id OR by (entityId + facetSlug) — the slug resolves to the entity's live facet (a no-op when none is live). May return a proposal. Never deletes the entity — only the role-facet.",
       parameters: {
         type: "object",
-        required: ["facetId"],
         properties: {
           facetId: { type: "string", format: "uuid" },
+          entityId: { type: "string", format: "uuid" },
+          facetSlug: { type: "string" },
         },
       },
     },

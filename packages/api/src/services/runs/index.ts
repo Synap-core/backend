@@ -106,7 +106,12 @@ function sessionStatus(s: string): RunStatus {
 // Each returns the concrete column values matching the normalised filter; an
 // EMPTY array means the ledger can never produce that status (skip the query).
 
-type AutomationRunStatus = "running" | "completed" | "failed" | "cancelled";
+type AutomationRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "skipped";
 type PlaybookRunStatusValue = "running" | "completed" | "failed" | "proposed";
 type FocusSessionStatus =
   | "active"
@@ -123,6 +128,7 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
     case "completed":
     case "failed":
     case "cancelled":
+    case "skipped":
       return [status];
     case "proposed":
       return []; // automation_runs has no "proposed"
@@ -137,7 +143,8 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
     case "proposed":
       return [status];
     case "cancelled":
-      return []; // playbook_runs has no "cancelled"
+    case "skipped":
+      return []; // playbook_runs has no "cancelled"/"skipped"
   }
 }
 
@@ -152,7 +159,8 @@ function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
     case "cancelled":
       return ["cancelled"];
     case "proposed":
-      return []; // focus_sessions is never "proposed"
+    case "skipped":
+      return []; // focus_sessions is never "proposed"/"skipped"
   }
 }
 

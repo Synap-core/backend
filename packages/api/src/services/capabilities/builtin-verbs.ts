@@ -1230,14 +1230,151 @@ const entityFacetAttachHandler: BuiltinVerbHandler = async (params, ctx) => {
   return result;
 };
 
-/** entity_facet.detach — soft-delete a facet via the governed detachFacet door. */
+/**
+ * Resolve a live facet's id on an entity by its role-profile slug, scoped to the
+ * caller's floor via the canonical `getEffectiveFacets` resolver (the SAME
+ * floor-scoped read `entity_facet.list` uses — never a re-derived
+ * profileSlug::value match, the bug the scattered dedup implementations had).
+ * Returns null when the entity carries no live facet for that role (e.g. already
+ * detached); the callers decide whether that is a no-op or a NOT_FOUND.
+ */
+async function resolveFacetIdBySlug(
+  entityId: string,
+  facetSlug: string,
+  ctx: BuiltinVerbContext
+): Promise<string | null> {
+  const facets = await getEffectiveFacets(db, entityId, {
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId ?? undefined,
+  });
+  const match = facets.find((f) => f.profile.slug === facetSlug);
+  return match?.facet.id ?? null;
+}
+
+/**
+ * entity_facet.update — update a facet's status/properties through the governed
+ * `entitiesRouter.updateFacet` caller (which runs checkPermissionOrPropose
+ * internally, then FacetRepository.update — the one facet door). Accepts the
+ * facet's own id OR (entityId + facetSlug): capability nodes carry a facetId,
+ * template/flow authors carry the role slug. Return surfaced VERBATIM (it may be
+ * `{ status: "proposed", proposalId }`).
+ */
+const entityFacetUpdateParams = z.object({
+  /** The facet's own id (wins over entityId+facetSlug). */
+  facetId: z.string().uuid().optional(),
+  /** Alternative to facetId: parent entity + role slug to resolve to the live facet. */
+  entityId: z.string().uuid().optional(),
+  facetSlug: z.string().min(1).max(200).optional(),
+  status: z.string().max(100).optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
+  /** Overlay lens for property validation; omit to inherit the facet's stored ws. */
+  workspaceId: z.string().uuid().nullable().optional(),
+});
+
+const entityFacetUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityFacetUpdateParams.parse(params);
+
+  // Resolve the target facet id: explicit id wins; else (entityId + facetSlug)
+  // resolves to the live facet through the floor-scoped resolver.
+  let facetId = input.facetId;
+  if (!facetId) {
+    if (!input.entityId || !input.facetSlug) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "entity_facet.update requires facetId, or entityId + facetSlug.",
+      });
+    }
+    const resolved = await resolveFacetIdBySlug(
+      input.entityId,
+      input.facetSlug,
+      ctx
+    );
+    if (!resolved) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `No live facet '${input.facetSlug}' on entity ${input.entityId}.`,
+      });
+    }
+    facetId = resolved;
+  }
+
+  // updateFacet is a podProcedure — enforce membership only under a ws lens.
+  let workspaceRole: string | undefined;
+  if (ctx.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      ctx.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // updateFacet governs the write (checkPermissionOrPropose). Surface verbatim.
+  const result = await caller.updateFacet({
+    facetId,
+    status: input.status,
+    properties: input.properties,
+    ...(input.workspaceId !== undefined
+      ? { workspaceId: input.workspaceId }
+      : {}),
+  });
+
+  return result;
+};
+
+/** entity_facet.detach — soft-delete a facet via the governed detachFacet door.
+ *  Accepts the facet's own id OR (entityId + facetSlug): template/flow authors
+ *  know the role slug, not the facet id. */
 const entityFacetDetachParams = z.object({
-  /** The facet's own id (the handle entity_facet.attach returns). */
-  facetId: z.string().uuid(),
+  /** The facet's own id (wins over entityId+facetSlug). */
+  facetId: z.string().uuid().optional(),
+  /** Alternative to facetId: parent entity + role slug to resolve to the live facet. */
+  entityId: z.string().uuid().optional(),
+  facetSlug: z.string().min(1).max(200).optional(),
 });
 
 const entityFacetDetachHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = entityFacetDetachParams.parse(params);
+
+  // Resolve the target facet id: explicit id wins; else (entityId + facetSlug).
+  let facetId = input.facetId;
+  if (!facetId) {
+    if (!input.entityId || !input.facetSlug) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "entity_facet.detach requires facetId, or entityId + facetSlug.",
+      });
+    }
+    const resolved = await resolveFacetIdBySlug(
+      input.entityId,
+      input.facetSlug,
+      ctx
+    );
+    if (!resolved) {
+      // No live facet for that role — idempotent no-op (already detached, or the
+      // entity never carried it). Do NOT throw: an at-least-once redelivery of a
+      // flow's facet_detach must not fail after the facet is already gone.
+      return { status: "detached" as const, noop: true as const };
+    }
+    facetId = resolved;
+  }
 
   // Mirror entity.update: detachFacet is a podProcedure, so only enforce
   // membership when the acting run carries a workspace lens.
@@ -1267,8 +1404,55 @@ const entityFacetDetachHandler: BuiltinVerbHandler = async (params, ctx) => {
   } as unknown as Context);
 
   // detachFacet governs the write (checkPermissionOrPropose). Surface verbatim.
-  const result = await caller.detachFacet({ facetId: input.facetId });
+  const result = await caller.detachFacet({ facetId });
 
+  return result;
+};
+
+/**
+ * entity.delete — soft-delete an entity through the governed `entitiesRouter.delete`
+ * caller (checkPermissionOrPropose). DESTRUCTIVE: the governance floor always
+ * PROPOSES a delete for a non-owner agent, so the return is surfaced VERBATIM (it
+ * may be `{ status: "proposed", proposalId }`). Never hard-deletes — the router
+ * soft-deletes (sets deletedAt) exactly as MCP/tRPC delete does.
+ */
+const entityDeleteParams = z.object({
+  entityId: z.string().uuid(),
+});
+
+const entityDeleteHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityDeleteParams.parse(params);
+
+  // entities.delete is a podProcedure — enforce membership only under a ws lens
+  // (mirror entity.update). The router itself re-checks the entity's visibility.
+  let workspaceRole: string | undefined;
+  if (ctx.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      ctx.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // delete governs the write (checkPermissionOrPropose). Surface verbatim so an
+  // unapproved (proposed) delete is not reported as done.
+  const result = await caller.delete({ id: input.entityId });
   return result;
 };
 
@@ -1440,11 +1624,13 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Spine-2 — entity/document write + read.
   "entity.create": entityCreateHandler,
   "entity.update": entityUpdateHandler,
+  "entity.delete": entityDeleteHandler,
   "document.create": documentCreateHandler,
   "document.update": documentUpdateHandler,
   "document.read": documentReadHandler,
-  // Kind + Facets — role attach/detach/list over the one facet door.
+  // Kind + Facets — role attach/update/detach/list over the one facet door.
   "entity_facet.attach": entityFacetAttachHandler,
+  "entity_facet.update": entityFacetUpdateHandler,
   "entity_facet.detach": entityFacetDetachHandler,
   "entity_facet.list": entityFacetListHandler,
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
@@ -1480,10 +1666,12 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "graph.link": graphLinkParams,
   "entity.create": entityCreateParams,
   "entity.update": entityUpdateParams,
+  "entity.delete": entityDeleteParams,
   "document.create": documentCreateParams,
   "document.update": documentUpdateParams,
   "document.read": documentReadParams,
   "entity_facet.attach": entityFacetAttachParams,
+  "entity_facet.update": entityFacetUpdateParams,
   "entity_facet.detach": entityFacetDetachParams,
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,

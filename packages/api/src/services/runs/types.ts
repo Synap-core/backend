@@ -23,7 +23,10 @@ export type RunStatus =
   | "completed"
   | "failed"
   | "proposed"
-  | "cancelled";
+  | "cancelled"
+  // 'skipped' (Wave 4.V3) — an automation run whose flow precondition gated it
+  // out before any step ran. Only automation_runs produces it today.
+  | "skipped";
 
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {

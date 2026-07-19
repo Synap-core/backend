@@ -378,6 +378,15 @@ export interface AutomationEdge {
 export interface FlowDefinition {
   nodes: AutomationNode[];
   edges: AutomationEdge[];
+  /**
+   * Optional flow-level precondition (Wave 4.V3). A single comparison expression
+   * (same grammar as a `condition` node — e.g. "trigger.payload.stage === 'won'")
+   * evaluated against the run context BEFORE any step runs. When it evaluates
+   * false the run finalizes `skipped` (no side effect, no session) instead of
+   * fake-`completed`, so a precondition-gated run is honestly distinguishable
+   * from one that did work. Absent/empty → the flow always runs.
+   */
+  precondition?: string;
 }
 
 // ── Automations table ───────────────────────────────────────────────────────
@@ -496,8 +505,15 @@ export const automationRuns = pgTable(
       .default({})
       .notNull(),
 
+    // 'skipped' (Wave 4.V3) — a run whose flow-level precondition evaluated false
+    // at start: finalized before any step executes, distinct from a genuine
+    // 'completed'. The DB column is unconstrained `text` (no CHECK; see
+    // 0000_baseline_schema.sql), so this is a TS-only enum widening — exactly as
+    // automation_step_runs.status added 'skipped' with no migration. Nothing to
+    // migrate at the DB level, and schema-coherence validates column existence,
+    // not enum membership.
     status: text("status", {
-      enum: ["running", "completed", "failed", "cancelled"],
+      enum: ["running", "completed", "failed", "cancelled", "skipped"],
     })
       .notNull()
       .default("running"),
