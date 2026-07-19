@@ -241,6 +241,15 @@ export function accessScopeWhere(args: {
    * them. Multi-valued so a caller can fetch across several projects at once.
    */
   projectLens?: string | string[] | null | undefined;
+  /**
+   * OPTIONAL floor restriction — narrow the EXPOSURE branch of the floor to a
+   * SUBSET of `EXPOSURE_RELATION_TYPES` (e.g. `[VISIBLE_TO]` for a portal
+   * guest whose access is explicit-share only). Default = the full whitelist,
+   * so every existing caller is behavior-preserving. Unlike the lenses this is
+   * part of the FLOOR: it can only REMOVE an access source, never add one —
+   * enforced by the `ExposureRelationType` type plus a runtime subset check.
+   */
+  exposureRelationTypes?: readonly ExposureRelationType[];
 }): SQL {
   const {
     workspaceIdColumn,
@@ -249,7 +258,25 @@ export function accessScopeWhere(args: {
     userId,
     workspaceLens,
     projectLens,
+    exposureRelationTypes = EXPOSURE_RELATION_TYPES,
   } = args;
+
+  // Narrow-only guard. The type already refuses off-whitelist strings at every
+  // TS call site; this runtime check holds the line for untyped (JS / cast)
+  // callers, and refuses an EMPTY list (which would silently drop the exposure
+  // branch — omit the option instead if you want the default whitelist).
+  if (exposureRelationTypes.length === 0) {
+    throw new Error(
+      "accessScopeWhere: exposureRelationTypes must not be empty — omit the option for the default whitelist"
+    );
+  }
+  for (const t of exposureRelationTypes) {
+    if (!EXPOSURE_RELATION_TYPES.includes(t)) {
+      throw new Error(
+        `accessScopeWhere: exposureRelationTypes may only narrow the exposure whitelist (got "${t}")`
+      );
+    }
+  }
 
   // ── Floor (security) — the union of all the ways the user may see a row. ──
   const podPersonal = and(isNull(workspaceIdColumn), eq(ownerColumn, userId))!;
@@ -261,9 +288,11 @@ export function accessScopeWhere(args: {
       isNotNull(workspaceIdColumn),
       userVisibleWhere(workspaceIdColumn, userId)
     )!,
-    // Exposure membership over BOTH axes (project + visible_to) — live: admits
-    // rows the user sees via anchor membership (`projects.id`) + exposure edges.
-    exposureMemberWhere(entityIdColumn, userId, EXPOSURE_RELATION_TYPES)
+    // Exposure membership — admits rows the user sees via anchor membership
+    // (`projects.id`) + exposure edges. Default = BOTH axes (project +
+    // visible_to); a caller-supplied `exposureRelationTypes` NARROWS this
+    // branch (portal guests: `visible_to` only).
+    exposureMemberWhere(entityIdColumn, userId, exposureRelationTypes)
   )!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
