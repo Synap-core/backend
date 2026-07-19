@@ -17,6 +17,7 @@ import {
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
 import { createLinks } from "./links/links-service.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
+import type { WorkspaceSettings } from "@synap/database";
 
 /**
  * Resolve a playbook's authored `grants` (tool/skill NAMES — see
@@ -107,6 +108,90 @@ async function grantPlaybookLinks(
   );
 }
 
+/**
+ * A template-declared action on an entity-detail surface. Authored on a
+ * template as `settings.actionPlacements` (see `TemplateActionPlacement` in
+ * `@synap-core/workspace-templates`); merged into `workspace.settings` here and
+ * read by the browser entity-detail cell to render dynamic actions.
+ *
+ * `ref` is authored as a capability verb key, or a playbook / automation NAME;
+ * `resolveActionPlacementRefs` rewrites playbook/automation names → row ids so
+ * the browser can launch them directly. Capability refs pass through unchanged.
+ */
+export interface ActionPlacement {
+  profileSlug: string;
+  surface: string;
+  kind: "capability" | "playbook" | "automation";
+  ref: string;
+  label: string;
+}
+
+/**
+ * Resolve each placement's `ref` for the browser: playbook/automation NAMES →
+ * row ids (workspace-scoped, the same NAME-in-scope lookup the playbooks/
+ * automations reuse-checks above use); capability refs (verb keys) pass through.
+ * A playbook/automation ref that resolves to no row is DROPPED (not fatal) —
+ * mirrors `resolveGrantRefs`. Returns placements with `ref` rewritten to an id
+ * the browser can launch directly.
+ */
+async function resolveActionPlacementRefs(
+  placements: ActionPlacement[],
+  workspaceId: string
+): Promise<ActionPlacement[]> {
+  if (placements.length === 0) return [];
+  const {
+    db,
+    and,
+    eq,
+    playbooks: playbooksTable,
+    automations: automationsTable,
+  } = await import("@synap/database");
+  const resolved: ActionPlacement[] = [];
+  for (const p of placements) {
+    if (p.kind === "capability") {
+      // Verb key — stable, resolved by executeCapability at click time.
+      resolved.push(p);
+      continue;
+    }
+    if (p.kind === "playbook") {
+      const [row] = await db
+        .select({ id: playbooksTable.id })
+        .from(playbooksTable)
+        .where(
+          and(
+            eq(playbooksTable.name, p.ref),
+            eq(playbooksTable.workspaceId, workspaceId)
+          )
+        )
+        .limit(1);
+      if (row) resolved.push({ ...p, ref: row.id });
+      // else: unresolved playbook ref — skipped, not fatal.
+      continue;
+    }
+    if (p.kind === "automation") {
+      const [row] = await db
+        .select({ id: automationsTable.id })
+        .from(automationsTable)
+        .where(
+          and(
+            eq(automationsTable.name, p.ref),
+            eq(automationsTable.workspaceId, workspaceId)
+          )
+        )
+        .limit(1);
+      if (row) resolved.push({ ...p, ref: row.id });
+      // else: unresolved automation ref — skipped, not fatal.
+      continue;
+    }
+  }
+  return resolved;
+}
+
+/** Stable identity of a placement — the idempotency key for the settings merge. */
+function placementKey(p: ActionPlacement): string {
+  return `${p.profileSlug}::${p.surface}::${p.kind}::${p.ref}`;
+}
+
 /** Minimal body slice the post-workspace layers read (PackageApply body). */
 export interface PackagePostWorkspaceBody {
   capabilities?: Array<{
@@ -146,6 +231,12 @@ export interface PackagePostWorkspaceBody {
     definition?: Record<string, unknown>;
     params?: Record<string, unknown>;
   }>;
+  /**
+   * Entity-detail action placements to merge into `settings.actionPlacements`.
+   * Applied AFTER playbooks/loops so playbook/automation refs resolve to the
+   * rows this apply just created. See {@link ActionPlacement}.
+   */
+  actionPlacements?: ActionPlacement[];
   projectId?: string;
 }
 
@@ -410,6 +501,69 @@ export async function applyPackagePostWorkspace(
       }
     }
     result.loops = loops;
+  }
+
+  // ── Action placements (→ settings.actionPlacements) ─────────────────────
+  // Runs AFTER playbooks/loops so playbook/automation refs resolve to rows this
+  // apply created. Merged idempotently into the workspace settings JSONB (dedup
+  // on profileSlug+surface+kind+ref) via the same direct read-modify-write the
+  // enroll-agent step / workspace-creation-service proposalId-stamp use — not
+  // the governed tRPC settings caller, which would PROPOSE (not apply) an
+  // agent-driven settings change and leave placements deferred.
+  if (body.actionPlacements?.length && workspaceId) {
+    try {
+      const resolved = await resolveActionPlacementRefs(
+        body.actionPlacements,
+        workspaceId
+      );
+      if (resolved.length > 0) {
+        const { db, workspaces, eq } = await import("@synap/database");
+        const [ws] = await db
+          .select({ settings: workspaces.settings })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
+          .limit(1);
+        const existingSettings = (ws?.settings ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const existingPlacements = Array.isArray(
+          existingSettings.actionPlacements
+        )
+          ? (existingSettings.actionPlacements as ActionPlacement[])
+          : [];
+        const seen = new Set(existingPlacements.map(placementKey));
+        const merged = [...existingPlacements];
+        for (const p of resolved) {
+          const key = placementKey(p);
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(p);
+          }
+        }
+        await db
+          .update(workspaces)
+          .set({
+            settings: {
+              ...existingSettings,
+              actionPlacements: merged,
+            } as unknown as WorkspaceSettings,
+          })
+          .where(eq(workspaces.id, workspaceId));
+        result.actionPlacements = {
+          status: "merged",
+          count: resolved.length,
+          total: merged.length,
+        };
+      } else {
+        result.actionPlacements = { status: "skipped", count: 0 };
+      }
+    } catch (e) {
+      result.actionPlacements = {
+        status: "error",
+        message: (e as Error).message,
+      };
+    }
   }
 
   // ── Project link (seed entities) ────────────────────────────────────────

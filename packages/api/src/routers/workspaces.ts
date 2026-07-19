@@ -92,6 +92,109 @@ import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
 
 const logger = createLogger({ module: "workspaces" });
 
+/**
+ * The `definition` fields the post-workspace body-builder reads. A structural
+ * slice of `createFromDefinition`'s zod input — the two disagreed silently
+ * before: `definition.automations` here is the LOOP-style
+ * `{trigger, action:{playbookSlug}}` shape (materialized as a loop TRIGGER),
+ * NOT the graph-flow `PackagePostWorkspaceBody['automations']`
+ * (`{triggerType, flowDefinition}`). The compose-overlay caller used to
+ * `input.definition as unknown as PackagePostWorkspaceBody`, which fed loop-style
+ * automations into the graph-automation applier step → every one threw
+ * (undefined `triggerType`) and was silently swallowed. Building the body HERE,
+ * the same way the normal-create branch does, is the one door both use.
+ */
+interface CreateDefinitionPostWorkspaceSlice {
+  playbooks?: Array<{
+    name: string;
+    goalTemplate?: string;
+    description?: string;
+    params?: unknown;
+    executor?: LoopPlaybookDef["executor"];
+    expectedOutputs?: unknown;
+    subjectProfile?: LoopPlaybookDef["subjectProfile"];
+    grants?: Array<{ kind: string; ref: string }>;
+  }>;
+  automations?: Array<{
+    name: string;
+    description?: string;
+    trigger: {
+      type: "cron" | "event" | "manual";
+      cron?: string;
+      eventType?: string;
+    };
+    action: {
+      type: "playbook_run";
+      playbookSlug: string;
+      params?: Record<string, unknown>;
+    };
+  }>;
+  capabilities?: PackagePostWorkspaceBody["capabilities"];
+  actionPlacements?: PackagePostWorkspaceBody["actionPlacements"];
+}
+
+/**
+ * Build the shared `applyPackagePostWorkspace` body from a
+ * `createFromDefinition` definition: capabilities install alongside a single
+ * autonomy `loops[]` entry carrying playbooks + their loop-style automation
+ * triggers, plus `actionPlacements` merged into settings. Used by BOTH the
+ * normal-create and compose-overlay branches so a loop-style definition can
+ * never be misrouted into the graph-automation applier step.
+ */
+function buildPostWorkspaceBodyFromDefinition(
+  definition: CreateDefinitionPostWorkspaceSlice,
+  targetWorkspaceId: string
+): PackagePostWorkspaceBody {
+  const playbookDefs = definition.playbooks;
+  const automationDefs = definition.automations;
+  const hasLoop =
+    (playbookDefs && playbookDefs.length > 0) ||
+    (automationDefs && automationDefs.length > 0);
+  const loopDef: LoopDefinition | undefined = hasLoop
+    ? {
+        key: `workspace-${targetWorkspaceId}`,
+        name: "Workspace loop",
+        // Loop playbook defs are "stored loosely, validated at the boundary"
+        // (see LoopPlaybookDef) — cast the mapped array once rather than field
+        // by field. Mirrors the pre-extraction inline literal's contextual typing.
+        playbooks: (playbookDefs ?? []).map((pb) => ({
+          ref: pb.name,
+          name: pb.name,
+          goalTemplate: pb.goalTemplate,
+          description: pb.description,
+          params: pb.params,
+          executor: pb.executor,
+          expectedOutputs: pb.expectedOutputs,
+          // Carry the subject kind → `createLoopFromDefinition` forwards it to
+          // `playbooksRouter.create`, landing on `subject_profile`.
+          subjectProfile: pb.subjectProfile,
+          grants: pb.grants?.map((g) => ({
+            kind: g.kind,
+            id: g.ref,
+          })),
+        })) as unknown as LoopPlaybookDef[],
+        triggers: (automationDefs ?? []).map((auto) => ({
+          name: auto.name,
+          description: auto.description,
+          trigger: {
+            type: auto.trigger.type,
+            cron: auto.trigger.cron,
+            eventType: auto.trigger.eventType,
+          },
+          playbookRef: auto.action.playbookSlug,
+          params: auto.action.params,
+        })),
+      }
+    : undefined;
+  return {
+    capabilities: definition.capabilities,
+    loops: loopDef
+      ? [{ definition: loopDef as unknown as Record<string, unknown> }]
+      : undefined,
+    actionPlacements: definition.actionPlacements,
+  };
+}
+
 function getWorkspaceVisibility(settings: unknown): string {
   if (!settings || typeof settings !== "object") return "members";
   const visibility = (settings as Record<string, unknown>).workspaceVisibility;
@@ -2357,7 +2460,14 @@ export const workspacesRouter = router({
                   color: z.string().optional(),
                   description: z.string().optional(),
                   scope: z.string().optional(),
+                  entityScope: z.enum(["pod", "workspace"]).optional(),
                   semanticSlug: z.string().nullable().optional(),
+                  // Profiles are either entity kinds (person, company) or
+                  // attachable roles (lead, client). Keep this generic: the
+                  // definition author, not the workspace router, owns the
+                  // domain vocabulary.
+                  profileKind: z.enum(["kind", "role"]).optional(),
+                  applicableKinds: z.array(z.string()).optional(),
                   // Proposal format: flat property list
                   properties: z
                     .array(
@@ -2784,6 +2894,24 @@ export const workspacesRouter = router({
                 })
               )
               .optional(),
+            /**
+             * Entity-detail action placements → merged into
+             * `settings.actionPlacements` by the shared
+             * `applyPackagePostWorkspace` door (Phase 4 GAP C). A plain
+             * `z.object` would STRIP this even under `.passthrough()` typing, so
+             * declare it to carry it typed through to the applier.
+             */
+            actionPlacements: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  surface: z.string(),
+                  kind: z.enum(["capability", "playbook", "automation"]),
+                  ref: z.string(),
+                  label: z.string(),
+                })
+              )
+              .optional(),
           })
           .passthrough(),
         packageSlug: z.string().optional(),
@@ -3194,6 +3322,36 @@ export const workspacesRouter = router({
               throw err;
             }
             if (core.status === "composed") {
+              // A compose overlay does not create a second workspace, but it
+              // still owns post-workspace layers such as playbooks. Apply them
+              // to the resolved base before returning; the shared applier is
+              // idempotent, so retries and already-installed overlays are safe.
+              // Build the body via the SAME converter the normal-create branch
+              // uses — the previous `as unknown as PackagePostWorkspaceBody` cast
+              // fed loop-style `definition.automations` into the graph-automation
+              // applier step, where each threw on an undefined `triggerType` and
+              // was silently swallowed (install-path parity bug, Phase 4 4.T1).
+              try {
+                await applyPackagePostWorkspace({
+                  workspaceId: core.composeTargetWorkspaceId,
+                  body: buildPostWorkspaceBodyFromDefinition(
+                    input.definition as CreateDefinitionPostWorkspaceSlice,
+                    core.composeTargetWorkspaceId
+                  ),
+                  userId: ctx.userId,
+                  agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+                  scopes: [],
+                });
+              } catch (err) {
+                logger.warn(
+                  {
+                    err,
+                    workspaceId: core.composeTargetWorkspaceId,
+                    packageSlug: input.packageSlug,
+                  },
+                  "compose overlay post-workspace layers failed (non-fatal)"
+                );
+              }
               auditLog({
                 subjectType: "workspaces",
                 subjectId: core.composeTargetWorkspaceId,
@@ -3441,71 +3599,24 @@ export const workspacesRouter = router({
           // both doors converge on the one door. `definition.tools` is intentionally
           // dropped: tools arrive through capabilities (the governed substrate) — the old
           // inline `tools` TODO is retired here.
-          const playbookDefs = input.definition.playbooks;
-          const automationDefs = input.definition.automations;
-          const capabilityDefs = (
-            input.definition as {
-              capabilities?: PackagePostWorkspaceBody["capabilities"];
-            }
-          ).capabilities;
-          const hasLoop =
-            (playbookDefs && playbookDefs.length > 0) ||
-            (automationDefs && automationDefs.length > 0);
-          if (hasLoop || (capabilityDefs && capabilityDefs.length > 0)) {
-            // The sub-contract has no template-local playbook `ref` (it keys triggers
-            // by `action.playbookSlug` = the playbook NAME), so we use the playbook
-            // name as the loop ref and rewrite each trigger's slug → ref.
-            const loopDef: LoopDefinition | undefined = hasLoop
-              ? {
-                  key: `workspace-${result.workspaceId}`,
-                  name: "Workspace loop",
-                  playbooks: (playbookDefs ?? []).map((pb) => ({
-                    ref: pb.name,
-                    name: pb.name,
-                    goalTemplate: pb.goalTemplate,
-                    description: pb.description,
-                    params: pb.params as unknown as LoopPlaybookDef["params"],
-                    executor: pb.executor,
-                    expectedOutputs:
-                      pb.expectedOutputs as unknown as LoopPlaybookDef["expectedOutputs"],
-                    // Carry the subject kind → `createLoopFromDefinition` forwards it
-                    // to `playbooksRouter.create`, landing on `subject_profile`.
-                    subjectProfile: pb.subjectProfile,
-                    grants: pb.grants?.map((g) => ({
-                      kind: g.kind,
-                      id: g.ref,
-                    })),
-                  })),
-                  triggers: (automationDefs ?? []).map((auto) => ({
-                    name: auto.name,
-                    description: auto.description,
-                    trigger: {
-                      type: auto.trigger.type,
-                      cron: auto.trigger.cron,
-                      eventType: auto.trigger.eventType,
-                    },
-                    playbookRef: auto.action.playbookSlug,
-                    params: auto.action.params,
-                  })),
-                }
-              : undefined;
-
+          // The `{playbooks · automations}` sub-contract is built into the shared
+          // body by `buildPostWorkspaceBodyFromDefinition` — the ONE builder the
+          // compose-overlay branch uses too, so loop-style automations can never
+          // be misrouted into the graph-automation applier step.
+          const postBody = buildPostWorkspaceBodyFromDefinition(
+            input.definition as CreateDefinitionPostWorkspaceSlice,
+            result.workspaceId
+          );
+          const hasPostWork = Boolean(
+            postBody.capabilities?.length ||
+            postBody.loops?.length ||
+            postBody.actionPlacements?.length
+          );
+          if (hasPostWork) {
             try {
               const post = await applyPackagePostWorkspace({
                 workspaceId: result.workspaceId,
-                body: {
-                  capabilities: capabilityDefs,
-                  loops: loopDef
-                    ? [
-                        {
-                          definition: loopDef as unknown as Record<
-                            string,
-                            unknown
-                          >,
-                        },
-                      ]
-                    : undefined,
-                },
+                body: postBody,
                 userId: ctx.userId,
                 agentUserId: (ctx as { agentUserId?: string }).agentUserId,
                 scopes: [],
@@ -3600,7 +3711,12 @@ export const workspacesRouter = router({
                 color: z.string().optional(),
                 description: z.string().optional(),
                 scope: z.string().optional(),
+                entityScope: z.enum(["pod", "workspace"]).optional(),
                 semanticSlug: z.string().nullable().optional(),
+                // Preserve generic kind/role metadata for reconciled
+                // definitions. The materializer validates the combination.
+                profileKind: z.enum(["kind", "role"]).optional(),
+                applicableKinds: z.array(z.string()).optional(),
                 properties: z
                   .array(
                     z.object({
@@ -3674,6 +3790,9 @@ export const workspacesRouter = router({
               })
             )
             .optional(),
+          /** Post-workspace layers are reconciled through the same generic door. */
+          capabilities: z.array(z.record(z.string(), z.unknown())).optional(),
+          playbooks: z.array(z.record(z.string(), z.unknown())).optional(),
         }),
       })
     )
@@ -3700,12 +3819,33 @@ export const workspacesRouter = router({
         });
       }
 
-      return reconcileWorkspaceFromDefinition({
+      const report = await reconcileWorkspaceFromDefinition({
         workspaceId: input.workspaceId,
         userId: ctx.userId,
         definition: input.definition as unknown as WorkspaceDefinitionInput,
         dryRun: input.dryRun,
       });
+      if (
+        !input.dryRun &&
+        (input.definition.capabilities?.length ||
+          input.definition.playbooks?.length)
+      ) {
+        try {
+          await applyPackagePostWorkspace({
+            workspaceId: input.workspaceId,
+            body: input.definition as unknown as PackagePostWorkspaceBody,
+            userId: ctx.userId,
+            agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+            scopes: [],
+          });
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId: input.workspaceId },
+            "reconcileFromDefinition post-workspace layers failed (non-fatal)"
+          );
+        }
+      }
+      return report;
     }),
 
   /**
