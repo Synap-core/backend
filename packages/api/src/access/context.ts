@@ -27,6 +27,8 @@
  * isHubProtocol but not agentUserId, so a hub read resolves actor="operator".
  */
 
+import type { ExposureRelationType } from "../utils/project-scope.js";
+
 export type Actor = "operator" | "agent";
 
 /**
@@ -63,7 +65,19 @@ export class AccessContext {
      * third access source); this lens is the optional narrowing on top.
      * See `projectLensWhere` / the project-centric-scope design doc.
      */
-    readonly projectLens: Lens = undefined
+    readonly projectLens: Lens = undefined,
+    /**
+     * OPTIONAL exposure-floor restriction — narrows the EXPOSURE branch of the
+     * DATA-table access floor (`accessScopeWhere`) to a SUBSET of the exposure
+     * whitelist (e.g. `["visible_to"]` for a portal guest: explicit-share
+     * only, a `belongs_to_project` edge does NOT admit). `undefined` = the
+     * full whitelist — every existing consumer unchanged. Unlike the lenses
+     * this is part of the FLOOR: it can only REMOVE an access source, never
+     * add one (subset-validated inside `accessScopeWhere`).
+     */
+    readonly exposureRelationTypes:
+      | readonly ExposureRelationType[]
+      | undefined = undefined
   ) {}
 
   /** Operator/UI boundary — built from the tRPC context (Kratos cookie). */
@@ -125,7 +139,8 @@ export class AccessContext {
       this.agentUserId,
       this.actor,
       workspaceLens,
-      this.projectLens
+      this.projectLens,
+      this.exposureRelationTypes
     );
   }
 
@@ -142,7 +157,27 @@ export class AccessContext {
       this.agentUserId,
       this.actor,
       this.workspaceLens,
-      projectLens
+      projectLens,
+      this.exposureRelationTypes
+    );
+  }
+
+  /**
+   * Return a copy whose DATA-table floor admits exposure ONLY through the
+   * given relation types (a subset of `EXPOSURE_RELATION_TYPES`). Built for
+   * portal-guest contexts (`visible_to`-only floors). Narrow-only by
+   * construction; the subset is re-validated inside `accessScopeWhere`.
+   */
+  withExposureRelationTypes(
+    exposureRelationTypes: readonly ExposureRelationType[]
+  ): AccessContext {
+    return new AccessContext(
+      this.userId,
+      this.agentUserId,
+      this.actor,
+      this.workspaceLens,
+      this.projectLens,
+      exposureRelationTypes
     );
   }
 

@@ -197,6 +197,7 @@ registerVisibility({
         userId: access.userId,
         workspaceLens: access.workspaceLens,
         projectLens: access.projectLens,
+        exposureRelationTypes: access.exposureRelationTypes,
       }),
   },
 });
@@ -213,6 +214,7 @@ registerVisibility({
         userId: access.userId,
         workspaceLens: access.workspaceLens,
         projectLens: access.projectLens,
+        exposureRelationTypes: access.exposureRelationTypes,
       }),
   },
 });
