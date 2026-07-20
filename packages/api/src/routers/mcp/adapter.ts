@@ -161,6 +161,14 @@ function primaryObjectId(data: unknown): string | undefined {
 const PROPOSAL_REINFORCEMENT_HINT =
   "Tell the user why you proposed this and give them this link.";
 
+/**
+ * The hint a DEDUPED write carries: an identical proposal was already pending, so
+ * the door returned it instead of creating a second. Tells the agent to stop
+ * re-proposing and point the user at the existing review instead.
+ */
+const PROPOSAL_DUPLICATE_HINT =
+  "An identical proposal is already pending review — this did NOT create a new one. Do not re-propose; give the user this link to the existing proposal.";
+
 function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
   // ONLY when the result carries an id that resolves to an openable object
@@ -179,12 +187,23 @@ function ok(data: unknown): CallToolResult {
     // Two proposed shapes flow through here: governed writes ({status:
     // "proposed"}) and executeCapability outcomes ({kind: "proposed"}).
     ((payload as Record<string, unknown>).status === "proposed" ||
-      (payload as Record<string, unknown>).kind === "proposed") &&
-    !("hint" in (payload as Record<string, unknown>))
+      (payload as Record<string, unknown>).kind === "proposed")
   ) {
+    // DUPLICATE surfacing (one place, every governed-write door): when the write
+    // was deduped at the DB door (`deduped: true` rode up on the result), rewrite
+    // the outcome to `status: "duplicate"` + a stop-re-proposing hint so the agent
+    // learns an identical proposal is already pending. Otherwise keep the normal
+    // "proposed" reinforcement hint (respecting a hint a handler already set).
+    const p = payload as Record<string, unknown>;
+    const deduped = p.deduped === true;
     payload = {
-      ...(payload as Record<string, unknown>),
-      hint: PROPOSAL_REINFORCEMENT_HINT,
+      ...p,
+      ...(deduped ? { status: "duplicate" } : {}),
+      hint: deduped
+        ? PROPOSAL_DUPLICATE_HINT
+        : "hint" in p
+          ? p.hint
+          : PROPOSAL_REINFORCEMENT_HINT,
     };
   }
   return {
@@ -1336,6 +1355,7 @@ export async function executeMCPToolViaHubProtocol(
           summary: perm.summary,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
+          ...(perm.deduped ? { deduped: true } : {}),
         });
       }
       // Granted (operator authority) → same materialize door as approve
@@ -1437,6 +1457,7 @@ export async function executeMCPToolViaHubProtocol(
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           workspaceId,
+          ...(perm.deduped ? { deduped: true } : {}),
         });
       }
       // Granted (operator authority) → apply immediately. Attribute on the same

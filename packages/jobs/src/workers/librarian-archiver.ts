@@ -194,7 +194,7 @@ export async function handleLibrarianArchiver(): Promise<void> {
       const ageDays = Math.floor(
         (now.getTime() - project.createdAt.getTime()) / DAY_MS
       );
-      const proposal = await insertPendingProposal({
+      const { proposal } = await insertPendingProposal({
         // Pass the project's own workspace (may be null for pod-wide projects) —
         // same convention pod-hygiene-near-dup uses for its owner-reviewed rows.
         workspaceId: project.workspaceId,

@@ -18,6 +18,7 @@ import {
   entities,
   ProfileResolutionService,
   insertPendingProposal,
+  type InsertPendingProposalResult,
 } from "@synap/database";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
@@ -107,6 +108,13 @@ export type PermissionResult =
       reviewPath: string;
       /** Absolute clickable link into the app: `${PUBLIC_URL}/open/{id}`. */
       reviewUrl: string;
+      /**
+       * True when this proposal already existed as an identical PENDING
+       * agent/automation proposal and was returned instead of creating a
+       * duplicate. Surfaces to agents as a "duplicate" outcome so they stop
+       * re-proposing. Absent (undefined) on a freshly created proposal.
+       */
+      deduped?: boolean;
     }
   | { denied: true; reason: string };
 
@@ -1021,10 +1029,28 @@ export async function createPendingProposal(
    */
   tx?: DbTx
 ) {
+  // Public shape unchanged (returns the row) so the many simple callers stay
+  // as-is; they still benefit transparently from the SSOT's dedup guard (they
+  // get the existing row back, no duplicate). Only createProposal needs the
+  // `deduped` signal — it uses createPendingProposalRow directly.
+  const { proposal } = await createPendingProposalRow(input, tx);
+  return proposal;
+}
+
+/**
+ * Same as createPendingProposal but also reports whether the SSOT deduped the
+ * write (an identical PENDING agent proposal already existed). Threaded up by
+ * createProposal so it can skip the "created" notification for a dedup hit and
+ * tell the agent it already proposed this.
+ */
+async function createPendingProposalRow(
+  input: CreatePendingProposalInput,
+  tx?: DbTx
+): Promise<InsertPendingProposalResult> {
   // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
   // shape the automation write path uses via proposeAutomationWrite. createdBy
   // keeps this path's fallback (explicit → agent → requesting user).
-  const proposal = await insertPendingProposal(
+  const result = await insertPendingProposal(
     {
       workspaceId: input.workspaceId,
       targetType: input.targetType,
@@ -1047,12 +1073,13 @@ export async function createPendingProposal(
   );
 
   // Standalone callers get notifications inline; transaction callers run
-  // notifyProposalCreated() themselves after commit.
-  if (!tx) {
-    await notifyProposalCreated(proposal, input);
+  // notifyProposalCreated() themselves after commit. A dedup hit skips the
+  // notification — the row already notified when it was first created.
+  if (!tx && !result.deduped) {
+    await notifyProposalCreated(result.proposal, input);
   }
 
-  return proposal;
+  return result;
 }
 
 /**
@@ -1089,6 +1116,7 @@ async function createProposal(opts: {
   reasoning: string;
   reviewPath: string;
   reviewUrl: string;
+  deduped?: boolean;
 }> {
   const {
     userId,
@@ -1185,7 +1213,7 @@ async function createProposal(opts: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
-  const { proposal, pendingInput } = await db.transaction(async (tx) => {
+  const { proposal, pendingInput, deduped } = await db.transaction(async (tx) => {
     let reqEventId = requestedEventId;
     if (!reqEventId) {
       reqEventId = await logEvent(
@@ -1263,12 +1291,19 @@ async function createProposal(opts: {
       notificationDescription: reasoning ?? `${action} ${singularType}`,
     };
 
-    const created = await createPendingProposal(pendingInput, tx);
-    return { proposal: created, pendingInput };
+    const { proposal: created, deduped } = await createPendingProposalRow(
+      pendingInput,
+      tx
+    );
+    return { proposal: created, pendingInput, deduped };
   });
 
   // Post-commit notifications (broadcast / side-effects / notification center).
-  await notifyProposalCreated(proposal, pendingInput);
+  // A dedup hit returned a pre-existing proposal — it already notified when
+  // first created, so don't re-notify (avoids a double toast for the reviewer).
+  if (!deduped) {
+    await notifyProposalCreated(proposal, pendingInput);
+  }
 
   return {
     granted: false,
@@ -1278,6 +1313,7 @@ async function createProposal(opts: {
     reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
+    ...(deduped ? { deduped: true } : {}),
   };
 }
 

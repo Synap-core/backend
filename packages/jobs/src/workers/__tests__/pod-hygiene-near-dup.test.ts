@@ -21,7 +21,10 @@ vi.mock("@synap/database", () => {
     entities: {},
     entityVectors: {},
     proposals: {},
-    insertPendingProposal: vi.fn(),
+    insertPendingProposal: vi.fn(async () => ({
+      proposal: { id: "proposal-1" },
+      deduped: false,
+    })),
     eq: vi.fn(),
     and: vi.fn(),
     isNull: vi.fn(),

@@ -682,7 +682,7 @@ async function scanUser(userId: string): Promise<number> {
     const winnerEntity = data.winnerId === pair.a.id ? pair.a : pair.b;
     const workspaceId = winnerEntity.workspaceId;
 
-    const proposal = await insertPendingProposal({
+    const { proposal } = await insertPendingProposal({
       workspaceId,
       targetType: "entity",
       targetId: data.winnerId,

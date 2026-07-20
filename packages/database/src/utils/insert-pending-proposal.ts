@@ -1,6 +1,9 @@
+import { createHash } from "crypto";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
+import { stableStringify } from "./stable-stringify.js";
 
 /**
  * The canonical PENDING-proposal row INSERT.
@@ -56,17 +59,144 @@ export interface InsertPendingProposalInput {
   expiresAt?: Date | null;
 }
 
+export interface InsertPendingProposalResult {
+  /** The pending `proposals` row — freshly inserted, OR the pre-existing
+   *  identical one when `deduped` is true. */
+  proposal: typeof proposals.$inferSelect;
+  /**
+   * True when an identical PENDING proposal already existed and was returned
+   * instead of inserting a duplicate. Only ever true for agent/automation-
+   * authored proposals (see the guard in `insertPendingProposal`); human-authored
+   * proposals are never deduped. Lets the caller skip the "created" notification
+   * and tell the agent it already proposed this.
+   */
+  deduped: boolean;
+}
+
 /**
- * Insert a single PENDING `proposals` row and return the full inserted row.
+ * Payload keys that vary between two attempts to propose the SAME change — fresh
+ * request/correlation ids, per-run ids, the freshly-appended `.requested` event
+ * id, LLM-authored prose (reasoning/summary), and the before-snapshot context.
+ * They are envelope/plumbing, NOT the proposed change, so the dedup hash strips
+ * them; otherwise every retry would hash differently and dedup could never fire.
+ */
+const VOLATILE_DEDUP_KEYS = new Set([
+  "requestId",
+  "correlationId",
+  "requestedEventId",
+  "automationRunId",
+  "reasoning",
+  "summary",
+  "previousData",
+  "targetName",
+]);
+
+/**
+ * Canonical exact-match dedup hash for a pending proposal:
+ *   sha256( stableStringify({ workspaceId, proposalType, targetType,
+ *                             targetId?, payload }) )
+ *
+ * - `targetId` is INCLUDED for real-target actions (update/delete/attach/…) where
+ *   it identifies the thing being changed, and EXCLUDED for `create` — a create's
+ *   targetId is a fresh randomUUID per attempt (permission-check builds it as
+ *   `data.id ?? randomUUID()`), so hashing it would make every retry unique and
+ *   defeat dedup entirely.
+ * - `payload` is the stored `data` with the per-attempt VOLATILE_DEDUP_KEYS
+ *   stripped, then key-sorted by stableStringify — so two identical proposals
+ *   built in a different key order still hash equal.
+ */
+export function computeProposalDedupHash(p: {
+  workspaceId: string | null;
+  proposalType: string;
+  targetType: string;
+  targetId: string;
+  data: Record<string, unknown>;
+}): string {
+  const isCreate = p.proposalType === "create";
+  const payload: Record<string, unknown> = {};
+  for (const key of Object.keys(p.data)) {
+    if (VOLATILE_DEDUP_KEYS.has(key)) continue;
+    payload[key] = p.data[key];
+  }
+  const canonical = {
+    workspaceId: p.workspaceId ?? null,
+    proposalType: p.proposalType,
+    targetType: p.targetType,
+    ...(isCreate ? {} : { targetId: p.targetId }),
+    payload,
+  };
+  return createHash("sha256").update(stableStringify(canonical)).digest("hex");
+}
+
+/**
+ * Insert a single PENDING `proposals` row, or — for an agent/automation-authored
+ * proposal that exactly matches an existing PENDING one — return that existing
+ * row without inserting a duplicate. Result is `{ proposal, deduped }`.
  *
  * @param executor Optional transaction handle. When the caller is already
- *   inside a `db.transaction`, pass the tx so the INSERT joins it; otherwise the
- *   shared `db` connection is used.
+ *   inside a `db.transaction`, pass the tx so both the dedup SELECT and the
+ *   INSERT join it; otherwise the shared `db` connection is used.
  */
 export async function insertPendingProposal(
   input: InsertPendingProposalInput,
   executor: typeof db | DbTx = db
-): Promise<typeof proposals.$inferSelect> {
+): Promise<InsertPendingProposalResult> {
+  // DEDUP GUARD (agent/automation-authored only): prevent a duplicate pending
+  // proposal at the door instead of creating-then-rejecting. When an identical
+  // PENDING proposal already exists (same workspace + type + target + normalized
+  // payload, authored by the same agent, within the proposal TTL), return it
+  // rather than inserting a second row. Human-authored proposals (no
+  // agentUserId) are NEVER deduped — a person may deliberately file the same
+  // change twice. Exact-match by hash; hashed at read (no stored column / index
+  // this wave — a stored hash + unique index is the future optimization once
+  // candidate sets grow, and would also close the concurrent-insert race that
+  // read-then-insert leaves open for simultaneous duplicates).
+  if (input.agentUserId) {
+    const isCreate = input.proposalType === "create";
+    const ttlFloor = new Date(
+      Date.now() - PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000
+    );
+    const candidates = await executor
+      .select()
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.status, ProposalStatus.PENDING),
+          input.workspaceId == null
+            ? isNull(proposals.workspaceId)
+            : eq(proposals.workspaceId, input.workspaceId),
+          eq(proposals.proposalType, input.proposalType),
+          eq(proposals.targetType, input.targetType),
+          eq(proposals.agentUserId, input.agentUserId),
+          // A create's targetId is a fresh randomUUID per attempt, so filtering by
+          // it would never match a prior attempt — narrow by it only for real
+          // targets (update/delete/attach/…).
+          ...(isCreate ? [] : [eq(proposals.targetId, input.targetId)]),
+          gt(proposals.createdAt, ttlFloor)
+        )
+      );
+
+    const incomingHash = computeProposalDedupHash({
+      workspaceId: input.workspaceId,
+      proposalType: input.proposalType,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      data: input.data,
+    });
+    for (const candidate of candidates) {
+      const candidateHash = computeProposalDedupHash({
+        workspaceId: candidate.workspaceId,
+        proposalType: candidate.proposalType,
+        targetType: candidate.targetType,
+        targetId: candidate.targetId,
+        data: (candidate.data ?? {}) as Record<string, unknown>,
+      });
+      if (candidateHash === incomingHash) {
+        return { proposal: candidate, deduped: true };
+      }
+    }
+  }
+
   const [proposal] = await executor
     .insert(proposals)
     .values({
@@ -100,5 +230,5 @@ export async function insertPendingProposal(
     })
     .returning();
 
-  return proposal;
+  return { proposal, deduped: false };
 }

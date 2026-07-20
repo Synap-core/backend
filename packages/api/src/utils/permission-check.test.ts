@@ -53,11 +53,15 @@ vi.mock("@synap/database", async () => {
       transaction: vi.fn(async (cb) => cb({ insert: mockDbInsert })),
     },
     // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the proposal
-    // row shape createPendingProposal now delegates to. Returns a row with an id
-    // just like the mocked `db.insert(...).returning()` above.
+    // row shape createPendingProposal now delegates to. Returns
+    // `{ proposal, deduped }` (the new dedup-aware contract), with a row id just
+    // like the mocked `db.insert(...).returning()` above.
     insertPendingProposal: vi
       .fn()
-      .mockImplementation(async () => ({ id: randomUUID() })),
+      .mockImplementation(async () => ({
+        proposal: { id: randomUUID() },
+        deduped: false,
+      })),
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },

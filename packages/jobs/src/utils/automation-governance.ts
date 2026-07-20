@@ -45,6 +45,9 @@ import {
   verifyPermission,
   ProposalStatus,
   insertPendingProposal,
+  proposals,
+  eq,
+  and,
 } from "@synap/database";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { randomUUID } from "crypto";
@@ -217,7 +220,7 @@ async function proposeAutomationWrite(opts: {
   /** Workflow attribution (D3a): the executing step run + flow node id. */
   stepRunId?: string;
   nodeId?: string;
-}): Promise<{ proposed: true; proposalId: string }> {
+}): Promise<{ proposed: true; proposalId: string; deduped?: boolean }> {
   const {
     agentUserId,
     workspaceId,
@@ -232,6 +235,23 @@ async function proposeAutomationWrite(opts: {
     nodeId,
   } = opts;
 
+  // STEP-RUN IDEMPOTENCY (the pg-boss hole): the automation queue retries steps
+  // (retryLimit:3) with NO idempotency, so a redelivered step would re-propose.
+  // A (stepRunId, nodeId) pair identifies exactly one flow-node execution, so if
+  // a proposal already exists for it — in ANY status (a redelivery must not
+  // re-propose even when the first attempt was already approved/rejected) —
+  // return it instead of creating a second. Runs BEFORE the governance write.
+  if (stepRunId && nodeId) {
+    const [existing] = await db
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(and(eq(proposals.stepRunId, stepRunId), eq(proposals.nodeId, nodeId)))
+      .limit(1);
+    if (existing) {
+      return { proposed: true, proposalId: existing.id, deduped: true };
+    }
+  }
+
   const singularType = subjectType.endsWith("s")
     ? subjectType.slice(0, -1)
     : subjectType;
@@ -244,7 +264,7 @@ async function proposeAutomationWrite(opts: {
   // shape the chat-AI path uses via createPendingProposal. The hand-mirrored
   // insert that used to live here (with its documented drift risk) is gone; the
   // automation-specific `data` payload + side effects below stay here.
-  const proposal = await insertPendingProposal({
+  const { proposal, deduped } = await insertPendingProposal({
     workspaceId,
     targetType: singularType,
     targetId,
@@ -269,42 +289,45 @@ async function proposeAutomationWrite(opts: {
   });
 
   // Supplementary realtime nudge — the Reactions queue itself is DB-driven, so
-  // a broadcast failure must never block governance.
-  try {
-    await broadcastNotification({
-      userId: agentUserId,
-      requestId: proposal.id,
-      message: {
-        type: "proposal:created",
-        data: {
-          proposalId: proposal.id,
-          targetType: singularType,
-          targetId,
-          changeType: action,
-          status: ProposalStatus.PENDING,
-        },
+  // a broadcast failure must never block governance. Skipped on a dedup hit: the
+  // pre-existing row already broadcast + emitted these when it was first created.
+  if (!deduped) {
+    try {
+      await broadcastNotification({
+        userId: agentUserId,
         requestId: proposal.id,
-        status: "success",
-        timestamp: new Date().toISOString(),
+        message: {
+          type: "proposal:created",
+          data: {
+            proposalId: proposal.id,
+            targetType: singularType,
+            targetId,
+            changeType: action,
+            status: ProposalStatus.PENDING,
+          },
+          requestId: proposal.id,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch {
+      // non-critical
+    }
+
+    emitSideEffects({
+      subjectType: "proposal",
+      action: "created",
+      subjectId: proposal.id,
+      userId: agentUserId,
+      workspaceId,
+      data: {
+        proposalStatus: "created",
+        targetType: singularType,
+        changeType: action,
+        correlationId: resolvedCorrelationId,
       },
     });
-  } catch {
-    // non-critical
   }
-
-  emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    subjectId: proposal.id,
-    userId: agentUserId,
-    workspaceId,
-    data: {
-      proposalStatus: "created",
-      targetType: singularType,
-      changeType: action,
-      correlationId: resolvedCorrelationId,
-    },
-  });
 
   logger.info(
     {
@@ -312,9 +335,12 @@ async function proposeAutomationWrite(opts: {
       agentUserId,
       workspaceId,
       eventKey: `${subjectType}.${action}`,
+      deduped,
     },
-    "Automation write routed to attributed proposal"
+    deduped
+      ? "Automation write matched an existing pending proposal (deduped)"
+      : "Automation write routed to attributed proposal"
   );
 
-  return { proposed: true, proposalId: proposal.id };
+  return { proposed: true, proposalId: proposal.id, ...(deduped ? { deduped: true } : {}) };
 }

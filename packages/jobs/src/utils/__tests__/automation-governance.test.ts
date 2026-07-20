@@ -18,7 +18,10 @@ const {
   // proposeAutomationWrite now delegates the row INSERT to the shared
   // insertPendingProposal (SSOT in @synap/database); assert on its call args.
   const insertPendingProposalMock = vi.fn(
-    async (_input: Record<string, unknown>) => ({ id: "proposal-1" })
+    async (_input: Record<string, unknown>) => ({
+      proposal: { id: "proposal-1" },
+      deduped: false,
+    })
   );
   return {
     verifyPermissionMock: vi.fn(async () => ({ allowed: true })),
@@ -83,7 +86,10 @@ beforeEach(() => {
     reason: "default propose",
   });
   insertPendingProposalMock.mockClear();
-  insertPendingProposalMock.mockResolvedValue({ id: "proposal-1" });
+  insertPendingProposalMock.mockResolvedValue({
+    proposal: { id: "proposal-1" },
+    deduped: false,
+  });
   broadcastMock.mockClear();
   emitSideEffectsMock.mockClear();
   // Owning-user lookup returns an agent user (so agent governance applies and

@@ -10,7 +10,10 @@ vi.mock("@synap/database", () => ({
   projectMembers: {},
   relations: {},
   proposals: {},
-  insertPendingProposal: vi.fn(),
+  insertPendingProposal: vi.fn(async () => ({
+    proposal: { id: "proposal-1" },
+    deduped: false,
+  })),
   BELONGS_TO_PROJECT: "belongs_to_project",
   ProposalStatus: { PENDING: "pending" },
   eq: vi.fn(),
