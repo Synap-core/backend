@@ -1597,7 +1597,18 @@ export const proposalsRouter = router({
       }
 
       if (input.status === "pending") {
-        conditions.push(eq(proposals.status, ProposalStatus.PENDING));
+        // "Pending" = the actionable queue. APPROVAL_FAILED belongs here: the
+        // user clicked Approve but execution failed, so the proposal is still
+        // UNRESOLVED and needs their attention (retry or dismiss). Hiding it
+        // (as a plain PENDING-only filter would) is exactly the zombie the user
+        // can't see. Terminal states (approved/rejected/reverted/withdrawn) are
+        // excluded as before.
+        conditions.push(
+          inArray(proposals.status, [
+            ProposalStatus.PENDING,
+            ProposalStatus.APPROVAL_FAILED,
+          ])
+        );
       } else if (input.status === "validated") {
         // "Approved" tab = applied proposals: BOTH human-approved AND
         // auto-approved (both are revertable, and the board's count folds
@@ -2296,14 +2307,40 @@ export const proposalsRouter = router({
         });
       }
 
-      return executor.execute({
-        proposal: proposal as never,
-        payload,
-        userId,
-        input,
-        ctx,
-        deps: approveDeps,
-      });
+      // The executor flips status → APPROVED only on success. If it throws
+      // (e.g. the target project/entity was deleted after the proposal was
+      // filed), the proposal would otherwise stay PENDING forever — a zombie
+      // the user clicked Approve on but can never resolve. We do NOT reject
+      // (the user's Approve intent is real and feeds the AI flywheel); instead
+      // we record the terminal failure as APPROVAL_FAILED with the error, then
+      // re-throw so the caller still sees the failure (frontend toast fires).
+      // A retry of approve is allowed — there is no PENDING-only status guard
+      // above, so re-approving an APPROVAL_FAILED proposal re-runs the executor
+      // and flips to APPROVED on success.
+      try {
+        return await executor.execute({
+          proposal: proposal as never,
+          payload,
+          userId,
+          input,
+          ctx,
+          deps: approveDeps,
+        });
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : String(err);
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVAL_FAILED,
+            rejectionReason: errorMessage,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        throw err;
+      }
     }),
 
   /**
@@ -3105,7 +3142,13 @@ export const proposalsRouter = router({
             continue;
           }
 
-          if (proposal.status !== ProposalStatus.PENDING) {
+          // PENDING or APPROVAL_FAILED are the retryable states (both surface in
+          // the actionable queue). A previously-failed approval can be retried in
+          // a batch just like a single Retry; every terminal state is skipped.
+          if (
+            proposal.status !== ProposalStatus.PENDING &&
+            proposal.status !== ProposalStatus.APPROVAL_FAILED
+          ) {
             results.push({
               proposalId,
               success: false,
