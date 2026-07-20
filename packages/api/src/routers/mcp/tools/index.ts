@@ -337,6 +337,11 @@ export const tools = {
             },
             title: { type: "string" },
             description: { type: "string" },
+            content: {
+              type: "string",
+              description:
+                "LONG-FORM markdown body (the write-up itself, not a summary). Materialized into a versioned document linked to the entity — so a note/article/research entity and its body land in ONE call. Use `description` for a short preview and `content` for anything multi-paragraph; do NOT stuff long text into `properties`.",
+            },
             properties: {
               type: "object",
               description:
@@ -394,7 +399,7 @@ export const tools = {
       {
         name: "synap_create_document",
         description:
-          "Create a long-form markdown document, optionally attached to an entity — for meeting notes, research, plans; content that doesn't fit entity properties.",
+          "Create a standalone long-form markdown document — meeting notes, research, plans; content that doesn't fit entity properties. Pass `entityId` to ATTACH it to an existing entity (sets that entity's linked document). If you are creating the entity too, prefer synap_create_entity with `content` — that makes the entity and its body in ONE governed call. Attachment only happens when the document itself was auto-approved; a proposal-gated document has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -402,6 +407,11 @@ export const tools = {
             content: {
               type: "string",
               description: "Document content (markdown or plain text)",
+            },
+            entityId: {
+              type: "string",
+              description:
+                "Optional UUID of an EXISTING entity to attach this document to. The attach is a separate governed entity update — its own outcome comes back under `attached`.",
             },
             workspaceId: { type: "string" },
           },
@@ -411,7 +421,7 @@ export const tools = {
       {
         name: "synap_remember_fact",
         description:
-          "Store a loose fact or knowledge fragment in persistent memory. Use for preferences, context, and facts recalled by keyword. Always auto-approved (never proposed). For structured objects use synap_create_entity.",
+          'Store a durable fact about the user (preference, habit, working style, technical context) as a governed `user_observation`. Returns status:"proposed" with a `reviewUrl` when the fact is your own inference — that is normal, not an error — or status:"created" when you pass userStated:true because the user told you directly. Returns the record\'s id so you can link or revert it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -421,7 +431,29 @@ export const tools = {
                 "User ID (auto-injected from API key if not provided)",
             },
             fact: { type: "string", description: "The fact to remember" },
-            workspaceId: { type: "string" },
+            confidence: {
+              type: "number",
+              description:
+                "How sure you are, 0–1 (default 0.8). Stored on the observation; it does NOT change the governance outcome.",
+            },
+            category: {
+              type: "string",
+              enum: [
+                "working_style",
+                "communication",
+                "focus",
+                "preferences",
+                "habits",
+                "technical",
+              ],
+              description:
+                "Which bucket the observation belongs to (default 'preferences').",
+            },
+            userStated: {
+              type: "boolean",
+              description:
+                "true ONLY if the user directly stated this; do not infer. This is the single signal that makes the write auto-approve instead of proposing.",
+            },
           },
           required: ["fact"],
         },
@@ -769,6 +801,63 @@ export const tools = {
           required: ["sessionId"],
         },
       },
+      {
+        name: "synap_get_session",
+        description:
+          "Re-find a focus session — read-only. Call it with NO arguments to get YOUR CURRENT session (the most recent non-closed one) when you've lost the id that synap_start_session returned; pass sessionId to fetch a specific one. Returns the session with its goal, status, progress, stage and expectedOutputs, or { session: null } when there is none. Always yours: sessions are scoped to the calling user.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description:
+                "Optional focus session UUID. Omit to get your current (most recent non-closed) session.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "synap_list_sessions",
+        description:
+          "List YOUR focus sessions, newest first — read-only. Use it to see what work is open before starting something new (don't start a second session for work that already has one), or to find a session you closed earlier. Filter by status and/or narrow to a workspace or project.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              enum: [
+                "active",
+                "paused",
+                "closed",
+                "forming",
+                "scheduled",
+                "failed",
+                "cancelled",
+                "open",
+                "all",
+              ],
+              description:
+                "'open' (default) = every non-terminal session (active/paused/forming/scheduled). 'all' = no status filter. Or name one exact status.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Optional: only sessions in this workspace.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only sessions scoped to this project.",
+            },
+            subjectEntityId: {
+              type: "string",
+              description:
+                "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
+            },
+            limit: { type: "number", default: 20 },
+          },
+          required: [],
+        },
+      },
       // ── Cell authoring & renderer binding ───────────────────────────────────
       {
         name: "synap_create_cell",
@@ -968,13 +1057,113 @@ export const tools = {
       {
         name: "synap_capture",
         description:
-          "THE free-text write door: hand it anything worth remembering and the capture pipeline structures it into the right entities. Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only — never invent a workspace from capture. Hint profileSlug to guide extraction; global:true stores a pod-wide runbook; use synap_create_entity when you already know the exact slug + fields.",
+          "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n" +
+          "• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n" +
+          "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
+          "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
+          "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
+          "\n" +
+          'EXAMPLE 1 — raw text:\n{ "text": "Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March." }\n' +
+          "\n" +
+          'EXAMPLE 2 — one structured entity, with properties + a long body:\n{ "entities": [ { "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com", "role": "Head of Data" }, "content": "## Notes\\nOwns the data platform. Wants a March demo." } ] }\n' +
+          "\n" +
+          'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
+          "\n" +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS — give the user the reviewUrl.\n' +
+          'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (an entity with that email/phone/url already exists — its id is returned; enrich it instead of duplicating) or "no-durable-content" (nothing storable was sent).',
         inputSchema: {
           type: "object",
           properties: {
             text: {
               type: "string",
-              description: "Free-form text to parse (max 8000 chars)",
+              description:
+                "Free-form text to parse (max 8000 chars). Send this when you have prose. If you ALSO send `entities[]`, the structured payload is used and this text is kept on the proposal as provenance.",
+            },
+            entities: {
+              type: "array",
+              description:
+                "Structured payload: the things to write. Each needs a `profileSlug`; `ref` is only required when a relation points at it (it is auto-assigned otherwise).",
+              items: {
+                type: "object",
+                properties: {
+                  ref: {
+                    type: "string",
+                    description:
+                      "Local id you invent, unique within this call — relations point at it. Optional when you send no relations.",
+                  },
+                  profileSlug: {
+                    type: "string",
+                    description:
+                      "Entity kind (e.g. person, company, deal, note). REQUIRED.",
+                  },
+                  title: {
+                    type: "string",
+                    description: "Display name. Defaults to `ref` if omitted.",
+                  },
+                  description: {
+                    type: "string",
+                    description: "Short preview text.",
+                  },
+                  content: {
+                    type: "string",
+                    description:
+                      "Long-form markdown body — materialized as a linked document on approval.",
+                  },
+                  properties: {
+                    type: "object",
+                    description:
+                      "Typed fields. Include email / phone / url when known: they are STRONG identity signals and drive dedup against existing entities.",
+                  },
+                  existingEntityId: {
+                    type: "string",
+                    description:
+                      "UUID of an entity that already exists — LINK it instead of creating a duplicate.",
+                  },
+                  facets: {
+                    type: "array",
+                    description:
+                      "Kind + Facets: role-profiles to attach on approval (a role is a facet, never a second entity).",
+                    items: {
+                      type: "object",
+                      properties: {
+                        profileSlug: { type: "string" },
+                        status: { type: "string" },
+                        properties: { type: "object" },
+                        contextRef: {
+                          type: "string",
+                          description:
+                            "Optional ref of another entity in this call that gives the role its context.",
+                        },
+                      },
+                      required: ["profileSlug"],
+                    },
+                  },
+                },
+                required: ["profileSlug"],
+              },
+            },
+            relations: {
+              type: "array",
+              description:
+                "The graph's edges (needs `entities[]`). Both refs MUST name entities in this same call.",
+              items: {
+                type: "object",
+                properties: {
+                  sourceRef: { type: "string" },
+                  targetRef: { type: "string" },
+                  type: {
+                    type: "string",
+                    description:
+                      "Relation type — free string, e.g. 'works_at', 'related_to', 'contact_for', 'references'.",
+                  },
+                },
+                required: ["sourceRef", "targetRef", "type"],
+              },
+            },
+            summary: {
+              type: "string",
+              description:
+                "One line the reviewer sees on the proposal card (structured payloads). Auto-generated when omitted — write your own, it is what the user reads.",
             },
             profileSlug: {
               type: "string",
@@ -1010,7 +1199,126 @@ export const tools = {
                 "How much latitude the backend resolver has to place the capture. Placement is DERIVED by the backend, not free-picked by you: the resolver files pod-wide kinds pod-wide and computes a workspace lens from the ontology (a role enabled in exactly one of your workspaces) and context (bound channel / focus session). You do NOT choose a workspace and cannot invent one — you are only ever consulted as a TIE-BREAKER among the pre-approved candidates the resolver could not separate, and you may abstain. 'auto' (default) = let the resolver place it (deterministic when possible; tie-break only when >1 candidate survive; returned as movedToWorkspace). 'ask' = never move silently; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = keep the caller's/session workspace, no resolution. To force a specific workspace, pass an explicit workspaceId (rung-1 explicit placement) rather than expecting to route there by inference.",
             },
           },
-          required: ["text"],
+          // No `required`: the payload is a gradient — `text` OR `entities[]`
+          // (or both). An empty call is REJECTED at the door with
+          // reason "no-durable-content" and a message saying what to send.
+        },
+      },
+      {
+        name: "synap_capture_graph",
+        description:
+          "DEPRECATED — use `synap_capture` instead: it takes this exact `entities[]` + `relations[]` payload (plus plain `text`), routes to the SAME core, and returns the same receipt. This name is kept only so callers that already learned it keep working.\n" +
+          "\n" +
+          "THE composite write door: propose MANY entities AND the links between them as ONE reviewable proposal. Use this instead of a chain of synap_create_entity + synap_link_entities calls whenever you already know the shape of the graph (a person at a company working on a deal; a meeting with attendees; a scraped roster). The user reviews and accepts ONCE, and everything materializes together — nothing half-lands.\n" +
+          "\n" +
+          "HOW REFS WORK: every entity carries a `ref` — a short local id YOU invent (any unique string, e.g. 'p1', 'acme'). Relations point at those refs, so you can link entities that don't exist yet; on approval each ref is swapped for the real entity id. Refs must be unique within the call, and every relation/binding ref must name an entity in the same call. To link something that ALREADY exists, still give it a `ref` but add `existingEntityId` — it will be linked, not re-created. Identity dedup runs automatically (email/phone/url are strong signals), so a person you list who already exists is reused.\n" +
+          "\n" +
+          'EXAMPLE 1 — a person at a company:\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "url": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
+          "\n" +
+          'EXAMPLE 2 — a new contact linked to an EXISTING deal, with a role facet and a long-form body:\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Grace Hopper", "properties": { "email": "grace@navy.mil" }, "facets": [ { "profileSlug": "client" } ] }, { "ref": "d1", "profileSlug": "deal", "existingEntityId": "7f3c…-uuid" }, { "ref": "n1", "profileSlug": "note", "title": "Kickoff call notes", "content": "## Agenda\\n…" } ], "relations": [ { "sourceRef": "p1", "targetRef": "d1", "type": "contact_for" }, { "sourceRef": "n1", "targetRef": "d1", "type": "references" } ] }\n' +
+          "\n" +
+          'Returns { proposalId, reviewUrl, entityCount, relationCount, writeReceipt:{ state:"pending" } } — "pending" is SUCCESS, not an error: give the user the reviewUrl.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            entities: {
+              type: "array",
+              description:
+                "The graph's nodes (at least one). Each needs a unique local `ref` + a `profileSlug` (discover slugs with synap_list_profiles).",
+              items: {
+                type: "object",
+                properties: {
+                  ref: {
+                    type: "string",
+                    description:
+                      "Local id you invent, unique within this call — relations point at it.",
+                  },
+                  profileSlug: {
+                    type: "string",
+                    description:
+                      "Entity kind (e.g. person, company, deal, note).",
+                  },
+                  title: {
+                    type: "string",
+                    description: "Display name. Defaults to `ref` if omitted.",
+                  },
+                  description: {
+                    type: "string",
+                    description: "Short preview text.",
+                  },
+                  content: {
+                    type: "string",
+                    description:
+                      "Long-form markdown body — materialized as a linked document on approval.",
+                  },
+                  properties: {
+                    type: "object",
+                    description:
+                      "Typed fields. Include email / phone / url when known: they are STRONG identity signals and drive dedup against existing entities.",
+                  },
+                  existingEntityId: {
+                    type: "string",
+                    description:
+                      "UUID of an entity that already exists — LINK it instead of creating a duplicate.",
+                  },
+                  facets: {
+                    type: "array",
+                    description:
+                      "Kind + Facets: role-profiles to attach on approval (a role is a facet, never a second entity).",
+                    items: {
+                      type: "object",
+                      properties: {
+                        profileSlug: { type: "string" },
+                        status: { type: "string" },
+                        properties: { type: "object" },
+                        contextRef: {
+                          type: "string",
+                          description:
+                            "Optional ref of another entity in this call that gives the role its context.",
+                        },
+                      },
+                      required: ["profileSlug"],
+                    },
+                  },
+                },
+                required: ["ref", "profileSlug"],
+              },
+            },
+            relations: {
+              type: "array",
+              description:
+                "The graph's edges. Both refs MUST name entities in this same call.",
+              items: {
+                type: "object",
+                properties: {
+                  sourceRef: { type: "string" },
+                  targetRef: { type: "string" },
+                  type: {
+                    type: "string",
+                    description:
+                      "Relation type — free string, e.g. 'works_at', 'related_to', 'contact_for', 'references'.",
+                  },
+                },
+                required: ["sourceRef", "targetRef", "type"],
+              },
+            },
+            summary: {
+              type: "string",
+              description:
+                "One line the reviewer sees on the proposal card. Auto-generated when omitted — write your own, it is what the user reads.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace to file the proposal in (usually pre-set by the connection URL). Omit for pod-wide.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project id — every newly created entity is filed into it on approval.",
+            },
+          },
+          required: ["entities"],
         },
       },
 
@@ -1366,7 +1674,16 @@ export const tools = {
     userId: string,
     apiKeyScopes: string[],
     sessionUserId?: string,
-    agentUserId?: string
+    agentUserId?: string,
+    /**
+     * AMBIENT focus-session handle — the MCP URL's `?sessionId=`, injected
+     * server-side by the transport (routers/mcp/index.ts). It is deliberately
+     * NOT part of `scopedArgs` and is NEVER advertised on a tool schema: putting
+     * a bookkeeping handle in front of the model on every tool would make the
+     * advertised schemas dishonest. An explicit `args.sessionId` (the session
+     * tools) always wins; this is only the fallback.
+     */
+    ambientSessionId?: string
   ): Promise<CallToolResult> {
     // THE error door. Every MCP tool call flows through this one seam, so the
     // boundary lives here and nowhere else: a thrown error becomes an
@@ -1393,7 +1710,8 @@ export const tools = {
         userId,
         apiKeyScopes,
         sessionUserId,
-        agentUserId
+        agentUserId,
+        ambientSessionId
       );
     } catch (err) {
       return toSafeToolError(err, name);

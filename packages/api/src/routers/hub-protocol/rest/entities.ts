@@ -31,8 +31,8 @@ import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership
 
 import { uploadBufferAsFileEntity, MAX_FILE_SIZE } from "../../file-upload.js";
 import { relationsRouter } from "../../relations.js";
-import { resolveEntityByName } from "../../../services/entity-resolution.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
+import { buildCreateEntityReceipt } from "../write-receipt.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   retrieve,
@@ -69,194 +69,9 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
-/** A single resolution suggestion / auto-connected facet (ids + names). */
-interface ResolutionSuggestion {
-  id: string;
-  name: string;
-  profileSlug: string;
-}
-
-/** The `resolution` block attached to a create response (additive). */
-interface CreateResolutionBlock {
-  /** SAME profile + SAME name → the agent should consider updating this instead. */
-  existingSameProfile?: ResolutionSuggestion;
-  /** DIFFERENT-profile facets we auto-connected the new entity to. */
-  autoConnected: Array<ResolutionSuggestion & { relation: string }>;
-  /** Everything worth a second look: the auto-connected facets (shallow). */
-  suggestions: ResolutionSuggestion[];
-}
-
-/**
- * Normalize the tRPC create result into a truthful transport receipt without
- * changing the legacy status/id envelope. The create router can materialize
- * the primary entity before a non-atomic facet follow-up fails, so callers
- * need `partial` rather than a misleading all-or-nothing success claim.
- */
-function buildCreateWriteReceipt(input: {
-  result: Record<string, unknown>;
-  profileSlug: string;
-  effectiveWorkspaceId: string | null;
-  projectId?: string;
-  source?: string;
-}) {
-  const rawFacets = Array.isArray(input.result.facets)
-    ? input.result.facets
-    : [];
-  const facets = rawFacets.flatMap((facet) => {
-    if (!facet || typeof facet !== "object") return [];
-    const row = facet as Record<string, unknown>;
-    if (typeof row.slug !== "string") return [];
-    return [
-      {
-        slug: row.slug,
-        outcome:
-          typeof row.outcome === "string"
-            ? row.outcome
-            : typeof row.status === "string"
-              ? row.status
-              : "unknown",
-        ...(typeof row.facetId === "string" ? { facetId: row.facetId } : {}),
-        ...(typeof row.proposalId === "string"
-          ? { proposalId: row.proposalId }
-          : {}),
-        ...(typeof row.error === "string" ? { error: row.error } : {}),
-      },
-    ];
-  });
-  const status = input.result.status;
-  const pending = status === "proposed";
-  const partial = !pending && facets.some((facet) => facet.outcome === "error");
-  const warnings = facets
-    .filter((facet) => facet.outcome === "dropped" || facet.outcome === "error")
-    .map((facet) =>
-      facet.error
-        ? `Facet ${facet.slug}: ${facet.error}`
-        : `Facet ${facet.slug} was ${facet.outcome}`
-    );
-
-  const state: "pending" | "applied" | "partial" = pending
-    ? "pending"
-    : partial
-      ? "partial"
-      : "applied";
-  return {
-    state,
-    ...(typeof input.result.proposalId === "string"
-      ? { proposalId: input.result.proposalId }
-      : {}),
-    ...(typeof input.result.reviewUrl === "string"
-      ? { reviewUrl: input.result.reviewUrl }
-      : {}),
-    ...(typeof input.result.id === "string"
-      ? { entityId: input.result.id }
-      : {}),
-    ...(typeof input.result.proposedEntityId === "string"
-      ? { proposedEntityId: input.result.proposedEntityId }
-      : {}),
-    profileSlug: input.profileSlug,
-    effectiveWorkspaceId: input.effectiveWorkspaceId,
-    ...(input.projectId && !pending ? { projectId: input.projectId } : {}),
-    ...(input.source ? { source: input.source } : {}),
-    ...(facets.length ? { facets } : {}),
-    ...(warnings.length ? { warnings } : {}),
-  };
-}
-
-/**
- * Run exact-name resolution around a just-created entity and (a) auto-connect
- * cross-profile facets via a `same_subject` relation (governed by the SAME
- * proposal/auto path as any relation write) and (b) return an advisory block.
- *
- * ADVISORY ONLY — every failure path returns `undefined`, never throws, so the
- * underlying entity write is never blocked by resolution.
- */
-async function buildCreateResolution(params: {
-  scopes: string[];
-  title: string;
-  profileSlug: string;
-  userId: string;
-  createdId?: string;
-  effectiveWorkspaceId: string | null;
-  resolvedAgentUserId?: string;
-  reasoning?: string;
-}): Promise<CreateResolutionBlock | undefined> {
-  try {
-    const { sameProfile, otherProfiles } = await resolveEntityByName({
-      name: params.title,
-      targetProfileSlug: params.profileSlug,
-      userId: params.userId,
-      excludeId: params.createdId,
-    });
-
-    if (!sameProfile && otherProfiles.length === 0) return undefined;
-
-    const autoConnected: CreateResolutionBlock["autoConnected"] = [];
-
-    // Auto-connect ONLY same-name + different-profile facets, and only when we
-    // have a concrete created entity id to connect FROM (proposed entities have
-    // no id yet — skip; the suggestion is still surfaced so the agent sees it).
-    if (params.createdId && otherProfiles.length > 0) {
-      const relCtx = await createHubProtocolCallerContext(
-        params.userId,
-        params.scopes,
-        params.effectiveWorkspaceId ?? undefined
-      );
-      const relCaller = relationsRouter.createCaller(
-        relCtx as Parameters<typeof relationsRouter.createCaller>[0]
-      );
-      for (const facet of otherProfiles) {
-        try {
-          await relCaller.create({
-            sourceEntityId: params.createdId,
-            targetEntityId: facet.id,
-            type: "same_subject",
-            ...(params.effectiveWorkspaceId
-              ? { workspaceId: params.effectiveWorkspaceId }
-              : {}),
-          });
-          autoConnected.push({
-            id: facet.id,
-            name: facet.name,
-            profileSlug: facet.profileSlug,
-            relation: "same_subject",
-          });
-        } catch (relErr) {
-          // A single auto-connect failure (e.g. cross-workspace facet, missing
-          // workspace) must not sink the whole resolution block.
-          logger.warn(
-            { relErr, facetId: facet.id, createdId: params.createdId },
-            "auto-connect same_subject failed"
-          );
-        }
-      }
-    }
-
-    // suggestions = the cross-profile facets worth a second look (shallow: the
-    // same set we auto-connected, surfaced explicitly for the agent).
-    const suggestions: ResolutionSuggestion[] = otherProfiles.map((e) => ({
-      id: e.id,
-      name: e.name,
-      profileSlug: e.profileSlug,
-    }));
-
-    return {
-      ...(sameProfile
-        ? {
-            existingSameProfile: {
-              id: sameProfile.id,
-              name: sameProfile.name,
-              profileSlug: sameProfile.profileSlug,
-            },
-          }
-        : {}),
-      autoConnected,
-      suggestions,
-    };
-  } catch (err) {
-    logger.warn({ err }, "buildCreateResolution failed (resolution omitted)");
-    return undefined;
-  }
-}
+// NOTE: `buildCreateWriteReceipt` + `buildCreateResolution` (and their types)
+// moved to ../write-receipt.ts so MCP and any other transport can emit the
+// IDENTICAL receipt. This file now only calls `buildCreateEntityReceipt`.
 
 /** The shallow `impact` block attached to an update response (additive). */
 interface UpdateImpactBlock {
@@ -1099,6 +914,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         description: "Missing scope",
         content: { "application/json": { schema: ErrorSchema } },
       },
+      404: {
+        description: "Referenced profile not found",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       500: {
         description: "Internal error",
         content: { "application/json": { schema: ErrorSchema } },
@@ -1238,15 +1057,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // exists under the same name, and auto-connect cross-profile facets.
       // ADVISORY — any failure here must NOT break the write (the entity is
       // already created above). The `resolution` block is purely additive.
-      const resolution = await buildCreateResolution({
+      const { writeReceipt, resolution } = await buildCreateEntityReceipt({
+        result: result as Record<string, unknown>,
+        profileSlug,
+        effectiveWorkspaceId,
+        userId,
         scopes: c.get("scopes") as string[],
         title: body.title,
-        profileSlug,
-        userId,
-        createdId: result.id,
-        effectiveWorkspaceId,
-        resolvedAgentUserId,
-        reasoning: body.reasoning,
+        ...(body.projectId ? { projectId: body.projectId } : {}),
+        ...(body.source ? { source: body.source } : {}),
+        ...(resolvedAgentUserId ? { resolvedAgentUserId } : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
 
       // Echo back the resolved workspace context so external callers can
@@ -1256,22 +1077,21 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           ...result,
           effectiveWorkspaceId,
-          writeReceipt: buildCreateWriteReceipt({
-            result: result as Record<string, unknown>,
-            profileSlug,
-            effectiveWorkspaceId,
-            projectId: body.projectId,
-            source: body.source,
-          }),
+          writeReceipt,
           ...(resolution ? { resolution } : {}),
         },
         200
       );
     } catch (err) {
       logger.error({ err }, "createEntity failed");
+      // Classify instead of a blanket 500: a PropertyValidationError (unknown /
+      // invalid property) is a fixable CLIENT mistake and must come back as 400
+      // with its message, so the agent can correct itself. `facetErrorStatus`
+      // (defined further down, same closure) already walks the cause chain and
+      // duck-types the codes/names; genuinely-unknown errors still return 500.
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });
@@ -1883,6 +1703,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         description: "Forbidden",
         content: { "application/json": { schema: ErrorSchema } },
       },
+      404: {
+        description: "Entity not found",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       500: {
         description: "Internal error",
         content: { "application/json": { schema: ErrorSchema } },
@@ -2004,9 +1828,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json({ ...result, ...(impact ? { impact } : {}) }, 200);
     } catch (err) {
       logger.error({ err, entityId }, "updateEntity failed");
+      // Same classification as POST /entities — property-validation failures are
+      // 400s the caller can fix, not 500s.
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });

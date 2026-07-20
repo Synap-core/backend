@@ -42,6 +42,7 @@ const FROZEN: Record<string, number> = {
   "packages/api/src/routers/webhooks-inbound.ts": 1,
   "packages/api/src/services/event-end/run-event-end.ts": 1,
   "packages/api/src/services/event-sync/run-event-sync.ts": 1,
+  "packages/api/src/utils/assert-known-profile-slug.ts": 1, // JSDoc: names the row-blind fallback it deliberately preserves, not code
   "packages/api/src/utils/user-scoped.ts": 1, // JSDoc example, not code
   "packages/database/src/repositories/entity-repository.ts": 1,
   "packages/database/src/services/facet-resolution-service.ts": 1, // the DOOR

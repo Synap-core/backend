@@ -38,7 +38,7 @@ import {
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
-  profileSlugScopeCondition,
+  profileSlugScopeConditionFromRows,
 } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -52,6 +52,7 @@ import type { Context } from "../../context.js";
 import type { ScopedDb } from "../../access/scoped-db.js";
 import type { ContextObjectType } from "../../utils/resolve-or-create-channel.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
   placeArtboardDeck,
   ArtboardDeckSlideSchema,
@@ -436,10 +437,16 @@ const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
   // Polymorphic (Kind + Facets): a role slug (client/partner/…) matches via
   // the facet EXISTS, a kind slug via entities.type — same one-door routing
   // as entities.list, so agents querying by role get rows post-conversion.
+  //
+  // Fail closed first: an agent that invents a slug ("crm-lead" where the pod
+  // says "lead") must get a typed "unknown profile" it can act on, not an
+  // empty result set it will report as "you have none".
+  const slugRows = await assertKnownProfileSlug(db, input.profileSlug);
   const conditions: SQL[] = [
-    await profileSlugScopeCondition(
+    profileSlugScopeConditionFromRows(
       db,
       input.profileSlug,
+      slugRows,
       facetVisibilityScope
     ),
   ];

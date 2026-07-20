@@ -18,6 +18,7 @@ import {
   PropertyValidationService,
   PropertyIndexService,
 } from "../services/index.js";
+import type { UnmodeledProperty } from "../services/property-validation-service.js";
 import {
   ProfileNotFoundError,
   PropertyValidationError,
@@ -64,6 +65,35 @@ function runBoundedSignalWrite(task: () => Promise<void>): void {
   }
 }
 
+/**
+ * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
+ * caller aimed the generic create door at something that is not an entity
+ * (a project, a multi-kind role). These were `throw new Error(...)`, which no
+ * cause-chain mapper can classify, so the clearest teaching prose in the
+ * codebase reached the client as a 500 ("Database operation failed") and the
+ * agent learned nothing.
+ *
+ * Extends `PropertyValidationError` deliberately: that class is ALREADY mapped
+ * to 400 by `mapDbErrorToTRPC` (instanceof), `isDbDomainError`, and the hub
+ * REST `facetErrorStatus` (duck-typed on `.name`). A brand-new name would fall
+ * straight back to 500 without edits in @synap/api — so the inherited
+ * `name = "PropertyValidationError"` is kept on purpose; the specific case is
+ * carried by `guard` for callers that want to branch on it.
+ *
+ * The message is the teaching prose VERBATIM — the inherited
+ * "Property validation failed for profile X: ..." envelope is overwritten.
+ */
+export class EntityCreateRejectedError extends PropertyValidationError {
+  constructor(
+    public readonly guard: "project-is-not-an-entity" | "role-is-not-a-kind",
+    message: string,
+    profileId: string
+  ) {
+    super([{ field: "profileSlug", message }], profileId);
+    this.message = message;
+  }
+}
+
 export interface CreateEntityInput {
   /**
    * Pin the new row's id instead of letting the DB mint one. Used by the
@@ -105,6 +135,21 @@ export interface CreateEntityInput {
    */
   skipValidation?: boolean;
 }
+
+/**
+ * What `create()` / `update()` hand back: the written row PLUS the advisory
+ * signal the property validator produced for it.
+ *
+ * `unmodeled` lists keys the caller wrote that the profile does not model.
+ * They ARE stored (verbatim, in the JSONB bag — the flexible-schema tolerance
+ * is deliberate back-compat) and they never make the write fail; the field
+ * exists so a caller that invented a key learns it invented one, with a
+ * `didYouMean` hint, instead of reading a 200 as "modelled and queryable".
+ *
+ * OMITTED when there is nothing to report, so the common path returns exactly
+ * the row it always did (this object is spread into API responses).
+ */
+export type WrittenEntity = Entity & { unmodeled?: UnmodeledProperty[] };
 
 export interface UpdateEntityInput {
   title?: string;
@@ -225,7 +270,15 @@ export class EntityRepository extends BaseRepository<
    * Create a new entity with profile-based validation
    * Emits: entities.create.completed
    */
-  async create(data: CreateEntityInput, userId: string): Promise<Entity> {
+  async create(
+    data: CreateEntityInput,
+    userId: string
+  ): Promise<WrittenEntity> {
+    // Advisory: unknown property keys seen by the validator on this write.
+    // Collected across BOTH validation passes (the role-adapter's facet pass
+    // in 1a and the entity pass in 2) and returned on the row — never a reason
+    // to reject, never a change to what gets stored.
+    const unmodeled: UnmodeledProperty[] = [];
     // 1. Resolve profile (required)
     const profileRef = data.profileId ?? data.profileSlug;
     if (!profileRef) {
@@ -252,8 +305,10 @@ export class EntityRepository extends BaseRepository<
     // remaining fossils stay allowed (this is the create path; update is
     // separate). Route the caller to the real project door.
     if (profile.slug === "project") {
-      throw new Error(
-        "Projects are not entities. Use the project door (MCP synap_create_project / POST /api/hub/projects) — agent creation requires evidenceEntityIds (≥5). To group work, link entities to an existing project via belongs_to_project."
+      throw new EntityCreateRejectedError(
+        "project-is-not-an-entity",
+        "Projects are not entities. Use the project door (MCP synap_create_project / POST /api/hub/projects) — agent creation requires evidenceEntityIds (≥5). To group work, link entities to an existing project via belongs_to_project.",
+        profile.id
       );
     }
 
@@ -286,11 +341,13 @@ export class EntityRepository extends BaseRepository<
     if (profile.profileKind === "role" && !data.skipValidation) {
       const applicable = profile.applicableKinds ?? [];
       if (applicable.length !== 1) {
-        throw new Error(
+        throw new EntityCreateRejectedError(
+          "role-is-not-a-kind",
           `Profile '${profile.slug}' is a role (a hat), not a kind — it cannot ` +
             `be created as an entity. Resolve or create the target entity ` +
             `(applicable kinds: ${applicable.join(", ") || "none"}) first, ` +
-            `then attach the '${profile.slug}' facet to it.`
+            `then attach the '${profile.slug}' facet to it.`,
+          profile.id
         );
       }
       const target = await this.profileResolution.resolveProfile(
@@ -336,6 +393,7 @@ export class EntityRepository extends BaseRepository<
           profile.id
         );
       }
+      unmodeled.push(...facetValidation.unmodeled);
       roleFacetProfile = profile;
       roleFacetProperties = { ...facetValidation.normalized };
       if (!roleTitleAlreadyInProps) {
@@ -392,6 +450,7 @@ export class EntityRepository extends BaseRepository<
       }
 
       validatedProperties = validationResult.normalized;
+      unmodeled.push(...validationResult.unmodeled);
     } else if (!profileId && data.properties) {
       // No profile - just store properties as-is (flexible)
       validatedProperties = data.properties;
@@ -527,7 +586,9 @@ export class EntityRepository extends BaseRepository<
       );
     }
 
-    return entity;
+    // Additive: the row exactly as before, plus the advisory `unmodeled` list
+    // when (and only when) there is something to tell the caller.
+    return unmodeled.length ? { ...entity, unmodeled } : entity;
   }
 
   /**
@@ -538,7 +599,9 @@ export class EntityRepository extends BaseRepository<
     id: string,
     data: UpdateEntityInput,
     userId: string
-  ): Promise<Entity> {
+  ): Promise<WrittenEntity> {
+    // Same advisory contract as create() — see WrittenEntity.
+    const unmodeled: UnmodeledProperty[] = [];
     // 1. Get existing entity
     const existing = await this.db.query.entities.findFirst({
       where: and(eq(entities.id, id), eq(entities.userId, userId)),
@@ -603,6 +666,7 @@ export class EntityRepository extends BaseRepository<
       }
 
       updatedProperties = validationResult.normalized;
+      unmodeled.push(...validationResult.unmodeled);
     } else if (data.properties) {
       // No profile - just merge properties (after deletions already applied to baseProperties)
       updatedProperties = {
@@ -658,7 +722,7 @@ export class EntityRepository extends BaseRepository<
       await this.emitCompleted("update", entity, userId);
     }
 
-    return entity;
+    return unmodeled.length ? { ...entity, unmodeled } : entity;
   }
 
   /**

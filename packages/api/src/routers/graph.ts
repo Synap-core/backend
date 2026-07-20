@@ -20,7 +20,7 @@ import {
   inArray,
   isNull,
   desc,
-  profileSlugScopeCondition,
+  profileSlugScopeConditionFromRows,
   loadFacetSlugsBatch,
 } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
@@ -36,6 +36,7 @@ import {
 import { relationsRouter } from "./relations.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
+import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 
 /**
  * Get a single node with full graph context
@@ -279,16 +280,28 @@ export const graphRouter = router({
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId
       );
+      // Fail closed on a slug that names no profile in this pod — otherwise the
+      // predicate's row-blind kind branch yields an empty graph that looks
+      // identical to a genuinely empty one (see assertKnownProfileSlug).
+      const slugRows = input.profileSlug
+        ? await assertKnownProfileSlug(db, input.profileSlug)
+        : undefined;
       const entityRows = await db.query.entities.findMany({
         where: and(
           userVisibleWhere(entities.workspaceId, ctx.userId),
           isNull(entities.deletedAt),
           // Polymorphic (Kind + Facets): role slugs match via facet EXISTS
           // across all the user's workspaces (undefined lens + owner floor).
-          input.profileSlug
-            ? await profileSlugScopeCondition(db, input.profileSlug, {
-                ...facetVisibilityScope,
-              })
+          // Built from the rows the assert above already resolved — one lookup.
+          input.profileSlug && slugRows
+            ? profileSlugScopeConditionFromRows(
+                db,
+                input.profileSlug,
+                slugRows,
+                {
+                  ...facetVisibilityScope,
+                }
+              )
             : undefined
         ),
         columns: {
@@ -371,14 +384,24 @@ export const graphRouter = router({
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId
       );
+      // Same fail-closed rule as getFull above.
+      const typeRows = input.entityType
+        ? await assertKnownProfileSlug(db, input.entityType)
+        : undefined;
       const allEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          // Polymorphic (Kind + Facets) — same routing as getFull above.
-          input.entityType
-            ? await profileSlugScopeCondition(db, input.entityType, {
-                ...facetVisibilityScope,
-              })
+          // Polymorphic (Kind + Facets) — same routing as getFull above, built
+          // from the rows the assert already resolved.
+          input.entityType && typeRows
+            ? profileSlugScopeConditionFromRows(
+                db,
+                input.entityType,
+                typeRows,
+                {
+                  ...facetVisibilityScope,
+                }
+              )
             : undefined
         ),
       });

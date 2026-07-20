@@ -7,7 +7,7 @@
  * provider down, fuzzy recall degrades to keyword-only — worse still). This
  * dispatches a scoped, TYPED entity query through the SAME access doors
  * `entities.list` uses — the `workspaceLensWhere`/`accessScopeWhere` floor plus
- * the `profileSlugScopeCondition` polymorphic type match — never a hand-rolled
+ * the `profileSlugScopeConditionFromRows` polymorphic type match — never a hand-rolled
  * scope. Minimal by design: a profile + one optional status filter (tasks); no
  * general query language.
  */
@@ -18,7 +18,7 @@ import {
   isNull,
   desc,
   drizzleSql,
-  profileSlugScopeCondition,
+  profileSlugScopeConditionFromRows,
 } from "@synap/database";
 import { workspaceLensWhere } from "../../utils/user-visible-where.js";
 import {
@@ -26,6 +26,7 @@ import {
   projectLensWhere,
 } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 
 export interface StructuredParams {
   /** Catalog-resolved profile slug the enumerative query named. */
@@ -78,21 +79,37 @@ export async function structuredLookup(
         ownerColumn: entities.userId,
         userId,
       })
-    : workspaceLensWhere(entities.workspaceId, userId, workspaceId ?? undefined, {
-        includeGlobals: true,
-      });
+    : workspaceLensWhere(
+        entities.workspaceId,
+        userId,
+        workspaceId ?? undefined,
+        {
+          includeGlobals: true,
+        }
+      );
 
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     userId,
     projectId ? undefined : workspaceId
   );
 
+  // Fail closed on a slug this pod has no profile for — the enumerative lane
+  // must not answer "you have none" to a question about vocabulary that does
+  // not exist here (see assertKnownProfileSlug).
+  const slugRows = await assertKnownProfileSlug(db, profileSlug);
+
   const conditions = [
     isNull(entities.deletedAt),
     floor,
     // Polymorphic type match (kind → entities.type; role → facet EXISTS) — the
-    // one door entities.list resolves a single caller-supplied slug through.
-    await profileSlugScopeCondition(db, profileSlug, facetVisibilityScope),
+    // one door entities.list resolves a single caller-supplied slug through,
+    // built from the rows the assert above already resolved (one lookup).
+    profileSlugScopeConditionFromRows(
+      db,
+      profileSlug,
+      slugRows,
+      facetVisibilityScope
+    ),
   ];
 
   if (projectId) conditions.push(projectLensWhere(entities.id, projectId));

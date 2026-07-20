@@ -245,8 +245,21 @@ export const podProcedure = protectedProcedure.use(async (opts) => {
  * Used for sensitive system operations: raw DB access, tool execution, event injection.
  */
 export const podAdminProcedure = protectedProcedure.use(async (opts) => {
-  const { ctx } = opts;
+  await assertPodAdmin(opts.ctx.userId);
+  return opts.next({ ctx: opts.ctx });
+});
 
+/**
+ * THE pod-admin check: is `userId` an admin/owner of the pod-admin workspace?
+ * Throws `FORBIDDEN` otherwise.
+ *
+ * Extracted from `podAdminProcedure` (its only body) so a procedure that is
+ * NOT wholly pod-admin can still require pod-admin for a SUBSET of its input —
+ * `profiles.update` gates its pod-wide fields on an unowned (system/shared)
+ * profile this way. One mechanism, two entry points; never a second copy of
+ * the membership query.
+ */
+export async function assertPodAdmin(userId: string): Promise<void> {
   // Find the pod-admin workspace
   const podAdminWorkspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.systemSlug, "pod-admin"),
@@ -264,7 +277,7 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
-      eq(workspaceMembers.userId, ctx.userId),
+      eq(workspaceMembers.userId, userId),
       inArray(workspaceMembers.role, ["admin", "owner"])
     ),
   });
@@ -275,9 +288,7 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
       message: "Pod admin access required",
     });
   }
-
-  return opts.next({ ctx });
-});
+}
 
 export { t };
 export const router = t.router as typeof t.router;

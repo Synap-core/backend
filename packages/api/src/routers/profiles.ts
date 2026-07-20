@@ -11,7 +11,12 @@ import {
   workspaceProcedure,
   protectedProcedure,
   podProcedure,
+  assertPodAdmin,
 } from "../trpc.js";
+import {
+  changedPodWideProfileFields,
+  profileOwnershipRequirement,
+} from "../utils/profile-pod-wide-fields.js";
 import {
   getDb,
   ProfileRepository,
@@ -624,15 +629,44 @@ export const profilesRouter = router({
         });
       }
 
-      // Scope changes require the calling workspace to own the profile
-      if (input.scope !== undefined && input.scope !== existing.scope) {
-        if (existing.workspaceId !== ctx.workspaceId) {
+      // POD-WIDE FIELD GATE. A profile row is shared across the whole pod, so
+      // `scope`, `entityScope`, `aiPosture` and the three default renderers
+      // change behaviour for EVERY workspace — see profile-pod-wide-fields.ts
+      // for exactly which fields are gated, which are not, and why. Previously
+      // only `scope` was checked here; the rest were written below with no gate
+      // at all, so any member of any workspace that could see a shared/system
+      // profile could flip pod-wide entity placement and agent posture.
+      const changedPodWide = changedPodWideProfileFields(input, existing);
+      if (changedPodWide.length > 0) {
+        const fieldList = changedPodWide.join(", ");
+        const requirement = profileOwnershipRequirement(existing);
+        if (
+          requirement.kind === "owning-workspace" &&
+          requirement.workspaceId !== ctx.workspaceId
+        ) {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "Only the owning workspace can change a profile's scope",
+            message: `Only the owning workspace can change a profile's ${fieldList}`,
           });
         }
+        if (
+          requirement.kind === "owning-user" &&
+          requirement.userId !== ctx.userId
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Only the owning user can change a profile's ${fieldList}`,
+          });
+        }
+        if (requirement.kind === "pod-admin") {
+          // System/shared profile — owned by the pod itself. Throws FORBIDDEN
+          // "Pod admin access required" through the SAME check
+          // podAdminProcedure uses.
+          await assertPodAdmin(ctx.userId);
+        }
+      }
 
+      if (input.scope !== undefined && input.scope !== existing.scope) {
         // Downgrading from "shared" → revoke all existing grants
         if (existing.scope === "shared") {
           const grantedWorkspaces = await profileRepo.getGrantedWorkspaces(
@@ -1328,9 +1362,7 @@ export const profilesRouter = router({
       // profile id for any older data that may have used the id as the key.
       const legacyMap = (
         ws?.settings as
-          | { profileBentoViewIds?: Record<string, string> }
-          | null
-          | undefined
+          { profileBentoViewIds?: Record<string, string> } | null | undefined
       )?.profileBentoViewIds;
       const legacyId = legacyMap?.[profile.slug] ?? legacyMap?.[profile.id];
       if (legacyId) {

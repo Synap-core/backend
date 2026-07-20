@@ -324,6 +324,36 @@ export function profileScopeConditions(
 }
 
 /**
+ * THE slug → profile-rows lookup. Every read that routes a caller-supplied
+ * `profileSlug` (the scope predicate below, `entities.list`'s descendant-aware
+ * branch, the `facetSlug` filter, `groupByFacetStatus`) resolves it through
+ * here, so "what rows does this slug name?" has exactly one answer.
+ *
+ * ALL rows for the slug, not `findFirst`: one slug can be carried by several
+ * profile rows (e.g. a system row + a workspace-scope twin — the perso pod's
+ * two `knowledge` rows). The legacy `entities.type` match was text-based and
+ * therefore row-blind; the facet EXISTS is id-based, so it must OR every role
+ * row's id or entities faceted on the twin silently vanish (verified live
+ * post-conversion).
+ *
+ * DELIBERATELY UNSCOPED by user/workspace: this answers "does this pod's
+ * vocabulary contain this slug at all", not "may this caller see it". Access is
+ * enforced by the entity floor the predicate is ANDed with, never here. An
+ * EMPTY result therefore means the slug names nothing anywhere in the pod —
+ * see `assertKnownProfileSlug` (API layer), the one door that turns that into
+ * an error instead of a silently-empty list.
+ */
+export async function profileSlugRows(
+  db: PostgresJsDatabase<typeof schema>,
+  profileSlug: string
+): Promise<Array<{ id: string; profileKind: "kind" | "role" }>> {
+  return db.query.profiles.findMany({
+    where: eq(profiles.slug, profileSlug),
+    columns: { id: true, profileKind: true },
+  });
+}
+
+/**
  * Polymorphic single-slug scope predicate: resolve `profileSlug`'s
  * `profileKind` and return the matching entity condition — role → the
  * facet-EXISTS (`facetRoleExists`), kind/unknown → `entities.type` equality
@@ -335,22 +365,47 @@ export function profileScopeConditions(
  * `opts.workspaceId` lens: undefined = facets across all workspaces;
  * null = pod-wide facets only; string = that workspace + pod-wide — always
  * with the owner floor (see `facetVisibilityConditions`).
+ *
+ * Callers that ALREADY hold the slug's rows (every API door now resolves them
+ * once through `assertKnownProfileSlug`) must call
+ * `profileSlugScopeConditionFromRows` instead — this overload exists only for
+ * callers that do not, and it is a thin `profileSlugRows` + delegate so the
+ * branch logic has exactly one implementation.
  */
 export async function profileSlugScopeCondition(
   db: PostgresJsDatabase<typeof schema>,
   profileSlug: string,
   opts: FacetVisibilityScope
 ): Promise<SQL> {
-  // ALL rows for the slug, not findFirst: one slug can be carried by several
-  // profile rows (e.g. a system row + a workspace-scope twin — the perso pod's
-  // two `knowledge` rows). The legacy `entities.type` match was text-based and
-  // therefore row-blind; the facet EXISTS is id-based, so it must OR every
-  // role row's id or entities faceted on the twin silently vanish
-  // (verified live post-conversion).
-  const rows = await db.query.profiles.findMany({
-    where: eq(profiles.slug, profileSlug),
-    columns: { id: true, profileKind: true },
-  });
+  const rows = await profileSlugRows(db, profileSlug);
+  return profileSlugScopeConditionFromRows(db, profileSlug, rows, opts);
+}
+
+/**
+ * THE implementation of the single-slug scope predicate — see
+ * `profileSlugScopeCondition` for the semantics; this is the same function with
+ * the `profileSlugRows` lookup lifted out.
+ *
+ * WHY IT EXISTS. `assertKnownProfileSlug` (API layer) already runs the ONE
+ * `profiles WHERE slug = ?` lookup and RETURNS the rows, as its doc promises.
+ * A caller that then called the slug-taking overload re-ran the identical query
+ * a second time per read. Taking the rows keeps that promise true at every door.
+ *
+ * `profileSlug` is still required: the kind branch is the byte-for-byte
+ * pre-facets TEXT match on `entities.type`, which is row-blind by design (see
+ * `profileSlugRows`) — it matches the slug, not an id.
+ *
+ * The zero-row fallback (`hasKindRow` when `rows` is empty → `entities.type`
+ * equality) is DELIBERATE and preserved: doors that fail closed on an unknown
+ * slug do so before calling here, and internal callers with no caller-supplied
+ * slug keep the legacy text behavior.
+ */
+export function profileSlugScopeConditionFromRows(
+  db: PostgresJsDatabase<typeof schema>,
+  profileSlug: string,
+  rows: Array<{ id: string; profileKind: "kind" | "role" }>,
+  opts: FacetVisibilityScope
+): SQL {
   const roleIds = rows.filter((r) => r.profileKind === "role").map((r) => r.id);
   const hasKindRow =
     rows.length === 0 || rows.some((r) => r.profileKind !== "role");

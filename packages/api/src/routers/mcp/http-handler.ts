@@ -265,6 +265,13 @@ mcpHttpApp.post("/", async (c) => {
   // ?projectId= (project focus lens). Both narrow tool calls; orthogonal.
   const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
   const defaultProjectId = c.req.query("projectId") ?? undefined;
+  // `?sessionId=` — an EXPLICIT STATE HANDLE (a `focus_sessions` row id), not
+  // transport session state. MCP 2026-07-28 removes `Mcp-Session-Id` and the
+  // initialize handshake (SEP-2575 "Make MCP Stateless" / SEP-2567 "Sessionless
+  // MCP via Explicit State Handles"), so the handle rides the URL per request
+  // and is threaded server-side into the executor — never advertised on tool
+  // schemas. It is a SCOPE HINT only: downstream governance still authorizes.
+  const defaultSessionId = c.req.query("sessionId") ?? undefined;
   // Live grounding is only consumed by the client at the `initialize` handshake
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a
   // tools/call request would otherwise pay 2 DB queries for instructions no one
@@ -289,7 +296,8 @@ mcpHttpApp.post("/", async (c) => {
     agentUserId,
     // The validated key's OWN scopes — never the process-global MCP_SCOPES env
     // var, which is meaningless per-key over HTTP.
-    deriveMcpScopes(keyRecord.scope)
+    deriveMcpScopes(keyRecord.scope),
+    defaultSessionId
   );
   await server.connect(transport);
 

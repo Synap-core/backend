@@ -96,7 +96,22 @@ export function createMCPServer(
    * stream-establishment branch, which cannot execute tools in production —
    * both handlers below hard-fail without a sessionUserId/MCP_USER_ID).
    */
-  apiKeyScopes?: string[]
+  apiKeyScopes?: string[],
+  /**
+   * The active `focus_sessions` row id, from `?sessionId=` in the HTTP URL —
+   * an EXPLICIT STATE HANDLE, never transport session state. (MCP 2026-07-28
+   * removes `Mcp-Session-Id`, the initialize handshake and resumability —
+   * SEP-2575 / SEP-2567 — so state must be a handle passed per request.)
+   *
+   * Unlike `defaultWorkspaceId` / `defaultProjectId` it is NOT spread into the
+   * tool arguments: it is handed to the executor server-side so no tool has to
+   * declare `sessionId` in its JSON schema. Scope becomes an authorization
+   * concern, not an attention concern — the model never sees or reasons about
+   * the handle. It is a SCOPE HINT ONLY: it groups a run's writes (proposals,
+   * `session --produced--> entity` links, project placement rung 2) and never
+   * itself authorizes anything — downstream governance still applies.
+   */
+  defaultSessionId?: string
 ) {
   const server = new Server(
     {
@@ -192,13 +207,20 @@ export function createMCPServer(
       ...args,
     };
 
+    // `sessionId` is deliberately NOT part of `scopedArgs`: spreading it would
+    // only reach tools that DECLARE the param, and declaring it everywhere puts
+    // a bookkeeping handle in front of the model on every schema. It travels
+    // server-side instead — explicit on the wire, hidden from the tool schema —
+    // so advertised schemas stay honest. An explicit `args.sessionId` (the
+    // session tools) still wins; the adapter treats this as the fallback.
     return await tools.execute(
       request.params.name,
       scopedArgs,
       userId,
       scopes,
       sessionUserId,
-      agentUserId
+      agentUserId,
+      defaultSessionId
     );
   });
 

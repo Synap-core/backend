@@ -85,6 +85,17 @@ const ResolveIdentityResponseSchema = z
         score: z.number().optional(),
       })
     ),
+    crossKindCandidates: z
+      .array(
+        z.object({
+          entityId: z.string(),
+          title: z.string().nullable(),
+          kind: z.string(),
+        })
+      )
+      .describe(
+        'Same-title entities of a DIFFERENT kind. ADVISORY: `match` stays "none" because a title alone never auto-merges — but do NOT treat "none" as "safe to create" when this is non-empty. Prefer proposing a link to one of these over minting a duplicate.'
+      ),
   })
   .openapi("ResolveIdentityResponse");
 

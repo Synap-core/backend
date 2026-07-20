@@ -38,7 +38,7 @@ import {
   type FacetVisibilityScope,
   facetRoleExists,
   facetVisibilityConditions,
-  profileSlugScopeCondition,
+  profileSlugScopeConditionFromRows,
   drizzleSql,
   links,
   type LinkEndpointType,
@@ -70,6 +70,7 @@ import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
@@ -619,17 +620,29 @@ export const entitiesRouter = router({
       );
 
       // Resolve the role slug to its profile id(s) — every same-slug row (a
-      // facet may sit on a system row OR a workspace-scope twin). Non-role or
-      // unknown slug → no groups.
-      const roleProfiles = await db.query.profiles.findMany({
-        where: eq(profiles.slug, input.roleSlug),
-        columns: { id: true, profileKind: true },
-      });
+      // facet may sit on a system row OR a workspace-scope twin).
+      //
+      // FAIL CLOSED, same door as `list`/`search`/graph: a kanban mounted on a
+      // slug this pod has no profile for (the `crm-lead`-against-a-`lead`-
+      // workspace bug, which reproduces here verbatim) must get a typed error,
+      // not empty columns indistinguishable from an empty pipeline.
+      const roleProfiles = await assertKnownProfileSlug(db, input.roleSlug);
       const roleProfileIds = roleProfiles
         .filter((p) => p.profileKind === "role")
         .map((p) => p.id);
       if (roleProfileIds.length === 0) {
-        return { roleSlug: input.roleSlug, groups: [] };
+        // Slug EXISTS but names only primary kinds — a kind never carries
+        // facets, so this grouping can never return anything. Same class of
+        // caller error as an unknown slug; surface it rather than render
+        // permanently empty columns.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            `Profile "${input.roleSlug}" is a kind, not a role. ` +
+            `groupByFacetStatus groups entities by their FACET status, so it ` +
+            `only applies to role-profiles (profileKind: "role"). List the ` +
+            `available roles (profiles.list) and use one of them.`,
+        });
       }
 
       const conditions = [
@@ -1465,6 +1478,15 @@ export const entitiesRouter = router({
         id: createdEntity.id,
         entity: toApiEntity(createdEntity),
         facets: createdFacets,
+        // Advisory: property keys the caller sent that no property_def models.
+        // Stored verbatim (never a failure) but surfaced on the write receipt
+        // with a did-you-mean, so an agent that invents a key is TOLD instead
+        // of getting a silent 200. Forwarded EXPLICITLY — it also rides along
+        // inside `entity` via toApiEntity's spread, but relying on that is
+        // incidental and would break silently if the spread ever changed.
+        ...(createdEntity.unmodeled?.length
+          ? { unmodeled: createdEntity.unmodeled }
+          : {}),
       };
     }),
 
@@ -1586,16 +1608,24 @@ export const entitiesRouter = router({
         // can be carried by a system row AND a workspace-scope twin — the
         // legacy text match was row-blind, so the role routing must OR every
         // role row's id or entities faceted on the twin vanish).
-        const slugProfiles = await database.query.profiles.findMany({
-          where: eq(profiles.slug, input.profileSlug),
-          columns: { id: true, profileKind: true },
-        });
+        //
+        // Resolved through the ONE slug lookup (`profileSlugRows`) the scope
+        // predicate uses, then asserted non-empty: a slug naming no profile at
+        // all would otherwise fall through to the row-blind `entities.type`
+        // match, return `[]`, and be indistinguishable from a genuinely empty
+        // list (the `crm-lead`-against-a-`lead`-workspace bug).
+        const slugProfiles = await assertKnownProfileSlug(
+          database,
+          input.profileSlug
+        );
         const roleProfileIds = slugProfiles
           .filter((p) => p.profileKind === "role")
           .map((p) => p.id);
-        const hasKindRow =
-          slugProfiles.length === 0 ||
-          slugProfiles.some((p) => p.profileKind !== "role");
+        // The old `slugProfiles.length === 0 ||` disjunct is gone: the assert
+        // above guarantees at least one row, so the zero-row fallback here is
+        // unreachable. A slug carrying ONLY role rows now correctly yields no
+        // kind branch instead of an `entities.type` match that never hits.
+        const hasKindRow = slugProfiles.some((p) => p.profileKind !== "role");
 
         const slugBranches: any[] = [];
         if (roleProfileIds.length > 0) {
@@ -1653,24 +1683,19 @@ export const entitiesRouter = router({
         // be carried by several profile rows (system + workspace twins), and
         // a facet may sit on ANY of them — match every row's id, never a
         // findFirst pick.
-        let facetProfileIds = input.facetProfileId
+        //
+        // FAIL CLOSED on an unknown `facetSlug` — same door as the
+        // `profileSlug` branch above. This used to push `false` and return an
+        // empty page, which is exactly the silent-empty this workstream
+        // exists to kill: "this pod has no such role" read as "no rows".
+        const facetProfileIds = input.facetProfileId
           ? [input.facetProfileId]
-          : [];
-        if (facetProfileIds.length === 0 && input.facetSlug) {
-          const facetProfiles = await db.query.profiles.findMany({
-            where: eq(profiles.slug, input.facetSlug),
-            columns: { id: true },
-          });
-          facetProfileIds = facetProfiles.map((p) => p.id);
-        }
-        if (facetProfileIds.length > 0) {
-          conditions.push(
-            facetRoleExists(db, facetProfileIds, facetVisibilityScope)
-          );
-        } else {
-          // Unknown facetSlug — no entity can match; short-circuit to empty.
-          conditions.push(drizzleSql`false`);
-        }
+          : (await assertKnownProfileSlug(db, input.facetSlug!)).map(
+              (p) => p.id
+            );
+        conditions.push(
+          facetRoleExists(db, facetProfileIds, facetVisibilityScope)
+        );
       }
 
       const results = await db.query.entities.findMany({
@@ -1736,12 +1761,21 @@ export const entitiesRouter = router({
 
       if (input.profileSlug) {
         // Polymorphic (Kind + Facets); pod-personal list → pod-wide facet
-        // lens (workspaceId: null) + owner floor.
+        // lens (workspaceId: null) + owner floor. Fail closed first on a slug
+        // that names no profile at all — otherwise the predicate's row-blind
+        // kind branch returns `[]` and "no such vocabulary" reads as "empty".
+        const database = await getDb();
+        const slugRows = await assertKnownProfileSlug(
+          database,
+          input.profileSlug
+        );
         conditions.push(
-          await profileSlugScopeCondition(await getDb(), input.profileSlug, {
-            userId: ctx.userId,
-            workspaceId: null,
-          })
+          profileSlugScopeConditionFromRows(
+            database,
+            input.profileSlug,
+            slugRows,
+            { userId: ctx.userId, workspaceId: null }
+          )
         );
       }
 
@@ -1916,12 +1950,18 @@ export const entitiesRouter = router({
       if (input.profileSlug) {
         // Polymorphic (Kind + Facets): a role slug matches via the facet
         // EXISTS, a kind slug via entities.type — same routing as
-        // entities.list, through the shared one-door helper.
+        // entities.list, through the shared one-door helper. Fail closed on an
+        // unknown slug before building the predicate (see assertKnownProfileSlug).
         const database = await getDb();
+        const slugRows = await assertKnownProfileSlug(
+          database,
+          input.profileSlug
+        );
         conditions.push(
-          await profileSlugScopeCondition(
+          profileSlugScopeConditionFromRows(
             database,
             input.profileSlug,
+            slugRows,
             facetVisibilityScope
           )
         );
@@ -3483,8 +3523,7 @@ export const entitiesRouter = router({
           (workspace?.settings as Record<string, unknown>) ?? {};
         const profileTemplates =
           workspaceSettings.profileEntityBentoTemplates as
-            | Record<string, { blocks: unknown[] }>
-            | undefined;
+            Record<string, { blocks: unknown[] }> | undefined;
 
         // Level 1: profile-specific template from workspace settings
         // Level 2: built-in profile templates for common entity types

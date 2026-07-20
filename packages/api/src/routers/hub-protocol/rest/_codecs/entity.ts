@@ -260,6 +260,28 @@ export const CreateEntityResponseSchema = z
           )
           .optional(),
         warnings: z.array(z.string()).optional(),
+        properties: z
+          .object({
+            unmodeled: z
+              .array(
+                z.object({
+                  key: z.string(),
+                  didYouMean: z
+                    .string()
+                    .optional()
+                    .describe(
+                      "Closest valid property slug, when the key looks like a typo."
+                    ),
+                })
+              )
+              .describe(
+                "Property keys written but NOT modelled by the profile. Stored verbatim (the write succeeded) but not queryable."
+              ),
+          })
+          .optional()
+          .describe(
+            "Present only when the write carried keys the profile does not model."
+          ),
       })
       .optional(),
   })

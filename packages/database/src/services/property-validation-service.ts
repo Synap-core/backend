@@ -9,6 +9,10 @@ import {
   type EffectiveProperty,
 } from "./profile-resolution-service.js";
 import { PropertyValueType } from "../schema/property-defs.js";
+import { suggestClosest } from "./did-you-mean.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "property-validation-service" });
 
 const VAULT_REF_RE =
   /^vault:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -16,10 +20,40 @@ function isVaultReference(value: unknown): value is string {
   return typeof value === "string" && VAULT_REF_RE.test(value);
 }
 
+/**
+ * Keys that live on the ENTITY ROW, not in the property bag. Callers
+ * (EntityRepository.create, FacetRepository) merge `title` into the bag before
+ * validating so a profile declaring a required `title` def is satisfied — it is
+ * not an invented key, so it must never be reported as unmodeled (that would
+ * warn on every create for the many profiles with no `title` def).
+ */
+const ENTITY_COLUMN_KEYS = new Set(["title"]);
+
+/**
+ * A property key the caller wrote that the profile does not model.
+ * Reported, never rejected — see `ValidationResult.unmodeled`.
+ */
+export interface UnmodeledProperty {
+  key: string;
+  /** Closest VALID property slug, when one is close enough to be a likely typo. */
+  didYouMean?: string;
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
   normalized: Record<string, unknown>;
+  /**
+   * Keys present in the payload that the profile (through this workspace's
+   * lens) does not define. They are still STORED verbatim — the flexible-schema
+   * tolerance is load-bearing for historical clients — but they are no longer
+   * silent: callers surface them on the write receipt as `unmodeled` so an
+   * agent that invented a key learns it invented one instead of reading a 200
+   * as "modelled and queryable".
+   *
+   * Always present (possibly empty) so callers can read it without a guard.
+   */
+  unmodeled: UnmodeledProperty[];
 }
 
 export class PropertyValidationService {
@@ -51,6 +85,7 @@ export class PropertyValidationService {
     }
   ): Promise<ValidationResult> {
     const errors: string[] = [];
+    const unmodeled: UnmodeledProperty[] = [];
     const normalized: Record<string, unknown> = { ...properties };
     const enforceRequired = opts?.enforceRequired !== false;
 
@@ -78,7 +113,24 @@ export class PropertyValidationService {
       const prop = effectiveProperties.find((p) => p.slug === key);
 
       if (!prop) {
-        // Unknown property - allow it but warn (flexible schema)
+        // Unknown property — STILL ACCEPTED (flexible schema; historical
+        // clients depend on the tolerance) but no longer silent. Before, this
+        // `continue` carried a promise of a warning that did not exist, and the
+        // key was stored verbatim in JSONB: an agent that invented a property
+        // key got a 200 and believed it worked. Report it both ways — a server
+        // log AND structured data on the result, so the caller can render it as
+        // `unmodeled` on the write receipt with a recovery hint.
+        if (ENTITY_COLUMN_KEYS.has(key)) continue;
+        const didYouMean = suggestClosest(
+          key,
+          effectiveProperties.map((p) => p.slug)
+        );
+        unmodeled.push(didYouMean ? { key, didYouMean } : { key });
+        logger.warn(
+          { profileId, workspaceId, key, didYouMean },
+          `Unknown property '${key}' is not modelled by this profile — stored verbatim, not queryable` +
+            (didYouMean ? ` (did you mean '${didYouMean}'?)` : "")
+        );
         continue;
       }
 
@@ -101,6 +153,9 @@ export class PropertyValidationService {
       valid: errors.length === 0,
       errors,
       normalized,
+      // Unmodeled keys never make the result invalid — they are a receipt
+      // signal, not a rejection.
+      unmodeled,
     };
   }
 

@@ -27,6 +27,8 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import {
   profileScopeConditions,
   profileSlugScopeCondition,
+  profileSlugScopeConditionFromRows,
+  profileSlugRows,
   facetRoleExists,
 } from "../services/facet-resolution-service.js";
 
@@ -101,9 +103,7 @@ describe("profileScopeConditions — polymorphic Kind + Facets scope", () => {
     const viaScope = render(
       profileScopeConditions(db, [{ id: "r1", profileKind: "role" }], opts)
     );
-    const viaDirect = dialect.sqlToQuery(
-      facetRoleExists(db, ["r1"], opts)
-    ).sql;
+    const viaDirect = dialect.sqlToQuery(facetRoleExists(db, ["r1"], opts)).sql;
     expect(viaScope).toBe(viaDirect);
   });
 });
@@ -113,7 +113,9 @@ describe("profileScopeConditions — polymorphic Kind + Facets scope", () => {
 // the SQL-building surface (facetRoleExists/eq) only needs the query-builder,
 // which `drizzle.mock()` already provides — Object.assign layers the stub on
 // top without touching the query-builder prototype.
-const dbWithRows = (rows: Array<{ id: string; profileKind: "kind" | "role" }>) =>
+const dbWithRows = (
+  rows: Array<{ id: string; profileKind: "kind" | "role" }>
+) =>
   Object.assign(Object.create(Object.getPrototypeOf(db)), db, {
     query: { profiles: { findMany: async () => rows } },
   }) as typeof db;
@@ -177,11 +179,111 @@ describe("profileSlugScopeCondition — polymorphic single-slug scope", () => {
     expect(sql).toContain(" or ");
   });
 
-  test("zero rows (unknown slug) → falls back to legacy type equality", async () => {
+  // The row-blind fallback is DELIBERATE and must stay: the kind branch is
+  // byte-for-byte the pre-facets text match, so this shared predicate never
+  // decides that a slug is illegitimate. Distinguishing "unknown vocabulary"
+  // from "empty result" is the API boundary's job (`assertKnownProfileSlug`),
+  // which is why this test asserts the fallback SURVIVES rather than throws.
+  test("zero rows (unknown slug) → still falls back to legacy type equality, never throws", async () => {
     const sql = render(
       await profileSlugScopeCondition(dbWithRows([]), "unmapped-slug", opts)
     );
     expect(sql).toBe('"entities"."type" = $1');
+  });
+
+  test("profileSlugRows is the lookup the predicate resolves through", async () => {
+    // Guards the one-door refactor: the predicate must not re-hand-roll a
+    // `profiles.findMany` beside `profileSlugRows`.
+    const calls: string[] = [];
+    const spyDb = Object.assign(Object.create(Object.getPrototypeOf(db)), db, {
+      query: {
+        profiles: {
+          findMany: async () => {
+            calls.push("findMany");
+            return [{ id: "r1", profileKind: "role" as const }];
+          },
+        },
+      },
+    }) as typeof db;
+
+    expect(await profileSlugRows(spyDb, "client")).toEqual([
+      { id: "r1", profileKind: "role" },
+    ]);
+    await profileSlugScopeCondition(spyDb, "client", opts);
+    // one lookup for the direct call, exactly one for the predicate
+    expect(calls.length).toBe(2);
+  });
+});
+
+describe("profileSlugScopeConditionFromRows — ONE implementation, two entries", () => {
+  // GUARD for the one-door refactor: API doors that already hold the slug's
+  // rows (from `assertKnownProfileSlug`, which returns them) call the
+  // rows-taking variant so the `profiles WHERE slug = ?` lookup runs ONCE per
+  // read instead of twice. That is only safe while the two entries cannot
+  // drift — the slug-taking overload must be `profileSlugRows` + delegate,
+  // never a second copy of the branch logic. These cases pin IDENTICAL SQL
+  // (params included) across every branch mix, including the deliberate
+  // row-blind zero-row fallback.
+  const MIXES: Array<{
+    name: string;
+    slug: string;
+    rows: Array<{ id: string; profileKind: "kind" | "role" }>;
+  }> = [
+    {
+      name: "kind only",
+      slug: "invoice",
+      rows: [{ id: "k1", profileKind: "kind" }],
+    },
+    {
+      name: "role only",
+      slug: "client",
+      rows: [{ id: "r1", profileKind: "role" }],
+    },
+    {
+      name: "mixed kind + role twins",
+      slug: "knowledge",
+      rows: [
+        { id: "k1", profileKind: "kind" },
+        { id: "r1", profileKind: "role" },
+        { id: "r2", profileKind: "role" },
+      ],
+    },
+    { name: "zero rows (row-blind fallback)", slug: "unmapped-slug", rows: [] },
+  ];
+
+  for (const { name, slug, rows } of MIXES) {
+    test(`${name} → both entries emit identical SQL and params`, async () => {
+      const fromSlug = await profileSlugScopeCondition(
+        dbWithRows(rows),
+        slug,
+        opts
+      );
+      const fromRows = profileSlugScopeConditionFromRows(db, slug, rows, opts);
+
+      const a = dialect.sqlToQuery(fromSlug);
+      const b = dialect.sqlToQuery(fromRows);
+      expect(b.sql).toBe(a.sql);
+      expect(b.params).toEqual(a.params);
+    });
+  }
+
+  test("the slug-taking entry performs exactly one lookup and delegates", async () => {
+    // If it ever forked the branch logic instead of delegating, this count
+    // would still pass — so pair it with the identical-SQL cases above.
+    let calls = 0;
+    const spyDb = Object.assign(Object.create(Object.getPrototypeOf(db)), db, {
+      query: {
+        profiles: {
+          findMany: async () => {
+            calls++;
+            return [{ id: "r1", profileKind: "role" as const }];
+          },
+        },
+      },
+    }) as typeof db;
+
+    await profileSlugScopeCondition(spyDb, "client", opts);
+    expect(calls).toBe(1);
   });
 });
 

@@ -80,6 +80,24 @@ export interface IdentityResolution {
   /** The resolved row: strong→signal owner, weak→first same-kind candidate. */
   entity?: ResolvedIdentityEntity;
   /**
+   * SAME-TITLE rows of a DIFFERENT kind than the requested `kindSlug`, present
+   * only when nothing matched within the requested kind.
+   *
+   * `match: null` used to be read as "nothing exists — safe to create", which
+   * green-lit a duplicate whenever the same subject already existed under
+   * another kind (the `question` ↔ `research` case): the rows were sitting in
+   * `candidates`, but no caller could tell them apart from noise. This field is
+   * the explicit, NON-COMMITTAL signal: "do not auto-merge, but a human/agent
+   * should consider linking these."
+   *
+   * It is deliberately NOT a match verdict. Title similarity alone must NEVER
+   * merge entities — strong-signal dedup (email/phone/url/handle/external-id)
+   * stays the only automatic path. Treat this as a link SUGGESTION only.
+   *
+   * Always present (possibly empty); a subset of `candidates`.
+   */
+  crossKindCandidates: ResolvedIdentityEntity[];
+  /**
    * ALL weak candidates (name/handle/alias), across kinds and unfiltered by
    * `kindSlug` — so a caller doing cross-profile facet detection (person +
    * company sharing a name) can partition them itself. Empty on a strong hit
@@ -272,7 +290,9 @@ export function signalsFromExplicit(
  * @param userId    The acting user (provenance; weak scope is via `userScope`).
  * @param kindSlug  When set, a weak match must be the SAME kind (entities.type)
  *                  to become `match:'weak'` / `entity`; `candidates` still
- *                  carries cross-kind rows for facet detection.
+ *                  carries cross-kind rows for facet detection, and
+ *                  `crossKindCandidates` names them explicitly when nothing of
+ *                  the requested kind matched (advisory — never auto-merge).
  * @param name      The name/title to weak-match (=== title). Blank → no weak.
  * @param signals   Strong identity atoms to look up (email/phone/url/…).
  * @param userScope A Drizzle predicate limiting the weak search to rows the
@@ -326,7 +346,12 @@ export async function resolveIdentity(
         columns: { id: true, title: true, type: true, workspaceId: true },
       });
       if (entity) {
-        return { match: "strong", entity, candidates: [] };
+        return {
+          match: "strong",
+          entity,
+          candidates: [],
+          crossKindCandidates: [],
+        };
       }
       // Signal points at a deleted/missing row — ignore, fall through to weak.
     }
@@ -335,7 +360,7 @@ export async function resolveIdentity(
   // ── WEAK: name / handle / alias candidates (advisory) ─────────────────────
   const name = params.name?.trim();
   if (!name || !params.userScope) {
-    return { match: null, candidates: [] };
+    return { match: null, candidates: [], crossKindCandidates: [] };
   }
 
   // EXACT name, case-insensitive. `ilike` with no wildcards is an exact CI
@@ -410,7 +435,23 @@ export async function resolveIdentity(
     ? candidates.find((c) => c.type === params.kindSlug)
     : candidates[0];
 
-  return { match: entity ? "weak" : null, entity, candidates };
+  // Cross-kind same-title rows: only meaningful when the caller asked for a
+  // specific kind AND nothing of that kind matched — i.e. exactly the case that
+  // used to answer a bare "no match" and green-light a duplicate. Advisory
+  // only: `match` stays null (no auto-merge on a weak/title signal, ever), but
+  // the caller can now say "a `research` with this title already exists" instead
+  // of "safe to create".
+  const crossKindCandidates =
+    params.kindSlug && !entity
+      ? candidates.filter((c) => c.type !== params.kindSlug)
+      : [];
+
+  return {
+    match: entity ? "weak" : null,
+    entity,
+    candidates,
+    crossKindCandidates,
+  };
 }
 
 /**

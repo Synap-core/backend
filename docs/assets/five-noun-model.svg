@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'Kalam', 'Caveat', 'Comic Sans MS', cursive">
+  <!-- Automation (top - narrowest) -->
+  <rect x="280" y="40" width="340" height="70" rx="14" fill="white" stroke="#111" stroke-width="2.2"/>
+  <text x="450" y="83" text-anchor="middle" font-size="24">Automation</text>
+  <text x="640" y="82" font-size="16" font-style="italic">react to &amp; produce change</text>
+
+  <!-- Workspace -->
+  <rect x="240" y="130" width="420" height="70" rx="14" fill="white" stroke="#111" stroke-width="2.2"/>
+  <text x="450" y="173" text-anchor="middle" font-size="24">Workspace</text>
+  <text x="680" y="172" font-size="16" font-style="italic">= the app</text>
+
+  <!-- View -->
+  <rect x="200" y="220" width="500" height="70" rx="14" fill="white" stroke="#111" stroke-width="2.2"/>
+  <text x="450" y="263" text-anchor="middle" font-size="24">View</text>
+  <text x="720" y="262" font-size="16" font-style="italic">render entities</text>
+
+  <!-- Entity -->
+  <rect x="160" y="310" width="580" height="70" rx="14" fill="white" stroke="#111" stroke-width="2.2"/>
+  <text x="450" y="353" text-anchor="middle" font-size="24">Entity</text>
+  <text x="760" y="352" font-size="16" font-style="italic">typed record</text>
+
+  <!-- Atom (bottom - widest, the foundation) -->
+  <rect x="120" y="400" width="660" height="70" rx="14" fill="white" stroke="#111" stroke-width="2.2"/>
+  <text x="450" y="443" text-anchor="middle" font-size="24">Atom</text>
+  <text x="800" y="442" font-size="16" font-style="italic">typed cell</text>
+
+  <!-- Foundation label -->
+  <text x="450" y="500" text-anchor="middle" font-size="18" font-style="italic" fill="#666">Each layer composes the ones below.</text>
+</svg>

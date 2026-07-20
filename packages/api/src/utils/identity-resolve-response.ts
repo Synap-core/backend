@@ -26,6 +26,19 @@ export async function buildIdentityResolveResponse(
   entityTitle?: string | null;
   entityKind?: string;
   candidates: Array<{ entityId: string; title: string | null; kind: string }>;
+  /**
+   * Same-title entities of a DIFFERENT kind (e.g. a `question` and a `research`
+   * sharing a title). ADVISORY ONLY — `match` stays "none" because title
+   * similarity must never auto-merge; strong signals (email/phone/url) remain
+   * the only automatic path. Present so a caller stops treating "none" as
+   * "safe to create" and can propose a LINK instead of minting a duplicate.
+   * A subset of `candidates`, so it inherits the same caller-scoping.
+   */
+  crossKindCandidates: Array<{
+    entityId: string;
+    title: string | null;
+    kind: string;
+  }>;
 }> {
   let strongVisible = true;
   if (resolution.match === "strong" && resolution.entity) {
@@ -45,6 +58,11 @@ export async function buildIdentityResolveResponse(
     entityTitle: strongVisible ? resolution.entity?.title : undefined,
     entityKind: strongVisible ? resolution.entity?.type : undefined,
     candidates: resolution.candidates.map((cand) => ({
+      entityId: cand.id,
+      title: cand.title,
+      kind: cand.type,
+    })),
+    crossKindCandidates: (resolution.crossKindCandidates ?? []).map((cand) => ({
       entityId: cand.id,
       title: cand.title,
       kind: cand.type,

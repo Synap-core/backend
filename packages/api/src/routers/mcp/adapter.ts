@@ -25,6 +25,9 @@ import {
 import { entityDataNeighbors } from "../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
+// Type-only: keeps `remember-fact.js` lazily imported at the call site while
+// letting the `category` arg be narrowed to the seeded `uo_category` enum.
+import type { UserObservationCategory } from "../../services/knowledge/remember-fact.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import {
   type ProfileCatalogEntry,
@@ -35,18 +38,22 @@ import {
   db,
   knowledgeKeysRepository,
   entities,
+  focusSessions,
   tools as toolsTable,
   eq,
   and,
   or,
+  desc,
+  inArray,
   isNull,
   resolveIdentity,
   extractIdentitySignals,
   signalsFromExplicit,
+  IDENTITY_SIGNAL_PROPERTY_KEYS,
   type IdentitySignal,
   type ProviderVerbSpec,
 } from "@synap/database";
-import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
+import { getUserWorkspaceIds, logger } from "../hub-protocol/rest/_shared.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -58,7 +65,8 @@ async function createHubProtocolCaller(
   userId: string,
   scopes: string[],
   agentUserId?: string,
-  sessionId?: string | null
+  sessionId?: string | null,
+  workspaceId?: string | null
 ) {
   await getDb();
 
@@ -90,6 +98,13 @@ async function createHubProtocolCaller(
     // its proposals/entities group under the run. The hub routers propagate
     // ctx.sessionId downward (see hub-protocol/entities.ts createEntity).
     sessionId: sessionId ?? null,
+    // AMBIENT governance lens (the MCP URL's `?workspaceId=`). Hub write procs
+    // read `ctx.workspaceId` as the caller's ambient workspace; when it is null
+    // they fall back to the user's most-recently-updated membership — a random
+    // governance lens the acting agent may not even belong to (which is what
+    // turned entity proposals into `workspace.join` proposals). NEVER an
+    // explicit placement pin: pod-scope kinds must still land pod-wide.
+    workspaceId: workspaceId ?? null,
     scopes: hubScopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
@@ -256,20 +271,316 @@ async function buildGraphEnvelope(
   return envelope;
 }
 
+// ── Focus-session handle resolution (server-side, never a tool schema) ────────
+
+/**
+ * The tools whose writes are worth GROUPING under a focus session (proposal
+ * grouping + `produced` links), plus the session tools themselves. Resolving a
+ * handle costs a DB round-trip, so a tool that would never use one — every read
+ * door, orient, diagnose — must not pay for it. Keep this list in sync when a
+ * new governed write door is added here.
+ */
+const SESSION_LINKED_TOOLS = new Set([
+  "synap_create_entity",
+  "synap_update_entity",
+  "synap_create_document",
+  "synap_remember_fact",
+  "synap_link_entities",
+  "synap_attach_facet",
+  "synap_detach_facet",
+  "synap_capture",
+  "synap_capture_graph",
+  "synap_create_project",
+  "synap_create_playbook",
+  "synap_create_view",
+  "synap_create_verb",
+  "synap_start_session",
+  "synap_update_session",
+  "synap_complete_session",
+  "synap_promote_session_to_playbook",
+]);
+
+/** Non-terminal statuses — a session still "in flight" for its owner. */
+const OPEN_SESSION_STATUSES = [
+  "active",
+  "paused",
+  "forming",
+  "scheduled",
+] as const;
+
+/**
+ * Short-lived memo of the DERIVED ambient session per user. A single agent turn
+ * fires several write tools back to back; without this each one re-queries
+ * `focus_sessions` for the same answer. Deliberately tiny (a few seconds): a
+ * session the user just closed must stop attracting writes almost immediately.
+ */
+const DERIVED_SESSION_TTL_MS = 15_000;
+const derivedSessionCache = new Map<
+  string,
+  { sessionId: string | undefined; at: number }
+>();
+
+/**
+ * Does this `focus_sessions` row belong to the effective user?
+ *
+ * `?sessionId=` arrives on the MCP URL and is caller-supplied — nothing upstream
+ * validates it. Left unchecked it would point proposal grouping and `produced`
+ * links at somebody else's session. This is a SCOPE HINT, not authorization, so
+ * a mismatch is ignored (and logged), never thrown.
+ */
+async function ownsFocusSession(
+  userId: string,
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      )
+      .limit(1);
+    return Boolean(row);
+  } catch (err) {
+    // A lookup failure must not silently widen the handle's reach.
+    logger.warn(
+      { err, sessionId },
+      "mcp: focus-session ownership check failed"
+    );
+    return false;
+  }
+}
+
+/**
+ * The user's most recent still-open focus session — the ambient "what I'm
+ * working on" handle when no explicit/URL one was supplied. Without this the
+ * whole session-handle feature is inert: MCP URLs are registered once per
+ * client, so nothing ever populates `?sessionId=`.
+ */
+export async function resolveAmbientSession(
+  userId: string
+): Promise<string | undefined> {
+  const cached = derivedSessionCache.get(userId);
+  if (cached && Date.now() - cached.at < DERIVED_SESSION_TTL_MS) {
+    return cached.sessionId;
+  }
+  let sessionId: string | undefined;
+  try {
+    const [row] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.userId, userId),
+          inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+        )
+      )
+      .orderBy(desc(focusSessions.startedAt))
+      .limit(1);
+    sessionId = row?.id;
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "mcp: ambient focus-session derivation failed"
+    );
+    sessionId = undefined;
+  }
+  derivedSessionCache.set(userId, { sessionId, at: Date.now() });
+  return sessionId;
+}
+
+/**
+ * Resolve the focus-session handle for THIS tool call.
+ *
+ * Precedence: explicit `args.sessionId` > validated ambient (`?sessionId=`) >
+ * derived (most recent open session). Every candidate is ownership-checked
+ * before it becomes `ctx.sessionId`; a handle that isn't the caller's is dropped
+ * rather than rejected — it is a grouping hint, and refusing the whole tool call
+ * over it would be a worse failure than losing the grouping.
+ */
+async function resolveSessionHandle(
+  toolName: string,
+  args: Record<string, unknown>,
+  userId: string,
+  ambientSessionId?: string
+): Promise<string | undefined> {
+  if (!SESSION_LINKED_TOOLS.has(toolName)) return undefined;
+  // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
+  // dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
+  // still rejected downstream by the mutation inputs' zod `.uuid()` schemas.)
+  const explicit =
+    typeof args.sessionId === "string" && args.sessionId.trim() !== ""
+      ? args.sessionId
+      : undefined;
+  const candidate = explicit ?? ambientSessionId;
+  if (candidate) {
+    if (await ownsFocusSession(userId, candidate)) return candidate;
+    logger.warn(
+      {
+        userId,
+        sessionId: candidate,
+        toolName,
+        source: explicit ? "arg" : "url",
+      },
+      "mcp: focus-session handle does not belong to the caller — ignoring"
+    );
+    return undefined;
+  }
+  return resolveAmbientSession(userId);
+}
+
+// ── THE ONE CAPTURE DOOR — shared helpers (design doc §2.2 / §2.3) ────────────
+//
+// `synap_capture` is the AI-facing write door: ONE tool whose PAYLOAD is a
+// gradient — `text` (unstructured) → `entities[]` (structured) → `entities[] +
+// relations[]` (graph). An agent never has to classify its own input first,
+// which is exactly the classification that broke a real agent against the old
+// capture / create_entity / remember_fact split.
+//
+// Nothing below is a new core. The routing dispatches to the EXISTING capture
+// structure→execute pipeline or the EXISTING `submitCaptureGraph`; these helpers
+// only carry the uniform receipt and the door-level REJECT guard. The guard runs
+// BEFORE governance — a rejected call never reaches `checkPermissionOrPropose`,
+// so this is not a governance change.
+
+/** The scope every capture receipt echoes back — where the write actually landed. */
+interface CaptureScope {
+  workspaceId: string | null;
+  projectId: string | null;
+  sessionId: string | null;
+}
+
+/**
+ * The receipt, identical on every branch of the door.
+ *
+ * `pending` / `applied` + the proposal fields are the SAME shape
+ * `buildCreateWriteReceipt` emits (the graph branch forwards
+ * `submitCaptureGraph`'s receipt verbatim, which already conforms).
+ * `rejected` is the door-level outcome §2.3 adds: nothing was written and
+ * nothing was even proposed.
+ *
+ * Deliberately NOT modelled (no data behind them on this path — never invent
+ * receipt fields): §2.3's `items[]`, `properties`, `next[]`.
+ */
+interface CaptureWriteReceipt {
+  state: "applied" | "pending" | "rejected";
+  effectiveWorkspaceId: string | null;
+  projectId?: string;
+  source: string;
+  proposalId?: string;
+  reviewUrl?: string;
+}
+
+/**
+ * Reject reasons the door emits.
+ *
+ * ⚠️ DEFERRED — §2.3's third reason, `recall-loop`, is deliberately ABSENT:
+ * content that came OUT of the pod (a `synap_ask` answer, an entity body the
+ * agent just read) being re-ingested as if it were new — mem0's 808-copies
+ * failure mode.
+ *
+ * Detecting it honestly needs provenance that does not exist yet: a read-receipt
+ * trail of what THIS caller was served (query, entity/document ids, content
+ * hashes, a time window) that a subsequent write can be checked against. Every
+ * substitute is a fragile heuristic — text similarity against the whole pod
+ * would reject legitimate restatements and quietly lose real knowledge, which is
+ * a worse failure than a duplicate.
+ *
+ * What would unblock it: the recall doors (`synap_ask`, `synap_get_entity`,
+ * `synap_get_document`) recording per-caller served-content hashes + source ids
+ * with a short TTL; this door then rejects when an incoming payload's normalized
+ * hash matches something served to the SAME caller and the write carries no new
+ * signal. Until that exists, this door does not guess.
+ */
+type CaptureRejectReason =
+  "already-known" | "no-durable-content" | "structuring-unavailable";
+
+/**
+ * Minimum durable text. Deliberately tiny: the guard exists to stop empty /
+ * whitespace / punctuation-only writes (mem0's 97.8%-junk failure mode), NOT to
+ * judge whether a short fact is worth keeping — "Ada left" is durable.
+ */
+const CAPTURE_MIN_DURABLE_CHARS = 3;
+
+/**
+ * How many structured entities still get the advisory cross-kind pre-check.
+ * One `resolveIdentity` is 2-3 queries, so a large batch skips it entirely — the
+ * core's OWN dedup (inside `submitCaptureGraph`) runs either way; only the
+ * advisory link suggestions are dropped.
+ */
+const CAPTURE_CROSSKIND_PRECHECK_MAX = 8;
+
+function normalizeCaptureText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+/** Whitespace / punctuation-only, or shorter than a word → nothing to store. */
+function hasDurableText(normalized: string): boolean {
+  return (
+    normalized.length >= CAPTURE_MIN_DURABLE_CHARS &&
+    /[\p{L}\p{N}]/u.test(normalized)
+  );
+}
+
+/** Does this entity element carry something storable (or name something real)? */
+function hasDurableEntity(e: Record<string, unknown>): boolean {
+  if (typeof e.existingEntityId === "string" && e.existingEntityId) return true;
+  if (hasDurableText(normalizeCaptureText(e.title))) return true;
+  if (hasDurableText(normalizeCaptureText(e.description))) return true;
+  if (hasDurableText(normalizeCaptureText(e.content))) return true;
+  const props = e.properties;
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    if (Object.keys(props as Record<string, unknown>).length > 0) return true;
+  }
+  return Array.isArray(e.facets) && e.facets.length > 0;
+}
+
+/** The uniform rejection envelope — same `scope` + `writeReceipt` as a success. */
+function captureRejected(params: {
+  reason: CaptureRejectReason;
+  message: string;
+  scope: CaptureScope;
+  extra?: Record<string, unknown>;
+}): CallToolResult {
+  const receipt: CaptureWriteReceipt = {
+    state: "rejected",
+    effectiveWorkspaceId: params.scope.workspaceId,
+    ...(params.scope.projectId ? { projectId: params.scope.projectId } : {}),
+    source: "agent",
+  };
+  // `extra` is spread FIRST on purpose: it carries branch-specific passthrough
+  // (the structurer's preview, degraded flags) and must never be able to
+  // overwrite the canonical `status` / `reason` / `scope` / receipt fields.
+  return ok({
+    ...(params.extra ?? {}),
+    status: "rejected",
+    reason: params.reason,
+    message: params.message,
+    scope: params.scope,
+    writeReceipt: receipt,
+  });
+}
+
 export async function executeMCPToolViaHubProtocol(
   toolName: string,
   args: Record<string, unknown>,
   userId: string,
   apiKeyScopes: string[],
   _sessionUserId?: string,
-  agentUserId?: string
+  agentUserId?: string,
+  /**
+   * AMBIENT focus-session handle from the MCP URL's `?sessionId=` — injected
+   * server-side by the transport, never advertised on a tool schema. An explicit
+   * `args.sessionId` wins over it; both are ownership-checked before use.
+   */
+  ambientSessionId?: string
 ): Promise<CallToolResult> {
-  // Normalize once: sessionId flows to a `uuid` DB column, so a non-string arg
-  // is dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
-  // still rejected downstream by the mutation inputs' zod `.uuid()` schemas.)
-  // Reused by every write case below.
-  const sessionId =
-    typeof args.sessionId === "string" ? args.sessionId : undefined;
+  const sessionId = await resolveSessionHandle(
+    toolName,
+    args,
+    userId,
+    ambientSessionId
+  );
 
   const caller = await createHubProtocolCaller(
     userId,
@@ -277,6 +588,26 @@ export async function executeMCPToolViaHubProtocol(
     agentUserId,
     sessionId
   );
+
+  // The MCP server auto-injects the URL lens (`?workspaceId=`) into every tool
+  // call that accepts it. Entity writes ignored it entirely, so the hub fell
+  // back to the user's most-recently-updated workspace membership. `lensCaller`
+  // is the same hub caller with that lens as the AMBIENT governance workspace —
+  // used by the entity write tools below. Normalized like `sessionId`: a
+  // non-string arg is dropped rather than blindly cast.
+  const lensWorkspaceId =
+    typeof args.workspaceId === "string" && args.workspaceId.trim() !== ""
+      ? args.workspaceId
+      : undefined;
+  const lensCaller = lensWorkspaceId
+    ? await createHubProtocolCaller(
+        userId,
+        apiKeyScopes,
+        agentUserId,
+        sessionId,
+        lensWorkspaceId
+      )
+    : caller;
 
   switch (toolName) {
     // ── Recall: THE one door ──────────────────────────────────────────────────
@@ -435,13 +766,27 @@ export async function executeMCPToolViaHubProtocol(
     // ── Write tools ─────────────────────────────────────────────────────────
     case "synap_create_entity": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const result = await caller.entities.createEntity({
+      // `lensCaller` carries the injected `?workspaceId=` lens as the AMBIENT
+      // governance workspace (see above) — without it the hub picked a random
+      // membership and the caller got a `workspace.join` proposal instead of an
+      // entity proposal. It is deliberately NOT passed as the input's explicit
+      // `workspaceId` (that is a rung-1 placement pin and would workspace-pin
+      // pod-scope kinds — the four-door bug).
+      const profileSlug =
+        (args.profileSlug as string | undefined) ||
+        (args.type as string | undefined);
+      const result = await lensCaller.entities.createEntity({
         userId,
-        profileSlug:
-          (args.profileSlug as string | undefined) ||
-          (args.type as string | undefined),
+        profileSlug,
         title: args.title as string,
         description: args.description as string | undefined,
+        // Long-form body → a versioned linked document (resolveContentTarget).
+        // The hub input has always accepted `content`; the MCP schema could not
+        // SEND it, so an agent had to make a second create_document call and
+        // wire it up by hand. Forwarded here = long-text → document in ONE call.
+        ...(typeof args.content === "string" && args.content
+          ? { content: args.content }
+          : {}),
         properties: args.properties as Record<string, unknown> | undefined,
         // A project-pinned MCP URL (?projectId=) auto-injects args.projectId, so
         // entities the agent creates are filed into its project focus.
@@ -461,12 +806,58 @@ export async function executeMCPToolViaHubProtocol(
         ...(agentUserId ? { agentUserId } : {}),
         aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
       });
-      return ok(result);
+
+      // ── The write receipt (the thing MCP callers never got) ────────────────
+      // REST callers have long received `writeReceipt` (truthful pending /
+      // applied / partial + per-facet outcomes + warnings) and `resolution`
+      // (what already exists under this name). MCP calls the tRPC procedure
+      // directly, so it returned a bare id. Same shared builder, same blocks —
+      // one receipt shape for every transport.
+      //
+      // NOT wrapped in try/catch on purpose: buildCreateEntityReceipt never
+      // throws (resolution failures come back as `resolution: undefined`), and a
+      // catch here would swallow the receipt it is meant to deliver.
+      //
+      // It also has an INTENDED side effect: same-name/different-profile matches
+      // are auto-connected with a governed `same_subject` relation.
+      const { buildCreateEntityReceipt } =
+        await import("../hub-protocol/write-receipt.js");
+      const created = result as Record<string, unknown>;
+      // The hub procedure echoes the AMBIENT governance lens it resolved (which
+      // may be the membership fallback, not our injected lens) — prefer it, and
+      // fall back to the URL lens. Not the entity's placement: a pod-scope kind
+      // still lands pod-wide. Same caveat as the hub's own echo.
+      const receiptWorkspaceId =
+        (typeof created.workspaceId === "string"
+          ? created.workspaceId
+          : null) ??
+        lensWorkspaceId ??
+        null;
+      const { writeReceipt, resolution } = await buildCreateEntityReceipt({
+        result: created,
+        profileSlug: profileSlug ?? "",
+        effectiveWorkspaceId: receiptWorkspaceId,
+        userId,
+        scopes: apiKeyScopes,
+        title: args.title as string,
+        ...(args.projectId ? { projectId: args.projectId as string } : {}),
+        source: "agent",
+        ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
+        reasoning: `MCP tool: ${toolName}`,
+      });
+      return ok({
+        ...created,
+        effectiveWorkspaceId: receiptWorkspaceId,
+        writeReceipt,
+        ...(resolution ? { resolution } : {}),
+      });
     }
 
     case "synap_update_entity": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const result = await caller.entities.updateEntity({
+      // Same omission as create: hub `updateEntity` derives its governance lens
+      // from `ctx.workspaceId`, which was always null for MCP callers.
+      const result = await lensCaller.entities.updateEntity({
         entityId: args.entityId as string,
         userId,
         title: args.title as string | undefined,
@@ -489,18 +880,84 @@ export async function executeMCPToolViaHubProtocol(
         reasoning: "Created via MCP",
         ...(agentUserId ? { agentUserId } : {}),
       });
-      return ok(result);
+      // ATTACHMENT (the description used to claim it without doing it). The
+      // link lives on `entities.documentId` — `documents.entityId` was removed —
+      // so it is a separate GOVERNED entity update through the regular entities
+      // router, not a side effect of the document write.
+      const attachEntityId = args.entityId as string | undefined;
+      if (!attachEntityId) return ok(result);
+      const doc = result as Record<string, unknown>;
+      // A proposal-gated document has no row yet: `documentId` is only the id it
+      // WILL get. Linking to it now would leave a dangling reference, so say so
+      // instead of pretending the attach happened.
+      if (doc.status === "proposed") {
+        return ok({
+          ...doc,
+          attached: {
+            entityId: attachEntityId,
+            status: "skipped",
+            reason:
+              "The document itself is awaiting review — approve it first, then attach it with synap_update_entity.",
+          },
+        });
+      }
+      const documentId =
+        typeof doc.documentId === "string"
+          ? doc.documentId
+          : typeof doc.id === "string"
+            ? doc.id
+            : undefined;
+      if (!documentId) return ok(result);
+      const attachCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        (args.workspaceId as string) || undefined,
+        undefined,
+        sessionId,
+        agentUserId
+      );
+      const attachCaller = regularEntitiesRouter.createCaller(attachCtx);
+      const attached = await attachCaller.update({
+        id: attachEntityId,
+        documentId,
+        reasoning: `Attach document created via MCP tool: ${toolName}`,
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok({
+        ...doc,
+        attached: {
+          entityId: attachEntityId,
+          documentId,
+          // Governed like every other entity update: an agent may get a
+          // proposal here even though the document itself was auto-approved.
+          ...(attached as Record<string, unknown>),
+        },
+      });
     }
 
     case "synap_remember_fact": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
+      // GOVERNED: a fact about the user is a `user_observation` entity now, not
+      // an ungoverned `knowledge_facts` row. AI-INFERRED → proposed;
+      // `userStated: true` → auto-approved (the policy rung reads
+      // `uo_validated`). `lensCaller` carries the workspace lens + agent
+      // identity + session handle, exactly like create_entity.
       const { rememberFact } =
         await import("../../services/knowledge/remember-fact.js");
-      await rememberFact({
+      const result = await rememberFact({
+        caller: lensCaller,
         userId: (args.userId as string) || userId,
         fact: args.fact as string,
+        ...(typeof args.confidence === "number"
+          ? { confidence: args.confidence }
+          : {}),
+        ...(typeof args.category === "string"
+          ? { category: args.category as UserObservationCategory }
+          : {}),
+        ...(args.userStated === true ? { userStated: true } : {}),
+        ...(agentUserId ? { agentUserId } : {}),
       });
-      return ok({ success: true, message: "Fact stored successfully" });
+      return ok(result);
     }
 
     case "synap_get_entity": {
@@ -739,7 +1196,11 @@ export async function executeMCPToolViaHubProtocol(
     // makes governance propose for agent callers, exactly like create_entity.
     case "synap_attach_facet": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const result = await caller.entities.attachFacet({
+      // lensCaller: the hub facet procs derive their governance workspace from
+      // ctx.workspaceId, which was always null for MCP callers (same omission
+      // as create/update — the explicit `workspaceId` below is the FACET lens,
+      // not the governance one).
+      const result = await lensCaller.entities.attachFacet({
         userId,
         entityId: args.entityId as string,
         profileSlug: args.facetSlug as string,
@@ -821,7 +1282,8 @@ export async function executeMCPToolViaHubProtocol(
         }
         facetId = matches[0].facet.id;
       }
-      const result = await caller.entities.detachFacet({
+      // lensCaller: same governance-lens omission as attachFacet above.
+      const result = await lensCaller.entities.detachFacet({
         userId,
         facetId,
         ...(agentUserId ? { agentUserId } : {}),
@@ -930,6 +1392,79 @@ export async function executeMCPToolViaHubProtocol(
         return ok({ error: `Focus session ${args.sessionId} not found` });
       }
       return ok({ status: "closed", session });
+    }
+
+    // Re-find a session. Without these an agent that lost the id returned by
+    // start_session could never reach its own session again — it could only
+    // start a second one. Read-only, and floored on the caller's userId (the
+    // same floor the REST focus-session routes enforce), so no workspace param
+    // is needed and project-scoped sessions (workspaceId NULL) stay visible.
+    case "synap_get_session": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wantedId =
+        typeof args.sessionId === "string" && args.sessionId.trim() !== ""
+          ? args.sessionId
+          : await resolveAmbientSession(userId);
+      if (!wantedId) {
+        return ok({
+          session: null,
+          message:
+            "You have no open focus session. Start one with synap_start_session.",
+        });
+      }
+      const [session] = await db
+        .select()
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, wantedId), eq(focusSessions.userId, userId))
+        )
+        .limit(1);
+      if (!session) {
+        return ok({ error: `Focus session ${wantedId} not found` });
+      }
+      return ok({ session });
+    }
+
+    case "synap_list_sessions": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const statusArg = (args.status as string | undefined) ?? "open";
+      const conditions = [eq(focusSessions.userId, userId)];
+      if (statusArg === "open") {
+        conditions.push(
+          inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+        );
+      } else if (statusArg !== "all") {
+        conditions.push(
+          eq(
+            focusSessions.status,
+            statusArg as (typeof focusSessions.$inferSelect)["status"]
+          )
+        );
+      }
+      // The URL lens auto-injects workspaceId/projectId — honoured as filters,
+      // never as an authorization boundary (userId above is the floor).
+      if (typeof args.workspaceId === "string" && args.workspaceId) {
+        conditions.push(eq(focusSessions.workspaceId, args.workspaceId));
+      }
+      if (typeof args.projectId === "string" && args.projectId) {
+        conditions.push(eq(focusSessions.projectId, args.projectId));
+      }
+      if (typeof args.subjectEntityId === "string" && args.subjectEntityId) {
+        conditions.push(
+          eq(focusSessions.subjectEntityId, args.subjectEntityId)
+        );
+      }
+      const rawLimit =
+        typeof args.limit === "number" && Number.isFinite(args.limit)
+          ? args.limit
+          : 20;
+      const sessions = await db
+        .select()
+        .from(focusSessions)
+        .where(and(...conditions))
+        .orderBy(desc(focusSessions.startedAt))
+        .limit(Math.min(Math.max(Math.trunc(rawLimit), 1), 50));
+      return ok({ sessions, count: sessions.length });
     }
 
     case "synap_update_session": {
@@ -1118,9 +1653,293 @@ export async function executeMCPToolViaHubProtocol(
       return ok({ ...policy, pendingProposals: pendingCount });
     }
 
-    // ── Capture ──────────────────────────────────────────────────────────────
-    case "synap_capture": {
+    // ── THE ONE CAPTURE DOOR (design doc §2.2) ───────────────────────────────
+    // `synap_capture` and its DEPRECATED alias `synap_capture_graph` share ONE
+    // body. Routing is by PAYLOAD, never by tool name — an agent must never have
+    // to classify "is this a loose fact, a structured object, or a graph?":
+    //
+    //   entities[] present  → the composite core (`submitCaptureGraph`), with or
+    //                         without relations[] → ONE reviewable proposal.
+    //   text only           → the existing capture structure→execute pipeline.
+    //   global:true + text  → the pod-wide runbook lane (knowledge_keys).
+    //   neither             → REJECT (no-durable-content).
+    //
+    // Nothing here reimplements a core. The only door-level logic is the REJECT
+    // guard, which runs BEFORE governance (a rejected call never reaches
+    // `checkPermissionOrPropose`), and the uniform receipt.
+    case "synap_capture":
+    case "synap_capture_graph": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
+
+      const captureRawText = typeof args.text === "string" ? args.text : "";
+      const captureNormalizedText = normalizeCaptureText(captureRawText);
+      const captureEntities = Array.isArray(args.entities)
+        ? (args.entities as Array<Record<string, unknown>>)
+        : [];
+      const captureRelations = Array.isArray(args.relations)
+        ? (args.relations as Array<Record<string, unknown>>)
+        : [];
+      const captureProjectId =
+        typeof args.projectId === "string" && args.projectId
+          ? args.projectId
+          : null;
+
+      // `global` is the pod-wide RUNBOOK lane — a keyed text doc, not entities.
+      // Mixing it with a structured payload has no meaning; say so rather than
+      // silently dropping one of the two.
+      if (args.global === true && captureEntities.length > 0) {
+        return ok({
+          error:
+            "global:true is the pod-wide runbook lane and takes `text` only. Send the runbook text on its own call, or drop `global` to capture entities[].",
+        });
+      }
+
+      // ══ STRUCTURED / GRAPH BRANCH ═══════════════════════════════════════════
+      // Reaches the SAME core `POST /api/hub/capture/graph` calls — the mature,
+      // idempotent `submitCaptureGraph` (within-batch collapse → identity dedup →
+      // one `import.graph` proposal). The adapter-side work is only the ref
+      // validation the HTTP door does in its handler (the core documents that
+      // callers MUST have validated refs) and the membership check
+      // `resolveActingContext` performs there.
+      //
+      // `text` sent ALONGSIDE `entities[]` is not dropped: the structured payload
+      // wins (it is the precise one) and the raw text rides along as `rawSource`
+      // provenance on the proposal, where the reviewer can see it.
+      if (captureEntities.length > 0) {
+        // Refs must be unique, and every relation ref must name an entity in
+        // this call — fail loud, exactly like the HTTP door: a dangling ref would
+        // silently drop the link at materialization time.
+        //
+        // DRIFT vs the old `synap_capture_graph`: `ref` is now OPTIONAL. A single
+        // structured entity should not have to invent a local id. Explicit refs
+        // are still unique-checked and auto-assigned ones can never collide.
+        const explicitRefs = new Set<string>();
+        for (const e of captureEntities) {
+          if (typeof e.ref === "string" && e.ref) {
+            if (explicitRefs.has(e.ref)) {
+              return ok({ error: `duplicate entity ref: ${e.ref}` });
+            }
+            explicitRefs.add(e.ref);
+          }
+        }
+        let autoRefSeq = 0;
+        const graphEntities: Array<Record<string, unknown> & { ref: string }> =
+          captureEntities.map((e) => {
+            if (typeof e.ref === "string" && e.ref) return { ...e, ref: e.ref };
+            let candidate = `e${autoRefSeq++}`;
+            while (explicitRefs.has(candidate)) candidate = `e${autoRefSeq++}`;
+            explicitRefs.add(candidate);
+            return { ...e, ref: candidate };
+          });
+        for (const e of graphEntities) {
+          if (typeof e.profileSlug !== "string" || !e.profileSlug) {
+            return ok({
+              error: `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`,
+            });
+          }
+        }
+        const refs = new Set(graphEntities.map((e) => e.ref));
+        for (const r of captureRelations) {
+          if (
+            typeof r.sourceRef !== "string" ||
+            typeof r.targetRef !== "string" ||
+            typeof r.type !== "string" ||
+            !r.type
+          ) {
+            return ok({
+              error: "each relation needs `sourceRef`, `targetRef` and `type`",
+            });
+          }
+          if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
+            return ok({
+              error: `relation references an unknown ref: ${r.sourceRef} -> ${r.targetRef}. Every ref must belong to an entity in the same call.`,
+            });
+          }
+        }
+
+        const graphWsId = lensWorkspaceId ?? null;
+        const graphScope: CaptureScope = {
+          workspaceId: graphWsId,
+          projectId: captureProjectId,
+          sessionId: sessionId ?? null,
+        };
+
+        // ── REJECT: no-durable-content ───────────────────────────────────────
+        if (!graphEntities.some((e) => hasDurableEntity(e))) {
+          return captureRejected({
+            reason: "no-durable-content",
+            scope: graphScope,
+            message:
+              "Nothing storable was sent — every entity was empty. Give each one at least a `title`, or `properties` (email / phone / url are strongest: they also dedup), or a `content` body, or an `existingEntityId` to link to.",
+          });
+        }
+
+        // ── REJECT: already-known ────────────────────────────────────────────
+        // Fires ONLY when the call would be a pure no-op: a SINGLE entity, no
+        // relations, carrying nothing beyond its own identity signals, whose
+        // strong signal (email/phone/url/handle/external-id) already resolves to
+        // an existing entity. Anything richer is an ENRICHMENT or a LINK and is
+        // let through — `submitCaptureGraph` reuses the existing row instead of
+        // minting a duplicate, so there is nothing left to guard there.
+        //
+        // TITLE SIMILARITY NEVER REJECTS: no `name`/`userScope` is passed here,
+        // so only the strong (globally-unique) path of the resolver runs.
+        // Same-title-across-kinds stays advisory (crossKindCandidates, below).
+        if (graphEntities.length === 1 && captureRelations.length === 0) {
+          const only = graphEntities[0];
+          const onlyProps =
+            only.properties &&
+            typeof only.properties === "object" &&
+            !Array.isArray(only.properties)
+              ? (only.properties as Record<string, unknown>)
+              : {};
+          const onlySignals = extractIdentitySignals(onlyProps);
+          // `IdentitySignal.type` is a plain string upstream — index the
+          // strong-signal key map through a widened view rather than casting the
+          // signal type, so an unknown atom yields no keys instead of throwing.
+          const signalKeyMap = IDENTITY_SIGNAL_PROPERTY_KEYS as Record<
+            string,
+            string[] | undefined
+          >;
+          const signalKeys = new Set(
+            onlySignals.flatMap((s) => signalKeyMap[s.type] ?? [])
+          );
+          const carriesOnlyIdentity =
+            !only.existingEntityId &&
+            Object.keys(onlyProps).every((k) => signalKeys.has(k)) &&
+            !hasDurableText(normalizeCaptureText(only.content)) &&
+            !hasDurableText(normalizeCaptureText(only.description)) &&
+            !(Array.isArray(only.facets) && only.facets.length > 0);
+          if (onlySignals.length > 0 && carriesOnlyIdentity) {
+            try {
+              const known = await resolveIdentity(db, {
+                userId,
+                kindSlug: only.profileSlug as string,
+                signals: onlySignals,
+              });
+              if (known.match === "strong" && known.entity) {
+                return captureRejected({
+                  reason: "already-known",
+                  scope: graphScope,
+                  message:
+                    `A ${known.entity.type} with this exact identity already exists ("${known.entity.title ?? known.entity.id}") and the call carried nothing new, so nothing was written. ` +
+                    "This is a correct outcome, not an error — do not retry it. To add information, either send it here as content / extra properties / relations (it will enrich the existing entity, not duplicate it) or call synap_update_entity on the id below.",
+                  extra: {
+                    entityId: known.entity.id,
+                    existing: {
+                      id: known.entity.id,
+                      title: known.entity.title,
+                      profileSlug: known.entity.type,
+                    },
+                  },
+                });
+              }
+            } catch (err) {
+              // Best-effort: a lookup failure must never block a write.
+              logger.warn({ err }, "capture: already-known pre-check failed");
+            }
+          }
+        }
+
+        // ── ADVISORY (never a reject): Wave-0 crossKindCandidates ────────────
+        // Same title under a DIFFERENT kind — §2.3's `links.proposed` slot. A
+        // link SUGGESTION for the agent/reviewer, never an auto-merge.
+        const crossKindLinks: Array<{
+          ref: string;
+          candidateId: string;
+          title: string | null;
+          profileSlug: string;
+          reason: string;
+        }> = [];
+        if (graphEntities.length <= CAPTURE_CROSSKIND_PRECHECK_MAX) {
+          const visibleScope = userVisibleWhere(entities.workspaceId, userId);
+          for (const e of graphEntities) {
+            if (e.existingEntityId) continue;
+            const candidateTitle = normalizeCaptureText(e.title);
+            if (!candidateTitle) continue;
+            try {
+              const res = await resolveIdentity(db, {
+                userId,
+                kindSlug: e.profileSlug as string,
+                name: candidateTitle,
+                signals: extractIdentitySignals(
+                  e.properties as Record<string, unknown> | undefined
+                ),
+                userScope: visibleScope,
+              });
+              for (const cand of res.crossKindCandidates) {
+                crossKindLinks.push({
+                  ref: e.ref,
+                  candidateId: cand.id,
+                  title: cand.title,
+                  profileSlug: cand.type,
+                  reason: "same title across kinds",
+                });
+              }
+            } catch (err) {
+              logger.warn({ err }, "capture: cross-kind pre-check failed");
+            }
+          }
+        }
+
+        // Membership gate — the HTTP door does this via resolveActingContext.
+        // Without it an MCP key could queue a proposal in a foreign lens.
+        if (graphWsId) {
+          const { verifyWorkspaceAccess } =
+            await import("../hub-protocol/rest/_shared.js");
+          if (!(await verifyWorkspaceAccess(userId, graphWsId))) {
+            return ok({
+              error: `Forbidden: no access to workspace ${graphWsId}`,
+            });
+          }
+        }
+        const { submitCaptureGraph } =
+          await import("../../services/capture-agent/submit-capture-graph.js");
+        const graphResult = await submitCaptureGraph({
+          userId,
+          workspaceId: graphWsId,
+          ...(captureProjectId ? { projectId: captureProjectId } : {}),
+          // Origin is the door, not a caller claim: an MCP caller is an agent.
+          source: "agent",
+          ...(sessionId ? { sessionId } : {}),
+          // Shape-validated above (profileSlug present, refs unique and
+          // resolvable) — the remaining fields are optional and pass straight
+          // through to the same core the HTTP door feeds.
+          entities: graphEntities as unknown as Parameters<
+            typeof submitCaptureGraph
+          >[0]["entities"],
+          relations: captureRelations as unknown as Parameters<
+            typeof submitCaptureGraph
+          >[0]["relations"],
+          ...(typeof args.summary === "string" && args.summary
+            ? { summary: args.summary }
+            : {}),
+          // Provenance for a mixed text+entities payload (bounded by the core to
+          // proposal data — reviewable, never silently discarded).
+          ...(captureNormalizedText
+            ? { rawSource: { rawText: captureRawText.slice(0, 8000) } }
+            : {}),
+        });
+        // `state: "pending"` IS the success shape here — surface it as a governed
+        // write so `ok()` attaches the standard proposal reinforcement hint.
+        // `graphResult.writeReceipt` already conforms to the uniform receipt.
+        return ok({
+          status: "proposed",
+          scope: graphScope,
+          ...graphResult,
+          ...(crossKindLinks.length
+            ? { links: { proposed: crossKindLinks } }
+            : {}),
+          ...(captureNormalizedText
+            ? {
+                provenance:
+                  "Both `text` and `entities[]` were sent: the structured payload was used, and the raw text is kept on the proposal as provenance for the reviewer.",
+              }
+            : {}),
+        });
+      }
+
+      // ══ TEXT BRANCH ═════════════════════════════════════════════════════════
       const { captureRouter } = await import("../capture.js");
       // Resolve workspace: use provided or fall back to user's first workspace
       let captureWsId = args.workspaceId as string | undefined;
@@ -1130,6 +1949,21 @@ export async function executeMCPToolViaHubProtocol(
       }
       if (!captureWsId) {
         return ok({ error: "No accessible workspace found for this user" });
+      }
+      const textScope: CaptureScope = {
+        workspaceId: captureWsId,
+        projectId: captureProjectId,
+        sessionId: sessionId ?? null,
+      };
+      // ── REJECT: no-durable-content ─────────────────────────────────────────
+      // Also the "empty payload" branch: neither `text` nor `entities[]`.
+      if (!hasDurableText(captureNormalizedText)) {
+        return captureRejected({
+          reason: "no-durable-content",
+          scope: textScope,
+          message:
+            "Nothing storable was sent. Pass `text` with something worth remembering (a fact, a decision, a person, a task, a document body), or pass `entities[]` when you already know the kind and its fields.",
+        });
       }
       // GLOBAL lane — mirror the CLI's `capture --global`: a pod-wide procedural
       // runbook goes to knowledge_keys (a keyed doc upsert), NOT the entity
@@ -1151,7 +1985,19 @@ export async function executeMCPToolViaHubProtocol(
           workspaceId: captureWsId,
           author: userId,
         });
-        return ok({ lane: "global", knowledgeKey: record });
+        const globalReceipt: CaptureWriteReceipt = {
+          state: "applied",
+          effectiveWorkspaceId: captureWsId,
+          ...(captureProjectId ? { projectId: captureProjectId } : {}),
+          source: "agent",
+        };
+        return ok({
+          status: "applied",
+          lane: "global",
+          scope: textScope,
+          writeReceipt: globalReceipt,
+          knowledgeKey: record,
+        });
       }
       const captureCtx = await createHubProtocolCallerContext(
         userId,
@@ -1188,20 +2034,30 @@ export async function executeMCPToolViaHubProtocol(
       if ((structured as { degraded?: boolean }).degraded === true) {
         const reason = (structured as { degradedReason?: string })
           .degradedReason;
-        return ok({
-          degraded: true,
-          degradedReason: reason,
-          executed: false,
+        return captureRejected({
+          reason: "structuring-unavailable",
+          scope: textScope,
           message:
             "⚠️ AI structuring is temporarily unavailable, so nothing was created. " +
             "Tell the user their capture was NOT structured (the AI service is degraded) and to try again shortly — do not present this as a normal capture or save a raw note.",
+          extra: {
+            degraded: true,
+            ...(reason ? { degradedReason: reason } : {}),
+            executed: false,
+          },
         });
       }
       if (captureProposals.length === 0) {
-        return ok({
-          ...structured,
-          executed: false,
-          note: "Nothing to capture.",
+        return captureRejected({
+          reason: "no-durable-content",
+          scope: textScope,
+          message:
+            "The text was read but nothing durable could be extracted from it. Say what the thing IS (a person, a task, a decision, a note) — or send `entities[]` directly when you already know the kind.",
+          extra: {
+            ...structured,
+            executed: false,
+            note: "Nothing to capture.",
+          },
         });
       }
       // Dedup → merge: when structure found a high-confidence SAME-PROFILE
@@ -1286,7 +2142,30 @@ export async function executeMCPToolViaHubProtocol(
           status: "linked" | "proposed";
         };
       };
+      // The scope echo must be what the write ACTUALLY landed in: routing may
+      // have moved it (movedToWorkspace), and a project only counts when it was
+      // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
+      const landedWsId = ex.movedToWorkspace ?? captureWsId;
+      const landedProjectId =
+        ex.project?.status === "linked"
+          ? ex.project.projectId
+          : captureProjectId;
+      const textReceipt: CaptureWriteReceipt = {
+        state: "applied",
+        effectiveWorkspaceId: landedWsId,
+        ...(landedProjectId ? { projectId: landedProjectId } : {}),
+        source: "agent",
+      };
       return ok({
+        // First-party capture writes DIRECTLY (auto-approved + revertible), so
+        // the uniform status here is "applied", never "proposed".
+        status: "applied",
+        scope: {
+          workspaceId: landedWsId,
+          projectId: landedProjectId,
+          sessionId: sessionId ?? null,
+        },
+        writeReceipt: textReceipt,
         structured,
         executed,
         ...(ex.movedToWorkspace

@@ -102,6 +102,16 @@ export const entitiesRouter = router({
         title: z.string(),
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Long-form markdown body. MUST be declared here (mirrors the tRPC
+         * `entities.create` input) — zod strips undeclared keys, so an omitted
+         * field silently DROPPED the body of every `POST /api/hub/entities`
+         * call: 200 OK, `documentId = NULL`, essay gone. Forwarded to
+         * `caller.create` below, where `resolveContentTarget` materializes it
+         * into a versioned document (or folds short content into
+         * `properties.content`). Same class of bug already fixed for capture.
+         */
+        content: z.string().optional(),
         // File the entity into a project — threaded to checkPermissionOrPropose
         // so the proposal carries projectId and the materializer stamps the
         // belongs_to_project edge that project-scoped recall relies on.
@@ -208,6 +218,9 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
+        // Long-form body → linked document (versioned) via resolveContentTarget.
+        // Must be forwarded or the create runs with documentId = NULL.
+        ...(input.content ? { content: input.content } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),
         // Only an EXPLICIT body workspaceId becomes a targetWorkspaceId (rung-1
         // pin). The ambient workspace is NEVER forced here — it already flows via
@@ -266,6 +279,23 @@ export const entitiesRouter = router({
           }
         ).facets ?? [];
 
+      // Unknown-property signal (`PropertyValidationService` → EntityRepository
+      // → the created row). Keys the caller invented are STORED verbatim but not
+      // modelled/queryable — forward them so the write receipt can tell the
+      // agent instead of handing it a silent 200. The door's own envelope drops
+      // everything it doesn't name, so this must be lifted explicitly; the
+      // regular `entities.create` procedure carries it on `entity` (its
+      // `toApiEntity` spreads the repository row), with a top-level read first
+      // in case a caller path surfaces it there.
+      const resultShape = result as Record<string, unknown>;
+      const rawUnmodeled =
+        resultShape.unmodeled ??
+        (resultShape.entity as Record<string, unknown> | null | undefined)
+          ?.unmodeled;
+      const unmodeled = Array.isArray(rawUnmodeled)
+        ? (rawUnmodeled as Array<{ key: string; didYouMean?: string }>)
+        : [];
+
       return {
         status: result.status,
         message: result.message,
@@ -294,6 +324,9 @@ export const entitiesRouter = router({
         // Kind + Facets: the roles attached in this call (empty/omitted when none
         // were requested or the create was proposal-gated).
         ...(attachedFacets.length ? { facets: attachedFacets } : {}),
+        // Property keys this write invented (stored, but not modelled). Omitted
+        // when there are none, so the common envelope is byte-identical.
+        ...(unmodeled.length ? { unmodeled } : {}),
       };
     }),
 

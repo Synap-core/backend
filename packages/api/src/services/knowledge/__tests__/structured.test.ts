@@ -21,6 +21,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   captured: { where: undefined as any },
+  /** Rows `profileSlugRows` resolves to — emptied to test the fail-closed door. */
+  slugRows: [{ id: "kind-1", profileKind: "kind" as const }] as Array<{
+    id: string;
+    profileKind: "kind" | "role";
+  }>,
 }));
 
 vi.mock("@synap/database", () => ({
@@ -50,10 +55,19 @@ vi.mock("@synap/database", () => ({
     strings: [...strings],
     vals,
   }),
-  profileSlugScopeCondition: async (_db: unknown, slug: string) => ({
+  profileSlugScopeConditionFromRows: (
+    _db: unknown,
+    slug: string,
+    _rows: unknown
+  ) => ({
     _tag: "profileSlugScope",
     slug,
   }),
+  // `structuredLookup` now fails closed on a slug this pod has no profile for
+  // (assertKnownProfileSlug → profileSlugRows). These scoping tests all use a
+  // slug that EXISTS, so the stub returns one kind row; the assert passes and
+  // the composed-WHERE invariants below are what's under test.
+  profileSlugRows: async (_db: unknown, _slug: string) => h.slugRows,
 }));
 
 vi.mock("../../../utils/user-visible-where.js", () => ({
@@ -86,6 +100,37 @@ const hasTag = (tag: string) => conditionsOf().some((c) => c?._tag === tag);
 
 beforeEach(() => {
   h.captured.where = undefined;
+  h.slugRows = [{ id: "kind-1", profileKind: "kind" }];
+});
+
+describe("structuredLookup — fails closed on unknown vocabulary", () => {
+  it("throws instead of returning [] when the slug names no profile", async () => {
+    // The defect this closes: the shared scope predicate falls back to a
+    // row-blind `entities.type` match for an unresolvable slug, so the lane
+    // answered "you have none" to a question about vocabulary that does not
+    // exist in this pod — indistinguishable from a genuinely empty result.
+    h.slugRows = [];
+    await expect(
+      structuredLookup({
+        profileSlug: "crm-lead",
+        userId: USER,
+        workspaceId: "ws-1",
+        limit: 10,
+      })
+    ).rejects.toThrow(/Unknown profile: "crm-lead"/);
+    // and it must not have run the query at all
+    expect(h.captured.where).toBeUndefined();
+  });
+
+  it("proceeds normally when the slug resolves", async () => {
+    await structuredLookup({
+      profileSlug: "company",
+      userId: USER,
+      workspaceId: "ws-1",
+      limit: 10,
+    });
+    expect(h.captured.where?._tag).toBe("and");
+  });
 });
 
 describe("structuredLookup — floor is always intersected", () => {
