@@ -772,15 +772,39 @@ async function mintKratosSession(
       body: JSON.stringify({}),
       signal: AbortSignal.timeout(8_000),
     }
-  ).catch(() => null);
-  if (!response?.ok) return null;
+  ).catch((error: unknown) => {
+    // Silent nulls here surfaced as an unexplained 503 on EVERY federated
+    // sign-in with nothing in the logs. Name the failure instead: the usual
+    // causes are an unset/wrong KRATOS_ADMIN_URL (the localhost default is not
+    // reachable from inside the API container) or Kratos being unreachable.
+    logger.error(
+      { error, kratosAdminUrl, identityId },
+      "Kratos session mint failed — admin request did not complete"
+    );
+    return null;
+  });
+  if (!response) return null;
+  if (!response.ok) {
+    // 404 here means the linked users.kratos_identity_id no longer exists in
+    // Kratos (orphaned link); 4xx/5xx otherwise is an admin API fault.
+    logger.error(
+      { status: response.status, kratosAdminUrl, identityId },
+      "Kratos session mint failed — admin API returned a non-OK status"
+    );
+    return null;
+  }
   const data = (await response.json().catch(() => null)) as {
     session_token?: string;
     session?: Record<string, unknown>;
   } | null;
-  return data?.session_token
-    ? { sessionToken: data.session_token, session: data.session ?? {} }
-    : null;
+  if (!data?.session_token) {
+    logger.error(
+      { kratosAdminUrl, identityId },
+      "Kratos session mint failed — admin response carried no session_token"
+    );
+    return null;
+  }
+  return { sessionToken: data.session_token, session: data.session ?? {} };
 }
 
 /** Best-effort compensation when a newly-created auth identity cannot be granted Pod access. */
