@@ -37,6 +37,12 @@ const EXPECTED = [
   "POD_IDENTITY_UNAVAILABLE",
   "POD_SCOPE_ACCESS_DENIED",
   "POD_SESSION_MINT_FAILED",
+  // Replay guard — REPLAY_PROTECTION_UNAVAILABLE is the one that fires on a
+  // schema fault (e.g. missing replay_context) and looked like a generic
+  // "exchange failed" on every sign-in.
+  "ASSERTION_EXPIRED",
+  "ASSERTION_REPLAYED",
+  "REPLAY_PROTECTION_UNAVAILABLE",
 ].sort();
 
 function emittedCodes(src: string): string[] {

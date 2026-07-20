@@ -51,6 +51,16 @@ interface RequiredColumn {
 const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // Wave B3 provenance — tripwire on the KG core (0107). Checking 2 of the 5
   // per table is enough to confirm the migration ran (it adds all 5 together).
+  //
+  // Federated sign-in writes a replay receipt on EVERY exchange. If this column
+  // is missing the insert throws, the pod still boots "healthy", and every
+  // federated sign-in fails with an unexplained exchange error — the exact
+  // silent-runtime-failure this check exists to prevent.
+  {
+    table: "federated_assertion_receipts",
+    column: "replay_context",
+    addedBy: "0196_federated_application_connection_request_lifecycle.sql",
+  },
   {
     table: "entities",
     column: "created_by_kind",

@@ -563,16 +563,32 @@ async function consumeFederatedAssertion(
     });
     if (result === "consumed" || result === "recovered") return null;
     if (result === "expired") {
-      return c.json({ error: "Federated assertion has expired" }, 401);
+      return c.json(
+        { error: "Federated assertion has expired", code: "ASSERTION_EXPIRED" },
+        401
+      );
     }
-    return c.json({ error: "Federated assertion has already been used" }, 409);
+    return c.json(
+      {
+        error: "Federated assertion has already been used",
+        code: "ASSERTION_REPLAYED",
+      },
+      409
+    );
   } catch (error) {
+    // Almost always a schema/DB fault on the receipts table (e.g. a pod that
+    // missed the migration adding `replay_context`). Without a code this
+    // surfaces to the user as an unexplained "exchange failed" on EVERY
+    // sign-in, while the pod otherwise looks healthy.
     logger.error(
       { error, issuerId },
       "Could not record federated assertion replay receipt"
     );
     return c.json(
-      { error: "Federated assertion replay protection is unavailable" },
+      {
+        error: "Federated assertion replay protection is unavailable",
+        code: "REPLAY_PROTECTION_UNAVAILABLE",
+      },
       503
     );
   }
