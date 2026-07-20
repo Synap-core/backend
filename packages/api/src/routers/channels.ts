@@ -4099,19 +4099,14 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.channelId),
-          eq(channels.userId, ctx.userId)
-        ),
-      });
-
-      if (!channel) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Channel not found",
-        });
-      }
+      // Membership access, not owner-only: the sidebar lists channels by
+      // membership/visibility (channelVisibilityWhere), so a member could see a
+      // shared channel yet 404 on rename — the same ownership-vs-membership gap
+      // archiveChannel had. Same door its sibling mutations already use.
+      const channel = await assertChannelMembershipAccess(
+        input.channelId,
+        ctx.userId
+      );
 
       await db
         .update(channels)
@@ -4368,19 +4363,10 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.channelId),
-          eq(channels.userId, ctx.userId)
-        ),
-      });
-
-      if (!channel) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Channel not found",
-        });
-      }
+      const channel = await assertChannelMembershipAccess(
+        input.channelId,
+        ctx.userId
+      );
 
       await db
         .update(channels)
