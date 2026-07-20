@@ -382,6 +382,13 @@ export const skillsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
+        /**
+         * AI attribution — set by AI callers, mirroring `create`. Load-bearing
+         * for re-approval: an agent rewriting an `instruction` skill's `body`
+         * must re-earn approval, because that body is injected verbatim into an
+         * agent's system prompt.
+         */
+        agentUserId: z.string().uuid().optional(),
         kind: z
           .enum(["instruction", "code", "declarative", "builtin"])
           .optional(),
@@ -401,7 +408,9 @@ export const skillsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { id, ...updateData } = input;
+      // `agentUserId` is attribution, NOT a column — peel it off so the spread
+      // below never carries it into the skills UPDATE.
+      const { id, agentUserId: _agentUserId, ...updateData } = input;
 
       // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
@@ -444,9 +453,19 @@ export const skillsRouter = router({
         "timeoutSeconds",
         "kind",
       ] as const;
-      const execChanged = RE_APPROVAL_FIELDS.some(
-        (k) => (updateData as Record<string, unknown>)[k] !== undefined
-      );
+      const execChanged =
+        RE_APPROVAL_FIELDS.some(
+          (k) => (updateData as Record<string, unknown>)[k] !== undefined
+        ) ||
+        // An AGENT rewriting `body` must re-earn approval. `body` is not
+        // executable, so it isn't in RE_APPROVAL_FIELDS — but for an
+        // `instruction` skill the body IS injected verbatim into an agent's
+        // system prompt (is-agent-executor.ts). Without this, an agent could
+        // take an already-approved instruction skill and rewrite its body while
+        // it KEPT `approved: true` — precisely the "hostile fetched content
+        // persists itself into the prompt" path the approval gate exists to
+        // stop. A human editing their own skill is unaffected.
+        (updateData.body !== undefined && !!input.agentUserId);
 
       // Documentation + optional Code: when code is set, derive `kind` (unless
       // given) and store empty code as null (the skill becomes doc-only).

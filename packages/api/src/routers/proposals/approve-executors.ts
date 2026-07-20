@@ -521,8 +521,7 @@ export function registerApproveExecutors(): void {
           | "secret"
           | "entity_id",
         constraints: innerData.constraints as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         uiHints: innerData.uiHints as Record<string, unknown> | undefined,
         overlay: innerData.overlay === true,
         required: innerData.required as boolean | undefined,
@@ -723,10 +722,7 @@ export function registerApproveExecutors(): void {
         name,
         description: innerData.description as string | undefined,
         status: innerData.status as
-          | "active"
-          | "archived"
-          | "completed"
-          | undefined,
+          "active" | "archived" | "completed" | undefined,
         settings: innerData.settings as Record<string, unknown> | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,
       });
@@ -1109,8 +1105,7 @@ export function registerApproveExecutors(): void {
         description: innerData.description as string | undefined,
         triggerType,
         triggerConfig: innerData.triggerConfig as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         flowDefinition,
         status: innerData.status as string | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,
@@ -1202,21 +1197,25 @@ export function registerApproveExecutors(): void {
         goalTemplate,
         params: innerData.params as Record<string, unknown>[] | undefined,
         inputStrategy: innerData.inputStrategy as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         channelSpec: innerData.channelSpec as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         expectedOutputs: innerData.expectedOutputs as
-          | Record<string, unknown>[]
-          | undefined,
+          Record<string, unknown>[] | undefined,
         stages: innerData.stages as Record<string, unknown>[] | undefined,
         subjectProfile: innerData.subjectProfile as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         schedule: innerData.schedule,
         executor: innerData.executor,
         status: innerData.status,
+        // The propose gate stores the Layer-2 context skill in `data`; without
+        // reading it back here an APPROVED playbook materialized with no context
+        // skill at all — i.e. the feature was a no-op on the agent-proposed path,
+        // which is exactly the path that needs a generated HOW. Note this
+        // re-runs with NO agentUserId, so the skill is born approved: the human
+        // approval genuinely covers it, and the executor will inject it.
+        contextSkill: innerData.contextSkill as
+          { name?: string; body: string } | undefined,
       };
       await playbookCaller.create(
         createArgs as Parameters<typeof playbookCaller.create>[0]
@@ -1323,10 +1322,7 @@ export function registerApproveExecutors(): void {
         {}) as Record<string, unknown>;
       const profileSlug = innerData.profileSlug as string | undefined;
       const slot = innerData.slot as
-        | "list"
-        | "detail"
-        | "dashboard"
-        | undefined;
+        "list" | "detail" | "dashboard" | undefined;
       const ref = innerData.ref as RendererRef | null | undefined;
       const scope =
         (innerData.scope as "workspace" | "pod" | undefined) ?? "workspace";
@@ -1934,17 +1930,10 @@ export function registerApproveExecutors(): void {
           templateId: inner.templateId as string | undefined,
           packageSlug: inner.packageSlug as string | undefined,
           workspaceType: inner.workspaceType as
-            | "personal"
-            | "agent"
-            | "project"
-            | "operational"
-            | undefined,
+            "personal" | "agent" | "project" | "operational" | undefined,
           createdBy:
             (inner.createdBy as
-              | "user"
-              | "provisioning"
-              | "plugin"
-              | undefined) ?? "provisioning",
+              "user" | "provisioning" | "plugin" | undefined) ?? "provisioning",
         });
       } catch (e) {
         if (
@@ -2328,11 +2317,7 @@ export function registerApproveExecutors(): void {
           packageSlug: inner.packageSlug as string | undefined,
           packageVersion: inner.packageVersion as string | undefined,
           workspaceType: inner.workspaceType as
-            | "personal"
-            | "agent"
-            | "project"
-            | "operational"
-            | undefined,
+            "personal" | "agent" | "project" | "operational" | undefined,
         });
       } catch (e) {
         if (
@@ -2969,10 +2954,7 @@ export function registerApproveExecutors(): void {
     async execute({ proposal, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
       const capabilityKind = data.capabilityKind as
-        | "tool"
-        | "skill"
-        | "command"
-        | undefined;
+        "tool" | "skill" | "command" | undefined;
       const capabilityId = data.capabilityId as string | undefined;
 
       if (!capabilityKind || !capabilityId) {
@@ -3159,8 +3141,7 @@ export function registerApproveExecutors(): void {
         targetType: proposal.targetType,
         proposalType: proposal.proposalType,
         source: (proposal.data as Record<string, unknown> | null)?.source as
-          | string
-          | undefined,
+          string | undefined,
       });
 
       deps.emitProposalReviewed(

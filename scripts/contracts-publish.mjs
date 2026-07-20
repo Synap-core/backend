@@ -11,6 +11,7 @@
  *   1. @synap-core/api-types  → npm publish      (consumed by synap-app + synap-cli)
  *   2. @synap-core/types      → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
  *   3. @synap-core/hub-protocol → pnpm pack → tgz (consumed by synap-intelligence-service via file:)
+ *   4. @synap/hub-rest-client → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
  *
  * DRY-RUN by default. Nothing is written, published, or copied without --yes.
  *
@@ -216,24 +217,47 @@ const TGZ_ARTIFACTS = [
     dir: "packages/hub-protocol",
     tgzPrefix: "synap-core-hub-protocol-",
   },
+  // Consumed by apps/intelligence-hub. MUST be a tgz, never a
+  // `file:../../../synap-backend/...` sibling-repo path: the IS Dockerfile
+  // copies only IS manifests + packages/*.tgz, so a sibling path resolves to
+  // an absent `/synap-backend/...` and the image build dies at pnpm install.
+  {
+    name: "@synap/hub-rest-client",
+    dir: "packages/hub-rest-client",
+    tgzPrefix: "synap-hub-rest-client-",
+  },
 ];
 
 step(
   "C",
-  "Pack tgz artifacts (types, hub-protocol) → copy to IS → repin file: refs"
+  "Pack tgz artifacts (types, hub-protocol, hub-rest-client) → copy to IS → repin file: refs"
 );
-const isPkgFile = join(SYNAP_IS_DIR, "apps/cli/package.json");
-const isPkgRel = "apps/cli/package.json";
+// Every IS manifest that may hold a `file:` ref to a backend artifact. Repin
+// scans ALL of them: an artifact is repinned wherever its name appears, so a
+// new consumer only needs to be listed here (or a new artifact added above) —
+// neither one silently keeps a stale/sibling-repo ref the way a single
+// hardcoded manifest did.
+const IS_CONSUMER_RELS = [
+  "apps/cli/package.json",
+  "apps/intelligence-hub/package.json",
+];
 const isPackagesDir = join(SYNAP_IS_DIR, "packages");
-const isHasCli = existsSync(isPkgFile);
 
 if (!existsSync(SYNAP_IS_DIR)) {
   sub(`⚠️  IS repo not found at ${SYNAP_IS_DIR} — skipping tgz step`);
-} else if (!isHasCli) {
-  sub(`⚠️  ${isPkgRel} not found in IS repo — skipping tgz step`);
 }
 
-let isPkgText = isHasCli ? readFileSync(isPkgFile, "utf-8") : null;
+/** @type {{rel: string, file: string, text: string}[]} */
+const isConsumers = existsSync(SYNAP_IS_DIR)
+  ? IS_CONSUMER_RELS.flatMap((rel) => {
+      const file = join(SYNAP_IS_DIR, rel);
+      if (!existsSync(file)) {
+        sub(`⚠️  ${rel} not found in IS repo — skipping`);
+        return [];
+      }
+      return [{ rel, file, text: readFileSync(file, "utf-8") }];
+    })
+  : [];
 const tgzSummary = [];
 
 for (const art of TGZ_ARTIFACTS) {
@@ -259,15 +283,13 @@ for (const art of TGZ_ARTIFACTS) {
       for (const s of stale)
         sub(`  ${tag()} would remove superseded: packages/${s}`);
     }
-    if (isPkgText) {
-      const { count: _count } = repinJsonText(isPkgText, art.name, "__N/A__"); // count only for file: style below
+    for (const c of isConsumers) {
       // file: refs are not semver — detect by name presence
       const hasRef = new RegExp(
         `"${art.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*"file:`
-      ).test(isPkgText);
-      sub(
-        `  ${tag()} would set ${isPkgRel}: "${art.name}": "${isRefPath}" ${hasRef ? "(replacing existing file: ref)" : "(no existing file: ref found — review)"}`
-      );
+      ).test(c.text);
+      if (!hasRef) continue; // not a consumer of this artifact
+      sub(`  ${tag()} would set ${c.rel}: "${art.name}": "${isRefPath}"`);
     }
     tgzSummary.push({ name: art.name, ver, tgzName, applied: false });
   } else {
@@ -302,23 +324,26 @@ for (const art of TGZ_ARTIFACTS) {
         sub(`  ✓ removed superseded: packages/${s}`);
       }
     }
-    if (isPkgText) {
-      const escaped = art.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`("${escaped}"\\s*:\\s*")file:[^"]*(")`, "g");
+    const escaped = art.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`("${escaped}"\\s*:\\s*")file:[^"]*(")`, "g");
+    for (const c of isConsumers) {
       let n = 0;
-      isPkgText = isPkgText.replace(re, (_m, pre, post) => {
+      c.text = c.text.replace(re, (_m, pre, post) => {
         n += 1;
         return `${pre}${isRefPath}${post}`;
       });
-      sub(`  ✓ repinned ${isPkgRel} (${n} ref${n === 1 ? "" : "s"})`);
+      if (n > 0) sub(`  ✓ repinned ${c.rel} (${n} ref${n === 1 ? "" : "s"})`);
     }
     tgzSummary.push({ name: art.name, ver, tgzName, applied: true });
   }
 }
 
-if (!DRY && isPkgText && isHasCli) {
-  writeFileSync(isPkgFile, isPkgText);
-  sub(`✓ wrote ${isPkgRel}`);
+if (!DRY) {
+  for (const c of isConsumers) {
+    if (c.text === readFileSync(c.file, "utf-8")) continue; // untouched
+    writeFileSync(c.file, c.text);
+    sub(`✓ wrote ${c.rel}`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

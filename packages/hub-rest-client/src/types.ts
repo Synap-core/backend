@@ -960,6 +960,27 @@ export interface AttachFacetInput {
   reasoning?: string;
 }
 
+/**
+ * Result of `POST /entities/{entityId}/facets`.
+ *
+ * NOT a `HubGovernanceResult`: the facet door's inline-write status is
+ * `attached` (never `created`/`approved`), and it reports the new row as
+ * `facetId` rather than `id`. Source of truth for both branches:
+ * `entities.attachFacet` in `packages/api/src/routers/entities.ts`.
+ */
+export interface HubAttachFacetResult {
+  status: "attached" | "proposed";
+  message?: string;
+  /** Present on the inline `attached` branch. */
+  facetId?: string;
+  /** The materialized facet row on `attached`; `null` on `proposed`. */
+  facet?: Record<string, unknown> | null;
+  /** Present on the `proposed` branch. */
+  proposalId?: string;
+  proposalType?: string;
+  reviewUrl?: string;
+}
+
 export interface CreateViewInput {
   name: string;
   type: HubView["type"];

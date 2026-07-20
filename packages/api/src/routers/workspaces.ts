@@ -114,7 +114,14 @@ interface CreateDefinitionPostWorkspaceSlice {
     executor?: LoopPlaybookDef["executor"];
     expectedOutputs?: unknown;
     subjectProfile?: LoopPlaybookDef["subjectProfile"];
-    grants?: Array<{ kind: string; ref: string }>;
+    /** Scheduled cadence (e.g. a radar's weekly scan) — forwarded to the loop applier. */
+    schedule?: LoopPlaybookDef["schedule"];
+    /**
+     * Authored either as bare NAMES (the Hub door's form, what templates write)
+     * or as `{kind, ref}` objects. Only the object form carries a resolvable id
+     * for the loop applier — see the narrowing in the body builder.
+     */
+    grants?: Array<string | { kind: string; ref: string }>;
   }>;
   automations?: Array<{
     name: string;
@@ -175,10 +182,23 @@ function buildPostWorkspaceBodyFromDefinition(
           // Carry the subject kind → `createLoopFromDefinition` forwards it to
           // `playbooksRouter.create`, landing on `subject_profile`.
           subjectProfile: pb.subjectProfile,
-          grants: pb.grants?.map((g) => ({
-            kind: g.kind,
-            id: g.ref,
-          })),
+          // Carry the schedule through — `LoopPlaybookDef` and the loop applier
+          // both support it, and without it a template-authored radar cadence
+          // (`schedule: {cron, enabled:false}`) is silently dropped on this door.
+          schedule: pb.schedule,
+          // Grants may be authored as bare NAMES (the Hub door's form) or as
+          // `{kind, ref}`. The loop applier writes `toId: g.id` straight into a
+          // link row, so it needs a real row id — a NAME cannot be resolved
+          // here (this is a pure function with no db). Objects pass through;
+          // names are left to the Hub / approve-executor door, which resolves
+          // them properly via `resolveGrantRefs`. Dropping them here keeps the
+          // install succeeding instead of writing link rows pointing at a name.
+          grants: pb.grants
+            ?.filter(
+              (g): g is { kind: "tool" | "skill" | "command"; ref: string } =>
+                typeof g !== "string"
+            )
+            .map((g) => ({ kind: g.kind, id: g.ref })),
         })) as unknown as LoopPlaybookDef[],
         triggers: (automationDefs ?? []).map((auto) => ({
           name: auto.name,
@@ -2797,6 +2817,18 @@ export const workspacesRouter = router({
                     .enum(["is-agent", "external-agent", "hybrid"])
                     .optional(),
                   /**
+                   * Scheduled cadence (`{cron, enabled}`) — e.g. a radar's
+                   * weekly scan. Undeclared here, zod STRIPPED it and the
+                   * template's schedule never reached the DB on this door.
+                   */
+                  schedule: z
+                    .object({
+                      cron: z.string(),
+                      enabled: z.boolean().optional(),
+                    })
+                    .nullable()
+                    .optional(),
+                  /**
                    * Entity kind the playbook operates over → persisted to
                    * `playbooks.subject_profile`, making it matchable by
                    * `playbooks.matchForEntity`. Forwarded into the LoopDefinition
@@ -2808,12 +2840,25 @@ export const workspacesRouter = router({
                       filter: z.record(z.string(), z.unknown()).optional(),
                     })
                     .optional(),
+                  /**
+                   * Workspace templates author grants as BARE NAMES
+                   * (`grants: [exa_search, entity.create]`) — the same form the
+                   * Hub door already accepts (`PackagePostWorkspaceBody
+                   * .playbooks[].grants: string[]`). Requiring only the
+                   * `{kind, ref}` object form made this door REJECT the whole
+                   * mutation for any template carrying playbook grants, so a
+                   * browser install 400'd outright. Accept both shapes here;
+                   * `buildPostWorkspaceBodyFromDefinition` narrows them.
+                   */
                   grants: z
                     .array(
-                      z.object({
-                        kind: z.enum(["tool", "skill", "command"]),
-                        ref: z.string(),
-                      })
+                      z.union([
+                        z.string(),
+                        z.object({
+                          kind: z.enum(["tool", "skill", "command"]),
+                          ref: z.string(),
+                        }),
+                      ])
                     )
                     .optional(),
                   expectedOutputs: z
@@ -3101,13 +3146,34 @@ export const workspacesRouter = router({
         // existing ones. Mirrors the compose-overlay branch; non-fatal.
         //
         // SOURCE MUST MATCH LAYER 1: when the version-aware path resolved a
-        // fresh template server-side, build from THAT (`outcome.packageDefinition`)
-        // — not the caller's `input.definition`, which may be a stale cached copy
-        // missing exactly the playbook the new version added.
+        // fresh template server-side, build from THAT — not the caller's
+        // `input.definition`, which may be a stale cached copy missing exactly
+        // the playbook the new version added.
+        //
+        // ADAPT, DON'T CAST: the resolved value is a PackageDefinitionOutput,
+        // whose wire shape differs from the WorkspaceDefinitionOutput this door
+        // otherwise receives — graph automations are `automations` there but
+        // `flowAutomations` here. Casting silently (a) dropped every
+        // template-authored graph automation, and (b) fed flow-shaped rows into
+        // the LOOP-trigger mapping, where `auto.trigger` is undefined → TypeError
+        // → the whole layer-2 sync (playbooks + capabilities + placements) was
+        // swallowed by the catch below. Map the fields explicitly instead.
         if (syncLayers) {
           try {
-            const postWorkspaceSource = (outcome.packageDefinition ??
-              input.definition) as CreateDefinitionPostWorkspaceSlice;
+            const pkg = outcome.packageDefinition;
+            const postWorkspaceSource: CreateDefinitionPostWorkspaceSlice = pkg
+              ? {
+                  playbooks:
+                    pkg.playbooks as CreateDefinitionPostWorkspaceSlice["playbooks"],
+                  capabilities:
+                    pkg.capabilities as CreateDefinitionPostWorkspaceSlice["capabilities"],
+                  actionPlacements:
+                    pkg.actionPlacements as CreateDefinitionPostWorkspaceSlice["actionPlacements"],
+                  // The rename the old cast erased.
+                  flowAutomations:
+                    pkg.automations as CreateDefinitionPostWorkspaceSlice["flowAutomations"],
+                }
+              : (input.definition as CreateDefinitionPostWorkspaceSlice);
             await applyPackagePostWorkspace({
               workspaceId,
               body: buildPostWorkspaceBodyFromDefinition(

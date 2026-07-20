@@ -57,6 +57,7 @@ import type {
   CreateThreadInput,
   CreateRelationInput,
   AttachFacetInput,
+  HubAttachFacetResult,
   CreateViewInput,
   UpdateViewInput,
   ArrangeBentoViewInput,
@@ -534,9 +535,9 @@ export class HubRestClient {
    * may be `proposed`; callers must surface its review information instead of
    * claiming the role was applied.
    */
-  async attachFacet(input: AttachFacetInput): Promise<HubGovernanceResult> {
+  async attachFacet(input: AttachFacetInput): Promise<HubAttachFacetResult> {
     const userId = await this.resolveUserId();
-    return this.request<HubGovernanceResult>(
+    return this.request<HubAttachFacetResult>(
       "POST",
       `/api/hub/entities/${input.entityId}/facets`,
       {

@@ -97,6 +97,7 @@ export type {
   HubUserContext,
   // Governance
   HubGovernanceResult,
+  HubAttachFacetResult,
   HubWriteReceipt,
   HubWriteSource,
   // Capabilities & teaching substrate

@@ -13463,14 +13463,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							description?: string | undefined;
 						}[] | undefined;
 						executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+						schedule?: {
+							cron: string;
+							enabled?: boolean | undefined;
+						} | null | undefined;
 						subjectProfile?: {
 							profileSlug: string;
 							filter?: Record<string, unknown> | undefined;
 						} | undefined;
-						grants?: {
+						grants?: (string | {
 							kind: "command" | "tool" | "skill";
 							ref: string;
-						}[] | undefined;
+						})[] | undefined;
 						expectedOutputs?: {
 							description: string;
 							type: "entities" | "document" | "csv" | "report";
@@ -15400,6 +15404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				agentUserId?: string | undefined;
 				kind?: "code" | "instruction" | "declarative" | "builtin" | undefined;
 				scope?: "user" | "workspace" | "pod" | undefined;
 				agentTypes?: string[] | null | undefined;

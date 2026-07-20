@@ -1127,8 +1127,14 @@ export const playbooksRouter = router({
       // playbook→skill via a non-grant `documents` edge (kept OUT of the
       // grantable/runnable set so it's never executed). Rides the playbook's
       // approval exactly like the cron automation above (this direct-create path
-      // is only reached AFTER checkPermissionOrPropose granted). The executor
-      // reads the body directly at kickoff. Best-effort — never fail the create.
+      // is only reached AFTER checkPermissionOrPropose granted).
+      //
+      // TWO TRUST BOUNDARIES, deliberately separate: approving the PLAYBOOK is
+      // not approving arbitrary prose injected into every future kickoff's
+      // system prompt. So the executor injects this body ONLY once it is
+      // `approved` (is-agent-executor.ts) — which for an agent author means a
+      // human must approve the skill separately. Do not "simplify" either side
+      // to match the other. Best-effort — never fail the create.
       if (input.contextSkill?.body?.trim()) {
         try {
           const skillId = randomUUID();
@@ -1142,8 +1148,9 @@ export const playbooksRouter = router({
             userId: input.agentUserId ?? ctx.userId,
             status: "active",
             // Born-approved only for a trusted human author (mirrors
-            // insertSkillGoverned); an agent-authored body stays unapproved, but
-            // the executor reads it by link regardless of approval.
+            // insertSkillGoverned). An agent-authored body stays unapproved and
+            // the executor SKIPS it (is-agent-executor.ts filters on `approved`)
+            // until a human approves — this body is system-prompt surface.
             approved: !input.agentUserId,
           });
           await createLinks([
