@@ -664,28 +664,16 @@ export const workspacesRouter = router({
       // Ensure default workspace setup (for existing workspaces created before these features)
       // These are one-time operations per workspace.
       // Default views are NOT auto-created — the frontend renders views ephemerally.
+      //
+      // The default WHITEBOARD is NOT auto-created here anymore. There is exactly
+      // ONE canonical whiteboard per pod, resolved lazily via the single door
+      // `views.resolveScopedSurface` ({ type: 'whiteboard' }, no scope) on first
+      // open. Per-workspace auto-created boards produced a graveyard of empty
+      // `isMain` boards the canonical door never reached.
       const {
-        ensureDefaultWhiteboard,
         ensureDefaultCommands,
         ensureDefaultRelationDefs,
       } = await import("@synap/database");
-
-      const whiteboardResult = await ensureDefaultWhiteboard(
-        input.id,
-        ctx.userId
-      );
-      console.log(
-        `[workspaces.get] ensureDefaultWhiteboard:`,
-        whiteboardResult.status,
-        whiteboardResult.message
-      );
-      if (whiteboardResult.status === "error") {
-        console.error(
-          `[workspaces.get] Failed to ensure default whiteboard:`,
-          whiteboardResult.message,
-          whiteboardResult.error
-        );
-      }
 
       const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);
       console.log(
@@ -718,27 +706,8 @@ export const workspacesRouter = router({
         );
       }
 
-      // If whiteboard was just created, refetch workspace to get updated settings
-      if (whiteboardResult.status === "created") {
-        const updatedWorkspace = await db.query.workspaces.findFirst({
-          where: eq(workspaces.id, input.id),
-        });
-        if (updatedWorkspace) {
-          console.log(
-            `[workspaces.get] Whiteboard created, returning updated workspace with mainWhiteboardId:`,
-            (updatedWorkspace.settings as Record<string, unknown> | null)
-              ?.mainWhiteboardId
-          );
-          return {
-            ...projectWorkspaceSettings(updatedWorkspace),
-            role: membership.role,
-            accessKind: "member",
-          };
-        }
-      }
-
-      // Return workspace (may or may not have mainWhiteboardId depending on whiteboard creation status)
-      // Frontend should check for mainWhiteboardId and handle missing whiteboard case
+      // Return workspace. The pod-canonical whiteboard is resolved lazily on
+      // first open (views.resolveScopedSurface), not eagerly stamped here.
       return {
         ...projectWorkspaceSettings(workspace),
         role: membership.role,

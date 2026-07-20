@@ -594,26 +594,35 @@ export const viewsRouter = router({
       const metaSessionId = (m: unknown) =>
         (m as Record<string, unknown> | null)?.sessionId ?? null;
 
-      // Find the marked canonical surface for this scope. Scope the query on the
-      // access columns (workspace_id via the lens floor, project_id direct) so a
-      // forged scope can never reach another workspace's surface.
-      const candidates = await db.query.views.findMany({
-        where: and(
-          eq(views.type, input.type),
-          workspaceId
-            ? and(
-                eq(views.workspaceId, workspaceId),
-                viewLensWhere(ctx.userId, workspaceId)
-              )
-            : and(isNull(views.workspaceId), eq(views.userId, ctx.userId)),
-          projectId ? eq(views.projectId, projectId) : isNull(views.projectId)
-        ),
-      });
-
-      const existing = candidates.find(
-        (v) =>
-          isScopedSurface(v.metadata) && metaSessionId(v.metadata) === sessionId
+      // Scope the query on the access columns (workspace_id via the lens floor,
+      // project_id direct) so a forged scope can never reach another workspace's
+      // surface. Held in a const so the post-conflict re-read below uses the
+      // EXACT same predicate as the initial find.
+      const scopeWhere = and(
+        eq(views.type, input.type),
+        workspaceId
+          ? and(
+              eq(views.workspaceId, workspaceId),
+              viewLensWhere(ctx.userId, workspaceId)
+            )
+          : and(isNull(views.workspaceId), eq(views.userId, ctx.userId)),
+        projectId ? eq(views.projectId, projectId) : isNull(views.projectId)
       );
+
+      // Find the marked canonical surface for this scope (session lives in
+      // metadata, not a column, so it's filtered in JS).
+      const findCanonicalSurface = async () => {
+        const candidates = await db.query.views.findMany({ where: scopeWhere });
+        return (
+          candidates.find(
+            (v) =>
+              isScopedSurface(v.metadata) &&
+              metaSessionId(v.metadata) === sessionId
+          ) ?? null
+        );
+      };
+
+      const existing = await findCanonicalSurface();
       if (existing) return { view: existing, status: "resolved" as const };
 
       // None found — CREATE the canonical surface for this scope.
@@ -685,27 +694,55 @@ export const viewsRouter = router({
       const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
-      const createdView = await viewRepo.create(
-        {
-          id: viewId,
-          type: input.type,
-          name: input.type,
-          documentId: docId,
-          yjsRoomId,
-          workspaceId,
-          projectId,
-          userId: ctx.userId,
-          config: {},
-          metadata: {
-            scopedSurface: true,
-            createdBy: ctx.userId,
-            ...(sessionId ? { sessionId } : {}),
+      try {
+        const createdView = await viewRepo.create(
+          {
+            id: viewId,
+            type: input.type,
+            name: input.type,
+            documentId: docId,
+            yjsRoomId,
+            workspaceId,
+            projectId,
+            userId: ctx.userId,
+            config: {},
+            metadata: {
+              scopedSurface: true,
+              createdBy: ctx.userId,
+              ...(sessionId ? { sessionId } : {}),
+            },
           },
-        },
-        ctx.userId
-      );
+          ctx.userId
+        );
 
-      return { view: createdView, status: "created" as const };
+        return { view: createdView, status: "created" as const };
+      } catch (err) {
+        // Two concurrent resolvers can both pass the find above and race the
+        // insert; `views_scoped_surface_uniq_idx` guarantees only one wins.
+        // The loser must CONVERGE on the winner's board, not surface a raw
+        // unique-violation (same 23505 pattern as relations.ts).
+        const pgCode =
+          (err as { code?: string })?.code ??
+          (err as { cause?: { code?: string } })?.cause?.code;
+        if (pgCode !== "23505") throw err;
+
+        // Best-effort: reap the loser's orphaned canvas document + version so
+        // the race leaves no stray rows (storage object is left; harmless).
+        if (docId) {
+          await db
+            .delete(documentVersions)
+            .where(eq(documentVersions.documentId, docId))
+            .catch(() => undefined);
+          await db
+            .delete(documents)
+            .where(eq(documents.id, docId))
+            .catch(() => undefined);
+        }
+
+        const winner = await findCanonicalSurface();
+        if (winner) return { view: winner, status: "resolved" as const };
+        throw err;
+      }
     }),
 
   /**

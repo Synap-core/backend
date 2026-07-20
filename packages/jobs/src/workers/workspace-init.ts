@@ -34,7 +34,6 @@ export async function handleWorkspaceInit(
   );
 
   const {
-    ensureDefaultWhiteboard,
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
     ensureSystemProfiles,
@@ -49,14 +48,13 @@ export async function handleWorkspaceInit(
     logger.warn({ err }, "Failed to ensure system profiles (non-fatal)");
   }
 
-  // Whiteboard + commands + relation defs. Default views are NOT auto-created —
-  // the frontend renders views ephemerally from profile data and persists them
-  // only when the user or AI explicitly saves a view.
+  // Commands + relation defs. Default views are NOT auto-created — the frontend
+  // renders views ephemerally from profile data and persists them only when the
+  // user or AI explicitly saves a view. The default WHITEBOARD is likewise NOT
+  // auto-created per workspace: there is ONE pod-canonical board, resolved lazily
+  // via views.resolveScopedSurface on first open (single door). Per-workspace
+  // auto-creation manufactured a graveyard of empty boards.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [
-    {
-      name: "whiteboard",
-      promise: ensureDefaultWhiteboard(workspaceId, userId),
-    },
     { name: "commands", promise: ensureDefaultCommands(workspaceId, userId) },
     {
       name: "relation-defs",
