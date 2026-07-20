@@ -331,6 +331,12 @@ export async function materializeCompositeGraph(
         description: op.description,
         properties: op.properties,
         content: op.content, // long-form body → linked document
+        // `projectId` is additive on the composite wire contract. Some
+        // consumers still compile against a pre-generated proposal declaration,
+        // so narrow locally until that generated declaration refreshes.
+        ...((op as { projectId?: string }).projectId
+          ? { projectId: (op as { projectId?: string }).projectId }
+          : {}),
         source: options?.source ?? "system",
         // Explicit workspace-scope request (imports): pin to the caller's
         // workspace even for pod-default profiles. The create router reads the

@@ -3997,6 +3997,8 @@ export interface CompositeCreateEntityOp {
 	op: "create_entity";
 	/** Profile slug for the new entity (e.g. "question"). */
 	profileSlug: string;
+	/** Existing project to file the created entity into at materialization. */
+	projectId?: string;
 	title?: string;
 	description?: string;
 	properties?: Record<string, unknown>;
@@ -15360,6 +15362,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
+				workspaceId?: string | undefined;
 			};
 			output: {
 				skill: any;

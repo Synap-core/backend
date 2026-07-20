@@ -87,6 +87,82 @@ interface CreateResolutionBlock {
 }
 
 /**
+ * Normalize the tRPC create result into a truthful transport receipt without
+ * changing the legacy status/id envelope. The create router can materialize
+ * the primary entity before a non-atomic facet follow-up fails, so callers
+ * need `partial` rather than a misleading all-or-nothing success claim.
+ */
+function buildCreateWriteReceipt(input: {
+  result: Record<string, unknown>;
+  profileSlug: string;
+  effectiveWorkspaceId: string | null;
+  projectId?: string;
+  source?: string;
+}) {
+  const rawFacets = Array.isArray(input.result.facets)
+    ? input.result.facets
+    : [];
+  const facets = rawFacets.flatMap((facet) => {
+    if (!facet || typeof facet !== "object") return [];
+    const row = facet as Record<string, unknown>;
+    if (typeof row.slug !== "string") return [];
+    return [
+      {
+        slug: row.slug,
+        outcome:
+          typeof row.outcome === "string"
+            ? row.outcome
+            : typeof row.status === "string"
+              ? row.status
+              : "unknown",
+        ...(typeof row.facetId === "string" ? { facetId: row.facetId } : {}),
+        ...(typeof row.proposalId === "string"
+          ? { proposalId: row.proposalId }
+          : {}),
+        ...(typeof row.error === "string" ? { error: row.error } : {}),
+      },
+    ];
+  });
+  const status = input.result.status;
+  const pending = status === "proposed";
+  const partial = !pending && facets.some((facet) => facet.outcome === "error");
+  const warnings = facets
+    .filter((facet) => facet.outcome === "dropped" || facet.outcome === "error")
+    .map((facet) =>
+      facet.error
+        ? `Facet ${facet.slug}: ${facet.error}`
+        : `Facet ${facet.slug} was ${facet.outcome}`
+    );
+
+  const state: "pending" | "applied" | "partial" = pending
+    ? "pending"
+    : partial
+      ? "partial"
+      : "applied";
+  return {
+    state,
+    ...(typeof input.result.proposalId === "string"
+      ? { proposalId: input.result.proposalId }
+      : {}),
+    ...(typeof input.result.reviewUrl === "string"
+      ? { reviewUrl: input.result.reviewUrl }
+      : {}),
+    ...(typeof input.result.id === "string"
+      ? { entityId: input.result.id }
+      : {}),
+    ...(typeof input.result.proposedEntityId === "string"
+      ? { proposedEntityId: input.result.proposedEntityId }
+      : {}),
+    profileSlug: input.profileSlug,
+    effectiveWorkspaceId: input.effectiveWorkspaceId,
+    ...(input.projectId && !pending ? { projectId: input.projectId } : {}),
+    ...(input.source ? { source: input.source } : {}),
+    ...(facets.length ? { facets } : {}),
+    ...(warnings.length ? { warnings } : {}),
+  };
+}
+
+/**
  * Run exact-name resolution around a just-created entity and (a) auto-connect
  * cross-profile facets via a `same_subject` relation (governed by the SAME
  * proposal/auto path as any relation write) and (b) return an advisory block.
@@ -1180,6 +1256,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           ...result,
           effectiveWorkspaceId,
+          writeReceipt: buildCreateWriteReceipt({
+            result: result as Record<string, unknown>,
+            profileSlug,
+            effectiveWorkspaceId,
+            projectId: body.projectId,
+            source: body.source,
+          }),
           ...(resolution ? { resolution } : {}),
         },
         200
@@ -1387,8 +1470,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       //    the pre-stored orphan the caller referenced (link-only). Upload lands
       //    the `file` entity (document + v1 snapshot) in the target's workspace.
       let uploaded:
-        | Awaited<ReturnType<typeof uploadBufferAsFileEntity>>
-        | undefined;
+        Awaited<ReturnType<typeof uploadBufferAsFileEntity>> | undefined;
       let fileEntityId: string;
       if (linkOnly) {
         fileEntityId = body.fileEntityId as string;

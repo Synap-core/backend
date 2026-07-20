@@ -69,6 +69,34 @@ entity, work the loop the same way you'd read a file before editing it:
 5. **CONNECT** — every new entity links to at least one other. Duplicates and
    orphans are the two ways the graph degrades; avoid both.
 
+## Complete intent, governed outcome
+
+`title` + `content` is only a minimum payload, not Synap's data model. Once
+you have read the schema, send the complete intent that is known: `profileSlug`,
+title, typed `properties`, short `description`, long-form `content`, an existing
+`projectId`, links, and source/session provenance. Include role `facets` in the
+same composite plan whenever they must be reviewed with the entity.
+
+- **One entity with known fields and no creation-time role change** → use
+  `create_entity` / `POST /entities`.
+- **Several entities, facets, or relations that belong in one review** → use the
+  composite graph/capture-plan door, never a loose sequence of creates.
+- **Raw input whose structure is unknown** → use capture to produce a plan;
+  preserve an original file with `keepRaw` when supplied. Raw source is not the
+  same thing as an entity's edited content.
+
+Workspace is an explicit lens: omit it to read the pod/base schema and let the
+profile's placement rule apply. Pass a workspace only when the user or a
+reviewed routing decision actually selected it; then its overlays are valid.
+Never fill it from a configured/default workspace.
+
+Read the write receipt before continuing. `pending` means a proposal exists and
+no entity has materialized; `applied` means the reported operations completed;
+`partial` means independent follow-up operations failed and must be repaired or
+surfaced. Do not send a speculative second update merely because a write
+completed — enrich only when you learned genuinely new information or the
+receipt identifies a specific missing field.
+
 ---
 
 ## Discover profiles — never assume

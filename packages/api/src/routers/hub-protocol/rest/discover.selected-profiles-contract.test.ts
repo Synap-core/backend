@@ -45,20 +45,29 @@ function mockProfilesCaller() {
       },
     ],
   });
-  const listPropertyDefs = vi.fn().mockResolvedValue({
-    propertyDefs: [
-      {
-        id: "property-task",
-        profileId: "11111111-1111-4111-8111-111111111111",
-        slug: "due-date",
-        valueType: "date",
-      },
-    ],
-  });
+  const getProfile = vi.fn().mockImplementation(({ identifier }) =>
+    Promise.resolve({
+      effectiveProperties:
+        identifier === "task"
+          ? [
+              {
+                id: "property-task",
+                slug: "due-date",
+                valueType: "date",
+                required: true,
+                defaultValue: null,
+                constraints: { format: "date" },
+                uiHints: {},
+                workspaceId: null,
+              },
+            ]
+          : [],
+    })
+  );
   vi.mocked(getCaller).mockResolvedValue({
-    profiles: { listProfiles, listPropertyDefs },
+    profiles: { listProfiles, getProfile },
   } as never);
-  return { listProfiles, listPropertyDefs };
+  return { listProfiles, getProfile };
 }
 
 describe("GET /discover?profileSlugs", () => {
@@ -67,7 +76,7 @@ describe("GET /discover?profileSlugs", () => {
   });
 
   it("returns only selected profiles and fetches only their property schemas", async () => {
-    const { listProfiles, listPropertyDefs } = mockProfilesCaller();
+    const { listProfiles, getProfile } = mockProfilesCaller();
 
     const response = await buildApp().request(
       `/discover?userId=user-1&workspaceId=${WORKSPACE_ID}&profileSlugs=task`
@@ -79,10 +88,10 @@ describe("GET /discover?profileSlugs", () => {
       workspaceId: WORKSPACE_ID,
       profileSlugs: ["task"],
     });
-    expect(listPropertyDefs).toHaveBeenCalledWith({
+    expect(getProfile).toHaveBeenCalledWith({
       userId: "user-1",
       workspaceId: WORKSPACE_ID,
-      profileIds: ["11111111-1111-4111-8111-111111111111"],
+      identifier: "task",
     });
     await expect(response.json()).resolves.toMatchObject({
       profiles: [
@@ -91,26 +100,34 @@ describe("GET /discover?profileSlugs", () => {
           // Placement axis (entityScope) vs the new visibility axis (scope column).
           scope: "workspace",
           visibility: "system",
-          properties: [{ slug: "due-date", type: "date" }],
+          properties: [
+            {
+              slug: "due-date",
+              type: "date",
+              required: true,
+              constraints: { format: "date" },
+              schemaScope: "base",
+            },
+          ],
         },
       ],
     });
   });
 
   it("does not fall back to every property schema when no selected slug exists", async () => {
-    const { listPropertyDefs } = mockProfilesCaller();
+    const { getProfile } = mockProfilesCaller();
 
     const response = await buildApp().request(
       `/discover?userId=user-1&workspaceId=${WORKSPACE_ID}&profileSlugs=missing-profile`
     );
 
     expect(response.status).toBe(200);
-    expect(listPropertyDefs).not.toHaveBeenCalled();
+    expect(getProfile).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({ profiles: [] });
   });
 
   it("keeps the existing all-profile response when profileSlugs is omitted", async () => {
-    const { listProfiles, listPropertyDefs } = mockProfilesCaller();
+    const { listProfiles, getProfile } = mockProfilesCaller();
 
     const response = await buildApp().request(
       `/discover?userId=user-1&workspaceId=${WORKSPACE_ID}`
@@ -121,12 +138,36 @@ describe("GET /discover?profileSlugs", () => {
       userId: "user-1",
       workspaceId: WORKSPACE_ID,
     });
-    expect(listPropertyDefs).toHaveBeenCalledWith({
+    expect(getProfile).toHaveBeenCalledWith({
       userId: "user-1",
       workspaceId: WORKSPACE_ID,
+      identifier: "task",
+    });
+    expect(getProfile).toHaveBeenCalledWith({
+      userId: "user-1",
+      workspaceId: WORKSPACE_ID,
+      identifier: "investor",
     });
     await expect(response.json()).resolves.toMatchObject({
       profiles: [{ slug: "task" }, { slug: "investor" }],
+    });
+  });
+
+  it("reads base schemas without manufacturing a workspace lens", async () => {
+    const { listProfiles, getProfile } = mockProfilesCaller();
+
+    const response = await buildApp().request(
+      "/discover?userId=user-1&profileSlugs=task"
+    );
+
+    expect(response.status).toBe(200);
+    expect(listProfiles).toHaveBeenCalledWith({
+      userId: "user-1",
+      profileSlugs: ["task"],
+    });
+    expect(getProfile).toHaveBeenCalledWith({
+      userId: "user-1",
+      identifier: "task",
     });
   });
 });

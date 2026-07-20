@@ -411,7 +411,10 @@ export class HubRestClient {
       input;
     return this.request<HubGovernanceResult>("POST", "/api/hub/entities", {
       ...rest,
-      workspaceId: rest.workspaceId ?? this.workspaceId,
+      // Entity placement is a write decision, never an ambient client default.
+      // Omitted means pod/base behavior; an explicit workspace opts into its
+      // overlay/membership lens. This deliberately differs from read helpers.
+      ...(rest.workspaceId ? { workspaceId: rest.workspaceId } : {}),
       ...(content !== undefined ? { content } : {}),
       properties: {
         ...properties,
@@ -683,8 +686,11 @@ export class HubRestClient {
     const userId = await this.resolveUserId();
     const normalized =
       typeof options === "string" ? { workspaceId: options } : (options ?? {});
-    const wsId = normalized.workspaceId ?? this.workspaceId ?? "";
-    const params = new URLSearchParams({ userId, workspaceId: wsId });
+    const params = new URLSearchParams({ userId });
+    // No configured fallback: an omitted workspace asks for the base schema,
+    // while an explicit one resolves only that workspace's overlays.
+    if (normalized.workspaceId)
+      params.set("workspaceId", normalized.workspaceId);
     if (normalized.summary !== undefined)
       params.set("summary", String(normalized.summary));
     if (normalized.profileSlugs?.length)
@@ -1182,7 +1188,8 @@ export class HubRestClient {
       "/api/hub/capabilities/execute",
       {
         ...input,
-        workspaceId: input.workspaceId ?? this.workspaceId,
+        // Graph proposals follow the same explicit-scope rule as direct writes.
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       }
     );
   }
@@ -1351,6 +1358,10 @@ export class HubRestClient {
         // and the REST codec. Dropping it here silently made CLI/Raycast capture
         // behave differently from MCP despite all three using the same backend.
         projectId: input.projectId,
+        targetWorkspaceId: input.targetWorkspaceId,
+        keepRaw: input.keepRaw,
+        file: input.file,
+        idempotencyKey: input.idempotencyKey,
         workspaceRouting: input.workspaceRouting,
         aiWorkspaceId: input.aiWorkspaceId,
         aiWorkspaceConfidence: input.aiWorkspaceConfidence,
@@ -1370,14 +1381,16 @@ export class HubRestClient {
   async submitCaptureGraph(
     input: SubmitCaptureGraphInput
   ): Promise<SubmitCaptureGraphResult> {
+    const { workspaceId, relations, bindings, ...body } = input;
     return this.request<SubmitCaptureGraphResult>(
       "POST",
       "/api/hub/capture/graph",
       {
-        ...input,
-        workspaceId: input.workspaceId ?? this.workspaceId,
-        relations: input.relations ?? [],
-        bindings: input.bindings ?? [],
+        ...body,
+        // Proposal audience and schema overlays are explicit write choices.
+        ...(workspaceId ? { workspaceId } : {}),
+        relations: relations ?? [],
+        bindings: bindings ?? [],
       }
     );
   }

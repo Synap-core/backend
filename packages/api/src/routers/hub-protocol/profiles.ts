@@ -61,7 +61,8 @@ export const hubProfilesRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        /** Omit for the caller's pod/base profile floor (no workspace overlay lens). */
+        workspaceId: z.string().uuid().nullable().optional(),
         /** Narrow an already-oriented read to these profile slugs. */
         profileSlugs: z.array(z.string().min(1).max(100)).max(50).optional(),
       })
@@ -77,12 +78,37 @@ export const hubProfilesRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularProfilesRouter.createCaller(callerContext);
       return caller.list(
         input.profileSlugs ? { profileSlugs: input.profileSlugs } : undefined
       );
+    }),
+
+  /**
+   * Read one profile and its effective property schema through an explicit
+   * workspace lens. No workspace means base definitions only; it is never
+   * replaced with a default workspace.
+   */
+  getProfile: scopedProcedure(["hub-protocol.read"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid().nullable().optional(),
+        identifier: z.string().min(1).max(100),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.userId;
+      if (!userId) throw new TRPCError({ code: "UNAUTHORIZED" });
+      const callerContext = await createHubProtocolCallerContext(
+        userId,
+        ctx.scopes || [],
+        input.workspaceId ?? null
+      );
+      const caller = regularProfilesRouter.createCaller(callerContext);
+      return caller.get({ identifier: input.identifier });
     }),
 
   /**

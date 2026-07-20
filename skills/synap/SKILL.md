@@ -236,7 +236,7 @@ or `recall` — `ask` is the door.)
 
 ```bash
 # REST (when no Bash access)
-POST   /api/hub/entities          body: { userId, workspaceId?, profileSlug, title, properties }
+POST   /api/hub/entities          body: { userId, workspaceId?, profileSlug, title, description?, properties?, content?, projectId?, facets?, source? }
 PATCH  /api/hub/entities/{id}     body: { userId, properties }   ← deep-merges, send only changed keys
 POST   /api/hub/documents         body: { userId, workspaceId?, title, content, entityId? }
 PATCH  /api/hub/documents/{id}    body: { userId, title?, content? }   ← full content replacement
@@ -256,11 +256,13 @@ synap discover --profiles --json # CLI: profiles only
 ```
 
 ```
-GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
-→ { profiles: [{ slug, displayName, scope, properties: [{ slug, type, options? }], createCommand }], commands: {...} }
+GET /api/hub/discover?userId={userId}&profileSlugs=task
+→ { profiles: [{ slug, displayName, scope, properties: [{ slug, type, required, defaultValue?, constraints?, targetProfileSlug? }], createCommand }], commands: {...} }
 ```
 
-Call this once at session start. The response includes every system profile and any custom workspace profiles the user has created, each with its full property schema. Use `createCommand` per profile as a copy-paste template. Do not rely on a static property list — it will drift.
+Call the summary tier once at session start, then load only the profile schemas
+needed for a write. Omit `workspaceId` for base/pod schema; add it only to see
+that workspace's overlays. Do not rely on a static property list — it will drift.
 
 **Load more detail on demand** (`GET /api/hub/skills/system?sections=<id>`):
 
@@ -828,18 +830,37 @@ fabricate, never silent give-up. Provider 200-with-error-body: always check
 
 ## Core writes
 
-### Create an entity (always with links)
+### Create an entity (schema-first, complete intent)
+
+Before this call, use `/discover?userId=…&profileSlugs=<kind>` to read the
+real fields, required/default values, constraints and reference targets. Omit
+`workspaceId` for the pod/base schema and normal profile placement; pass it
+only when the user or routing decision explicitly selected that workspace.
 
 ```json
 POST /api/hub/entities
 {
   "userId": "{userId}",
-  "workspaceId": "{workspaceId}",
-  "profileSlug": "task",          // from /profiles — never guess
+  "profileSlug": "task",          // from /discover — never guess
   "title": "Weekly team sync",
-  "properties": { "status": "todo", "projectId": "ent_..." }
+  "description": "Recurring planning sync",
+  "properties": { "status": "todo", "dueDate": "2026-07-21" },
+  "content": "# Agenda\n- Priorities\n- Risks",
+  "projectId": "{existingProjectId}",
+  "source": "agent"
 }
 ```
+
+The response has legacy `status`/`id` fields plus `writeReceipt`:
+`pending` means a proposal exists and no entity is live; `applied` means the
+reported direct write completed; `partial` means a follow-up (for example a
+facet) failed after the entity applied. Never claim completion from `pending`,
+and only enrich again when the receipt identifies a real missing fact.
+
+For several entities, creation-time roles/facets, or relations that need one
+review, submit one `POST /api/hub/capture/graph` plan instead of sequencing
+independent creates. It returns a pending receipt and materializes on human
+approval.
 
 ### Update an entity
 

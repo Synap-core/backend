@@ -118,6 +118,10 @@ export interface CreateEntityInput {
   profileSlug: string;
   title: string;
   workspaceId?: string;
+  /** Existing project to file this entity into via `belongs_to_project`. */
+  projectId?: string;
+  /** Short description rendered with the entity; long-form text belongs in content. */
+  description?: string;
   properties?: Record<string, unknown>;
   content?: string;
   url?: string;
@@ -130,8 +134,19 @@ export interface CreateEntityInput {
   agentUserId?: string;
   sessionId?: string;
   reasoning?: string;
+  /** Origin signal for audit/provenance. It does not grant permissions. */
+  source?: HubWriteSource;
   sourceMessageId?: string;
   extractedFromMessageId?: string;
+  /** Role profiles to attach with this entity when the write applies inline. */
+  facets?: Array<{
+    /** `profileSlug` is accepted by REST; `slug` remains valid for legacy callers. */
+    profileSlug?: string;
+    slug?: string;
+    status?: string;
+    properties?: Record<string, unknown>;
+    contextEntityId?: string;
+  }>;
 }
 
 export interface UpdateEntityInput {
@@ -368,6 +383,18 @@ export interface CaptureExecuteInput {
   relations?: CaptureRelation[];
   /** Cross-cutting project lens to file the created entities into. */
   projectId?: string | null;
+  /** Explicit reviewed placement override; unlike workspaceId it is never inferred. */
+  targetWorkspaceId?: string | null;
+  /** Preserve the original binary source with the primary derived entity. */
+  keepRaw?: boolean;
+  file?: {
+    /** Base64 payload; server caps it at about 5MB decoded. */
+    content: string;
+    mimeType: string;
+    filename?: string;
+  };
+  /** Client-stable retry namespace for this capture execution. */
+  idempotencyKey?: string;
   /**
    * Workspace routing (shared across all capture doors). Forward the AI's
    * structure hints + the caller's mode so the door auto-routes; the backend
@@ -415,9 +442,29 @@ export interface CaptureGraphBinding {
   title?: string;
 }
 
+/**
+ * Bounded original-input context retained in proposal data for review/retry.
+ * It is deliberately not a materialized source artifact or entity provenance.
+ */
+export interface CaptureGraphRawSource {
+  rawText?: string;
+  sourceUrl?: string;
+  label?: string;
+  mimeType?: string;
+  hash?: string;
+  idempotencyKey?: string;
+}
+
 /** Input for POST /capture/graph. The server always creates one composite proposal. */
 export interface SubmitCaptureGraphInput {
   workspaceId?: string | null;
+  /** Existing project to file every newly created graph entity into on approval. */
+  projectId?: string | null;
+  /** Origin signal preserved through proposal approval and materialization. */
+  source?: HubWriteSource;
+  sourceMessageId?: string;
+  sessionId?: string;
+  rawSource?: CaptureGraphRawSource;
   entities: CaptureGraphEntity[];
   relations?: CaptureGraphRelation[];
   bindings?: CaptureGraphBinding[];
@@ -425,6 +472,8 @@ export interface SubmitCaptureGraphInput {
 }
 
 export interface SubmitCaptureGraphResult {
+  /** Composite graph writes are proposal-first, so this receipt begins pending. */
+  writeReceipt?: HubWriteReceipt;
   proposalId?: string;
   entityCount: number;
   relationCount: number;
@@ -588,6 +637,15 @@ export interface HubDiscoverProperty {
   type: string;
   options?: string[];
   required?: boolean;
+  /** Default the validator applies when this property is omitted. */
+  defaultValue?: unknown;
+  /** Exact validation constraints used by the property validator. */
+  constraints?: Record<string, unknown>;
+  /** Target kind for an entity_id property, when configured. */
+  targetProfileSlug?: string;
+  /** Base definitions are always visible; workspace definitions require this lens. */
+  schemaScope?: "base" | "workspace";
+  workspaceId?: string | null;
 }
 
 export interface HubDiscoverProfile {
@@ -612,6 +670,10 @@ export interface HubDiscoverResult {
 
 /** Progressive-disclosure controls for GET /discover. */
 export interface HubDiscoverOptions {
+  /**
+   * Omit to read the base/pod schema only. Supplying a workspace resolves only
+   * that workspace's overlays; callers must never substitute a default here.
+   */
   workspaceId?: string;
   /** Return the digest tier without property schemas. */
   summary?: boolean;
@@ -627,6 +689,8 @@ export interface HubOrientProfile {
   name: string;
   profileKind: "kind" | "role";
   applicableKinds?: string[] | null;
+  /** Placement for entities of this kind; distinct from profile visibility. */
+  entityScope?: "pod" | "workspace" | null;
 }
 
 export interface HubOrientWorkspace {
@@ -796,8 +860,44 @@ export interface HubUserContext {
 
 // ─── Governance ───────────────────────────────────────────────────────────────
 
+export type HubWriteSource =
+  | "intelligence"
+  | "agent"
+  | "openwebui-pipeline"
+  | "openclaw"
+  | "extension"
+  | "cli"
+  | "n8n"
+  | "raycast";
+
+/**
+ * Truthful outcome envelope shared by direct and proposal-first write doors.
+ * `partial` means independently-applied sub-operations failed; it never
+ * implies an atomic rollback.
+ */
+export interface HubWriteReceipt {
+  state: "pending" | "applied" | "partial";
+  proposalId?: string;
+  reviewUrl?: string;
+  entityId?: string;
+  proposedEntityId?: string;
+  profileSlug?: string;
+  effectiveWorkspaceId?: string | null;
+  projectId?: string;
+  source?: HubWriteSource;
+  facets?: Array<{
+    slug: string;
+    outcome: "attached" | "proposed" | "dropped" | "error" | string;
+    facetId?: string;
+    proposalId?: string;
+    error?: string;
+  }>;
+  warnings?: string[];
+}
+
 export interface HubGovernanceResult {
-  status: "approved" | "proposed" | "denied";
+  /** `created` is an inline, materialized write; `proposed` remains pending. */
+  status: "approved" | "created" | "proposed" | "denied";
   id?: string;
   proposalId?: string;
   reason?: string;
@@ -823,6 +923,8 @@ export interface HubGovernanceResult {
    * this directly to the user so they can approve without digging through the app.
    */
   reviewUrl?: string;
+  /** Additive receipt for write-aware clients. Legacy clients may keep using status/id. */
+  writeReceipt?: HubWriteReceipt;
 }
 
 // ─── Write input types ────────────────────────────────────────────────────────

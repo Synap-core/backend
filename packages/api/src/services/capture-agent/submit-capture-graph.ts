@@ -41,6 +41,33 @@ export interface SubmitCaptureGraphInput {
   userId: string;
   /** Workspace to scope the proposal to (null = pod-wide). */
   workspaceId?: string | null;
+  /** Existing project to file each newly-created graph entity into on approval. */
+  projectId?: string | null;
+  /** Origin signal carried through the proposal into entity materialization. */
+  source?:
+    | "intelligence"
+    | "agent"
+    | "openwebui-pipeline"
+    | "openclaw"
+    | "extension"
+    | "cli"
+    | "n8n"
+    | "raycast";
+  sourceMessageId?: string;
+  sessionId?: string;
+  /**
+   * Bounded original input retained only in proposal data for review/retry.
+   * This is not a materialized source entity/document or shared provenance
+   * artifact after approval.
+   */
+  rawSource?: {
+    rawText?: string;
+    sourceUrl?: string;
+    label?: string;
+    mimeType?: string;
+    hash?: string;
+    idempotencyKey?: string;
+  };
   entities: CaptureGraphEntity[];
   relations?: CaptureGraphRelation[];
   bindings?: CaptureGraphBinding[];
@@ -54,6 +81,14 @@ export interface SubmitCaptureGraphResult {
   bindingCount: number;
   reviewUrl: string | undefined;
   summary: string;
+  writeReceipt: {
+    state: "pending";
+    proposalId?: string;
+    reviewUrl?: string;
+    effectiveWorkspaceId: string | null;
+    projectId?: string;
+    source: string;
+  };
 }
 
 /**
@@ -111,6 +146,7 @@ export async function submitCaptureGraph(
       op: "create_entity" as const,
       ref: e.ref,
       profileSlug: e.profileSlug,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
       title: e.title ?? e.ref,
       ...(e.description ? { description: e.description } : {}),
       ...(e.content ? { content: e.content } : {}),
@@ -140,11 +176,33 @@ export async function submitCaptureGraph(
     targetId: randomUUID(),
     proposalType: "import.graph",
     action: "create",
-    source: "intelligence",
+    source: input.source ?? "intelligence",
     summary,
+    ...(input.sourceMessageId
+      ? { sourceMessageId: input.sourceMessageId }
+      : {}),
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
     // `bindings` rides alongside operations; the approve flow applies them after
     // materialization (resolving entityRef → real id).
-    data: { operations, source: "graph", bindings },
+    data: {
+      operations,
+      // This is the actual origin stamped at materialization; graph is a
+      // transport shape, not an origin the entity router understands.
+      source: input.source ?? "intelligence",
+      graphSource: "capture",
+      bindings,
+      ...(input.rawSource
+        ? {
+            proposalProvenance: {
+              kind: "raw_capture_input",
+              storage: "proposal_data_only",
+              rawSource: input.rawSource,
+            },
+          }
+        : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+    },
   });
 
   const proposalId = (created as { id?: string })?.id;
@@ -157,5 +215,13 @@ export async function submitCaptureGraph(
     bindingCount: bindings.length,
     reviewUrl,
     summary,
+    writeReceipt: {
+      state: "pending",
+      ...(proposalId ? { proposalId } : {}),
+      ...(reviewUrl ? { reviewUrl } : {}),
+      effectiveWorkspaceId: workspaceId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      source: input.source ?? "intelligence",
+    },
   };
 }

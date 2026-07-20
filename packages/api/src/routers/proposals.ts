@@ -1971,8 +1971,7 @@ export const proposalsRouter = router({
           payload as { dispositions?: GraphDispositionMap }
         ).dispositions;
         const clientDisp = input.dispositions as
-          | GraphDispositionMap
-          | undefined;
+          GraphDispositionMap | undefined;
         const dispositions: GraphDispositionMap | undefined =
           persistedDisp || clientDisp
             ? { ...(persistedDisp ?? {}), ...(clientDisp ?? {}) }
@@ -2009,6 +2008,11 @@ export const proposalsRouter = router({
           {
             ...(proposal.workspaceId ? { workspaceScoped: true } : {}),
             facetCaller: entityCaller,
+            // Graph submitters persist their origin in proposal data. Reuse it
+            // on approval so source attribution survives the proposal boundary.
+            ...(typeof payload.source === "string"
+              ? { source: payload.source }
+              : {}),
           }
         );
 
@@ -2366,8 +2370,7 @@ export const proposalsRouter = router({
           targetType: proposal.targetType,
           proposalType: proposal.proposalType,
           source: (proposal.data as Record<string, unknown> | null)?.source as
-            | string
-            | undefined,
+            string | undefined,
           rejectionReason: input.reason,
         });
         emitProposalReviewed(
@@ -3152,9 +3155,7 @@ export const proposalsRouter = router({
 
           // Emit .validated event for generic proposals (same as single approve)
           const payload = proposal.data as
-            | StoredProposalData
-            | null
-            | undefined;
+            StoredProposalData | null | undefined;
 
           if (payload && isRequestShapedProposalData(payload)) {
             const {

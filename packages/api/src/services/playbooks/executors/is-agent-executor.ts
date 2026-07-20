@@ -107,7 +107,15 @@ export class IsAgentExecutor implements Executor {
               eq(links.fromId, ctx.playbookId),
               eq(links.linkType, "documents"),
               eq(links.toType, "skill"),
-              eq(skills.kind, "instruction")
+              eq(skills.kind, "instruction"),
+              // SECURITY — inject only HUMAN-APPROVED prose. This body is
+              // prepended verbatim to every kickoff, i.e. it is system-prompt
+              // surface. Agent-authored instruction skills are born unapproved
+              // (playbooks.ts / skills.ts) precisely so an agent cannot write
+              // into its own future prompts without review. That matters most
+              // when a "learning" is derived from fetched web content: without
+              // this filter a hostile page could persist itself into the prompt.
+              eq(skills.approved, true)
             )
           )
           // Deterministic pick: a composed template or re-install can leave more

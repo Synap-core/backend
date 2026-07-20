@@ -21,10 +21,7 @@ export type { Proposal, NewProposal } from "@synap/database";
  * Includes "auto_approved" for whitelist-bypassed actions.
  */
 export type ProposalStatusString =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "auto_approved";
+  "pending" | "approved" | "rejected" | "auto_approved";
 
 /**
  * Status filter accepted by `proposals.list` tRPC procedure.
@@ -327,6 +324,8 @@ export interface CompositeCreateEntityOp {
   op: "create_entity";
   /** Profile slug for the new entity (e.g. "question"). */
   profileSlug: string;
+  /** Existing project to file the created entity into at materialization. */
+  projectId?: string;
   title?: string;
   description?: string;
   properties?: Record<string, unknown>;
@@ -375,8 +374,7 @@ export interface CompositeCreateRelationOp {
 }
 
 export type CompositeProposalOperation =
-  | CompositeCreateEntityOp
-  | CompositeCreateRelationOp;
+  CompositeCreateEntityOp | CompositeCreateRelationOp;
 
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
@@ -401,10 +399,7 @@ export interface CompositeProposalData extends ProposalDataLifecycle {
  * real-world subject. Surfaced in the review UI and audit trail.
  */
 export type EntityMergeMethod =
-  | "strong_signal"
-  | "exact_title"
-  | "embedding"
-  | "manual";
+  "strong_signal" | "exact_title" | "embedding" | "manual";
 
 /** Property-level plan: fill empty winner fields from loser; list conflicts. */
 export interface EntityMergePropertyPlan {

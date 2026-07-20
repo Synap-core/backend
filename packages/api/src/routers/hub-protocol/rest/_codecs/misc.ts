@@ -11,6 +11,31 @@
 
 import { z } from "@hono/zod-openapi";
 
+/**
+ * Optional original-input descriptor carried with a proposal-first graph
+ * capture. It is proposal provenance only: approval does not materialize it as
+ * a shared source entity or document. Keeping the payload bounded lets review
+ * and retry surfaces retain the exact prompt/input without a schema migration.
+ */
+export const CaptureGraphRawSourceSchema = z
+  .object({
+    rawText: z.string().max(100_000).optional(),
+    sourceUrl: z.string().url().max(4_096).optional(),
+    label: z.string().trim().min(1).max(512).optional(),
+    mimeType: z.string().max(256).optional(),
+    hash: z.string().max(256).optional(),
+    idempotencyKey: z.string().max(200).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.rawText !== undefined ||
+      value.sourceUrl !== undefined ||
+      value.label !== undefined,
+    "rawText, sourceUrl, or label is required"
+  )
+  .openapi("CaptureGraphRawSource");
+
 // ── MCP servers ─────────────────────────────────────────────────────────────
 
 /** Wire shape of an approved MCP server (read-only — IS subset). */
@@ -261,6 +286,20 @@ export const CaptureExecuteRequestSchema = z
         })
       )
       .optional(),
+    /** Explicit placement override from an already-reviewed capture plan. */
+    targetWorkspaceId: z.string().uuid().nullish(),
+    /** Preserve the original binary source alongside the primary derived entity. */
+    keepRaw: z.boolean().optional(),
+    /** Base64 source blob, used only when keepRaw is true (max about 5MB binary). */
+    file: z
+      .object({
+        content: z.string().max(7_000_000, "file.content too large (max ~5MB)"),
+        mimeType: z.string(),
+        filename: z.string().optional(),
+      })
+      .optional(),
+    /** Retry namespace: same key + tempIds links prior entities instead of duplicating. */
+    idempotencyKey: z.string().max(200).optional(),
     // Workspace routing (shared with the tRPC capture.execute contract). Forward
     // the AI's structure hints + the caller's mode so this door auto-routes
     // identically to MCP. Without them the capture stays in the ambient workspace.

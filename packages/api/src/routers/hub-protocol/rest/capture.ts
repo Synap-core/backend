@@ -54,6 +54,7 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { submitCaptureGraph } from "../../../services/capture-agent/submit-capture-graph.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
+  CaptureGraphRawSourceSchema,
   CaptureExecuteRequestSchema,
   CaptureStructureRequestSchema,
   ClusterTabsRequestSchema,
@@ -69,6 +70,19 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+
+const GRAPH_WRITE_SOURCES = new Set([
+  "intelligence",
+  "agent",
+  "openwebui-pipeline",
+  "openclaw",
+  "extension",
+  "cli",
+  "n8n",
+  "raycast",
+] as const);
+type GraphWriteSource =
+  typeof GRAPH_WRITE_SOURCES extends Set<infer T> ? T : never;
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -347,6 +361,10 @@ export function registerCaptureRoutes(app: HubHono): void {
         entities: body.entities,
         relations: body.relations ?? [],
         projectId: body.projectId ?? undefined,
+        targetWorkspaceId: body.targetWorkspaceId ?? undefined,
+        keepRaw: body.keepRaw,
+        file: body.file,
+        idempotencyKey: body.idempotencyKey,
         // Forward workspace routing so this door auto-routes like MCP.
         workspaceRouting: body.workspaceRouting,
         aiWorkspaceId: body.aiWorkspaceId,
@@ -453,8 +471,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       // path. Deep is best-effort; on no yield we fall back to shallow.
       const isProse = body.source === "obsidian" || body.source === "markdown";
       let operations:
-        | ReturnType<typeof importProposalToComposite>["operations"]
-        | undefined;
+        ReturnType<typeof importProposalToComposite>["operations"] | undefined;
       let summary = "";
       let droppedReferences = 0;
       let stats: Record<string, unknown> = {};
@@ -915,6 +932,11 @@ export function registerCaptureRoutes(app: HubHono): void {
     }
     const body = (await c.req.json().catch(() => null)) as {
       workspaceId?: string;
+      projectId?: string;
+      source?: string;
+      sourceMessageId?: string;
+      sessionId?: string;
+      rawSource?: unknown;
       entities?: Array<{
         ref: string;
         profileSlug: string;
@@ -945,6 +967,31 @@ export function registerCaptureRoutes(app: HubHono): void {
 
     if (!body || !Array.isArray(body.entities) || body.entities.length === 0) {
       return c.json({ error: "entities[] is required (at least one)" }, 400);
+    }
+    if (
+      body.source &&
+      !GRAPH_WRITE_SOURCES.has(body.source as GraphWriteSource)
+    ) {
+      return c.json({ error: "Unsupported graph write source" }, 400);
+    }
+    if (
+      body.projectId &&
+      !z.string().uuid().safeParse(body.projectId).success
+    ) {
+      return c.json({ error: "projectId must be a UUID" }, 400);
+    }
+    const rawSource =
+      body.rawSource === undefined
+        ? undefined
+        : CaptureGraphRawSourceSchema.safeParse(body.rawSource);
+    if (rawSource && !rawSource.success) {
+      return c.json(
+        {
+          error: "Invalid rawSource proposal provenance",
+          details: rawSource.error.issues,
+        },
+        400
+      );
     }
     // This is a governed graph proposal, but its workspace still sets the
     // proposal's audience and approval surface. Bind it to the authenticated
@@ -1002,6 +1049,13 @@ export function registerCaptureRoutes(app: HubHono): void {
       const result = await submitCaptureGraph({
         userId,
         workspaceId,
+        ...(body.projectId ? { projectId: body.projectId } : {}),
+        ...(body.source ? { source: body.source as GraphWriteSource } : {}),
+        ...(body.sourceMessageId
+          ? { sourceMessageId: body.sourceMessageId }
+          : {}),
+        ...(body.sessionId ? { sessionId: body.sessionId } : {}),
+        ...(rawSource?.success ? { rawSource: rawSource.data } : {}),
         entities: body.entities,
         relations,
         bindings,

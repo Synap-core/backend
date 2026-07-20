@@ -1,17 +1,36 @@
 ## Core writes
 
-### Create an entity (always with links)
+### Create an entity (schema-first, complete intent)
+
+Before this call, use `/discover?userId=…&profileSlugs=<kind>` to read the
+real fields, required/default values, constraints and reference targets. Omit
+`workspaceId` for the pod/base schema and normal profile placement; pass it
+only when the user or routing decision explicitly selected that workspace.
 
 ```json
 POST /api/hub/entities
 {
   "userId": "{userId}",
-  "workspaceId": "{workspaceId}",
-  "profileSlug": "task",          // from /profiles — never guess
+  "profileSlug": "task",          // from /discover — never guess
   "title": "Weekly team sync",
-  "properties": { "status": "todo", "projectId": "ent_..." }
+  "description": "Recurring planning sync",
+  "properties": { "status": "todo", "dueDate": "2026-07-21" },
+  "content": "# Agenda\n- Priorities\n- Risks",
+  "projectId": "{existingProjectId}",
+  "source": "agent"
 }
 ```
+
+The response has legacy `status`/`id` fields plus `writeReceipt`:
+`pending` means a proposal exists and no entity is live; `applied` means the
+reported direct write completed; `partial` means a follow-up (for example a
+facet) failed after the entity applied. Never claim completion from `pending`,
+and only enrich again when the receipt identifies a real missing fact.
+
+For several entities, creation-time roles/facets, or relations that need one
+review, submit one `POST /api/hub/capture/graph` plan instead of sequencing
+independent creates. It returns a pending receipt and materializes on human
+approval.
 
 ### Update an entity
 

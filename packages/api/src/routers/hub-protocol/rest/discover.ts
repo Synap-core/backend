@@ -33,6 +33,13 @@ const DiscoverPropertySchema = z.object({
     .optional()
     .describe("Valid values for select/enum types"),
   required: z.boolean().optional(),
+  defaultValue: z.unknown().optional(),
+  constraints: z.record(z.string(), z.unknown()).optional(),
+  targetProfileSlug: z.string().optional(),
+  schemaScope: z
+    .enum(["base", "workspace"])
+    .describe("base = global/profile definition; workspace = explicit overlay"),
+  workspaceId: z.string().nullable().optional(),
 });
 
 /** Kind + Facets discriminator, surfaced on every profile-listing read. */
@@ -70,7 +77,8 @@ const ProfileSlugListSchema = z
 
 const DiscoverQuerySchema = z.object({
   userId: z.string().min(1),
-  workspaceId: z.string().uuid(),
+  /** Omitted intentionally means the pod/base schema, never a default workspace. */
+  workspaceId: z.string().uuid().optional(),
   summary: z.enum(["true", "false"]).optional(),
   profileSlugs: ProfileSlugListSchema.optional(),
 });
@@ -138,15 +146,6 @@ export const DiscoverSummaryResponseSchema = z
   })
   .openapi("DiscoverSummaryResponse");
 
-type PropertyDef = {
-  id: string;
-  profileId?: string | null;
-  slug: string;
-  valueType: string;
-  constraints?: Record<string, unknown>;
-  uiHints?: Record<string, unknown>;
-};
-
 export function registerDiscoverRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
@@ -160,7 +159,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
     request: { query: DiscoverQuerySchema },
     responses: {
       200: { description: "Discovery payload", schema: DiscoverResponseSchema },
-      400: { description: "Missing required query param", schema: ErrorSchema },
+      400: { description: "Invalid query param", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
@@ -184,7 +183,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
       return c.json(
         {
           error:
-            "userId and workspaceId are required; profileSlugs must be a comma-separated list of profile slugs when supplied",
+            "userId is required; workspaceId is optional and profileSlugs must be a comma-separated list of profile slugs when supplied",
         },
         400
       );
@@ -200,7 +199,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
 
       const profilesRaw = await caller.profiles.listProfiles({
         userId,
-        workspaceId,
+        ...(workspaceId ? { workspaceId } : {}),
         ...(selectedSlugs ? { profileSlugs: selectedSlugs } : {}),
       });
 
@@ -233,11 +232,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
           displayName: p.displayName,
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
-            | "system"
-            | "shared"
-            | "workspace"
-            | "user"
-            | undefined,
+            "system" | "shared" | "workspace" | "user" | undefined,
           description: p.description ?? null,
           icon: p.icon ?? null,
           profileKind: p.profileKind ?? "kind",
@@ -254,45 +249,63 @@ export function registerDiscoverRoutes(app: HubHono): void {
         });
       }
 
-      // ── Full tier: property schemas + create commands ──
-      // A selected schema read must not fan out into every profile's property
-      // definitions. The hub caller delegates the filter to the repository.
-      const defsRaw =
-        selectedSlugs && selectedProfiles.length === 0
-          ? { propertyDefs: [] }
-          : await caller.profiles.listPropertyDefs({
-              userId,
-              workspaceId,
-              ...(selectedSlugs
-                ? { profileIds: selectedProfiles.map((profile) => profile.id) }
-                : {}),
-            });
-      const allDefs = (Array.isArray(defsRaw)
-        ? defsRaw
-        : ((defsRaw as unknown as { propertyDefs: unknown[] }).propertyDefs ??
-          [])) as unknown as PropertyDef[];
-
-      // Group property defs by profileId
-      const defsByProfileId = new Map<string, PropertyDef[]>();
-      for (const def of allDefs) {
-        if (!def.profileId) continue;
-        if (!defsByProfileId.has(def.profileId))
-          defsByProfileId.set(def.profileId, []);
-        defsByProfileId.get(def.profileId)!.push(def);
-      }
+      // ── Full tier: effective schemas + create commands ──
+      // Read each selected profile through the SAME resolution service used by
+      // validation. This includes inherited required/default metadata and only
+      // the explicit workspace's overlays. An absent workspace is the base
+      // lens, not an unfiltered/admin read.
+      const schemaByProfileId = new Map<
+        string,
+        { effectiveProperties: Array<Record<string, unknown>> }
+      >();
+      await Promise.all(
+        selectedProfiles.map(async (profile) => {
+          const schema = (await caller.profiles.getProfile({
+            userId,
+            ...(workspaceId ? { workspaceId } : {}),
+            identifier: profile.slug,
+          })) as unknown as {
+            effectiveProperties?: Array<Record<string, unknown>>;
+          };
+          schemaByProfileId.set(profile.id, {
+            effectiveProperties: schema.effectiveProperties ?? [],
+          });
+        })
+      );
 
       const discoveredProfiles = selectedProfiles.map((p) => {
-        const defs = defsByProfileId.get(p.id) ?? [];
+        const defs = schemaByProfileId.get(p.id)?.effectiveProperties ?? [];
         const properties = defs.map((d) => {
+          const constraints =
+            d.constraints && typeof d.constraints === "object"
+              ? (d.constraints as Record<string, unknown>)
+              : undefined;
+          const uiHints =
+            d.uiHints && typeof d.uiHints === "object"
+              ? (d.uiHints as Record<string, unknown>)
+              : undefined;
           const options =
-            (d.constraints?.options as string[] | undefined) ??
-            (d.uiHints?.options as string[] | undefined);
+            (constraints?.options as string[] | undefined) ??
+            (uiHints?.options as string[] | undefined);
           return {
-            slug: d.slug,
+            slug: String(d.slug),
             displayName:
-              (d.uiHints?.displayName as string | undefined) ?? d.slug,
-            type: d.valueType,
+              (uiHints?.displayName as string | undefined) ?? String(d.slug),
+            type: String(d.valueType),
             ...(options?.length ? { options } : {}),
+            required: d.required === true,
+            ...(d.defaultValue !== undefined && d.defaultValue !== null
+              ? { defaultValue: d.defaultValue }
+              : {}),
+            ...(constraints ? { constraints } : {}),
+            ...(typeof uiHints?.linkedProfileSlug === "string"
+              ? { targetProfileSlug: uiHints.linkedProfileSlug }
+              : typeof constraints?.targetProfileSlug === "string"
+                ? { targetProfileSlug: constraints.targetProfileSlug }
+                : {}),
+            schemaScope: d.workspaceId ? "workspace" : "base",
+            workspaceId:
+              typeof d.workspaceId === "string" ? d.workspaceId : null,
           };
         });
 
@@ -305,11 +318,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
           displayName: p.displayName,
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
-            | "system"
-            | "shared"
-            | "workspace"
-            | "user"
-            | undefined,
+            "system" | "shared" | "workspace" | "user" | undefined,
           description: p.description ?? null,
           icon: p.icon ?? null,
           profileKind: p.profileKind ?? "kind",

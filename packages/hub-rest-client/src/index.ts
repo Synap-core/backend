@@ -97,6 +97,8 @@ export type {
   HubUserContext,
   // Governance
   HubGovernanceResult,
+  HubWriteReceipt,
+  HubWriteSource,
   // Capabilities & teaching substrate
   HubCapabilityVerb,
   HubCapability,
@@ -142,6 +144,7 @@ export type {
   CaptureGraphEntity,
   CaptureGraphRelation,
   CaptureGraphBinding,
+  CaptureGraphRawSource,
   SubmitCaptureGraphInput,
   SubmitCaptureGraphResult,
   AskResponse,

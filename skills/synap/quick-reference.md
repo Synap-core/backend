@@ -26,7 +26,7 @@ or `recall` — `ask` is the door.)
 
 ```bash
 # REST (when no Bash access)
-POST   /api/hub/entities          body: { userId, workspaceId?, profileSlug, title, properties }
+POST   /api/hub/entities          body: { userId, workspaceId?, profileSlug, title, description?, properties?, content?, projectId?, facets?, source? }
 PATCH  /api/hub/entities/{id}     body: { userId, properties }   ← deep-merges, send only changed keys
 POST   /api/hub/documents         body: { userId, workspaceId?, title, content, entityId? }
 PATCH  /api/hub/documents/{id}    body: { userId, title?, content? }   ← full content replacement
@@ -46,11 +46,13 @@ synap discover --profiles --json # CLI: profiles only
 ```
 
 ```
-GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
-→ { profiles: [{ slug, displayName, scope, properties: [{ slug, type, options? }], createCommand }], commands: {...} }
+GET /api/hub/discover?userId={userId}&profileSlugs=task
+→ { profiles: [{ slug, displayName, scope, properties: [{ slug, type, required, defaultValue?, constraints?, targetProfileSlug? }], createCommand }], commands: {...} }
 ```
 
-Call this once at session start. The response includes every system profile and any custom workspace profiles the user has created, each with its full property schema. Use `createCommand` per profile as a copy-paste template. Do not rely on a static property list — it will drift.
+Call the summary tier once at session start, then load only the profile schemas
+needed for a write. Omit `workspaceId` for base/pod schema; add it only to see
+that workspace's overlays. Do not rely on a static property list — it will drift.
 
 **Load more detail on demand** (`GET /api/hub/skills/system?sections=<id>`):
 

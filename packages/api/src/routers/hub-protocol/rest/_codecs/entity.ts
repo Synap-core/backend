@@ -232,6 +232,36 @@ export const CreateEntityResponseSchema = z
       .describe(
         "Kind + Facets: per-role attach outcome for any `facets` passed in the request (status attached/proposed/error)."
       ),
+    /**
+     * Additive, write-aware receipt. `pending` means only a proposal exists;
+     * `partial` means independent follow-up operations failed after the entity
+     * write applied — it never claims an atomic rollback.
+     */
+    writeReceipt: z
+      .object({
+        state: z.enum(["pending", "applied", "partial"]),
+        proposalId: z.string().optional(),
+        reviewUrl: z.string().optional(),
+        entityId: z.string().optional(),
+        proposedEntityId: z.string().optional(),
+        profileSlug: z.string().optional(),
+        effectiveWorkspaceId: z.string().nullable().optional(),
+        projectId: z.string().optional(),
+        source: z.string().optional(),
+        facets: z
+          .array(
+            z.object({
+              slug: z.string(),
+              outcome: z.string(),
+              facetId: z.string().optional(),
+              proposalId: z.string().optional(),
+              error: z.string().optional(),
+            })
+          )
+          .optional(),
+        warnings: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .openapi("CreateEntityResponse");
 
