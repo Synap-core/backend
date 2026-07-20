@@ -390,11 +390,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const { listRuns, getRun } = await import("../../services/runs/index.js");
       const flowType = args.flowType as
-        | "automation"
-        | "playbook"
-        | "capture"
-        | "session"
-        | undefined;
+        "automation" | "playbook" | "capture" | "session" | undefined;
       // With a runId → that run's activity timeline (a capture's decision + trace
       // events: what happened and WHY, each with a fixHint). Without → the feed.
       if (args.runId) {
@@ -458,8 +454,7 @@ export async function executeMCPToolViaHubProtocol(
         preview: args.description as string | undefined,
         // properties merges into the JSONB column; metadata is a legacy alias
         metadata: (args.properties ?? args.metadata) as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
@@ -865,8 +860,7 @@ export async function executeMCPToolViaHubProtocol(
         authScopes: apiKeyScopes,
         detail: (args.detail as "light" | "full" | undefined) ?? "light",
         scope: args.scope as
-          | Array<"workspaces" | "projects" | "profiles">
-          | undefined,
+          Array<"workspaces" | "projects" | "profiles"> | undefined,
         workspaceId: args.workspaceId as string | undefined,
         projectId: args.projectId as string | undefined,
       });
@@ -911,8 +905,7 @@ export async function executeMCPToolViaHubProtocol(
         agentUserId,
         summary: args.summary as string | undefined,
         verificationReport: args.verificationReport as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
       });
       if (!session) {
         return ok({ error: `Focus session ${args.sessionId} not found` });
@@ -933,8 +926,7 @@ export async function executeMCPToolViaHubProtocol(
         progress: args.progress as number | undefined,
         currentStage: args.currentStage as string | undefined,
         addOutput: args.addOutput as
-          | { kind: string; label: string; icon?: string }
-          | undefined,
+          { kind: string; label: string; icon?: string } | undefined,
         completeOutput: args.completeOutput as string | undefined,
         expectedOutputs: args.expectedOutputs as
           | Array<{
@@ -1065,11 +1057,7 @@ export async function executeMCPToolViaHubProtocol(
       const playbookCaller = playbooksRouter.createCaller(playbookCtx);
       const result = await playbookCaller.list({
         status: args.status as
-          | "draft"
-          | "active"
-          | "paused"
-          | "archived"
-          | undefined,
+          "draft" | "active" | "paused" | "archived" | undefined,
       });
       return ok(result);
     }
@@ -1243,10 +1231,7 @@ export async function executeMCPToolViaHubProtocol(
             typeof captureCaller.execute
           >[0]["relations"]) ?? [],
         workspaceRouting: args.workspaceRouting as
-          | "auto"
-          | "ask"
-          | "locked"
-          | undefined,
+          "auto" | "ask" | "locked" | undefined,
         aiWorkspaceId: (structured as { targetWorkspaceId?: string | null })
           .targetWorkspaceId,
         aiWorkspaceConfidence: (
@@ -1540,11 +1525,7 @@ export async function executeMCPToolViaHubProtocol(
         // synap_start_session(templateId) — a draft would be invisible to run.
         status:
           (args.status as
-            | "draft"
-            | "active"
-            | "paused"
-            | "archived"
-            | undefined) ?? "active",
+            "draft" | "active" | "paused" | "archived" | undefined) ?? "active",
         agentUserId,
       });
       return ok(result);
@@ -1639,6 +1620,8 @@ export async function executeMCPToolViaHubProtocol(
       const limit = typeof args.limit === "number" ? args.limit : undefined;
       const { listCapabilities } =
         await import("../../services/capabilities/capability-registry.js");
+      const { projectRunnableActions } =
+        await import("../../services/capabilities/action-projection.js");
       const capabilities = await listCapabilities(
         { workspaceId: wsId, userId },
         query || kind || limit !== undefined
@@ -1650,81 +1633,17 @@ export async function executeMCPToolViaHubProtocol(
           : undefined
       );
 
-      // Flatten to an action-first list the agent can run directly. HONEST
-      // runnable surface (not just tool verbs): standalone code skills and
-      // intelligence_commands are executable via skillId too; IS-native
-      // entries (`catalogOnly: true` — no run bridge yet, recon-verified 404)
-      // are excluded. `enabled` derives from `governance` (the row's real
-      // approved state) — NOT a nonexistent `approved` field on the read-model
-      // (the previous flattening always evaluated to false).
-      type RunnableCap = {
-        id: string;
-        name?: string;
-        kind?: string;
-        governance?: string;
-        catalogOnly?: boolean;
-        inputSchema?: Record<string, unknown>;
-        connection?: {
-          required: boolean;
-          connected: boolean;
-          provider: string;
-        };
-        verbs?: Array<{
-          id?: string;
-          label?: string;
-          kind?: string;
-          effectiveExecMode?: string;
-          paramsSchema?: Record<string, unknown>;
-        }>;
-      };
-      const caps = capabilities as unknown as RunnableCap[];
-      const verbRunnable = caps.flatMap((cap) => {
-        if (cap.catalogOnly) return [];
-        // A provider verb is only runnable when its connection is present:
-        // dispatching against a disconnected provider just 4xxs. Surface the
-        // gap explicitly (`needsConnection` + provider) so the agent connects
-        // first instead of guessing from `governance`.
-        const needsConnection = cap.connection?.required
-          ? !cap.connection.connected
-          : false;
-        return (cap.verbs ?? []).map((v) => ({
-          verbId: v.id,
-          label: v.label ?? v.id,
-          tool: cap.name,
-          enabled: cap.governance === "auto" && !needsConnection,
-          execMode: v.effectiveExecMode,
-          paramsSchema: v.paramsSchema,
-          ...(cap.connection?.required
-            ? { needsConnection, provider: cap.connection.provider }
-            : {}),
-        }));
-      });
-      const standaloneRunnable = caps
-        .filter(
-          (cap) =>
-            (cap.kind === "skill" || cap.kind === "command") &&
-            !cap.catalogOnly &&
-            (cap.verbs?.length ?? 0) === 0
-        )
-        .map((cap) => ({
-          skillId: cap.id,
-          label: cap.name ?? cap.id,
-          tool: null,
-          enabled: cap.governance === "auto",
-          execMode: undefined,
-          paramsSchema:
-            cap.inputSchema && Object.keys(cap.inputSchema).length > 0
-              ? cap.inputSchema
-              : undefined,
-        }));
-      const runnable = [...verbRunnable, ...standaloneRunnable];
+      // MCP and Hub REST intentionally share this projection: never expose a
+      // catalog-only, draft, or disconnected action as executable on one
+      // surface while hiding it on the other.
+      const runnable = projectRunnableActions(capabilities);
 
       // Response size discipline: with a query, drop the full verb catalog dump
       // (grant/govDefault noise) — the compact projection carries name/kind/
       // description/governance + a slim verb list, `runnable` above already
       // carries the paramsSchema for anything actually callable.
       const responseCapabilities = query
-        ? caps.map((cap) => ({
+        ? capabilities.map((cap) => ({
             kind: cap.kind,
             id: cap.id,
             name: cap.name,

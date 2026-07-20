@@ -18,7 +18,7 @@ import {
   deleteLink,
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
@@ -152,33 +152,7 @@ export const skillsRouter = router({
       const userId = requireUserId(ctx.userId);
       const conditions: SQL[] = [];
 
-      // Three-tier scope filtering:
-      //   pod       — visible to all users on the data pod (no userId/workspaceId filter)
-      //   user      — visible only to the owning user
-      //   workspace — visible to all members of the workspace
-      if (input?.workspaceId) {
-        conditions.push(
-          or(
-            eq(skills.scope, "pod"),
-            and(eq(skills.scope, "user"), eq(skills.userId, userId)),
-            and(
-              eq(skills.scope, "workspace"),
-              eq(skills.workspaceId, input.workspaceId),
-              // Membership guard — without it, any caller could read another
-              // workspace's "workspace"-scoped skills (code/instructions) by id.
-              userVisibleWhere(skills.workspaceId, userId)
-            )
-          )!
-        );
-      } else {
-        // No workspace context — pod-wide + user-owned only
-        conditions.push(
-          or(
-            eq(skills.scope, "pod"),
-            and(eq(skills.scope, "user"), eq(skills.userId, userId))
-          )!
-        );
-      }
+      conditions.push(visibleSkillsWhere(userId, input?.workspaceId));
 
       if (input?.kind) {
         conditions.push(eq(skills.kind, input.kind));
@@ -213,6 +187,8 @@ export const skillsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
+        /** Required to resolve a workspace-scoped skill; omitted = pod + own only. */
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -220,8 +196,7 @@ export const skillsRouter = router({
       const skill = await ctx.db.query.skills.findFirst({
         where: and(
           eq(skills.id, input.id),
-          // Pod-scoped: any user. User-scoped: owner only.
-          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+          visibleSkillsWhere(userId, input.workspaceId)
         ),
       });
 

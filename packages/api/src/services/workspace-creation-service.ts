@@ -30,7 +30,10 @@ import {
 } from "@synap/database";
 import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
-import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
+import {
+  resolveWorkspaceTemplate,
+  type ResolvedWorkspaceTemplate,
+} from "./capabilities/resolve-workspace-template.js";
 
 const logger = createLogger({ module: "workspace-creation-service" });
 
@@ -46,6 +49,20 @@ export interface ReconcileIfStaleResult {
   checked: boolean;
   report?: ReconcileReport;
   version?: string;
+  /**
+   * The package definition this reconcile actually ran against — the FRESH
+   * server-resolved template, NOT the caller's (possibly stale) copy.
+   *
+   * A caller that also syncs the post-workspace layers (capabilities /
+   * playbooks / automations, via `applyPackagePostWorkspace`) MUST build its
+   * body from THIS, not from its own `definition`: layer 1 reconciles against
+   * the freshest template, so sourcing layer 2 from a stale caller copy would
+   * silently skip a playbook the new template version just added (the workspace
+   * would gain the new profile but not the playbook that uses it).
+   * Undefined when the reconcile ran off `callerDefinition` (no resolved
+   * template) — then the caller's own definition IS the right source.
+   */
+  packageDefinition?: ResolvedWorkspaceTemplate["packageDefinition"];
 }
 
 /**
@@ -159,6 +176,9 @@ export async function reconcileWorkspaceIfStale(opts: {
       checked: true,
       report,
       version,
+      // Hand back the SAME source layer 1 reconciled against so a caller
+      // syncing layer 2 stays in lockstep with it (see the field's doc).
+      packageDefinition: resolved?.packageDefinition,
     };
   } catch (err) {
     logger.warn(

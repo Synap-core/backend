@@ -24,6 +24,7 @@ export { registerBriefsRoutes } from "./briefs.js";
 export { registerToolsRoutes } from "./tools.js";
 export { registerCapabilitiesRoutes } from "./capabilities.js";
 export { registerCapabilitiesCatalogRoutes } from "./capabilities-catalog.js";
+export { registerCapabilitiesActionsRoutes } from "./capabilities-actions.js";
 export { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
 export { registerCapabilityConnectionsRoutes } from "./capability-connections.js";
 export { registerLoopsRoutes } from "./loops.js";

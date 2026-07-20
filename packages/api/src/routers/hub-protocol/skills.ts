@@ -67,6 +67,7 @@ export const skillsRouter = router({
       z.object({
         userId: z.string(),
         skillId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -79,6 +80,7 @@ export const skillsRouter = router({
       // Call regular API's get endpoint
       const result = await caller.get({
         id: input.skillId,
+        workspaceId: input.workspaceId,
       });
 
       return result.skill;

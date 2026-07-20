@@ -55,12 +55,7 @@ export interface HubChannel {
   id: string;
   name: string;
   type:
-    | "personal"
-    | "thread"
-    | "sub_thread"
-    | "feed"
-    | "external"
-    | "agent_collab";
+    "personal" | "thread" | "sub_thread" | "feed" | "external" | "agent_collab";
   workspaceId: string | null;
   agentType?: string;
   contextObjectType?:
@@ -94,6 +89,8 @@ export interface HubUser {
   email?: string;
   name?: string;
   scopes?: string[];
+  /** True only when the server authenticated this request as an agent credential. */
+  isAgent: boolean;
 }
 
 export interface HubMemoryResult {
@@ -238,11 +235,7 @@ export interface FollowUpChip {
   label: string;
   value: string;
   action:
-    | "link_entity"
-    | "set_property"
-    | "add_relation"
-    | "confirm"
-    | "dismiss";
+    "link_entity" | "set_property" | "add_relation" | "confirm" | "dismiss";
   icon?: string;
   entityId?: string;
   propertyKey?: string;
@@ -692,12 +685,7 @@ export interface HubThread {
   id: string;
   name?: string;
   type:
-    | "personal"
-    | "thread"
-    | "sub_thread"
-    | "feed"
-    | "external"
-    | "agent_collab";
+    "personal" | "thread" | "sub_thread" | "feed" | "external" | "agent_collab";
   workspaceId?: string;
   agentType?: string;
   contextObjectType?:
@@ -994,6 +982,27 @@ export interface HubCapabilityCatalogResult {
   capabilities: HubCapabilityCatalogCard[];
 }
 
+/** One action the shared capability execute door can launch immediately. */
+export interface HubRunnableCapabilityAction {
+  skillId?: string;
+  verbId?: string;
+  label: string;
+  description?: string | null;
+  tool: string | null;
+  connection?: {
+    required: true;
+    state: "connected";
+    provider: string;
+  };
+  governance: "auto";
+  executionMode?: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface HubRunnableCapabilityActionsResult {
+  actions: HubRunnableCapabilityAction[];
+}
+
 export interface ExecuteCapabilityInput {
   verbId?: string;
   skillId?: string;
@@ -1038,6 +1047,8 @@ export interface ListAgentSkillsOptions {
   tag?: string;
   /** Restrict to the seeded system/* teaching catalog. */
   system?: boolean;
+  /** Include visible workspace-scoped skills for this selected lens. */
+  workspaceId?: string;
   limit?: number;
   offset?: number;
 }
@@ -1121,12 +1132,7 @@ export interface UpdateAutomationInput {
 // ─── Subscriptions / Reactions (Pulse) ───────────────────────────────────────
 
 export type ReactionKind =
-  | "automation"
-  | "ai_feed"
-  | "ai_react"
-  | "notify"
-  | "webhook"
-  | "message_out";
+  "automation" | "ai_feed" | "ai_react" | "notify" | "webhook" | "message_out";
 
 export type ReactionLens = "all" | "internal" | "external";
 
@@ -1145,11 +1151,7 @@ export interface HubReactionEvent {
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 export type NotificationSourceType =
-  | "proposal"
-  | "connector"
-  | "agent"
-  | "system"
-  | "inbox_item";
+  "proposal" | "connector" | "agent" | "system" | "inbox_item";
 
 export interface CreateNotificationInput {
   userId: string;

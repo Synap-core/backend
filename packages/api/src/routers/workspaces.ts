@@ -3073,7 +3073,10 @@ export const workspacesRouter = router({
         let syncLayers: boolean;
         if (outcome.checked) {
           report = outcome.report; // in sync (undefined) or freshly reconciled
-          syncLayers = !!outcome.report;
+          // Read the field that MEANS "a reconcile write happened" rather than
+          // inferring it from the report's presence (equivalent today, but the
+          // report is a payload, not the signal).
+          syncLayers = outcome.reconciled;
         } else {
           try {
             report = await reconcileWorkspaceFromDefinition({
@@ -3096,12 +3099,19 @@ export const workspacesRouter = router({
         // idempotent by (name, workspaceId), so a re-install ADDS playbooks the
         // template gained since first install (e.g. radars) WITHOUT duplicating
         // existing ones. Mirrors the compose-overlay branch; non-fatal.
+        //
+        // SOURCE MUST MATCH LAYER 1: when the version-aware path resolved a
+        // fresh template server-side, build from THAT (`outcome.packageDefinition`)
+        // — not the caller's `input.definition`, which may be a stale cached copy
+        // missing exactly the playbook the new version added.
         if (syncLayers) {
           try {
+            const postWorkspaceSource = (outcome.packageDefinition ??
+              input.definition) as CreateDefinitionPostWorkspaceSlice;
             await applyPackagePostWorkspace({
               workspaceId,
               body: buildPostWorkspaceBodyFromDefinition(
-                input.definition as CreateDefinitionPostWorkspaceSlice,
+                postWorkspaceSource,
                 workspaceId
               ),
               userId: ctx.userId,

@@ -23,6 +23,7 @@ import {
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 
 /**
  * Module-scoped pino logger.
@@ -163,12 +164,21 @@ export async function resolveProposalId(
     });
   }
   // `raw` is validated to [0-9a-f] only — it carries no LIKE wildcards to escape.
+  //
+  // Scope with the SAME predicate `proposals.list` uses (`userVisibleWhere`) —
+  // resolve exactly what we displayed. Scoping by `createdBy` instead would miss
+  // the dominant review case: `checkPermissionOrPropose` stamps the human
+  // (permission-check.ts:1254), but the agent-initiated paths stamp the AGENT
+  // (:771, :1393) — so an AI proposal would list fine, print its short id, then
+  // 404 on approve. `userVisibleWhere` also covers pod-wide (NULL workspace)
+  // proposals. This is disambiguation, not authorization: approve/reject still
+  // gate downstream.
   const rows = await db
     .select({ id: proposals.id })
     .from(proposals)
     .where(
       and(
-        eq(proposals.createdBy, userId),
+        userVisibleWhere(proposals.workspaceId, userId),
         drizzleSql`${proposals.id}::text LIKE ${`${raw}%`}`
       )
     )

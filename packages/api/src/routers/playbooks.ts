@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@synap-core/core";
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -65,6 +66,8 @@ import {
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
+
+const logger = createLogger({ module: "playbooks-router" });
 
 /**
  * Resolve a subject entity id to bind to a run/session, guarding cross-workspace
@@ -1153,8 +1156,14 @@ export const playbooksRouter = router({
               linkType: "documents",
             },
           ]);
-        } catch {
-          // Non-fatal: a context-skill hiccup must never fail the playbook create.
+        } catch (err) {
+          // Non-fatal: a context-skill hiccup must never fail the playbook
+          // create. Logged, not swallowed — otherwise the playbook looks healthy
+          // while every run silently misses the HOW it was meant to carry.
+          logger.warn(
+            { err, playbookId: (created as Playbook).id },
+            "playbooks.create: context skill persist failed (non-fatal)"
+          );
         }
       }
 

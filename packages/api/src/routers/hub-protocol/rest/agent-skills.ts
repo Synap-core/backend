@@ -33,6 +33,7 @@ import {
 } from "./_codecs/skill.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 import { insertSkillGoverned } from "../../skills.js";
+import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         topic: z.string().optional(),
         q: z.string().optional(),
         tag: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
         system: z.string().optional().openapi({
           description: "'true' to list only seeded system/* instruction skills",
         }),
@@ -147,7 +149,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     tags: ["Agent Skills"],
     summary: "Get a single agent skill by slug",
     request: {
-      query: z.object({ slug: z.string().min(1) }),
+      query: z.object({
+        slug: z.string().min(1),
+        workspaceId: z.string().uuid().optional(),
+      }),
     },
     responses: {
       200: { description: "Skill", schema: AgentSkillWireSchema },
@@ -259,7 +264,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Insufficient scope" }, 403);
     }
-    const userId = c.req.query("userId") || (c.get("userId") as string);
+    const userId = c.get("userId");
     const workspaceId = c.req.query("workspaceId");
     const status = c.req.query("status");
     const approvedQuery = c.req.query("approved");
@@ -291,14 +296,25 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Insufficient scope" }, 403);
     }
-    const userId = c.req.query("userId") || (c.get("userId") as string);
+    const userId = c.get("userId");
     const skillId = c.req.param("id");
+    const workspaceId = c.req.query("workspaceId");
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
+    }
     if (!skillId) {
       return c.json({ error: "id is required" }, 400);
     }
     try {
       const caller = await getCaller(c);
-      const result = await caller.skills.getSkill({ userId, skillId });
+      const result = await caller.skills.getSkill({
+        userId,
+        skillId,
+        workspaceId: workspaceId || undefined,
+      });
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "agent-skills/executable get failed");
@@ -346,7 +362,12 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /agent-skills — list skills with optional topic/query/tag filtering
+   * GET /agent-skills — list visible, active, approved instruction skills.
+   *
+   * This is the external progressive-disclosure catalog. It intentionally shares
+   * the canonical three-tier visibility and lifecycle/approval gates used by the
+   * agent skill resolver: a caller never learns another user's private or an
+   * unapproved/inactive skill body through a convenient REST side door.
    */
   app.get("/agent-skills", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -360,11 +381,23 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     // skill-loader pod-overlay uses this to fetch just the teaching catalog,
     // never the user's whole skill library.
     const system = c.req.query("system") === "true";
+    const workspaceId = c.req.query("workspaceId");
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
+    }
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
 
     try {
-      const conditions: SQL[] = [];
+      const conditions: SQL[] = [
+        visibleSkillsWhere(c.get("userId"), workspaceId || undefined),
+        eq(skills.kind, "instruction"),
+        eq(skills.status, "active"),
+        eq(skills.approved, true),
+      ];
 
       if (topic) {
         // topics is text[] — use array containment
@@ -430,11 +463,26 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json({ error: "Insufficient scope" }, 403);
     }
     const slug = c.req.param("slug");
+    const workspaceId = c.req.query("workspaceId");
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
+    }
     try {
       const [row] = await db
         .select()
         .from(skills)
-        .where(eq(skills.slug, slug))
+        .where(
+          and(
+            eq(skills.slug, slug),
+            visibleSkillsWhere(c.get("userId"), workspaceId || undefined),
+            eq(skills.kind, "instruction"),
+            eq(skills.status, "active"),
+            eq(skills.approved, true)
+          )
+        )
         .limit(1);
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);
@@ -454,11 +502,26 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json({ error: "Insufficient scope" }, 403);
     }
     const id = c.req.param("id");
+    const workspaceId = c.req.query("workspaceId");
+    if (
+      workspaceId !== undefined &&
+      !z.string().uuid().safeParse(workspaceId).success
+    ) {
+      return c.json({ error: "workspaceId query param must be a UUID" }, 400);
+    }
     try {
       const [row] = await db
         .select()
         .from(skills)
-        .where(eq(skills.id, id))
+        .where(
+          and(
+            eq(skills.id, id),
+            visibleSkillsWhere(c.get("userId"), workspaceId || undefined),
+            eq(skills.kind, "instruction"),
+            eq(skills.status, "active"),
+            eq(skills.approved, true)
+          )
+        )
         .limit(1);
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);

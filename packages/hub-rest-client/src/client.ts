@@ -68,6 +68,7 @@ import type {
   HubDocumentProposalResult,
   HubCapability,
   HubCapabilityCatalogResult,
+  HubRunnableCapabilityActionsResult,
   ExecuteCapabilityInput,
   ExecuteCapabilityResult,
   ListAgentSkillsOptions,
@@ -139,9 +140,7 @@ function unwrapList<T>(result: T[] | HubListResponse<T>): T[] {
 /** Hub GET /workspaces returns `{ workspaces }`, not `{ data }`. */
 function unwrapWorkspacesResponse(
   result:
-    | HubWorkspace[]
-    | HubListResponse<HubWorkspace>
-    | HubWorkspacesListResponse
+    HubWorkspace[] | HubListResponse<HubWorkspace> | HubWorkspacesListResponse
 ): HubWorkspace[] {
   if (Array.isArray(result)) return result;
   if (result && typeof result === "object" && "workspaces" in result) {
@@ -1150,6 +1149,30 @@ export class HubRestClient {
     );
   }
 
+  /** List only approved, connected actions that this client can execute now. */
+  async listRunnableCapabilityActions(options?: {
+    workspaceId?: string;
+    query?: string;
+    kind?: string;
+    limit?: number;
+  }): Promise<HubRunnableCapabilityActionsResult> {
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    if (!workspaceId) {
+      throw new Error(
+        "workspaceId is required for listRunnableCapabilityActions"
+      );
+    }
+    const params = new URLSearchParams({ workspaceId });
+    if (options?.query) params.set("query", options.query);
+    if (options?.kind) params.set("kind", options.kind);
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    return this.request<HubRunnableCapabilityActionsResult>(
+      "GET",
+      `/api/hub/capabilities/actions?${params}`
+    );
+  }
+
   /** Run one registered capability through the shared governance gate. */
   async executeCapability(
     input: ExecuteCapabilityInput
@@ -1174,6 +1197,8 @@ export class HubRestClient {
     if (options?.tag) params.set("tag", options.tag);
     if (options?.system !== undefined)
       params.set("system", String(options.system));
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    if (workspaceId) params.set("workspaceId", workspaceId);
     if (options?.limit !== undefined)
       params.set("limit", String(options.limit));
     if (options?.offset !== undefined)
@@ -1186,10 +1211,15 @@ export class HubRestClient {
   }
 
   /** Load one skill body only when it is relevant to the agent's next action. */
-  async getAgentSkillBySlug(slug: string): Promise<HubAgentSkill> {
+  async getAgentSkillBySlug(
+    slug: string,
+    options?: { workspaceId?: string }
+  ): Promise<HubAgentSkill> {
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    const qs = workspaceId ? `?${new URLSearchParams({ workspaceId })}` : "";
     return this.request<HubAgentSkill>(
       "GET",
-      `/api/hub/agent-skills/by-slug/${encodeURIComponent(slug)}`
+      `/api/hub/agent-skills/by-slug/${encodeURIComponent(slug)}${qs}`
     );
   }
 

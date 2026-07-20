@@ -24,10 +24,14 @@ import {
   links,
   eq,
   and,
+  desc,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import { MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
+
+const logger = createLogger({ module: "is-agent-executor" });
 
 export class IsAgentExecutor implements Executor {
   readonly ref = "is-agent" as const;
@@ -106,12 +110,21 @@ export class IsAgentExecutor implements Executor {
               eq(skills.kind, "instruction")
             )
           )
+          // Deterministic pick: a composed template or re-install can leave more
+          // than one instruction skill linked; always take the newest.
+          .orderBy(desc(skills.createdAt))
           .limit(1);
         if (ctxSkill?.body?.trim()) {
           contextPrefix = `## How to run this playbook\n${ctxSkill.body.trim()}\n\n`;
         }
-      } catch {
-        // best-effort — fall through with no context prefix
+      } catch (err) {
+        // Non-fatal — the run proceeds without the HOW. Logged because this
+        // query runs on EVERY playbook run: a persistent failure would silently
+        // degrade every run otherwise.
+        logger.warn(
+          { err, playbookId: ctx.playbookId },
+          "is-agent: context skill lookup failed (non-fatal)"
+        );
       }
     }
 

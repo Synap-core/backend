@@ -73,6 +73,8 @@
  * processed in; this function faithfully orders whatever the lookup resolves.
  */
 
+import { layerTemplateGraph } from "@synap-core/workspace-templates";
+
 /** Minimal structural view of a template dependency edge. */
 export interface TemplateDependencyRef {
   /** Slug of the template this one depends on (template-slug space). */
@@ -113,11 +115,20 @@ const UNORDERED_RANK = Number.MAX_SAFE_INTEGER;
  *    simply absent from the graph — not an error.
  *  - Multiple workspaces sharing a subtype all sort together, keeping their
  *    original relative order.
- *  - CYCLES terminate (an ancestor-path guard breaks the back-edge) and never
- *    drop a row.
+ *  - CYCLES terminate (the shared composition engine's ancestor-path guard
+ *    breaks the back-edge) and never drop a row.
  *  - DETERMINISTIC: same input ⇒ same output. Slugs are visited in order of
  *    first appearance in `rows`, dependencies in declaration order, and ties are
  *    broken by original index.
+ *
+ * IMPLEMENTATION: delegates the actual layering to `layerTemplateGraph`
+ * (`@synap-core/workspace-templates`) — the same longest-path composition
+ * engine the CLI/browser/backend all share for template dependency graphs.
+ * This function supplies only what's specific to the boot-reconcile use
+ * case: resolving each row to its template's node identity, restricting
+ * edges to templates PRESENT on this pod (a caller-side predicate, not an
+ * engine default — see the "WHAT THIS DOES NOT FIX" section above), and
+ * translating the engine's layers back into this function's row order.
  */
 export function orderWorkspacesByTemplateDependencies<
   T extends OrderableWorkspaceRow,
@@ -155,51 +166,84 @@ export function orderWorkspacesByTemplateDependencies<
     }
   }
 
-  // 3. DFS post-order over declared dependencies, restricted to present slugs.
-  //    Post-order emits a dependency BEFORE its dependents — exactly the order
-  //    the reconcile loop needs.
-  const topoOrder: string[] = [];
-  const visited = new Set<string>(); // fully processed → emitted exactly once
-  const onPath = new Set<string>(); // current DFS ancestor chain → cycle guard
+  // 3. PRESENT-ONLY edge predicate — the caller-side filter that keeps this
+  //    pass "reconcile what's here", never "conjure what's missing" (see the
+  //    doc comment above). This is deliberately NOT folded into the engine:
+  //    `layerTemplateGraph`'s default `bundledEdgesOf` has no notion of "on
+  //    this pod", so the filter has to live here, on every call. Both
+  //    `compose` (overlay onto the base) and `require` (base must exist) mean
+  //    the SAME thing for ordering: the dependency goes first — `dep.kind` is
+  //    not filtered here either, a `capability`/`automation` dep simply never
+  //    matches a present workspace slug, so the presence check drops it.
+  const edgesOfPresent = (slug: string): TemplateDependencyRef[] =>
+    (templateBySlug.get(slug)?.dependencies ?? []).filter((dep) =>
+      present.has(dep.slug)
+    );
 
-  const visit = (slug: string): void => {
-    // A true cycle: `slug` is an ANCESTOR of itself on this path. Break the back
-    // edge and return — the node is still emitted by the frame that owns it, so
-    // a cycle degrades to an arbitrary-but-deterministic order, never a hang and
-    // never a dropped row.
-    if (onPath.has(slug)) return;
-    // Already emitted (or a legitimate diamond re-reached from another parent).
-    if (visited.has(slug)) return;
-
-    onPath.add(slug);
-    // Both `compose` (overlay onto the base) and `require` (base must exist)
-    // mean the SAME thing for ordering: the dependency goes first. Dependency
-    // `kind` is not filtered — a `capability`/`automation` dep simply never
-    // matches a workspace node, so the presence check below drops it.
-    for (const dep of templateBySlug.get(slug)?.dependencies ?? []) {
-      // A dependency with no workspace on this pod is absent from the sort, not
-      // an error — nothing to order against.
-      if (present.has(dep.slug)) visit(dep.slug);
+  // 4. Root selection for the engine. `layerTemplateGraph` pins every slug in
+  //    `roots` to layer 0 regardless of what depends on it, so passing every
+  //    present slug as a root would wrongly flatten dependencies (e.g.
+  //    `foundation`) to the top layer instead of the bedrock. A slug only
+  //    belongs in `roots` when no OTHER present slug reaches it first —
+  //    everything else is discovered as a dependency during the engine's own
+  //    walk. A pure cycle (no slug in the component has an outside root)
+  //    still needs a representative, so this walks `presentSlugs` in order
+  //    and adds whichever slug isn't already reachable from an earlier root —
+  //    the same coverage the old DFS's `visited` set guaranteed, computed
+  //    once here instead of inside a hand-rolled traversal.
+  const roots: string[] = [];
+  const reachableFromRoots = new Set<string>();
+  const markReachable = (start: string): void => {
+    const stack = [start];
+    while (stack.length > 0) {
+      const slug = stack.pop();
+      if (slug === undefined || reachableFromRoots.has(slug)) continue;
+      reachableFromRoots.add(slug);
+      for (const dep of edgesOfPresent(slug)) stack.push(dep.slug);
     }
-    onPath.delete(slug);
-
-    visited.add(slug);
-    topoOrder.push(slug);
   };
+  for (const slug of presentSlugs) {
+    if (reachableFromRoots.has(slug)) continue;
+    roots.push(slug);
+    markReachable(slug);
+  }
 
-  for (const slug of presentSlugs) visit(slug);
+  // 5. Delegate the actual layering to the shared composition engine — same
+  //    graph (`dependencies[]`, present-filtered), same guarantees (every
+  //    reachable node exactly once, cycles broken not dropped, deterministic).
+  //    `TemplateDependencyRef` carries no `relation` field, so every edge
+  //    reaching the engine defaults to `"require"` — which is exactly the old
+  //    DFS's compose-and-require-are-the-same behaviour (see step 3), not an
+  //    approximation of it: the engine's compose-only node exclusion (a
+  //    `compose` source is never its own layer node) can never trigger here.
+  const graph = layerTemplateGraph({ roots, edgesOf: edgesOfPresent });
 
-  // 4. Rank each slug by its topological position; rows off the graph sort last.
+  // 6. `layers[0]` = roots, `layers[n]` = bedrock (engine convention). This
+  //    function's contract is the OPPOSITE direction — a dependency
+  //    reconciles BEFORE its dependent — so rank a node by distance from
+  //    bedrock: `maxLayer - node.layer` gives the bedrock layer rank 0.
+  //    Rows off the graph keep the old `UNORDERED_RANK` (sort last).
+  const maxLayer = Math.max(
+    0,
+    ...[...graph.nodes.values()].map((node) => node.layer)
+  );
   const rankOf = new Map<string, number>();
-  topoOrder.forEach((slug, i) => rankOf.set(slug, i));
+  for (const node of graph.nodes.values()) {
+    rankOf.set(node.slug, maxLayer - node.layer);
+  }
 
-  // 5. Stable sort by (rank, originalIndex). The explicit index tiebreak makes
-  //    determinism a property of THIS code rather than of engine sort stability.
+  // 7. Stable sort by (rank, originalIndex) — unchanged from the old DFS's
+  //    final step. The explicit index tiebreak makes determinism a property
+  //    of THIS code, and it's also what keeps two rows at the same rank (e.g.
+  //    sibling consumers of the same base) in their ORIGINAL relative order
+  //    instead of the engine's internal alphabetical layer ordering.
   return rows
     .map((row, index) => {
       const slug = identityOf[index];
       const rank =
-        slug === undefined ? UNORDERED_RANK : (rankOf.get(slug) ?? UNORDERED_RANK);
+        slug === undefined
+          ? UNORDERED_RANK
+          : (rankOf.get(slug) ?? UNORDERED_RANK);
       return { row, index, rank };
     })
     .sort((a, b) => a.rank - b.rank || a.index - b.index)

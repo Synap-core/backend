@@ -48,7 +48,10 @@ describe("resolveProposalId", () => {
     mockLimit.mockResolvedValue([{ id: FULL }]);
     const out = await resolveProposalId("user-1", "9f5433a9");
     expect(out).toBe(FULL);
-    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    // Queried (vs the full-uuid fast path, which must not). No exact count:
+    // the visibility predicate builds its own member/owned/pod-visible
+    // subqueries off `db`, so the call count is an implementation detail.
+    expect(mockDb.select).toHaveBeenCalled();
   });
 
   it("throws NOT_FOUND when a plausible prefix matches nothing", async () => {

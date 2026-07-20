@@ -75,11 +75,12 @@ export interface ResolvedWorkspaceTemplate {
  * PackageDefinitionOutput-shaped body instead of the raw YAML template. Note
  * one real naming divergence between the two converters' installed shapes:
  * the package shape calls the field `suggestedEntities`, the workspace shape
- * calls it `seedEntities` — mapped explicitly, not cast. The bento union
- * (`bentoLayout` on the package shape) is carried into `bentoViewBlocks` (the
- * workspace shape's single bento field in the installed
- * `@synap-core/workspace-templates` version) verbatim — exactly what a direct
- * `toWorkspaceDefinition(slug)` call already does.
+ * calls it `seedEntities` — mapped explicitly, not cast. The bento union is
+ * SPLIT across two wire fields — widgets on `bentoLayout`, views on
+ * `bentoViewBlocks` — and BOTH are carried verbatim, exactly what a direct
+ * `toWorkspaceDefinition(slug)` call produces. (Funnelling `bentoLayout` into
+ * `bentoViewBlocks`, as this did before the split, silently dropped every
+ * widget.)
  */
 function toWorkspaceDefinitionInput(
   pkg: PackageDefinitionOutput
@@ -96,7 +97,13 @@ function toWorkspaceDefinitionInput(
     displayTemplates: pkg.displayTemplates,
     layoutConfig: pkg.layoutConfig,
     bentoViewName: pkg.bentoViewName,
-    bentoViewBlocks: pkg.bentoLayout,
+    // The authored bento union is SPLIT across two wire fields and BOTH must be
+    // carried: widgets live on `bentoLayout`, views on `bentoViewBlocks`. This
+    // previously funnelled `bentoLayout` into `bentoViewBlocks`, which silently
+    // dropped every widget (the exact data loss the upstream split exists to
+    // prevent — see the field docs in @synap-core/workspace-templates).
+    bentoLayout: pkg.bentoLayout,
+    bentoViewBlocks: pkg.bentoViewBlocks,
     profileEntityBentoTemplates: pkg.profileEntityBentoTemplates,
     workspaceSubtype: pkg.workspaceSubtype,
     workspaceType: pkg.workspaceType,

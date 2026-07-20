@@ -15,7 +15,7 @@
  * first via `POST /skills/:id/approve`.
  */
 
-import { db, skills, eq, and, or, isNull, desc } from "@synap/database";
+import { db, skills, eq, and, desc } from "@synap/database";
 
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
@@ -24,6 +24,7 @@ import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export type ExecuteCapabilityResult =
   | { kind: "run"; skillId: string; result: unknown }
@@ -73,8 +74,10 @@ export async function executeCapability(input: {
     };
   }
 
-  // Resolve the backing skill — by id, or by verb NAME scoped exactly like the
-  // capability registry read-model: pod-wide OR this workspace OR owned by actor.
+  // Resolve the backing skill through the SAME three-tier visibility contract as
+  // the skills catalog. In particular, a direct `skillId` is not an authority:
+  // it must still belong to the caller's pod/user/workspace lens and be active.
+  // This protects every caller of this shared core (Hub REST, MCP, Raycast).
   const [skillRow] = await db
     .select({
       id: skills.id,
@@ -86,16 +89,11 @@ export async function executeCapability(input: {
     })
     .from(skills)
     .where(
-      skillId
-        ? eq(skills.id, skillId)
-        : and(
-            eq(skills.name, verbId!),
-            or(
-              isNull(skills.workspaceId),
-              ...(workspaceId ? [eq(skills.workspaceId, workspaceId)] : []),
-              eq(skills.userId, userId)
-            )
-          )
+      and(
+        visibleSkillsWhere(userId, workspaceId ?? undefined),
+        eq(skills.status, "active"),
+        skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!)
+      )
     )
     // Deterministic resolution when a verb NAME has duplicates (e.g. a stale
     // re-installed capability): prefer an approved skill, then the most recently

@@ -18,7 +18,12 @@ export function registerUsersRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Identity",
-        schema: z.object({ id: z.string(), scopes: z.array(z.string()) }),
+        schema: z.object({
+          id: z.string(),
+          scopes: z.array(z.string()),
+          /** Server-derived credential posture; never accepted from the caller. */
+          isAgent: z.boolean(),
+        }),
       },
       401: { description: "Unauthorized" },
     },
@@ -32,6 +37,13 @@ export function registerUsersRoutes(app: HubHono): void {
     const userId = c.get("userId") as string | undefined;
     const scopes = c.get("scopes") as string[] | undefined;
     if (!userId) return c.json({ error: "Unauthorized" }, 401);
-    return c.json({ id: userId, scopes: scopes ?? [] });
+    // `agentUserId` is established only by Hub auth middleware after it resolves
+    // the bearer key. It is deliberately not a query/body field, so an external
+    // client cannot forge agent posture to unlock AI-write surfaces.
+    return c.json({
+      id: userId,
+      scopes: scopes ?? [],
+      isAgent: Boolean(c.get("agentUserId")),
+    });
   });
 }

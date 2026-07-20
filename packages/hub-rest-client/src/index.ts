@@ -103,6 +103,8 @@ export type {
   HubCapabilityCatalogConnection,
   HubCapabilityCatalogCard,
   HubCapabilityCatalogResult,
+  HubRunnableCapabilityAction,
+  HubRunnableCapabilityActionsResult,
   ExecuteCapabilityResult,
   HubAgentSkill,
   ListAgentSkillsOptions,

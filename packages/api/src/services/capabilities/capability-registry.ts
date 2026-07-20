@@ -51,6 +51,7 @@ import type {
 } from "@synap/playbooks";
 import { getDefaultActiveService } from "@synap/intelligence-client";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface CapabilityRegistryContext {
   workspaceId: string;
@@ -166,7 +167,8 @@ function buildVerbStates(
   catalog: ToolVerbCatalogEntry[] | null | undefined,
   grant: { execMode: ExecMode } | undefined,
   toolKind: string,
-  providerSpecByName: Map<string, ProviderVerbSpec>
+  providerSpecByName: Map<string, ProviderVerbSpec>,
+  backingSkillExecutableByName: Map<string, boolean>
 ): CapabilityVerbState[] {
   if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
@@ -185,6 +187,10 @@ function buildVerbStates(
       granted,
       effectiveExecMode: grant ? grant.execMode : v.govDefault,
       ...(paramsSchema ? { paramsSchema } : {}),
+      // A tool verb is only a real action when its backing skill can clear the
+      // execute door's lifecycle + approval gates. The tool row's own approval
+      // is not enough: executeCapability resolves and gates this skill.
+      backingSkillExecutable: backingSkillExecutableByName.get(v.id) === true,
     };
   });
 }
@@ -316,27 +322,31 @@ export async function listCapabilities(
   }
 
   // ── Skills (instruction | code) ─────────────────────────────────────────────
-  // Visible = pod-wide (NULL) OR this workspace OR owned by the caller (user scope).
+  // Same three-tier lens as execution: pod-wide, the caller's user-scoped
+  // skills, and workspace skills only in this selected accessible workspace.
   // Fetched BEFORE toolCaps so declarative skills' `providerSpec` (the source of
   // truth for a provider verb's real param shape) is available to buildVerbStates.
   const skillRows = await db
     .select()
     .from(skills)
-    .where(
-      or(
-        isNull(skills.workspaceId),
-        eq(skills.workspaceId, ctx.workspaceId),
-        eq(skills.userId, ctx.userId)
-      )
-    );
+    .where(visibleSkillsWhere(ctx.userId, ctx.workspaceId));
 
   // verb id (= skill name) → providerSpec, for declarative skills only. A tool's
   // verb catalog entry id mirrors the requiring skill's name (see deriveToolVerbs
   // in create-from-definition.ts), so this is a direct lookup, no join needed.
   const providerSpecByName = new Map<string, ProviderVerbSpec>();
+  const backingSkillExecutableByName = new Map<string, boolean>();
   for (const s of skillRows) {
     if (s.kind === "declarative" && s.providerSpec) {
       providerSpecByName.set(s.name, s.providerSpec as ProviderVerbSpec);
+    }
+    // `executeCapability` prefers approved candidates when duplicate verb names
+    // exist. Any visible active+approved backing skill therefore makes this verb
+    // executable; absent/draft/inactive rows must not be advertised as actions.
+    if (s.status === "active" && s.approved) {
+      backingSkillExecutableByName.set(s.name, true);
+    } else if (!backingSkillExecutableByName.has(s.name)) {
+      backingSkillExecutableByName.set(s.name, false);
     }
   }
 
@@ -381,7 +391,8 @@ export async function listCapabilities(
       row.capabilities as ToolVerbCatalogEntry[] | null,
       grantByGrantableId.get(row.id),
       row.kind,
-      providerSpecByName
+      providerSpecByName,
+      backingSkillExecutableByName
     ),
     ...(row.kind === "provider"
       ? {
@@ -417,6 +428,10 @@ export async function listCapabilities(
           inputSchema: asInputSchema(row.parameters),
           executor: "is-agent",
           governance: deriveGovernance(row.approved),
+          // Lifecycle is distinct from approval. Keep inactive/error skills in
+          // the broad registry for management surfaces, but mark them so the
+          // shared action projection never advertises an unlaunchable skill.
+          runnable: row.status === "active",
         }
   );
 

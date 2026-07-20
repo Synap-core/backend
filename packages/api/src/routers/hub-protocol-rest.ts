@@ -35,6 +35,7 @@ import {
   registerAutomationsRoutes,
   registerCapabilitiesRoutes,
   registerCapabilitiesCatalogRoutes,
+  registerCapabilitiesActionsRoutes,
   registerCapabilitiesExecuteRoutes,
   registerCapabilityConnectionsRoutes,
   registerLoopsRoutes,
@@ -542,6 +543,7 @@ registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD se
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
 registerCapabilitiesCatalogRoutes(app); // GET /capabilities/catalog (pack-grouped, status-computed cards)
+registerCapabilitiesActionsRoutes(app); // GET /capabilities/actions (honestly executable action projection)
 registerCapabilitiesExecuteRoutes(app); // POST /capabilities/execute (agnostic capability launcher)
 registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities/:capabilityId/connections (W4 connection CRUD)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
