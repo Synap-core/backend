@@ -48,6 +48,7 @@ import type {
   RunProducedEntity,
   RunProposalItem,
   RunAgent,
+  RunGroup,
 } from "./types.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
@@ -519,6 +520,134 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   });
   unique.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
   return unique.slice(0, perFlow);
+}
+
+// ── Public: run GROUPS (one row per template/flow) ───────────────────────────
+
+export interface ListRunGroupsInput {
+  userId: string;
+  /** Restrict to one flow ledger; omit for automation + playbook merged. */
+  flowType?: "automation" | "playbook";
+  /** Narrow to a workspace lens (within the user floor). */
+  scope?: { workspaceId?: string };
+  /** Cap on groups returned (newest-active first). */
+  limit?: number;
+}
+
+/**
+ * Runs collapsed to ONE row per flow (automation / playbook), newest-active
+ * first. USER-floored via the SAME `userVisibleWhere` predicate `listRuns` uses,
+ * so a group never counts a run the user can't see. Each ledger is grouped in the
+ * DB (GROUP BY flowId) — the counts + latest run are exact over the whole ledger,
+ * never a client fold over a truncated page. capture/session runs have no flowId
+ * and are intentionally absent (they stay individual rows in the feed).
+ */
+export async function listRunGroups(
+  input: ListRunGroupsInput
+): Promise<RunGroup[]> {
+  const { userId, flowType } = input;
+  const scope = input.scope ?? {};
+  const limit = Math.min(input.limit ?? 50, 100);
+
+  const jobs: Array<Promise<RunGroup[]>> = [];
+  if (!flowType || flowType === "automation")
+    jobs.push(groupAutomationRuns(userId, scope.workspaceId, limit));
+  if (!flowType || flowType === "playbook")
+    jobs.push(groupPlaybookRuns(userId, scope.workspaceId, limit));
+
+  const merged = (await Promise.all(jobs)).flat();
+  merged.sort(
+    (a, b) => b.latestStartedAt.getTime() - a.latestStartedAt.getTime()
+  );
+  return merged.slice(0, limit);
+}
+
+async function groupAutomationRuns(
+  userId: string,
+  workspaceId: string | undefined,
+  limit: number
+): Promise<RunGroup[]> {
+  const rows = await db
+    .select({
+      flowId: automationRuns.automationId,
+      flowName: automations.name,
+      runCount: drizzleSql<number>`count(*)::int`,
+      completedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'completed'))::int`,
+      failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'failed'))::int`,
+      hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
+      latestStartedAt: drizzleSql<Date>`max(${automationRuns.startedAt})`,
+      latestRunId: drizzleSql<string>`(array_agg(${automationRuns.id} order by ${automationRuns.startedAt} desc))[1]`,
+      latestStatus: drizzleSql<string>`(array_agg(${automationRuns.status} order by ${automationRuns.startedAt} desc))[1]`,
+    })
+    .from(automationRuns)
+    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+    .where(
+      and(
+        userVisibleWhere(automationRuns.workspaceId, userId),
+        workspaceId
+          ? eq(automationRuns.workspaceId, workspaceId)
+          : undefined
+      )
+    )
+    .groupBy(automationRuns.automationId, automations.name)
+    .orderBy(desc(drizzleSql`max(${automationRuns.startedAt})`))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    flowType: "automation" as const,
+    flowId: r.flowId,
+    flowName: r.flowName ?? "Automation",
+    runCount: r.runCount,
+    latestRunId: r.latestRunId,
+    latestStatus: r.latestStatus as RunStatus,
+    latestStartedAt: r.latestStartedAt,
+    hasRunning: r.hasRunning ?? false,
+    completedCount: r.completedCount,
+    failedCount: r.failedCount,
+  }));
+}
+
+async function groupPlaybookRuns(
+  userId: string,
+  workspaceId: string | undefined,
+  limit: number
+): Promise<RunGroup[]> {
+  const rows = await db
+    .select({
+      flowId: playbookRuns.playbookId,
+      flowName: playbooks.name,
+      runCount: drizzleSql<number>`count(*)::int`,
+      completedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'completed'))::int`,
+      failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
+      hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
+      latestStartedAt: drizzleSql<Date>`max(${playbookRuns.startedAt})`,
+      latestRunId: drizzleSql<string>`(array_agg(${playbookRuns.id} order by ${playbookRuns.startedAt} desc))[1]`,
+      latestStatus: drizzleSql<string>`(array_agg(${playbookRuns.status} order by ${playbookRuns.startedAt} desc))[1]`,
+    })
+    .from(playbookRuns)
+    .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
+    .where(
+      and(
+        userVisibleWhere(playbookRuns.workspaceId, userId),
+        workspaceId ? eq(playbookRuns.workspaceId, workspaceId) : undefined
+      )
+    )
+    .groupBy(playbookRuns.playbookId, playbooks.name)
+    .orderBy(desc(drizzleSql`max(${playbookRuns.startedAt})`))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    flowType: "playbook" as const,
+    flowId: r.flowId,
+    flowName: r.flowName ?? "Playbook",
+    runCount: r.runCount,
+    latestRunId: r.latestRunId,
+    latestStatus: r.latestStatus as RunStatus,
+    latestStartedAt: r.latestStartedAt,
+    hasRunning: r.hasRunning ?? false,
+    completedCount: r.completedCount,
+    failedCount: r.failedCount,
+  }));
 }
 
 // ── Public: get one run + its activity timeline ──────────────────────────────

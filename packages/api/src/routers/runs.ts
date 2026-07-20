@@ -14,7 +14,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { listRuns, getRun } from "../services/runs/index.js";
+import { listRuns, getRun, listRunGroups } from "../services/runs/index.js";
 
 const flowType = z.enum(["automation", "playbook", "capture", "session"]);
 const runStatus = z.enum([
@@ -51,6 +51,26 @@ export const runsRouter = router({
       const userId = requireUserId(ctx.userId);
       const runs = await listRuns({ userId, ...input });
       return { runs };
+    }),
+
+  /** Runs collapsed to ONE row per flow (automation / playbook), newest-active
+   *  first. The counts + latest run are exact over the whole ledger (grouped in
+   *  the DB), so a template card can show a true run count. capture/session runs
+   *  have no flow and are absent — they stay individual rows via `.list`. */
+  groups: protectedProcedure
+    .input(
+      z.object({
+        flowType: z.enum(["automation", "playbook"]).optional(),
+        scope: z
+          .object({ workspaceId: z.string().uuid().optional() })
+          .optional(),
+        limit: z.number().min(1).max(100).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const groups = await listRunGroups({ userId, ...input });
+      return { groups };
     }),
 
   /** One run + its flow-agnostic activity timeline. */
