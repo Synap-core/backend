@@ -459,13 +459,20 @@ generate_kratos_config() {
     # Cloud" provider (P2 human sign-in). When ABSENT, the oidc method stays
     # disabled — byte-identical to the prior config, so this can never break Kratos
     # boot. Issuer defaults to the hosted CP; override with SYNAP_POD_OIDC_ISSUER.
-    local cp_oidc_client_secret=""
-    local cp_oidc_issuer="https://api.synap.live"
+    # AGNOSTIC: every field is env-driven; the defaults just make "Continue with
+    # Synap Cloud" the zero-config case. Point these at ANY OIDC issuer.
+    local oidc_client_secret=""
+    local oidc_issuer="https://api.synap.live"
+    local oidc_client_id="synap-pod-kratos"
+    local oidc_label="Synap Cloud"
+    local oidc_provider_id="cp"
     if [ -n "$env_file" ]; then
-        cp_oidc_client_secret=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_KRATOS_CLIENT_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
-        local _cp_issuer_override
-        _cp_issuer_override=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_ISSUER=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
-        if [ -n "$_cp_issuer_override" ]; then cp_oidc_issuer="$_cp_issuer_override"; fi
+        local _v
+        oidc_client_secret=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_KRATOS_CLIENT_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
+        _v=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_ISSUER=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo ""); [ -n "$_v" ] && oidc_issuer="$_v"
+        _v=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_CLIENT_ID=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo ""); [ -n "$_v" ] && oidc_client_id="$_v"
+        _v=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_LABEL=" | cut -d'=' -f2- | sed 's/^ *//; s/ *$//' | tr -d '"' || echo ""); [ -n "$_v" ] && oidc_label="$_v"
+        _v=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_PROVIDER_ID=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo ""); [ -n "$_v" ] && oidc_provider_id="$_v"
     fi
     
     if [ -z "$webhook_secret" ] || [ "$webhook_secret" = "" ]; then
@@ -580,16 +587,16 @@ generate_kratos_config() {
     # secret is configured; otherwise `enabled: false` (unchanged, cannot break
     # boot). The mapper (oidc.cp.jsonnet) maps email+name onto the pod identity.
     local oidc_block="      enabled: false"
-    if [ -n "$cp_oidc_client_secret" ]; then
+    if [ -n "$oidc_client_secret" ]; then
         oidc_block="      enabled: true
       config:
         providers:
-          - id: cp
+          - id: ${oidc_provider_id}
             provider: generic
-            label: Synap Cloud
-            issuer_url: ${cp_oidc_issuer}
-            client_id: synap-pod-kratos
-            client_secret: ${cp_oidc_client_secret}
+            label: ${oidc_label}
+            issuer_url: ${oidc_issuer}
+            client_id: ${oidc_client_id}
+            client_secret: ${oidc_client_secret}
             scope:
               - openid
               - email
