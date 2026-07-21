@@ -17,9 +17,15 @@ import { describe, expect, it } from "vitest";
  * (for existing rows) add a normalizing data migration like 0203.
  */
 
+// ALL agent-user create-doors — a sentinel in ANY of them defeats the invariant.
+// (This list was originally 2 files and went false-green while two more doors —
+// intelligence-registry + intelligence — still stamped `agent:${id}`. If you add
+// a new agent-user insert site, add it here.)
 const SOURCES = [
   "./agent-identity-service.ts",
   "../routers/hub-protocol/rest/setup.ts",
+  "../routers/intelligence-registry.ts",
+  "../routers/intelligence.ts",
 ].map((rel) => ({
   rel,
   src: readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"),

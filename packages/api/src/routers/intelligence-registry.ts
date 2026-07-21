@@ -362,8 +362,7 @@ export const intelligenceRegistryRouter = router({
         const existing = (workspace.settings as Record<string, unknown>) ?? {};
         const overrides =
           (existing.intelligenceServiceOverrides as
-            | Record<string, string>
-            | undefined) ?? {};
+            Record<string, string> | undefined) ?? {};
         await workspaceRepo.mergeSettings(
           ctx.workspaceId,
           {
@@ -427,8 +426,7 @@ export const intelligenceRegistryRouter = router({
       if (input.capability) {
         const overrides =
           (existing.intelligenceServiceOverrides as
-            | Record<string, string>
-            | undefined) ?? {};
+            Record<string, string> | undefined) ?? {};
         const { [input.capability]: _removed, ...rest } = overrides;
         updatedSettings = {
           ...existing,
@@ -665,7 +663,10 @@ export const intelligenceRegistryRouter = router({
           createdByUserId: ctx.userId,
           capabilities: entry.agentCapabilities,
         } satisfies NonNullable<(typeof users.$inferInsert)["agentMetadata"]>,
-        kratosIdentityId: `agent:${agentId}`,
+        // INVARIANT: agents NEVER carry a Kratos identity — `kratos_identity_id
+        // IS NULL` is the human↔agent discriminator (see agent-identity-service.ts
+        // + the agent-kratos-identity-invariant tripwire). Do not stamp a sentinel.
+        kratosIdentityId: null,
         timezone: "UTC",
         locale: "en",
       });
@@ -1390,8 +1391,7 @@ export const intelligenceRegistryRouter = router({
       LIMIT 1
     `);
     const oldUser = oldAgent[0] as
-      | { id: string; email: string; created_at: string }
-      | undefined;
+      { id: string; email: string; created_at: string } | undefined;
 
     const isProvisioned = !!key || !!oldUser;
     const lastUsedAt = key?.last_used_at;
@@ -1495,8 +1495,7 @@ docker run -d \\
       LIMIT 1
     `);
     const agentUser = agentRows[0] as
-      | { id: string; email: string; created_at: string }
-      | undefined;
+      { id: string; email: string; created_at: string } | undefined;
 
     let oldKey = null;
     if (agentUser) {

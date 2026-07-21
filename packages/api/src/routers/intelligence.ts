@@ -553,8 +553,7 @@ export const intelligenceRouter = router({
         where: eq(workspaces.id, ctx.workspaceId!),
       });
       const settings = workspace?.settings as
-        | { intelligenceServiceId?: string }
-        | undefined;
+        { intelligenceServiceId?: string } | undefined;
       const serviceId = settings?.intelligenceServiceId;
 
       let manifest: {
@@ -1296,7 +1295,10 @@ export const intelligenceRouter = router({
           createdByUserId: ctx.userId ?? "system",
           capabilities: entry.agentCapabilities,
         } satisfies AgentMetadata,
-        kratosIdentityId: `agent:${agentId}`,
+        // INVARIANT: agents NEVER carry a Kratos identity — `kratos_identity_id
+        // IS NULL` is the human↔agent discriminator (see agent-identity-service.ts
+        // + the agent-kratos-identity-invariant tripwire). Do not stamp a sentinel.
+        kratosIdentityId: null,
         timezone: "UTC",
         locale: "en",
       });
