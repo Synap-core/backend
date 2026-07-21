@@ -546,6 +546,13 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.linkedUserId === "string" && body.linkedUserId.trim()
         ? body.linkedUserId.trim()
         : undefined;
+    // Optional per-runtime instance label. When set, concurrent instances of the
+    // same agent coexist: the sibling-revoke and idempotency below scope to THIS
+    // instance instead of the whole agent-user. Omitted → legacy single-key model.
+    const instanceId: string | undefined =
+      typeof body.instanceId === "string" && body.instanceId.trim()
+        ? body.instanceId.trim()
+        : undefined;
     // Surface installs can request a pending-approval flow: key is created inactive
     // until the human owner approves it at the review URL.
     const requireApproval: boolean =
@@ -791,7 +798,10 @@ export function registerSetupRoutes(app: HubHono): void {
           where: and(
             eq(apiKeys.userId, agentUserId),
             eq(apiKeys.keyType, "hub_inbound"),
-            isNull(apiKeys.revokedAt)
+            isNull(apiKeys.revokedAt),
+            // Instance mode: a healthy key for THIS instance is what makes the
+            // call a no-op; another instance's key must not satisfy it.
+            instanceId ? eq(apiKeys.instanceId, instanceId) : undefined
           ),
           columns: { id: true },
         });
@@ -812,6 +822,9 @@ export function registerSetupRoutes(app: HubHono): void {
         userId: agentUserId,
         revokedBy: agentUserId,
         revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+        // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
+        // revokes all siblings so exactly one key stays live.
+        instanceId,
       });
 
       // Agent hub keys now carry a bounded lifetime (SAFE 90d default — see
@@ -835,6 +848,7 @@ export function registerSetupRoutes(app: HubHono): void {
           keyType: "hub_inbound",
           description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup`,
           linkedUserId: resolvedLinkedUserId ?? null,
+          instanceId: instanceId ?? null,
           expiresAt: new Date(nowMs + AGENT_KEY_TTL_DAYS * DAY_MS),
           rotationScheduledAt: new Date(
             nowMs + (AGENT_KEY_TTL_DAYS - AGENT_KEY_ROTATION_LEAD_DAYS) * DAY_MS

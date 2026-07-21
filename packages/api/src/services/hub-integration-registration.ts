@@ -108,12 +108,23 @@ export function integrationHubIdFromIssuerUrl(jwtIssuerUrl: string): string {
 }
 
 /**
- * Revoke all active hub_inbound keys for a user (used before re-provisioning
- * an agent key in setup/agent).
+ * Revoke active hub_inbound keys for a user before re-provisioning in setup/agent.
+ *
+ * Legacy (single-key) mode — `instanceId` omitted: revokes ALL of the user's active
+ * hub_inbound keys, so exactly one is live at a time.
+ *
+ * Instance mode — `instanceId` set: revokes ONLY the active keys carrying that same
+ * instance label (rotating THIS runtime's own key), leaving other instances' keys
+ * and any legacy NULL-instance key untouched, so concurrent instances coexist.
  */
 export async function revokeActiveHubInboundKeysForUser(
   database: typeof db,
-  params: { userId: string; revokedBy: string; revokedReason: string }
+  params: {
+    userId: string;
+    revokedBy: string;
+    revokedReason: string;
+    instanceId?: string;
+  }
 ): Promise<void> {
   await database
     .update(apiKeys)
@@ -127,7 +138,10 @@ export async function revokeActiveHubInboundKeysForUser(
       and(
         eq(apiKeys.userId, params.userId),
         eq(apiKeys.keyType, "hub_inbound"),
-        eq(apiKeys.isActive, true)
+        eq(apiKeys.isActive, true),
+        params.instanceId
+          ? eq(apiKeys.instanceId, params.instanceId)
+          : undefined
       )
     );
 }
