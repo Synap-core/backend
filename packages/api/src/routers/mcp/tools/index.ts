@@ -400,14 +400,20 @@ export const tools = {
       {
         name: "synap_create_document",
         description:
-          "Create a standalone long-form markdown document — meeting notes, research, plans; content that doesn't fit entity properties. Pass `entityId` to ATTACH it to an existing entity (sets that entity's linked document). If you are creating the entity too, prefer synap_create_entity with `content` — that makes the entity and its body in ONE governed call. Attachment only happens when the document itself was auto-approved; a proposal-gated document has no row to link yet, and the response says so.",
+          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store a real binary from disk, that's the CLI `synap upload` / the multipart upload door — an agent can't do it here. Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
             title: { type: "string" },
             content: {
               type: "string",
-              description: "Document content (markdown or plain text)",
+              description:
+                "Authored document body (markdown or plain text). Mutually exclusive with `url`.",
+            },
+            url: {
+              type: "string",
+              description:
+                "External reference: an https URL to a file/page you have a link to (no bytes stored). Use INSTEAD of `content` when referencing an existing file/link rather than authoring a body.",
             },
             entityId: {
               type: "string",

@@ -241,6 +241,10 @@ app.use("/*", async (c, next) => {
     // true), facet-workspace-scoped (never returns pod-wide private entities), and
     // field-whitelisted. It is the ONLY new unauth path.
     "/public/projection",
+    // CP→pod OIDC federation client push — authenticated by the CP's ISSUER
+    // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
+    // key, exactly like /auth/exchange. The handler runs its own verification.
+    "/federation/oidc-config",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the

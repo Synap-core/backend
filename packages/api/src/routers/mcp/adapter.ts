@@ -931,6 +931,10 @@ export async function executeMCPToolViaHubProtocol(
         workspaceId: requestedWorkspaceId as string,
         title: args.title as string,
         content: (args.content as string) || "",
+        // External reference: a URL to a file/page the agent has (but no bytes
+        // to upload). Creates a reference document (storageKey NULL) — the
+        // agent-appropriate "here's a file" path when there's no local binary.
+        ...(args.url ? { url: args.url as string } : {}),
         reasoning: "Created via MCP",
         ...(agentUserId ? { agentUserId } : {}),
       });

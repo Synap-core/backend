@@ -903,6 +903,23 @@ rarely touches `file` at all. Reach for `synap_create_document` /
 isn't itself a title-worthy entity (see below) — never as a substitute for an
 entity's `content`.
 
+### "I want to add a real FILE" — the decision tree
+
+An agent has **no filesystem and no binary**, so it can never upload raw bytes
+itself. Pick by what you actually have:
+
+| You have… | Do this | Result |
+|---|---|---|
+| Text you **wrote** (plan, notes, deck outline) | `synap_create_entity` with `content` (a content kind) | body auto-becomes a document — NOT a `file` |
+| A **URL/link** to a file or page (Google Doc, a PDF url, an article) | `synap_create_document` with **`url`** (no `content`), or attach it to an entity via `entityId` | an external **reference** document (no bytes) |
+| A real **binary on a local disk** (only a CLI/desktop client has this) | the CLI `synap upload <path>` / the multipart upload door | a `file` entity backed by stored bytes |
+| A binary you do **not** have | you **cannot** — ask the human/client to upload it | — |
+
+So the honest answer to "upload this PDF" when you only have its name is: you
+can't fabricate an upload. Either reference its **url** (if you have one) or tell
+the user the file must be uploaded from a device that has it. Do **not** stuff
+the request into a note and call it done.
+
 ### Create a document (attach to an entity)
 
 ```json
