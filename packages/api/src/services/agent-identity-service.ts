@@ -127,6 +127,11 @@ export async function ensureLocalAdjunctRegistryRow(opts: {
     name: opts.name,
     slug,
     description: `Local agent adjunct (${agentCommand})`,
+    // Set explicitly: the live `agents.capabilities` column is NOT NULL, but the
+    // drizzle schema declares it `.array().default([])` (nullable-with-default) —
+    // a drift, so omitting it emits DEFAULT → NULL → not-null violation (500 on
+    // every /setup/agent surface provision). An explicit [] is drift-proof.
+    capabilities: [],
     ownerType: "user",
     userId: opts.agentUserId,
     active: true,
