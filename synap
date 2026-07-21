@@ -453,6 +453,20 @@ generate_kratos_config() {
         # Use cat and grep to avoid permission issues with direct grep
         webhook_secret=$(cat "$env_file" 2>/dev/null | grep "^KRATOS_WEBHOOK_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
     fi
+
+    # CP OIDC federation (Wave A) — optional. When SYNAP_POD_KRATOS_CLIENT_SECRET is
+    # set in .env, Kratos federates to the Control Plane as a "Continue with Synap
+    # Cloud" provider (P2 human sign-in). When ABSENT, the oidc method stays
+    # disabled — byte-identical to the prior config, so this can never break Kratos
+    # boot. Issuer defaults to the hosted CP; override with SYNAP_POD_OIDC_ISSUER.
+    local cp_oidc_client_secret=""
+    local cp_oidc_issuer="https://api.synap.live"
+    if [ -n "$env_file" ]; then
+        cp_oidc_client_secret=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_KRATOS_CLIENT_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
+        local _cp_issuer_override
+        _cp_issuer_override=$(cat "$env_file" 2>/dev/null | grep "^SYNAP_POD_OIDC_ISSUER=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
+        if [ -n "$_cp_issuer_override" ]; then cp_oidc_issuer="$_cp_issuer_override"; fi
+    fi
     
     if [ -z "$webhook_secret" ] || [ "$webhook_secret" = "" ]; then
         echo -e "${YELLOW}⚠️  KRATOS_WEBHOOK_SECRET not found in .env, generating new secret...${NC}"
@@ -557,7 +571,30 @@ generate_kratos_config() {
     - https://${domain}
     - https://${domain}/*
     - ${pod_admin_origin}
-    - ${pod_admin_origin}/*"
+    - ${pod_admin_origin}/*
+    - https://*.synap.live
+    - https://*.synap.live/*"
+    fi
+
+    # OIDC method block — federate to the Control Plane ONLY when its client
+    # secret is configured; otherwise `enabled: false` (unchanged, cannot break
+    # boot). The mapper (oidc.cp.jsonnet) maps email+name onto the pod identity.
+    local oidc_block="      enabled: false"
+    if [ -n "$cp_oidc_client_secret" ]; then
+        oidc_block="      enabled: true
+      config:
+        providers:
+          - id: cp
+            provider: generic
+            label: Synap Cloud
+            issuer_url: ${cp_oidc_issuer}
+            client_id: synap-pod-kratos
+            client_secret: ${cp_oidc_client_secret}
+            scope:
+              - openid
+              - email
+              - profile
+            mapper_url: file:///etc/config/kratos/oidc.cp.jsonnet"
     fi
 
     # Cookie domain and secure settings — scoped to the bare root so the
@@ -630,7 +667,7 @@ echo "            - https://${domain}"
 echo "            - ${pod_admin_origin}"
 fi)
     oidc:
-      enabled: false
+$oidc_block
   flows:
     error:
       ui_url: ${kratos_ui}
