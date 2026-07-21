@@ -10,9 +10,21 @@
  * Authorship: 'delegated' when a human triggered the action, else 'autonomous'.
  */
 
-import { db, eq, and } from "@synap/database";
-import { agents, users, apiKeys } from "@synap/database/schema";
-import { randomUUID, randomBytes } from "crypto";
+import {
+  db,
+  eq,
+  and,
+  sql,
+  EventRepository,
+  ApiKeyRepository,
+} from "@synap/database";
+import { agents, users } from "@synap/database/schema";
+import { randomUUID } from "crypto";
+import { createAndVerifyHubInboundKey } from "./external-registration.js";
+import {
+  AGENT_KEY_TTL_DAYS,
+  AGENT_KEY_ROTATION_LEAD_DAYS,
+} from "./hub-integration-registration.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -208,26 +220,39 @@ export async function createNamedAgent(opts: {
     agentType: opts.agentType,
   });
 
-  // Issue a fresh session API key for this agent
-  const plainKey = `synap_hub_live_${randomBytes(32).toString("hex")}`;
-  const keyId = randomUUID();
+  // Issue a fresh Hub Protocol key via the CANONICAL mint+verify primitive — the
+  // same one /api/hub/setup/agent uses (bounded TTL + O(1) keyLookupHash +
+  // immediate self-verify). This replaces a prior bcrypt-only insert that had no
+  // lookup hash (so it could not be O(1)-verified by the inbound middleware), no
+  // TTL, and no post-mint verification. Scope is left unchanged ([read, write]) —
+  // this wave hardens the mint, it does not broaden the agent's privileges.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const eventRepo = new EventRepository(sql);
+  const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+  const registration = await createAndVerifyHubInboundKey(
+    apiKeyRepo,
+    {
+      keyName: opts.name,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      userId: agentUserId,
+      keyType: "hub_inbound",
+      description: `Hub Protocol auth token for ${opts.name} (${opts.agentType}) agent`,
+      linkedUserId: opts.createdByUserId,
+      expiresAt: new Date(nowMs + AGENT_KEY_TTL_DAYS * DAY_MS),
+      rotationScheduledAt: new Date(
+        nowMs + (AGENT_KEY_TTL_DAYS - AGENT_KEY_ROTATION_LEAD_DAYS) * DAY_MS
+      ),
+    },
+    opts.createdByUserId,
+    agentUserId
+  );
 
-  // Use bcrypt to hash — import dynamically to avoid circular deps
-  const bcrypt = await import("bcrypt");
-  const keyHash = await bcrypt.hash(plainKey, 12);
+  if (registration.outcome !== "CONNECTED_VERIFIED") {
+    throw new Error(
+      `Agent key mint failed verification: ${registration.verificationError ?? registration.outcome}`
+    );
+  }
 
-  await db.insert(apiKeys).values({
-    id: keyId,
-    userId: agentUserId,
-    keyName: opts.name,
-    keyPrefix: plainKey.slice(0, 16),
-    keyHash,
-    keyType: "hub_inbound",
-    scope: ["hub-protocol.read", "hub-protocol.write"],
-    isActive: true,
-    linkedUserId: opts.createdByUserId,
-    createdBy: opts.createdByUserId,
-  });
-
-  return { agentUserId, email, apiKey: plainKey };
+  return { agentUserId, email, apiKey: registration.plainKey };
 }
