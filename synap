@@ -1875,6 +1875,13 @@ EOF
     echo "  ./synap logs      # View logs"
     echo "  ./synap update    # Update to latest"
     echo ""
+    echo "External sign-in (optional):"
+    echo "  Your pod uses email/password by default. To let people sign in with"
+    echo "  their Synap Cloud account (or any OIDC issuer):"
+    echo "    ./synap federation connect-cloud   # federate to Synap Cloud"
+    echo "    ./synap federation enable --issuer <url> --client-id <id> --client-secret <secret>"
+    echo "    ./synap federation status          # see what's on"
+    echo ""
     echo "First admin setup:"
     if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
         local ui_base="https://${DOMAIN}"
