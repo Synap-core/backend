@@ -30,6 +30,7 @@ import {
 } from "@synap/database";
 
 import { apiKeyService } from "../../../services/api-keys.js";
+import { assertPodAdmin } from "../../../trpc.js";
 import {
   createAdminUser,
   ensureUserRow,
@@ -1772,9 +1773,14 @@ export function registerSetupRoutes(app: HubHono): void {
   // ─── Pending-approval flow (requireApproval: true in POST /setup/agent) ──────
   // CLI creates key as isActive=false, opens browser to /review, polls for status.
 
-  async function resolveKratosSession(c: {
+  /**
+   * Resolve the Kratos browser session to a POD user id (or null). The
+   * pending-agent decider is authorized against this — not merely "someone is
+   * signed in".
+   */
+  async function resolveKratosPodUserId(c: {
     req: { header(name: string): string | undefined };
-  }): Promise<boolean> {
+  }): Promise<string | null> {
     try {
       const { getSession } = await import("@synap/auth");
       const headers = new Headers();
@@ -1783,7 +1789,31 @@ export function registerSetupRoutes(app: HubHono): void {
       if (cookie) headers.set("cookie", cookie);
       if (sessionToken) headers.set("x-session-token", sessionToken);
       const session = await getSession(headers);
-      return !!session?.identity?.id;
+      const kratosId = session?.identity?.id;
+      if (!kratosId) return null;
+      const user = await db.query.users.findFirst({
+        where: eq(users.kratosIdentityId, kratosId),
+        columns: { id: true },
+      });
+      return user?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * GOVERNANCE gate for deciding a pending agent connection: only the human the
+   * connection acts for (its `linkedUserId`) OR a pod admin may approve/reject —
+   * NOT any signed-in member. Reuses the canonical `assertPodAdmin` door.
+   */
+  async function canDecidePendingConnection(
+    approverId: string,
+    linkedUserId: string | null
+  ): Promise<boolean> {
+    if (linkedUserId && linkedUserId === approverId) return true;
+    try {
+      await assertPodAdmin(approverId);
+      return true;
     } catch {
       return false;
     }
@@ -1865,15 +1895,15 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
     return c.html(html);
   });
 
-  /** Approve a pending key — requires Kratos session (pod owner in browser). */
+  /** Approve a pending key — only the connection's linked human, or a pod admin. */
   app.post("/setup/agent/pending/:keyId/approve", async (c) => {
     const keyId = c.req.param("keyId");
-    if (!(await resolveKratosSession(c)))
-      return c.json({ error: "Sign in to your pod first" }, 401);
+    const approverId = await resolveKratosPodUserId(c);
+    if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 
     const key = await db.query.apiKeys.findFirst({
       where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
-      columns: { id: true, revokedAt: true },
+      columns: { id: true, revokedAt: true, linkedUserId: true },
     });
     if (!key || key.revokedAt)
       return c.json(
@@ -1881,25 +1911,41 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
         404
       );
 
+    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
+      return c.json({ error: "Not authorized to decide this connection" }, 403);
+
     await db
       .update(apiKeys)
       .set({ isActive: true })
       .where(eq(apiKeys.id, keyId));
-    logger.info({ keyId }, "setup/agent/pending: approved");
+    logger.info({ keyId, approverId }, "setup/agent/pending: approved");
     return c.json({ ok: true });
   });
 
-  /** Reject a pending key — requires Kratos session. */
+  /** Reject a pending key — only the connection's linked human, or a pod admin. */
   app.post("/setup/agent/pending/:keyId/reject", async (c) => {
     const keyId = c.req.param("keyId");
-    if (!(await resolveKratosSession(c)))
-      return c.json({ error: "Sign in to your pod first" }, 401);
+    const approverId = await resolveKratosPodUserId(c);
+    if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
+
+    const key = await db.query.apiKeys.findFirst({
+      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
+      columns: { id: true, revokedAt: true, linkedUserId: true },
+    });
+    if (!key || key.revokedAt)
+      return c.json(
+        { error: "Pending key not found or already processed" },
+        404
+      );
+
+    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
+      return c.json({ error: "Not authorized to decide this connection" }, 403);
 
     await db
       .update(apiKeys)
       .set({ isActive: false, revokedAt: new Date() })
       .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
-    logger.info({ keyId }, "setup/agent/pending: rejected");
+    logger.info({ keyId, approverId }, "setup/agent/pending: rejected");
     return c.json({ ok: true });
   });
 }
