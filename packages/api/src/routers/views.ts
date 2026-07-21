@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { storage } from "@synap/storage";
 import {
@@ -141,6 +142,8 @@ import {
   type SortRule,
   type EntityQuery,
 } from "@synap-core/types";
+
+const logger = createLogger({ module: "views" });
 
 export const viewsRouter = router({
   /**
@@ -735,18 +738,18 @@ export const viewsRouter = router({
             .delete(documentVersions)
             .where(eq(documentVersions.documentId, docId))
             .catch((reapErr: unknown) =>
-              console.warn(
-                `[resolveScopedSurface] failed to reap orphan documentVersions ${docId}:`,
-                reapErr
+              logger.warn(
+                { err: reapErr, docId },
+                "resolveScopedSurface: failed to reap orphan documentVersions"
               )
             );
           await db
             .delete(documents)
             .where(eq(documents.id, docId))
             .catch((reapErr: unknown) =>
-              console.warn(
-                `[resolveScopedSurface] failed to reap orphan document ${docId}:`,
-                reapErr
+              logger.warn(
+                { err: reapErr, docId },
+                "resolveScopedSurface: failed to reap orphan document"
               )
             );
         }
