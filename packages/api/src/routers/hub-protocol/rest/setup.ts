@@ -575,11 +575,29 @@ export function registerSetupRoutes(app: HubHono): void {
       if (authMethod === "api_key_surface") {
         resolvedLinkedUserId = surfaceAgentLinkedUserId;
       } else if (resolvedLinkedUserId === undefined) {
-        const humanUser = await db.query.users.findFirst({
+        // Deterministic pod-owner attribution: the OLDEST human (the first-owner),
+        // not an arbitrary DB-order "first human". On a MULTI-human pod, silently
+        // defaulting mis-attributes the agent to whoever happens to sort first —
+        // so detect ambiguity (limit 2) and WARN loudly rather than hide it. Pass
+        // an explicit body.linkedUserId to bind the agent to the intended human
+        // (the CLI-bootstrap repoint must do this on multi-user pods).
+        const humans = await db.query.users.findMany({
           where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
+          orderBy: (u, { asc }) => [asc(u.createdAt)],
           columns: { id: true },
+          limit: 2,
         });
-        if (humanUser) resolvedLinkedUserId = humanUser.id;
+        if (humans[0]) {
+          resolvedLinkedUserId = humans[0].id;
+          if (humans.length > 1) {
+            logger.warn(
+              { agentType, chosenLinkedUserId: humans[0].id },
+              "setup/agent: no explicit linkedUserId on a multi-human pod — " +
+                "attributed the agent to the oldest human (first-owner). Pass an " +
+                "explicit linkedUserId to bind it to the intended human."
+            );
+          }
+        }
       }
 
       // ── Find target workspace (optional — agent exists at pod level) ─────────
@@ -617,8 +635,12 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       if (!ownerUserId) {
+        // Deterministic first-owner (oldest human) — same rule as the linkedUserId
+        // attribution above, so createdBy/owner and linkedUserId can't diverge onto
+        // different arbitrary humans on a multi-user pod.
         const humanUser = await db.query.users.findFirst({
           where: (u, { eq }) => eq(u.userType, "human"),
+          orderBy: (u, { asc }) => [asc(u.createdAt)],
           columns: { id: true },
         });
         if (humanUser) {
