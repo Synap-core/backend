@@ -105,7 +105,7 @@ export function deriveAuthorshipMode(
  * stable and never collides with another user's same-typed adjunct under the
  * `(intelligenceServiceId, slug)` unique index (intelligenceServiceId is null here).
  */
-async function ensureLocalAdjunctRegistryRow(opts: {
+export async function ensureLocalAdjunctRegistryRow(opts: {
   agentUserId: string;
   name: string;
   agentType: string;

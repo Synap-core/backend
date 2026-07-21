@@ -54,6 +54,7 @@ import {
   createAndVerifyServiceKey,
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
+import { ensureLocalAdjunctRegistryRow } from "../../../services/agent-identity-service.js";
 import { API_KEY_SCOPES, isValidScope } from "@synap/database/schema";
 
 import { kratosAdmin } from "@synap/auth";
@@ -375,10 +376,8 @@ export function registerSetupRoutes(app: HubHono): void {
 
     let authenticated = false;
     let authMethod:
-      | "jwt"
-      | "provisioning_token"
-      | "api_key"
-      | "api_key_surface" = "provisioning_token";
+      "jwt" | "provisioning_token" | "api_key" | "api_key_surface" =
+      "provisioning_token";
     let jwtIssuerUrl: string | null = null;
 
     // Try 1: generic issuer JWT verified against the Pod-local issuer registry.
@@ -716,6 +715,23 @@ export function registerSetupRoutes(app: HubHono): void {
             "setup/agent: lost provision race — reusing existing agent user"
           );
         }
+      }
+
+      // ── 1b. Managed registry row for LOCAL surface agents (observability) ────
+      // Only the surface-key path provisions a genuine local CLI adjunct
+      // (claude-code / codex / cursor — the agentType is validated as a surface
+      // type above). Give it an `agents` registry row (kind:'local' + agentCommand)
+      // so it appears as a first-class, selectable adjunct in the management/picker
+      // UI and a turn can be terminal-routed to it. NEVER do this for jwt/issuer
+      // (cloud) agents: an `agentCommand` on the row makes the renderer try to
+      // launch a local terminal, which is wrong for a remote agent. Idempotent by
+      // agents.userId, so re-provisions are safe.
+      if (authMethod === "api_key_surface") {
+        await ensureLocalAdjunctRegistryRow({
+          agentUserId,
+          name: agentLabel,
+          agentType,
+        });
       }
 
       // ── 2. Grant workspace membership (opportunistic — skipped if no workspace) ─
