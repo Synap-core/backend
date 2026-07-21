@@ -26,6 +26,9 @@
  */
 
 import { knowledgeRepository } from "@synap/database";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "remember-fact" });
 
 /** `uo_category` enum — seeded in `ensure-system-profiles.ts`. */
 export const USER_OBSERVATION_CATEGORIES = [
@@ -69,6 +72,14 @@ export interface RememberFactCaller {
 }
 
 export interface RememberFactResult {
+  /**
+   * BACK-COMPAT: the pre-governance return was `{ success, message }` and
+   * existing callers (CLI, skills, Raycast, IS) still branch on it. A QUEUED
+   * PROPOSAL IS NOT A FAILURE — it is an accepted governed write awaiting
+   * review — so both "created" and "proposed" are `true`; only a refused or
+   * failed verdict is `false`. Read `status` for the precise outcome.
+   */
+  success: boolean;
   /** "created" (auto-approved) | "proposed" (queued for review) | door verdict. */
   status: string;
   /** The `user_observation` entity id — present once it materialized. */
@@ -78,7 +89,8 @@ export interface RememberFactResult {
   proposalId?: string;
   proposalType?: string;
   reviewUrl?: string;
-  message?: string;
+  /** Always populated — the door's message, or a verdict-shaped fallback. */
+  message: string;
   /** Whether the fact was recorded as user-stated (auto-approve) or inferred. */
   validated: boolean;
   category: UserObservationCategory;
@@ -166,10 +178,17 @@ export async function rememberFact(params: {
     });
     factId = record.id;
   } catch (err) {
-    console.error("[rememberFact] recall index write failed:", err);
+    logger.error(
+      { err, userId, entityId, status: created.status },
+      "recall index write failed — governed write kept, episodic recall degraded"
+    );
   }
 
+  // A queued proposal is an ACCEPTED write, not a failure (see `success` doc).
+  const success = created.status === "created" || created.status === "proposed";
+
   return {
+    success,
     status: created.status,
     entityId,
     ...(created.proposedEntityId
@@ -178,7 +197,13 @@ export async function rememberFact(params: {
     ...(created.proposalId ? { proposalId: created.proposalId } : {}),
     ...(created.proposalType ? { proposalType: created.proposalType } : {}),
     ...(created.reviewUrl ? { reviewUrl: created.reviewUrl } : {}),
-    ...(created.message ? { message: created.message } : {}),
+    message:
+      created.message ??
+      (created.status === "proposed"
+        ? "Fact queued for review"
+        : success
+          ? "Fact stored successfully"
+          : "Fact was not stored"),
     validated,
     category,
     confidence,

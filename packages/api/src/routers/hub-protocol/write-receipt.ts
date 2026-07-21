@@ -190,7 +190,17 @@ export async function buildCreateResolution(params: {
   userId: string;
   createdId?: string;
   effectiveWorkspaceId: string | null;
+  /** Acting agent — bound onto the relation caller ctx so the auto-connect is
+   *  attributed to (and governable as) the agent, not the operator. */
   resolvedAgentUserId?: string;
+  /**
+   * Agent rationale. Kept on the signature because callers already have it and
+   * it belongs on the proposal, but `relations.create` exposes NO channel for
+   * it today: its input has no `reasoning`, and it does not forward one to
+   * `checkPermissionOrPropose`. Forwarded the day that door grows one — do NOT
+   * smuggle it through `metadata` (relation metadata is dropped entirely on the
+   * proposal path).
+   */
   reasoning?: string;
 }): Promise<CreateResolutionBlock | undefined> {
   try {
@@ -209,10 +219,19 @@ export async function buildCreateResolution(params: {
     // have a concrete created entity id to connect FROM (proposed entities have
     // no id yet — skip; the suggestion is still surfaced so the agent sees it).
     if (params.createdId && otherProfiles.length > 0) {
+      // Agent attribution travels on the CALLER CONTEXT, not in the input:
+      // `relations.create` takes no `agentUserId`/`reasoning` field, and
+      // `ctx.agentUserId` is the canonical seam ("the agent acting on behalf of
+      // this request" — see createHubProtocolCallerContext). Without it the
+      // auto-connect would be written as the plain operator, so an MCP agent
+      // create would silently author an edge under the USER's identity.
       const relCtx = await createHubProtocolCallerContext(
         params.userId,
         params.scopes,
-        params.effectiveWorkspaceId ?? undefined
+        params.effectiveWorkspaceId ?? undefined,
+        null, // sourceMessageId — not carried by the resolution path
+        null, // sessionId — not carried by the resolution path
+        params.resolvedAgentUserId ?? null
       );
       const relCaller = relationsRouter.createCaller(
         relCtx as Parameters<typeof relationsRouter.createCaller>[0]

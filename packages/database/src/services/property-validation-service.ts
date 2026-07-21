@@ -117,16 +117,18 @@ export class PropertyValidationService {
         // clients depend on the tolerance) but no longer silent. Before, this
         // `continue` carried a promise of a warning that did not exist, and the
         // key was stored verbatim in JSONB: an agent that invented a property
-        // key got a 200 and believed it worked. Report it both ways — a server
-        // log AND structured data on the result, so the caller can render it as
-        // `unmodeled` on the write receipt with a recovery hint.
+        // key got a 200 and believed it worked. The structured `unmodeled`
+        // entry IS the report — it reaches the caller on the write receipt with
+        // a recovery hint. The log line is therefore duplicate reporting and
+        // stays at DEBUG: flexible-schema clients legitimately send extra keys
+        // on every write, and a warn per key would be steady noise.
         if (ENTITY_COLUMN_KEYS.has(key)) continue;
         const didYouMean = suggestClosest(
           key,
           effectiveProperties.map((p) => p.slug)
         );
         unmodeled.push(didYouMean ? { key, didYouMean } : { key });
-        logger.warn(
+        logger.debug(
           { profileId, workspaceId, key, didYouMean },
           `Unknown property '${key}' is not modelled by this profile — stored verbatim, not queryable` +
             (didYouMean ? ` (did you mean '${didYouMean}'?)` : "")

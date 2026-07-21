@@ -12,7 +12,7 @@
  * distance is known to exceed `max`, so long unrelated strings cost O(n) rather
  * than O(n*m).
  */
-export function levenshtein(a: string, b: string, max = Infinity): number {
+function levenshtein(a: string, b: string, max = Infinity): number {
   if (a === b) return 0;
   if (Math.abs(a.length - b.length) > max) return max + 1;
   if (a.length === 0) return b.length;

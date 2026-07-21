@@ -284,14 +284,9 @@ export const entitiesRouter = router({
       // modelled/queryable — forward them so the write receipt can tell the
       // agent instead of handing it a silent 200. The door's own envelope drops
       // everything it doesn't name, so this must be lifted explicitly; the
-      // regular `entities.create` procedure carries it on `entity` (its
-      // `toApiEntity` spreads the repository row), with a top-level read first
-      // in case a caller path surfaces it there.
+      // regular `entities.create` procedure forwards it at the TOP LEVEL.
       const resultShape = result as Record<string, unknown>;
-      const rawUnmodeled =
-        resultShape.unmodeled ??
-        (resultShape.entity as Record<string, unknown> | null | undefined)
-          ?.unmodeled;
+      const rawUnmodeled = resultShape.unmodeled;
       const unmodeled = Array.isArray(rawUnmodeled)
         ? (rawUnmodeled as Array<{ key: string; didYouMean?: string }>)
         : [];

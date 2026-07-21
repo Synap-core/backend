@@ -52,6 +52,11 @@ import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { submitCaptureGraph } from "../../../services/capture-agent/submit-capture-graph.js";
+import {
+  shouldPersistCapturePlan,
+  captureStructureToGraph,
+  type CaptureStructureLike,
+} from "../../../services/capture-agent/capture-structure-to-graph.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CaptureGraphRawSourceSchema,
@@ -281,6 +286,50 @@ export function registerCaptureRoutes(app: HubHono): void {
         instructions: body.instructions,
         previousEntities: body.previousEntities,
       });
+
+      // ── CONFIRM MODE (the server holds the plan) ──────────────────────────
+      // A HUMAN interactive caller (no agentUserId) gets the produced plan
+      // PERSISTED as a pending composite proposal the moment it is offered — so
+      // an abandoned plan is a visible uncommitted proposal, not silence. This
+      // closes the false-success incident by construction: the human's later
+      // confirmation is the EXISTING `proposals.approve(proposalId)`. An AGENT
+      // caller (agentUserId set) still gets the ephemeral plan to drive its own
+      // /capture/graph write. Degraded / clarifying-followUp / empty plans are
+      // returned unchanged — we only change what happens AFTER a plan exists.
+      const structureAgentUserId = c.get("agentUserId") as string | undefined;
+      const structurePlan = result as CaptureStructureLike;
+      if (!structureAgentUserId && shouldPersistCapturePlan(structurePlan)) {
+        const { entities, relations } = captureStructureToGraph(structurePlan);
+        // Placement is the structure procedure's already-resolved target (it ran
+        // the one workspace-resolution door); never re-stamp the ambient lens.
+        const targetWorkspaceId =
+          typeof (result as { targetWorkspaceId?: unknown })
+            .targetWorkspaceId === "string"
+            ? ((result as { targetWorkspaceId?: string }).targetWorkspaceId ??
+              null)
+            : null;
+        const graph = await submitCaptureGraph({
+          userId,
+          workspaceId: targetWorkspaceId,
+          // Presenter tag so surfaces can label "my uncommitted plans" apart from
+          // agent proposals. Governance still derives mode from identity.
+          captureMode: "confirm",
+          entities,
+          relations,
+        });
+        return c.json({
+          proposalId: graph.proposalId,
+          reviewUrl: graph.reviewUrl,
+          status: "awaiting_confirmation",
+          summary: graph.summary,
+          entityCount: graph.entityCount,
+          relationCount: graph.relationCount,
+          ...(graph.projectCandidate
+            ? { projectCandidate: graph.projectCandidate }
+            : {}),
+        });
+      }
+
       return c.json(result);
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/structure failed");

@@ -4,12 +4,23 @@
  * Extracted from the Hono route handler (routers/hub-protocol/rest/capture.ts) so
  * BOTH the HTTP door AND in-process producers (the Cal.com booking webhook, the
  * Cal.com backfill poller) create the SAME one-reviewable-composite proposal
- * through the SAME code path — within-batch dedup → persisted-entity dedup →
- * `import.graph` event-backed proposal. No hand-rolled entity writer.
+ * through the SAME code path — within-batch dedup → persisted-entity dedup → the
+ * governed composite proposal. No hand-rolled entity writer.
  *
  * The route keeps its own request parsing + ref validation and calls this with
  * already-validated arrays. In-process callers build the arrays via a mapper
  * (which guarantees valid refs) and call this directly.
+ *
+ * TWO TERMINALS, ONE CORE (mode DERIVED from identity, never a caller flag):
+ *   - agent mode (`agentUserId` present): the graph is scored against the ONE
+ *     agent policy evaluator (`resolveAgentGovernanceDecision`). All-or-nothing:
+ *     when EVERY op auto-approves (and there are no channel bindings) it is
+ *     MATERIALIZED now as a direct operator write + recorded `auto_approved`
+ *     (revertible). Any non-approvable op → the whole graph proposes.
+ *   - pending (webhooks/cron, agent-propose, and the human confirm door): the
+ *     durable `import.graph` pending proposal — the plan the human confirms via
+ *     `proposals.approve`. This is what makes an abandoned plan a VISIBLE
+ *     uncommitted proposal instead of a silent false-success.
  */
 
 import { randomUUID } from "crypto";
@@ -22,11 +33,19 @@ import {
   or,
   isNull,
   entities,
+  getWorkspaceMembership,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
-import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
+import {
+  createEventBackedProposal,
+  createAutoApprovedProposal,
+} from "../../utils/event-backed-proposal.js";
+import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
 import { openLink } from "../../utils/deep-links.js";
+import { captureGraphEventKeys } from "./capture-graph-policy.js";
+import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
 import {
   collapseDuplicateEntities,
   type CaptureGraphEntity,
@@ -39,10 +58,33 @@ const logger = createLogger({ module: "submit-capture-graph" });
 export interface SubmitCaptureGraphInput {
   /** The proposing/acting user (operator or the Capture agent actor). */
   userId: string;
+  /**
+   * The acting AGENT user id, when an agent key drove this call (MCP). Its
+   * PRESENCE is what enables agent-mode auto-apply (derived mode — never a
+   * caller-chosen flag): the graph is scored against the ONE agent policy
+   * evaluator and, when EVERY op auto-approves (and there are no channel
+   * bindings), it is materialized immediately as a direct operator write +
+   * recorded `auto_approved`. Absent (webhooks/cron/human confirm door) → always
+   * a pending proposal, exactly as before.
+   */
+  agentUserId?: string | null;
   /** Workspace to scope the proposal to (null = pod-wide). */
   workspaceId?: string | null;
   /** Existing project to file each newly-created graph entity into on approval. */
   projectId?: string | null;
+  /**
+   * A project NAME-ref (piece D). Resolved to `projectId` via an EXACT slug
+   * match on the caller's OWN projects (a rung-1 pin). No match → NOT linked
+   * (the widening-access law forbids auto-linking a guess); surfaced on the
+   * result as `projectCandidate`. Ignored when `projectId` is already set.
+   */
+  projectName?: string | null;
+  /**
+   * Presenter tag stamped on the proposal's `data.captureMode` (JSONB, no
+   * migration) so surfaces can label "my uncommitted plan" (confirm) apart from
+   * an "agent proposal". Pure metadata — never consulted by governance.
+   */
+  captureMode?: string;
   /** Origin signal carried through the proposal into entity materialization. */
   source?:
     | "intelligence"
@@ -81,13 +123,24 @@ export interface SubmitCaptureGraphResult {
   bindingCount: number;
   reviewUrl: string | undefined;
   summary: string;
+  /** True when the graph was materialized immediately (agent-mode auto-apply). */
+  applied: boolean;
+  /**
+   * A `projectName` that matched no project of the caller (piece D). Advisory
+   * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
+   */
+  projectCandidate?: { name: string };
   writeReceipt: {
-    state: "pending";
+    state: "pending" | "applied";
     proposalId?: string;
     reviewUrl?: string;
     effectiveWorkspaceId: string | null;
     projectId?: string;
     source: string;
+    /** applied path only: fresh-created vs linked-existing counts + ids. */
+    created?: number;
+    linked?: number;
+    entityIds?: string[];
   };
 }
 
@@ -101,6 +154,24 @@ export async function submitCaptureGraph(
 ): Promise<SubmitCaptureGraphResult> {
   const { userId } = input;
   const workspaceId = input.workspaceId ?? null;
+
+  // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
+  // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
+  // rung-1 explicit pin — but ONLY on an exact slug match on the caller's own
+  // projects. No match ⇒ NOT linked (the widening-access law forbids auto-linking
+  // an AI-guessed project) ⇒ surfaced as an advisory candidate. An explicit
+  // `projectId` always wins over a name.
+  let resolvedProjectId = input.projectId ?? null;
+  let projectCandidate: { name: string } | undefined;
+  if (!resolvedProjectId && input.projectName) {
+    const projectRef = await resolveCaptureProjectRef({
+      userId,
+      projectName: input.projectName,
+    });
+    if (projectRef.projectId) resolvedProjectId = projectRef.projectId;
+    else if (projectRef.candidateName)
+      projectCandidate = { name: projectRef.candidateName };
+  }
 
   // WITHIN-BATCH DEDUP: the producer may list the same person/company under two
   // different `ref`s (neither persisted yet). Collapse those before resolving
@@ -146,7 +217,7 @@ export async function submitCaptureGraph(
       op: "create_entity" as const,
       ref: e.ref,
       profileSlug: e.profileSlug,
-      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
       title: e.title ?? e.ref,
       ...(e.description ? { description: e.description } : {}),
       ...(e.content ? { content: e.content } : {}),
@@ -169,6 +240,178 @@ export async function submitCaptureGraph(
     input.summary ??
     `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
 
+  const source = input.source ?? "intelligence";
+
+  // Reusable proposal-provenance block (rawSource is bounded, proposal-data-only).
+  const proposalProvenance = input.rawSource
+    ? {
+        proposalProvenance: {
+          kind: "raw_capture_input" as const,
+          storage: "proposal_data_only" as const,
+          rawSource: input.rawSource,
+        },
+      }
+    : {};
+
+  // ── AGENT-MODE AUTO-APPLY (piece A) ──────────────────────────────────────
+  // A composite graph is ATOMIC → all-or-nothing: it may auto-apply ONLY when
+  // EVERY op is auto-approvable under the ONE agent policy evaluator
+  // (`decideAgentPolicy`, via `resolveAgentGovernanceDecision`). This aligns
+  // capture with how `create_entity` already behaves (whitelisted → executes).
+  //
+  // Gated on `agentUserId` (so this only fires on agent doors; webhooks/cron/
+  // human confirm door pass none → the pending path below, unchanged). Channel
+  // bindings force the pending path: they are applied by the approve flow AFTER
+  // materialization, so an auto-apply that skipped them would silently drop the
+  // binds.
+  if (input.agentUserId && bindings.length === 0) {
+    const keys = captureGraphEventKeys(operations);
+    let allAutoApprove = keys.length > 0;
+    for (const { subjectType, action } of keys) {
+      const gov = await resolveAgentGovernanceDecision({
+        db,
+        agentUserId: input.agentUserId,
+        workspaceId,
+        subjectType,
+        action,
+        // MCP is an agent WRITE door — prefer the agent's own metadata
+        // autoApproveFor, falling back to the workspace override (chat-door rule).
+        preferAgentMetadataAutoApproveFor: true,
+      });
+      // Any non-execute (propose / deny / not-agent) → the WHOLE graph proposes.
+      if (gov.decision !== "execute") {
+        allAutoApprove = false;
+        break;
+      }
+    }
+
+    if (allAutoApprove) {
+      // Materialize NOW as a DIRECT OPERATOR write, through the EXACT composite
+      // caller shape `proposals.approve` builds: `{ db, authenticated, userId,
+      // workspaceId, workspaceRole, sessionId }` with NO `source` field — so
+      // `entities.create`'s gate falls through to a granted first-party write
+      // (never the legacy AI-source whitelist, whose per-workspace autoApproveFor
+      // could disagree with the agent-metadata decision above and silently turn a
+      // create back into a proposal). The governance decision already happened
+      // (policy said execute); this is the authorized EXECUTION.
+      const membershipRole = workspaceId
+        ? (await getWorkspaceMembership(db, workspaceId, userId))?.role
+        : "owner";
+      // No membership for a workspace-pinned graph ⇒ can't materialize as this
+      // user ⇒ fall through to the pending path (reviewable) instead of failing.
+      if (!membershipRole) {
+        logger.warn(
+          { userId, workspaceId },
+          "capture auto-apply: no workspace membership — filing pending instead"
+        );
+      } else {
+        const compositeCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId,
+          workspaceRole: membershipRole,
+          sessionId: input.sessionId ?? null,
+        };
+        const { entitiesRouter } = await import("../../routers/entities.js");
+        const { relationsRouter } = await import("../../routers/relations.js");
+        const entityCaller = entitiesRouter.createCaller(
+          compositeCtx as unknown as Parameters<
+            typeof entitiesRouter.createCaller
+          >[0]
+        );
+        const relationCaller = relationsRouter.createCaller(
+          compositeCtx as unknown as Parameters<
+            typeof relationsRouter.createCaller
+          >[0]
+        );
+
+        const materialized = await materializeCompositeGraph(
+          operations,
+          entityCaller,
+          relationCaller,
+          (err, type) =>
+            logger.warn(
+              { err, type },
+              "capture auto-apply: relation create failed (entities kept)"
+            ),
+          {
+            source,
+            // The composite ctx's `attachFacet` door — same governance context,
+            // so a policy-approved graph attaches facets directly.
+            facetCaller: entityCaller,
+          }
+        );
+        const materializedEntityIds = materialized.entities
+          .filter((e) => !e.linked)
+          .map((e) => e.entityId);
+
+        // Record the already-done write as a durable `auto_approved` proposal so
+        // it is traceable, shows in the Proposals app, and can be REVERTED
+        // (revert reads `data.materialized.entityIds`; proposalType
+        // `capture.graph` is the recognized auto-approved-capture shape). NOT
+        // `notifyProposalCreated` — an applied write is not a pending review
+        // item. Best-effort: a recording hiccup must never fail the
+        // already-committed capture.
+        let recordId: string | undefined;
+        try {
+          const { proposal } = await createAutoApprovedProposal({
+            userId,
+            reviewedBy: userId,
+            workspaceId,
+            targetType: "entity",
+            targetId: randomUUID(),
+            proposalType: "capture.graph",
+            action: "graph",
+            // `source` must be a valid EventSource — the capture-origin
+            // discriminator lives in `data.source` + the proposalType.
+            source: "api",
+            summary,
+            ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+            ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+            data: {
+              operations,
+              source,
+              graphSource: "capture",
+              materialized: { entityIds: materializedEntityIds },
+              ...(input.captureMode ? { captureMode: input.captureMode } : {}),
+              ...proposalProvenance,
+              ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+            },
+          });
+          recordId = (proposal as { id?: string })?.id;
+        } catch (err) {
+          logger.warn(
+            { err, userId },
+            "capture auto-apply: auto_approved record failed (capture preserved)"
+          );
+        }
+
+        return {
+          proposalId: recordId,
+          entityCount: graphEntities.length,
+          relationCount: relations.length,
+          bindingCount: bindings.length,
+          reviewUrl: undefined,
+          summary,
+          applied: true,
+          ...(projectCandidate ? { projectCandidate } : {}),
+          writeReceipt: {
+            state: "applied",
+            ...(recordId ? { proposalId: recordId } : {}),
+            effectiveWorkspaceId: workspaceId,
+            ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+            source,
+            created: materialized.created,
+            linked: materialized.entities.filter((e) => e.linked).length,
+            entityIds: materialized.entities.map((e) => e.entityId),
+          },
+        };
+      }
+    }
+  }
+
+  // ── PENDING PATH (confirm mode + agent-propose + machine callers) ─────────
   const { proposal: created } = await createEventBackedProposal({
     userId,
     workspaceId,
@@ -176,32 +419,27 @@ export async function submitCaptureGraph(
     targetId: randomUUID(),
     proposalType: "import.graph",
     action: "create",
-    source: input.source ?? "intelligence",
+    source,
     summary,
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
       : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     // `bindings` rides alongside operations; the approve flow applies them after
     // materialization (resolving entityRef → real id).
     data: {
       operations,
       // This is the actual origin stamped at materialization; graph is a
       // transport shape, not an origin the entity router understands.
-      source: input.source ?? "intelligence",
+      source,
       graphSource: "capture",
       bindings,
-      ...(input.rawSource
-        ? {
-            proposalProvenance: {
-              kind: "raw_capture_input",
-              storage: "proposal_data_only",
-              rawSource: input.rawSource,
-            },
-          }
-        : {}),
-      ...(input.projectId ? { projectId: input.projectId } : {}),
+      // Presenter tag (JSONB, no migration): "my uncommitted plan" (confirm) vs
+      // an agent proposal. Never consulted by governance.
+      ...(input.captureMode ? { captureMode: input.captureMode } : {}),
+      ...proposalProvenance,
+      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },
   });
 
@@ -215,13 +453,15 @@ export async function submitCaptureGraph(
     bindingCount: bindings.length,
     reviewUrl,
     summary,
+    applied: false,
+    ...(projectCandidate ? { projectCandidate } : {}),
     writeReceipt: {
       state: "pending",
       ...(proposalId ? { proposalId } : {}),
       ...(reviewUrl ? { reviewUrl } : {}),
       effectiveWorkspaceId: workspaceId,
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      source: input.source ?? "intelligence",
+      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+      source,
     },
   };
 }

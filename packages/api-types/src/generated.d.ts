@@ -3555,12 +3555,6 @@ export interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
-export interface ProjectDedupCandidate {
-	id: string;
-	name: string;
-	/** Token-set overlap score with the requested name. */
-	score: number;
-}
 export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
@@ -3616,6 +3610,12 @@ export type RendererRef = {
 	props?: Record<string, unknown>;
 	title?: string;
 };
+export interface ProjectDedupCandidate {
+	id: string;
+	name: string;
+	/** Token-set overlap score with the requested name. */
+	score: number;
+}
 /**
  * Column definition for views
  */
@@ -5584,6 +5584,37 @@ export interface UnifiedRun {
 	definitionVersion: number | null;
 }
 /**
+ * A run GROUP — one template's whole run footprint collapsed to a single row.
+ *
+ * Only the ledgers whose runs instantiate a reusable FLOW group: `automation` and
+ * `playbook` (both carry a `flowId`). Ad-hoc `capture`/`session` runs have no
+ * flowId, so they are never grouped — they stay individual `UnifiedRun` rows. The
+ * group key is (`flowType`, `flowId`). Counts are computed SERVER-side over the
+ * whole ledger (not a truncated page), so `runCount`/`latestRunId` are exact —
+ * the reason this is a dedicated grouped query and never a client fold.
+ */
+export interface RunGroup {
+	flowType: "automation" | "playbook";
+	/** The flow every run in this group instantiated (automationId / playbookId). */
+	flowId: string;
+	/** Human label for the flow (automation/playbook name). */
+	flowName: string;
+	/** Total runs of this flow the user can see. */
+	runCount: number;
+	/** The newest run's id — the drill target for "latest run". */
+	latestRunId: string;
+	/** The newest run's status (drives the group's status badge). */
+	latestStatus: RunStatus;
+	/** When the newest run started (the group's sort key in the merged feed). */
+	latestStartedAt: Date;
+	/** Any run of this flow currently running — drives the live pulse. */
+	hasRunning: boolean;
+	/** Runs that completed. */
+	completedCount: number;
+	/** Runs that failed. */
+	failedCount: number;
+}
+/**
  * One entry in a run's activity timeline — a step (automation), a decision/trace
  * (capture), or a lifecycle marker. Rich timelines come from automation steps and
  * capture events; playbook/session runs carry a `channelId` so the UI opens the
@@ -6609,6 +6640,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id?: undefined;
 				deduplicated?: undefined;
 			} | {
+				unmodeled?: any;
 				status: string;
 				message: string;
 				id: any;
@@ -21225,6 +21257,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				runs: UnifiedRun[];
+			};
+			meta: object;
+		}>;
+		groups: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				flowType?: "playbook" | "automation" | undefined;
+				scope?: {
+					workspaceId?: string | undefined;
+				} | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				groups: RunGroup[];
 			};
 			meta: object;
 		}>;

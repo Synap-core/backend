@@ -15,6 +15,7 @@ import {
   type CapabilityBriefDoor,
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
+import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
@@ -438,14 +439,9 @@ export const tools = {
             },
             category: {
               type: "string",
-              enum: [
-                "working_style",
-                "communication",
-                "focus",
-                "preferences",
-                "habits",
-                "technical",
-              ],
+              // SSOT: the `uo_category` enum lives in remember-fact.ts (seeded
+              // in ensure-system-profiles.ts) — never re-list it here.
+              enum: [...USER_OBSERVATION_CATEGORIES],
               description:
                 "Which bucket the observation belongs to (default 'preferences').",
             },
@@ -492,7 +488,7 @@ export const tools = {
       {
         name: "synap_attach_facet",
         description:
-          "Attach a ROLE to an existing entity (Kind + Facets). A role — client, partner, prospect, investor, sponsor — is a FACET, never its own entity: an entity IS one kind (person, company) and HAS many roles. Resolve identity FIRST (synap_ask / synap_get_entities on strong signals like email/phone/url) so you attach the role to the REAL entity instead of creating a duplicate. Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error. Use synap_list_profiles to find role slugs (profileKind='role') and which kinds they apply to (applicableKinds).",
+          "Attach a ROLE to an existing entity (Kind + Facets). A role — client, partner, prospect, investor, sponsor — is a FACET, never its own entity: an entity IS one kind (person, company) and HAS many roles. Resolve identity FIRST (synap_ask / synap_get_entities on strong signals like email / phone / website) so you attach the role to the REAL entity instead of creating a duplicate. Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error. Use synap_list_profiles to find role slugs (profileKind='role') and which kinds they apply to (applicableKinds).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1062,6 +1058,7 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
+          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
           "\n" +
           'EXAMPLE 1 — raw text:\n{ "text": "Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March." }\n' +
           "\n" +
@@ -1070,7 +1067,7 @@ export const tools = {
           'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
           "\n" +
           'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS — give the user the reviewUrl.\n' +
-          'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (an entity with that email/phone/url already exists — its id is returned; enrich it instead of duplicating) or "no-durable-content" (nothing storable was sent).',
+          'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent) or "structuring-unavailable" (text lane only: the AI structurer is down — tell the user and retry later).',
         inputSchema: {
           type: "object",
           properties: {
@@ -1112,7 +1109,7 @@ export const tools = {
                   properties: {
                     type: "object",
                     description:
-                      "Typed fields. Include email / phone / url when known: they are STRONG identity signals and drive dedup against existing entities.",
+                      "Typed fields. Include the STRONG identity signals when known — `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — spelled exactly like that: they are what drives dedup against existing entities.",
                   },
                   existingEntityId: {
                     type: "string",
@@ -1202,123 +1199,6 @@ export const tools = {
           // No `required`: the payload is a gradient — `text` OR `entities[]`
           // (or both). An empty call is REJECTED at the door with
           // reason "no-durable-content" and a message saying what to send.
-        },
-      },
-      {
-        name: "synap_capture_graph",
-        description:
-          "DEPRECATED — use `synap_capture` instead: it takes this exact `entities[]` + `relations[]` payload (plus plain `text`), routes to the SAME core, and returns the same receipt. This name is kept only so callers that already learned it keep working.\n" +
-          "\n" +
-          "THE composite write door: propose MANY entities AND the links between them as ONE reviewable proposal. Use this instead of a chain of synap_create_entity + synap_link_entities calls whenever you already know the shape of the graph (a person at a company working on a deal; a meeting with attendees; a scraped roster). The user reviews and accepts ONCE, and everything materializes together — nothing half-lands.\n" +
-          "\n" +
-          "HOW REFS WORK: every entity carries a `ref` — a short local id YOU invent (any unique string, e.g. 'p1', 'acme'). Relations point at those refs, so you can link entities that don't exist yet; on approval each ref is swapped for the real entity id. Refs must be unique within the call, and every relation/binding ref must name an entity in the same call. To link something that ALREADY exists, still give it a `ref` but add `existingEntityId` — it will be linked, not re-created. Identity dedup runs automatically (email/phone/url are strong signals), so a person you list who already exists is reused.\n" +
-          "\n" +
-          'EXAMPLE 1 — a person at a company:\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "url": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
-          "\n" +
-          'EXAMPLE 2 — a new contact linked to an EXISTING deal, with a role facet and a long-form body:\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Grace Hopper", "properties": { "email": "grace@navy.mil" }, "facets": [ { "profileSlug": "client" } ] }, { "ref": "d1", "profileSlug": "deal", "existingEntityId": "7f3c…-uuid" }, { "ref": "n1", "profileSlug": "note", "title": "Kickoff call notes", "content": "## Agenda\\n…" } ], "relations": [ { "sourceRef": "p1", "targetRef": "d1", "type": "contact_for" }, { "sourceRef": "n1", "targetRef": "d1", "type": "references" } ] }\n' +
-          "\n" +
-          'Returns { proposalId, reviewUrl, entityCount, relationCount, writeReceipt:{ state:"pending" } } — "pending" is SUCCESS, not an error: give the user the reviewUrl.',
-        inputSchema: {
-          type: "object",
-          properties: {
-            entities: {
-              type: "array",
-              description:
-                "The graph's nodes (at least one). Each needs a unique local `ref` + a `profileSlug` (discover slugs with synap_list_profiles).",
-              items: {
-                type: "object",
-                properties: {
-                  ref: {
-                    type: "string",
-                    description:
-                      "Local id you invent, unique within this call — relations point at it.",
-                  },
-                  profileSlug: {
-                    type: "string",
-                    description:
-                      "Entity kind (e.g. person, company, deal, note).",
-                  },
-                  title: {
-                    type: "string",
-                    description: "Display name. Defaults to `ref` if omitted.",
-                  },
-                  description: {
-                    type: "string",
-                    description: "Short preview text.",
-                  },
-                  content: {
-                    type: "string",
-                    description:
-                      "Long-form markdown body — materialized as a linked document on approval.",
-                  },
-                  properties: {
-                    type: "object",
-                    description:
-                      "Typed fields. Include email / phone / url when known: they are STRONG identity signals and drive dedup against existing entities.",
-                  },
-                  existingEntityId: {
-                    type: "string",
-                    description:
-                      "UUID of an entity that already exists — LINK it instead of creating a duplicate.",
-                  },
-                  facets: {
-                    type: "array",
-                    description:
-                      "Kind + Facets: role-profiles to attach on approval (a role is a facet, never a second entity).",
-                    items: {
-                      type: "object",
-                      properties: {
-                        profileSlug: { type: "string" },
-                        status: { type: "string" },
-                        properties: { type: "object" },
-                        contextRef: {
-                          type: "string",
-                          description:
-                            "Optional ref of another entity in this call that gives the role its context.",
-                        },
-                      },
-                      required: ["profileSlug"],
-                    },
-                  },
-                },
-                required: ["ref", "profileSlug"],
-              },
-            },
-            relations: {
-              type: "array",
-              description:
-                "The graph's edges. Both refs MUST name entities in this same call.",
-              items: {
-                type: "object",
-                properties: {
-                  sourceRef: { type: "string" },
-                  targetRef: { type: "string" },
-                  type: {
-                    type: "string",
-                    description:
-                      "Relation type — free string, e.g. 'works_at', 'related_to', 'contact_for', 'references'.",
-                  },
-                },
-                required: ["sourceRef", "targetRef", "type"],
-              },
-            },
-            summary: {
-              type: "string",
-              description:
-                "One line the reviewer sees on the proposal card. Auto-generated when omitted — write your own, it is what the user reads.",
-            },
-            workspaceId: {
-              type: "string",
-              description:
-                "Workspace to file the proposal in (usually pre-set by the connection URL). Omit for pod-wide.",
-            },
-            projectId: {
-              type: "string",
-              description:
-                "Optional project id — every newly created entity is filed into it on approval.",
-            },
-          },
-          required: ["entities"],
         },
       },
 

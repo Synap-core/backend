@@ -128,7 +128,13 @@ export const hubRelationsRouter = router({
         ctx.scopes || [],
         input.workspaceId,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        // The input declared `agentUserId` but never forwarded it, so an
+        // agent-created relation authenticated as the operator and skipped the
+        // governance membrane. relations.create now reads ctx.agentUserId.
+        // (`reasoning` is still declared with no channel — relations.create has
+        // no reasoning input and drops metadata before the gate.)
+        input.agentUserId ?? undefined
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 

@@ -69,10 +69,6 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
-// NOTE: `buildCreateWriteReceipt` + `buildCreateResolution` (and their types)
-// moved to ../write-receipt.ts so MCP and any other transport can emit the
-// IDENTICAL receipt. This file now only calls `buildCreateEntityReceipt`.
-
 /** The shallow `impact` block attached to an update response (additive). */
 interface UpdateImpactBlock {
   /** Immediate relation neighbours of the updated entity (ids + names + relation). */

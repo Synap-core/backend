@@ -27,6 +27,8 @@ import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
 // Type-only: keeps `remember-fact.js` lazily imported at the call site while
 // letting the `category` arg be narrowed to the seeded `uo_category` enum.
+// (The enum's VALUES ride along on that same lazy import, so the model-supplied
+// `category` is validated against the SSOT instead of being blindly cast.)
 import type { UserObservationCategory } from "../../services/knowledge/remember-fact.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import {
@@ -53,7 +55,11 @@ import {
   type IdentitySignal,
   type ProviderVerbSpec,
 } from "@synap/database";
-import { getUserWorkspaceIds, logger } from "../hub-protocol/rest/_shared.js";
+import {
+  getUserWorkspaceIds,
+  logger,
+  verifyWorkspaceAccess,
+} from "../hub-protocol/rest/_shared.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -309,16 +315,15 @@ const OPEN_SESSION_STATUSES = [
 ] as const;
 
 /**
- * Short-lived memo of the DERIVED ambient session per user. A single agent turn
- * fires several write tools back to back; without this each one re-queries
- * `focus_sessions` for the same answer. Deliberately tiny (a few seconds): a
- * session the user just closed must stop attracting writes almost immediately.
+ * Every `focus_sessions.status` value (mirrors the schema's column enum). Used
+ * to validate the model-supplied `status` filter — see synap_list_sessions.
  */
-const DERIVED_SESSION_TTL_MS = 15_000;
-const derivedSessionCache = new Map<
-  string,
-  { sessionId: string | undefined; at: number }
->();
+const SESSION_STATUSES = [
+  ...OPEN_SESSION_STATUSES,
+  "closed",
+  "failed",
+  "cancelled",
+] as const;
 
 /**
  * Does this `focus_sessions` row belong to the effective user?
@@ -356,14 +361,15 @@ async function ownsFocusSession(
  * working on" handle when no explicit/URL one was supplied. Without this the
  * whole session-handle feature is inert: MCP URLs are registered once per
  * client, so nothing ever populates `?sessionId=`.
+ *
+ * NOT memoized. `synap_start_session` is itself session-linked, so this runs
+ * BEFORE the session it opens exists — a memo would cache that pre-session
+ * answer and the writes belonging to the just-opened session are exactly the
+ * ones that would fail to group. The query is a single indexed lookup.
  */
 export async function resolveAmbientSession(
   userId: string
 ): Promise<string | undefined> {
-  const cached = derivedSessionCache.get(userId);
-  if (cached && Date.now() - cached.at < DERIVED_SESSION_TTL_MS) {
-    return cached.sessionId;
-  }
   let sessionId: string | undefined;
   try {
     const [row] = await db
@@ -385,7 +391,6 @@ export async function resolveAmbientSession(
     );
     sessionId = undefined;
   }
-  derivedSessionCache.set(userId, { sessionId, at: Date.now() });
   return sessionId;
 }
 
@@ -451,46 +456,26 @@ interface CaptureScope {
 }
 
 /**
- * The receipt, identical on every branch of the door.
- *
- * `pending` / `applied` + the proposal fields are the SAME shape
- * `buildCreateWriteReceipt` emits (the graph branch forwards
- * `submitCaptureGraph`'s receipt verbatim, which already conforms).
- * `rejected` is the door-level outcome §2.3 adds: nothing was written and
- * nothing was even proposed.
+ * The receipt this file constructs — the door-level REJECT outcome (nothing
+ * written, nothing even proposed) and its `applied` twin. The graph branch does
+ * NOT use this type: it forwards `submitCaptureGraph`'s own receipt verbatim,
+ * which carries the proposal fields.
  *
  * Deliberately NOT modelled (no data behind them on this path — never invent
  * receipt fields): §2.3's `items[]`, `properties`, `next[]`.
  */
 interface CaptureWriteReceipt {
-  state: "applied" | "pending" | "rejected";
+  state: "applied" | "rejected";
   effectiveWorkspaceId: string | null;
   projectId?: string;
   source: string;
-  proposalId?: string;
-  reviewUrl?: string;
 }
 
 /**
- * Reject reasons the door emits.
- *
- * ⚠️ DEFERRED — §2.3's third reason, `recall-loop`, is deliberately ABSENT:
- * content that came OUT of the pod (a `synap_ask` answer, an entity body the
- * agent just read) being re-ingested as if it were new — mem0's 808-copies
- * failure mode.
- *
- * Detecting it honestly needs provenance that does not exist yet: a read-receipt
- * trail of what THIS caller was served (query, entity/document ids, content
- * hashes, a time window) that a subsequent write can be checked against. Every
- * substitute is a fragile heuristic — text similarity against the whole pod
- * would reject legitimate restatements and quietly lose real knowledge, which is
- * a worse failure than a duplicate.
- *
- * What would unblock it: the recall doors (`synap_ask`, `synap_get_entity`,
- * `synap_get_document`) recording per-caller served-content hashes + source ids
- * with a short TTL; this door then rejects when an incoming payload's normalized
- * hash matches something served to the SAME caller and the write carries no new
- * signal. Until that exists, this door does not guess.
+ * Reject reasons the door emits. §2.3's fourth reason, `recall-loop`
+ * (re-ingesting content the pod itself just served), is deliberately NOT built —
+ * it needs per-caller read-receipt provenance that does not exist yet; see the
+ * capture-door design doc §2.3.
  */
 type CaptureRejectReason =
   "already-known" | "no-durable-content" | "structuring-unavailable";
@@ -595,10 +580,34 @@ export async function executeMCPToolViaHubProtocol(
   // is the same hub caller with that lens as the AMBIENT governance workspace —
   // used by the entity write tools below. Normalized like `sessionId`: a
   // non-string arg is dropped rather than blindly cast.
-  const lensWorkspaceId =
+  //
+  // SECURITY: the URL lens is injected ONLY when the model didn't send one
+  // (mcp/index.ts), so `args.workspaceId` here can be a MODEL-supplied id. It
+  // becomes `ctx.workspaceId`, which the hub write procs consume as the ambient
+  // governance workspace WITHOUT re-validating it (`entities.create` only
+  // membership-checks `input.targetWorkspaceId`). Gate it here — the same
+  // `verifyWorkspaceAccess` the capture-graph branch uses.
+  const requestedWorkspaceId =
     typeof args.workspaceId === "string" && args.workspaceId.trim() !== ""
       ? args.workspaceId
       : undefined;
+  const workspaceAccessible = requestedWorkspaceId
+    ? await verifyWorkspaceAccess(userId, requestedWorkspaceId)
+    : false;
+  if (requestedWorkspaceId && !workspaceAccessible) {
+    // DROPPED, not rejected — like the session handle, the ambient lens is a
+    // governance HINT, and falling back to no lens is exactly the (safe)
+    // behaviour that predates it. Failing the whole call would also punish the
+    // legitimate owner-without-member-row case. Placement PINS still fail loud:
+    // the capture-graph branch below reuses this verdict to return Forbidden.
+    logger.warn(
+      { userId, workspaceId: requestedWorkspaceId, toolName },
+      "mcp: workspace lens is not accessible to the caller — ignoring"
+    );
+  }
+  const lensWorkspaceId = workspaceAccessible
+    ? requestedWorkspaceId
+    : undefined;
   const lensCaller = lensWorkspaceId
     ? await createHubProtocolCaller(
         userId,
@@ -728,7 +737,9 @@ export async function executeMCPToolViaHubProtocol(
       const { listCreatedProposals } =
         await import("../../services/proposals/proposals-service.js");
       const result = await listCreatedProposals({
-        createdBy: (args.userId as string) || userId,
+        // `createdBy` is the ONLY user floor this service applies — a
+        // model-supplied `args.userId` would list a foreign user's proposals.
+        createdBy: userId,
         workspaceId: args.workspaceId as string | undefined,
         status: args.status as string | undefined,
         limit: (args.limit as number) || undefined,
@@ -911,7 +922,9 @@ export async function executeMCPToolViaHubProtocol(
       const attachCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
-        (args.workspaceId as string) || undefined,
+        // Membership-gated lens, never the raw model-supplied id — this ctx
+        // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
+        lensWorkspaceId,
         undefined,
         sessionId,
         agentUserId
@@ -942,18 +955,28 @@ export async function executeMCPToolViaHubProtocol(
       // `userStated: true` → auto-approved (the policy rung reads
       // `uo_validated`). `lensCaller` carries the workspace lens + agent
       // identity + session handle, exactly like create_entity.
-      const { rememberFact } =
+      const { rememberFact, USER_OBSERVATION_CATEGORIES } =
         await import("../../services/knowledge/remember-fact.js");
+      // Off-enum categories were written unchecked. Validate against the SSOT
+      // and fall back to the service's own default rather than failing the write.
+      const factCategory =
+        typeof args.category === "string" &&
+        (USER_OBSERVATION_CATEGORIES as readonly string[]).includes(
+          args.category
+        )
+          ? (args.category as UserObservationCategory)
+          : undefined;
       const result = await rememberFact({
         caller: lensCaller,
-        userId: (args.userId as string) || userId,
+        // NEVER `args.userId`: the hub `createEntity` trusts `input.userId`, so a
+        // model-supplied one would mint an entity + proposal owned by another
+        // user. The API key already identifies the caller.
+        userId,
         fact: args.fact as string,
         ...(typeof args.confidence === "number"
           ? { confidence: args.confidence }
           : {}),
-        ...(typeof args.category === "string"
-          ? { category: args.category as UserObservationCategory }
-          : {}),
+        ...(factCategory ? { category: factCategory } : {}),
         ...(args.userStated === true ? { userStated: true } : {}),
         ...(agentUserId ? { agentUserId } : {}),
       });
@@ -1434,6 +1457,14 @@ export async function executeMCPToolViaHubProtocol(
           inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
         );
       } else if (statusArg !== "all") {
+        // MCP schemas are ADVISORY — nothing validates `status` server-side, so
+        // an off-enum value ("done", "completed") would silently match zero rows
+        // instead of telling the agent what it may ask for.
+        if (!(SESSION_STATUSES as readonly string[]).includes(statusArg)) {
+          return ok({
+            error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
+          });
+        }
         conditions.push(
           eq(
             focusSessions.status,
@@ -1683,6 +1714,18 @@ export async function executeMCPToolViaHubProtocol(
         typeof args.projectId === "string" && args.projectId
           ? args.projectId
           : null;
+      // Project NAME-ref (piece D): an agent may name a project instead of
+      // knowing its UUID (`projectName`, or `project: { name }`). Resolved at the
+      // submitCaptureGraph boundary via an EXACT slug match on the caller's OWN
+      // projects — no match is NEVER auto-linked (widening-access law).
+      const captureProjectName =
+        typeof args.projectName === "string" && args.projectName
+          ? args.projectName
+          : args.project &&
+              typeof args.project === "object" &&
+              typeof (args.project as { name?: unknown }).name === "string"
+            ? (args.project as { name: string }).name
+            : null;
 
       // `global` is the pod-wide RUNBOOK lane — a keyed text doc, not entities.
       // Mixing it with a structured payload has no meaning; say so rather than
@@ -1738,7 +1781,8 @@ export async function executeMCPToolViaHubProtocol(
             });
           }
         }
-        const refs = new Set(graphEntities.map((e) => e.ref));
+        // `explicitRefs` already holds every ref in play — the auto-assign loop
+        // above `.add()`s the ones it mints.
         for (const r of captureRelations) {
           if (
             typeof r.sourceRef !== "string" ||
@@ -1750,14 +1794,19 @@ export async function executeMCPToolViaHubProtocol(
               error: "each relation needs `sourceRef`, `targetRef` and `type`",
             });
           }
-          if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
+          if (
+            !explicitRefs.has(r.sourceRef) ||
+            !explicitRefs.has(r.targetRef)
+          ) {
             return ok({
               error: `relation references an unknown ref: ${r.sourceRef} -> ${r.targetRef}. Every ref must belong to an entity in the same call.`,
             });
           }
         }
 
-        const graphWsId = lensWorkspaceId ?? null;
+        // The RAW requested id, not the dropped-on-failure lens: a placement pin
+        // must fail loud (Forbidden, below) rather than silently land pod-wide.
+        const graphWsId = requestedWorkspaceId ?? null;
         const graphScope: CaptureScope = {
           workspaceId: graphWsId,
           projectId: captureProjectId,
@@ -1770,14 +1819,15 @@ export async function executeMCPToolViaHubProtocol(
             reason: "no-durable-content",
             scope: graphScope,
             message:
-              "Nothing storable was sent — every entity was empty. Give each one at least a `title`, or `properties` (email / phone / url are strongest: they also dedup), or a `content` body, or an `existingEntityId` to link to.",
+              "Nothing storable was sent — every entity was empty. Give each one at least a `title`, or `properties` (email / phone / website are strongest: they also dedup), or a `content` body, or an `existingEntityId` to link to.",
           });
         }
 
         // ── REJECT: already-known ────────────────────────────────────────────
         // Fires ONLY when the call would be a pure no-op: a SINGLE entity, no
         // relations, carrying nothing beyond its own identity signals, whose
-        // strong signal (email/phone/url/handle/external-id) already resolves to
+        // strong signal (email/phone/website/handle/external-id — `extractIdentitySignals`
+        // reads `website`, never a bare `url`) already resolves to
         // an existing entity. Anything richer is an ENRICHMENT or a LINK and is
         // let through — `submitCaptureGraph` reuses the existing row instead of
         // minting a duplicate, so there is nothing left to guard there.
@@ -1818,21 +1868,55 @@ export async function executeMCPToolViaHubProtocol(
                 signals: onlySignals,
               });
               if (known.match === "strong" && known.entity) {
-                return captureRejected({
-                  reason: "already-known",
-                  scope: graphScope,
-                  message:
-                    `A ${known.entity.type} with this exact identity already exists ("${known.entity.title ?? known.entity.id}") and the call carried nothing new, so nothing was written. ` +
-                    "This is a correct outcome, not an error — do not retry it. To add information, either send it here as content / extra properties / relations (it will enrich the existing entity, not duplicate it) or call synap_update_entity on the id below.",
-                  extra: {
-                    entityId: known.entity.id,
-                    existing: {
-                      id: known.entity.id,
-                      title: known.entity.title,
-                      profileSlug: known.entity.type,
+                // A BETTER TITLE is new information. The existing row may be
+                // titled by its own signal ("ada@acme.com"); rejecting a call
+                // that supplies "Ada Lovelace" would discard the improvement.
+                const incomingTitle = normalizeCaptureText(only.title);
+                const titleIsNew =
+                  hasDurableText(incomingTitle) &&
+                  incomingTitle !==
+                    normalizeCaptureText(known.entity.title ?? "");
+                if (!titleIsNew) {
+                  // SECURITY: the STRONG path is deliberately pod-GLOBAL and
+                  // unscoped (frozen policy: one subject per email/phone), so
+                  // `known.entity` may belong to another user. Dedup still
+                  // applies pod-wide, but the matched row's CONTENT must not
+                  // leak — the same rule `buildIdentityResolveResponse` encodes.
+                  // Probe visibility here; when invisible, reject WITHOUT the
+                  // title/kind/id (no id ⇒ `ok()` emits no `/open/` link).
+                  const visible = await db.query.entities.findFirst({
+                    columns: { id: true },
+                    where: and(
+                      eq(entities.id, known.entity.id),
+                      isNull(entities.deletedAt),
+                      userVisibleWhere(entities.workspaceId, userId)
+                    ),
+                  });
+                  if (!visible) {
+                    return captureRejected({
+                      reason: "already-known",
+                      scope: graphScope,
+                      message:
+                        "An entity with this exact identity already exists in this pod and the call carried nothing new, so nothing was written. " +
+                        "This is a correct outcome, not an error — do not retry it. To add information, send it here as content / extra properties / relations.",
+                    });
+                  }
+                  return captureRejected({
+                    reason: "already-known",
+                    scope: graphScope,
+                    message:
+                      `A ${known.entity.type} with this exact identity already exists ("${known.entity.title ?? known.entity.id}") and the call carried nothing new, so nothing was written. ` +
+                      "This is a correct outcome, not an error — do not retry it. To add information, either send it here as content / extra properties / relations (it will enrich the existing entity, not duplicate it) or call synap_update_entity on the id below.",
+                    extra: {
+                      entityId: known.entity.id,
+                      existing: {
+                        id: known.entity.id,
+                        title: known.entity.title,
+                        profileSlug: known.entity.type,
+                      },
                     },
-                  },
-                });
+                  });
+                }
               }
             } catch (err) {
               // Best-effort: a lookup failure must never block a write.
@@ -1883,22 +1967,28 @@ export async function executeMCPToolViaHubProtocol(
         }
 
         // Membership gate — the HTTP door does this via resolveActingContext.
-        // Without it an MCP key could queue a proposal in a foreign lens.
-        if (graphWsId) {
-          const { verifyWorkspaceAccess } =
-            await import("../hub-protocol/rest/_shared.js");
-          if (!(await verifyWorkspaceAccess(userId, graphWsId))) {
-            return ok({
-              error: `Forbidden: no access to workspace ${graphWsId}`,
-            });
-          }
+        // Without it an MCP key could queue a proposal in a foreign lens. The
+        // verdict was already computed once at the top of this function.
+        if (graphWsId && !workspaceAccessible) {
+          return ok({
+            error: `Forbidden: no access to workspace ${graphWsId}`,
+          });
         }
         const { submitCaptureGraph } =
           await import("../../services/capture-agent/submit-capture-graph.js");
+
+        // AGENT-MODE routing (piece A): submitCaptureGraph derives the terminal
+        // from identity + policy. We pass the acting `agentUserId` so the core
+        // scores the graph against the ONE agent policy evaluator: when EVERY op
+        // is auto-approvable it MATERIALIZES the graph now (a direct operator
+        // write it builds itself, the same one the approve loop performs) and
+        // records an `auto_approved` proposal; otherwise it files a pending one.
         const graphResult = await submitCaptureGraph({
           userId,
+          ...(agentUserId ? { agentUserId } : {}),
           workspaceId: graphWsId,
           ...(captureProjectId ? { projectId: captureProjectId } : {}),
+          ...(captureProjectName ? { projectName: captureProjectName } : {}),
           // Origin is the door, not a caller claim: an MCP caller is an agent.
           source: "agent",
           ...(sessionId ? { sessionId } : {}),
@@ -1920,11 +2010,11 @@ export async function executeMCPToolViaHubProtocol(
             ? { rawSource: { rawText: captureRawText.slice(0, 8000) } }
             : {}),
         });
-        // `state: "pending"` IS the success shape here — surface it as a governed
-        // write so `ok()` attaches the standard proposal reinforcement hint.
-        // `graphResult.writeReceipt` already conforms to the uniform receipt.
+        // The terminal is policy-derived: `applied` (materialized now, whitelisted
+        // graph) or `proposed` (pending review). `graphResult.writeReceipt`
+        // already conforms to the uniform receipt (state applied|pending).
         return ok({
-          status: "proposed",
+          status: graphResult.applied ? "applied" : "proposed",
           scope: graphScope,
           ...graphResult,
           ...(crossKindLinks.length

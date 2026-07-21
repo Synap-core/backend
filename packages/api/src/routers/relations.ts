@@ -835,6 +835,12 @@ export const relationsRouter = router({
         workspaceId: effectiveWorkspaceId,
         subjectType: "relation",
         action: "create",
+        // Attribute to the acting agent so the write routes through the
+        // governance membrane (propose) instead of auto-applying as the
+        // operator. Without this the caller context carries agentUserId but the
+        // gate never sees it — which silently made agent-created relations
+        // (e.g. the same_subject auto-connect on capture) operator-owned.
+        agentUserId: ctx.agentUserId ?? undefined,
         // Group a link/relation proposal under the agent's active run session.
         sessionId: ctx.sessionId ?? undefined,
         data: {
