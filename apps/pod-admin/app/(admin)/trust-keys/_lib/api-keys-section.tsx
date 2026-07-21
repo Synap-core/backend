@@ -108,8 +108,8 @@ export function categorize(k: UnifiedKey): KeyCategory {
       return "system";
     default:
       // "system" (admin-minted) and "user_pat" (personal access token) both
-      // fall here for "system" they're already correctly named by keyType,
-      // but the operator bucket is for personal tokens.
+      // fall here: "system" is already correctly named by keyType; everything
+      // else (personal access tokens) maps to the operator bucket.
       return k.keyType === "system" ? "system" : "operator";
   }
 }
@@ -574,7 +574,7 @@ function KeyRow({
   );
 }
 
-function keyStatus(apiKey: {
+export function keyStatus(apiKey: {
   isActive: boolean;
   expiresAt?: Date | string | null;
 }): { kind: StatusKind; label: string } {

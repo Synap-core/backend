@@ -18,12 +18,13 @@
 
 import { useEffect, useState } from "react";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
-import { Ban, ChevronDown, ShieldCheck } from "lucide-react";
+import { Ban, ChevronDown, Plug } from "lucide-react";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
   categorize,
   CATEGORY_LABEL,
+  keyStatus,
   type UnifiedKey,
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
@@ -106,7 +107,7 @@ export default function MyConnectionsPage() {
   function confirmRevoke(key: UnifiedKey) {
     if (
       !window.confirm(
-        `Revoke "${key.keyName}"? Anything using this key will immediately lose access to this Pod.`
+        `Revoke "${key.keyName}"? Anything using this key will lose access to this Pod (a revoke may need admin approval first).`
       )
     ) {
       return;
@@ -138,7 +139,7 @@ export default function MyConnectionsPage() {
           <span className="text-xs text-foreground/50">{active.length}</span>
         </div>
         {active.length === 0 ? (
-          <EmptyState label="You have no active connections yet." />
+          <EmptyState />
         ) : (
           active.map((key) => (
             <KeyCard
@@ -205,12 +206,28 @@ function KeyCard({
   onRevoke?: () => void;
 }) {
   const category = categorize(apiKey);
-  const created = apiKey.createdAt
-    ? `created ${formatRelative(apiKey.createdAt)}`
-    : null;
-  const expiry = apiKey.expiresAt
-    ? `expires ${formatRelative(apiKey.expiresAt)}`
-    : "no expiry";
+  // Honest STATUS (Active / Expiring soon / Expired / Revoked) — separate from
+  // the TYPE badge, so an expired key never reads as a green "active" one.
+  const status = keyStatus(apiKey);
+  const statusColor =
+    status.kind === "healthy"
+      ? "success"
+      : status.kind === "stale"
+        ? "warning"
+        : "default";
+  const meta = [
+    apiKey.createdAt ? `created ${formatRelative(apiKey.createdAt)}` : null,
+    apiKey.lastUsedAt
+      ? `last used ${formatRelative(apiKey.lastUsedAt)}`
+      : "never used",
+    apiKey.isActive
+      ? apiKey.expiresAt
+        ? `expires ${formatRelative(apiKey.expiresAt)}`
+        : "no expiry"
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <Card shadow="none" className="border border-foreground/10 bg-content1">
@@ -218,23 +235,22 @@ function KeyCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="break-words text-sm font-medium">{apiKey.keyName}</p>
-            <p className="mt-1 font-mono text-xs text-foreground/55">
-              {connectionLabel(apiKey.hubId)} · {apiKey.keyPrefix}…
+            <p className="mt-1 text-xs text-foreground/55">
+              {connectionLabel(apiKey.hubId)} ·{" "}
+              <span className="font-mono">{apiKey.keyPrefix}…</span>
             </p>
           </div>
-          <Chip
-            size="sm"
-            variant="flat"
-            color={apiKey.isActive ? "success" : "default"}
-          >
-            {CATEGORY_LABEL[category]}
-          </Chip>
+          <div className="flex shrink-0 items-center gap-2">
+            <Chip size="sm" variant="flat" color="default">
+              {CATEGORY_LABEL[category]}
+            </Chip>
+            <Chip size="sm" variant="dot" color={statusColor}>
+              {status.label}
+            </Chip>
+          </div>
         </div>
 
-        <p className="text-xs text-foreground/55">
-          {created ? `${created} · ` : ""}
-          {expiry}
-        </p>
+        <p className="text-xs text-foreground/55">{meta}</p>
 
         {onRevoke ? (
           <div className="pt-1">
@@ -256,11 +272,22 @@ function KeyCard({
   );
 }
 
-function EmptyState({ label }: { label: string }) {
+function EmptyState() {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5 text-sm text-foreground/55">
-      <ShieldCheck size={17} className="shrink-0" />
-      {label}
+    <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
+      <div className="flex items-center gap-3 text-sm text-foreground/55">
+        <Plug size={17} className="shrink-0" />
+        You have no active connections yet.
+      </div>
+      <Button
+        as="a"
+        href="/connect"
+        size="sm"
+        variant="flat"
+        className="min-h-10"
+      >
+        Connect an app
+      </Button>
     </div>
   );
 }

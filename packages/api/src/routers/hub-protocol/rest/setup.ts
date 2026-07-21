@@ -1916,8 +1916,10 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
 
     await db
       .update(apiKeys)
+      // Only flip a still-PENDING key — guard against a concurrent reject
+      // resurrecting a revoked key (matches the reject handler's compound where).
       .set({ isActive: true })
-      .where(eq(apiKeys.id, keyId));
+      .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
     logger.info({ keyId, approverId }, "setup/agent/pending: approved");
     return c.json({ ok: true });
   });
