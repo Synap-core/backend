@@ -728,20 +728,41 @@ export const viewsRouter = router({
 
         // Best-effort: reap the loser's orphaned canvas document + version so
         // the race leaves no stray rows (storage object is left; harmless).
+        // Log reap failures — a swallowed delete leaks an empty doc row with
+        // zero observability otherwise.
         if (docId) {
           await db
             .delete(documentVersions)
             .where(eq(documentVersions.documentId, docId))
-            .catch(() => undefined);
+            .catch((reapErr: unknown) =>
+              console.warn(
+                `[resolveScopedSurface] failed to reap orphan documentVersions ${docId}:`,
+                reapErr
+              )
+            );
           await db
             .delete(documents)
             .where(eq(documents.id, docId))
-            .catch(() => undefined);
+            .catch((reapErr: unknown) =>
+              console.warn(
+                `[resolveScopedSurface] failed to reap orphan document ${docId}:`,
+                reapErr
+              )
+            );
         }
 
         const winner = await findCanonicalSurface();
         if (winner) return { view: winner, status: "resolved" as const };
-        throw err;
+        // The winner exists (the index rejected us) but is invisible to THIS
+        // caller's find predicate (different userId on a multi-user pod, or a
+        // different metadata.sessionId). Surface a clean conflict instead of
+        // leaking the raw driver 23505 across the tRPC boundary. The underlying
+        // shared-canonical-board semantics are a flagged product decision.
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "The canonical surface for this scope already exists but is not visible to you.",
+        });
       }
     }),
 
