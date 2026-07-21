@@ -2846,6 +2846,195 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
+    // ── Automations (WHEN-triggered flows) ────────────────────────────────────
+    case "synap_list_automations": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      // Same door the IS/UI use (hubAutomationsRouter.listAutomations →
+      // automationsRouter.list): access-layer visibility floor + pod-wide globals,
+      // narrowed by the workspace lens when present. No lens → all accessible.
+      const result = await caller.automations.listAutomations({
+        userId,
+        workspaceId: requestedWorkspaceId ?? null,
+        status: args.status as
+          "draft" | "active" | "paused" | "error" | undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+      return ok(result);
+    }
+
+    case "synap_trigger_automation": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (typeof args.id !== "string" || args.id.trim() === "") {
+        return ok({ error: "id (automation UUID) is required" });
+      }
+      // Mirror the EXISTING trigger path exactly (hubAutomationsRouter.trigger
+      // Automation → automationsRouter.trigger): identified by id, gated by
+      // assertWorkspaceWrite on the automation's REAL workspace, then enqueued.
+      // This is a RUN, not a content write — it returns { status: "triggered",
+      // runId }, never a proposal. The entity writes the run performs downstream
+      // are separately governed by the automation-governance gate keyed off the
+      // automation's OWNING agent (checkAutomationWriteOrPropose), so an agent
+      // launching a run never launders those writes past governance.
+      // Workspace scoping: pass the confined lens (requestedWorkspaceId) — the
+      // trigger proc rejects a mismatch, so a lens-scoped call only fires that
+      // lens's automations; call with no workspace lens to run a pod-wide one.
+      const result = await caller.automations.triggerAutomation({
+        userId,
+        workspaceId: requestedWorkspaceId ?? null,
+        id: args.id,
+        payload: args.payload as Record<string, unknown> | undefined,
+      });
+      return ok(result);
+    }
+
+    case "synap_create_automation": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (typeof args.name !== "string" || args.name.trim() === "") {
+        return ok({ error: "name is required" });
+      }
+      if (typeof args.triggerType !== "string") {
+        return ok({
+          error: "triggerType is required (event | cron | webhook | manual)",
+        });
+      }
+      const flow = args.flowDefinition as
+        { nodes?: unknown; edges?: unknown } | undefined;
+      if (!flow || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
+        return ok({
+          error:
+            "flowDefinition is required and must be { nodes: [...], edges: [...] }",
+        });
+      }
+      // resultRouting (optional) threads into metadata.resultRouting — the SET
+      // path for the per-entity/per-type run routing. We build the FULL metadata
+      // bag here (a create, not an update), so no wholesale-replace hazard.
+      const resultRouting = args.resultRouting as
+        "per_type" | "per_entity" | "trigger" | undefined;
+      const metadata: Record<string, unknown> = {
+        ...((args.metadata as Record<string, unknown> | undefined) ?? {}),
+        ...(resultRouting ? { resultRouting } : {}),
+      };
+      // GOVERNED create (hubAutomationsRouter.createAutomation → automationsRouter
+      // .create). With agentUserId set, create routes through checkPermission
+      // OrPropose → status:"proposed" (no row written); on approval the approve-
+      // executor re-runs create and materializes a real automation. Default
+      // status "active" (not draft) so an approved automation is immediately
+      // live — mirrors synap_create_playbook.
+      const result = await caller.automations.createAutomation({
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        // Provenance is branded by the hub createAutomation door itself
+        // (source: agentUserId ? "agent" : "intelligence" → createdVia:"ai"),
+        // so the MCP caller passes agentUserId and needs no explicit source.
+        workspaceId: requestedWorkspaceId ?? null,
+        name: args.name,
+        description: args.description as string | undefined,
+        triggerType: args.triggerType as
+          "event" | "cron" | "webhook" | "manual",
+        triggerConfig:
+          (args.triggerConfig as Record<string, unknown> | undefined) ?? {},
+        flowDefinition: flow as {
+          nodes: Record<string, unknown>[];
+          edges: Record<string, unknown>[];
+        },
+        status:
+          (args.status as
+            "draft" | "active" | "paused" | "error" | undefined) ?? "active",
+        metadata,
+      });
+      return ok(result);
+    }
+
+    // ── Playbook executor launch (distinct from start_session's working-run) ──
+    case "synap_run_playbook": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (
+        typeof args.playbookId !== "string" ||
+        args.playbookId.trim() === ""
+      ) {
+        return ok({ error: "playbookId is required" });
+      }
+      // `run` is a workspaceProcedure — resolve the workspace lens (confined
+      // value, else the user's first workspace) exactly like synap_list_playbooks.
+      let runWsId = requestedWorkspaceId;
+      if (!runWsId) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        runWsId = wsIds[0];
+      }
+      if (!runWsId) return ok({ error: "No accessible workspace found" });
+      const runCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        runWsId,
+        undefined,
+        sessionId,
+        agentUserId
+      );
+      const runCaller = playbooksRouter.createCaller(runCtx);
+      // GOVERNED (playbooksRouter.run → checkPermissionOrPropose { playbook, run }).
+      // With agentUserId set, an agent launch returns status:"proposed" (no run
+      // created); only on approval does runPlaybook execute. Same governance the
+      // tRPC/UI run door enforces — never a direct-active bypass.
+      const result = await runCaller.run({
+        playbookId: args.playbookId,
+        params: args.params as Record<string, unknown> | undefined,
+        subjectId: args.subjectId as string | undefined,
+        agentIds: args.agentIds as string[] | undefined,
+        source: "mcp",
+        reasoning: args.reasoning as string | undefined,
+        agentUserId,
+      });
+      return ok(result);
+    }
+
+    // ── Author a Tier-2 CODE skill (sandboxed executable) ─────────────────────
+    // NAMED CHOICE: a NEW tool, not a `kind:'code'` branch on synap_create_verb.
+    // create_verb is deliberately declarative-only (a unit-tested validator
+    // rejects code) and is about ADDING a verb to an installed tool; a code skill
+    // is a different shape (author executable code + docs, no toolName/provider
+    // Spec). Both route to the SAME governed door (skillsRouter.create); keeping
+    // them separate preserves create_verb's clean single purpose.
+    case "synap_create_skill": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (typeof args.name !== "string" || args.name.trim() === "") {
+        return ok({ error: "name is required" });
+      }
+      if (typeof args.code !== "string" || args.code.trim() === "") {
+        return ok({
+          error:
+            "code is required — synap_create_skill authors a runnable (sandboxed) code skill. For a declarative provider-HTTP verb use synap_create_verb instead.",
+        });
+      }
+      const skillWorkspaceId =
+        typeof args.workspaceId === "string" ? args.workspaceId : undefined;
+      const skillsCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        skillWorkspaceId ?? null,
+        undefined,
+        sessionId,
+        agentUserId ?? null
+      );
+      const skillsCaller = regularSkillsRouter.createCaller(skillsCtx as never);
+      // GOVERNED (skillsRouter.create → checkPermissionOrPropose { skill, create }).
+      // With agentUserId set, an agent create returns status:"proposed". On
+      // approval the code skill is born UNAPPROVED (approved = kind==="instruction"
+      // → false for code): it does NOT load or run as an agent tool until the
+      // owner explicitly approves it. Same governance every skill-create door uses.
+      const result = await skillsCaller.create({
+        workspaceId: skillWorkspaceId,
+        kind: "code",
+        scope: skillWorkspaceId ? "workspace" : "pod",
+        name: args.name,
+        description: args.description as string | undefined,
+        body: args.body as string | undefined,
+        code: args.code,
+        parameters: args.parameters as Record<string, unknown> | undefined,
+        agentUserId: agentUserId ?? undefined,
+      });
+      return ok(result);
+    }
+
     default:
       throw new Error(
         `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`

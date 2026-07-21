@@ -59,6 +59,20 @@ PATCH /api/hub/entities/{entityId}
 
 **Properties are deep-merged — send only the keys you want to change.** An update with `{ "status": "done" }` leaves all other properties untouched. You never need to re-send the full properties object.
 
+### Authored text is content, not a `file`
+
+Something **you** author — a pitch deck, a strategic plan, a note body — is
+**never** a `file`- or `document`-kind entity. Create it as the right CONTENT
+kind (`note`, `knowledge`, or a fitting domain kind) with `content` set to the
+Markdown body; Synap **auto-materializes** that `content` into a real
+versioned document behind the scenes (`entities WHERE documentId = ?`) — no
+upload step needed. `file` is reserved for real uploaded bytes you actually
+have (the upload door / `synap upload`) — an agent has no filesystem, so it
+rarely touches `file` at all. Reach for `synap_create_document` /
+`POST /api/hub/documents` directly only for a standalone rich document that
+isn't itself a title-worthy entity (see below) — never as a substitute for an
+entity's `content`.
+
 ### Create a document (attach to an entity)
 
 ```json

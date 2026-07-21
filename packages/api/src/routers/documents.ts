@@ -34,6 +34,8 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   readDocumentVersionContent,
+  EntityBodyService,
+  eventRepository,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -316,13 +318,25 @@ export const documentsRouter = router({
         }
       }
 
-      // All documents use MinIO storage (unified approach)
-      // Current content is always in storage, versions are snapshots in database
-      const contentBuffer = await storage.downloadBuffer(document.storageKey!);
-      const content =
-        document.type === "pdf" || document.type === "docx"
-          ? contentBuffer.toString("base64")
-          : contentBuffer.toString("utf-8");
+      // Read the body via the 3-state resolver (never non-null-asserts
+      // `storageKey` — fixes B2, where an external-URL reference document
+      // [storageKey NULL, storageUrl set] crashed here on `storageKey!`).
+      //   - stored bytes → base64 for pdf/docx, else utf-8 (behavior-preserving)
+      //   - external ref → the URL string (previously an unreadable crash)
+      //   - inline       → the latest version's inline content
+      const entityBodyService = new EntityBodyService(db, eventRepository);
+      const body = await entityBodyService.getBytes(input.documentId);
+      let content = "";
+      if (body?.kind === "bytes") {
+        content =
+          document.type === "pdf" || document.type === "docx"
+            ? body.buffer.toString("base64")
+            : body.buffer.toString("utf-8");
+      } else if (body?.kind === "external") {
+        content = body.url;
+      } else if (body?.kind === "inline") {
+        content = body.content;
+      }
 
       return { document, content };
     }),

@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, asc, desc, ne, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, asc, desc, ne, isNull, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import {
@@ -427,7 +427,19 @@ export class ChannelRepository {
           eq(channels.contextObjectId, entityId),
           // Never route an internal recap into a client-comms surface.
           ne(channels.channelType, ChannelType.EXTERNAL),
-          eq(channels.status, ChannelStatus.ACTIVE)
+          eq(channels.status, ChannelStatus.ACTIVE),
+          // Reuse ONLY within the requesting run's workspace scope. A pod-scoped
+          // entity can be touched by automations in different workspaces; without
+          // this, workspace Y's per-entity recap would reuse (and disclose into)
+          // a channel workspace X created for the same entity — the channel
+          // read-visibility gate is keyed on channels.workspaceId. So we scope
+          // reuse per-workspace (pod-wide runs reuse the pod-scoped channel),
+          // creating a fresh per-(entity, workspace) thread on a miss. Unlike
+          // ensureAutomationRunChannel (automationId is single-workspace by
+          // construction), the entity binding is not.
+          workspaceId
+            ? eq(channels.workspaceId, workspaceId)
+            : isNull(channels.workspaceId)
         )
       )
       // Deterministic oldest-wins on duplicate entity-bound channels.

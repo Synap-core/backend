@@ -373,6 +373,23 @@ export const automationsRouter = router({
         }
       }
 
+      // A cron automation born `active` (direct operator create, OR an
+      // agent-proposed create materialized at approval time — the approve-executor
+      // re-runs THIS proc) must carry `nextRunAt`, or the cron scheduler's
+      // `status='active' AND nextRunAt <= now` filter (automation-cron-scheduler.ts)
+      // never selects it and it silently never fires. `activate` computes this for
+      // the activate-later path; compute it here for the born-active path too,
+      // reading `triggerConfig.expression` exactly like `activate` does. Only cron
+      // needs it — event/webhook/manual are dispatched by other paths.
+      let createNextRunAt: Date | null = null;
+      if (input.status === "active" && input.triggerType === "cron") {
+        const cronExpression = (input.triggerConfig as Record<string, unknown>)
+          ?.expression as string | undefined;
+        if (cronExpression) {
+          createNextRunAt = computeNextCronRunAt(cronExpression, new Date());
+        }
+      }
+
       const [row] = await database
         .insert(automations)
         .values({
@@ -384,6 +401,7 @@ export const automationsRouter = router({
           triggerConfig: input.triggerConfig,
           flowDefinition: input.flowDefinition as unknown as FlowDefinition,
           status: input.status,
+          ...(createNextRunAt ? { nextRunAt: createNextRunAt } : {}),
           state: input.state ?? {},
           metadata: {
             ...(input.metadata ?? {}),

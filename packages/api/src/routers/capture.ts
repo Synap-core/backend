@@ -76,8 +76,11 @@ import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
-import { eventRepository, linkEntityToProject } from "@synap/database";
-import { resolveContentTarget } from "../import/materialize-document.js";
+import {
+  eventRepository,
+  linkEntityToProject,
+  EntityBodyService,
+} from "@synap/database";
 import {
   materializeCompositeGraph,
   createRelationsFromRefs,
@@ -92,6 +95,57 @@ import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 const logger = createLogger({ module: "capture-router" });
+
+/**
+ * Resolve a captured body through the canonical EntityBodyService door — the
+ * behavior-preserving replacement for the old `resolveContentTarget`:
+ *   - long-form markdown → a versioned document (+ Typesense index), linked via
+ *     the returned `documentId`;
+ *   - short content → returned as `inlineContent` for the caller to place into
+ *     `properties.content`.
+ * The service owns the Document + Storage half only; the Typesense side-effect
+ * (which `materializeContentDocument` used to fire internally) stays a caller
+ * concern and is fired here. A materialization failure folds back to inline
+ * inside the service, so capture is never blocked. The prior path stamped the
+ * document with default `human` provenance — preserved here.
+ */
+async function resolveCapturedBody(params: {
+  content: string | undefined | null;
+  title?: string;
+  userId: string;
+  workspaceId?: string | null;
+  db: unknown;
+  eventRepo: typeof eventRepository;
+}): Promise<{ documentId?: string; inlineContent?: string }> {
+  const { content, title, userId, workspaceId, db, eventRepo } = params;
+  if (!content) return {};
+  const body = await new EntityBodyService(db, eventRepo).setBody({
+    // Storage-path key only (mirrors the old random-uuid path — the entity does
+    // not exist yet at this pre-create point).
+    entityId: randomUUID(),
+    userId,
+    workspaceId: workspaceId ?? null,
+    title: title || undefined,
+    provenance: { createdByKind: "human", createdByUserId: userId },
+    text: content,
+  });
+  if (body.documentId) {
+    const documentId = body.documentId;
+    emitSideEffects({
+      subjectType: "document",
+      action: "create",
+      subjectId: documentId,
+      userId,
+      workspaceId: workspaceId ?? undefined,
+    }).catch((err) =>
+      logger.warn(
+        { err, documentId },
+        "Document Typesense indexing failed (document still persisted)"
+      )
+    );
+  }
+  return { documentId: body.documentId, inlineContent: body.inlineContent };
+}
 
 // ── Default relation type for unknown slugs ────────────────────────────────
 
@@ -167,9 +221,7 @@ type DedupCandidate = {
 };
 
 type DegradedCaptureReason =
-  | "is_auth_error"
-  | "is_invalid_response"
-  | "is_empty_result";
+  "is_auth_error" | "is_invalid_response" | "is_empty_result";
 
 /** Build the generic-item fallback proposal returned when IS cannot structure input. */
 export function buildDegradedCaptureFallback(
@@ -474,14 +526,13 @@ export const captureRouter = router({
       // Typesense), linked via documentId. Short content is kept inline as
       // properties.content so the full body survives even when the 80-char
       // title truncates it. Shared single decision point; never blocks capture.
-      const { documentId, inlineContent } = await resolveContentTarget({
+      const { documentId, inlineContent } = await resolveCapturedBody({
         content: input.content,
         title,
         userId,
         workspaceId,
         db: database,
         eventRepo,
-        logContext: { userId },
       });
       if (inlineContent !== undefined) {
         properties = { ...properties, content: inlineContent };
@@ -869,8 +920,7 @@ export const captureRouter = router({
       // history. Threaded into structure() so EVERY capture door benefits. Best
       // effort: a memory hiccup degrades to "no memory", never fails the capture.
       let routingMemory:
-        | Awaited<ReturnType<typeof fetchRoutingMemory>>
-        | undefined;
+        Awaited<ReturnType<typeof fetchRoutingMemory>> | undefined;
       try {
         routingMemory = await fetchRoutingMemory(userId);
       } catch (err) {
@@ -1872,14 +1922,13 @@ export const captureRouter = router({
           // kinds keep the routed stamp. The item fallback below is explicitly
           // pinned to the routed workspace so degraded captures stay in-lane.
           const isPod = await isPodScopeProfile(op.profileSlug);
-          const { documentId, inlineContent } = await resolveContentTarget({
+          const { documentId, inlineContent } = await resolveCapturedBody({
             content: op.content,
             title: op.title,
             userId,
             workspaceId,
             db: database,
             eventRepo,
-            logContext: { profileSlug: op.profileSlug },
           });
           const properties: Record<string, unknown> = {
             ...(op.properties ?? {}),

@@ -25,13 +25,13 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 ### Data layers — the graph itself
 
-| Layer         | What it is                                     | When to use                                              |
-| ------------- | ---------------------------------------------- | -------------------------------------------------------- |
-| **Entities**  | Typed structured nodes (task, person, …)       | Anything worth filtering, sorting, or linking            |
-| **Relations** | Typed edges between entities                   | Making the graph traversable                             |
-| **Documents** | Long-form markdown attached to an entity       | Meeting notes, research writeups, articles               |
-| **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
-| **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
+| Layer         | What it is                                                                                                                                       | When to use                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| **Entities**  | Typed structured nodes (task, person, …)                                                                                                         | Anything worth filtering, sorting, or linking                                                                |
+| **Relations** | Typed edges between entities                                                                                                                     | Making the graph traversable                                                                                 |
+| **Documents** | Long-form versioned body attached to an entity — auto-materialized from an entity's `content`, or created standalone via `synap_create_document` | Meeting notes, research writeups, articles — **never** a `file`/`document`-kind entity for text you authored |
+| **Threads**   | Channel conversations, optional entity context                                                                                                   | Posting to the user's personal AI channel                                                                    |
+| **Proposals** | Writes queued for human approval                                                                                                                 | Governance for some mutations (not an error — see below)                                                     |
 
 ### Key profiles for AI use
 

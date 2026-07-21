@@ -51,3 +51,24 @@
    ```
 
 3. If the user said why ("interesting for the onboarding project"), also create a relation to that project — never drop the reason as a plain comment, turn it into a link.
+
+### Example 4 — "Write up a strategic plan for the Q3 launch"
+
+You are authoring this text yourself — it is not a file you have. Don't create
+a `file`/`document`-kind entity and stuff the Markdown into it.
+
+1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=knowledge&workspaceId=…` → none
+2. Create a CONTENT-kind entity carrying the plan as `content` (the doc auto-materializes):
+
+   ```json
+   POST /api/hub/entities
+   { "userId": "{userId}", "workspaceId": "{wsId}",
+     "profileSlug": "knowledge",
+     "title": "Q3 launch strategic plan",
+     "properties": { "ek_type": "reference" },
+     "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
+   }
+   ```
+
+3. Link it to the relevant project: `POST /api/hub/relations` `{ sourceEntityId: "ent_new_plan", targetEntityId: "ent_project_q3", type: "related_to" }`.
+4. Confirm: "Plan captured and linked to Q3 launch." No upload, no `file` entity, no separate `synap_create_document` call.

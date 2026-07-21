@@ -1508,6 +1508,191 @@ export const tools = {
         },
       },
       {
+        name: "synap_list_automations",
+        description:
+          "List automations (WHEN-triggered flows) visible in a workspace — the reactive rules a user has set up (e.g. 'on new lead → draft a follow-up', 'every morning → recap yesterday'). Each entry has its id (pass to synap_trigger_automation), name, triggerType (event | cron | webhook | manual), and status (active | draft | paused | error). Read-only. Call this to discover what already reacts BEFORE creating a new automation. Omit workspaceId to list everything accessible.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace UUID to narrow to (pod-wide automations are always included). Omit for all accessible.",
+            },
+            status: {
+              type: "string",
+              enum: ["draft", "active", "paused", "error"],
+              description: "Optional status filter.",
+            },
+            limit: {
+              type: "number",
+              description: "Max entries to return (default 50).",
+            },
+          },
+        },
+      },
+      {
+        name: "synap_trigger_automation",
+        description:
+          "Run an existing automation NOW, on demand (discover ids via synap_list_automations) — e.g. fire a 'daily client recap' immediately instead of waiting for its schedule. Pass the automation id; optionally a payload injected as the run's trigger.payload. This is a RUN, not a proposal: it returns { status: 'triggered', runId } once enqueued (gated by your write access to the automation's workspace). Any entity writes the run then performs are separately reviewed under the automation's own governance. A draft automation is runnable on demand this way; paused/error non-manual ones are refused.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description: "UUID of the automation to trigger.",
+            },
+            payload: {
+              type: "object",
+              description:
+                "Optional data injected as trigger.payload in the run context (e.g. { entityId } to bind the run to a subject).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens. When set, only automations in that workspace can be triggered; omit to trigger a pod-wide automation.",
+            },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "synap_create_automation",
+        description:
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger and a flowDefinition ({ nodes, edges }). For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Automation display name." },
+            description: {
+              type: "string",
+              description: "What this automation does.",
+            },
+            triggerType: {
+              type: "string",
+              enum: ["event", "cron", "webhook", "manual"],
+              description:
+                "WHEN it fires: 'event' (something happened, e.g. entity created), 'cron' (schedule — put the 5-field expression in triggerConfig.expression), 'webhook' (external call), 'manual' (only via synap_trigger_automation).",
+            },
+            triggerConfig: {
+              type: "object",
+              description:
+                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { profileSlug } }.",
+            },
+            flowDefinition: {
+              type: "object",
+              description:
+                "The THEN flow: { nodes: [...], edges: [...] }. Nodes are the steps; edges wire them in order.",
+              properties: {
+                nodes: { type: "array", items: { type: "object" } },
+                edges: { type: "array", items: { type: "object" } },
+              },
+              required: ["nodes", "edges"],
+            },
+            status: {
+              type: "string",
+              enum: ["draft", "active", "paused", "error"],
+              description: "Defaults to 'active' (live once approved).",
+            },
+            resultRouting: {
+              type: "string",
+              enum: ["per_type", "per_entity", "trigger"],
+              description:
+                "Optional: where run results are posted. 'per_entity' = the subject entity's own channel, 'per_type' = one channel per entity type, 'trigger' = the triggering channel.",
+            },
+            metadata: {
+              type: "object",
+              description: "Optional extra metadata bag.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Optional workspace to scope to (default pod-wide).",
+            },
+          },
+          required: ["name", "triggerType", "flowDefinition"],
+        },
+      },
+      {
+        name: "synap_run_playbook",
+        description:
+          "LAUNCH a playbook via its executor (discover ids via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). This is the EXECUTOR launch, distinct from synap_start_session(templateId) which opens a working session for you to drive by hand. Governed: an agent launch returns status='proposed' for review; only on approval does the run execute. Pass params to fill {{placeholders}}, and subjectId to bind the run to an entity.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            playbookId: {
+              type: "string",
+              description: "UUID of the playbook to run.",
+            },
+            params: {
+              type: "object",
+              description:
+                "Values for the playbook's {{param}} placeholders (e.g. { market: 'EU fintech' }).",
+            },
+            subjectId: {
+              type: "string",
+              description:
+                "Optional entity UUID to bind this run to (the run's subject lens).",
+            },
+            agentIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional agent ids to staff the run with.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you're launching this — surfaced on the review proposal.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace the playbook lives in (falls back to your first workspace).",
+            },
+          },
+          required: ["playbookId"],
+        },
+      },
+      {
+        name: "synap_create_skill",
+        description:
+          "Author a runnable CODE skill — a sandboxed executable (plus its docs) the agent can later run, e.g. a custom transform/enrichment that no connected-service verb covers. Use this when you need CODE; for a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed the same as every write: an agent create returns status='proposed'. Once approved, a code skill is born UNAPPROVED — it does NOT load or run as a tool until the owner explicitly approves it (code executes, so it needs a deliberate human OK). `code` is required.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description:
+                "Stable skill name (e.g. 'normalize_phone_numbers').",
+            },
+            description: {
+              type: "string",
+              description: "One line: what it does + when to use it.",
+            },
+            code: {
+              type: "string",
+              description:
+                "The executable source (runs sandboxed). REQUIRED — this is what makes it a code skill.",
+            },
+            body: {
+              type: "string",
+              description:
+                "Optional Markdown documentation: how the skill works, inputs/outputs, when to use it.",
+            },
+            parameters: {
+              type: "object",
+              description:
+                "Optional runtime parameter schema (shorthand types, e.g. { input: 'string', count: 'number?' }).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace to scope the skill to (default: pod-wide).",
+            },
+          },
+          required: ["name", "code"],
+        },
+      },
+      {
         name: "synap_load_skill",
         description:
           "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic.",

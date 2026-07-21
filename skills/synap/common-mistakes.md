@@ -10,3 +10,4 @@
 8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
 9. **Routing known-structure data through free-text capture.** If you already know the profileSlug + fields, create the entity directly — smart capture can degrade to a single flat note.
 10. **Paragraph session goals.** The goal is one line; put detail and deliverables in expectedOutputs.
+11. **Creating a `file`/`document`-kind entity to hold text you wrote.** A pitch deck, plan, or note body you authored is `content` on a real CONTENT-kind entity (`note`, `knowledge`, a domain kind) — Synap auto-materializes it into a document. `file` is only for real uploaded bytes you actually have; an agent with no filesystem almost never needs it.

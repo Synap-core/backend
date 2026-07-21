@@ -1758,14 +1758,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     try {
-      // Resolve pod-wide vs workspace scope for the `document` kind exactly like
+      // Resolve pod-wide vs workspace scope for the `file` kind exactly like
       // the `entity/create` approve-executor: a pod-scope kind lands pod-wide
       // (caller ctx.workspaceId = null) while a workspace-scoped one stays in
       // its lens. `entities.create` still runs its own placement resolver; this
       // only fixes the caller/governance lens.
       const profileService = new ProfileResolutionService(db);
       const entityScope = await profileService.getEntityScope(
-        "document",
+        "file",
         workspaceId
       );
       const callerWorkspaceId = entityScope === "pod" ? null : workspaceId;
@@ -1791,7 +1791,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // `agentUserId` is threaded as INPUT (entities.create reads it from the
       // input, not the ctx) so the permission check attributes provenance.
       const created = (await entityCaller.create({
-        profileSlug: "document",
+        profileSlug: "file",
         title: bodyTitle ?? filename,
         documentId: stored.documentId,
         properties: { mimeType, fileSize: buffer.length },

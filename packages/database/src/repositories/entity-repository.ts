@@ -85,7 +85,10 @@ function runBoundedSignalWrite(task: () => Promise<void>): void {
  */
 export class EntityCreateRejectedError extends PropertyValidationError {
   constructor(
-    public readonly guard: "project-is-not-an-entity" | "role-is-not-a-kind",
+    public readonly guard:
+      | "project-is-not-an-entity"
+      | "role-is-not-a-kind"
+      | "file-requires-document",
     message: string,
     profileId: string
   ) {
@@ -308,6 +311,22 @@ export class EntityRepository extends BaseRepository<
       throw new EntityCreateRejectedError(
         "project-is-not-an-entity",
         "Projects are not entities. Use the project door (MCP synap_create_project / POST /api/hub/projects) — agent creation requires evidenceEntityIds (≥5). To group work, link entities to an existing project via belongs_to_project.",
+        profile.id
+      );
+    }
+
+    // 1a-pre-2. File-is-uploaded-bytes door. The `file` kind is ONLY for real
+    // uploaded bytes — its identity is a stored `documents` row reached via
+    // `documentId`. Authored text is NOT a file: it belongs to a content kind
+    // (note/article/…) whose body auto-becomes a document. Reject a `file`
+    // create that carries no upload-derived `documentId` so an agent can't
+    // mislabel prose as a file (which would then synthesize an empty/ghost
+    // document). The governed upload door supplies a real `documentId` and so
+    // passes cleanly. Backstop for the API-entry guard in entities.create.
+    if (profile.slug === "file" && !data.documentId) {
+      throw new EntityCreateRejectedError(
+        "file-requires-document",
+        "A `file` entity must be backed by an uploaded document — use the upload door (synap upload / POST /api/hub/entities/files). Authored text should be a content kind (note/article/…); its body becomes a document automatically.",
         profile.id
       );
     }

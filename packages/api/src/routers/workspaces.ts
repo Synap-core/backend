@@ -32,7 +32,7 @@ import {
   ProfileResolutionService,
   WorkspaceRepository,
   WorkspaceMemberRepository,
-  DocumentRepository,
+  EntityBodyService,
   EntityRepository,
   RelationRepository,
   RelationDefRepository,
@@ -670,10 +670,8 @@ export const workspacesRouter = router({
       // `views.resolveScopedSurface` ({ type: 'whiteboard' }, no scope) on first
       // open. Per-workspace auto-created boards produced a graveyard of empty
       // `isMain` boards the canonical door never reached.
-      const {
-        ensureDefaultCommands,
-        ensureDefaultRelationDefs,
-      } = await import("@synap/database");
+      const { ensureDefaultCommands, ensureDefaultRelationDefs } =
+        await import("@synap/database");
 
       const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);
       console.log(
@@ -3668,8 +3666,7 @@ export const workspacesRouter = router({
             }
           }
 
-          // Create documents for entities with content
-          // (storage lives in the API layer, not the database package)
+          // Seed entity bodies through the canonical body door (EntityBodyService).
           const entitiesWithContent = (input.definition.suggestedEntities ?? [])
             .map((entity, idx) => ({ entity, entityId: result.entityIds[idx] }))
             .filter(
@@ -3678,50 +3675,50 @@ export const workspacesRouter = router({
             );
 
           if (entitiesWithContent.length > 0) {
-            const { storage } = await import("@synap/storage");
-
             const database = await getDb();
             // Shared singleton, not a fresh hookless instance — see note above.
             const evRepo = eventRepository;
-            const docRepo = new DocumentRepository(database, evRepo);
+            const entityBodyService = new EntityBodyService(database, evRepo);
             const entRepo = new EntityRepository(database, evRepo);
 
             for (const { entity, entityId } of entitiesWithContent) {
               try {
-                const key = storage.buildPath(
-                  ctx.userId,
-                  "entity",
+                // B4 FIX: this loop used to materialize EVERY seed body into a
+                // document unconditionally (and never wrote a v1 snapshot). It
+                // now runs the SAME heuristic as every other writer — long-form
+                // → a versioned document (with a real v1 snapshot), short →
+                // inline properties.content. Provisioning write → `system`
+                // provenance.
+                const body = await entityBodyService.setBody({
                   entityId,
-                  "md"
-                );
-                const metadata = await storage.upload(key, entity.content, {
-                  contentType: "text/markdown",
-                });
-
-                const doc = await docRepo.create(
-                  {
-                    title: entity.title,
-                    type: "markdown",
-                    storageUrl: metadata.url,
-                    storageKey: metadata.path,
-                    size: metadata.size,
-                    mimeType: "text/markdown",
-                    userId: ctx.userId,
-                    workspaceId: result.workspaceId,
+                  userId: ctx.userId,
+                  workspaceId: result.workspaceId,
+                  title: entity.title,
+                  provenance: {
+                    createdByKind: "system",
+                    createdByUserId: ctx.userId,
                   },
-                  ctx.userId
-                );
-
-                // Link entity → document (single direction — no backlink needed)
-                await entRepo.update(
-                  entityId,
-                  { documentId: doc.id },
-                  ctx.userId
-                );
+                  text: entity.content,
+                });
+                if (body.documentId) {
+                  // Link entity → document (single direction — no backlink needed)
+                  await entRepo.update(
+                    entityId,
+                    { documentId: body.documentId },
+                    ctx.userId
+                  );
+                } else if (body.inlineContent !== undefined) {
+                  // Short seed body stays inline (merged into properties).
+                  await entRepo.update(
+                    entityId,
+                    { properties: { content: body.inlineContent } },
+                    ctx.userId
+                  );
+                }
               } catch (err) {
                 logger.warn(
                   { err, entityId, title: entity.title },
-                  "Failed to create document for seed entity (non-fatal)"
+                  "Failed to seed body for entity (non-fatal)"
                 );
               }
             }

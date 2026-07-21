@@ -113,10 +113,9 @@ export const contextRouter = router({
           id: r.id,
           type: r.type,
           title: r.title ?? null,
-          // Pass document metadata through for both `document` (canonical) and
-          // legacy `file` — the file→document merge is operator-driven, so
-          // un-migrated uploads stay `type:"file"` until it runs.
-          ...(r.type === "document" || r.type === "file"
+          // Pass document metadata through for `file` entities so linked
+          // uploads carry their storage/mime properties into AI context.
+          ...(r.type === "file"
             ? { properties: r.properties as Record<string, unknown> }
             : {}),
         }));

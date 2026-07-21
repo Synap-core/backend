@@ -29,7 +29,7 @@ import {
   ProfileResolutionService,
   eventRepository,
   EntityRepository,
-  DocumentRepository,
+  EntityBodyService,
   FacetRepository,
   getEffectiveFacets,
   loadFacetSlugsBatch,
@@ -56,7 +56,6 @@ import {
 } from "@synap/database";
 import {
   entities,
-  documents,
   views,
   workspaces,
   entityExternalLinks,
@@ -89,7 +88,6 @@ import {
   userVisibleWhere,
 } from "../utils/user-visible-where.js";
 import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
-import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 
@@ -289,7 +287,7 @@ const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
       kind: "widget",
       widgetType: "entity-links",
       pos: { x: 0, y: 8, w: 6, h: 4 },
-      config: { profileSlug: "document", title: "Documents" },
+      config: { profileSlug: "file", title: "Documents" },
     },
     {
       id: "all-links",
@@ -330,7 +328,7 @@ const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
       kind: "widget",
       widgetType: "entity-links",
       pos: { x: 6, y: 8, w: 6, h: 4 },
-      config: { profileSlug: "document", title: "Documents" },
+      config: { profileSlug: "file", title: "Documents" },
     },
   ],
 };
@@ -849,6 +847,23 @@ export const entitiesRouter = router({
         });
       }
 
+      // File-is-uploaded-bytes guard (API entry). The `file` kind is ONLY for
+      // real uploaded bytes reached via an upload-derived `documentId`. Reject
+      // BEFORE EntityBodyService.setBody below synthesizes a documentId from
+      // `content` — otherwise authored text would silently mint a ghost document
+      // and slip through as a "file". A genuine upload arrives with a real
+      // `documentId` and NO `content`. Backstopped in EntityRepository.create.
+      if (
+        profileSlug === "file" &&
+        (input.content != null || input.documentId == null)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "A `file` entity must be backed by an uploaded document (use the upload door — synap upload / POST /api/hub/entities/files). Authored text should be a content kind (note/article/…); its body becomes a document automatically.",
+        });
+      }
+
       // Kind + Facets: attach requested roles to a materialized entity through
       // the governed `attachFacet` door — the ONE facet write door (validation +
       // proposal gating inherited). Advisory: a single role failure is reported,
@@ -982,6 +997,24 @@ export const entitiesRouter = router({
               visibleMatch
             ) {
               const matchedId = identity.entity.id;
+              const enrichCaller = entitiesRouter.createCaller(
+                ctx as unknown as Parameters<
+                  typeof entitiesRouter.createCaller
+                >[0]
+              );
+              // update's source enum is narrower than create's — connector
+              // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
+              // Governance only branches on ai/intelligence anyway, so map the
+              // non-AI connector sources to "user" (first-party write).
+              const enrichSource =
+                input.source === "ai" ||
+                input.source === "intelligence" ||
+                input.source === "agent" ||
+                input.source === "system" ||
+                input.source === "extension" ||
+                input.source === "user"
+                  ? input.source
+                  : "user";
               const nonEmptyProperties = Object.fromEntries(
                 Object.entries(input.properties ?? {}).filter(
                   ([, v]) => v !== undefined && v !== null && v !== ""
@@ -989,27 +1022,10 @@ export const entitiesRouter = router({
               );
               if (Object.keys(nonEmptyProperties).length > 0) {
                 try {
-                  const enrichCaller = entitiesRouter.createCaller(
-                    ctx as unknown as Parameters<
-                      typeof entitiesRouter.createCaller
-                    >[0]
-                  );
                   await enrichCaller.update({
                     id: matchedId,
                     properties: nonEmptyProperties,
-                    // update's source enum is narrower than create's — connector
-                    // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
-                    // Governance only branches on ai/intelligence anyway, so map
-                    // the non-AI connector sources to "user" (first-party write).
-                    source:
-                      input.source === "ai" ||
-                      input.source === "intelligence" ||
-                      input.source === "agent" ||
-                      input.source === "system" ||
-                      input.source === "extension" ||
-                      input.source === "user"
-                        ? input.source
-                        : "user",
+                    source: enrichSource,
                     agentUserId: input.agentUserId,
                     reasoning: input.reasoning,
                   });
@@ -1018,6 +1034,84 @@ export const entitiesRouter = router({
                     { enrichErr, entityId: matchedId },
                     "[entities.create] dedup enrich failed — returning matched entity unenriched"
                   );
+                }
+              }
+
+              // B3 FIX: a dedup used to SILENTLY DROP a long-form body carried by
+              // this create. Recover it — materialize the body via the canonical
+              // door (EntityBodyService) and link it onto the deduped entity — but
+              // ONLY when the match has no existing body (no documentId, no inline
+              // content). Appending onto an entity that ALREADY has a body needs a
+              // version-onto-existing primitive the body service does not expose;
+              // clobbering would lose the prior body, so that case still reports
+              // the body as dropped rather than overwrite it.
+              let dedupContentDropped = false;
+              if (input.content && input.content.trim().length > 0) {
+                const matchHasBody =
+                  !!(visibleMatch as { documentId?: string | null })
+                    .documentId ||
+                  !!(
+                    (visibleMatch as { properties?: Record<string, unknown> })
+                      .properties as { content?: unknown } | undefined
+                  )?.content;
+                if (matchHasBody) {
+                  dedupContentDropped = true;
+                } else {
+                  try {
+                    const matchWorkspaceId =
+                      (visibleMatch as { workspaceId?: string | null })
+                        .workspaceId ?? null;
+                    const body = await new EntityBodyService(
+                      resolveDb,
+                      eventRepository
+                    ).setBody({
+                      entityId: matchedId,
+                      userId: ctx.userId,
+                      workspaceId: matchWorkspaceId,
+                      title: input.title || undefined,
+                      provenance: {
+                        createdByKind: "human",
+                        createdByUserId: ctx.userId,
+                      },
+                      text: input.content,
+                    });
+                    if (body.documentId) {
+                      const bodyDocId = body.documentId;
+                      await enrichCaller.update({
+                        id: matchedId,
+                        documentId: bodyDocId,
+                        source: enrichSource,
+                        agentUserId: input.agentUserId,
+                        reasoning: input.reasoning,
+                      });
+                      emitSideEffects({
+                        subjectType: "document",
+                        action: "create",
+                        subjectId: bodyDocId,
+                        userId: ctx.userId,
+                        workspaceId: matchWorkspaceId ?? undefined,
+                      }).catch((err) =>
+                        logger.warn(
+                          { err, documentId: bodyDocId },
+                          "Document Typesense indexing failed (document still persisted)"
+                        )
+                      );
+                    } else if (body.inlineContent !== undefined) {
+                      await enrichCaller.update({
+                        id: matchedId,
+                        properties: { content: body.inlineContent },
+                        source: enrichSource,
+                        agentUserId: input.agentUserId,
+                        reasoning: input.reasoning,
+                      });
+                    }
+                  } catch (bodyErr) {
+                    dedupContentDropped = true;
+                    logger.warn(
+                      { bodyErr, entityId: matchedId },
+                      "[entities.create] dedup body recovery failed — body not merged"
+                    );
+                  }
                 }
               }
               const dedupFacets = await attachRequestedFacets(matchedId);
@@ -1050,6 +1144,11 @@ export const entitiesRouter = router({
                 entity: matched ? toApiEntity(matched) : null,
                 // Additive: signals this create merged onto an existing entity.
                 deduplicated: true,
+                // B3: whether a long-form body carried by this create could NOT
+                // be recovered onto the deduped entity (true only when the match
+                // already had a body we won't clobber). Consumed by the composite
+                // materializer's `contentDropped` diagnostic.
+                contentDropped: dedupContentDropped,
                 facets: dedupFacets,
               };
             }
@@ -1230,19 +1329,49 @@ export const entitiesRouter = router({
       let createdEntity: any;
 
       // Resolve where content lives ONCE (heuristic-gated, shared with the
-      // capture paths): long-form → a versioned document linked via documentId,
-      // short → inline properties.content. The document is scoped to the SAME
-      // workspace as the entity so a workspace purge reclaims both.
-      const { documentId: contentDocumentId, inlineContent } =
-        await resolveContentTarget({
-          content: input.content || undefined,
-          title: input.title || undefined,
+      // capture paths) via the canonical body door (EntityBodyService): long-form
+      // → a versioned document linked via documentId, short → inline
+      // properties.content. The document is scoped to the SAME workspace as the
+      // entity so a workspace purge reclaims both. The service owns Document +
+      // Storage ONLY — documentId linking, properties.content, and the Typesense
+      // side-effect stay caller concerns here.
+      const entityBodyService = new EntityBodyService(database, eventRepo);
+      let contentDocumentId: string | undefined;
+      let inlineContent: string | undefined;
+      if (input.content) {
+        const body = await entityBodyService.setBody({
+          entityId,
           userId: ctx.userId,
           workspaceId: entityWorkspaceId ?? null,
-          db: database,
-          eventRepo,
-          logContext: { profileSlug, title: input.title },
+          title: input.title || undefined,
+          // Behavior-preserving: the prior materializeContentDocument path stamped
+          // the document with default `human` provenance (no agent/correlation).
+          provenance: {
+            createdByKind: "human",
+            createdByUserId: ctx.userId,
+          },
+          text: input.content,
         });
+        contentDocumentId = body.documentId;
+        inlineContent = body.inlineContent;
+        // Typesense index the new document (caller concern — the service is
+        // side-effect-free). Fire-and-forget; indexing failure never blocks.
+        if (contentDocumentId) {
+          const indexedDocumentId = contentDocumentId;
+          emitSideEffects({
+            subjectType: "document",
+            action: "create",
+            subjectId: indexedDocumentId,
+            userId: ctx.userId,
+            workspaceId: entityWorkspaceId ?? undefined,
+          }).catch((err) =>
+            logger.warn(
+              { err, documentId: indexedDocumentId },
+              "Document Typesense indexing failed (document still persisted)"
+            )
+          );
+        }
+      }
       const documentId = contentDocumentId ?? input.documentId ?? undefined;
       const propertiesWithContent: Record<string, unknown> =
         inlineContent !== undefined
@@ -1272,13 +1401,14 @@ export const entitiesRouter = router({
       } catch (createErr) {
         // Compensate: if we materialized a document for this entity but the
         // entity create then failed, delete the now-orphaned document (nothing
-        // points to it) so we don't leak storage + a stranded row.
+        // points to it) so we don't leak storage + a stranded row. deleteBody is
+        // the service's reverse-cascade — it also cleans the storage objects the
+        // bare DocumentRepository.delete used to leave behind.
         if (contentDocumentId) {
           try {
-            await new DocumentRepository(database, eventRepo).delete(
-              contentDocumentId,
-              ctx.userId
-            );
+            await entityBodyService.deleteBody({
+              documentId: contentDocumentId,
+            });
           } catch (cleanupErr) {
             logger.warn(
               { cleanupErr, documentId: contentDocumentId },
@@ -3209,46 +3339,16 @@ export const entitiesRouter = router({
 
       // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
-      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
-      // instance has no registered hooks, so emitCompleted()'s append silently
-      // never reaches the realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const docRepo = new DocumentRepository(database, eventRepo);
 
-      const { getUserPreference } = await import("@synap/database");
-      const userPref = await getUserPreference(
-        ctx.userId,
-        "entity.deleteDocument"
-      );
-
-      if (userPref) {
-        const entity = await db.query.entities.findFirst({
-          where: and(
-            eq(entities.id, input.id),
-            eq(entities.userId, ctx.userId)
-          ),
-        });
-
-        if (entity?.documentId) {
-          const document = await db.query.documents.findFirst({
-            where: and(
-              eq(documents.id, entity.documentId),
-              eq(documents.userId, ctx.userId)
-            ),
-          });
-
-          if (document) {
-            const { storage } = await import("@synap/storage");
-            try {
-              if (document.storageKey)
-                await storage.delete(document.storageKey);
-            } catch {
-              // Storage deletion is best-effort — entity delete proceeds regardless
-            }
-            await docRepo.delete(entity.documentId, ctx.userId);
-          }
-        }
-      }
+      // B1 / soft-delete reversibility: this is a SOFT delete (sets `deletedAt`
+      // below, "Keeping deleted rows preserves audit/proposal reversibility").
+      // We DELIBERATELY do NOT delete the entity's document/storage here — a
+      // restore must be able to recover the body. The old user-pref-gated
+      // `entity.deleteDocument` cascade was removed: on a soft delete it would
+      // have orphaned a restore (deleting the body of a still-restorable row).
+      // The unconditional document→storage reverse-cascade (EntityBodyService
+      // .deleteBody) fires only on the HARD/permanent delete paths
+      // (`adminDelete` / `adminBatchDelete`).
 
       // Snapshot profileSlug before deletion for automation trigger filtering
       const [deletedEntityRow] = await database
@@ -3909,9 +4009,23 @@ export const entitiesRouter = router({
       const [deleted] = await database
         .delete(entities)
         .where(eq(entities.id, input.id))
-        .returning({ id: entities.id, type: entities.type });
+        .returning({
+          id: entities.id,
+          type: entities.type,
+          documentId: entities.documentId,
+        });
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+      // B1: a HARD delete reclaims the linked document row + ALL its storage
+      // objects (the current-content object + every version snapshot).
+      // Previously orphaned — adminDelete cleaned up neither. Unconditional
+      // reverse-cascade via the one body door. The entity row is already gone,
+      // so we pass the captured `documentId` directly.
+      if (deleted.documentId) {
+        await new EntityBodyService(database, eventRepository).deleteBody({
+          documentId: deleted.documentId,
+        });
       }
       console.log(
         `[pod-admin] adminDelete: entity ${deleted.id} (type=${deleted.type}) permanently deleted`
@@ -3953,7 +4067,18 @@ export const entitiesRouter = router({
       const deleted = await database
         .delete(entities)
         .where(and(...conditions))
-        .returning({ id: entities.id });
+        .returning({ id: entities.id, documentId: entities.documentId });
+      // B1: reclaim each hard-deleted entity's document + storage objects
+      // (previously orphaned). Unconditional reverse-cascade via the one body
+      // door; best-effort per row so one cleanup miss never aborts the batch.
+      const bodyService = new EntityBodyService(database, eventRepository);
+      for (const row of deleted) {
+        if (row.documentId) {
+          await bodyService
+            .deleteBody({ documentId: row.documentId })
+            .catch(() => {});
+        }
+      }
       console.log(
         `[pod-admin] adminBatchDelete: ${deleted.length} entities permanently deleted`
       );

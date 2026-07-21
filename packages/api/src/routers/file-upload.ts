@@ -17,13 +17,11 @@ import {
   and,
   entities,
   documents,
-  documentVersions,
   workspaceMembers,
   materializeEntity,
   resolveImportEntityPlacement,
   eventRepository,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
+  EntityBodyService,
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
@@ -51,21 +49,6 @@ export function isAllowedMimeType(mimeType: string): boolean {
   if (mimeType.startsWith("audio/")) return true;
   if (mimeType.startsWith("video/")) return true;
   return ALLOWED_MIME_TYPES.has(mimeType);
-}
-
-function documentTypeForMimeType(mimeType: string): string {
-  if (mimeType === "text/markdown") return "markdown";
-  if (mimeType === "text/html") return "html";
-  if (mimeType.startsWith("text/")) return "text";
-  if (mimeType === "application/json") return "code";
-  if (mimeType === "application/pdf") return "pdf";
-  if (
-    mimeType ===
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  ) {
-    return "docx";
-  }
-  return "file";
 }
 
 function brandAssetKindForMimeType(mimeType: string): string {
@@ -104,12 +87,6 @@ export interface StoredDocument {
   storageUrl: string;
   /** `metadata.size` — stored byte size. */
   size: number;
-  /**
-   * The version-snapshot blob key. Exposed so a downstream failure (e.g. an
-   * entity-create that follows) can clean up BOTH storage objects, preserving
-   * the original single-function cleanup behavior.
-   */
-  snapshotStorageKey: string;
   /** The inserted `documents` row. */
   document: { id: string; storageKey: string | null; [k: string]: unknown };
 }
@@ -137,82 +114,46 @@ export async function storeDocumentFromBuffer(params: {
   title?: string;
 }): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
-  const displayTitle = params.title?.trim() || filename;
 
-  const storageId = randomUUID();
-  // Sanitize the caller-supplied filename for the storage KEY (defense-in-depth
-  // for a local-fs storage backend; object stores treat keys literally). The
-  // random storageId already namespaces each blob; this just strips separators
-  // and parent refs. The original `filename` is still used for the display title.
-  const safeName = (filename || "file")
-    .replace(/[\\/]/g, "_")
-    .replace(/\.\./g, "_");
-  const storagePath = `files/${workspaceId ?? "pod"}/${storageId}/${safeName}`;
-
-  // Upload current file content to storage (MinIO / R2).
+  // Thin wrapper over the canonical body door (EntityBodyService bytes-mode):
+  // it uploads the blob + the immutable v1 version snapshot and writes the
+  // `documents` row (+ v1 `document_versions`) atomically through
+  // DocumentRepository.create — the same storage/type/snapshot logic this
+  // function used to inline. The service owns storage + version cleanup
+  // (deleteBody), so callers no longer track the snapshot object key themselves.
   logger.info(
-    { storageId, fileName: filename, size: buffer.length, mimeType },
+    { fileName: filename, size: buffer.length, mimeType },
     "Uploading file to storage"
   );
-  const metadata = await storage.upload(storagePath, buffer, {
-    contentType: mimeType,
-  });
-
-  // Canonical path: each uploaded blob gets a document row plus an immutable
-  // v1 snapshot. Entities link to the document; raw storage is never the only
-  // source of truth.
-  const documentId = randomUUID();
-  const versionId = randomUUID();
-  const documentType = documentTypeForMimeType(mimeType);
-  const snapshot = await uploadDocumentVersionSnapshot({
+  const entityBodyService = new EntityBodyService(db, eventRepository);
+  const result = await entityBodyService.setBody({
+    // No entity exists yet — this id only namespaces the storage/version keys.
+    entityId: randomUUID(),
     userId,
-    documentId,
-    versionId,
-    documentType,
+    workspaceId,
+    title: params.title,
+    filename,
     mimeType,
-    content: buffer,
+    bytes: buffer,
+    // A file upload reached through this store-only helper is a human action.
+    // (The prior raw insert left the provenance columns NULL; the canonical door
+    // stamps them — a minor, more-honest change.)
+    provenance: { createdByKind: "human", createdByUserId: userId },
   });
-  const [document] = await db.transaction(async (tx) => {
-    const [doc] = await tx
-      .insert(documents)
-      .values({
-        id: documentId,
-        userId,
-        workspaceId,
-        title: displayTitle,
-        type: documentType,
-        storageUrl: metadata.url,
-        storageKey: metadata.path,
-        size: metadata.size,
-        mimeType,
-        currentVersion: 1,
-        lastSavedVersion: 1,
-        metadata: {
-          originalFileName: filename,
-          uploadKind: "file-upload",
-        },
-      })
-      .returning();
 
-    await tx.insert(documentVersions).values({
-      id: versionId,
-      documentId,
-      version: 1,
-      ...storedVersionValues(snapshot),
-      author: "user",
-      authorId: userId,
-      message: "Initial upload",
-    });
-
-    return [doc];
-  });
+  // Re-read the inserted row so the return keeps the FULL `documents` record its
+  // callers expect (title/type/metadata/…), not just the id the service returns.
+  const [document] = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.id, result.documentId as string))
+    .limit(1);
 
   return {
-    documentId,
-    storageKey: metadata.path,
-    storageUrl: metadata.url,
-    size: metadata.size,
-    snapshotStorageKey: snapshot.storageKey,
+    documentId: result.documentId as string,
+    storageKey: result.storageKey as string,
+    storageUrl: result.storageUrl as string,
+    size: result.size as number,
     document: document as {
       id: string;
       storageKey: string | null;
@@ -263,7 +204,7 @@ export async function uploadBufferAsFileEntity(params: {
   // Human-facing title: caller-supplied (e.g. `synap upload --title`) or the
   // filename. `filename` remains the storage key / originalFileName provenance.
   const displayTitle = params.title?.trim() || filename;
-  const profileSlug = params.profileSlug || "document";
+  const profileSlug = params.profileSlug || "file";
   const storageKeyProperty = params.storageKeyProperty || "storageKey";
   const extraProperties = params.properties ?? {};
 
@@ -298,12 +239,12 @@ export async function uploadBufferAsFileEntity(params: {
             brandAssetKindForMimeType(mimeType),
         }
       : {};
-  // Canonical `document` entities keep their storage pointers on the documents
+  // Canonical `file` entities keep their storage pointers on the documents
   // row + entities.documentId ONLY — never duplicated into entity properties
   // (and `fileName` is dropped in favour of the entity title). Other profiles
-  // (legacy `file`, `brand-asset`) still receive the property pointers below.
-  const isCanonicalDocument = profileSlug === "document";
-  const storagePointerProperties = isCanonicalDocument
+  // (`brand-asset`) still receive the property pointers below.
+  const isCanonicalFile = profileSlug === "file";
+  const storagePointerProperties = isCanonicalFile
     ? {}
     : {
         fileName: filename,
@@ -355,11 +296,12 @@ export async function uploadBufferAsFileEntity(params: {
     createdEntity = materialized.entity;
   } catch (createError) {
     try {
-      await db.delete(documents).where(eq(documents.id, document.id));
-      await Promise.allSettled([
-        storage.delete(stored.storageKey),
-        storage.delete(stored.snapshotStorageKey),
-      ]);
+      // Reverse-cascade via the service — deletes the `documents` row AND both
+      // storage objects (current + v1 snapshot), the two-object cleanup this
+      // block used to hand-roll.
+      await new EntityBodyService(db, eventRepository).deleteBody({
+        documentId: document.id,
+      });
     } catch (cleanupError) {
       logger.warn(
         { err: cleanupError, documentId: document.id },
@@ -410,8 +352,7 @@ fileUploadApp.post("/upload", async (c) => {
     // Optional: caller-specified profile slug (default "file") and which property key
     // receives the storage path (default "storageKey"). Allows callers to create any
     // entity type in one round-trip instead of upload + separate create.
-    const profileSlug =
-      (body["profileSlug"] as string | undefined) || "document";
+    const profileSlug = (body["profileSlug"] as string | undefined) || "file";
     const storageKeyProperty =
       (body["storageKeyProperty"] as string | undefined) || "storageKey";
     let extraProperties: Record<string, unknown> = {};
@@ -621,13 +562,13 @@ fileUploadApp.get("/:entityId/url", async (c) => {
     }
 
     // The kind filter was intentionally dropped: bytes resolve for ANY entity
-    // that carries a documentId (document, legacy file, brand-asset) — the
-    // canonical link, not the kind, gates downloadability. Access is still
-    // owner-gated above (entity.userId === userId).
+    // that carries a documentId (file, brand-asset) — the canonical link, not
+    // the kind, gates downloadability. Access is still owner-gated above
+    // (entity.userId === userId).
     // Canonical path: resolve bytes via entities.documentId → documents.storageKey.
-    // Read-time fallback to the legacy properties.storageKey for un-migrated rows
-    // (documents created before the file→document consolidation stored the key
-    // in entity properties).
+    // Read-time fallback to the legacy properties.storageKey for un-migrated
+    // rows (early `file` entities stored the storage key in entity properties
+    // rather than on the documents row).
     let storageKey: string | undefined;
     if (entity.documentId) {
       const doc = await db.query.documents.findFirst({

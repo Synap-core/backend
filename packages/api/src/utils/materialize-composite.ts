@@ -361,7 +361,16 @@ export async function materializeCompositeGraph(
       // a dedup) — flag it so the body isn't lost without a trace.
       if ((result as { deduplicated?: boolean }).deduplicated === true) {
         linkedExisting = true;
-        if (op.content && op.content.trim().length > 0) {
+        // B3: entities.create now RECOVERS a dropped body onto the deduped entity
+        // when it safely can (no existing body to clobber) and reports the
+        // residual via `contentDropped`. Prefer that signal; fall back to the old
+        // "any content on a dedup is dropped" heuristic only if an older door
+        // omits it.
+        const reportedDropped = (result as { contentDropped?: boolean })
+          .contentDropped;
+        if (reportedDropped !== undefined) {
+          if (reportedDropped) contentDropped = true;
+        } else if (op.content && op.content.trim().length > 0) {
           contentDropped = true;
         }
       } else {

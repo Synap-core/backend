@@ -18,16 +18,29 @@ import type {
 import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
+  type StoredDocumentVersionSnapshot,
 } from "../utils/document-version-storage.js";
 
 export interface CreateDocumentInput {
+  /**
+   * Explicit document id. Optional — omit to let the DB default a random uuid.
+   * Supplied by callers (e.g. EntityBodyService bytes-mode) that pre-uploaded a
+   * version snapshot under a known id and need cleanup symmetry.
+   */
+  id?: string;
   title: string;
   type: "text" | "markdown" | "code" | "pdf" | "docx";
   language?: string;
   storageUrl: string;
-  storageKey: string;
+  /**
+   * Storage object key for the canonical current content. `null` for external
+   * references (storageUrl points off-pod, no bytes stored) — matches the
+   * nullable `documents.storage_key` column.
+   */
+  storageKey: string | null;
   size: number;
-  mimeType: string;
+  /** `null` for external references — matches the nullable `documents.mime_type` column. */
+  mimeType: string | null;
   projectId?: string;
   metadata?: Record<string, unknown>;
   userId: string;
@@ -38,6 +51,18 @@ export interface CreateDocumentInput {
    * from the start (the canonical current content still lives in storage).
    */
   content?: string;
+  /**
+   * Pre-uploaded v1 snapshot (bytes-mode). When set, the blob's version snapshot
+   * has ALREADY been uploaded to storage by the caller (via
+   * `uploadDocumentVersionSnapshot`); create() writes the v1 `document_versions`
+   * row from these values WITHOUT re-uploading — killing the double-upload for
+   * binary bodies. Mutually exclusive with `content` (takes precedence).
+   */
+  preUploadedVersion?: {
+    versionId: string;
+    snapshot: StoredDocumentVersionSnapshot;
+    message?: string;
+  };
   // Provenance (Wave B3) — who/what authored this row. Optional; defaults below.
   createdByKind?: "human" | "ai_agent" | "system";
   createdByUserId?: string;
@@ -75,6 +100,7 @@ export class DocumentRepository extends BaseRepository<
       const [doc] = await tx
         .insert(documents)
         .values({
+          ...(data.id ? { id: data.id } : {}),
           userId,
           workspaceId: data.workspaceId,
           title: data.title,
@@ -86,7 +112,8 @@ export class DocumentRepository extends BaseRepository<
           mimeType: data.mimeType,
           metadata: data.metadata,
           currentVersion: 1,
-          lastSavedVersion: data.content !== undefined ? 1 : 0,
+          lastSavedVersion:
+            data.content !== undefined || data.preUploadedVersion ? 1 : 0,
           // Provenance (Wave B3)
           ...stampProvenance({
             userId: data.createdByUserId ?? userId,
@@ -98,10 +125,19 @@ export class DocumentRepository extends BaseRepository<
         } as NewDocument)
         .returning();
 
-      // Write the v1 immutable snapshot when content is supplied, so the
-      // document has real version history from creation (storage holds current
-      // content).
-      if (data.content !== undefined) {
+      // Bytes-mode: the caller already uploaded the version snapshot — write the
+      // v1 row from the supplied snapshot values, no re-upload.
+      if (data.preUploadedVersion) {
+        await tx.insert(documentVersions).values({
+          id: data.preUploadedVersion.versionId,
+          documentId: doc.id,
+          version: 1,
+          ...storedVersionValues(data.preUploadedVersion.snapshot),
+          author: "user",
+          authorId: userId,
+          message: data.preUploadedVersion.message ?? "Initial version",
+        } as NewDocumentVersion);
+      } else if (data.content !== undefined) {
         const versionId = randomUUID();
         const snapshot = await uploadDocumentVersionSnapshot({
           userId,

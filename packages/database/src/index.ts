@@ -40,6 +40,7 @@ export * from "./services/capture-routing.js";
 export * from "./services/workspace-resolution-service.js";
 export * from "./services/project-resolution-service.js";
 export * from "./services/team-person-bridge.js";
+export * from "./services/entity-body-service.js";
 
 // Export errors
 export * from "./errors/index.js";

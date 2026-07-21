@@ -2779,9 +2779,24 @@ cmd_federation() {
             disabled="$(grep '^SYNAP_POD_FEDERATION_DISABLED=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
             echo -e "${BLUE}Federation (external sign-in) status${NC}"
             if [ -n "$cp" ] && [ -n "$hub" ] && [ "$disabled" != "1" ]; then
-                echo -e "  External sign-in: ${GREEN}ENABLED${NC} (auto-provisioned per-pod client)"
+                echo -e "  Configured:    ${GREEN}ENABLED${NC} (auto-provisioned per-pod client)"
                 echo -e "  Control Plane: $cp"
                 echo -e "  Button:        ${lbl:-Synap Cloud}"
+                # Ground truth: does the LIVE Kratos actually offer the oidc method?
+                # (Config can be ENABLED yet the deploy-time fetch may have failed —
+                # e.g. the CP wasn't deployed with /pods/oidc/provision yet.)
+                local _live=""
+                _live="$(curl -fsS --max-time 6 "https://${domain}/.ory/kratos/public/self-service/login/api" 2>/dev/null || true)"
+                [ -z "$_live" ] && _live="$(curl -fsS --max-time 6 "http://localhost:4433/self-service/login/api" 2>/dev/null || true)"
+                if printf '%s' "$_live" | grep -q '"group":"oidc"'; then
+                    echo -e "  Kratos:        ${GREEN}LIVE${NC} — the login page offers the provider"
+                elif [ -n "$_live" ]; then
+                    echo -e "  Kratos:        ${RED}NOT LIVE${NC} — login flow has NO oidc method."
+                    echo -e "    → the deploy-time fetch from ${cp}/pods/oidc/provision failed."
+                    echo -e "      Confirm that CP is deployed with the endpoint, then redeploy this pod."
+                else
+                    echo -e "  Kratos:        ${YELLOW}unreachable${NC} — couldn't probe the login flow to confirm."
+                fi
             else
                 echo -e "  External sign-in: ${YELLOW}DISABLED${NC} (Pod password sign-in only)"
                 [ -z "$cp" ]  && echo -e "    • CONTROL_PLANE_URL not set"

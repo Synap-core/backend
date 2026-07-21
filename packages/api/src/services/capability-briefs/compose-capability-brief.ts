@@ -141,6 +141,29 @@ const TOOL_METADATA: Record<
     postureSlug: "workspace",
     isWrite: true,
   },
+  synap_create_automation: {
+    governance: { subjectType: "automation", action: "create" },
+    postureSlug: "automation",
+    isWrite: true,
+  },
+  synap_trigger_automation: {
+    // launches an already-approved automation; gated by assertWorkspaceWrite,
+    // NOT a checkPermissionOrPropose door — so no governance dry-run applies
+    // (mirrors synap_run_capability). Downstream node writes stay governed.
+    governance: null,
+    postureSlug: "automation",
+    isWrite: true,
+  },
+  synap_run_playbook: {
+    governance: { subjectType: "playbook", action: "run" },
+    postureSlug: "playbook",
+    isWrite: true,
+  },
+  synap_create_skill: {
+    governance: { subjectType: "skill", action: "create" },
+    postureSlug: "capability",
+    isWrite: true,
+  },
   synap_list_capabilities: {
     governance: null, // read-only discovery, no checkPermissionOrPropose door
     postureSlug: "capability",

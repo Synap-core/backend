@@ -191,7 +191,7 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 | ------------- | ---------------------------------------------- | -------------------------------------------------------- |
 | **Entities**  | Typed structured nodes (task, person, …)       | Anything worth filtering, sorting, or linking            |
 | **Relations** | Typed edges between entities                   | Making the graph traversable                             |
-| **Documents** | Long-form markdown attached to an entity       | Meeting notes, research writeups, articles               |
+| **Documents** | Long-form versioned body attached to an entity — auto-materialized from an entity's `content`, or created standalone via `synap_create_document` | Meeting notes, research writeups, articles — **never** a `file`/`document`-kind entity for text you authored |
 | **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
 | **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
 
@@ -889,6 +889,20 @@ PATCH /api/hub/entities/{entityId}
 
 **Properties are deep-merged — send only the keys you want to change.** An update with `{ "status": "done" }` leaves all other properties untouched. You never need to re-send the full properties object.
 
+### Authored text is content, not a `file`
+
+Something **you** author — a pitch deck, a strategic plan, a note body — is
+**never** a `file`- or `document`-kind entity. Create it as the right CONTENT
+kind (`note`, `knowledge`, or a fitting domain kind) with `content` set to the
+Markdown body; Synap **auto-materializes** that `content` into a real
+versioned document behind the scenes (`entities WHERE documentId = ?`) — no
+upload step needed. `file` is reserved for real uploaded bytes you actually
+have (the upload door / `synap upload`) — an agent has no filesystem, so it
+rarely touches `file` at all. Reach for `synap_create_document` /
+`POST /api/hub/documents` directly only for a standalone rich document that
+isn't itself a title-worthy entity (see below) — never as a substitute for an
+entity's `content`.
+
 ### Create a document (attach to an entity)
 
 ```json
@@ -1360,6 +1374,27 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 
 3. If the user said why ("interesting for the onboarding project"), also create a relation to that project — never drop the reason as a plain comment, turn it into a link.
 
+### Example 4 — "Write up a strategic plan for the Q3 launch"
+
+You are authoring this text yourself — it is not a file you have. Don't create
+a `file`/`document`-kind entity and stuff the Markdown into it.
+
+1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=knowledge&workspaceId=…` → none
+2. Create a CONTENT-kind entity carrying the plan as `content` (the doc auto-materializes):
+
+   ```json
+   POST /api/hub/entities
+   { "userId": "{userId}", "workspaceId": "{wsId}",
+     "profileSlug": "knowledge",
+     "title": "Q3 launch strategic plan",
+     "properties": { "ek_type": "reference" },
+     "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
+   }
+   ```
+
+3. Link it to the relevant project: `POST /api/hub/relations` `{ sourceEntityId: "ent_new_plan", targetEntityId: "ent_project_q3", type: "related_to" }`.
+4. Confirm: "Plan captured and linked to Q3 launch." No upload, no `file` entity, no separate `synap_create_document` call.
+
 ---
 
 ## CRM Workspaces — 4-Entity Model
@@ -1494,6 +1529,7 @@ An extraction that creates a duplicate "Sarah Chen", or a `person` titled "Unkno
 8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
 9. **Routing known-structure data through free-text capture.** If you already know the profileSlug + fields, create the entity directly — smart capture can degrade to a single flat note.
 10. **Paragraph session goals.** The goal is one line; put detail and deliverables in expectedOutputs.
+11. **Creating a `file`/`document`-kind entity to hold text you wrote.** A pitch deck, plan, or note body you authored is `content` on a real CONTENT-kind entity (`note`, `knowledge`, a domain kind) — Synap auto-materializes it into a document. `file` is only for real uploaded bytes you actually have; an agent with no filesystem almost never needs it.
 
 ---
 

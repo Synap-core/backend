@@ -845,28 +845,16 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           description: "Sales opportunity",
         },
       },
-      // File (legacy — superseded by `document`; kept active until the
-      // file→document conversion runs its destructive tail).
+      // File — the canonical uploaded/attached file kind (pod-wide). Storage
+      // pointers live on the `documents` row + `entities.documentId`, never in
+      // entity properties. Created via upload, not manually.
       {
         slug: "file",
         displayName: "File",
         uiHints: {
           icon: "file",
           color: "#64748B",
-          description: "Uploaded file",
-          hideFromCreate: true, // created programmatically via file upload, not manually
-        },
-      },
-      // Document — the canonical uploaded/attached document kind (pod-wide).
-      // Storage pointers live on the `documents` row + `entities.documentId`,
-      // never in entity properties. Created via upload, not manually.
-      {
-        slug: "document",
-        displayName: "Document",
-        uiHints: {
-          icon: "file",
-          color: "#64748B",
-          description: "Uploaded or referenced document",
+          description: "Uploaded or referenced file",
           hideFromCreate: true, // created via upload, not manually
         },
       },
@@ -978,7 +966,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "research",
       "knowledge",
       "user_observation",
-      "document",
+      "file",
     ]);
 
     // First pass: create all profiles without parent links
@@ -1022,7 +1010,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     }
 
     // Third pass: backfill hideFromCreate flag on system-only profiles (idempotent)
-    const HIDE_FROM_CREATE_SLUGS = ["file", "document", "anchor"];
+    const HIDE_FROM_CREATE_SLUGS = ["file", "anchor"];
     for (const slug of HIDE_FROM_CREATE_SLUGS) {
       const profileId = createdProfiles.get(slug);
       if (!profileId) continue;
@@ -1202,21 +1190,11 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "description", required: false, displayOrder: 6 },
         ],
       },
-      // File (legacy)
+      // File — canonical. `title` replaces the legacy `fileName`; storage
+      // pointers live on the documents row + entities.documentId, never as
+      // properties.
       {
         profileSlug: "file",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "fileName", required: false, displayOrder: 1 },
-          { slug: "mimeType", required: false, displayOrder: 2 },
-          { slug: "fileSize", required: false, displayOrder: 3 },
-          { slug: "tags", required: false, displayOrder: 4 },
-        ],
-      },
-      // Document — canonical. `title` replaces `fileName`; storage pointers
-      // live on the documents row + entities.documentId, never as properties.
-      {
-        profileSlug: "document",
         propertySlugs: [
           { slug: "title", required: false, displayOrder: 0 },
           { slug: "mimeType", required: false, displayOrder: 1 },

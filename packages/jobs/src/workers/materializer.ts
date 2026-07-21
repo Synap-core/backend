@@ -25,7 +25,7 @@ import { resolve as resolvePath } from "path";
 import {
   getDb,
   EntityRepository,
-  DocumentRepository,
+  EntityBodyService,
   EventRepository,
   ViewRepository,
   ProfileRepository,
@@ -67,7 +67,6 @@ import {
 import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
-import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import {
   resolveMaterializedEntityWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
@@ -287,7 +286,7 @@ async function materializeEntity(
   const database = await getDb();
   const eventRepo = new EventRepository(sql);
   const entityRepo = new EntityRepository(database, eventRepo);
-  const docRepo = new DocumentRepository(database, eventRepo);
+  const entityBodyService = new EntityBodyService(database, eventRepo);
 
   if (action === "create") {
     // Idempotency: check if entity already exists
@@ -315,49 +314,42 @@ async function materializeEntity(
     const baseProperties =
       (data.properties as Record<string, unknown>) || undefined;
 
-    // Content routing — same heuristic decision (shouldMaterializeAsDocument)
-    // every other writer uses: long-form → a versioned document (storage row +
-    // v1 snapshot, linked via documentId); short → inline properties.content.
-    // (This worker can't import @synap/api, so it materializes inline but shares
-    // the heuristic via @synap-core/types and passes `content` so the document
-    // repository writes the v1 snapshot.)
+    // Content routing via the canonical body door (EntityBodyService) — the same
+    // heuristic every other writer uses: long-form → a versioned document
+    // (storage row + v1 snapshot, linked via documentId); short → inline
+    // properties.content. The service lives in @synap/database precisely so this
+    // worker (which cannot import @synap/api) shares the ONE implementation. The
+    // document is scoped to the entity's workspace so a workspace purge reclaims
+    // both. NOTE: like the old inline block, this path does NOT emit the document
+    // Typesense side-effect (unchanged). A materialization failure folds back to
+    // inline inside the service (previously it threw the job) — content is never
+    // lost and the proposal no longer gets stuck; a minor, strictly-safer nuance.
     let documentId: string | undefined =
       (data.documentId as string) || undefined;
     let properties = baseProperties;
 
-    if (rawContent && shouldMaterializeAsDocument(rawContent)) {
-      const { storage } = await import("@synap/storage");
-      const key = storage.buildPath(userId, "entity", subjectId, "md");
-      const metadata = await storage.upload(key, rawContent, {
-        contentType: "text/markdown",
-      });
-      const createdDocument = await docRepo.create(
-        {
-          title: (data.title as string) || "Untitled",
-          type: "markdown",
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/markdown",
+    if (rawContent) {
+      const body = await entityBodyService.setBody({
+        entityId: subjectId,
+        userId,
+        workspaceId: entityWorkspaceId ?? null,
+        title: (data.title as string) || undefined,
+        // Provenance (Wave B3): proposal-materialized document — pass the worker's
+        // stampProvenance verbatim (the ProvenanceStamp shape is a BodyProvenance).
+        provenance: stampProvenance({
           userId,
-          // Scope the document to the entity's workspace so a workspace purge
-          // reclaims both.
-          workspaceId: entityWorkspaceId ?? undefined,
-          content: rawContent, // → writes the document_versions v1 snapshot
-          // Provenance (Wave B3): proposal-materialized document.
-          ...stampProvenance({
-            userId,
-            agentUserId: (data.agentUserId as string) || undefined,
-            sourceProposalId: (data.sourceProposalId as string) || undefined,
-            correlationId: (data.correlationId as string) || undefined,
-          }),
-        },
-        userId
-      );
-      documentId = createdDocument.id;
-    } else if (rawContent) {
-      // Short content stays inline on the entity.
-      properties = { ...(baseProperties ?? {}), content: rawContent };
+          agentUserId: (data.agentUserId as string) || undefined,
+          sourceProposalId: (data.sourceProposalId as string) || undefined,
+          correlationId: (data.correlationId as string) || undefined,
+        }),
+        text: rawContent,
+      });
+      if (body.documentId) {
+        documentId = body.documentId;
+      } else if (body.inlineContent !== undefined) {
+        // Short content stays inline on the entity.
+        properties = { ...(baseProperties ?? {}), content: body.inlineContent };
+      }
     }
 
     // The entity→document link is one-directional (entity.documentId →

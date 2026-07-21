@@ -1872,15 +1872,11 @@ export const channelsRouter = router({
         }> = [];
 
         for (const attachEntityId of input.attachmentEntityIds) {
-          // Verify entity exists and is a document belonging to this user.
-          // Accept BOTH `document` (canonical) and legacy `file` — the
-          // file→document merge is operator-driven, so pre-consolidation
-          // uploads stay `type:"file"` until it runs; a document-only filter
-          // would silently drop every existing attachment in that window.
+          // Verify entity exists and is a `file` belonging to this user.
           const entity = await db.query.entities.findFirst({
             where: and(
               eq(entitiesTable.id, attachEntityId),
-              inArray(entitiesTable.type, ["document", "file"])
+              eq(entitiesTable.type, "file")
             ),
             columns: { id: true, title: true, properties: true },
           });
@@ -1889,8 +1885,8 @@ export const channelsRouter = router({
           const props = entity.properties as Record<string, unknown>;
           attachmentMeta.push({
             entityId: attachEntityId,
-            // Canonical documents carry the filename as the entity title;
-            // fall back to the legacy properties.fileName for un-migrated rows.
+            // Canonical `file` entities carry the filename as the entity title;
+            // fall back to the legacy properties.fileName for older rows.
             fileName: props.fileName ?? entity.title,
             mimeType: props.mimeType,
           });

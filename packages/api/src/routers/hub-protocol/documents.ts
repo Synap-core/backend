@@ -15,11 +15,10 @@ import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import {
   db,
-  documents,
-  documentVersions,
   normalizeDocumentType,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
+  DocumentRepository,
+  eventRepository,
+  type CreateDocumentInput,
 } from "@synap/database";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -136,37 +135,41 @@ export const documentsRouter = router({
       // pointing at the external URL (storageKey NULL, metadata.external) and
       // skip the MinIO upload + version snapshot entirely. Link via
       // entities.documentId like any document (caller's responsibility).
+      const docRepo = new DocumentRepository(db, eventRepository);
       if (input.url) {
-        const [created] = await db
-          .insert(documents)
-          .values({
+        // External reference: storageKey NULL, no bytes, no version snapshot.
+        // Routed through the ONE document door (DocumentRepository.create) instead
+        // of a raw insert. NOTE: create() emits `document.create.completed` itself
+        // (source "api"), so the manual auditLog(completed, source:"intelligence")
+        // is dropped to avoid a double completed event; agent authorship is now
+        // carried on the row's provenance columns. Typesense emitSideEffects kept.
+        const created = await docRepo.create(
+          {
             id: documentId,
             title: input.title,
-            type: normalizeDocumentType(input.type, "markdown"),
+            type: normalizeDocumentType(
+              input.type,
+              "markdown"
+            ) as CreateDocumentInput["type"],
             storageUrl: input.url,
             storageKey: null,
             size: 0,
             mimeType: null,
+            metadata: { external: true },
             userId,
             workspaceId: input.workspaceId ?? null,
-            currentVersion: 1,
-            lastSavedVersion: 0,
-            metadata: { external: true },
-          })
-          .returning();
+            createdByKind: "ai_agent",
+            createdByUserId: userId,
+            agentUserId: input.agentUserId,
+            correlationId,
+          },
+          userId
+        );
 
-        auditLog({
-          subjectType: "document",
-          action: "create",
-          phase: "completed",
-          subjectId: documentId,
-          userId: agentUserId,
-          source: "intelligence",
-        });
         emitSideEffects({
           subjectType: "document",
           action: "create",
-          subjectId: documentId,
+          subjectId: created.id,
           userId: agentUserId,
         });
 
@@ -178,7 +181,13 @@ export const documentsRouter = router({
       }
 
       // Auto-approved (matches workspace autoApproveFor whitelist):
-      // write to MinIO and DB immediately.
+      // write to MinIO and DB immediately. The current-content object is uploaded
+      // here, then DocumentRepository.create writes the row + the immutable v1
+      // snapshot atomically (its `content` arg replaces the hand-inlined
+      // uploadDocumentVersionSnapshot + documentVersions insert). create() also
+      // emits `document.create.completed`, so the prior manual auditLog(completed)
+      // is dropped to avoid a double completed event; Typesense emitSideEffects
+      // kept.
       const { storage } = await import("@synap/storage");
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;
@@ -192,62 +201,31 @@ export const documentsRouter = router({
       const metadata = await storage.upload(storageKey, content, {
         contentType: "text/markdown",
       });
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId,
-        documentId,
-        versionId,
-        documentType: docType,
-        mimeType: "text/markdown",
-        content,
-      });
 
-      const [created] = await db
-        .insert(documents)
-        .values({
+      const created = await docRepo.create(
+        {
           id: documentId,
           title: input.title,
-          type: docType,
+          type: docType as CreateDocumentInput["type"],
           storageUrl: metadata.url,
           storageKey: metadata.path,
           size: metadata.size,
           mimeType: "text/markdown",
           userId,
           workspaceId: input.workspaceId ?? null,
-          currentVersion: 1,
-          lastSavedVersion: 1,
-        })
-        .returning();
-
-      await db.insert(documentVersions).values({
-        id: versionId,
-        documentId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: input.userId,
-        message: "Initial version",
-      });
-
-      auditLog({
-        subjectType: "document",
-        action: "create",
-        phase: "completed",
-        subjectId: documentId,
-        userId: agentUserId,
-        // "agent" is NOT a valid EventSource (SynapEventSchema allows only
-        // api/automation/sync/migration/system/intelligence) — it threw a
-        // ZodError that auditLog swallowed best-effort, silently dropping the
-        // document.create.completed event for every agent-authored Hub doc.
-        // Agent authorship is already carried by `userId`/agentUserId; the
-        // valid, closest source for an IS/agent-driven write is "intelligence".
-        source: "intelligence",
-      });
+          content, // → writes the v1 document_versions snapshot
+          createdByKind: "ai_agent",
+          createdByUserId: userId,
+          agentUserId: input.agentUserId,
+          correlationId,
+        },
+        userId
+      );
 
       emitSideEffects({
         subjectType: "document",
         action: "create",
-        subjectId: documentId,
+        subjectId: created.id,
         userId: agentUserId,
       });
 
