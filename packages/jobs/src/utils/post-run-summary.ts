@@ -118,21 +118,75 @@ function emitRealtimeEvent(payload: {
 }
 
 /**
- * Resolve the channel a run's activity lands in — mirror of the executor's own
- * resolution (`executeAutomationFlow` ~L1942): an explicit trigger-bound channel
- * wins (e.g. a Discord-triggered automation posts back to its source channel),
- * otherwise the automation's durable run channel so every run lands in one room.
+ * Per-automation result routing, read from `automations.metadata.resultRouting`.
+ *
+ * - `per_type`   — (default) ONE durable channel per automation, holding all its
+ *                  runs. The historical behavior; preserved byte-for-byte.
+ * - `per_entity` — each run posts into ITS subject's own channel (the per-client
+ *                  recap spine). Falls back to per-type when the run has no
+ *                  subject.
+ * - `trigger`    — the trigger-bound channel (e.g. a Discord-triggered automation
+ *                  posts back to its source channel). Falls back to per-type when
+ *                  no trigger channel is configured.
  */
-async function resolveRunChannel(
+export type ResultRouting = "per_type" | "per_entity" | "trigger";
+
+export const DEFAULT_RESULT_ROUTING: ResultRouting = "per_type";
+
+/** Read resultRouting from an automation's metadata bag, safely defaulted. */
+export function resolveResultRouting(
+  metadata: Automation["metadata"] | null | undefined
+): ResultRouting {
+  const raw = (metadata as Record<string, unknown> | null | undefined)?.[
+    "resultRouting"
+  ];
+  if (raw === "per_entity" || raw === "trigger") return raw;
+  return DEFAULT_RESULT_ROUTING;
+}
+
+/**
+ * Resolve the channel a run's activity lands in — the ONE door shared by the
+ * run-narration path (`postRunSummary`) and the executor's per-run session open
+ * (`executeAutomationFlow`). Previously duplicated as two copy-pasted resolvers;
+ * this is the single source of truth. Switches on `metadata.resultRouting`:
+ *
+ *  - `per_entity` + a run subject → THIS run's subject's own channel
+ *    (`ensureEntityChannel`), the per-client recap spine. Choosing `per_entity`
+ *    is a deliberate opt-in, so it wins over a trigger-bound channel.
+ *  - otherwise an explicit trigger-bound channel wins (a Discord-triggered
+ *    automation posts back to its source channel) — this is the historical
+ *    default and the `trigger` mode made explicit.
+ *  - else THE automation's durable per-type run channel
+ *    (`ensureAutomationRunChannel`) — ONE feed for all its runs. This is the
+ *    `per_type` default, and the fall-back for a `per_entity` run with no subject
+ *    or a `trigger` automation with no configured channel.
+ *
+ * With no `resultRouting` set (`per_type`), the branch order below is exactly the
+ * old resolver: trigger channel first, else the per-type run channel.
+ */
+export async function resolveRunChannel(
   automation: Automation,
   run: AutomationRun
 ): Promise<string> {
+  const routing = resolveResultRouting(automation.metadata);
+  const repo = new ChannelRepository(db);
+
+  if (routing === "per_entity" && run.subjectEntityId) {
+    const channel = await repo.ensureEntityChannel(
+      run.subjectEntityId,
+      automation.createdBy,
+      run.workspaceId ?? undefined,
+      { title: automation.name ?? undefined }
+    );
+    return channel.id;
+  }
+
   const triggerChannelId = (
     automation.triggerConfig as AutomationTriggerConfig | null
   )?.channelId;
   if (triggerChannelId) return triggerChannelId;
 
-  const channel = await new ChannelRepository(db).ensureAutomationRunChannel(
+  const channel = await repo.ensureAutomationRunChannel(
     automation.id,
     automation.createdBy,
     run.workspaceId ?? undefined,

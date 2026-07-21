@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, asc, desc, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, asc, desc, ne, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import {
@@ -383,6 +383,67 @@ export class ChannelRepository {
       feedScope: workspaceId ? FeedScope.WORKSPACE : FeedScope.USER,
       contextObjectType: "automation",
       contextObjectId: automationId,
+    });
+  }
+
+  /**
+   * Get or create THE channel for posting activity ABOUT an entity — the
+   * WRITE-twin of the entity-bound channel READ used across the executor
+   * (`contextObjectType='entity' + contextObjectId=entityId`, e.g.
+   * `executeMessagesQueryStep`). This is the per-entity result-routing spine: it
+   * lets a per-client automation post each run's recap into that client's own
+   * room rather than one shared automation feed.
+   *
+   * REUSE-FIRST: if a channel is already bound to the entity we post INTO it
+   * rather than spawning a new room — the whole point is the client's existing
+   * discussion surface. We deliberately EXCLUDE `external` (client-comms)
+   * channels from reuse: an automation recap is an INTERNAL, operator-facing
+   * summary and must never land in the surface that mirrors back to the client
+   * (`executeMessagesQueryStep` reads the EXTERNAL one precisely because it is
+   * the client's comms). If only an external channel exists we create a fresh
+   * internal thread instead.
+   *
+   * CREATED TYPE = THREAD bound to the entity — the natural "discussion about
+   * this client" surface (mirrors `channels.createEntityComment`, which makes
+   * exactly this THREAD+entity shape). Not a FEED: a per-client recap is a
+   * conversation a teammate can reply in, not a read-only broadcast.
+   *
+   * Resolver-only (no unique index on the entity binding — same as
+   * `ensureAutomationRunChannel`): the oldest-wins read keeps it deterministic if
+   * a rare first-run race ever inserts two.
+   */
+  async ensureEntityChannel(
+    entityId: string,
+    ownerId: string,
+    workspaceId?: string,
+    opts?: { title?: string }
+  ): Promise<Channel> {
+    const [existing] = await this.db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.contextObjectType, "entity"),
+          eq(channels.contextObjectId, entityId),
+          // Never route an internal recap into a client-comms surface.
+          ne(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.status, ChannelStatus.ACTIVE)
+        )
+      )
+      // Deterministic oldest-wins on duplicate entity-bound channels.
+      .orderBy(asc(channels.createdAt))
+      .limit(1);
+
+    if (existing) return existing;
+
+    return await this.create({
+      userId: ownerId,
+      workspaceId,
+      title: opts?.title,
+      channelType: ChannelType.THREAD,
+      scope: workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+      contextObjectType: "entity",
+      contextObjectId: entityId,
     });
   }
 

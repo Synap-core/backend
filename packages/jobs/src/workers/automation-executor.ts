@@ -65,7 +65,6 @@ import {
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
-import type { AutomationTriggerConfig } from "@synap/database/schema";
 import { ChannelRepository } from "@synap/database";
 import type {
   FlowDefinition,
@@ -83,7 +82,10 @@ import {
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
 import { deterministicUuidV5 } from "../utils/deterministic-uuid.js";
-import { postRunSummary } from "../utils/post-run-summary.js";
+import {
+  postRunSummary,
+  resolveRunChannel,
+} from "../utils/post-run-summary.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -733,7 +735,11 @@ async function executeOutputStep(
   // governed write becomes a proposal that traces back to the exact step. In a
   // loop body the step run is the loop node's (no per-child row), while nodeId
   // is the child node — the closest honest attribution.
-  attribution?: { nodeId?: string; stepRunId?: string }
+  attribution?: { nodeId?: string; stepRunId?: string },
+  // The run's subject entity, when the run was launched about one — lets the
+  // `channel_message` node target `channelType:'subjectEntity'` (this run's
+  // subject's channel) without hardcoding a channelId.
+  runSubjectEntityId?: string | null
 ): Promise<Record<string, unknown>> {
   // Deep-resolve all template variables in config
   const config = deepResolveTemplates(data.config, context) as Record<
@@ -1028,9 +1034,11 @@ async function executeOutputStep(
     }
 
     case "channel_message": {
-      // Accepts explicit channelId OR channelType:'personal_thread'|'proactive'
-      // 'personal_thread'  → user's personal thread (channelType=PERSONAL)
-      // 'proactive' → user's feed channel (channelType='feed', feedScope='user') — automation outputs
+      // Accepts explicit channelId OR channelType:
+      //   'personal_thread' → user's personal thread (channelType=PERSONAL)
+      //   'proactive'       → user's feed channel (channelType='feed', feedScope='user') — automation outputs
+      //   'subjectEntity'   → THIS run's subject's own channel (per-client recap
+      //                       spine) — resolved from the run's subjectEntityId
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
       const metadata = (config.metadata ?? {}) as Record<string, unknown>;
@@ -1054,9 +1062,27 @@ async function executeOutputStep(
         ).id;
       }
 
+      // Post into THIS run's subject's own channel — the write-twin of the
+      // entity-bound read, via the same ChannelRepository resolver the executor's
+      // per_entity routing uses (reuse-first, THREAD-on-create, never client-comms).
+      if (!channelId && config.channelType === "subjectEntity") {
+        if (!runSubjectEntityId) {
+          throw new Error(
+            "channel_message channelType:'subjectEntity' requires the run to have a subjectEntityId"
+          );
+        }
+        channelId = (
+          await new ChannelRepository(db).ensureEntityChannel(
+            runSubjectEntityId,
+            ownerId,
+            workspaceId
+          )
+        ).id;
+      }
+
       if (!channelId) {
         throw new Error(
-          "channel_message requires channelId or channelType:'personal_thread'|'proactive'"
+          "channel_message requires channelId or channelType:'personal_thread'|'proactive'|'subjectEntity'"
         );
       }
 
@@ -1110,8 +1136,7 @@ async function executeOutputStep(
       const currentStage = config.currentStage as string | undefined;
       const grantStatus = config.grantStatus as unknown;
       const addOutput = config.addOutput as
-        | { kind: string; label: string; icon?: string }
-        | undefined;
+        { kind: string; label: string; icon?: string } | undefined;
 
       let session: typeof focusSessions.$inferSelect | undefined;
       if (sessionId) {
@@ -2589,23 +2614,13 @@ async function executeAutomationFlow(params: {
       .where(eq(users.id, ownerId))
       .limit(1);
 
-    // Channel resolution (runs-substrate rule: automation = ONE channel for all
-    // its runs). An explicit trigger-bound channel wins (e.g. a Discord-triggered
-    // automation posts back to its source channel); otherwise resolve THE
-    // automation's durable run channel so every run's activity lands in one room.
-    const triggerChannelId =
-      (automation.triggerConfig as AutomationTriggerConfig | null)?.channelId ??
-      undefined;
-    const boundChannelId =
-      triggerChannelId ??
-      (
-        await new ChannelRepository(db).ensureAutomationRunChannel(
-          automationId,
-          ownerId,
-          workspaceId ?? undefined,
-          automation.name ?? undefined
-        )
-      ).id;
+    // Channel resolution — the ONE door shared with the run-narration path
+    // (`resolveRunChannel`), switching on `metadata.resultRouting`: a per-entity
+    // automation lands each run in its subject's own channel; otherwise an
+    // explicit trigger-bound channel wins (e.g. a Discord-triggered automation
+    // posts back to its source channel); otherwise THE automation's durable
+    // per-type run channel so every run's activity lands in one room.
+    const boundChannelId = await resolveRunChannel(automation, run);
 
     const opened = await openRunSession({
       userId: ownerId,
@@ -2751,8 +2766,7 @@ async function executeAutomationFlow(params: {
           commandId:
             node.type === "command"
               ? ((node.data as Record<string, unknown>).commandId as
-                  | string
-                  | undefined)
+                  string | undefined)
               : undefined,
           status: "running",
           startedAt: new Date(),
@@ -2942,7 +2956,8 @@ async function executeAutomationFlow(params: {
                 runContext,
                 ownerId,
                 actingUserId,
-                { nodeId: node.id, stepRunId: stepRun.id }
+                { nodeId: node.id, stepRunId: stepRun.id },
+                run?.subjectEntityId
               );
               break;
             }
@@ -3048,7 +3063,8 @@ async function executeAutomationFlow(params: {
                           runContext,
                           ownerId,
                           actingUserId,
-                          { nodeId: childNode.id, stepRunId: stepRun.id }
+                          { nodeId: childNode.id, stepRunId: stepRun.id },
+                          run?.subjectEntityId
                         );
                         break;
                       case "condition": {
