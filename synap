@@ -2673,6 +2673,118 @@ cmd_start() {
     echo -e "${GREEN}✅ Services started!${NC}"
 }
 
+# ─── Federation / external sign-in enablement ──────────────────────────────────
+# Turn on "sign in via an external OIDC issuer through Kratos". The backend is
+# AGNOSTIC (any issuer); `connect-cloud` is a convenience that fills the Synap
+# Control Plane defaults and hands off to the landing page to link the account.
+cmd_federation() {
+    local deploy_dir
+    deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in a Synap installation directory${NC}"; exit 1
+    fi
+    cd "$deploy_dir"
+
+    local action="${1:-status}"; shift 2>/dev/null || true
+    local domain; domain="$(grep '^DOMAIN=' .env 2>/dev/null | cut -d= -f2)"
+
+    _fed_apply() {
+        echo -e "${BLUE}🔧 Regenerating Kratos config…${NC}"
+        generate_kratos_config "$domain"
+        echo -e "${BLUE}🔁 Restarting Kratos…${NC}"
+        docker compose up -d --force-recreate kratos >/dev/null 2>&1
+    }
+
+    case "$action" in
+        enable)
+            local issuer="" client_id="" client_secret="" label=""
+            while [ $# -gt 0 ]; do case "$1" in
+                --issuer) issuer="$2"; shift 2;;
+                --client-id) client_id="$2"; shift 2;;
+                --client-secret) client_secret="$2"; shift 2;;
+                --label) label="$2"; shift 2;;
+                *) echo -e "${YELLOW}Unknown flag: $1${NC}"; shift;;
+            esac; done
+            if [ -z "$client_secret" ]; then
+                echo -e "${RED}✗ --client-secret is required.${NC}"
+                echo "  synap federation enable --issuer <url> --client-id <id> --client-secret <secret> [--label <text>]"
+                exit 1
+            fi
+            update_env_value SYNAP_POD_KRATOS_CLIENT_SECRET "$client_secret"
+            [ -n "$issuer" ]    && update_env_value SYNAP_POD_OIDC_ISSUER "$issuer"
+            [ -n "$client_id" ] && update_env_value SYNAP_POD_OIDC_CLIENT_ID "$client_id"
+            [ -n "$label" ]     && update_env_value SYNAP_POD_OIDC_LABEL "$label"
+            rm -f .env.bak
+            _fed_apply
+            echo -e "${GREEN}✅ External sign-in enabled — the login page now offers \"${label:-your issuer}\".${NC}"
+            ;;
+        connect-cloud)
+            local client_secret="" cp_url=""
+            while [ $# -gt 0 ]; do case "$1" in
+                --client-secret) client_secret="$2"; shift 2;;
+                --control-plane) cp_url="$2"; shift 2;;
+                *) shift;;
+            esac; done
+            [ -z "$client_secret" ] && client_secret="$(grep '^SYNAP_POD_KRATOS_CLIENT_SECRET=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            if [ -z "$client_secret" ]; then
+                echo -e "${RED}✗ Need the Synap Cloud client secret.${NC}"
+                echo "  synap federation connect-cloud --client-secret <secret from Synap>"
+                exit 1
+            fi
+            [ -z "$cp_url" ] && cp_url="$(grep '^CONTROL_PLANE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            [ -z "$cp_url" ] && cp_url="https://api.synap.live"
+            update_env_value SYNAP_POD_KRATOS_CLIENT_SECRET "$client_secret"
+            update_env_value SYNAP_POD_OIDC_ISSUER "$cp_url"
+            update_env_value CONTROL_PLANE_URL "$cp_url"   # so the CP is auto-trusted at boot (seedControlPlaneIssuer)
+            update_env_value SYNAP_POD_OIDC_CLIENT_ID "synap-pod-kratos"
+            update_env_value SYNAP_POD_OIDC_LABEL "Synap Cloud"
+            update_env_value SYNAP_POD_OIDC_PROVIDER_ID "cp"
+            rm -f .env.bak
+            _fed_apply
+            echo -e "${BLUE}🔎 Verifying the Control Plane…${NC}"
+            if curl -fsS "${cp_url}/.well-known/openid-configuration" >/dev/null 2>&1; then
+                echo -e "${GREEN}  ✓ CP OIDC discovery reachable at ${cp_url}${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ Couldn't reach ${cp_url}/.well-known/openid-configuration — check CONTROL_PLANE_URL.${NC}"
+            fi
+            local landing="${SYNAP_LANDING_URL:-https://synap.live}"
+            echo ""
+            echo -e "${GREEN}✅ This pod now federates to Synap Cloud.${NC}"
+            echo -e "  Finish by connecting it to your account — open:"
+            echo -e "  ${BLUE}${landing}/connect?pod=${domain}${NC}"
+            ;;
+        status)
+            local sec issuer cid lbl cp
+            sec="$(grep '^SYNAP_POD_KRATOS_CLIENT_SECRET=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            issuer="$(grep '^SYNAP_POD_OIDC_ISSUER=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            cid="$(grep '^SYNAP_POD_OIDC_CLIENT_ID=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            lbl="$(grep '^SYNAP_POD_OIDC_LABEL=' .env 2>/dev/null | cut -d= -f2-)"
+            cp="$(grep '^CONTROL_PLANE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
+            echo -e "${BLUE}Federation (external sign-in) status${NC}"
+            if [ -n "$sec" ]; then
+                echo -e "  External sign-in: ${GREEN}ENABLED${NC}"
+                echo -e "  Issuer:    ${issuer:-https://api.synap.live}"
+                echo -e "  Client ID: ${cid:-synap-pod-kratos}"
+                echo -e "  Button:    ${lbl:-Synap Cloud}"
+            else
+                echo -e "  External sign-in: ${YELLOW}DISABLED${NC} (Pod email/password only)"
+                echo -e "  Enable: ${BLUE}synap federation connect-cloud${NC}  or  ${BLUE}synap federation enable --issuer … --client-secret …${NC}"
+            fi
+            if [ -n "$cp" ]; then echo -e "  CP trusted-issuer seed: ${GREEN}on${NC} ($cp)"; else echo -e "  CP trusted-issuer seed: ${YELLOW}off${NC} (CONTROL_PLANE_URL unset)"; fi
+            ;;
+        disable)
+            grep -q '^SYNAP_POD_KRATOS_CLIENT_SECRET=' .env && sed -i.bak '/^SYNAP_POD_KRATOS_CLIENT_SECRET=/d' .env && rm -f .env.bak
+            _fed_apply
+            echo -e "${GREEN}✅ External sign-in disabled — password sign-in only.${NC}"
+            ;;
+        *)
+            echo -e "${RED}Unknown action: $action${NC}"
+            echo "  synap federation status | enable | connect-cloud | disable"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_stop() {
     local deploy_dir=$(get_deploy_dir)
     if [ -z "$deploy_dir" ]; then
@@ -4110,6 +4222,7 @@ ${YELLOW}Management:${NC}
   synap backup [name]            Create backup
   synap restore <file>            Restore from backup
   synap config [action]          Manage configuration
+  synap federation <action>      External sign-in: status | enable | connect-cloud | disable
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
@@ -4226,6 +4339,10 @@ case "${1:-help}" in
     config)
         shift
         cmd_config "$@"
+        ;;
+    federation|fed)
+        shift
+        cmd_federation "$@"
         ;;
     rebuild)
         shift
