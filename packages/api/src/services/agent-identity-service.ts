@@ -185,7 +185,13 @@ export async function createNamedAgent(opts: {
         createdByUserId: opts.createdByUserId,
         isPersonalAgent: false,
       },
-      kratosIdentityId: `agent:${agentUserId}`,
+      // INVARIANT: an agent NEVER carries a Kratos identity. `kratosIdentityId IS
+      // NULL` is the canonical human↔agent discriminator (agents authenticate on
+      // the Hub-key rail, not Kratos). The federated user-sign-in rework keys human
+      // identity off a non-null kratosIdentityId, so a sentinel like `agent:${id}`
+      // here would mis-classify the agent as a Kratos human. Keep this NULL — the
+      // tripwire agent-kratos-identity-invariant.test.ts locks it.
+      kratosIdentityId: null,
     });
   }
 
