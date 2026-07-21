@@ -91,6 +91,7 @@ import {
   registerOrientRoutes,
   registerPodConfigRoutes,
   registerPodAdoptRoutes,
+  registerFederationRoutes,
   registerKeysRoutes,
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
@@ -588,6 +589,7 @@ registerDiscoverRoutes(app); // /discover
 registerOrientRoutes(app); // /orient
 registerPodConfigRoutes(app); // /pod/config
 registerPodAdoptRoutes(app); // /pod/adopt
+registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC federation push
 registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*

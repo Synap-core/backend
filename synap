@@ -454,53 +454,59 @@ generate_kratos_config() {
         webhook_secret=$(cat "$env_file" 2>/dev/null | grep "^KRATOS_WEBHOOK_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
     fi
 
-    # CP OIDC federation — per-pod, auto-provisioned. When this pod is connected
-    # to a Control Plane (CONTROL_PLANE_URL set) and holds its per-pod Hub API key
-    # (INTELLIGENCE_HUB_API_KEY — the same secret the CP stores as the pod's
-    # intelligence_api_key), we fetch this pod's OWN OIDC client (client_id +
-    # secret) from the CP at deploy over that existing key. No shared secret, no
-    # manual env var: the CP mints the client once and returns the stable secret
-    # on every call (idempotent), so Kratos federates to the Control Plane as a
-    # "Continue with Synap Cloud" provider. When NOT CP-connected (self-hosted /
-    # agnostic) or on ANY fetch failure, the oidc method stays disabled —
-    # byte-identical to the prior config, so this can never break Kratos boot.
-    # provider_id is fixed at "cp": Kratos builds its callback as
-    # .../oidc/callback/<provider_id>, which must match the exact redirect the CP
-    # registered for this pod (see ensurePodOidcClient / derivePodOidcRedirectUri).
+    # CP OIDC federation — per-pod, auto-provisioned via CP→pod PUSH. When this pod
+    # is connected to a Control Plane (CONTROL_PLANE_URL set), we ask the CP to
+    # (re)provision this pod's OWN OIDC client: the CP mints it and PUSHES it to the
+    # pod over the authenticated Hub channel (the pod persists it in pod_settings).
+    # We then read the pushed client from the pod's OWN database — there is no
+    # pod→CP secret and no manual env var (a pod holds no credential it can present
+    # to the CP; the authenticated direction is CP→pod). When NOT CP-connected
+    # (self-hosted / agnostic), disabled via `synap federation disable`, or on ANY
+    # failure, the oidc method stays disabled — byte-identical to the prior config,
+    # so this can never break Kratos boot. provider_id is fixed at "cp": Kratos
+    # builds its callback as .../oidc/callback/<provider_id>, which must match the
+    # redirect the CP registered (see ensurePodOidcClient / derivePodOidcRedirectUri).
     local oidc_client_secret=""
     local oidc_issuer=""
     local oidc_client_id=""
     local oidc_label="Synap Cloud"
     local oidc_provider_id="cp"
     if [ -n "$env_file" ]; then
-        local _cp_url _hub_key _pub_url _v
+        local _cp_url _pub_url _v _disabled
         _cp_url=$(grep "^CONTROL_PLANE_URL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || echo "")
-        _hub_key=$(grep "^INTELLIGENCE_HUB_API_KEY=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || echo "")
         _pub_url=$(grep "^PUBLIC_URL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || echo "")
         [ -z "$_pub_url" ] && _pub_url="https://${domain}"
-        # Optional: override the sign-in button label without reconnecting.
         _v=$(grep "^SYNAP_POD_OIDC_LABEL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^ *//; s/ *$//' | tr -d '"' || echo ""); [ -n "$_v" ] && oidc_label="$_v"
         # Explicit off-switch (`synap federation disable`) — keeps CP trust intact
         # while forcing password-only sign-in.
-        local _disabled
         _disabled=$(grep "^SYNAP_POD_FEDERATION_DISABLED=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || echo "")
-        if [ -n "$_cp_url" ] && [ -n "$_hub_key" ] && [ "$_disabled" != "1" ]; then
-            local _resp
-            _resp=$(curl -fsS --max-time 8 -X POST \
+        if [ -n "$_cp_url" ] && [ "$_disabled" != "1" ]; then
+            # 1. Trigger the CP to mint + push this pod's OIDC client over the Hub
+            #    channel. Returns { delivered: true } once the pod has persisted it.
+            #    No secret is returned here — it travels CP→pod (authenticated) only.
+            local _resp _delivered
+            _resp=$(curl -fsS --max-time 20 -X POST \
                 -H "Content-Type: application/json" \
-                -H "X-Hub-Api-Key: ${_hub_key}" \
                 -d "{\"podUrl\":\"${_pub_url}\"}" \
                 "${_cp_url%/}/pods/oidc/provision" 2>/dev/null || echo "")
-            if [ -n "$_resp" ]; then
-                oidc_client_id=$(printf '%s' "$_resp" | grep -oE '"clientId"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
-                oidc_client_secret=$(printf '%s' "$_resp" | grep -oE '"clientSecret"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
-                oidc_issuer=$(printf '%s' "$_resp" | grep -oE '"issuer"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
+            _delivered=$(printf '%s' "$_resp" | grep -oE '"delivered"[[:space:]]*:[[:space:]]*true' | head -1)
+            if [ -n "$_delivered" ]; then
+                # 2. Read the pushed client from the pod's OWN Postgres (pod-local,
+                #    plaintext read for the Kratos config — same trust as kratos.yml).
+                local _row
+                _row=$(docker compose exec -T postgres psql -U synap -d synap -tAF '|' -c \
+                    "SELECT settings->'federationOidcClient'->>'clientId', settings->'federationOidcClient'->>'clientSecret', settings->'federationOidcClient'->>'issuer' FROM pod_settings WHERE settings ? 'federationOidcClient' LIMIT 1" 2>/dev/null | head -1 || echo "")
+                oidc_client_id=$(printf '%s' "$_row" | cut -d'|' -f1)
+                oidc_client_secret=$(printf '%s' "$_row" | cut -d'|' -f2)
+                oidc_issuer=$(printf '%s' "$_row" | cut -d'|' -f3)
                 if [ -n "$oidc_client_secret" ] && [ -n "$oidc_client_id" ] && [ -n "$oidc_issuer" ]; then
-                    echo -e "${BLUE}ℹ️  Fetched per-pod OIDC client from Control Plane (${oidc_client_id})${NC}"
+                    echo -e "${BLUE}ℹ️  Per-pod OIDC client provisioned by Control Plane (${oidc_client_id})${NC}"
                 else
                     oidc_client_secret=""
-                    echo -e "${YELLOW}⚠️  CP OIDC provision response incomplete — federated sign-in stays disabled${NC}"
+                    echo -e "${YELLOW}⚠️  OIDC client delivered but not readable from pod_settings — federated sign-in stays disabled${NC}"
                 fi
+            elif [ -n "$_resp" ]; then
+                echo -e "${YELLOW}⚠️  CP could not deliver the OIDC client (${_resp}) — federated sign-in stays disabled${NC}"
             else
                 echo -e "${YELLOW}⚠️  Could not reach CP /pods/oidc/provision — federated sign-in stays disabled this deploy${NC}"
             fi
@@ -2754,10 +2760,6 @@ cmd_federation() {
             update_env_value CONTROL_PLANE_URL "$cp_url"   # also auto-trusts the CP at boot (seedControlPlaneIssuer)
             grep -q '^SYNAP_POD_FEDERATION_DISABLED=' .env && sed -i.bak '/^SYNAP_POD_FEDERATION_DISABLED=/d' .env
             rm -f .env.bak
-            local hub_key; hub_key="$(grep '^INTELLIGENCE_HUB_API_KEY=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
-            if [ -z "$hub_key" ]; then
-                echo -e "${YELLOW}⚠ This pod has no INTELLIGENCE_HUB_API_KEY — it wasn't provisioned by a Control Plane, so it can't auto-fetch an OIDC client. Federation will stay disabled until connected.${NC}"
-            fi
             _fed_apply
             echo -e "${BLUE}🔎 Verifying the Control Plane…${NC}"
             if curl -fsS "${cp_url%/}/.well-known/openid-configuration" >/dev/null 2>&1; then
@@ -2772,19 +2774,18 @@ cmd_federation() {
             echo -e "  ${BLUE}${landing}/connect?pod=${domain}${NC}"
             ;;
         status)
-            local cp hub lbl disabled
+            local cp lbl disabled
             cp="$(grep '^CONTROL_PLANE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
-            hub="$(grep '^INTELLIGENCE_HUB_API_KEY=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
             lbl="$(grep '^SYNAP_POD_OIDC_LABEL=' .env 2>/dev/null | cut -d= -f2-)"
             disabled="$(grep '^SYNAP_POD_FEDERATION_DISABLED=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
             echo -e "${BLUE}Federation (external sign-in) status${NC}"
-            if [ -n "$cp" ] && [ -n "$hub" ] && [ "$disabled" != "1" ]; then
-                echo -e "  Configured:    ${GREEN}ENABLED${NC} (auto-provisioned per-pod client)"
+            if [ -n "$cp" ] && [ "$disabled" != "1" ]; then
+                echo -e "  Configured:    ${GREEN}ENABLED${NC} (per-pod client, CP→pod push)"
                 echo -e "  Control Plane: $cp"
                 echo -e "  Button:        ${lbl:-Synap Cloud}"
                 # Ground truth: does the LIVE Kratos actually offer the oidc method?
-                # (Config can be ENABLED yet the deploy-time fetch may have failed —
-                # e.g. the CP wasn't deployed with /pods/oidc/provision yet.)
+                # (Config can be ENABLED yet the CP push may have failed — e.g. the
+                # CP wasn't deployed with the endpoint, or the pod backend was down.)
                 local _live=""
                 _live="$(curl -fsS --max-time 6 "https://${domain}/.ory/kratos/public/self-service/login/api" 2>/dev/null || true)"
                 [ -z "$_live" ] && _live="$(curl -fsS --max-time 6 "http://localhost:4433/self-service/login/api" 2>/dev/null || true)"
@@ -2792,15 +2793,15 @@ cmd_federation() {
                     echo -e "  Kratos:        ${GREEN}LIVE${NC} — the login page offers the provider"
                 elif [ -n "$_live" ]; then
                     echo -e "  Kratos:        ${RED}NOT LIVE${NC} — login flow has NO oidc method."
-                    echo -e "    → the deploy-time fetch from ${cp}/pods/oidc/provision failed."
-                    echo -e "      Confirm that CP is deployed with the endpoint, then redeploy this pod."
+                    echo -e "    → the CP→pod OIDC-client push failed at last deploy."
+                    echo -e "      Confirm CP is deployed with /pods/oidc/provision + the pod's"
+                    echo -e "      /api/hub/federation/oidc-config, then: ./synap federation connect-cloud"
                 else
                     echo -e "  Kratos:        ${YELLOW}unreachable${NC} — couldn't probe the login flow to confirm."
                 fi
             else
                 echo -e "  External sign-in: ${YELLOW}DISABLED${NC} (Pod password sign-in only)"
                 [ -z "$cp" ]  && echo -e "    • CONTROL_PLANE_URL not set"
-                [ -z "$hub" ] && echo -e "    • INTELLIGENCE_HUB_API_KEY not set (pod not CP-provisioned)"
                 [ "$disabled" = "1" ] && echo -e "    • explicitly disabled (synap federation disable)"
                 echo -e "  Enable: ${BLUE}synap federation connect-cloud${NC}"
             fi

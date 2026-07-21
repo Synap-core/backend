@@ -48,10 +48,7 @@ export interface PodProactiveDefaults {
  * 400 can never masquerade as "source temporarily unavailable".
  */
 export type CatalogSyncStatus =
-  | "ok"
-  | "empty"
-  | "unreachable"
-  | "misconfigured";
+  "ok" | "empty" | "unreachable" | "misconfigured";
 export interface CatalogSyncStamp {
   /** ISO timestamp of the last completed sync attempt (any outcome). */
   lastSyncAt: string;
@@ -60,10 +57,27 @@ export interface CatalogSyncStamp {
   lastCount: number;
 }
 
+/**
+ * Per-pod OIDC federation client, pushed by the control plane (CP) into this
+ * pod so the pod's Kratos can federate sign-in through the CP as its OIDC
+ * provider. Written via the `POST /api/hub/federation/oidc-config` hub route
+ * (CP→pod push, Hub-key Bearer auth) — NO new table, lives on the singleton
+ * `pod_settings.settings` blob under `federationOidcClient`.
+ */
+export interface FederationOidcClient {
+  clientId: string;
+  clientSecret: string;
+  issuer: string;
+  redirectUri: string;
+  /** ISO timestamp of the last CP push. */
+  updatedAt: string;
+}
+
 export interface PodSettingsBlob {
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;
+  federationOidcClient?: FederationOidcClient;
   [k: string]: unknown;
 }
 
