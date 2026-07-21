@@ -111,7 +111,17 @@ export function createMCPServer(
    * `session --produced--> entity` links, project placement rung 2) and never
    * itself authorizes anything — downstream governance still applies.
    */
-  defaultSessionId?: string
+  defaultSessionId?: string,
+  /**
+   * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` and workspace
+   * binding (`keyWorkspaceId`), from the HTTP door. Threaded into the executor
+   * so a bound `service` key is positively pinned to its workspace via the
+   * shared `resolveConfinedWorkspace` primitive — the SAME confinement the Hub
+   * REST door applies. Undefined/null for non-service or unbound keys →
+   * legacy passthrough (no behavior change).
+   */
+  keyType?: string | null,
+  keyWorkspaceId?: string | null
 ) {
   const server = new Server(
     {
@@ -220,7 +230,10 @@ export function createMCPServer(
       scopes,
       sessionUserId,
       agentUserId,
-      defaultSessionId
+      defaultSessionId,
+      // Service-key confinement — pinned per-request through to the executor.
+      keyType,
+      keyWorkspaceId
     );
   });
 

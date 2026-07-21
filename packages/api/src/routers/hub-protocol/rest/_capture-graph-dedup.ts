@@ -45,6 +45,51 @@ export interface CaptureGraphBinding {
   title?: string;
 }
 
+/**
+ * A structured ref-validation failure. Returned (never thrown) so each door
+ * renders its OWN exact wording + transport shape: the MCP door emits
+ * `ok({ error })`, the REST door `c.json({ error }, 400)`, and their relation
+ * messages differ (the MCP one carries an extra "must belong to an entity in
+ * the same call" hint). `null` = valid.
+ */
+export type CaptureGraphRefIssue =
+  | { kind: "duplicate-ref"; ref: string }
+  | { kind: "unknown-relation-ref"; sourceRef: string; targetRef: string };
+
+/**
+ * The shared ref-uniqueness + dangling-relation check both capture-graph doors
+ * ran by hand. Every entity `ref` must be unique, and every relation ref must
+ * name an entity in the same call — a dangling ref would silently drop the link
+ * at materialization time.
+ *
+ * Presence checks stay DOOR-LOCAL (they differ): the REST door requires `ref` +
+ * `profileSlug` together; the MCP door makes `ref` optional and auto-assigns it
+ * BEFORE calling this, and validates `profileSlug` / relation shape with its own
+ * hint-carrying messages. This function assumes each entity already carries the
+ * `ref` its door intends and only checks uniqueness + reachability.
+ */
+export function validateCaptureGraphRefs(
+  entities: ReadonlyArray<{ ref?: string | null }>,
+  relations: ReadonlyArray<{ sourceRef: string; targetRef: string }>
+): CaptureGraphRefIssue | null {
+  const refs = new Set<string>();
+  for (const e of entities) {
+    if (!e.ref) continue; // ref-presence is the caller's door-local concern
+    if (refs.has(e.ref)) return { kind: "duplicate-ref", ref: e.ref };
+    refs.add(e.ref);
+  }
+  for (const r of relations) {
+    if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
+      return {
+        kind: "unknown-relation-ref",
+        sourceRef: r.sourceRef,
+        targetRef: r.targetRef,
+      };
+    }
+  }
+  return null;
+}
+
 import {
   extractIdentitySignals,
   normalizeIdentitySignal,

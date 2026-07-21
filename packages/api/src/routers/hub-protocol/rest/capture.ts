@@ -52,6 +52,7 @@ import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { submitCaptureGraph } from "../../../services/capture-agent/submit-capture-graph.js";
+import { validateCaptureGraphRefs } from "./_capture-graph-dedup.js";
 import {
   shouldPersistCapturePlan,
   captureStructureToGraph,
@@ -311,9 +312,6 @@ export function registerCaptureRoutes(app: HubHono): void {
         const graph = await submitCaptureGraph({
           userId,
           workspaceId: targetWorkspaceId,
-          // Presenter tag so surfaces can label "my uncommitted plans" apart from
-          // agent proposals. Governance still derives mode from identity.
-          captureMode: "confirm",
           entities,
           relations,
         });
@@ -1049,8 +1047,8 @@ export function registerCaptureRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
-    // Refs must be unique; relations must reference known refs (fail loud — a
-    // dangling ref would silently drop the link at materialization time).
+    // Entity ref + profileSlug presence stays door-local (REST requires both
+    // together); the ref set built here also feeds the binding check below.
     const refs = new Set<string>();
     for (const e of body.entities) {
       if (!e.ref || !e.profileSlug) {
@@ -1059,21 +1057,23 @@ export function registerCaptureRoutes(app: HubHono): void {
           400
         );
       }
-      if (refs.has(e.ref)) {
-        return c.json({ error: `duplicate entity ref: ${e.ref}` }, 400);
-      }
       refs.add(e.ref);
     }
     let relations = Array.isArray(body.relations) ? body.relations : [];
-    for (const r of relations) {
-      if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
-        return c.json(
-          {
-            error: `relation references an unknown ref: ${r.sourceRef} -> ${r.targetRef}`,
-          },
-          400
-        );
-      }
+    // SHARED: ref-uniqueness + dangling-relation (fail loud — a dangling ref
+    // would silently drop the link at materialization time). Rendered with this
+    // door's exact wording + 400 shape.
+    const refIssue = validateCaptureGraphRefs(body.entities, relations);
+    if (refIssue) {
+      return c.json(
+        {
+          error:
+            refIssue.kind === "duplicate-ref"
+              ? `duplicate entity ref: ${refIssue.ref}`
+              : `relation references an unknown ref: ${refIssue.sourceRef} -> ${refIssue.targetRef}`,
+        },
+        400
+      );
     }
     let bindings = Array.isArray(body.bindings) ? body.bindings : [];
     for (const b of bindings) {

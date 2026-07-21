@@ -270,7 +270,7 @@ docker compose ps
 ## 💬 Support
 
 - **Documentation**: [docs.synap.live](https://docs.synap.live)
-- **Discord Community**: [discord.gg/synap](https://discord.gg/synap)
+- **Discord Community**: [discord.gg/xhRdQ7hG5h](https://discord.gg/xhRdQ7hG5h)
 - **GitHub Issues**: [github.com/synap-labs/synap-backend/issues](https://github.com/synap-labs/synap-backend/issues)
 
 ---

@@ -9045,7 +9045,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "workspace" | "entity" | "document" | "view" | "relation" | "profile";
-				changeType: "update" | "delete" | "create";
+				changeType: "update" | "create" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;

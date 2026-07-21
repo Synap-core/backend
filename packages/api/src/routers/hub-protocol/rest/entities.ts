@@ -1063,7 +1063,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.projectId ? { projectId: body.projectId } : {}),
         ...(body.source ? { source: body.source } : {}),
         ...(resolvedAgentUserId ? { resolvedAgentUserId } : {}),
-        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
 
       // Echo back the resolved workspace context so external callers can

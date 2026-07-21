@@ -79,10 +79,15 @@
     }
   },
   "synap/capture": {
-    "teachesTools": ["create_entity", "update_entity", "entity.create"],
+    "teachesTools": [
+      "synap_capture",
+      "create_entity",
+      "update_entity",
+      "entity.create"
+    ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Capture free text into the right entities without duplicating.",
+    "summary": "The one capture door: a payload gradient (text | entities | graph) in ONE call → one receipt; proposed is success, no plan-and-commit.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -373,10 +378,10 @@
     }
   },
   "synap/multi-entity-capture": {
-    "teachesTools": ["create_entity", "propose_entity_graph"],
+    "teachesTools": ["synap_capture", "create_entity", "propose_entity_graph"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Capturing multiple related entities from one piece of free text.",
+    "summary": "Multiple related entities from one input: send text or entities+relations through the one capture door — ONE call, ONE proposal, no two-step commit.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

@@ -79,12 +79,6 @@ export interface SubmitCaptureGraphInput {
    * result as `projectCandidate`. Ignored when `projectId` is already set.
    */
   projectName?: string | null;
-  /**
-   * Presenter tag stamped on the proposal's `data.captureMode` (JSONB, no
-   * migration) so surfaces can label "my uncommitted plan" (confirm) apart from
-   * an "agent proposal". Pure metadata — never consulted by governance.
-   */
-  captureMode?: string;
   /** Origin signal carried through the proposal into entity materialization. */
   source?:
     | "intelligence"
@@ -267,13 +261,25 @@ export async function submitCaptureGraph(
   if (input.agentUserId && bindings.length === 0) {
     const keys = captureGraphEventKeys(operations);
     let allAutoApprove = keys.length > 0;
-    for (const { subjectType, action } of keys) {
+    for (const {
+      subjectType,
+      action,
+      subjectProfileSlug,
+      subjectUoValidated,
+    } of keys) {
       const gov = await resolveAgentGovernanceDecision({
         db,
         agentUserId: input.agentUserId,
         workspaceId,
         subjectType,
         action,
+        // GOVERNANCE BY KIND: forward the op's profile slug + uo_validated so an
+        // unvalidated `user_observation` (an INFERENCE) forces `propose` here —
+        // and because the graph is atomic, the WHOLE graph then proposes. Absent
+        // for facet/relation ops (the rule no-ops). This mirrors the per-write
+        // signals `checkPermissionOrPropose`/`create_entity` already forward.
+        ...(subjectProfileSlug ? { subjectProfileSlug } : {}),
+        ...(subjectUoValidated !== undefined ? { subjectUoValidated } : {}),
         // MCP is an agent WRITE door — prefer the agent's own metadata
         // autoApproveFor, falling back to the workspace override (chat-door rule).
         preferAgentMetadataAutoApproveFor: true,
@@ -374,7 +380,6 @@ export async function submitCaptureGraph(
               source,
               graphSource: "capture",
               materialized: { entityIds: materializedEntityIds },
-              ...(input.captureMode ? { captureMode: input.captureMode } : {}),
               ...proposalProvenance,
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
@@ -435,9 +440,6 @@ export async function submitCaptureGraph(
       source,
       graphSource: "capture",
       bindings,
-      // Presenter tag (JSONB, no migration): "my uncommitted plan" (confirm) vs
-      // an agent proposal. Never consulted by governance.
-      ...(input.captureMode ? { captureMode: input.captureMode } : {}),
       ...proposalProvenance,
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },

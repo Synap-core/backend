@@ -297,7 +297,14 @@ mcpHttpApp.post("/", async (c) => {
     // The validated key's OWN scopes — never the process-global MCP_SCOPES env
     // var, which is meaningless per-key over HTTP.
     deriveMcpScopes(keyRecord.scope),
-    defaultSessionId
+    defaultSessionId,
+    // SERVICE-KEY CONFINEMENT: a bound `service` key is positively pinned to its
+    // workspace. Threaded into the executor so `resolveConfinedWorkspace` (the
+    // SAME primitive the REST door uses) 403s a bound key that targets another
+    // workspace and pins pod-wide calls to the bound ws. Non-service/unbound
+    // keys (`keyWorkspaceId == null`) pass through unchanged.
+    keyRecord.keyType,
+    keyRecord.workspaceId
   );
   await server.connect(transport);
 

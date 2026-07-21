@@ -5,7 +5,7 @@
 
 Sovereign data pod · Bring-your-own-agent · Config-first · Self-hostable
 
-[Website](https://www.synap.live) · [Documentation](https://www.synap.live/docs) · [Hosted (one-click)](https://www.synap.live/hosted) · [Discord](https://discord.gg/synap) · [X](https://x.com/synap)
+[Website](https://www.synap.live) · [Documentation](https://www.synap.live/docs) · [Hosted (one-click)](https://www.synap.live/hosted) · [Discord](https://discord.gg/xhRdQ7hG5h) · [X](https://x.com/synap)
 
 ---
 
@@ -236,7 +236,7 @@ Full docs: `[docs/architecture.md](./docs/architecture.md)`
 
 ## Community
 
-- 💬 **[Discord](https://discord.gg/synap)** — where builders share workspaces, playbooks, and capabilities
+- 💬 **[Discord](https://discord.gg/xhRdQ7hG5h)** — where builders share workspaces, playbooks, and capabilities
 - 🐦 **[X / Twitter](https://x.com/synap)** — daily build-in-public
 - 📬 **[Substack](https://synap.substack.com)** — the user-centric web movement
 - 🐙 **[GitHub Discussions](https://github.com/Synap-core/backend/discussions)** — technical Q&A

@@ -14,6 +14,7 @@ import { skillsRouter as regularSkillsRouter } from "../skills.js";
 import { projectsRouter } from "../projects.js";
 import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
+import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import { validateCreateVerbInput } from "./validate-create-verb.js";
 import {
   getObjectGraph,
@@ -61,6 +62,7 @@ import {
   verifyWorkspaceAccess,
 } from "../hub-protocol/rest/_shared.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { validateCaptureGraphRefs } from "../hub-protocol/rest/_capture-graph-dedup.js";
 import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
@@ -72,9 +74,21 @@ async function createHubProtocolCaller(
   scopes: string[],
   agentUserId?: string,
   sessionId?: string | null,
-  workspaceId?: string | null
+  workspaceId?: string | null,
+  // SERVICE-KEY CONFINEMENT: pins a bound `service` key's ambient workspace to
+  // its binding via the shared primitive (no-op for other keys). Defence in
+  // depth — callers already confine the value they pass, but this guarantees a
+  // bound key's ctx lens can never be another workspace.
+  keyType?: string | null,
+  keyWorkspaceId?: string | null
 ) {
   await getDb();
+
+  const confinedWorkspaceId = resolveConfinedWorkspace(
+    keyType,
+    keyWorkspaceId,
+    workspaceId
+  );
 
   // MCP keys use mcp.read / mcp.write scopes. Hub Protocol procedures require
   // hub-protocol.read / hub-protocol.write. Translate at the boundary so callers
@@ -110,7 +124,7 @@ async function createHubProtocolCaller(
     // governance lens the acting agent may not even belong to (which is what
     // turned entity proposals into `workspace.join` proposals). NEVER an
     // explicit placement pin: pod-scope kinds must still land pod-wide.
-    workspaceId: workspaceId ?? null,
+    workspaceId: confinedWorkspaceId ?? null,
     scopes: hubScopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
@@ -558,7 +572,17 @@ export async function executeMCPToolViaHubProtocol(
    * server-side by the transport, never advertised on a tool schema. An explicit
    * `args.sessionId` wins over it; both are ownership-checked before use.
    */
-  ambientSessionId?: string
+  ambientSessionId?: string,
+  /**
+   * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` + workspace
+   * binding. When it is a bound `service` key, EVERY workspace this call would
+   * touch (the injected `?workspaceId=` lens and every `args.workspaceId` a
+   * write reads) is clamped to the binding via `resolveConfinedWorkspace` — the
+   * SAME primitive the Hub REST door uses. Non-service/unbound keys pass through
+   * unchanged.
+   */
+  keyType?: string | null,
+  keyWorkspaceId?: string | null
 ): Promise<CallToolResult> {
   const sessionId = await resolveSessionHandle(
     toolName,
@@ -571,7 +595,10 @@ export async function executeMCPToolViaHubProtocol(
     userId,
     apiKeyScopes,
     agentUserId,
-    sessionId
+    sessionId,
+    null,
+    keyType,
+    keyWorkspaceId
   );
 
   // The MCP server auto-injects the URL lens (`?workspaceId=`) into every tool
@@ -587,10 +614,23 @@ export async function executeMCPToolViaHubProtocol(
   // governance workspace WITHOUT re-validating it (`entities.create` only
   // membership-checks `input.targetWorkspaceId`). Gate it here — the same
   // `verifyWorkspaceAccess` the capture-graph branch uses.
-  const requestedWorkspaceId =
+  const rawRequestedWorkspaceId =
     typeof args.workspaceId === "string" && args.workspaceId.trim() !== ""
       ? args.workspaceId
       : undefined;
+  // SERVICE-KEY CONFINEMENT (the one clamp for the whole call): resolve the
+  // requested workspace through the shared primitive BEFORE it becomes any lens
+  // or write input. A bound `service` key targeting another workspace throws 403
+  // HERE (before the switch → every read/write handler is covered); a bound key
+  // with no target is positively pinned to its binding; non-service/unbound keys
+  // return the requested value unchanged. Downstream reads `requestedWorkspaceId`
+  // (the confined value) everywhere it previously read the raw `args.workspaceId`.
+  const requestedWorkspaceId =
+    resolveConfinedWorkspace(
+      keyType,
+      keyWorkspaceId,
+      rawRequestedWorkspaceId
+    ) ?? undefined;
   const workspaceAccessible = requestedWorkspaceId
     ? await verifyWorkspaceAccess(userId, requestedWorkspaceId)
     : false;
@@ -614,7 +654,9 @@ export async function executeMCPToolViaHubProtocol(
         apiKeyScopes,
         agentUserId,
         sessionId,
-        lensWorkspaceId
+        lensWorkspaceId,
+        keyType,
+        keyWorkspaceId
       )
     : caller;
 
@@ -854,7 +896,6 @@ export async function executeMCPToolViaHubProtocol(
         ...(args.projectId ? { projectId: args.projectId as string } : {}),
         source: "agent",
         ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
-        reasoning: `MCP tool: ${toolName}`,
       });
       return ok({
         ...created,
@@ -885,7 +926,8 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const result = await caller.documents.createDocument({
         userId,
-        workspaceId: args.workspaceId as string,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
         title: args.title as string,
         content: (args.content as string) || "",
         reasoning: "Created via MCP",
@@ -1195,7 +1237,9 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_link_entities": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      let linkWsId = args.workspaceId as string | undefined;
+      // Confined workspace (service-key clamp) before the first-ws fallback, so a
+      // bound key never writes a relation into a non-bound workspace.
+      let linkWsId = requestedWorkspaceId;
       if (!linkWsId) {
         const ids = await getUserWorkspaceIds(userId);
         linkWsId = ids[0];
@@ -1230,9 +1274,9 @@ export async function executeMCPToolViaHubProtocol(
         ...(args.properties
           ? { properties: args.properties as Record<string, unknown> }
           : {}),
-        ...(args.workspaceId
-          ? { workspaceId: args.workspaceId as string }
-          : {}),
+        // Confined facet lens (service-key clamp) — a bound key can only scope
+        // the facet to its own workspace.
+        ...(requestedWorkspaceId ? { workspaceId: requestedWorkspaceId } : {}),
         ...(args.contextEntityId
           ? { contextEntityId: args.contextEntityId as string }
           : {}),
@@ -1331,7 +1375,8 @@ export async function executeMCPToolViaHubProtocol(
         uiHints.description = args.description;
       const result = await caller.profiles.createProfile({
         userId,
-        workspaceId: args.workspaceId as string,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
         slug: args.slug as string,
         displayName: args.displayName as string,
         profileKind: "role",
@@ -1675,6 +1720,12 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_governance": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;
+      // Membership floor: getEffectiveGovernance reads ANY workspace's policy by
+      // id, so gate on the caller actually belonging to it (a bound service key
+      // is already clamped upstream; this closes the read for ordinary keys too).
+      if (wsId && !(await verifyWorkspaceAccess(userId, wsId))) {
+        return ok({ error: `Forbidden: no access to workspace ${wsId}` });
+      }
       const { getEffectiveGovernance } =
         await import("../../utils/permission-check.js");
       const { countPendingProposals } =
@@ -1754,16 +1805,13 @@ export async function executeMCPToolViaHubProtocol(
         // silently drop the link at materialization time.
         //
         // DRIFT vs the old `synap_capture_graph`: `ref` is now OPTIONAL. A single
-        // structured entity should not have to invent a local id. Explicit refs
-        // are still unique-checked and auto-assigned ones can never collide.
+        // structured entity should not have to invent a local id. Auto-assign is
+        // DOOR-LOCAL (it runs before the shared uniqueness/dangling validation);
+        // `explicitRefs` only guards the minted ids against collision (a
+        // duplicate EXPLICIT ref is caught by `validateCaptureGraphRefs` below).
         const explicitRefs = new Set<string>();
         for (const e of captureEntities) {
-          if (typeof e.ref === "string" && e.ref) {
-            if (explicitRefs.has(e.ref)) {
-              return ok({ error: `duplicate entity ref: ${e.ref}` });
-            }
-            explicitRefs.add(e.ref);
-          }
+          if (typeof e.ref === "string" && e.ref) explicitRefs.add(e.ref);
         }
         let autoRefSeq = 0;
         const graphEntities: Array<Record<string, unknown> & { ref: string }> =
@@ -1781,8 +1829,8 @@ export async function executeMCPToolViaHubProtocol(
             });
           }
         }
-        // `explicitRefs` already holds every ref in play — the auto-assign loop
-        // above `.add()`s the ones it mints.
+        // Relation SHAPE (sourceRef/targetRef/type presence) stays door-local —
+        // MCP-specific message with the field names the agent must supply.
         for (const r of captureRelations) {
           if (
             typeof r.sourceRef !== "string" ||
@@ -1794,14 +1842,20 @@ export async function executeMCPToolViaHubProtocol(
               error: "each relation needs `sourceRef`, `targetRef` and `type`",
             });
           }
-          if (
-            !explicitRefs.has(r.sourceRef) ||
-            !explicitRefs.has(r.targetRef)
-          ) {
-            return ok({
-              error: `relation references an unknown ref: ${r.sourceRef} -> ${r.targetRef}. Every ref must belong to an entity in the same call.`,
-            });
-          }
+        }
+        // SHARED: ref-uniqueness + dangling-relation (the one door both surfaces
+        // run). Rendered here with MCP's own wording (the extra "same call" hint).
+        const refIssue = validateCaptureGraphRefs(
+          graphEntities,
+          captureRelations as Array<{ sourceRef: string; targetRef: string }>
+        );
+        if (refIssue) {
+          return ok({
+            error:
+              refIssue.kind === "duplicate-ref"
+                ? `duplicate entity ref: ${refIssue.ref}`
+                : `relation references an unknown ref: ${refIssue.sourceRef} -> ${refIssue.targetRef}. Every ref must belong to an entity in the same call.`,
+          });
         }
 
         // The RAW requested id, not the dropped-on-failure lens: a placement pin
@@ -2031,8 +2085,10 @@ export async function executeMCPToolViaHubProtocol(
 
       // ══ TEXT BRANCH ═════════════════════════════════════════════════════════
       const { captureRouter } = await import("../capture.js");
-      // Resolve workspace: use provided or fall back to user's first workspace
-      let captureWsId = args.workspaceId as string | undefined;
+      // Resolve workspace: use the confined workspace (service-key clamp) or fall
+      // back to user's first workspace. Feeds both the global-lane knowledge_keys
+      // write and the captureCtx below, so a bound key never writes elsewhere.
+      let captureWsId = requestedWorkspaceId;
       if (!captureWsId) {
         const wsIds = await getUserWorkspaceIds(userId);
         captureWsId = wsIds[0];
@@ -2445,9 +2501,10 @@ export async function executeMCPToolViaHubProtocol(
       if (typeof args.name !== "string" || args.name.trim() === "") {
         return ok({ error: "name is required" });
       }
-      // Resolve the HOME workspace: use provided or fall back to the user's
-      // first workspace (same fallback synap_capture uses).
-      let projectWsId = args.workspaceId as string | undefined;
+      // Resolve the HOME workspace: use the confined workspace (service-key
+      // clamp) or fall back to the user's first workspace (same fallback
+      // synap_capture uses).
+      let projectWsId = requestedWorkspaceId;
       if (!projectWsId) {
         const wsIds = await getUserWorkspaceIds(userId);
         projectWsId = wsIds[0];
@@ -2489,7 +2546,8 @@ export async function executeMCPToolViaHubProtocol(
       ) {
         return ok({ error: "goalTemplate is required" });
       }
-      let pbWsId = args.workspaceId as string | undefined;
+      // Confined workspace (service-key clamp) before the first-ws fallback.
+      let pbWsId = requestedWorkspaceId;
       if (!pbWsId) {
         const wsIds = await getUserWorkspaceIds(userId);
         pbWsId = wsIds[0];
@@ -2525,7 +2583,8 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const result = await caller.views.createView({
         userId,
-        workspaceId: args.workspaceId as string,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
         name: args.name as string,
         type: args.type as string,
         profileId: args.profileId as string | undefined,
@@ -2648,7 +2707,8 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_run_capability": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const wsId = args.workspaceId as string;
+      // Confined workspace (service-key clamp) — not the raw model-supplied id.
+      const wsId = requestedWorkspaceId as string;
       const { executeCapability } =
         await import("../../services/capabilities/execute-capability.js");
       const outcome = await executeCapability({

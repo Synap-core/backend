@@ -22,24 +22,54 @@ import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 export interface CaptureGraphEventKey {
   subjectType: string;
   action: string;
+  /**
+   * The write subject's profile slug — populated for `entity.create` ops so the
+   * governance-by-kind rung (a `user_observation` INFERENCE must propose, never
+   * auto-apply) fires PER OP. Undefined for facet/relation ops (governed by
+   * action alone). Without this, the deduped `entity.create` key dropped the
+   * slug and an unvalidated user_observation slipped through auto-apply.
+   */
+  subjectProfileSlug?: string;
+  /**
+   * `uo_validated` read from a `user_observation` op's properties: `true` =
+   * user-stated (auto-approve), false/undefined = inference (propose). Only
+   * meaningful when `subjectProfileSlug === "user_observation"`.
+   */
+  subjectUoValidated?: boolean;
 }
 
 /**
- * The DISTINCT `(subjectType, action)` policy keys a capture graph exercises.
- * Deduped so the caller runs the evaluator at most once per distinct key.
+ * The DISTINCT policy keys a capture graph exercises. Deduped so the caller runs
+ * the evaluator at most once per distinct key — now keyed by
+ * `(subjectType, action, profileSlug, uoValidated)` so two `entity.create` ops
+ * of DIFFERENT kinds (e.g. a `note` and an unvalidated `user_observation`) are
+ * evaluated separately, letting governance-by-kind fire for the one that needs it.
  */
 export function captureGraphEventKeys(
   operations: CompositeProposalOperation[]
 ): CaptureGraphEventKey[] {
   const keys = new Map<string, CaptureGraphEventKey>();
-  const add = (subjectType: string, action: string) =>
-    keys.set(`${subjectType}.${action}`, { subjectType, action });
+  const add = (key: CaptureGraphEventKey) => {
+    const mapKey = `${key.subjectType}.${key.action}::${key.subjectProfileSlug ?? ""}::${key.subjectUoValidated ?? ""}`;
+    if (!keys.has(mapKey)) keys.set(mapKey, key);
+  };
   for (const op of operations) {
     if (op.op === "create_entity") {
-      add("entity", "create");
-      if (op.facets && op.facets.length > 0) add("facet", "attach");
+      const props = op.properties as Record<string, unknown> | undefined;
+      const subjectUoValidated =
+        typeof props?.uo_validated === "boolean"
+          ? props.uo_validated
+          : undefined;
+      add({
+        subjectType: "entity",
+        action: "create",
+        subjectProfileSlug: op.profileSlug,
+        ...(subjectUoValidated !== undefined ? { subjectUoValidated } : {}),
+      });
+      if (op.facets && op.facets.length > 0)
+        add({ subjectType: "facet", action: "attach" });
     } else if (op.op === "create_relation") {
-      add("relation", "create");
+      add({ subjectType: "relation", action: "create" });
     }
   }
   return [...keys.values()];

@@ -1563,7 +1563,14 @@ export const tools = {
      * advertised schemas dishonest. An explicit `args.sessionId` (the session
      * tools) always wins; this is only the fallback.
      */
-    ambientSessionId?: string
+    ambientSessionId?: string,
+    /**
+     * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` + workspace
+     * binding. Forwarded to the adapter so a bound `service` key is confined to
+     * its workspace via `resolveConfinedWorkspace`. Undefined/null → passthrough.
+     */
+    keyType?: string | null,
+    keyWorkspaceId?: string | null
   ): Promise<CallToolResult> {
     // THE error door. Every MCP tool call flows through this one seam, so the
     // boundary lives here and nowhere else: a thrown error becomes an
@@ -1591,7 +1598,9 @@ export const tools = {
         apiKeyScopes,
         sessionUserId,
         agentUserId,
-        ambientSessionId
+        ambientSessionId,
+        keyType,
+        keyWorkspaceId
       );
     } catch (err) {
       return toSafeToolError(err, name);

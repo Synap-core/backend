@@ -193,15 +193,6 @@ export async function buildCreateResolution(params: {
   /** Acting agent — bound onto the relation caller ctx so the auto-connect is
    *  attributed to (and governable as) the agent, not the operator. */
   resolvedAgentUserId?: string;
-  /**
-   * Agent rationale. Kept on the signature because callers already have it and
-   * it belongs on the proposal, but `relations.create` exposes NO channel for
-   * it today: its input has no `reasoning`, and it does not forward one to
-   * `checkPermissionOrPropose`. Forwarded the day that door grows one — do NOT
-   * smuggle it through `metadata` (relation metadata is dropped entirely on the
-   * proposal path).
-   */
-  reasoning?: string;
 }): Promise<CreateResolutionBlock | undefined> {
   try {
     const { sameProfile, otherProfiles } = await resolveEntityByName({
@@ -317,7 +308,6 @@ export async function buildCreateEntityReceipt(params: {
   projectId?: string;
   source?: string;
   resolvedAgentUserId?: string;
-  reasoning?: string;
 }): Promise<{
   writeReceipt: CreateWriteReceipt;
   resolution?: CreateResolutionBlock;
@@ -334,7 +324,6 @@ export async function buildCreateEntityReceipt(params: {
     ...(params.resolvedAgentUserId
       ? { resolvedAgentUserId: params.resolvedAgentUserId }
       : {}),
-    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
   });
 
   const writeReceipt = buildCreateWriteReceipt({

@@ -830,7 +830,13 @@ fabricate, never silent give-up. Provider 200-with-error-body: always check
 
 ## Core writes
 
-### Create an entity (schema-first, complete intent)
+**Two write doors, one gradient.** `create_entity` is for exactly ONE
+fully-structured, typed entity you already have. For anything unstructured,
+several entities, or a graph — or **when in doubt** — use the capture door
+(`synap_capture`, see `capture.md`): precision comes from sending more structure
+in the SAME call, never from picking a different tool or a second commit step.
+
+### Create an entity (one exact typed entity)
 
 Before this call, use `/discover?userId=…&profileSlugs=<kind>` to read the
 real fields, required/default values, constraints and reference targets. Omit
@@ -852,15 +858,27 @@ POST /api/hub/entities
 ```
 
 The response has legacy `status`/`id` fields plus `writeReceipt`:
-`pending` means a proposal exists and no entity is live; `applied` means the
-reported direct write completed; `partial` means a follow-up (for example a
-facet) failed after the entity applied. Never claim completion from `pending`,
-and only enrich again when the receipt identifies a real missing fact.
+`pending`/`proposed` means a proposal exists and no entity is live yet;
+`applied` means the reported direct write completed; `partial` means a follow-up
+(for example a facet) failed after the entity applied. **A `proposed`/`pending`
+receipt is a governed success, not an error** — surface its `reviewUrl`, never
+claim completion, and only enrich again when the receipt identifies a real
+missing fact.
 
 For several entities, creation-time roles/facets, or relations that need one
-review, submit one `POST /api/hub/capture/graph` plan instead of sequencing
-independent creates. It returns a pending receipt and materializes on human
-approval.
+review, send the whole graph through the capture door (`synap_capture` with
+`entities[]` + `relations[]`) instead of sequencing independent creates. It is
+ONE governed call: policy auto-applies when every op is safe, otherwise the
+whole graph is proposed (atomic). There is no separate commit step.
+
+**Name-refs, not UUIDs.** Reference an existing project by name — the server
+resolves it against the caller's own projects (exact match files there; no match
+proposes, never mis-files). Never ask the user for a UUID.
+
+**Dedup is advisory across kinds.** Strong signals (`email`/`phone`/`website` —
+not a bare `url`) dedup within a kind; a same-title hit in a *different* kind
+comes back as an advisory candidate, never an auto-merge. "No exact match" is not
+"safe to create" when advisory candidates are returned — review them first.
 
 ### Update an entity
 
@@ -928,21 +946,25 @@ Content is a **full replacement**, not a patch. Fetch the current content first 
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
 
-### Store a fact (memory) — use sparingly
+### Remember a fact about the user — use sparingly
 
-```json
-POST /api/hub/memory
-{ "userId": "{userId}", "fact": "User prefers async communication over meetings" }
-```
+A fact *about the user* goes through `remember_fact` (CLI: `synap capture --type
+observation`). It writes a governed `user_observation` — not an ungoverned
+throwaway row: a fact the user explicitly stated auto-approves; a fact you
+inferred returns `proposed` (normal — surface the review link). Because it's a
+real entity it's addressable, linkable and revertible.
 
-Always auto-approved. **Memory is for loose, unstructured, hard-to-title facts only.** The seductive thing about memory is it has zero friction — no dedup, no linking, no proposals. That makes it easy to misuse.
+**Use it only for loose, unstructured, hard-to-title facts about the user** — a
+stated preference, a throwaway detail. Everything with a title-worthy noun or
+something to link to is an ENTITY through the capture door, not an observation.
 
-**The test:** if the user later asked "show me all X," can memory answer? Memory can only keyword-match — it has no structure. So:
+**The test:** if the user later asked "show me all X," could a loose observation
+answer? It can only keyword-match — it has no structure. So:
 
 | Input                                                   | Use                                                             |
 | ------------------------------------------------------- | --------------------------------------------------------------- |
-| "User prefers async communication"                      | memory — it's a preference                                      |
-| "Garage code is 4321"                                   | memory — throwaway fact                                         |
+| "User prefers async communication"                      | observation — it's a preference                                 |
+| "Garage code is 4321"                                   | observation — throwaway fact                                    |
 | "Should we use LangGraph or CrewAI for Eve?"            | **entity `question`** — substantive inquiry, start of flow      |
 | "Here's what I found comparing LangGraph and CrewAI…"   | **entity `research`** — investigation with sources + conclusion |
 | "We decided to use LangGraph over OpenClaude's native…" | **entity `decision`** — has title, rationale, project           |
@@ -952,7 +974,7 @@ Always auto-approved. **Memory is for loose, unstructured, hard-to-title facts o
 | "Action item from meeting: ship MVP by Friday"          | **entity `task`** linked to the `event` (meeting)               |
 | "Agreed with Sarah: we'll split backend & frontend"     | **entity `decision`** linked to Sarah + the project             |
 
-**Rule of thumb:** if it has a title-worthy noun OR context to link to (a project, a person, a meeting) OR a lifecycle (status/supersession) — it's an entity, not memory. Memory is the fallback, not the default.
+**Rule of thumb:** if it has a title-worthy noun OR context to link to (a project, a person, a meeting) OR a lifecycle (status/supersession) — it's an entity through the capture door, not an observation. A user observation is the fallback, not the default.
 
 **For decisions specifically** — use the `decision` system profile:
 
@@ -1271,14 +1293,16 @@ No SQL joins. The graph is the join.
 
 ## Multi-entity capture from free-form text
 
-When the user pastes a block of unstructured content (a meeting transcript, an email, a LinkedIn bio), use the capture pipeline instead of chaining manual creates:
+When the user pastes a block of unstructured content (a meeting transcript, an email, a LinkedIn bio) or when several related things come up at once, send it through the **one capture door** — `synap_capture` (CLI: `synap capture`). Don't chain manual creates, and don't run a two-step "structure then commit" dance.
+
+The payload is a gradient in a single call:
 
 ```
-POST /api/hub/capture/structure   → returns proposals + relations
-POST /api/hub/capture/execute     → commits (after user confirms)
+{ "text": "…paste the raw content…" }              → the AI structures it into entities
+{ "entities": [ … ], "relations": [ … ] }          → you supply the graph directly (refs link them)
 ```
 
-The pipeline extracts multiple entities with their relations in one LLM call. Read **`capture.md`** for the full flow.
+Everything lands as ONE reviewable proposal (or auto-applies when every op is safe), and you get back one receipt — `status: "applied" | "proposed" | "rejected"`. `proposed` is success: surface the review link. There is no separate commit step. Read **`capture.md`** for the full flow, dedup signals, name-refs, and reject reasons.
 
 ---
 
