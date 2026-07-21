@@ -107,7 +107,7 @@ export const entitiesRouter = router({
          * `entities.create` input) — zod strips undeclared keys, so an omitted
          * field silently DROPPED the body of every `POST /api/hub/entities`
          * call: 200 OK, `documentId = NULL`, essay gone. Forwarded to
-         * `caller.create` below, where `resolveContentTarget` materializes it
+         * `caller.create` below, where `EntityBodyService` materializes it
          * into a versioned document (or folds short content into
          * `properties.content`). Same class of bug already fixed for capture.
          */
@@ -218,7 +218,8 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
-        // Long-form body → linked document (versioned) via resolveContentTarget.
+        // Long-form body → linked document (versioned) via EntityBodyService,
+        // inside the entities `create` door.
         // Must be forwarded or the create runs with documentId = NULL.
         ...(input.content ? { content: input.content } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),

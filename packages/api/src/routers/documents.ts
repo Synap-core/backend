@@ -372,9 +372,19 @@ export const documentsRouter = router({
       // NOTE: Primary content editing should go through Yjs realtime (WebSocket),
       // not through this tRPC endpoint. This path exists for non-realtime updates only.
       if (input.delta) {
+        // An external-URL reference document has NO storage object (storageKey
+        // NULL, storageUrl points off-pod) — there is nothing to write content
+        // to. Reject rather than crash on a `storageKey!` assert (B2 class).
+        if (!document.storageKey) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Cannot update the content of an external reference document (no stored bytes).",
+          });
+        }
         const newContent = input.delta[0]?.content || "";
         await storage.upload(
-          document.storageKey!,
+          document.storageKey,
           Buffer.from(newContent, "utf-8"),
           { contentType: document.mimeType || "text/plain" }
         );

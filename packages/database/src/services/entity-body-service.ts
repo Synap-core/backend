@@ -21,8 +21,10 @@
  *                       `storageKey!` non-null-assert bug class, B2)
  *   - deleteBody     ← the version+object storage-cleanup at documents.ts:450,
  *                       made an unconditional reverse-cascade (B1)
- *   - attachSource   ← `storeEntitySourceBlob`
- *                       (api/src/utils/store-entity-source-blob.ts)
+ *
+ * (The raw-source-blob path — `storeEntitySourceBlob` — is a deliberately
+ * SEPARATE `sourceFile*` slot, not a body; folding it onto this service is a
+ * tracked follow-up, not part of W0–W3.)
  *
  * GOVERNANCE-AGNOSTIC: this service never calls `checkPermissionOrPropose` and
  * never falsifies provenance — the caller passes `provenance` in and it is
@@ -43,7 +45,6 @@ import {
   DocumentRepository,
   type CreateDocumentInput,
 } from "../repositories/document-repository.js";
-import { EntityRepository } from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import { uploadDocumentVersionSnapshot } from "../utils/document-version-storage.js";
 
@@ -108,21 +109,6 @@ function documentTypeForMimeType(mimeType: string): string {
   return "file";
 }
 
-/** Map a mime type → the `documents.type` union used for source-blob provenance. */
-function documentTypeForSourceBlob(
-  mimeType: string
-): "text" | "markdown" | "code" | "pdf" | "docx" {
-  if (mimeType === "application/pdf") return "pdf";
-  if (
-    mimeType ===
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  ) {
-    return "docx";
-  }
-  if (mimeType === "text/markdown") return "markdown";
-  return "text";
-}
-
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -178,25 +164,6 @@ export type EntityBodyBytes =
   | { kind: "external"; url: string }
   | { kind: "inline"; content: string };
 
-export interface AttachSourceParams {
-  entityId: string;
-  userId: string;
-  buffer: Buffer;
-  mimeType: string;
-  filename?: string;
-  /** Ambient workspace for the document row (the entity may be pod-wide). */
-  workspaceId?: string | null;
-  provenance: BodyProvenance;
-}
-
-export interface AttachSourceResult {
-  documentId: string;
-  storageKey: string;
-  storageUrl: string;
-  size: number;
-  mimeType: string;
-}
-
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -206,7 +173,7 @@ export class EntityBodyService {
 
   constructor(
     private readonly db: any,
-    private readonly eventRepo: EventRepository
+    eventRepo: EventRepository
   ) {
     this.docRepo = new DocumentRepository(db, eventRepo);
   }
@@ -397,6 +364,10 @@ export class EntityBodyService {
    * DB-only preview of the body: the latest `document_versions.content` column
    * (≤64k, the `TEXT_PREVIEW_LIMIT`). Cheap — for indexers/embedders. Returns
    * `null` when the document has no version rows.
+   *
+   * NOTE: the cheap-read counterpart to `getBytes` (storage). Readers still call
+   * `readDocumentVersionContent` directly today; the indexer/embedder read
+   * consolidation onto this method lands with the W4 always-document flip.
    */
   async getPreview(documentId: string): Promise<string | null> {
     const [version] = await this.db
@@ -506,65 +477,5 @@ export class EntityBodyService {
         .filter((k: string | null): k is string => !!k)
         .map((k: string) => storage.delete(k))
     );
-  }
-
-  /**
-   * Attach a raw SOURCE file to an entity as provenance — a SEPARATE slot from
-   * the body (← storeEntitySourceBlob). Writes a `documents` row (NO version
-   * snapshot, intentionally skipped for large media) and merges the
-   * `sourceFile*` blob onto the entity's properties. Does NOT set
-   * `entity.documentId` (which may already hold the extracted body). Kept
-   * deliberately distinct from `setBody`.
-   */
-  async attachSource(params: AttachSourceParams): Promise<AttachSourceResult> {
-    const { entityId, userId, buffer, mimeType, filename, workspaceId } =
-      params;
-    if (!buffer || buffer.length === 0) {
-      throw new Error("Source blob is empty");
-    }
-
-    const ext = (mimeType.split("/")[1] || "bin").split(";")[0].split("+")[0];
-    const key = storage.buildPath(userId, "entity", entityId, ext || "bin");
-    const metadata = await storage.upload(key, buffer, {
-      contentType: mimeType,
-    });
-
-    const createdDocument = await this.docRepo.create(
-      {
-        title: filename || "Source file",
-        type: documentTypeForSourceBlob(mimeType),
-        storageUrl: metadata.url,
-        storageKey: metadata.path,
-        size: metadata.size,
-        mimeType,
-        userId,
-        workspaceId: workspaceId ?? undefined,
-        ...this.provenanceFields(params.provenance),
-      },
-      userId
-    );
-
-    const entityRepo = new EntityRepository(this.db, this.eventRepo);
-    await entityRepo.update(
-      entityId,
-      {
-        properties: {
-          sourceFileDocumentId: createdDocument.id,
-          sourceFileUrl: metadata.url,
-          sourceFileSize: metadata.size,
-          sourceFileMimeType: mimeType,
-          ...(filename ? { sourceFileName: filename } : {}),
-        },
-      },
-      userId
-    );
-
-    return {
-      documentId: createdDocument.id,
-      storageKey: metadata.path,
-      storageUrl: metadata.url,
-      size: metadata.size,
-      mimeType,
-    };
   }
 }

@@ -833,7 +833,8 @@ export async function executeMCPToolViaHubProtocol(
         profileSlug,
         title: args.title as string,
         description: args.description as string | undefined,
-        // Long-form body → a versioned linked document (resolveContentTarget).
+        // Long-form body → a versioned linked document (via EntityBodyService,
+        // inside the entities `create` door this calls).
         // The hub input has always accepted `content`; the MCP schema could not
         // SEND it, so an agent had to make a second create_document call and
         // wire it up by hand. Forwarded here = long-text → document in ONE call.

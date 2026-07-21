@@ -6611,6 +6611,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 				} | null;
 				deduplicated: boolean;
+				contentDropped: boolean;
 				facets: {
 					slug: string;
 					status: string;
@@ -6639,6 +6640,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				id?: undefined;
 				deduplicated?: undefined;
+				contentDropped?: undefined;
 			} | {
 				unmodeled?: any;
 				status: string;
@@ -6681,6 +6683,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error?: string;
 				}[];
 				deduplicated?: undefined;
+				contentDropped?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				reviewUrl?: undefined;

@@ -414,6 +414,13 @@ async function materializeEntity(
     );
   } else if (action === "delete") {
     const entityId = (data.id as string) || subjectId;
+    // This is a HARD delete (EntityRepository.delete removes the row). Reclaim
+    // the entity's body document + its storage objects FIRST — otherwise the
+    // documents row + MinIO/version blobs orphan permanently (bug B1). Resolves
+    // documentId from the still-present entity; best-effort so a cleanup miss
+    // never blocks the delete. (Soft/reversible deletes go through the tRPC
+    // door and deliberately KEEP the document for restore.)
+    await entityBodyService.deleteBody({ entityId }).catch(() => {});
     await entityRepo.delete(entityId, userId);
   }
 }

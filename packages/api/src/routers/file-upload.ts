@@ -112,6 +112,12 @@ export async function storeDocumentFromBuffer(params: {
   filename: string;
   /** Human-facing document title. Defaults to `filename` when omitted. */
   title?: string;
+  /**
+   * The agent that stored this blob, when the caller is a machine/agent key
+   * (ctx.agentUserId). When set, provenance is `ai_agent` attributed to this id
+   * — NEVER falsified as `human`. Omit for a genuine human upload (Kratos).
+   */
+  actorAgentUserId?: string;
 }): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
 
@@ -135,10 +141,13 @@ export async function storeDocumentFromBuffer(params: {
     filename,
     mimeType,
     bytes: buffer,
-    // A file upload reached through this store-only helper is a human action.
-    // (The prior raw insert left the provenance columns NULL; the canonical door
-    // stamps them — a minor, more-honest change.)
-    provenance: { createdByKind: "human", createdByUserId: userId },
+    // Honest provenance: an agent-key upload (the general `/files` door) is
+    // attributed to the agent, a Kratos-session upload stays human. Never
+    // falsify an agent write as human (the sibling entity is attributed to the
+    // agent too — the document row must agree).
+    provenance: params.actorAgentUserId
+      ? { createdByKind: "ai_agent", createdByUserId: params.actorAgentUserId }
+      : { createdByKind: "human", createdByUserId: userId },
   });
 
   // Re-read the inserted row so the return keeps the FULL `documents` record its

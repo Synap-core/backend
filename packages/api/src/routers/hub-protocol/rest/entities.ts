@@ -1748,6 +1748,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         mimeType,
         filename,
         title: bodyTitle,
+        // Honest provenance: this is the general agent upload door — stamp the
+        // document as agent-authored (matching the sibling entity's attribution),
+        // never falsified as human.
+        actorAgentUserId: agentUserId,
       });
     } catch (err) {
       logger.error({ err }, "POST /files: document store failed");
