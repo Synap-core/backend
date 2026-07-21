@@ -379,6 +379,10 @@ app.use("/*", async (c, next) => {
     // bound `service` key to its workspace. Inert for every other key type.
     c.set("keyType", keyRecord.keyType);
     c.set("keyWorkspaceId", keyRecord.workspaceId ?? null);
+    // Per-instance attribution seam: expose the authenticating key's instance
+    // label so event/audit writers can tell which concurrent runtime of a shared
+    // agent identity performed the action. NULL for legacy single-key agents.
+    c.set("agentInstanceId", keyRecord.instanceId ?? null);
     // Agent key identity remap: when a key has linkedUserId (= the human who
     // created the agent), remap the effective userId to the human so entity
     // ownership is attributed correctly. The agent (key owner) is tracked as
