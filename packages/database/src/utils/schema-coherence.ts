@@ -331,6 +331,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "linked_user_id",
     addedBy: "0021_api_keys_linked_user_id.sql",
   },
+  {
+    table: "api_keys",
+    column: "instance_id",
+    addedBy: "0204_api_keys_instance_id.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {

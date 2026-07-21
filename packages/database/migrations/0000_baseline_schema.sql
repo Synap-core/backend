@@ -2248,6 +2248,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotated_from_id" uuid;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotation_scheduled_at" timestamp with time zone;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "linked_user_id" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;

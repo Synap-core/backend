@@ -114,6 +114,15 @@ export const apiKeys = pgTable(
     // See migration 0021_api_keys_linked_user_id.sql.
     linkedUserId: text("linked_user_id"),
 
+    // Instance label — a per-runtime marker for concurrent agent instances that
+    // share ONE agent identity (e.g. claude-code on two machines, or CLI + MCP).
+    // NULL = the legacy single-key model (minting revokes all siblings). When set,
+    // /setup/agent skips the blanket sibling-revoke and scopes idempotency/rotation
+    // to THIS instance, so multiple instances hold live keys concurrently. Purely a
+    // key label — the agent-user identity remains a pod-wide singleton per agentType.
+    // See migration 0204_api_keys_instance_id.sql.
+    instanceId: text("instance_id"),
+
     // Audit Trail
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

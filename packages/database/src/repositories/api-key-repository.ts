@@ -29,6 +29,9 @@ export interface CreateApiKeyInput {
   workspaceId?: string | null;
   /** Human user this agent key acts on behalf of (identity link). */
   linkedUserId?: string | null;
+  /** Per-runtime instance label for concurrent agent instances sharing one
+   * identity. NULL = legacy single-key model. See schema/api-keys.ts. */
+  instanceId?: string | null;
 }
 
 export interface UpdateApiKeyInput {
@@ -75,6 +78,7 @@ export class ApiKeyRepository extends BaseRepository<
         description: data.description,
         workspaceId: data.workspaceId ?? null,
         linkedUserId: data.linkedUserId ?? null,
+        instanceId: data.instanceId ?? null,
       })
       .returning();
 
