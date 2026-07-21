@@ -46,7 +46,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/zip",
 ]);
 
-function isAllowedMimeType(mimeType: string): boolean {
+export function isAllowedMimeType(mimeType: string): boolean {
   if (mimeType.startsWith("image/")) return true;
   if (mimeType.startsWith("audio/")) return true;
   if (mimeType.startsWith("video/")) return true;
@@ -91,38 +91,53 @@ export interface UploadedFileEntity {
 }
 
 /**
- * Core upload → document → file-entity pipeline, shared by the Kratos-authed
- * `POST /upload` multipart route AND the Hub-Protocol (API-key) attachment route.
- *
- * Given a decoded `Buffer` + mime/filename, this:
- *   1. uploads the blob to object storage,
- *   2. creates the canonical `documents` row + immutable `documentVersions` v1
- *      snapshot,
- *   3. creates the `file` (or caller-specified profile) entity via
- *      `EntityRepository` — including the `brand-asset` property mapping the
- *      route used before — and cleans up storage/document on entity failure.
- *
- * This is a straight extraction of the original `/upload` handler body; the
- * route now calls it so both auth surfaces share ONE storage/entity path.
+ * Result of {@link storeDocumentFromBuffer} — the STORE-ONLY half (blob →
+ * `documents` row + immutable v1 `documentVersions` snapshot) with NO entity.
+ * Loosely typed on `document` for the same `.d.ts` portability reason as
+ * {@link UploadedFileEntity}.
  */
-export async function uploadBufferAsFileEntity(params: {
+export interface StoredDocument {
+  documentId: string;
+  /** `metadata.path` — the object storage key (usable with `storage.getSignedUrl`). */
+  storageKey: string;
+  /** `metadata.url` — the document's canonical storage url. */
+  storageUrl: string;
+  /** `metadata.size` — stored byte size. */
+  size: number;
+  /**
+   * The version-snapshot blob key. Exposed so a downstream failure (e.g. an
+   * entity-create that follows) can clean up BOTH storage objects, preserving
+   * the original single-function cleanup behavior.
+   */
+  snapshotStorageKey: string;
+  /** The inserted `documents` row. */
+  document: { id: string; storageKey: string | null; [k: string]: unknown };
+}
+
+/**
+ * STORE-ONLY half of the upload pipeline: uploads the blob to object storage
+ * and writes the canonical `documents` row + immutable v1 `documentVersions`
+ * snapshot — but creates NO entity.
+ *
+ * Extracted from {@link uploadBufferAsFileEntity} so the governed `/files`
+ * multipart door can store the document, then mint its entity through the
+ * governed `entities.create` procedure (same permission membrane as every other
+ * write) instead of the direct `materializeEntity`. `uploadBufferAsFileEntity`
+ * itself now calls this then materializes, so its existing callers are
+ * unchanged.
+ */
+export async function storeDocumentFromBuffer(params: {
   userId: string;
-  /** Workspace the document + entity land in. `null` = pod-personal. */
+  /** Workspace the document lands in. `null` = pod-personal. */
   workspaceId: string | null;
   buffer: Buffer;
   mimeType: string;
   filename: string;
-  /** Defaults to "file" — same as the plain-file upload route. */
-  profileSlug?: string;
-  /** Property key that receives the storage path. Defaults to "storageKey". */
-  storageKeyProperty?: string;
-  /** Extra entity properties merged in (e.g. from the multipart `properties`). */
-  properties?: Record<string, unknown>;
-}): Promise<UploadedFileEntity> {
+  /** Human-facing document title. Defaults to `filename` when omitted. */
+  title?: string;
+}): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
-  const profileSlug = params.profileSlug || "file";
-  const storageKeyProperty = params.storageKeyProperty || "storageKey";
-  const extraProperties = params.properties ?? {};
+  const displayTitle = params.title?.trim() || filename;
 
   const storageId = randomUUID();
   // Sanitize the caller-supplied filename for the storage KEY (defense-in-depth
@@ -164,7 +179,7 @@ export async function uploadBufferAsFileEntity(params: {
         id: documentId,
         userId,
         workspaceId,
-        title: filename,
+        title: displayTitle,
         type: documentType,
         storageUrl: metadata.url,
         storageKey: metadata.path,
@@ -192,6 +207,78 @@ export async function uploadBufferAsFileEntity(params: {
     return [doc];
   });
 
+  return {
+    documentId,
+    storageKey: metadata.path,
+    storageUrl: metadata.url,
+    size: metadata.size,
+    snapshotStorageKey: snapshot.storageKey,
+    document: document as {
+      id: string;
+      storageKey: string | null;
+      [k: string]: unknown;
+    },
+  };
+}
+
+/**
+ * Core upload → document → file-entity pipeline, shared by the Kratos-authed
+ * `POST /upload` multipart route AND the Hub-Protocol (API-key) attachment route.
+ *
+ * Given a decoded `Buffer` + mime/filename, this:
+ *   1. uploads the blob to object storage,
+ *   2. creates the canonical `documents` row + immutable `documentVersions` v1
+ *      snapshot,
+ *   3. creates the `file` (or caller-specified profile) entity via
+ *      `EntityRepository` — including the `brand-asset` property mapping the
+ *      route used before — and cleans up storage/document on entity failure.
+ *
+ * This is a straight extraction of the original `/upload` handler body; the
+ * route now calls it so both auth surfaces share ONE storage/entity path.
+ */
+export async function uploadBufferAsFileEntity(params: {
+  userId: string;
+  /** Workspace the document + entity land in. `null` = pod-personal. */
+  workspaceId: string | null;
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+  /** Human-facing document/entity title. Defaults to `filename` when omitted. */
+  title?: string;
+  /**
+   * The agent that authored this upload, when the caller is a machine/agent key
+   * (ctx.agentUserId). When set, provenance is recorded as `ai_agent` attributed
+   * to this id — NOT falsified as `human`. Omit for a genuine human upload
+   * (Kratos session), which stays `human`.
+   */
+  actorAgentUserId?: string;
+  /** Defaults to "file" — same as the plain-file upload route. */
+  profileSlug?: string;
+  /** Property key that receives the storage path. Defaults to "storageKey". */
+  storageKeyProperty?: string;
+  /** Extra entity properties merged in (e.g. from the multipart `properties`). */
+  properties?: Record<string, unknown>;
+}): Promise<UploadedFileEntity> {
+  const { userId, workspaceId, buffer, mimeType, filename } = params;
+  // Human-facing title: caller-supplied (e.g. `synap upload --title`) or the
+  // filename. `filename` remains the storage key / originalFileName provenance.
+  const displayTitle = params.title?.trim() || filename;
+  const profileSlug = params.profileSlug || "document";
+  const storageKeyProperty = params.storageKeyProperty || "storageKey";
+  const extraProperties = params.properties ?? {};
+
+  // Store the blob → documents row + immutable v1 snapshot (the extracted
+  // store-only half). Behavior is identical to the previous inline body.
+  const stored = await storeDocumentFromBuffer({
+    userId,
+    workspaceId,
+    buffer,
+    mimeType,
+    filename,
+    title: params.title,
+  });
+  const document = stored.document;
+
   // Create entity via the governed materializer (wraps EntityRepository.create)
   // — handles profile resolution, property indexing, event emission, plus
   // provenance. A file upload is a direct HUMAN action, so provenance = human.
@@ -211,6 +298,18 @@ export async function uploadBufferAsFileEntity(params: {
             brandAssetKindForMimeType(mimeType),
         }
       : {};
+  // Canonical `document` entities keep their storage pointers on the documents
+  // row + entities.documentId ONLY — never duplicated into entity properties
+  // (and `fileName` is dropped in favour of the entity title). Other profiles
+  // (legacy `file`, `brand-asset`) still receive the property pointers below.
+  const isCanonicalDocument = profileSlug === "document";
+  const storagePointerProperties = isCanonicalDocument
+    ? {}
+    : {
+        fileName: filename,
+        documentId: document.id,
+        [effectiveStorageKeyProperty]: stored.storageKey,
+      };
   // D1: the upload's workspace is a CONTEXT signal — route placement through the
   // one door so a pod-scope kind (e.g. a generic `file`) lands pod-wide (NULL)
   // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens. The 400
@@ -227,24 +326,30 @@ export async function uploadBufferAsFileEntity(params: {
     const materialized = await materializeEntity(
       {
         profileSlug,
-        title: filename,
+        title: displayTitle,
         workspaceId: resolvedWorkspaceId,
         userId,
         documentId: document.id,
         properties: {
           ...extraProperties,
           ...documentProperties,
-          fileName: filename,
           mimeType,
           fileSize: buffer.length,
-          documentId: document.id,
-          [effectiveStorageKeyProperty]: metadata.path,
+          ...storagePointerProperties,
         },
       },
       {
         db,
         eventRepo: eventRepository,
-        provenance: { createdByKind: "human", createdByUserId: userId },
+        // Attribute honestly: an agent-key upload is `ai_agent` (attributed to
+        // the agent), a Kratos-session upload is `human`. Never falsify agent
+        // writes as human in the audit trail.
+        provenance: params.actorAgentUserId
+          ? {
+              createdByKind: "ai_agent",
+              createdByUserId: params.actorAgentUserId,
+            }
+          : { createdByKind: "human", createdByUserId: userId },
       }
     );
     createdEntity = materialized.entity;
@@ -252,8 +357,8 @@ export async function uploadBufferAsFileEntity(params: {
     try {
       await db.delete(documents).where(eq(documents.id, document.id));
       await Promise.allSettled([
-        storage.delete(metadata.path),
-        storage.delete(snapshot.storageKey),
+        storage.delete(stored.storageKey),
+        storage.delete(stored.snapshotStorageKey),
       ]);
     } catch (cleanupError) {
       logger.warn(
@@ -271,8 +376,8 @@ export async function uploadBufferAsFileEntity(params: {
       storageKey: string | null;
       [k: string]: unknown;
     },
-    url: metadata.url,
-    storageKey: metadata.path,
+    url: stored.storageUrl,
+    storageKey: stored.storageKey,
   };
 }
 
@@ -305,7 +410,8 @@ fileUploadApp.post("/upload", async (c) => {
     // Optional: caller-specified profile slug (default "file") and which property key
     // receives the storage path (default "storageKey"). Allows callers to create any
     // entity type in one round-trip instead of upload + separate create.
-    const profileSlug = (body["profileSlug"] as string | undefined) || "file";
+    const profileSlug =
+      (body["profileSlug"] as string | undefined) || "document";
     const storageKeyProperty =
       (body["storageKeyProperty"] as string | undefined) || "storageKey";
     let extraProperties: Record<string, unknown> = {};
@@ -495,8 +601,14 @@ fileUploadApp.get("/:entityId/url", async (c) => {
 
   try {
     const entity = await db.query.entities.findFirst({
-      where: and(eq(entities.id, entityId), eq(entities.type, "file")),
-      columns: { id: true, userId: true, properties: true, workspaceId: true },
+      where: eq(entities.id, entityId),
+      columns: {
+        id: true,
+        userId: true,
+        properties: true,
+        workspaceId: true,
+        documentId: true,
+      },
     });
 
     if (!entity) {
@@ -508,8 +620,26 @@ fileUploadApp.get("/:entityId/url", async (c) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const props = entity.properties as Record<string, unknown>;
-    const storageKey = props.storageKey as string;
+    // The kind filter was intentionally dropped: bytes resolve for ANY entity
+    // that carries a documentId (document, legacy file, brand-asset) — the
+    // canonical link, not the kind, gates downloadability. Access is still
+    // owner-gated above (entity.userId === userId).
+    // Canonical path: resolve bytes via entities.documentId → documents.storageKey.
+    // Read-time fallback to the legacy properties.storageKey for un-migrated rows
+    // (documents created before the file→document consolidation stored the key
+    // in entity properties).
+    let storageKey: string | undefined;
+    if (entity.documentId) {
+      const doc = await db.query.documents.findFirst({
+        where: eq(documents.id, entity.documentId),
+        columns: { storageKey: true },
+      });
+      storageKey = doc?.storageKey ?? undefined;
+    }
+    if (!storageKey) {
+      const props = entity.properties as Record<string, unknown>;
+      storageKey = props.storageKey as string | undefined;
+    }
 
     if (!storageKey) {
       return c.json({ error: "File has no storage key" }, 404);

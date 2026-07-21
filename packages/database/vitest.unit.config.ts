@@ -21,6 +21,7 @@ export default defineConfig({
       "src/services/entity-merge-service.test.ts",
       "src/services/profile-resolution-service.test.ts",
       "src/services/team-person-bridge.test.ts",
+      "src/services/__tests__/property-validation-service.test.ts",
 
       "src/__tests__/facet-slug-visibility.test.ts",
       "src/__tests__/facet-visibility.test.ts",

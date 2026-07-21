@@ -34,6 +34,8 @@ import {
   isNull,
   entities,
   getWorkspaceMembership,
+  ProfileResolutionService,
+  PropertyValidationService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -54,6 +56,46 @@ import {
 } from "../../routers/hub-protocol/rest/_capture-graph-dedup.js";
 
 const logger = createLogger({ module: "submit-capture-graph" });
+
+/** One flagged create_entity op that fails its EFFECTIVE schema at propose time. */
+export interface CaptureGraphInvalidEntity {
+  /** Human label for the reviewer/agent (op title, falling back to its ref). */
+  label: string;
+  profileSlug: string;
+  /** Validator messages, each already naming a missing-required/type violation. */
+  errors: string[];
+}
+
+/**
+ * A capture graph carried a `create_entity` op that CANNOT materialize — a
+ * required property is missing (or a value fails its type/constraint). A graph
+ * is atomic, so the WHOLE graph is rejected and NOTHING is queued: the failure
+ * is raised HERE, at submit, instead of surfacing when the human approves.
+ *
+ * The message is model-facing (MCP renders `.message` via `toSafeToolError`;
+ * the REST door returns it as a 400) — it names each flagged entity + its
+ * missing required property, with a soft hint for the artifact-backed case.
+ */
+export class CaptureGraphValidationError extends Error {
+  readonly invalidEntities: CaptureGraphInvalidEntity[];
+  constructor(invalidEntities: CaptureGraphInvalidEntity[]) {
+    const n = invalidEntities.length;
+    const lines = invalidEntities.map((e) => {
+      const needsArtifact = e.errors.some((m) =>
+        /'storageKey' is required/.test(m)
+      );
+      const hint = needsArtifact
+        ? " — this profile needs an uploaded artifact; it can't be created by reference (capture it as a note, or upload the file first)"
+        : "";
+      return `• "${e.label}" (${e.profileSlug}): ${e.errors.join("; ")}${hint}`;
+    });
+    super(
+      `Capture rejected — ${n} entit${n === 1 ? "y" : "ies"} can't be created as described, so nothing was queued:\n${lines.join("\n")}\nFix or drop the flagged entit${n === 1 ? "y" : "ies"} and resubmit.`
+    );
+    this.name = "CaptureGraphValidationError";
+    this.invalidEntities = invalidEntities;
+  }
+}
 
 export interface SubmitCaptureGraphInput {
   /** The proposing/acting user (operator or the Capture agent actor). */
@@ -226,6 +268,59 @@ export async function submitCaptureGraph(
       type: r.type,
     })),
   ];
+
+  // ── PREFLIGHT: never queue what can't materialize ────────────────────────
+  // Required-property validation runs only at MATERIALIZE (EntityRepository.
+  // create). Without this, a graph missing a required prop (a `file` with no
+  // `storageKey`, say) filed a PENDING proposal that then FAILED at approve.
+  // Validate every create_entity op against its EFFECTIVE schema HERE — the
+  // SAME `validateProperties` the materializer runs — so an un-materializable
+  // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
+  // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
+  const profileResolution = new ProfileResolutionService(db);
+  const propertyValidation = new PropertyValidationService(profileResolution);
+  const invalidEntities: CaptureGraphInvalidEntity[] = [];
+  for (const op of operations) {
+    if (op.op !== "create_entity") continue;
+    // Linking an existing entity materializes nothing new — no props to check.
+    if (op.existingEntityId) continue;
+    const profile = await profileResolution.resolveProfile(
+      op.profileSlug,
+      userId,
+      workspaceId
+    );
+    // Unknown profile ⇒ don't NEWLY reject here (a cold profile lens can
+    // fail-open, and unknown-slug graphs are a separate guard). Required-prop
+    // preflight is scoped to KNOWN profiles — exactly the materializer's check.
+    if (!profile) continue;
+    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
+    // `content` is folded in the way the materializer does (a long body becomes
+    // a linked document, a short one inlines to properties.content) so a profile
+    // that required `content` isn't falsely flagged when a body was provided.
+    if (op.content) propsToCheck.content = op.content;
+    const { valid, errors } =
+      await propertyValidation.validateEntityCreateForProposal(
+        propsToCheck,
+        profile.id,
+        workspaceId,
+        {
+          ...(op.title !== undefined ? { title: op.title } : {}),
+          profileDefaults:
+            (profile.defaultValues as Record<string, unknown>) ?? {},
+        }
+      );
+    if (!valid) {
+      invalidEntities.push({
+        label: op.title || op.ref || op.profileSlug,
+        profileSlug: op.profileSlug,
+        errors,
+      });
+    }
+  }
+  if (invalidEntities.length > 0) {
+    // Rejected BEFORE any proposal is filed — pending-proposal-one-door untouched.
+    throw new CaptureGraphValidationError(invalidEntities);
+  }
 
   const bindingNote = bindings.length
     ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`

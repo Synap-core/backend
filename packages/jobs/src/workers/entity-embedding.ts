@@ -54,12 +54,13 @@ export async function handleEntityEmbedding(
   let type = entityType;
   let entityProperties: Record<string, unknown> | null = null;
   let entityFacets: EntityEmbeddingFacet[] = [];
+  let documentText: string | null = null;
 
   // Always load the row for `properties` (and as fallback for title/type/preview)
   // so the embedding includes typed properties — not just title+preview — which
   // is what lets semantic recall match type/role/property queries.
   {
-    const { entities, eq, db, getEffectiveFacets } =
+    const { entities, documentVersions, eq, desc, db, getEffectiveFacets } =
       await import("@synap/database");
     const [entity] = await db
       .select({
@@ -67,6 +68,7 @@ export async function handleEntityEmbedding(
         type: entities.type,
         preview: entities.preview,
         properties: entities.properties,
+        documentId: entities.documentId,
       })
       .from(entities)
       .where(eq(entities.id, entityId))
@@ -77,6 +79,25 @@ export async function handleEntityEmbedding(
       type = type || entity.type;
       entityProperties =
         (entity.properties as Record<string, unknown> | null) ?? null;
+    }
+
+    // Linked document body — feed the attached document's text into the
+    // embedding so semantic recall can match an entity by its document
+    // contents, not just its title/properties. Best-effort, DB-only: read the
+    // latest version's preview-text column (document_versions.content, up to
+    // 64k chars; empty for uploaded binaries). If the document row is missing
+    // or content is empty, embed exactly as before — no throw, no behavior
+    // change. Text extraction of binaries is a separate effort, not done here.
+    if (entity?.documentId) {
+      const [docVersion] = await db
+        .select({ content: documentVersions.content })
+        .from(documentVersions)
+        .where(eq(documentVersions.documentId, entity.documentId))
+        .orderBy(desc(documentVersions.version))
+        .limit(1);
+      if (docVersion?.content) {
+        documentText = docVersion.content;
+      }
     }
 
     // Live facets (Kind+Facets) — unfiltered lens, all workspaces, so the
@@ -104,6 +125,7 @@ export async function handleEntityEmbedding(
     type,
     title: entityTitle,
     preview: entityPreview,
+    documentText,
     properties: entityProperties,
     facets: entityFacets,
   });

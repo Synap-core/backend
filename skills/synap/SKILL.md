@@ -876,7 +876,7 @@ resolves it against the caller's own projects (exact match files there; no match
 proposes, never mis-files). Never ask the user for a UUID.
 
 **Dedup is advisory across kinds.** Strong signals (`email`/`phone`/`website` —
-not a bare `url`) dedup within a kind; a same-title hit in a *different* kind
+not a bare `url`) dedup within a kind; a same-title hit in a _different_ kind
 comes back as an advisory candidate, never an auto-merge. "No exact match" is not
 "safe to create" when advisory candidates are returned — review them first.
 
@@ -948,7 +948,7 @@ The reverse lookup is `entities WHERE documentId = ?`. Always attach the documen
 
 ### Remember a fact about the user — use sparingly
 
-A fact *about the user* goes through `remember_fact` (CLI: `synap capture --type
+A fact _about the user_ goes through `remember_fact` (CLI: `synap capture --type
 observation`). It writes a governed `user_observation` — not an ungoverned
 throwaway row: a fact the user explicitly stated auto-approves; a fact you
 inferred returns `proposed` (normal — surface the review link). Because it's a

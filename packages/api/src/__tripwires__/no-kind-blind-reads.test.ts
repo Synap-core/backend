@@ -13,8 +13,8 @@ import { join, relative } from "path";
  * (facet-resolution-service.ts), which ORs the kind branch with a facet EXISTS.
  *
  * The current tree still carries a grandfathered set of `eq(entities.type, …)`
- * uses — some legitimate (literal PRIMARY-kind filters like "file"/"event", and
- * the door's own kind branch), some pre-existing kind-blind debt on dynamic
+ * uses — some legitimate (literal PRIMARY-kind filters like "document"/"event",
+ * and the door's own kind branch), some pre-existing kind-blind debt on dynamic
  * profile slugs. This tripwire FREEZES that set as a ratchet: the debt may
  * shrink freely, but it may not grow and no NEW file may introduce the pattern.
  * When you fix one, lower its count here; when a build fails, you added one —
@@ -37,7 +37,9 @@ const PACKAGES = join(REPO_ROOT, "packages");
 const FROZEN: Record<string, number> = {
   "packages/api/src/routers/devplane.ts": 2,
   "packages/api/src/routers/entities.ts": 3,
-  "packages/api/src/routers/file-upload.ts": 1,
+  // file-upload.ts previously filtered GET /:entityId/url on eq(entities.type,
+  // "file"); the file→document consolidation resolves via entities.documentId
+  // instead, so the pattern is gone (0 occurrences) — entry removed.
   "packages/api/src/routers/hub.ts": 2,
   "packages/api/src/routers/webhooks-inbound.ts": 1,
   "packages/api/src/services/event-end/run-event-end.ts": 1,

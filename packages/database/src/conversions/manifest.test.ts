@@ -209,6 +209,52 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
   });
 });
 
+describe("CONVERSION_MANIFEST — Wave 6 (file → document)", () => {
+  it("seeds the `document` kind pod-wide", () => {
+    const seed = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "w6.seed.document"
+    );
+    expect(seed?.op).toBe("seedKindProfile");
+    if (seed?.op === "seedKindProfile") {
+      expect(seed.slug).toBe("document");
+      expect(seed.entityScope).toBe("pod");
+    }
+  });
+
+  it("merges `file` into `document`", () => {
+    const op = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "w6.merge.file-into-document"
+    );
+    expect(op?.op).toBe("mergeInto");
+    if (op?.op === "mergeInto") {
+      expect(op.fromSlugs).toEqual(["file"]);
+      expect(op.intoSlug).toBe("document");
+    }
+  });
+
+  it("orders the document seed before the file→document merge", () => {
+    const seedIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w6.seed.document"
+    );
+    const mergeIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w6.merge.file-into-document"
+    );
+    expect(seedIdx).toBeGreaterThanOrEqual(0);
+    expect(mergeIdx).toBeGreaterThan(seedIdx);
+  });
+
+  it("keeps the global reconcile-entity-scope op ahead of the file merge so document per-entity scope is preserved", () => {
+    const reconcileIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w4.reconcile-entity-scope"
+    );
+    const mergeIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w6.merge.file-into-document"
+    );
+    expect(reconcileIdx).toBeGreaterThanOrEqual(0);
+    expect(mergeIdx).toBeGreaterThan(reconcileIdx);
+  });
+});
+
 describe("validateManifest", () => {
   it("rejects duplicate op keys", () => {
     const m: ConversionManifest = {

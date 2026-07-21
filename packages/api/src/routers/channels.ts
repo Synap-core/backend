@@ -1872,20 +1872,26 @@ export const channelsRouter = router({
         }> = [];
 
         for (const attachEntityId of input.attachmentEntityIds) {
-          // Verify entity exists and is a file belonging to this user
+          // Verify entity exists and is a document belonging to this user.
+          // Accept BOTH `document` (canonical) and legacy `file` — the
+          // file→document merge is operator-driven, so pre-consolidation
+          // uploads stay `type:"file"` until it runs; a document-only filter
+          // would silently drop every existing attachment in that window.
           const entity = await db.query.entities.findFirst({
             where: and(
               eq(entitiesTable.id, attachEntityId),
-              eq(entitiesTable.type, "file")
+              inArray(entitiesTable.type, ["document", "file"])
             ),
-            columns: { id: true, properties: true },
+            columns: { id: true, title: true, properties: true },
           });
           if (!entity) continue;
 
           const props = entity.properties as Record<string, unknown>;
           attachmentMeta.push({
             entityId: attachEntityId,
-            fileName: props.fileName,
+            // Canonical documents carry the filename as the entity title;
+            // fall back to the legacy properties.fileName for un-migrated rows.
+            fileName: props.fileName ?? entity.title,
             mimeType: props.mimeType,
           });
 
@@ -2350,8 +2356,7 @@ export const channelsRouter = router({
       let receivedStreamOutput = false;
       let turnCancelled = false;
       let terminalTurnFailure:
-        | { status: "failed" | "cancelled"; error: string }
-        | undefined;
+        { status: "failed" | "cancelled"; error: string } | undefined;
       try {
         // Both the durable Stop action and the hard deadline must interrupt
         // the actual Pod -> IS fetch, not merely stop consuming its iterator.

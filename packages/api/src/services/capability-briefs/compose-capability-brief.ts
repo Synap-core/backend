@@ -114,7 +114,10 @@ const TOOL_METADATA: Record<
     isWrite: true,
   },
   synap_create_cell: {
-    governance: { subjectType: "cell", action: "create" },
+    // `cell.define` (NOT `cell.create`, which is cell-instances/placed cells):
+    // defining renderer source is governed via checkPermissionOrPropose in the
+    // MCP adapter + the `cell/define` approve-executor.
+    governance: { subjectType: "cell", action: "define" },
     postureSlug: "cell",
     isWrite: true,
   },

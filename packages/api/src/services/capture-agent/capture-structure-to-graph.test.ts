@@ -122,16 +122,16 @@ describe("captureGraphEventKeys (all-or-nothing policy keys)", () => {
     type: "rel",
   } as unknown as CompositeProposalOperation;
 
-  it("an entity-only graph exercises just entity.create", () => {
+  it("an entity-only graph exercises just entity.create, carrying the slug", () => {
     expect(captureGraphEventKeys([entityOp()])).toEqual([
-      { subjectType: "entity", action: "create" },
+      { subjectType: "entity", action: "create", subjectProfileSlug: "note" },
     ]);
   });
 
   it("adds relation.create when the graph has relations, deduped", () => {
     const keys = captureGraphEventKeys([entityOp(), entityOp(), relOp]);
     expect(keys).toEqual([
-      { subjectType: "entity", action: "create" },
+      { subjectType: "entity", action: "create", subjectProfileSlug: "note" },
       { subjectType: "relation", action: "create" },
     ]);
   });
@@ -139,8 +139,43 @@ describe("captureGraphEventKeys (all-or-nothing policy keys)", () => {
   it("adds facet.attach when an entity declares facets", () => {
     const keys = captureGraphEventKeys([entityOp([{ profileSlug: "client" }])]);
     expect(keys).toEqual([
-      { subjectType: "entity", action: "create" },
+      { subjectType: "entity", action: "create", subjectProfileSlug: "note" },
       { subjectType: "facet", action: "attach" },
+    ]);
+  });
+
+  it("carries per-op profileSlug + uo_validated so a user_observation is scored by kind", () => {
+    const uoInference = {
+      op: "create_entity",
+      ref: "u0",
+      profileSlug: "user_observation",
+      title: "prefers async",
+      properties: {},
+    } as unknown as CompositeProposalOperation;
+    const uoValidated = {
+      op: "create_entity",
+      ref: "u1",
+      profileSlug: "user_observation",
+      title: "stated async",
+      properties: { uo_validated: true },
+    } as unknown as CompositeProposalOperation;
+    // A plain note + an unvalidated user_observation are DISTINCT keys — the
+    // slug is no longer dropped, so the inference can force propose on its own.
+    expect(
+      captureGraphEventKeys([entityOp(), uoInference, uoValidated])
+    ).toEqual([
+      { subjectType: "entity", action: "create", subjectProfileSlug: "note" },
+      {
+        subjectType: "entity",
+        action: "create",
+        subjectProfileSlug: "user_observation",
+      },
+      {
+        subjectType: "entity",
+        action: "create",
+        subjectProfileSlug: "user_observation",
+        subjectUoValidated: true,
+      },
     ]);
   });
 });

@@ -162,6 +162,48 @@ export class PropertyValidationService {
   }
 
   /**
+   * PROPOSE-TIME PREFLIGHT — "never queue what can't materialize".
+   *
+   * Required-property validation (this service, via `validateProperties`) runs
+   * only at MATERIALIZE time inside `EntityRepository.create`. A proposal-gated
+   * entity-create therefore used to file a pending proposal WITHOUT this check,
+   * and the missing-required failure surfaced only when the human clicked
+   * APPROVE (a `file` op with no `storageKey` is the observed bug). This is the
+   * SAME validation the materializer runs — invoked BEFORE the proposal is
+   * filed so a structurally un-materializable op is rejected at propose time,
+   * with a message naming the missing required property + the profile.
+   *
+   * Merge mirrors the materialize path EXACTLY so there are no false positives:
+   * `entities.create` folds `profile.defaultValues` into the properties, then
+   * `EntityRepository.create` merges the entity-level `title` before validating
+   * (both the kind path and the role-adapter's strict 1a check). Passing
+   * `profileDefaults` + `title` here reproduces that effective bag. Returns just
+   * `{ valid, errors }` — propose-time discards the normalized bag (nothing is
+   * stored yet); the errors already name each missing-required/type violation.
+   */
+  async validateEntityCreateForProposal(
+    properties: Record<string, unknown>,
+    profileId: string,
+    workspaceId?: string | null,
+    opts?: { title?: string; profileDefaults?: Record<string, unknown> }
+  ): Promise<{ valid: boolean; errors: string[] }> {
+    const merged: Record<string, unknown> = {
+      ...(opts?.profileDefaults ?? {}),
+      ...properties,
+    };
+    if (opts?.title !== undefined && !("title" in merged)) {
+      merged.title = opts.title;
+    }
+    const result = await this.validateProperties(
+      merged,
+      profileId,
+      workspaceId,
+      { enforceRequired: true }
+    );
+    return { valid: result.valid, errors: result.errors };
+  }
+
+  /**
    * Cast property value to correct type
    */
   async castPropertyValue(

@@ -773,6 +773,49 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       opKey: "w4.reconcile.campaign",
       slug: "campaign",
     },
+
+    // ─── Wave 6: file → document kind consolidation ────────────────────────
+    //
+    // `file` (uploaded-file kind) is consolidated into a single canonical
+    // `document` kind (pod-wide, seeded by ensure-system-profiles.ts). Same
+    // seed → mergeInto shape as the w3a.seed.item / w3c.merge precedent: seed
+    // the canonical row (create-if-missing, so the merge target is guaranteed
+    // to exist even if the boot seeder has not run on this pod yet), then merge
+    // every live `file` entity onto it.
+    //
+    // Data preserved (applyMergeInto — engine.ts): each `file` entity is
+    // repointed to the `document` profile and its entities.type set to
+    // "document"; its `properties` JSONB and its `documentId` (the storage
+    // pointer) are UNTOUCHED, and — critically — its `workspace_id` is NOT
+    // rewritten, so an entity's per-row scope (pod-wide vs workspace-scoped) is
+    // preserved even though the `document` profile is pod-wide. There is
+    // deliberately NO reconcileEntityScope for `document`: the global
+    // w4.reconcile-entity-scope op runs EARLIER in this manifest (before these
+    // ops act) and is idempotent/ledgered, so it never re-nulls a
+    // workspace-scoped file→document entity. property_defs / profile_properties
+    // move onto `document` (collision-skipped; the legacy `fileName` prop-link
+    // carries over as a harmless optional field) and views are re-pointed.
+    // Deactivation of the drained `file` source profile is gated behind
+    // --destructive-tail, so `file` stays active until a deliberate operator run.
+    {
+      op: "seedKindProfile",
+      opKey: "w6.seed.document",
+      slug: "document",
+      displayName: "Document",
+      entityScope: "pod",
+      uiHints: {
+        icon: "file",
+        color: "#64748B",
+        description: "Uploaded or referenced document",
+        hideFromCreate: true,
+      },
+    },
+    {
+      op: "mergeInto",
+      opKey: "w6.merge.file-into-document",
+      fromSlugs: ["file"],
+      intoSlug: "document",
+    },
   ],
 };
 

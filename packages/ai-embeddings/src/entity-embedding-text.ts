@@ -15,6 +15,15 @@
  * call it, so the embed text never drifts between the worker, the inline path,
  * and the backfill script.
  */
+/**
+ * Cap for the linked-document body folded into the embed text. The document
+ * preview column (document_versions.content) holds up to 64k chars; feeding all
+ * of it would blow the embedding token budget. 2000 chars (~500 tokens) adds a
+ * strong semantic signal from the document contents while staying well within
+ * the model's window alongside title/preview/properties/facets.
+ */
+const DOCUMENT_TEXT_MAX_CHARS = 2000;
+
 /** A live facet attached to the entity — kept minimal so callers don't need the full EffectiveFacet shape. */
 export interface EntityEmbeddingFacet {
   /** Role-profile slug (e.g. "client", "speaker"). */
@@ -48,6 +57,12 @@ export function buildEntityEmbeddingText(input: {
   type?: string | null;
   title?: string | null;
   preview?: string | null;
+  /**
+   * Body text of a linked document (entities.documentId) so semantic recall can
+   * match an entity by the contents of its attached document, not just its
+   * title/preview/properties. Truncated to DOCUMENT_TEXT_MAX_CHARS.
+   */
+  documentText?: string | null;
   properties?: Record<string, unknown> | null;
   /** Live facets (Kind+Facets) — role-profiles attached to the entity. */
   facets?: EntityEmbeddingFacet[] | null;
@@ -57,6 +72,17 @@ export function buildEntityEmbeddingText(input: {
   if (input.type) parts.push(input.type);
   if (input.title) parts.push(input.title);
   if (input.preview) parts.push(input.preview);
+
+  if (input.documentText) {
+    const docText = input.documentText.trim();
+    if (docText) {
+      parts.push(
+        docText.length > DOCUMENT_TEXT_MAX_CHARS
+          ? docText.slice(0, DOCUMENT_TEXT_MAX_CHARS)
+          : docText
+      );
+    }
+  }
 
   if (input.properties) {
     parts.push(...formatPropertyEntries(input.properties));

@@ -24,6 +24,8 @@ const LIMITS: Record<string, { windowMs: number; max: number }> = {
   postToA2AIChannel: { windowMs: 60_000, max: 100 },
   pollA2AIChannel: { windowMs: 60_000, max: 200 },
   createExternalChannel: { windowMs: 60_000, max: 20 },
+  /** File/blob upload door (POST /files): bound the unreviewed-upload vector. */
+  files: { windowMs: 60_000, max: 30 },
   /** MCP endpoint: 100 req/min per API key (prevents single compromised key from flooding) */
   mcp: { windowMs: 60_000, max: 100 },
   default: { windowMs: 60_000, max: 300 },

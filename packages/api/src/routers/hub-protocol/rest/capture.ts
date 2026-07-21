@@ -51,7 +51,10 @@ import {
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
-import { submitCaptureGraph } from "../../../services/capture-agent/submit-capture-graph.js";
+import {
+  submitCaptureGraph,
+  CaptureGraphValidationError,
+} from "../../../services/capture-agent/submit-capture-graph.js";
 import { validateCaptureGraphRefs } from "./_capture-graph-dedup.js";
 import {
   shouldPersistCapturePlan,
@@ -330,6 +333,12 @@ export function registerCaptureRoutes(app: HubHono): void {
 
       return c.json(result);
     } catch (err) {
+      // A structurally un-materializable graph is a client-input fault (missing
+      // a required property), rejected before anything is queued → 400, message
+      // preserved so the caller can fix the entity and retry.
+      if (err instanceof CaptureGraphValidationError) {
+        return c.json({ error: err.message }, 400);
+      }
       logger.error({ err, userId }, "POST /capture/structure failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
@@ -1122,6 +1131,11 @@ export function registerCaptureRoutes(app: HubHono): void {
       );
       return c.json(result);
     } catch (err) {
+      // Missing-required-property preflight rejection → 400 (client input fault),
+      // message preserved. Nothing was queued.
+      if (err instanceof CaptureGraphValidationError) {
+        return c.json({ error: err.message }, 400);
+      }
       logger.error({ err, userId }, "POST /capture/graph failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

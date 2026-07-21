@@ -289,7 +289,7 @@ const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
       kind: "widget",
       widgetType: "entity-links",
       pos: { x: 0, y: 8, w: 6, h: 4 },
-      config: { profileSlug: "file", title: "Documents" },
+      config: { profileSlug: "document", title: "Documents" },
     },
     {
       id: "all-links",
@@ -330,7 +330,7 @@ const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
       kind: "widget",
       widgetType: "entity-links",
       pos: { x: 6, y: 8, w: 6, h: 4 },
-      config: { profileSlug: "file", title: "Documents" },
+      config: { profileSlug: "document", title: "Documents" },
     },
   ],
 };

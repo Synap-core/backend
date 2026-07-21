@@ -1593,6 +1593,14 @@ export async function executeMCPToolViaHubProtocol(
     }
 
     // ── Cell authoring & renderer binding (external-agent surface) ──────────
+    // GOVERNED: defining a cell writes AI-generated renderer SOURCE (arbitrary JS
+    // executed in the cell-runtime sandbox) into `widget_definitions` — a durable,
+    // consequential surface (like `promote_cell_to_renderer`). `cell.define` is
+    // deliberately NOT in DEFAULT_AUTO_APPROVE, so agents propose and operators
+    // (no agentUserId) grant inline. On propose, the source rides in gate `data`
+    // so the `cell/define` approve-executor can materialize via the SAME defineCell
+    // door on approval. NOTE `cell.define` is distinct from `cell.create`
+    // (cell-instances — placed cells), which materializes a `cell_instances` row.
     case "synap_create_cell": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
       // Validate the shape before trusting the cast args (defineCell handles the
@@ -1613,18 +1621,46 @@ export async function executeMCPToolViaHubProtocol(
         );
       }
       const cellWorkspaceId = parsed.data.workspaceId ?? null;
-      // Gate the workspace-scoped write exactly as the REST door does
-      // (rest/cells.ts) — defineCell trusts its caller, so the door must verify
-      // the acting user is a member of the target workspace.
-      if (cellWorkspaceId) {
-        const { verifyWorkspaceAccess } =
-          await import("../hub-protocol/rest/_shared.js");
-        if (!(await verifyWorkspaceAccess(userId, cellWorkspaceId))) {
-          throw new Error(
-            `Forbidden: no access to workspace ${cellWorkspaceId}`
-          );
-        }
+      // Route through the governance gate — it owns RBAC (workspace membership +
+      // role, or the agent-join proposal for a non-member) AND the agent
+      // propose/execute decision. No manual verifyWorkspaceAccess: that would
+      // hard-deny an agent the gate would otherwise let PROPOSE.
+      const { checkPermissionOrPropose } =
+        await import("../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        workspaceId: cellWorkspaceId ?? undefined,
+        subjectType: "cell",
+        action: "define",
+        source: "api",
+        data: {
+          name: parsed.data.name,
+          rendererSource: parsed.data.rendererSource,
+          workspaceId: cellWorkspaceId,
+          description: parsed.data.description ?? null,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        return ok({ error: perm.reason, denied: true });
       }
+      if (
+        "proposalId" in perm &&
+        perm.proposalId &&
+        !("granted" in perm && perm.granted)
+      ) {
+        return ok({
+          status: "proposed",
+          message:
+            "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval.",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          ...(perm.deduped ? { deduped: true } : {}),
+        });
+      }
+      // Granted (operator authority) → apply inline via the ONE door.
       const { defineCell } =
         await import("../../services/cells/define-cell.js");
       const result = await defineCell({

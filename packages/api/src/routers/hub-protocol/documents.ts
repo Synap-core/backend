@@ -46,6 +46,18 @@ export const documentsRouter = router({
         type: z
           .enum(["text", "markdown", "code", "html", "pdf", "docx"])
           .default("markdown"),
+        // Optional external URL reference: when set, the document is a pointer
+        // to an external resource (storageUrl = url, storageKey = NULL,
+        // metadata.external = true) — no bytes are stored and no version
+        // snapshot is taken. `content` is ignored for external references.
+        // https-only: a stored URL may later render as a clickable link, so
+        // reject javascript:/data:/file: schemes (same guard as discord.ts,
+        // sync.ts, and shell.openExternal).
+        url: z
+          .string()
+          .url()
+          .refine((u) => u.startsWith("https://"), "url must be https")
+          .optional(),
         reasoning: z.string().optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
         agentUserId: z.string().uuid().optional(),
@@ -91,8 +103,10 @@ export const documentsRouter = router({
           id: documentId,
           title: input.title,
           type: input.type,
-          // Content stored inline — written to MinIO only when approved
+          // Content stored inline — written to MinIO only when approved.
+          // For an external URL reference, `url` is carried instead.
           content: input.content,
+          url: input.url ?? null,
           workspaceId: input.workspaceId ?? null,
           userId,
         },
@@ -115,6 +129,51 @@ export const documentsRouter = router({
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           message: "Document creation proposed, awaiting approval",
+        };
+      }
+
+      // External URL reference: no bytes to store. Create the documents row
+      // pointing at the external URL (storageKey NULL, metadata.external) and
+      // skip the MinIO upload + version snapshot entirely. Link via
+      // entities.documentId like any document (caller's responsibility).
+      if (input.url) {
+        const [created] = await db
+          .insert(documents)
+          .values({
+            id: documentId,
+            title: input.title,
+            type: normalizeDocumentType(input.type, "markdown"),
+            storageUrl: input.url,
+            storageKey: null,
+            size: 0,
+            mimeType: null,
+            userId,
+            workspaceId: input.workspaceId ?? null,
+            currentVersion: 1,
+            lastSavedVersion: 0,
+            metadata: { external: true },
+          })
+          .returning();
+
+        auditLog({
+          subjectType: "document",
+          action: "create",
+          phase: "completed",
+          subjectId: documentId,
+          userId: agentUserId,
+          source: "intelligence",
+        });
+        emitSideEffects({
+          subjectType: "document",
+          action: "create",
+          subjectId: documentId,
+          userId: agentUserId,
+        });
+
+        return {
+          id: created.id,
+          documentId: created.id,
+          status: "created" as const,
         };
       }
 

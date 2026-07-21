@@ -23,13 +23,21 @@ import {
   isNull,
   isNotNull,
   getEffectiveFacets,
+  ProfileResolutionService,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
 
-import { uploadBufferAsFileEntity, MAX_FILE_SIZE } from "../../file-upload.js";
+import {
+  uploadBufferAsFileEntity,
+  storeDocumentFromBuffer,
+  MAX_FILE_SIZE,
+  isAllowedMimeType,
+} from "../../file-upload.js";
+import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
+import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { buildCreateEntityReceipt } from "../write-receipt.js";
@@ -1523,91 +1531,122 @@ export function registerEntitiesRoutes(app: HubHono): void {
   });
 
   // ── POST /files ─────────────────────────────────────────────────────────
-  // Orphan file upload — store an image as a human-owned `file` entity with NO
-  // target to link to yet. The Discord attachment carry-through (Wave 1) uses
-  // this to persist an UNCAPTIONED photo the moment it arrives; a later message
-  // names the entity, and the bridge then calls
-  // `POST /entities/{id}/attachments` in link-only mode ({ fileEntityId }) to
-  // wire the stored photo to it. Same storage → document → file-entity pipeline
-  // (uploadBufferAsFileEntity, provenance = human) and the same image/* + 10MB
-  // guards as the attachments route.
-  const createFileRoute = createRoute({
-    method: "post",
-    path: "/files",
-    tags: ["Entities"],
-    summary: "Store an uploaded image as an orphan file entity",
-    description:
-      "Service (Hub API-key) route: base64-decode an image and store it as a " +
-      "`file` entity (document + snapshot) with no relation. Returns the file " +
-      "entity id so it can be linked later via POST /entities/{id}/attachments " +
-      "(link-only mode). Max 10MB, image/* only. Requires scope " +
-      "hub-protocol.write.",
-    request: {
-      body: {
-        content: {
-          "application/json": {
-            schema: z.object({
-              userId: z.string().optional(),
-              workspaceId: z.string(),
-              filename: z.string().min(1),
-              mimeType: z.string().min(1),
-              contentBase64: z.string().min(1),
-            }),
-          },
-        },
-      },
-    },
-    responses: {
-      200: {
-        description: "Created file entity id",
-        content: {
-          "application/json": {
-            schema: z.object({ fileEntityId: z.string() }),
-          },
-        },
-      },
-      400: {
-        description: "Bad request",
-        content: { "application/json": { schema: ErrorSchema } },
-      },
-      403: {
-        description: "Forbidden",
-        content: { "application/json": { schema: ErrorSchema } },
-      },
-      413: {
-        description: "File too large",
-        content: { "application/json": { schema: ErrorSchema } },
-      },
-      415: {
-        description: "Unsupported media type",
-        content: { "application/json": { schema: ErrorSchema } },
-      },
-      500: {
-        description: "Internal error",
-        content: { "application/json": { schema: ErrorSchema } },
-      },
-    },
-  });
-
-  app.openapi(createFileRoute, async (c): Promise<any> => {
+  // Standalone (orphan) upload — store a blob as a human-owned `document`
+  // entity with NO target to link to yet. Returns the entity id so it can be
+  // linked later via POST /entities/{id}/attachments (link-only mode).
+  //
+  // Two request shapes (plain Hono route so multipart is accepted — an
+  // OpenAPIHono route validates a single JSON body only, per the source-file
+  // precedent above):
+  //   • multipart/form-data { file, workspaceId?, userId? } — ARBITRARY mime,
+  //     up to MAX_FILE_SIZE (the general agent upload door).
+  //   • application/json { workspaceId, filename, mimeType, contentBase64,
+  //     userId? } — image/* only, the ORIGINAL Discord attachment carry-through
+  //     contract (Wave 1), preserved verbatim.
+  // Either way the blob flows through uploadBufferAsFileEntity (provenance =
+  // human), which now mints a `document` entity by default. Response shape stays
+  // `{ fileEntityId, documentId }` — the `fileEntityId` field NAME is kept for
+  // backward compatibility even though the kind is now `document`.
+  app.post("/files", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = c.req.valid("json");
 
-    // image/* only + 10MB cap (same limits as the attachments / multipart routes).
-    if (!body.mimeType.startsWith("image/")) {
-      return c.json(
-        { error: `Only image/* uploads are allowed (got ${body.mimeType})` },
-        415
-      );
-    }
-    let buffer: Buffer;
+    // Bound the unreviewed-upload vector per key (30/min). This is a plain Hono
+    // route, so map the tRPC-shaped rate-limit throw to a 429 response.
     try {
-      buffer = Buffer.from(body.contentBase64, "base64");
+      checkHubRateLimit(c.get("apiKeyId") as string | undefined, "files");
     } catch {
-      return c.json({ error: "contentBase64 is not valid base64" }, 400);
+      return c.json({ error: "Rate limit exceeded for /files" }, 429);
     }
+
+    const contentType = c.req.header("content-type") ?? "";
+    // Multipart = the general agent upload door → GOVERNED create path below.
+    // JSON/base64 = the original Discord image contract → unchanged direct path.
+    const isMultipart = contentType.includes("multipart/form-data");
+    let buffer: Buffer;
+    let mimeType: string;
+    let filename: string;
+    let bodyUserId: string | undefined;
+    let bodyWorkspaceId: string | undefined;
+    let bodyTitle: string | undefined;
+
+    try {
+      if (isMultipart) {
+        // Multipart: arbitrary mime, up to MAX_FILE_SIZE.
+        const body = await c.req.parseBody({ all: true });
+        const file = body["file"];
+        if (!file || !(file instanceof File)) {
+          return c.json(
+            { error: "file is required (multipart file field)" },
+            400
+          );
+        }
+        mimeType = file.type || "application/octet-stream";
+        filename = file.name || "file";
+        if (typeof body["userId"] === "string" && body["userId"]) {
+          bodyUserId = body["userId"];
+        }
+        if (typeof body["workspaceId"] === "string" && body["workspaceId"]) {
+          bodyWorkspaceId = body["workspaceId"];
+        }
+        if (typeof body["title"] === "string" && body["title"]) {
+          bodyTitle = body["title"];
+        }
+        if (file.size > MAX_FILE_SIZE) {
+          return c.json(
+            {
+              error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+            },
+            413
+          );
+        }
+        buffer = Buffer.from(await file.arrayBuffer());
+      } else {
+        // JSON base64: image/* only (original Discord contract).
+        const body = (await c.req.json()) as {
+          userId?: string;
+          workspaceId?: string;
+          filename?: string;
+          mimeType?: string;
+          contentBase64?: string;
+          title?: string;
+        };
+        if (
+          !body.workspaceId ||
+          !body.filename ||
+          !body.mimeType ||
+          !body.contentBase64
+        ) {
+          return c.json(
+            {
+              error:
+                "workspaceId, filename, mimeType and contentBase64 are required (or use multipart/form-data with a file field)",
+            },
+            400
+          );
+        }
+        if (!body.mimeType.startsWith("image/")) {
+          return c.json(
+            {
+              error: `Only image/* uploads are allowed in JSON mode (got ${body.mimeType}) — use multipart/form-data with a file field for other types`,
+            },
+            415
+          );
+        }
+        mimeType = body.mimeType;
+        filename = body.filename;
+        bodyUserId = body.userId;
+        bodyWorkspaceId = body.workspaceId;
+        if (typeof body.title === "string" && body.title)
+          bodyTitle = body.title;
+        buffer = Buffer.from(body.contentBase64, "base64");
+      }
+    } catch (err) {
+      logger.warn({ err }, "POST /files body parse failed");
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+
     if (buffer.length === 0) {
       return c.json({ error: "Decoded file is empty" }, 400);
     }
@@ -1619,6 +1658,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         413
       );
     }
+    // Same MIME allowlist as the Kratos `/upload` route — generalizing this door
+    // to arbitrary mime must NOT open a stored-XSS vector (SVG/HTML served back
+    // with the uploaded Content-Type). image/audio/video + a docs allowlist only.
+    if (!isAllowedMimeType(mimeType)) {
+      return c.json({ error: `MIME type not allowed: ${mimeType}` }, 415);
+    }
 
     // Bind acting identity to the authenticated principal (service key may pass
     // body.userId for on-behalf-of; a session caller may not). Mirrors the
@@ -1626,21 +1671,26 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
     const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+    if (!isServiceKey && bodyUserId && bodyUserId !== authUserId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    const userId = isServiceKey ? (bodyUserId ?? authUserId) : authUserId;
 
+    if (!bodyWorkspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
     // Item 3 Part 3: confine a bound service key to its workspace before the
     // membership check and the DIRECT uploadBufferAsFileEntity write.
     const workspaceId =
-      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+      getConfinedWorkspace(c, bodyWorkspaceId) ?? bodyWorkspaceId;
 
-    // Writing a file into a workspace requires MEMBERSHIP — reads must not
-    // authorize writes (same rule as the attachments route).
+    // Writing into a workspace requires MEMBERSHIP — reads must not authorize
+    // writes (same rule as the attachments route). The entity itself lands
+    // pod-wide via the placement resolver (document is a pod-scope kind); the
+    // workspace is a storage-path + auth context signal.
     if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json(
         { error: "Access denied: not a member of the target workspace" },
@@ -1648,15 +1698,133 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
 
+    const agentUserId = c.get("agentUserId") as string | undefined;
+
+    // ── JSON/base64 image mode: UNCHANGED direct path ──────────────────────
+    // The original Discord attachment carry-through (on-behalf-of-a-human).
+    // Kept on the direct `uploadBufferAsFileEntity` path to avoid any behavior
+    // change to the Discord bridge; provenance is attributed to the agent when
+    // an agent key uploads.
+    if (!isMultipart) {
+      try {
+        const uploaded = await uploadBufferAsFileEntity({
+          userId,
+          workspaceId,
+          buffer,
+          mimeType,
+          filename,
+          title: bodyTitle,
+          actorAgentUserId: agentUserId,
+        });
+        return c.json(
+          {
+            fileEntityId: uploaded.entity.id,
+            documentId: uploaded.document.id,
+          },
+          200
+        );
+      } catch (err) {
+        logger.error({ err }, "POST /files failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+
+    // ── Multipart (general agent) mode: GOVERNED path ──────────────────────
+    // Store the blob → documents row + immutable v1 version (NO entity), then
+    // mint the `document` entity through the GOVERNED `entities.create`
+    // procedure so this write passes the SAME permission membrane as every
+    // other create: auto-applied when `entity.create ∈ DEFAULT_AUTO_APPROVE`
+    // (the common `synap upload` case, so the file still lands immediately), or
+    // returned as a `proposed` handle under a stricter workspace policy.
+    let stored: Awaited<ReturnType<typeof storeDocumentFromBuffer>>;
     try {
-      const uploaded = await uploadBufferAsFileEntity({
+      stored = await storeDocumentFromBuffer({
         userId,
         workspaceId,
         buffer,
-        mimeType: body.mimeType,
-        filename: body.filename,
+        mimeType,
+        filename,
+        title: bodyTitle,
       });
-      return c.json({ fileEntityId: uploaded.entity.id }, 200);
+    } catch (err) {
+      logger.error({ err }, "POST /files: document store failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+
+    try {
+      // Resolve pod-wide vs workspace scope for the `document` kind exactly like
+      // the `entity/create` approve-executor: a pod-scope kind lands pod-wide
+      // (caller ctx.workspaceId = null) while a workspace-scoped one stays in
+      // its lens. `entities.create` still runs its own placement resolver; this
+      // only fixes the caller/governance lens.
+      const profileService = new ProfileResolutionService(db);
+      const entityScope = await profileService.getEntityScope(
+        "document",
+        workspaceId
+      );
+      const callerWorkspaceId = entityScope === "pod" ? null : workspaceId;
+
+      // Build the caller ctx through the canonical hub door — it threads the
+      // agent identity (so `entities.create`'s permission check attributes the
+      // write to the agent and routes it through the governance membrane),
+      // the session, and service-key workspace confinement.
+      const callerCtx = await createHubProtocolCallerContext(
+        userId,
+        c.get("scopes") as string[],
+        callerWorkspaceId,
+        undefined,
+        c.req.header("x-session-id") ?? null,
+        agentUserId ?? null,
+        c.get("keyType") as string | undefined,
+        c.get("keyWorkspaceId") as string | null | undefined
+      );
+      const entityCaller = regularEntitiesRouter.createCaller(
+        callerCtx as Parameters<typeof regularEntitiesRouter.createCaller>[0]
+      );
+
+      // `agentUserId` is threaded as INPUT (entities.create reads it from the
+      // input, not the ctx) so the permission check attributes provenance.
+      const created = (await entityCaller.create({
+        profileSlug: "document",
+        title: bodyTitle ?? filename,
+        documentId: stored.documentId,
+        properties: { mimeType, fileSize: buffer.length },
+        ...(agentUserId ? { agentUserId } : {}),
+        source: "agent",
+      })) as {
+        status?: string;
+        id?: string;
+        proposalId?: string;
+        reviewUrl?: string;
+      };
+
+      // Proposed (stricter policy): return the reviewable handle. The document
+      // row is stored now and the entity is created WITH its documentId on
+      // approval (the entity/create executor forwards it). A proposed-then-
+      // REJECTED upload leaves an unlinked documents row (sweepable orphan).
+      if (created.status === "proposed" || created.proposalId) {
+        return c.json(
+          {
+            documentId: stored.documentId,
+            proposalId: created.proposalId,
+            status: "proposed" as const,
+            reviewUrl: created.reviewUrl,
+          },
+          200
+        );
+      }
+
+      // Auto-approved: same `{ fileEntityId, documentId }` shape as before.
+      return c.json(
+        { fileEntityId: created.id, documentId: stored.documentId },
+        200
+      );
     } catch (err) {
       logger.error({ err }, "POST /files failed");
       return c.json(

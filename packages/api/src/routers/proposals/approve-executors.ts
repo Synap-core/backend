@@ -96,6 +96,50 @@ export function registerApproveExecutors(): void {
       void payload;
       const data = (proposal.data ?? {}) as Record<string, unknown>;
       const documentId = proposal.targetId;
+
+      // External URL reference: no bytes to store. Mirror the auto-approved
+      // external branch in documents.ts (storageUrl = url, storageKey = NULL,
+      // metadata.external = true) — skip the MinIO upload + version snapshot
+      // entirely. Without this, an approved external-reference proposal would
+      // wrongly upload empty content and build a normal content document.
+      if (typeof data.url === "string" && data.url) {
+        await db.insert(documents).values({
+          id: documentId,
+          title: (data.title as string) || "Untitled",
+          type: normalizeDocumentType(
+            (data.type as string) || "markdown",
+            "markdown"
+          ),
+          storageUrl: data.url,
+          storageKey: null,
+          size: 0,
+          mimeType: null,
+          userId: (data.userId as string) || userId,
+          workspaceId: proposal.workspaceId,
+          currentVersion: 1,
+          lastSavedVersion: 0,
+          metadata: { external: true },
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true };
+      }
+
       const docType = normalizeDocumentType(
         (data.type as string) || "markdown",
         "markdown"
@@ -434,6 +478,11 @@ export function registerApproveExecutors(): void {
         description: innerData.description as string | undefined,
         properties: innerData.properties as Record<string, unknown> | undefined,
         content: innerData.content as string | undefined,
+        // `entities.create` persists `documentId` into the proposal data
+        // (entities.ts) but this replay historically dropped it — so an approved
+        // entity-with-document proposal (a proposed file upload, or any
+        // long-content entity that proposed) lost its document link. Forward it.
+        documentId: innerData.documentId as string | undefined,
         source: "system",
       })) as { id?: string };
 
@@ -1349,6 +1398,73 @@ export function registerApproveExecutors(): void {
         slot,
         ref,
         scope,
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── cell / define ────────────────────────────────────────────────────────────
+  // A gated `synap_create_cell` (agent-authored AI-generated renderer source —
+  // the MCP adapter threads agentUserId into the gate) lands here on approval.
+  // Materializes via the SAME `defineCell` door the operator auto-apply path uses,
+  // so the widget_definitions upsert + realtime refresh event match exactly.
+  // Without this executor the `*/*` catch-all would flip the proposal APPROVED and
+  // emit a `cell.define.validated` event that NO worker handles (the materializer
+  // `cell` case is `cell.create`/cell-instances only) — the definition would never
+  // be written. The distinct action (`cell.define`) keeps it off that path.
+  registerProposalExecutor({
+    key: "cell/define",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const name = innerData.name as string | undefined;
+      const rendererSource = innerData.rendererSource as string | undefined;
+      if (!name || !rendererSource) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cell proposal is missing name/rendererSource",
+        });
+      }
+
+      // Idempotency: defineCell upserts, but skip the whole apply once the row
+      // has already been flipped APPROVED (double-click / retried re-approve).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { defineCell } =
+        await import("../../services/cells/define-cell.js");
+      await defineCell({
+        name,
+        rendererSource,
+        workspaceId:
+          (innerData.workspaceId as string | null | undefined) ??
+          proposal.workspaceId ??
+          null,
+        description:
+          (innerData.description as string | null | undefined) ?? null,
+        userId,
       });
 
       await db

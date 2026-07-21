@@ -10,6 +10,7 @@ import {
   loadAllFacetSlugsBatchForTrustedIndexing,
   and,
   eq,
+  desc,
   isNull,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
@@ -163,13 +164,42 @@ export class IndexingService {
         const entityRows = await db.query.entities.findMany({
           where: inArray(schema.entities.id, ids),
         });
-        return this.attachFacetSlugs(db, entityRows);
+        const withFacets = await this.attachFacetSlugs(db, entityRows);
+        // Fold the linked document body into `content` so an entity is
+        // keyword-searchable by its attached document's text — the search
+        // counterpart of the entity-embedding wire-cut. The entities table has
+        // NO `content` column; the body lives in document_versions via
+        // entities.documentId. Without this, entity-indexer's `entity.content`
+        // read is always undefined.
+        const docIds = withFacets
+          .map((e) => e.documentId as string | null)
+          .filter((d): d is string => !!d);
+        const contentByDoc = await this.loadLatestVersionContent(db, docIds);
+        for (const e of withFacets) {
+          const docId = e.documentId as string | null;
+          if (docId && contentByDoc.has(docId)) {
+            e.content = contentByDoc.get(docId);
+          }
+        }
+        return withFacets;
       }
 
-      case "documents":
-        return db.query.documents.findMany({
+      case "documents": {
+        const docRows = await db.query.documents.findMany({
           where: inArray(schema.documents.id, ids),
         });
+        // The documents table has NO `content` column (body text lives in
+        // document_versions). Enrich each row with its latest version's content
+        // so DocumentIndexer indexes real body text, not undefined.
+        const contentByDoc = await this.loadLatestVersionContent(
+          db,
+          docRows.map((d) => d.id)
+        );
+        return docRows.map((d) => ({
+          ...d,
+          content: contentByDoc.get(d.id) ?? null,
+        }));
+      }
 
       case "views":
         return db.query.views.findMany({
@@ -431,6 +461,35 @@ export class IndexingService {
       ...e,
       facetSlugs: slugsByEntity.get(e.id) ?? [],
     }));
+  }
+
+  /**
+   * Batch-load each document's LATEST version body text (the `documents` table
+   * has no `content` column — it lives in `document_versions`). Returns a map
+   * documentId → content. `DISTINCT ON (document_id) … ORDER BY version DESC`
+   * loads only the newest version per document (not every version's blob).
+   */
+  private async loadLatestVersionContent(
+    db: Awaited<ReturnType<typeof getDb>>,
+    documentIds: string[]
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (documentIds.length === 0) return out;
+    const rows = await db
+      .selectDistinctOn([schema.documentVersions.documentId], {
+        documentId: schema.documentVersions.documentId,
+        content: schema.documentVersions.content,
+      })
+      .from(schema.documentVersions)
+      .where(inArray(schema.documentVersions.documentId, documentIds))
+      .orderBy(
+        schema.documentVersions.documentId,
+        desc(schema.documentVersions.version)
+      );
+    for (const r of rows) {
+      if (r.content) out.set(r.documentId, r.content);
+    }
+    return out;
   }
 
   /**
