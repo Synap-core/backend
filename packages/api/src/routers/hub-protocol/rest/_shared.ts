@@ -78,14 +78,6 @@ export type HubVariables = {
    * a `service` key this is the confinement boundary applied at the shared door.
    */
   keyWorkspaceId?: string | null;
-  /**
-   * The authenticating key's `instance_id` (null if unlabeled) — the per-runtime
-   * marker for concurrent instances of ONE agent identity (see api_keys.instance_id).
-   * Surfaced here as the canonical seam for per-instance attribution; event/audit
-   * writers can read it to distinguish which runtime performed an action. NULL for
-   * legacy single-key agents and non-agent callers.
-   */
-  agentInstanceId?: string | null;
 };
 
 /**
