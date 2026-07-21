@@ -69,13 +69,15 @@ export async function proxy(req: NextRequest) {
   }
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
-  // /connect and /approve-agent/* are self-service surfaces for any
-  // signed-in pod user (CLI/Raycast/Claude Desktop key minting and the
-  // matching agent-key approval). The backend endpoints they call already
-  // re-verify the Kratos session server-side — we just need a valid session
-  // here, not the pod_admin role.
+  // /connect, /my-connections, and /approve-agent/* are self-service
+  // surfaces for any signed-in pod user (CLI/Raycast/Claude Desktop key
+  // minting, viewing/revoking your own keys, and the matching agent-key
+  // approval). The backend endpoints they call already re-verify the
+  // Kratos session server-side — we just need a valid session here, not
+  // the pod_admin role.
   const isSelfService =
     path === "/connect" ||
+    path === "/my-connections" ||
     path.startsWith("/approve-agent") ||
     path.startsWith("/connection-requests/");
   if (!isSelfService) {

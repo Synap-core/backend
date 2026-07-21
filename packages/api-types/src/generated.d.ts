@@ -9713,7 +9713,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
+				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
+				linkedUserId: string | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -9736,6 +9738,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyPrefix: string;
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
+				linkedUserId: string | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -9835,7 +9838,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
+				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
+				linkedUserId: string | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;

@@ -61,13 +61,14 @@ import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "./format";
 
-interface UnifiedKey {
+export interface UnifiedKey {
   id: string;
   userId?: string;
   keyName: string;
   keyPrefix: string;
   keyType?: string | null;
   hubId?: string | null;
+  linkedUserId?: string | null;
   scope?: string[] | string | null;
   isActive: boolean;
   expiresAt?: Date | string | null;
@@ -85,18 +86,38 @@ interface UnifiedKey {
   };
 }
 
-type KeyCategory = "agent" | "system" | "operator";
+export type KeyCategory = "agent" | "cli" | "service" | "system" | "operator";
 
-function categorize(k: UnifiedKey): KeyCategory {
-  if (k.user?.userType === "agent") return "agent";
-  const isHub = k.hubId && !k.hubId.startsWith("integration:");
-  const isInternalPrefix = k.keyPrefix?.startsWith("synap_hub_") ?? false;
-  if (Boolean(isHub) || isInternalPrefix) return "system";
-  return "operator";
+/**
+ * Badge category, derived purely from `keyType` (the real signal) — never
+ * from `hubId`/`keyPrefix` heuristics, which mislabeled a self-service
+ * `/connect` CLI key (keyType `hub_inbound`, `linkedUserId` set to the human
+ * it acts for) as "System".
+ */
+export function categorize(k: UnifiedKey): KeyCategory {
+  switch (k.keyType) {
+    case "is_internal":
+      // The trusted Intelligence-Service pod-read key — operator/system tier.
+      return "system";
+    case "service":
+      return "service";
+    case "hub_inbound":
+      if (k.linkedUserId) {
+        return k.hubId?.startsWith("integration:cli") ? "cli" : "agent";
+      }
+      return "system";
+    default:
+      // "system" (admin-minted) and "user_pat" (personal access token) both
+      // fall here for "system" they're already correctly named by keyType,
+      // but the operator bucket is for personal tokens.
+      return k.keyType === "system" ? "system" : "operator";
+  }
 }
 
-const CATEGORY_LABEL: Record<KeyCategory, string> = {
+export const CATEGORY_LABEL: Record<KeyCategory, string> = {
   agent: "Agent",
+  cli: "CLI",
+  service: "Service",
   system: "System",
   operator: "Operator",
 };
