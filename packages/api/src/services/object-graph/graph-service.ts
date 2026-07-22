@@ -23,6 +23,7 @@ import {
   getDb,
   inArray,
   and,
+  or,
   eq,
   isNull,
   ilike,
@@ -30,6 +31,8 @@ import {
   projects,
   views,
   channels,
+  channelMembers,
+  ChannelMemberKind,
   focusSessions,
   playbooks,
   tools,
@@ -38,6 +41,10 @@ import {
   automations,
   documents,
   intelligenceCommands,
+  agents,
+  vaultGrants,
+  GRANTABLE_TYPES,
+  type GrantableType,
   loadFacetSlugsBatch,
   type FacetVisibilityScope,
   workspaces,
@@ -67,6 +74,8 @@ export const GRAPH_KINDS = [
   "playbook",
   "tool",
   "skill",
+  "capability",
+  "agent",
   "automation",
   "document",
   "command",
@@ -112,7 +121,17 @@ export interface GraphNeighbor extends GraphNode {
   edgeType: string;
   direction: "outgoing" | "incoming" | "structural";
   /** Which substrate the edge came from — glass-box provenance. */
-  via: "links" | "relations" | "property" | "channel" | "session";
+  via:
+    | "links"
+    | "relations"
+    | "property"
+    | "channel"
+    | "session"
+    // vault_grants (capability grants) — NOT mirrored into `links`, folded in
+    // read-time for capability/tool/skill/command↔agent bindings.
+    | "grant"
+    // automations.createdBy ownership — an agent → the automations it authored.
+    | "automation";
 }
 
 /** "Fetch X, get X + everything it's linked to, typed." */

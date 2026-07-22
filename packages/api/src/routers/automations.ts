@@ -22,13 +22,20 @@ import {
   and,
   or,
   isNull,
+  inArray,
   desc,
   drizzleSql,
   automations,
   automationRuns,
   automationStepRuns,
+  channels,
+  ChannelRepository,
 } from "@synap/database";
 import type { AutomationTriggerConfig, FlowDefinition } from "@synap/database";
+// Shared with the runtime run-narration resolver (post-run-summary.ts): the ONE
+// SSOT for `metadata.resultRouting`. Imported (not re-copied) — the static
+// feedTargets resolver must classify routing identically to `resolveRunChannel`.
+import { resolveResultRouting } from "@synap/jobs/utils/post-run-summary.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -144,6 +151,139 @@ export const automationsRouter = router({
         .limit(input?.limit ?? 50);
 
       return { automations: rows };
+    }),
+
+  // ── Feed targets — the static "automation → where its runs land" resolver ────
+
+  /**
+   * Backend-accurate answer to "which channel (or subject KIND) does each
+   * automation's runs feed into?" — the static counterpart of the runtime
+   * `resolveRunChannel` (jobs/utils/post-run-summary.ts). The Atlas "loops" map
+   * consumes this instead of the old broad client-side channel approximation.
+   *
+   * BRANCH ORDER mirrors `resolveRunChannel` EXACTLY:
+   *   1. `per_entity` routing + a subject KIND (`triggerConfig.filters.profileSlug`,
+   *      the SAME canonical field the trigger-matcher matches on) → the subject
+   *      kind, `fansOut:true`. Each run lands in ITS entity's channel at runtime,
+   *      so statically we can only name the fan-out KIND. Slug absent ⇒ fall
+   *      through (a per_entity automation with no subject filter routes per-type).
+   *   2. `triggerConfig.channelId` set → that channel (priority over per_type for
+   *      ALL non-per_entity routings, exactly as `resolveRunChannel`).
+   *   3. else `per_type` → the automation's durable run channel, resolved
+   *      READ-ONLY via `findAutomationRunChannel` (NEVER creates — a read path must
+   *      not spawn a channel; `undefined` on a miss just yields no channelId).
+   *
+   * SCOPING — automations loaded through the SAME scoped predicate + workspace
+   * narrow as `list`. Channel TITLES are resolved through the channels
+   * VisibilityRule (`scopedDb(...).predicate(channels)`), so a channelId the
+   * caller can't see returns its id but no title — never a cross-user title leak.
+   */
+  feedTargets: protectedProcedure
+    .input(
+      z
+        .object({ workspaceId: z.string().uuid().nullable().optional() })
+        .optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        automations
+      );
+      const rows = await database
+        .select()
+        .from(automations)
+        .where(
+          and(
+            visibility,
+            input?.workspaceId
+              ? or(
+                  isNull(automations.workspaceId),
+                  eq(automations.workspaceId, input.workspaceId)
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(automations.updatedAt));
+
+      const channelRepo = new ChannelRepository(database);
+
+      // Anonymous (structural) type — a named local interface would leak as a
+      // private name into the exported router's inferred type (TS4025).
+      const targets: Array<{
+        automationId: string;
+        mode: "per_type" | "per_entity" | "trigger";
+        channelId?: string;
+        channelTitle?: string;
+        subjectProfileSlug?: string;
+        fansOut?: boolean;
+      }> = [];
+      for (const a of rows) {
+        const mode = resolveResultRouting(a.metadata);
+        const trigger = a.triggerConfig as AutomationTriggerConfig | null;
+
+        // (1) per_entity + subject KIND → fan out over that kind (no channelId).
+        if (mode === "per_entity") {
+          const slug = trigger?.filters?.profileSlug as string | undefined;
+          if (slug) {
+            targets.push({
+              automationId: a.id,
+              mode,
+              subjectProfileSlug: slug,
+              fansOut: true,
+            });
+            continue;
+          }
+          // slug absent → fall through to trigger/per_type below.
+        }
+
+        // (2) explicit trigger-bound channel wins for every non-per_entity route.
+        const triggerChannelId = trigger?.channelId as string | undefined;
+        if (triggerChannelId) {
+          targets.push({
+            automationId: a.id,
+            mode,
+            channelId: triggerChannelId,
+          });
+          continue;
+        }
+
+        // (3) per_type durable run channel — READ-ONLY, never created.
+        const runChannel = await channelRepo.findAutomationRunChannel(a.id);
+        if (runChannel) {
+          targets.push({ automationId: a.id, mode, channelId: runChannel.id });
+        } else {
+          targets.push({ automationId: a.id, mode });
+        }
+      }
+
+      // Batch-resolve titles for every collected channelId in ONE scoped IN(...)
+      // select. Unseen (unauthorized) channels simply don't appear → no title.
+      const channelIds = [
+        ...new Set(
+          targets
+            .map((t) => t.channelId)
+            .filter((id): id is string => typeof id === "string")
+        ),
+      ];
+      if (channelIds.length > 0) {
+        const chanVisibility = scopedDb(AccessContext.from(ctx)).predicate(
+          channels
+        );
+        const titleRows = await database
+          .select({ id: channels.id, title: channels.title })
+          .from(channels)
+          .where(and(chanVisibility, inArray(channels.id, channelIds)));
+        const titleById = new Map(
+          titleRows.map((r) => [r.id, r.title] as const)
+        );
+        for (const t of targets) {
+          if (!t.channelId) continue;
+          const title = titleById.get(t.channelId);
+          if (title) t.channelTitle = title;
+        }
+      }
+
+      return { targets };
     }),
 
   // ── Match automations that would fire on creating an entity profile ─────────

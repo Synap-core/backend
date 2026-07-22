@@ -21,12 +21,7 @@ export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
 // ── Tool — a registered integration the AI can use ───────────────────────────
 export type ToolKind =
-  | "builtin"
-  | "api"
-  | "mcp"
-  | "provider"
-  | "external"
-  | "script";
+  "builtin" | "api" | "mcp" | "provider" | "external" | "script";
 
 /**
  * The verb axis of a Tool — the structured, enumerable capability matrix. A
@@ -106,11 +101,7 @@ export type ExecMode = "auto" | "propose" | "dry-run";
 
 // ── Playbook — a session template (configuration) ────────────────────────────
 export type PlaybookParamType =
-  | "text"
-  | "number"
-  | "entity"
-  | "choice"
-  | "boolean";
+  "text" | "number" | "entity" | "choice" | "boolean";
 export interface PlaybookParam {
   name: string;
   label?: string;
@@ -195,6 +186,10 @@ export type LinkEndpointType =
   // A capability CONTAINER (`capabilities` table). Parts attach as members:
   // `tool|skill|command --member_of--> capability`.
   | "capability"
+  // An AI agent (the `agents` REGISTRY row). A graph citizen so "what is this
+  // agent using / assigned to" resolves: capability grants (vault_grants), the
+  // channels it is assigned to / a member of, and the automations it created.
+  | "agent"
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
   | "workspace";

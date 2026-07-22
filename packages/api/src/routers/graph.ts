@@ -144,7 +144,7 @@ export const graphRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.entityId),
-          eq(entities.userId, ctx.userId)
+          graphEntityFloor(ctx.userId)
         ),
       });
 
@@ -158,7 +158,7 @@ export const graphRouter = router({
 
       // 2. Get all relations for this entity (both directions)
       const whereClause = and(
-        eq(relations.userId, ctx.userId),
+        graphRelationsFloor(ctx.userId),
         or(
           eq(relations.sourceEntityId, input.entityId),
           eq(relations.targetEntityId, input.entityId)
@@ -190,7 +190,7 @@ export const graphRouter = router({
       if (input.includeRelatedPreviews && relatedEntityIds.size > 0) {
         relatedEntities = await db.query.entities.findMany({
           where: and(
-            eq(entities.userId, ctx.userId),
+            graphEntityFloor(ctx.userId),
             inArray(entities.id, Array.from(relatedEntityIds))
           ),
           columns: {
@@ -253,7 +253,7 @@ export const graphRouter = router({
       // 1. Fetch all requested entities
       const fetchedEntities = await db.query.entities.findMany({
         where: and(
-          eq(entities.userId, ctx.userId),
+          graphEntityFloor(ctx.userId),
           inArray(entities.id, input.entityIds)
         ),
       });
@@ -268,14 +268,14 @@ export const graphRouter = router({
       if (input.includeInternalRelations && !input.includeExternalRelations) {
         // Only relations where BOTH entities are in the set
         relationWhere = and(
-          eq(relations.userId, ctx.userId),
+          graphRelationsFloor(ctx.userId),
           inArray(relations.sourceEntityId, input.entityIds),
           inArray(relations.targetEntityId, input.entityIds)
         );
       } else {
         // Relations where at least ONE entity is in the set
         relationWhere = and(
-          eq(relations.userId, ctx.userId),
+          graphRelationsFloor(ctx.userId),
           or(
             inArray(relations.sourceEntityId, input.entityIds),
             inArray(relations.targetEntityId, input.entityIds)

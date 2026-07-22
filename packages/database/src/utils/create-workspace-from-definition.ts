@@ -1641,32 +1641,52 @@ export async function createWorkspaceFromDefinition(
     Object.assign(entityRefMap, rebuilt.entityRefMap);
     onProgress?.("entities", 85, "Seed data restored");
   } else {
+    // Resume idempotency: "entities" is pushed to completedSteps only AFTER the
+    // whole loop finishes, so a mid-loop crash leaves it OUT — and a resume
+    // (via resumeIfFailed) re-runs this loop from the top. Blind create would
+    // re-insert the seed entities that DID land last attempt. Seed entities are
+    // keyed by (profileSlug=type, title) — the template's own entityRefMap key,
+    // unique per seed set — so find-or-create on that key makes resume a no-op
+    // for what already exists. A brand-new workspace has no entities yet, so
+    // this never false-reuses on a first install.
+    const existingSeed = await dbConn.query.entities.findMany({
+      where: eq(entities.workspaceId, workspaceId),
+    });
+    const seedByKey: Record<string, string> = {};
+    for (const e of existingSeed) seedByKey[`${e.type}:${e.title}`] = e.id;
+
     for (const entity of definition.suggestedEntities ?? []) {
-      let result;
-      try {
-        result = await entityRepo.create(
-          {
-            profileSlug: entity.profileSlug,
-            title: entity.title,
-            properties: entity.properties,
-            workspaceId,
-            userId,
-            // Skip strict validation for template seed data — property slugs in the
-            // template may differ from system profile property defs, and required
-            // properties on system profiles (like 'title') are entity-level fields,
-            // not property values.
-            skipValidation: true,
-          },
-          userId
-        );
-      } catch (err) {
-        await handleStepError(
-          `entities[${entity.profileSlug}:${entity.title}]`,
-          err
-        );
+      const refKey = `${entity.profileSlug}:${entity.title}`;
+      let entityId = seedByKey[refKey];
+      if (!entityId) {
+        let result;
+        try {
+          result = await entityRepo.create(
+            {
+              profileSlug: entity.profileSlug,
+              title: entity.title,
+              properties: entity.properties,
+              workspaceId,
+              userId,
+              // Skip strict validation for template seed data — property slugs in the
+              // template may differ from system profile property defs, and required
+              // properties on system profiles (like 'title') are entity-level fields,
+              // not property values.
+              skipValidation: true,
+            },
+            userId
+          );
+        } catch (err) {
+          await handleStepError(
+            `entities[${entity.profileSlug}:${entity.title}]`,
+            err
+          );
+        }
+        entityId = result!.id;
+        seedByKey[refKey] = entityId;
       }
-      entityIds.push(result!.id);
-      entityRefMap[`${entity.profileSlug}:${entity.title}`] = result!.id;
+      entityIds.push(entityId);
+      entityRefMap[refKey] = entityId;
     }
 
     // Resolve entity_id cross-references (ref:profileSlug:Title → real UUID)
@@ -1751,6 +1771,19 @@ export async function createWorkspaceFromDefinition(
   // 11. Create relations between seed entities
   const relationRepo = new RelationRepository(dbConn, eventRepo);
   if (!stepDone("relations-seed")) {
+    // Resume idempotency (same rationale as the seed-entities loop): a mid-loop
+    // crash re-runs this from the top, and relationRepo.create is a blind
+    // insert. Skip any (source, target, type) edge already present in the
+    // workspace so a resume never duplicates seed relations.
+    const relEdgeKey = (s: string, t: string, ty: string) => `${s} ${t} ${ty}`;
+    const existingSeedRels = await dbConn.query.relations.findMany({
+      where: (r, { eq: eqOp }) => eqOp(r.workspaceId, workspaceId),
+    });
+    const seenRelEdges = new Set(
+      existingSeedRels.map((r) =>
+        relEdgeKey(r.sourceEntityId ?? "", r.targetEntityId ?? "", r.type)
+      )
+    );
     for (const rel of definition.suggestedRelations ?? []) {
       const sourceId = entityRefMap[rel.sourceRef];
       const targetId = entityRefMap[rel.targetRef];
@@ -1761,6 +1794,8 @@ export async function createWorkspaceFromDefinition(
         );
         continue;
       }
+      const edge = relEdgeKey(sourceId, targetId, rel.type);
+      if (seenRelEdges.has(edge)) continue;
       try {
         await relationRepo.create(
           {
@@ -1773,6 +1808,7 @@ export async function createWorkspaceFromDefinition(
           },
           userId
         );
+        seenRelEdges.add(edge);
       } catch (err) {
         await handleStepError(
           `relations-seed[${rel.sourceRef}->${rel.targetRef}]`,

@@ -397,6 +397,97 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── channel / bind ─────────────────────────────────────────────────────────
+  // Approve a bindChannel proposal (hub-protocol channels.bindChannel): point an
+  // ALREADY-EXISTING channel at a context object, optionally stamping the firewall
+  // role. Structurally identical to create_external — resolve the membership floor,
+  // build the governed channelsRouter caller, and DELEGATE the write to
+  // updateChannel (which sets context_object_id and routes branchPurpose through
+  // the setChannelBranchPurpose one-door). NO raw UPDATE here.
+  //
+  // Data shape: the bind door files via checkPermissionOrPropose(source:
+  // "intelligence") → createProposal, which stores the gate data REQUEST-SHAPED
+  // (nested under proposal.data.data), like entity/create. We read nested-first
+  // with a flat fallback so the executor is robust to either envelope.
+  //
+  // FIREWALL: updateChannel wraps setChannelBranchPurpose and rethrows a
+  // ChannelFirewallImmutableError as FORBIDDEN — so approving a bind that would
+  // flip an already-client-comms channel FAILS LOUDLY (the proposal lands in
+  // APPROVAL_FAILED), never silently reclassifying a real client's conversation.
+  registerProposalExecutor({
+    key: "channel/bind",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const outer = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = (outer.data ?? outer ?? {}) as Record<string, unknown>;
+      const bindWorkspaceId = proposal.workspaceId || null;
+      if (!bindWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Proposal is missing a valid workspaceId",
+        });
+      }
+      const channelId = data.channelId as string | undefined;
+      const contextObjectId = data.contextObjectId as string | undefined;
+      if (!channelId || !contextObjectId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "channel/bind proposal is missing channelId or contextObjectId",
+        });
+      }
+      const membership = await getWorkspaceMembership(
+        db,
+        bindWorkspaceId,
+        userId
+      );
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const bindCallerCtx = {
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: bindWorkspaceId,
+        workspaceRole: membership.role,
+      };
+      const caller = channelsRouter.createCaller(
+        bindCallerCtx as unknown as Context
+      );
+      await caller.updateChannel({
+        channelId,
+        contextObjectType:
+          (data.contextObjectType as
+            "entity" | "document" | "view" | undefined) ?? "entity",
+        contextObjectId,
+        ...(typeof data.branchPurpose === "string"
+          ? { branchPurpose: data.branchPurpose }
+          : {}),
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── entity / create ────────────────────────────────────────────────────────
   registerProposalExecutor({
     key: "entity/create",

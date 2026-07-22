@@ -15,6 +15,12 @@
  *
  *   (a) No template declares a shared-role slug as `profileKind: kind` or
  *       workspace-scoped.
+ *   (a2) The mirror for shared KINDS (e.g. `platform`, content-os → social):
+ *       no template declares a shared-kind slug as a `role` or workspace-scoped.
+ *       Rules (b)/(c) already cover a shared KIND for drift (they key on
+ *       `scope: shared`), but (a)'s anti-fork guard only knew about roles — a
+ *       shared-kind slug re-declared as `scope: workspace` would slip (a) AND
+ *       (b)/(c) and silently fork a private copy at apply.
  *   (b) No two templates declare the SAME property slug on the same `scope:
  *       shared` profile with DIFFERENT definitions (valueType / inputType /
  *       enumValues / defaultValue). EXTRA properties are ALLOWED.

@@ -279,7 +279,61 @@ export interface ApplyPackagePostWorkspaceInput {
   scopes?: string[];
 }
 
+/**
+ * Stamp the workspace `provisioningStatus:"failed"` after a post-workspace
+ * layer throw. Routes through `mergeSettings` — the ONE door provisioning-status
+ * transitions flow through — mirroring core's `handleStepError`. Best-effort:
+ * a stamp failure must never mask the real layer error.
+ */
+async function markPostWorkspaceProvisioningFailed(
+  workspaceId: string,
+  userId: string,
+  cause: unknown
+): Promise<void> {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const { getDb, WorkspaceRepository, eventRepository } =
+    await import("@synap/database");
+  const dbConn = await getDb();
+  const repo = new WorkspaceRepository(dbConn, eventRepository);
+  await repo.mergeSettings(
+    workspaceId,
+    {
+      provisioningStatus: "failed",
+      failedStep: "post-workspace",
+      failedStepError: message.slice(0, 500),
+    },
+    userId
+  );
+}
+
+/**
+ * Public door. The core engine stamps `provisioningStatus:"active"` +
+ * `packageVersion` BEFORE this runs, so a bare throw here would leave the
+ * workspace "active" with its living layers (capabilities/playbooks/automations/
+ * loops) missing — and a same-version reinstall then sees `outcome:"unchanged"`
+ * and PERMANENTLY skips re-seeding (`packages.ts` gate). Stamping "failed" on
+ * throw makes the next reinstall re-enter `resumeIfFailed` → core resumes →
+ * `outcome:"created"` → this door re-runs. Re-running is safe: every layer
+ * applier here is idempotent (capabilities/automations/playbooks dedup by name;
+ * `createLinks` dedups by unique edge). Recovery for the "living operation"
+ * layer The Arch / Enterprise-OS depend on.
+ */
 export async function applyPackagePostWorkspace(
+  input: ApplyPackagePostWorkspaceInput
+): Promise<Record<string, unknown>> {
+  try {
+    return await applyPackagePostWorkspaceInner(input);
+  } catch (e) {
+    await markPostWorkspaceProvisioningFailed(
+      input.workspaceId,
+      input.userId,
+      e
+    ).catch(() => {});
+    throw e;
+  }
+}
+
+async function applyPackagePostWorkspaceInner(
   input: ApplyPackagePostWorkspaceInput
 ): Promise<Record<string, unknown>> {
   const { workspaceId, body, userId, agentUserId } = input;

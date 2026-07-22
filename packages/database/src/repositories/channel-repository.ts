@@ -353,12 +353,16 @@ export class ChannelRepository {
    * unique index yet): the oldest-wins read keeps it deterministic if a rare
    * first-run race ever inserts two.
    */
-  async ensureAutomationRunChannel(
-    automationId: string,
-    ownerId: string,
-    workspaceId?: string,
-    title?: string
-  ): Promise<Channel> {
+  /**
+   * The LOOKUP half of `ensureAutomationRunChannel` — the existing per-type run
+   * channel for an automation, or `undefined` on a miss. NEVER creates. Extracted
+   * so read-only callers (e.g. the atlas `feedTargets` resolver) can ask "which
+   * channel does this automation's runs land in?" without ever spawning one.
+   * `ensureAutomationRunChannel` calls this then creates on miss — same behavior.
+   */
+  async findAutomationRunChannel(
+    automationId: string
+  ): Promise<Channel | undefined> {
     const [existing] = await this.db
       .select()
       .from(channels)
@@ -372,6 +376,16 @@ export class ChannelRepository {
       .orderBy(asc(channels.createdAt))
       .limit(1);
 
+    return existing;
+  }
+
+  async ensureAutomationRunChannel(
+    automationId: string,
+    ownerId: string,
+    workspaceId?: string,
+    title?: string
+  ): Promise<Channel> {
+    const existing = await this.findAutomationRunChannel(automationId);
     if (existing) return existing;
 
     return await this.create({

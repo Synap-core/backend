@@ -261,6 +261,108 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Bind an ALREADY-EXISTING channel to a context object (entity/document/view)
+   * — the "point this channel at this client" door. Sets contextObjectId and,
+   * OPTIONALLY, the firewall role label (branchPurpose).
+   *
+   *   AI proposes bindChannel
+   *     → checkPermissionOrPropose({ subjectType:"channel", action:"bind" })
+   *     → proposal created (PENDING) in the user's inbox
+   *   User approves
+   *     → proposals.approve executes the `channel/bind` executor, which delegates
+   *       to the GOVERNED channelsRouter.updateChannel (context_object_id +
+   *       setChannelBranchPurpose one-door; client-comms stays immutable).
+   *
+   * ALWAYS proposes: "channel.bind" is DELIBERATELY not in DEFAULT_AUTO_APPROVE.
+   * A bind changes what a durable surface points at (and can stamp the firewall
+   * role) — the operator must SEE and ACCEPT it. `source:"intelligence"` routes
+   * this through the same createProposal machinery every AI write uses.
+   *
+   * FIREWALL: branchPurpose is passed through as EXPLICIT data a human confirms —
+   * never default-forced to "client-comms". A wrong client-comms bind is
+   * unrecoverable, so the human owns that choice; and the executor's one-door
+   * write refuses to reclassify an already-client-comms channel.
+   */
+  bindChannel: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        /** The human user who should approve this (agent acts on behalf of). */
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        /** The already-existing channel to bind. */
+        channelId: z.string().uuid(),
+        /** A channel binds to an entity/document/view (default: entity). */
+        contextObjectType: z
+          .enum(["entity", "document", "view"])
+          .default("entity"),
+        /** The object (usually a client entity) to point the channel at. */
+        contextObjectId: z.string().uuid(),
+        /**
+         * Optional firewall role label ("client-comms" | "team"). Carried as
+         * explicit data a human confirms — NEVER default-forced. Applied on
+         * approval via the setChannelBranchPurpose one-door (client-comms is
+         * immutable there + at the DB trigger).
+         */
+        branchPurpose: z.string().max(500).optional(),
+        /** Optional provenance: platform-native channel id (for the review card). */
+        externalChannelId: z.string().optional(),
+        /** Optional: agent reasoning shown in the proposal inbox item. */
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const proposalId = randomUUID();
+
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "channel",
+        action: "bind",
+        source: "intelligence",
+        data: {
+          id: proposalId,
+          channelId: input.channelId,
+          contextObjectType: input.contextObjectType,
+          contextObjectId: input.contextObjectId,
+          ...(input.branchPurpose !== undefined
+            ? { branchPurpose: input.branchPurpose }
+            : {}),
+          ...(input.externalChannelId !== undefined
+            ? { externalChannelId: input.externalChannelId }
+            : {}),
+        },
+        reasoning: input.reasoning,
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return {
+          status: "denied" as const,
+          reason: perm.reason,
+        };
+      }
+
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          message: `Proposal created — user must approve binding this channel to ${input.contextObjectType} ${input.contextObjectId}.`,
+        };
+      }
+
+      // Auto-approved (only if a workspace explicitly opted "channel.bind" into
+      // autoApproveFor). The bind itself is applied by the channel/bind executor.
+      return {
+        status: "approved" as const,
+        channelId: input.channelId,
+        message: "Channel bind auto-approved.",
+      };
+    }),
+
+  /**
    * Send a message to an existing external-import channel (hot path).
    * Requires: hub-protocol.write scope
    *
