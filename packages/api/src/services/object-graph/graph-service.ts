@@ -180,6 +180,10 @@ const KIND_TABLE: Record<string, KindSpec> = {
   tool: { table: tools, name: "name", subtype: "kind" },
   skill: { table: skills, name: "name", subtype: "kind" },
   capability: { table: capabilities, name: "name" },
+  // The `agents` REGISTRY row (id = agents.id). Pod-global reference data — no
+  // `workspaceId` column, so hydrateNodes scopes it via the agent floor below
+  // (system-owned OR owned by the caller), NOT workspaceLensWhere.
+  agent: { table: agents, name: "name" },
   command: { table: intelligenceCommands, name: "title" },
   automation: { table: automations, name: "name", subtype: "triggerType" },
   document: {
@@ -251,7 +255,16 @@ export async function hydrateNodes(
                   isNull((t as typeof workspaces).archivedAt),
                   workspaceLensWhere(t.id, userId, workspaceId)
                 )
-              : workspaceLensWhere(t.workspaceId, userId, workspaceId)
+              : kind === "agent"
+                ? // Agents have no `workspaceId` column — they are a pod-global
+                  // registry. Floor: SYSTEM-owned (shared built-ins) OR owned by
+                  // this caller (private local adjuncts stay owner-only). This
+                  // prevents leaking another user's private agent's NAME.
+                  or(
+                    eq((t as typeof agents).ownerType, "system"),
+                    eq((t as typeof agents).userId, userId)
+                  )
+                : workspaceLensWhere(t.workspaceId, userId, workspaceId)
           )
         );
 
@@ -404,6 +417,258 @@ export function connectionsToNeighbors(
   });
 }
 
+/** Focus kinds whose grants live in `vault_grants` (the grantables + the
+ * capability container that groups them). Matched by `grantableId = focusId`. */
+const GRANTABLE_FOCUS_KINDS: ReadonlySet<string> = new Set([
+  "capability",
+  "tool",
+  "skill",
+  "command",
+]);
+
+/** The agent floor used to gate registry rows we surface as neighbours: SYSTEM
+ * agents (shared built-ins) OR the caller's own agents — never another user's
+ * private adjunct. Mirrors the `agent` branch in hydrateNodes. */
+function agentFloor(userId: string) {
+  return or(eq(agents.ownerType, "system"), eq(agents.userId, userId))!;
+}
+
+/**
+ * The GOVERNANCE / OWNERSHIP neighbours of an infra object — bindings that live
+ * in `vault_grants` (capability grants) and in the agent's channel/automation
+ * ownership, NEITHER of which is mirrored into the `links` table. A read-time
+ * fold (analogous to the entity-data fold), gated by focus kind:
+ *
+ *  - focus grantable (capability|tool|skill|command) → the AGENTS (or a
+ *    workspace) GRANTED it. `vault_grants WHERE grantable_id = focus`
+ *    (+ grantable_type when the focus is itself a grantable type). Each grant's
+ *    `granted_to` is an agent-USER id; we map it → its `agents` REGISTRY row
+ *    (agents.userId = granted_to) for display, dropping agents the caller can't
+ *    see (agentFloor). Workspace-scoped grants (granted_to NULL) surface the
+ *    workspace instead.
+ *  - focus agent → the tools/skills/commands/secrets granted TO it
+ *    (`vault_grants WHERE granted_to = <agent's agent-user id>`), PLUS the
+ *    channels it is assigned to / an ai_agent member of, and the automations it
+ *    created (`automations.createdBy = <agent-user id>`).
+ *
+ * Every far endpoint is hydrated through `hydrateNodes`, so it inherits the SAME
+ * visibility floor as every other neighbour — an endpoint in a workspace the
+ * caller can't see never hydrates and is dropped (no cross-workspace leak). The
+ * driver queries (vault_grants / channels / automations rows) key off ids that
+ * are not themselves user data; visibility is enforced at the hydration of the
+ * endpoint we actually surface, exactly like getLinkNeighbors does for `links`.
+ */
+export async function getGovernanceNeighbors(
+  userId: string,
+  kind: string,
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  const isGrantableFocus = GRANTABLE_FOCUS_KINDS.has(kind);
+  const isAgentFocus = kind === "agent";
+  if (!isGrantableFocus && !isAgentFocus) return [];
+
+  const db = await getDb();
+  const out: GraphNeighbor[] = [];
+
+  // ── A. Focus is a grantable → the agents/workspace granted it ───────────────
+  if (isGrantableFocus) {
+    const conds = [
+      eq(vaultGrants.grantableId, id),
+      isNull(vaultGrants.revokedAt),
+    ];
+    // Narrow by grantable_type when the focus kind IS a grantable type
+    // (tool/skill/command) — guards against a cross-type id collision. A
+    // `capability` focus has no grantable_type row (capabilities are containers,
+    // not directly granted), so it matches nothing here — its member tools/skills
+    // still surface via the existing `member_of` links.
+    if ((GRANTABLE_TYPES as readonly string[]).includes(kind)) {
+      conds.push(eq(vaultGrants.grantableType, kind as GrantableType));
+    }
+    const grants = await db
+      .select()
+      .from(vaultGrants)
+      .where(and(...conds));
+
+    const agentUserIds = [
+      ...new Set(grants.map((g) => g.grantedTo).filter(Boolean) as string[]),
+    ];
+    // Resolve agent-USER id → agents REGISTRY row (scoped by agentFloor). An
+    // agent-user with no visible registry row is dropped (we can't display it
+    // and won't leak another user's agent id).
+    const agentByUser = new Map<string, typeof agents.$inferSelect>();
+    if (agentUserIds.length > 0) {
+      const rows = await db
+        .select()
+        .from(agents)
+        .where(and(inArray(agents.userId, agentUserIds), agentFloor(userId)));
+      for (const a of rows) if (a.userId) agentByUser.set(a.userId, a);
+    }
+
+    // Workspace-scoped grants (granted_to NULL, workspace set) → workspace node.
+    const wsIds = [
+      ...new Set(
+        grants
+          .filter((g) => !g.grantedTo && g.workspaceId)
+          .map((g) => g.workspaceId as string)
+      ),
+    ];
+    const wsNodes = wsIds.length
+      ? await hydrateNodes(
+          userId,
+          wsIds.map((w) => ({ kind: "workspace", id: w })),
+          facetVisibilityScope,
+          workspaceId
+        )
+      : new Map<string, GraphNode>();
+
+    for (const g of grants) {
+      if (g.grantedTo) {
+        const a = agentByUser.get(g.grantedTo);
+        if (!a) continue;
+        out.push({
+          kind: "agent",
+          id: a.id,
+          name: a.name,
+          subtype: null,
+          subtypes: [],
+          workspaceId: null,
+          edgeType: "granted_to",
+          direction: "incoming",
+          via: "grant",
+        });
+      } else if (g.workspaceId) {
+        const node = wsNodes.get(`workspace:${g.workspaceId}`);
+        if (!node) continue;
+        out.push({
+          ...node,
+          edgeType: "granted_to",
+          direction: "structural",
+          via: "grant",
+        });
+      }
+    }
+  }
+
+  // ── B. Focus is an agent → what it uses / is assigned to / created ──────────
+  if (isAgentFocus) {
+    // Resolve the focus agent (scoped) → its agent-USER id. If the caller can't
+    // see the agent, run no folds.
+    const [agentRow] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, id), agentFloor(userId)))
+      .limit(1);
+    if (!agentRow) return out;
+    const agentUserId = agentRow.userId;
+
+    // B1. Grants TO this agent (keyed on the agent-user id) → the grantables.
+    if (agentUserId) {
+      const grants = await db
+        .select()
+        .from(vaultGrants)
+        .where(
+          and(
+            eq(vaultGrants.grantedTo, agentUserId),
+            isNull(vaultGrants.revokedAt)
+          )
+        );
+      const refs = grants.map((g) => ({
+        kind: g.grantableType,
+        id: g.grantableId,
+      }));
+      const nodes = await hydrateNodes(
+        userId,
+        refs,
+        facetVisibilityScope,
+        workspaceId
+      );
+      for (const g of grants) {
+        const node = nodes.get(`${g.grantableType}:${g.grantableId}`);
+        if (!node) continue;
+        out.push({
+          ...node,
+          edgeType: "granted",
+          direction: "outgoing",
+          via: "grant",
+        });
+      }
+    }
+
+    // B2. Channels the agent is assigned to (channels.assignedAgentId = agent.id)
+    // OR an ai_agent member of (channel_members, keyed on the agent-user id).
+    const assignedRows = await db
+      .select({ id: channels.id })
+      .from(channels)
+      .where(eq(channels.assignedAgentId, id));
+    const assignedIds = new Set(assignedRows.map((r) => r.id));
+    let memberChannelIds: string[] = [];
+    if (agentUserId) {
+      const mems = await db
+        .select({ channelId: channelMembers.channelId })
+        .from(channelMembers)
+        .where(
+          and(
+            eq(channelMembers.memberId, agentUserId),
+            eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+          )
+        );
+      memberChannelIds = mems.map((m) => m.channelId);
+    }
+    const channelIds = [...new Set([...assignedIds, ...memberChannelIds])];
+    if (channelIds.length > 0) {
+      const chNodes = await hydrateNodes(
+        userId,
+        channelIds.map((cid) => ({ kind: "channel", id: cid })),
+        facetVisibilityScope,
+        workspaceId
+      );
+      for (const cid of channelIds) {
+        const node = chNodes.get(`channel:${cid}`);
+        if (!node) continue;
+        out.push({
+          ...node,
+          edgeType: assignedIds.has(cid) ? "assigned_agent" : "channel_member",
+          direction: "outgoing",
+          via: "channel",
+        });
+      }
+    }
+
+    // B3. Automations the agent CREATED (automations.createdBy = agent-user id).
+    // This is the owner-approved definition of agent→automations; the
+    // "runs/governs" dimension has no stored link (see report).
+    if (agentUserId) {
+      const autoRows = await db
+        .select({ id: automations.id })
+        .from(automations)
+        .where(eq(automations.createdBy, agentUserId));
+      const autoIds = autoRows.map((r) => r.id);
+      if (autoIds.length > 0) {
+        const autoNodes = await hydrateNodes(
+          userId,
+          autoIds.map((aid) => ({ kind: "automation", id: aid })),
+          facetVisibilityScope,
+          workspaceId
+        );
+        for (const aid of autoIds) {
+          const node = autoNodes.get(`automation:${aid}`);
+          if (!node) continue;
+          out.push({
+            ...node,
+            edgeType: "created",
+            direction: "outgoing",
+            via: "automation",
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 /**
  * Assemble the uniform envelope: the focused object (hydrated) + its neighbours.
  * `extraNeighbors` lets the route layer fold in the ENTITY-DATA graph
@@ -421,9 +686,10 @@ export async function getObjectGraph(
     userId,
     workspaceId
   );
-  const [selfMap, linkNeighbors] = await Promise.all([
+  const [selfMap, linkNeighbors, governanceNeighbors] = await Promise.all([
     hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
     getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
   ]);
 
   const object: GraphNode = selfMap.get(`${kind}:${id}`) ?? {
@@ -439,7 +705,11 @@ export async function getObjectGraph(
   // linked twice the same way isn't double-counted.
   const seen = new Set<string>();
   const neighbors: GraphNeighbor[] = [];
-  for (const n of [...linkNeighbors, ...extraNeighbors]) {
+  for (const n of [
+    ...linkNeighbors,
+    ...governanceNeighbors,
+    ...extraNeighbors,
+  ]) {
     const key = `${n.kind}:${n.id}:${n.edgeType}:${n.via}`;
     if (seen.has(key)) continue;
     seen.add(key);

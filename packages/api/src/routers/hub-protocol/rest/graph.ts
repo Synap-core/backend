@@ -48,7 +48,15 @@ const GraphNodeSchema = z
 const GraphNeighborSchema = GraphNodeSchema.extend({
   edgeType: z.string(),
   direction: z.enum(["outgoing", "incoming", "structural"]),
-  via: z.enum(["links", "relations", "property", "channel", "session"]),
+  via: z.enum([
+    "links",
+    "relations",
+    "property",
+    "channel",
+    "session",
+    "grant",
+    "automation",
+  ]),
 }).openapi("GraphNeighbor");
 
 const GraphEnvelopeSchema = z

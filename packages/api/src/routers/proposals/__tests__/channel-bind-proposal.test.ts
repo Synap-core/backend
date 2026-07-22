@@ -59,40 +59,59 @@ describe("(a) channel.bind is never auto-approved", () => {
     expect(isAutoApproved("channel.bind", ["entity.create"])).toBe(false);
   });
 
-  it("the filing door routes through checkPermissionOrPropose (no direct write)", () => {
-    const src = readSrc("routers/hub-protocol/channels.ts");
-    const start = src.indexOf("bindChannel:");
-    const end = src.indexOf("sendExternalMessage:");
+  it("the filing door routes through the proposeChannelBind helper (checkPermissionOrPropose, no direct write)", () => {
+    // bindChannel delegates to the shared helper — the SSOT for the gate + data
+    // shape, reused by the REST POST /channels/:channelId/bind door.
+    const chanSrc = readSrc("routers/hub-protocol/channels.ts");
+    const start = chanSrc.indexOf("bindChannel:");
+    const end = chanSrc.indexOf("sendExternalMessage:");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    const door = src.slice(start, end);
-
-    // Gate call with the exact subject/action/source the executor + policy expect.
-    expect(door).toContain("checkPermissionOrPropose");
-    expect(door).toMatch(/subjectType:\s*["']channel["']/);
-    expect(door).toMatch(/action:\s*["']bind["']/);
-    expect(door).toMatch(/source:\s*["']intelligence["']/);
-    // The proposed branch returns the standard review envelope.
-    expect(door).toMatch(/status:\s*["']proposed["']/);
-    // The door itself NEVER binds — it only files a proposal. The actual write is
-    // the channel/bind executor. So the door builds no router caller and issues
-    // no Drizzle write of its own. (Doc-comments may NAME the write doors; what
-    // matters is that the door never INVOKES one.)
+    const door = chanSrc.slice(start, end);
+    expect(door).toContain("proposeChannelBind");
+    // The door itself NEVER binds — no router caller, no Drizzle write of its own.
     expect(door).not.toContain("createCaller");
     expect(door).not.toContain("caller.updateChannel");
-    expect(door).not.toMatch(/\bawait\s+setChannelBranchPurpose\(/);
     expect(door).not.toMatch(/\.set\(/);
+
+    // The helper is the ONE place the gate is called — with the exact
+    // subject/action/source the executor + policy expect, returning the review
+    // envelope, and never invoking a write door itself.
+    const helper = readSrc("utils/propose-channel-bind.ts");
+    expect(helper).toContain("checkPermissionOrPropose");
+    expect(helper).toMatch(/subjectType:\s*["']channel["']/);
+    expect(helper).toMatch(/action:\s*["']bind["']/);
+    expect(helper).toMatch(/source:\s*["']intelligence["']/);
+    expect(helper).toMatch(/status:\s*["']proposed["']/);
+    expect(helper).not.toContain("caller.updateChannel");
+    expect(helper).not.toMatch(/\bawait\s+setChannelBranchPurpose\(/);
+    expect(helper).not.toMatch(/\.set\(/);
   });
 
   it("branchPurpose is passed through as explicit data, never default-forced", () => {
-    const src = readSrc("routers/hub-protocol/channels.ts");
-    const door = src.slice(
-      src.indexOf("bindChannel:"),
-      src.indexOf("sendExternalMessage:")
-    );
-    // Only spread when provided — never a literal default `"client-comms"`.
-    expect(door).toContain("branchPurpose !== undefined");
-    expect(door).not.toMatch(/branchPurpose:\s*["']client-comms["']/);
+    // The pass-through lives in the shared helper (bindChannel + the REST route
+    // both delegate to it). Only spread when provided — never a literal default.
+    const helper = readSrc("utils/propose-channel-bind.ts");
+    expect(helper).toContain("branchPurpose !== undefined");
+    expect(helper).not.toMatch(/branchPurpose:\s*["']client-comms["']/);
+  });
+
+  it("the REST bind door (IS agent's target) delegates to the same helper", () => {
+    // POST /api/hub/channels/:channelId/bind — the door the IS classify-and-propose
+    // tool calls. Must reuse proposeChannelBind (no second gate implementation) and
+    // require hub-protocol.write.
+    const rest = readSrc("routers/hub-protocol/rest/channels.ts");
+    expect(rest).toMatch(/app\.post\(\s*["']\/channels\/:channelId\/bind["']/);
+    expect(rest).toContain("proposeChannelBind");
+    // The route handler (from app.post to the end of the block) gates on write
+    // scope and never binds directly — the executor does, on approval.
+    const start = rest.indexOf('app.post("/channels/:channelId/bind"');
+    const door = rest.slice(start, start + 1600);
+    expect(door).toContain("hasScope");
+    expect(door).toContain("hub-protocol.write");
+    expect(door).toContain("proposeChannelBind");
+    expect(door).not.toContain("caller.updateChannel");
+    expect(door).not.toMatch(/\.set\(\{[^}]*branchPurpose/);
   });
 });
 

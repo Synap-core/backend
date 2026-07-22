@@ -42,6 +42,7 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { proposeChannelBind } from "../../../utils/propose-channel-bind.js";
 
 /**
  * Shared gate for Discord channel write operations (rename, pin).
@@ -630,6 +631,101 @@ export function registerChannelsRoutes(app: HubHono): void {
         { err, externalChannelId },
         "POST /channels/:externalChannelId/rename enqueue failed"
       );
+      return c.json({ error: msg }, 500);
+    }
+  });
+
+  // ── POST /channels/:channelId/bind ───────────────────────────────────────
+  // Governed PROPOSE door — the IS classify-and-propose target. Files a
+  // `channel/bind` proposal (via the shared proposeChannelBind helper, the tRPC
+  // bindChannel twin) that, on approval, points an EXISTING channel at a context
+  // object and optionally stamps the firewall role. Keys on the SYNAP channel
+  // UUID (NOT the external id). ALWAYS proposes unless "channel.bind" is opted
+  // into autoApproveFor; branchPurpose is human-confirmed, never default-forced.
+  const bindBodySchema = z.object({
+    userId: z.string(),
+    workspaceId: z.string().uuid(),
+    contextObjectId: z.string().uuid(),
+    contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+    branchPurpose: z.string().max(500).optional(),
+    externalChannelId: z.string().optional(),
+    reasoning: z.string().optional(),
+  });
+  registerOpenApi(app, {
+    method: "post",
+    path: "/channels/:channelId/bind",
+    tags: ["Channels"],
+    summary: "Propose binding a channel to a context object",
+    description:
+      "Files a governed `channel/bind` proposal (subjectType 'channel', action 'bind'). On approval, points an EXISTING channel (by Synap channel UUID) at a context object — usually a client entity — and optionally stamps the firewall role (branchPurpose). ALWAYS proposes unless a workspace opted 'channel.bind' into autoApproveFor. branchPurpose is human-confirmed, never default-forced (client-comms is immutable once set).",
+    request: { body: bindBodySchema },
+    responses: {
+      200: {
+        description: "Proposed / approved / denied",
+        schema: z.object({ status: z.string() }).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/channels/:channelId/bind", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const channelId = c.req.param("channelId");
+    if (!z.string().uuid().safeParse(channelId).success) {
+      return c.json({ error: "channelId (path) must be a valid uuid" }, 400);
+    }
+    let body: z.infer<typeof bindBodySchema>;
+    try {
+      body = bindBodySchema.parse(await c.req.json());
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid request body" },
+        400
+      );
+    }
+    // Confine the workspace to the bound service key (Item 3 — mismatch → 403).
+    let workspaceId: string;
+    try {
+      const confined = getConfinedWorkspace(c, body.workspaceId);
+      if (!confined) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
+      workspaceId = confined;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "FORBIDDEN") {
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      }
+      throw err;
+    }
+    try {
+      const result = await proposeChannelBind({
+        userId: body.userId,
+        workspaceId,
+        channelId,
+        contextObjectType: body.contextObjectType ?? "entity",
+        contextObjectId: body.contextObjectId,
+        ...(body.branchPurpose !== undefined
+          ? { branchPurpose: body.branchPurpose }
+          : {}),
+        ...(body.externalChannelId !== undefined
+          ? { externalChannelId: body.externalChannelId }
+          : {}),
+        ...(body.reasoning !== undefined ? { reasoning: body.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, channelId }, "POST /channels/:channelId/bind failed");
       return c.json({ error: msg }, 500);
     }
   });

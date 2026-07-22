@@ -67,6 +67,10 @@ export type LinkEndpointType =
   // A capability CONTAINER (`capabilities` table). Parts attach as members:
   // `tool|skill|command --member_of--> capability` (mirrors automation→playbook).
   | "capability"
+  // An AI agent (the `agents` REGISTRY row) — a graph citizen so the object-graph
+  // door resolves an agent's grants/channels/automations. In lock-step with the
+  // @synap/playbooks LinkEndpointType union.
+  | "agent"
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
   // Governs lens propagation only — never data movement (see links.ts header).

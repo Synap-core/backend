@@ -22,6 +22,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { proposeChannelBind } from "../../utils/propose-channel-bind.js";
 import { randomUUID } from "crypto";
 import { db, eq, and, gt, inArray, computeMessageHash } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
@@ -310,57 +311,9 @@ export const channelsRouter = router({
         reasoning: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
-      const proposalId = randomUUID();
-
-      const perm = await checkPermissionOrPropose({
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        subjectType: "channel",
-        action: "bind",
-        source: "intelligence",
-        data: {
-          id: proposalId,
-          channelId: input.channelId,
-          contextObjectType: input.contextObjectType,
-          contextObjectId: input.contextObjectId,
-          ...(input.branchPurpose !== undefined
-            ? { branchPurpose: input.branchPurpose }
-            : {}),
-          ...(input.externalChannelId !== undefined
-            ? { externalChannelId: input.externalChannelId }
-            : {}),
-        },
-        reasoning: input.reasoning,
-      });
-
-      if ("denied" in perm && perm.denied) {
-        return {
-          status: "denied" as const,
-          reason: perm.reason,
-        };
-      }
-
-      if ("proposalId" in perm) {
-        return {
-          status: "proposed" as const,
-          proposalId: perm.proposalId,
-          summary: perm.summary,
-          reasoning: perm.reasoning,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
-          message: `Proposal created — user must approve binding this channel to ${input.contextObjectType} ${input.contextObjectId}.`,
-        };
-      }
-
-      // Auto-approved (only if a workspace explicitly opted "channel.bind" into
-      // autoApproveFor). The bind itself is applied by the channel/bind executor.
-      return {
-        status: "approved" as const,
-        channelId: input.channelId,
-        message: "Channel bind auto-approved.",
-      };
-    }),
+    // Delegates to the shared proposeChannelBind helper — the SSOT for the
+    // proposal data shape, reused by the REST POST /channels/:channelId/bind door.
+    .mutation(async ({ input }) => proposeChannelBind(input)),
 
   /**
    * Send a message to an existing external-import channel (hot path).
