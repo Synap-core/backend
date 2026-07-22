@@ -162,6 +162,20 @@ const SHARED_ROLE_SLUGS = new Set([
   "competitor",
 ]);
 
+/**
+ * Shared ecosystem KINDS (not roles) that must stay pod-wide so a `require`-
+ * consumer adopts them by re-declaring the slug (fires a grant on the ONE
+ * pod-wide row) instead of forking a private copy. `platform` (content-os →
+ * social) is the first: a publishing-account vocabulary shared across the
+ * content domain. These behave like the shared roles for drift (rules (b)/(c)
+ * already cover any `scope: shared` profile), but the anti-fork guard (a) only
+ * knew about roles — a careless edit declaring `platform` as `scope: workspace`
+ * or `profileKind: role` would slip through (a) AND (b)/(c) (which skip non-
+ * shared scopes) and silently fork a second identity at apply. Rule (a2) closes
+ * that: a shared-kind slug must stay `scope: shared` and stay a kind.
+ */
+const SHARED_KIND_SLUGS = new Set(["platform"]);
+
 const isSharedScope = (scope?: string): boolean =>
   (scope ?? "").toLowerCase() === "shared";
 const isWorkspaceScope = (scope?: string): boolean => {
@@ -296,6 +310,29 @@ describe("workspace-templates — shared ecosystem role SSOT", () => {
     expect(violations, violations.join("\n")).toEqual([]);
   });
 
+  it("(a2) never declares a shared-KIND slug as a role or workspace-scoped profile", () => {
+    const violations: string[] = [];
+    for (const tpl of templates) {
+      const tplSlug = templateSlug(tpl);
+      for (const p of profilesOf(tpl)) {
+        if (!SHARED_KIND_SLUGS.has(p.slug)) continue;
+        if (normalizeKind(p.profileKind) !== "kind") {
+          violations.push(
+            `${tplSlug}: shared-kind slug '${p.slug}' declared as profileKind='role' (must be a kind)`
+          );
+        }
+        if (isWorkspaceScope(p.scope)) {
+          violations.push(
+            `${tplSlug}: shared-kind slug '${p.slug}' is workspace-scoped (scope='${
+              p.scope ?? "workspace"
+            }') — must be scope: shared so require-consumers reuse the pod-wide row`
+          );
+        }
+      }
+    }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
+
   it("(b) never declares the same shared-profile property with CONFLICTING definitions across templates (extras are legal overlays)", () => {
     // sharedSlug → propSlug → defFingerprint → templates carrying it.
     // Two fingerprints for one (sharedSlug, propSlug) = two templates fighting
@@ -352,8 +389,7 @@ describe("workspace-templates — shared ecosystem role SSOT", () => {
         for (const field of ROW_LEVEL_FIELDS) {
           const value = rowFieldValue(p, field);
           if (value === null) continue; // omitted = makes no claim
-          const perField =
-            perProfile.get(field) ?? new Map<string, string[]>();
+          const perField = perProfile.get(field) ?? new Map<string, string[]>();
           perField.set(value, [...(perField.get(value) ?? []), tplSlug]);
           perProfile.set(field, perField);
         }
@@ -403,8 +439,8 @@ describe("workspace-templates — shared ecosystem role SSOT", () => {
       .map(
         ([slug]) =>
           `shared role '${slug}' has NO template declaring a non-empty applicableKinds — ` +
-            `the pod-wide row would accept ANY entity kind as this role (FacetRepository.attach ` +
-            `skips the gate when applicableKinds is empty). The template that OWNS this role must declare it.`
+          `the pod-wide row would accept ANY entity kind as this role (FacetRepository.attach ` +
+          `skips the gate when applicableKinds is empty). The template that OWNS this role must declare it.`
       );
     expect(violations, violations.join("\n")).toEqual([]);
   });

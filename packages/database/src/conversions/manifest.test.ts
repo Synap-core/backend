@@ -161,11 +161,10 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
     }
   });
 
-  it("declares the five knowledge-family convertToFacet ops, all targeting item", () => {
+  it("declares the two remaining knowledge-family convertToFacet ops, all targeting item", () => {
+    // Decision 1 retired question/research/decision as convert ops — they stay
+    // primary KINDS. Only knowledge + user_observation still convert onto item.
     const expected = [
-      ["w4.convert.question", "question"],
-      ["w4.convert.research", "research"],
-      ["w4.convert.decision", "decision"],
       ["w4.convert.user_observation", "user_observation"],
       ["w4.convert.knowledge", "knowledge"],
     ] as const;
@@ -181,11 +180,26 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
     }
   });
 
+  it("retires question/research/decision convert ops as ledger keeps (Decision 1 — they stay kinds)", () => {
+    // opKeys retained per append-only discipline; op flipped convertToFacet→keep.
+    const retired = [
+      "w4.convert.question",
+      "w4.convert.research",
+      "w4.convert.decision",
+      "w5.reconvert.research-drift",
+    ] as const;
+    for (const opKey of retired) {
+      const op = CONVERSION_MANIFEST.ops.find((o) => o.opKey === opKey);
+      expect(op).toBeDefined();
+      expect(op?.op).toBe("keep");
+    }
+  });
+
   it("every w4 convertToFacet op has a non-empty propertyMapping with real slugs", () => {
     const w4Converts = CONVERSION_MANIFEST.ops.filter(
       (o) => o.op === "convertToFacet" && o.opKey.startsWith("w4.")
     );
-    expect(w4Converts.length).toBe(5);
+    expect(w4Converts.length).toBe(2);
     for (const op of w4Converts) {
       if (op.op !== "convertToFacet") continue;
       const mapping = op.propertyMapping ?? {};

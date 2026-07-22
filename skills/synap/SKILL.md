@@ -907,13 +907,13 @@ entity's `content`.
 
 You CAN store content you **hold** — you send it inline. Pick by what you have:
 
-| You have…                                                              | Do this                                                                                         | Result                                        |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| You have…                                                                                   | Do this                                                                                         | Result                                                               |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
-| Text you're **authoring as a note/idea** (not "a file") — a plan, a thought | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`   |
-| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article   | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes) |
-| A **large file on a local disk** you don't hold in context             | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have           | a `file` entity backed by stored bytes        |
-| Only a file's **name**, nothing else                                   | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                             |
+| Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
+| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
+| A **large file on a local disk** you don't hold in context                                  | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have          | a `file` entity backed by stored bytes                               |
+| Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
 **Store ≠ analyze.** `synap_store_file` / `synap_create_document` store content
 **deterministically — the file is NEVER read by an LLM.** Only fetch a document

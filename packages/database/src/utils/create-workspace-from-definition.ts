@@ -279,13 +279,7 @@ export interface WorkspaceDefinitionInput {
       cellProps?: Record<string, unknown>;
       surface?: {
         kind:
-          | "cell"
-          | "view"
-          | "entity"
-          | "document"
-          | "channel"
-          | "app"
-          | "url";
+          "cell" | "view" | "entity" | "document" | "channel" | "app" | "url";
         cellKey?: string;
         viewId?: string;
         viewName?: string;
@@ -298,12 +292,7 @@ export interface WorkspaceDefinitionInput {
         rendererType?: "native" | "external" | "iframe-srcdoc";
         external?: boolean;
         placement?:
-          | "main"
-          | "side"
-          | "floating"
-          | "modal"
-          | "popover"
-          | "embed";
+          "main" | "side" | "floating" | "modal" | "popover" | "embed";
         displayMode?: "compact" | "medium" | "full";
         props?: Record<string, unknown>;
         title?: string;
@@ -384,8 +373,6 @@ export interface CreateFromDefinitionOptions {
    * from the DB) and execution continues from the first incomplete step.
    */
   resumeFrom?: ResumeState;
-  /** Validate but do not write anything to the database. */
-  dryRun?: boolean;
 }
 
 // ─── Definition validation ────────────────────────────────────────────────────
@@ -441,6 +428,26 @@ function validateDefinition(
     );
   }
 
+  const errors = collectCrossRefErrors(def);
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Definition validation failed for '${label}' (${errors.length} error${errors.length > 1 ? "s" : ""}):\n` +
+        errors.map((e) => `  • ${e}`).join("\n")
+    );
+  }
+}
+
+/**
+ * Collect the cross-reference errors validated AFTER the Zod schema passes —
+ * unknown profile slugs referenced from views / entities / links, missing
+ * required fields, duplicate slugs. Returns [] when structurally sound.
+ *
+ * Extracted so the write-free `preflightWorkspaceFromDefinition` door reports
+ * the SAME structural failures the create door throws on — one source of truth,
+ * never a second re-implementation that could drift.
+ */
+function collectCrossRefErrors(def: WorkspaceDefinitionInput): string[] {
   const errors: string[] = [];
   const definedSlugs = new Set<string>();
 
@@ -494,12 +501,7 @@ function validateDefinition(
     }
   }
 
-  if (errors.length > 0) {
-    throw new Error(
-      `Definition validation failed for '${label}' (${errors.length} error${errors.length > 1 ? "s" : ""}):\n` +
-        errors.map((e) => `  • ${e}`).join("\n")
-    );
-  }
+  return errors;
 }
 
 export interface CreateFromDefinitionResult {
@@ -507,6 +509,213 @@ export interface CreateFromDefinitionResult {
   profileIds: string[];
   viewIds: string[];
   entityIds: string[];
+}
+
+/**
+ * Write-free preview of what `createWorkspaceFromDefinition` WOULD do to the pod
+ * catalog — computed by running the REAL create-path resolver
+ * (`resolveProfileForApply`) with `dryRun:true`, so a template author (notably
+ * an AI that can't dogfood) sees profileKind conflicts and other resolution
+ * failures at install time BEFORE anything is written.
+ *
+ * The shape mirrors `ReconcileReport` where the two overlap — the resolver is
+ * the ONE shared door, so `create`/`reused`/`conflicts`/`deferred` mean exactly
+ * what the create loop and the reconcile loop do with the same `resolution`.
+ */
+export interface WorkspacePreflightReport {
+  dryRun: true;
+  /**
+   * `true` when the apply would complete with NO skips/orphans: no structural
+   * validation errors, no profileKind conflicts, no unresolved entityLinks, no
+   * scope-orphaned views. `deferred` and `scopeConflicts` are ADVISORY (the
+   * apply still succeeds) and do NOT flip this false.
+   */
+  ok: boolean;
+  /** Structural / cross-reference errors (same set the create door throws on). */
+  validationErrors: string[];
+  profiles: {
+    /** Slugs that don't exist pod-wide → a fresh profile would be CREATED. */
+    create: string[];
+    /** Slugs resolving to an existing pod profile (grant / promote-and-share). */
+    reused: string[];
+    /**
+     * Declared slug matches an existing profile of a DIFFERENT profileKind
+     * (kind vs role). The create door SKIPS these entirely — never overlaid,
+     * never mutated. The load-bearing thing a template author must see.
+     */
+    conflicts: Array<{
+      slug: string;
+      existingKind: string;
+      declaredKind: string;
+    }>;
+    /**
+     * A same-slug profile exists but could not be safely promoted to shared
+     * (another user's private row, or the pod-wide seat is held by a
+     * soft-deleted shared row), so a DUPLICATE workspace-scoped profile would be
+     * created. Advisory — the apply still succeeds.
+     */
+    deferred: Array<{ slug: string; reason: string }>;
+    /**
+     * Declared `scope`/`entityScope` on a REUSED slug diverges from the live
+     * row. Advisory: the row is reused untouched, the declared scope NOT applied
+     * (the first creator owns placement/visibility).
+     */
+    scopeConflicts: Array<{
+      slug: string;
+      existingScope: string;
+      declaredScope: string;
+      existingEntityScope: string;
+      declaredEntityScope: "pod" | "workspace" | null;
+    }>;
+  };
+  /**
+   * entityLinks whose source or target profile would NOT resolve (because that
+   * profile is a kind CONFLICT and gets skipped) — the relation would be
+   * silently dropped at apply. `"source → target (type)"`.
+   */
+  entityLinks: { unresolved: string[] };
+  /**
+   * Structured views that declare a `scopeProfileSlug(s)` where NONE resolve
+   * (the scoping profile is a skipped conflict) — the view would be created
+   * scope-less (orphaned). View name.
+   */
+  views: { wouldOrphan: string[] };
+}
+
+/**
+ * Run the create-path resolver against the live pod catalog WITHOUT writing —
+ * validate structurally, then resolve every declared profile via the shared
+ * `resolveProfileForApply({ dryRun:true })` door, and derive which entityLinks
+ * and views would fail to resolve as a consequence.
+ *
+ * WRITE-FREE by construction: it creates no workspace/member/profile/view row.
+ * `resolveProfileForApply` gates every grant/promote/reactivate write behind
+ * `!opts.dryRun`, so with `dryRun:true` it issues reads only. To model a BRAND-
+ * NEW empty workspace (which is what a create provisions), the resolver is given
+ * a fresh random `workspaceId`: no grants and no workspace-scoped rows exist for
+ * it, exactly the lens a just-created workspace has — so system/shared profiles
+ * resolve pod-wide (reuse) precisely as they would on a real create.
+ */
+export async function preflightWorkspaceFromDefinition(opts: {
+  definition: WorkspaceDefinitionInput;
+  userId: string;
+}): Promise<WorkspacePreflightReport> {
+  const { userId } = opts;
+  const { randomUUID } = await import("crypto");
+
+  // Same field-alias normalization the create door applies.
+  const definition: WorkspaceDefinitionInput = {
+    ...opts.definition,
+    suggestedEntities:
+      opts.definition.suggestedEntities ?? opts.definition.seedEntities,
+  };
+
+  const report: WorkspacePreflightReport = {
+    dryRun: true,
+    ok: false,
+    validationErrors: [],
+    profiles: {
+      create: [],
+      reused: [],
+      conflicts: [],
+      deferred: [],
+      scopeConflicts: [],
+    },
+    entityLinks: { unresolved: [] },
+    views: { wouldOrphan: [] },
+  };
+
+  // ── 1. Structural validation (same rules the create door throws on) ─────────
+  const parsed = WorkspaceDefinitionSchema.safeParse(definition);
+  if (!parsed.success) {
+    report.validationErrors = [
+      "Schema error: " +
+        parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join(", "),
+    ];
+    return report; // definition shape is unreliable — cannot safely resolve
+  }
+  const crossRef = collectCrossRefErrors(definition);
+  if (crossRef.length > 0) {
+    report.validationErrors = crossRef;
+    return report; // slugs referenced don't exist — resolution would double-report
+  }
+
+  // ── 2. Resolve every profile write-free against the live pod catalog ────────
+  const dbConn = await getDb();
+  const profileRepo = new ProfileRepository(dbConn);
+  // Fresh empty-workspace lens: models exactly what a create provisions.
+  const workspaceId = randomUUID();
+  /** Slugs that WOULD land in the create loop's profileMap (everything but a conflict). */
+  const resolvedSlugs = new Set<string>();
+
+  for (const profile of definition.profiles ?? []) {
+    const scope = normalizeProfileScope(profile.scope);
+    const resolution = await resolveProfileForApply(profileRepo, {
+      slug: profile.slug,
+      declaredScope: scope,
+      declaredScopeExplicit: profile.scope !== undefined,
+      declaredEntityScope: profile.entityScope,
+      declaredKind: profile.profileKind,
+      workspaceId,
+      actorUserId: userId,
+      dryRun: true,
+    });
+
+    if (resolution.conflict) {
+      report.profiles.conflicts.push(resolution.conflict);
+      continue; // create door skips it → slug never enters profileMap
+    }
+    resolvedSlugs.add(profile.slug);
+    if (resolution.scopeConflict)
+      report.profiles.scopeConflicts.push(resolution.scopeConflict);
+    if (resolution.profile) {
+      report.profiles.reused.push(profile.slug);
+    } else if (resolution.promotionDeferred) {
+      report.profiles.deferred.push({
+        slug: profile.slug,
+        reason: resolution.deferredReason ?? "not-promotable",
+      });
+    } else {
+      report.profiles.create.push(profile.slug);
+    }
+  }
+
+  // ── 3. entityLinks whose endpoints won't resolve (skipped-conflict profile) ─
+  for (const link of definition.entityLinks ?? []) {
+    if (
+      !resolvedSlugs.has(link.sourceProfileSlug) ||
+      !resolvedSlugs.has(link.targetProfileSlug)
+    ) {
+      report.entityLinks.unresolved.push(
+        `${link.sourceProfileSlug} → ${link.targetProfileSlug} (${link.type})`
+      );
+    }
+  }
+
+  // ── 4. Views whose declared scope profile(s) won't resolve → scope-orphaned ─
+  for (const view of definition.views ?? []) {
+    const name = view.name ?? view.displayName ?? "(unnamed)";
+    const declaredScopeSlugs = [
+      view.scopeProfileSlug,
+      ...(view.scopeProfileSlugs ?? []),
+    ].filter(Boolean) as string[];
+    if (
+      declaredScopeSlugs.length > 0 &&
+      !declaredScopeSlugs.some((s) => resolvedSlugs.has(s))
+    ) {
+      report.views.wouldOrphan.push(name);
+    }
+  }
+
+  report.ok =
+    report.validationErrors.length === 0 &&
+    report.profiles.conflicts.length === 0 &&
+    report.entityLinks.unresolved.length === 0 &&
+    report.views.wouldOrphan.length === 0;
+
+  return report;
 }
 
 export async function createWorkspaceFromDefinition(
@@ -537,15 +746,6 @@ export async function createWorkspaceFromDefinition(
   // ── Validate before touching the DB ─────────────────────────────────────────
   const templateLabel = templateName ?? packageSlug ?? "unnamed";
   validateDefinition(definition, templateLabel);
-
-  if (opts.dryRun) {
-    return {
-      workspaceId: "dry-run",
-      profileIds: [],
-      viewIds: [],
-      entityIds: [],
-    };
-  }
 
   const dbConn = await getDb();
   const eventRepo = new EventRepository(sql);
@@ -736,11 +936,9 @@ export async function createWorkspaceFromDefinition(
       profileMap_[p.slug] = p.id;
       profileHintsMap_[p.slug] = {
         icon: (p.uiHints as Record<string, unknown> | null)?.icon as
-          | string
-          | undefined,
+          string | undefined,
         color: (p.uiHints as Record<string, unknown> | null)?.color as
-          | string
-          | undefined,
+          string | undefined,
       };
       profileIds_.push(p.id);
     }
@@ -1634,6 +1832,11 @@ export async function createWorkspaceFromDefinition(
   const finalSettingsPatch: Partial<WorkspaceSettings> = {
     provisioningStatus: "active",
     completedSteps,
+    // Clear any stale failure markers from a prior failed attempt this run just
+    // resumed past — nulled (not omitted) because mergeSettings' JSONB `||`
+    // merge overwrites keys but cannot delete them.
+    failedStep: null,
+    failedStepError: null,
   };
   if (resolvedLayout) {
     finalSettingsPatch.layout = resolvedLayout;

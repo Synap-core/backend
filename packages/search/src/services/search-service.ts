@@ -7,6 +7,8 @@ import { getTypesenseAdminClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
 import type { MultiSearchRequestSchema } from "../types/index.js";
 import { POD_WIDE_WORKSPACE_SCOPE } from "../utils/workspace-scope.js";
+import { getDb, eq, drizzleSql } from "@synap/database";
+import * as schema from "@synap/database/schema";
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -56,6 +58,14 @@ export class SearchService {
       "agents",
     ];
 
+    // Resolve the caller's member-workspace floor once, only when the `entities`
+    // collection is in play — the entity filter admits rows shared into a
+    // workspace the caller belongs to (membership/role-lens), closing the gap
+    // where a shared entity is in `entities.list` but not in Cmd-K / recall.
+    const visibleWorkspaceIds = collections.includes("entities")
+      ? await this.resolveVisibleWorkspaceIds(options.userId)
+      : [];
+
     // Build multi-search request
     const searches: MultiSearchRequestSchema["searches"] = collections.map(
       (collection) => {
@@ -63,7 +73,11 @@ export class SearchService {
           collection,
           q: options.query,
           query_by: this.getQueryFields(collection),
-          filter_by: this.buildFilter({ ...options, collection }),
+          filter_by: this.buildFilter({
+            ...options,
+            collection,
+            visibleWorkspaceIds,
+          }),
           sort_by: "_text_match:desc,updatedAt:desc",
           per_page: options.limit || 20,
           page: options.page || 1,
@@ -174,10 +188,22 @@ export class SearchService {
   ): Promise<SearchResponse> {
     const client = getTypesenseAdminClient();
 
+    // Entity floor parity (see `search`): resolve the caller's member workspaces
+    // so a membership/role-lens-shared entity is found. Skipped for the channelId
+    // short-circuit (its own multi-author gate) and non-entity collections.
+    const visibleWorkspaceIds =
+      collection === "entities" && !options.channelId
+        ? await this.resolveVisibleWorkspaceIds(options.userId)
+        : [];
+
     const searchParams: any = {
       q: query,
       query_by: this.getQueryFields(collection),
-      filter_by: this.buildFilter({ ...options, collection }),
+      filter_by: this.buildFilter({
+        ...options,
+        collection,
+        visibleWorkspaceIds,
+      }),
       sort_by: "_text_match:desc,updatedAt:desc",
       per_page: options.limit || 20,
       page: options.page || 1,
@@ -237,6 +263,67 @@ export class SearchService {
   }
 
   /**
+   * The caller's member-workspace floor for the ENTITY search filter — the set of
+   * workspace ids whose membership (or pod-visibility) grants a NON-OWNER read.
+   *
+   * MIRRORS `getUserWorkspaceIds` (packages/api/src/utils/workspace-membership.ts):
+   * the workspaces the user is a member of ∪ the pod-visible / pod-joinable
+   * workspaces. It is duplicated here (not imported) because `@synap/api` depends
+   * on `@synap/search` — importing upward would be circular. The search/DB parity
+   * tripwire (`search-db-visibility-parity.test.ts`) guards this mirror against
+   * drift with `getUserWorkspaceIds` + the DB `accessScopeWhere` floor.
+   */
+  private async resolveVisibleWorkspaceIds(userId: string): Promise<string[]> {
+    const db = await getDb();
+    const memberRows = await db.query.workspaceMembers.findMany({
+      where: eq(schema.workspaceMembers.userId, userId),
+      columns: { workspaceId: true },
+    });
+    const ids = new Set(memberRows.map((r) => r.workspaceId));
+    const podReadable = await db.query.workspaces.findMany({
+      where: drizzleSql`${schema.workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+      columns: { id: true },
+    });
+    for (const w of podReadable) ids.add(w.id);
+    return [...ids];
+  }
+
+  /**
+   * The per-collection visibility FLOOR clause.
+   *
+   * - `entities`: owner OR membership/role-lens share. Admits the caller's own
+   *   rows (`userId:=caller`) UNION rows shared into a workspace the caller is a
+   *   member of (`visibleInWorkspaces:=[...]` — the entity's own workspace + its
+   *   active facets, denormalized at index time). Mirrors the DB
+   *   `accessScopeWhere` floor's owner + workspace-membership + facetLens branches.
+   *
+   *   PHASE 2 (keyword half): this does NOT cover the EXPOSURE axis (project
+   *   `belongs_to_project` / `visible_to` client-portal edges) — those are not
+   *   denormalized into the index yet. The VECTOR half of recall post-filters with
+   *   the real `accessScopeWhere` floor and DOES cover exposure; Cmd-K keyword
+   *   results do not. Do not claim full parity here.
+   *
+   * - other collections: owner-only (`userId:=caller`) — their sharing model is
+   *   not denormalized; behaviour-preserving. Empty `visibleWorkspaceIds` also
+   *   falls back to owner-only (byte-for-byte the pre-parity filter).
+   */
+  private buildFloor(options: {
+    userId: string;
+    collection?: string;
+    visibleWorkspaceIds?: string[];
+  }): string {
+    const owner = `userId:=\`${options.userId}\``;
+    const wsIds = options.visibleWorkspaceIds ?? [];
+    if (options.collection === "entities" && wsIds.length > 0) {
+      const shared = `visibleInWorkspaces:=[${wsIds
+        .map((w) => `\`${w}\``)
+        .join(",")}]`;
+      return `(${owner} || ${shared})`;
+    }
+    return owner;
+  }
+
+  /**
    * Build filter for multi-tenancy and optional filters
    */
   private buildFilter(options: {
@@ -244,6 +331,7 @@ export class SearchService {
     workspaceId?: string;
     channelId?: string;
     collection?: string;
+    visibleWorkspaceIds?: string[];
     entityTypes?: string[];
     documentTypes?: string[];
     viewTypes?: string[];
@@ -257,7 +345,7 @@ export class SearchService {
       return `channelId:=\`${options.channelId}\``;
     }
 
-    const filters: string[] = [`userId:=\`${options.userId}\``];
+    const filters: string[] = [this.buildFloor(options)];
 
     if (options.workspaceId) {
       filters.push(

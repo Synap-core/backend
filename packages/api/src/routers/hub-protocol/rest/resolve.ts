@@ -14,7 +14,7 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { db } from "@synap/database";
 import { proposals, entities, views, documents } from "@synap/database/schema";
-import { eq } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull } from "drizzle-orm";
 import {
   hasScope,
   logger,
@@ -22,6 +22,8 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { resolveByName } from "../../../services/object-graph/graph-service.js";
+import { accessScopeWhere } from "../../../utils/project-scope.js";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 
 const ResolveByNameSchema = z
   .object({
@@ -130,6 +132,15 @@ export function registerResolveRoutes(app: HubHono): void {
       return c.json({ error: "id is required" }, 400);
     }
 
+    // Bind the resolve to the acting principal. Each probe below ANDs the
+    // acting user's visibility floor onto its `eq(table.id, id)` lookup — without
+    // it, resolve returned title + workspaceId for ANY row in the pod (a
+    // cross-tenant existence + metadata leak). Not-found (→ `unknown`) is the
+    // correct response for an id the caller cannot see.
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const userId = acting.userId;
+
     async function probe<T>(
       label: string,
       fn: () => Promise<T | undefined>
@@ -155,7 +166,14 @@ export function registerResolveRoutes(app: HubHono): void {
           workspaceId: proposals.workspaceId,
         })
         .from(proposals)
-        .where(eq(proposals.id, id))
+        // Mirror the canonical proposals floor (registry `workspace` rule):
+        // visible when the proposal's workspace is one the caller can see.
+        .where(
+          and(
+            eq(proposals.id, id),
+            userVisibleWhere(proposals.workspaceId, userId)
+          )
+        )
         .limit(1);
       return row;
     });
@@ -178,7 +196,19 @@ export function registerResolveRoutes(app: HubHono): void {
           type: entities.type,
         })
         .from(entities)
-        .where(eq(entities.id, id))
+        // Canonical DATA-table floor. Display read → facetLens honors role-as-lens.
+        .where(
+          and(
+            eq(entities.id, id),
+            accessScopeWhere({
+              workspaceIdColumn: entities.workspaceId,
+              entityIdColumn: entities.id,
+              ownerColumn: entities.userId,
+              userId,
+              facetLens: true,
+            })
+          )
+        )
         .limit(1);
       return row;
     });
@@ -201,7 +231,20 @@ export function registerResolveRoutes(app: HubHono): void {
           workspaceId: views.workspaceId,
         })
         .from(views)
-        .where(eq(views.id, id))
+        // Mirror the canonical views floor (viewVisibleWhere in views.ts):
+        // pod-personal (owner) OR workspace-membership. Views carry no facets.
+        .where(
+          and(
+            eq(views.id, id),
+            or(
+              and(isNull(views.workspaceId), eq(views.userId, userId)),
+              and(
+                isNotNull(views.workspaceId),
+                userVisibleWhere(views.workspaceId, userId)
+              )
+            )
+          )
+        )
         .limit(1);
       return row;
     });
@@ -223,7 +266,19 @@ export function registerResolveRoutes(app: HubHono): void {
           workspaceId: documents.workspaceId,
         })
         .from(documents)
-        .where(eq(documents.id, id))
+        // Canonical DATA-table floor (registry documents rule) — NO facetLens
+        // (documents have no facets; their id doesn't map to entity_facets).
+        .where(
+          and(
+            eq(documents.id, id),
+            accessScopeWhere({
+              workspaceIdColumn: documents.workspaceId,
+              entityIdColumn: documents.id,
+              ownerColumn: documents.userId,
+              userId,
+            })
+          )
+        )
         .limit(1);
       return row;
     });

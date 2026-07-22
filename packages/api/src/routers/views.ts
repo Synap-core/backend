@@ -65,10 +65,7 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../utils/user-visible-where.js";
-import {
-  projectMemberWhere,
-  projectLensWhere,
-} from "../utils/project-scope.js";
+import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
 
 function viewVisibleWhere(userId: string) {
   return or(
@@ -96,39 +93,26 @@ function viewLensWhere(
   )!;
 }
 
+// The entity floor for VIEW content — routed through the one door, identical to
+// `entities.ts` `entityLensWhere`, so a structured view (kanban/gallery/table/
+// feed/bento) resolves entities with the SAME visibility as `entities.list`:
+// role-as-lens (facetLens) + full exposure (project + visible_to). Previously
+// hand-rolled with owner-only pod-wide + project-only exposure, so a role-shared
+// entity was invisible in a co-member's view while showing in their list.
 function entityLensWhereForViews(
   userId: string,
   lens: string | null | undefined,
   includePodWide: boolean
 ) {
-  const userPodWide = and(
-    isNull(entities.workspaceId),
-    eq(entities.userId, userId)
-  );
-  // Project-membership is the 3rd access source in the user floor (mirrors
-  // entityVisibleWhere in entities.ts): a project member sees their project's
-  // entities ACROSS workspaces, regardless of the active workspace lens — so it
-  // is OR'd into the floor in every lens state, never gated by `lens`.
-  const projectFloor = projectMemberWhere(entities.id, userId);
-  if (lens === undefined) {
-    return or(
-      userPodWide,
-      and(
-        isNotNull(entities.workspaceId),
-        userVisibleWhere(entities.workspaceId, userId)
-      ),
-      projectFloor
-    )!;
-  }
-  if (lens === null) return or(userPodWide, projectFloor)!;
-  const workspaceBranch = workspaceLensWhere(
-    entities.workspaceId,
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
     userId,
-    lens
-  );
-  return includePodWide
-    ? or(userPodWide, workspaceBranch, projectFloor)!
-    : or(workspaceBranch, projectFloor)!;
+    workspaceLens: lens,
+    facetLens: true,
+    includeGlobalsInLens: includePodWide,
+  });
 }
 
 // Proper package imports
@@ -1126,8 +1110,7 @@ export const viewsRouter = router({
           visibleColumns: config.visibleColumns as string[] | undefined,
           columnOrder: config.columnOrder as string[] | undefined,
           columnWidths: config.columnWidths as
-            | Record<string, number>
-            | undefined,
+            Record<string, number> | undefined,
         }
       );
 
@@ -1373,8 +1356,7 @@ export const viewsRouter = router({
           config: input.config as Record<string, unknown> | undefined,
           embeddedViewIds: input.embeddedViewIds,
           schemaSnapshot: input.schemaSnapshot as
-            | Record<string, unknown>
-            | undefined,
+            Record<string, unknown> | undefined,
           snapshotUpdatedAt: input.snapshotUpdatedAt,
           // Merge the metadata patch onto existing metadata (never replace).
           metadata: input.metadata
@@ -1694,11 +1676,9 @@ export const viewsRouter = router({
       // 3. Build default blocks and create bento view
       const color =
         ((profile.uiHints as Record<string, unknown>)?.color as
-          | string
-          | undefined) ?? "#6366F1";
+          string | undefined) ?? "#6366F1";
       const rawIcon = (profile.uiHints as Record<string, unknown>)?.icon as
-        | string
-        | undefined;
+        string | undefined;
       const icon = rawIcon
         ? rawIcon
             .split("-")

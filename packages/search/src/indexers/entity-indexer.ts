@@ -32,6 +32,13 @@ interface Entity {
    * search doc is per-entity; visibility is enforced at query time elsewhere).
    */
   facetSlugs?: string[] | null;
+  /**
+   * Workspace ids of the entity's ACTIVE (non-deleted) facets — the role-as-lens
+   * workspaces that grant a non-owner read. Populated by IndexingService alongside
+   * `facetSlugs` (same batch pass, deletedAt-aware). Folded with the entity's own
+   * `workspaceId` into the `visibleInWorkspaces` field the query floor filters on.
+   */
+  facetWorkspaceIds?: string[] | null;
 }
 
 export class EntityIndexer extends BaseIndexer<Entity> {
@@ -52,6 +59,21 @@ export class EntityIndexer extends BaseIndexer<Entity> {
     // by email/discord-handle/nickname finds the person (dedup + recall).
     const searchAliases = collectSearchAliases(entity.properties);
 
+    // Visibility-parity floor: the workspace ids that grant a NON-OWNER read of
+    // this entity — its own `workspaceId` (when non-null; a pod-wide/null entity
+    // is owner-gated, not workspace-shared) ∪ the workspaces of its ACTIVE facets
+    // (role-as-lens). Deduped. Detach soft-deletes the facet → IndexingService only
+    // threads active facet workspaces here, so a revoked role drops its workspace
+    // on the re-index detach triggers. Mirrors the DB `accessScopeWhere` floor's
+    // workspace-membership + facetLens branches.
+    const visibleInWorkspaces = [
+      ...new Set(
+        [entity.workspaceId, ...(entity.facetWorkspaceIds ?? [])].filter(
+          (w): w is string => typeof w === "string" && w.length > 0
+        )
+      ),
+    ];
+
     const doc: SearchDocument = {
       id: entity.id,
       title: entity.title,
@@ -67,6 +89,8 @@ export class EntityIndexer extends BaseIndexer<Entity> {
         entity.facetSlugs && entity.facetSlugs.length > 0
           ? entity.facetSlugs
           : undefined,
+      visibleInWorkspaces:
+        visibleInWorkspaces.length > 0 ? visibleInWorkspaces : undefined,
       searchAliases: searchAliases.length > 0 ? searchAliases : undefined,
       createdAt: this.toTimestamp(entity.createdAt),
       updatedAt: this.toTimestamp(entity.updatedAt),

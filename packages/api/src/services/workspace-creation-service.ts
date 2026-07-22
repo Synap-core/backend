@@ -452,6 +452,55 @@ export async function createWorkspaceFromDefinitionIdempotent(
     createdBy = "user",
   } = input;
 
+  // Recovery: a workspace whose last provisioning attempt FAILED must be
+  // RESUMED from its completed steps, not reconciled. `reconcileWorkspaceIfStale`
+  // short-circuits when the version stamp is unchanged, so a same-version CLI/Hub
+  // reinstall of a failed workspace is otherwise a complete no-op that never
+  // advances the stuck workspace. This mirrors the tRPC door's failed-status
+  // resume (routers/workspaces.ts) — it triggers on STATUS not version, so it
+  // bypasses the stale-version short-circuit with no version-stamp change.
+  // Resume is step-granular idempotent (steps enter completedSteps only after
+  // fully done). Returns a result to return directly, or null when the workspace
+  // is not in a failed state (fall through to the normal reconcile path).
+  const resumeIfFailed = async (
+    workspaceId: string,
+    settings: WorkspaceSettings | null | undefined
+  ): Promise<CreateWorkspaceFromDefinitionResult | null> => {
+    if (settings?.provisioningStatus !== "failed") return null;
+    logger.warn(
+      {
+        userId,
+        workspaceId,
+        proposalId,
+        packageSlug,
+        failedStep: settings.failedStep,
+        completedSteps: settings.completedSteps,
+      },
+      "createFromDefinition (Hub): resuming failed workspace from completed steps"
+    );
+    const resumeResult = await createWorkspaceFromDefinition({
+      definition,
+      userId,
+      packageSlug,
+      packageVersion,
+      templateId,
+      templateName,
+      workspaceName,
+      workspaceType,
+      linkedAgentId,
+      createdBy,
+      resumeFrom: {
+        workspaceId,
+        completedSteps: settings.completedSteps ?? [],
+      },
+    });
+    return {
+      workspaceId: resumeResult.workspaceId,
+      created: true,
+      outcome: "created",
+    };
+  };
+
   // Serialise concurrent calls with the same (userId, proposalId) so a hung
   // retry can't race the original and double-create. No-op when proposalId
   // is missing.
@@ -476,6 +525,10 @@ export async function createWorkspaceFromDefinitionIdempotent(
         const ws = existingMembership.workspace;
         const currentSettings = (ws.settings ??
           null) as WorkspaceSettings | null;
+        // Failed prior attempt → resume from completed steps instead of
+        // reconciling (a same-version reconcile would short-circuit to no-op).
+        const resumed = await resumeIfFailed(ws.id, currentSettings);
+        if (resumed) return resumed;
         // W2b: bring an already-present workspace up to the FRESHEST template
         // (cache-first, hash-compared) instead of silently no-op-ing — this is
         // the Hub-door gap the tRPC door already had a (now-shared) fix for.
@@ -515,6 +568,10 @@ export async function createWorkspaceFromDefinitionIdempotent(
       const fallback = await findLegacyWorkspaceMatch(packageSlug, userId);
       if (fallback) {
         const currentSettings = fallback.settings;
+        // Failed prior attempt → resume from completed steps instead of
+        // reconciling (a same-version reconcile would short-circuit to no-op).
+        const resumed = await resumeIfFailed(fallback.id, currentSettings);
+        if (resumed) return resumed;
         const { reconciled, report } = await reconcileWorkspaceIfStale({
           workspaceId: fallback.id,
           packageSlug,

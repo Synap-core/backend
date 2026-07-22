@@ -295,6 +295,17 @@ app.use("*", async (c, next) => {
       403
     );
   }
+  // The Kratos public bootstrap (`/.ory/kratos/public/*` and the legacy
+  // `/self-service/*` alias) is PRE-authentication: an approved external app
+  // initializes a login flow and redeems a session-token-exchange code there
+  // BEFORE it has any Pod session token — requiring one is a chicken-and-egg
+  // that 401s the very first federated sign-in step. Kratos owns its own
+  // CSRF/flow protection, no Pod data is exposed, and an approved-app origin
+  // never receives ACA-Credentials so no ambient cookie can ride along. Exempt
+  // it, exactly as `/api/federation/exchange` is exempt.
+  const authBootstrapPath =
+    c.req.path.startsWith("/.ory/kratos/public/") ||
+    c.req.path.startsWith("/self-service/");
   // An owner-approved external origin is allowed to use an explicit Pod token
   // for normal APIs. It must never fall back to an ambient Kratos cookie:
   // CORS does not stop a cross-site request from being sent, only from being
@@ -305,6 +316,7 @@ app.use("*", async (c, next) => {
     !firstPartyOrigin &&
     !applicationExchangePath &&
     !applicationConnectionPath &&
+    !authBootstrapPath &&
     c.req.method !== "OPTIONS";
   if (requiresExplicitPodToken) {
     const tokenStatus = await validateExplicitPodSessionToken(
@@ -1466,14 +1478,7 @@ app.onError((err, c) => {
   // Return standardized error response
   // Cast statusCode to satisfy Hono's type requirements
   const statusCode = synapError.statusCode as
-    | 400
-    | 401
-    | 403
-    | 404
-    | 409
-    | 429
-    | 500
-    | 503;
+    400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
   return c.json(
     {
       error: synapError.name,

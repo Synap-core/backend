@@ -19,12 +19,14 @@ import {
   or,
   inArray,
   isNull,
+  isNotNull,
   desc,
   profileSlugScopeConditionFromRows,
   loadFacetSlugsBatch,
 } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import {
   getObjectGraph,
   connectionsToNeighbors,
@@ -37,6 +39,33 @@ import { relationsRouter } from "./relations.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+
+// Entity read floor for the graph's legacy bulk fetches (getNode/getSubgraph) —
+// the ONE door with role-as-lens (facetLens), so they agree with getFull and
+// entities.list. A bare `eq(entities.userId)` here was owner-only and hid
+// role-shared entities from co-members (NOT_FOUND on getNode, absent in getSubgraph).
+function graphEntityFloor(userId: string) {
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId,
+    facetLens: true,
+  });
+}
+
+// Relations floor mirroring the `relations` VisibilityRule (access/registry.ts):
+// workspace rows follow membership, NULL-workspace rows stay owner-floored — so a
+// role-shared entity's edges aren't dropped when authored by a teammate.
+function graphRelationsFloor(userId: string) {
+  return or(
+    and(
+      isNotNull(relations.workspaceId),
+      workspaceLensWhere(relations.workspaceId, userId)
+    ),
+    and(isNull(relations.workspaceId), eq(relations.userId, userId))
+  )!;
+}
 
 /**
  * Get a single node with full graph context
@@ -333,7 +362,19 @@ export const graphRouter = router({
       const ids = entityRows.map((e) => e.id);
       const relationRows = await db.query.relations.findMany({
         where: and(
-          eq(relations.userId, ctx.userId),
+          // Same floor as the `relations` VisibilityRule (access/registry.ts):
+          // workspace-scoped relations follow membership (collaboration data),
+          // pod-wide (NULL-workspace) relations stay owner-floored (no
+          // collaborative boundary). A bare `eq(userId, ctx.userId)` here was
+          // owner-only and rendered role-shared entities as DISCONNECTED nodes
+          // whenever the connecting relation was authored by a teammate.
+          or(
+            and(
+              isNotNull(relations.workspaceId),
+              workspaceLensWhere(relations.workspaceId, ctx.userId)
+            ),
+            and(isNull(relations.workspaceId), eq(relations.userId, ctx.userId))
+          ),
           or(
             inArray(relations.sourceEntityId, ids),
             inArray(relations.targetEntityId, ids)
@@ -357,6 +398,12 @@ export const graphRouter = router({
 
   /**
    * Get graph statistics for an entity or entire graph
+   *
+   * NOTE: unlike `getFull` above, the entity/relation counts here stay
+   * owner-scoped (`eq(userId, ctx.userId)`) rather than membership-floored.
+   * That's a deferred product decision (should workspace-shared stats count
+   * teammates' rows too?), not part of the getFull disconnected-node fix —
+   * left unchanged intentionally.
    */
   getStats: protectedProcedure
     .input(

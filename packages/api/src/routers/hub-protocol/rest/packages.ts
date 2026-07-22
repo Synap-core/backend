@@ -17,7 +17,10 @@ import {
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
-import type { WorkspaceDefinitionInput } from "@synap/database";
+import {
+  preflightWorkspaceFromDefinition,
+  type WorkspaceDefinitionInput,
+} from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 
@@ -238,6 +241,27 @@ export function registerPackagesRoutes(app: HubHono): void {
   // The hub app is mounted at /api/hub, so routes are registered RELATIVE
   // (like every sibling: /workspaces, /capabilities). An absolute
   // "/api/hub/packages/apply" here double-prefixes to /api/hub/api/hub/... and 404s.
+  // Write-free PREVIEW of the create path. A SEPARATE route (not `/apply?dryRun`)
+  // on purpose: `/apply` runs `checkPermissionOrPropose` — which can create a
+  // GOVERNANCE PROPOSAL and return 202 — plus dependency-resolve, compose, and
+  // post-workspace seeding, none of which a read-only preview may trigger.
+  // Overloading `/apply` with a flag would fork its whole body; a sibling that
+  // just runs the resolver pass keeps both doors honest. Read-only, so no
+  // permission gate (nothing is written) — matches the capabilities-reconcile
+  // `dryRun` precedent. Covers the TOP-LEVEL definition's create-path resolution
+  // (profiles / entityLinks / views); dependency-graph + compose-base preview
+  // stay with reconcile's own `dryRun` (a follow-up can thread this through
+  // `materializeWorkspaceCore` for full-fidelity dep/compose preview).
+  app.post("/packages/preflight", async (c) => {
+    const userId = c.get("userId");
+    const body = PackageApplySchema.parse(await c.req.json());
+    const report = await preflightWorkspaceFromDefinition({
+      definition: body as unknown as WorkspaceDefinitionInput,
+      userId,
+    });
+    return c.json(report, 200);
+  });
+
   app.post("/packages/apply", async (c) => {
     const userId = c.get("userId");
     const agentUserId = c.get("agentUserId") ?? undefined;
@@ -299,10 +323,7 @@ export function registerPackagesRoutes(app: HubHono): void {
     // `composed` branch (no such discriminator there) — the safe default,
     // meaning "seed fully" (never skipped).
     let postWorkspaceOutcome:
-      | "created"
-      | "reconciled"
-      | "unchanged"
-      | undefined;
+      "created" | "reconciled" | "unchanged" | undefined;
     try {
       const core = await materializeWorkspaceCore({
         definition: body as unknown as WorkspaceDefinitionInput,

@@ -188,9 +188,11 @@ export {
 // Export createWorkspaceFromDefinition utility
 export {
   createWorkspaceFromDefinition,
+  preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
   type CreateFromDefinitionOptions,
   type CreateFromDefinitionResult,
+  type WorkspacePreflightReport,
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
 export {

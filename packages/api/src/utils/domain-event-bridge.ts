@@ -17,6 +17,13 @@
  * - widget_definition.*.completed → widget_definition:changed
  * - focus_session.*.completed → focus_session:updated
  * - artifact.changed.completed → artifact:changed
+ * - entity_facet.*.completed → entity_facet:attached | entity_facet:updated | entity_facet:detached
+ *
+ * Room targeting — the unified room rule: an event's row carries a
+ * workspaceId → `workspace:<id>`; otherwise (pod-wide, e.g. a facet attached
+ * with no workspace lens) → `user:<ownerUserId>`. Pod-wide data is never
+ * broadcast to a `pod:<id>` room — it stays owner-only until a facet grants
+ * a workspace visibility.
  */
 
 import { randomUUID } from "crypto";
@@ -129,6 +136,21 @@ function mapToSocketEvent(
       event: "agent_run:updated",
       workspaceIdRequired: true,
     },
+    // Facets — attach/detach is how role-as-lens visibility is granted.
+    // workspaceId is optional: null is meaningful (pod-wide facet), and
+    // falls back to the owner's `user:<userId>` room via the unified rule.
+    "entity_facet.create.completed": {
+      event: "entity_facet:attached",
+      workspaceIdRequired: false,
+    },
+    "entity_facet.update.completed": {
+      event: "entity_facet:updated",
+      workspaceIdRequired: false,
+    },
+    "entity_facet.delete.completed": {
+      event: "entity_facet:detached",
+      workspaceIdRequired: false,
+    },
   };
   return m[eventType] ?? null;
 }
@@ -215,10 +237,14 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
   if (event.eventType.startsWith("document.")) {
     payloadData.documentId = event.subjectId;
   }
+  // Unified room rule: workspaceId present → workspace room. Otherwise
+  // (only reachable here when workspaceIdRequired is false, since the
+  // required case already returned above) → the owner's user room, so
+  // pod-wide events still reach the one client that can see them.
   const body = JSON.stringify({
     event: mapped.event,
     data: payloadData,
-    ...(workspaceId && { workspaceId }),
+    ...(workspaceId ? { workspaceId } : { userId: event.userId }),
   });
 
   fetch(url, {

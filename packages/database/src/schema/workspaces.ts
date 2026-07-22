@@ -718,15 +718,18 @@ export interface WorkspaceSettings {
   provisioningStatus?: "pending" | "active" | "failed";
   /**
    * The step at which provisioning failed.
-   * Only set when provisioningStatus === "failed".
+   * Only set when provisioningStatus === "failed"; explicitly `null` clears it
+   * on a successful (re)provision — the JSONB `||` merge overwrites the stale
+   * value with JSON null rather than leaving it dangling (it cannot delete keys).
    * Format: step-key (e.g. "profiles[company].create", "views[Home]", "entities")
    */
-  failedStep?: string;
+  failedStep?: string | null;
   /**
    * Human-readable error message from the failed step (truncated to 500 chars).
-   * Only set when provisioningStatus === "failed".
+   * Only set when provisioningStatus === "failed"; `null` clears it on success
+   * (same JSONB-merge reason as failedStep above).
    */
-  failedStepError?: string;
+  failedStepError?: string | null;
   /**
    * Step keys that completed successfully before the failure.
    * Populated in order: ["workspace", "member", "profiles", "relations", "templates",

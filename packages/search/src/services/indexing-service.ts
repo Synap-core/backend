@@ -442,9 +442,10 @@ export class IndexingService {
   }
 
   /**
-   * Batch-attach live facet (role-profile) slugs to entity rows for indexing.
-   * Uses the explicitly trusted unfiltered wrapper. Search documents are
-   * per-entity; user visibility is enforced by the query path.
+   * Batch-attach live facet (role-profile) slugs AND active-facet workspace ids
+   * to entity rows for indexing. Uses the explicitly trusted unfiltered wrapper
+   * for slugs. Search documents are per-entity; user visibility is enforced by
+   * the query path (owner + `visibleInWorkspaces` membership/role-lens floor).
    */
   private async attachFacetSlugs(
     db: Awaited<ReturnType<typeof getDb>>,
@@ -452,15 +453,65 @@ export class IndexingService {
   ): Promise<any[]> {
     if (entityRows.length === 0) return entityRows;
 
+    const ids = entityRows.map((e) => e.id);
     const slugsByEntity = await loadAllFacetSlugsBatchForTrustedIndexing(
       db,
-      entityRows.map((e) => e.id)
+      ids
     );
+    const facetWsByEntity = await this.loadActiveFacetWorkspaceIds(db, ids);
 
     return entityRows.map((e) => ({
       ...e,
       facetSlugs: slugsByEntity.get(e.id) ?? [],
+      facetWorkspaceIds: facetWsByEntity.get(e.id) ?? [],
     }));
+  }
+
+  /**
+   * Batch-load the workspace ids of each entity's ACTIVE (non-deleted) facets →
+   * Map<entityId, workspaceId[]>. The role-as-lens half of the visibility floor:
+   * a facet in workspace W grants W's members a read of the entity, which the
+   * search doc denormalizes into `visibleInWorkspaces`.
+   *
+   * `deletedAt IS NULL` is the ACCESS-REVOCATION GATE — detach soft-deletes the
+   * facet (never hard-deletes), so without this filter a revoked role would keep
+   * granting the lens forever. Facet attach/detach both re-index the parent entity
+   * (via `emitFacetSideEffects`), so a detach re-runs this pass and the field
+   * drops the workspace. Pod-wide (NULL-workspace) facets grant NO workspace lens
+   * — they are skipped — matching `facetLensedEntityIdsSubquery` (a NULL facet
+   * workspace never joins `workspace_members`).
+   */
+  private async loadActiveFacetWorkspaceIds(
+    db: Awaited<ReturnType<typeof getDb>>,
+    entityIds: string[]
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (entityIds.length === 0) return out;
+
+    const rows = await db
+      .select({
+        entityId: schema.entityFacets.entityId,
+        workspaceId: schema.entityFacets.workspaceId,
+      })
+      .from(schema.entityFacets)
+      .where(
+        and(
+          inArray(schema.entityFacets.entityId, entityIds),
+          isNull(schema.entityFacets.deletedAt)
+        )
+      );
+
+    for (const r of rows) {
+      // Skip pod-wide facets (NULL workspace) — they grant no workspace lens.
+      if (!r.workspaceId) continue;
+      const list = out.get(r.entityId);
+      if (list) {
+        if (!list.includes(r.workspaceId)) list.push(r.workspaceId);
+      } else {
+        out.set(r.entityId, [r.workspaceId]);
+      }
+    }
+    return out;
   }
 
   /**

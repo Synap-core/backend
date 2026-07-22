@@ -20,7 +20,6 @@ import {
   drizzleSql,
   profileSlugScopeConditionFromRows,
 } from "@synap/database";
-import { workspaceLensWhere } from "../../utils/user-visible-where.js";
 import {
   accessScopeWhere,
   projectLensWhere,
@@ -79,14 +78,23 @@ export async function structuredLookup(
         ownerColumn: entities.userId,
         userId,
       })
-    : workspaceLensWhere(
-        entities.workspaceId,
+    : accessScopeWhere({
+        // The non-project branch previously floored on bare
+        // `workspaceLensWhere(entities.workspaceId, ...)`, whose `userVisibleWhere`
+        // NULL clause treats `workspace_id IS NULL` as pod-wide-visible-to-ALL.
+        // For `entities`, a NULL workspace means owner-PRIVATE, so that leaked
+        // every user's pod-wide entities. accessScopeWhere's pod-personal branch
+        // gates NULL rows to their owner. `includeGlobalsInLens` reproduces the
+        // old `includeGlobals: true` (surface pod-wide globals under a lens);
+        // `facetLens` honors role-as-lens on this READ path.
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
         userId,
-        workspaceId ?? undefined,
-        {
-          includeGlobals: true,
-        }
-      );
+        workspaceLens: workspaceId ?? undefined,
+        includeGlobalsInLens: true,
+        facetLens: true,
+      });
 
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     userId,

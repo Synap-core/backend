@@ -176,21 +176,15 @@ export interface ConversionManifest {
   ops: ConversionOp[];
 }
 
-// Shared propertyMapping for the knowledge/research family's w4 conversion
-// and its w5 drift-repair re-run (same fields, fresh opKey — see the W5
-// section below). One literal object referenced by both ops so the two can
-// never silently drift apart.
+// Shared propertyMapping for the `knowledge` kind's w4 conversion and its w5
+// drift-repair re-run (same fields, fresh opKey — see the W5 section below).
+// One literal object referenced by both ops so the two can never silently
+// drift apart.
 const KNOWLEDGE_PROPERTY_MAPPING: Record<string, string> = {
   ek_type: "ek_type",
   ek_claim: "ek_claim",
   ek_why: "ek_why",
   ek_evidence: "ek_evidence",
-};
-const RESEARCH_PROPERTY_MAPPING: Record<string, string> = {
-  researchStatus: "researchStatus",
-  questionId: "questionId",
-  conclusion: "conclusion",
-  researchConfidence: "researchConfidence",
 };
 
 /**
@@ -447,19 +441,19 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w3c.keep.question",
       slug: "question",
-      note: "Knowledge-family kind; converted to an `item` role by w4.convert.question.",
+      note: "Knowledge-family kind; stays a primary KIND (Decision 1 — research-base.yaml + research templates declare it as a kind). The W4 convert into an `item` role was withdrawn — see the retired w4.convert.question.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.research",
       slug: "research",
-      note: "Knowledge-family kind; converted to an `item` role by w4.convert.research.",
+      note: "Knowledge-family kind; stays a primary KIND (Decision 1 — research-base.yaml + research templates declare it as a kind). The W4 convert into an `item` role was withdrawn — see the retired w4.convert.research.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.decision",
       slug: "decision",
-      note: "Knowledge-family kind; converted to an `item` role by w4.convert.decision.",
+      note: "Knowledge-family kind; stays a primary KIND (Decision 1 — research-base.yaml + research templates declare it as a kind). The W4 convert into an `item` role was withdrawn — see the retired w4.convert.decision.",
     },
     {
       op: "keep",
@@ -493,84 +487,61 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
 
     // ─── Wave 4: knowledge-family conversions ──────────────────────────────
     //
-    // Turns the five rigid knowledge-family kinds into roles on `item` (the
-    // universal capture kind seeded by w3a.seed.item, settled as the capture
-    // home by w3c.merge.note-capture-into-item). Ordered AFTER that merge —
-    // `item` must already be the canonical capture kind before anything else
-    // converts onto it.
+    // Turns the knowledge-family kinds that ARE roles-in-disguise into roles on
+    // `item` (the universal capture kind seeded by w3a.seed.item, settled as the
+    // capture home by w3c.merge.note-capture-into-item). Ordered AFTER that
+    // merge — `item` must already be the canonical capture kind before anything
+    // else converts onto it.
     //
-    // Common shape: base fields already present on every capture-ish profile
-    // (title, tags, description) are NOT remapped onto the facet — they carry
-    // the same names on `item` already (item inherited them via the note
-    // merge), so remapping would just duplicate them. Only the fields
-    // distinctive to each role are mapped, mirroring the w3c CRM entries'
+    // Only `knowledge` and `user_observation` convert here. The original W4
+    // intent also converted `question`, `research`, and `decision` onto `item`
+    // roles — those three convert ops are now RETIRED (see the retire block
+    // immediately below): Decision 1 keeps question/research/decision as primary
+    // KINDS, since research-base.yaml + the research workspace templates declare
+    // them as first-class kinds with their own lifecycle/graph. The convert
+    // entries are retained as ledger no-ops per the append-only opKey discipline
+    // (mirroring the w3a.keep.note supersession), not deleted.
+    //
+    // Common shape (for the two that DO convert): base fields already present on
+    // every capture-ish profile (title, tags, description) are NOT remapped onto
+    // the facet — they carry the same names on `item` already (item inherited
+    // them via the note merge), so remapping would just duplicate them. Only the
+    // fields distinctive to each role are mapped, mirroring the w3c CRM entries'
     // "role/companyId only, not title/email/phone" precedent.
-    //
-    // applicableKinds is deliberately minimal (['item']) for all five — e.g.
-    // a `question` or `decision` COULD plausibly also apply to `work` (a
-    // paper/project kind) or other future kinds, but that's a real product
-    // decision (does a decision-role attach to a work-item too?) that
-    // shouldn't be smuggled into a data-conversion manifest. Extend
-    // applicableKinds in a later wave once that's decided explicitly.
 
-    // question → item: the entry point of question → research → decision.
-    // questionStatus is the lifecycle field (open/answered/abandoned per its
-    // enum-ish default "open"); projectId is the thematic container so it
-    // seeds context_entity_id; answeredByDecisionId is a real cross-reference
-    // but the engine allows only one contextFromProperty per op, and projectId
-    // is the more load-bearing link (every question view is likely scoped by
-    // project), so answeredByDecisionId stays a plain mapped property.
+    // ── RETIRED (Decision 1): question / research / decision stay primary KINDS.
+    //
+    // These three convert ops were authored in W4 to fold the question →
+    // research → decision family into `item` roles. That intent is WITHDRAWN:
+    // research-base.yaml + the research workspace templates now declare
+    // question, research, and decision as first-class primary kinds, so
+    // converting them into `item` roles would contradict the SSOT.
+    //
+    // The ops were DORMANT — `runConversions()` is manual + dry-run-by-default
+    // and never auto-runs, so these never applied on any pod. Per the
+    // append-only ledger discipline the opKeys are NOT deleted; each is turned
+    // into a `keep` ledger no-op (applyOp returns {} — engine.ts) recording that
+    // the slug is deliberately kept as a primary kind. This mirrors how
+    // w3a.keep.note was superseded in place rather than removed. The
+    // corresponding `w3c.keep.{question,research,decision}` notes above are
+    // updated to match (they no longer claim a w4 conversion).
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w4.convert.question",
       slug: "question",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: {
-        questionStatus: "questionStatus",
-        askedAt: "askedAt",
-        answeredByDecisionId: "answeredByDecisionId",
-      },
-      statusFrom: "questionStatus",
-      contextFromProperty: "projectId",
+      note: "RETIRED (Decision 1): question stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
     },
-
-    // research → item: sources/findings/confidence, answers a question.
-    // researchStatus (ongoing/concluded-ish) is the status-like field.
-    // questionId is a real cross-reference (research answers a question) but,
-    // as with `question` above, projectId wins the single contextFromProperty
-    // slot as the more universally-scoped container; questionId stays mapped.
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w4.convert.research",
       slug: "research",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: RESEARCH_PROPERTY_MAPPING,
-      statusFrom: "researchStatus",
-      contextFromProperty: "projectId",
+      note: "RETIRED (Decision 1): research stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
     },
-
-    // decision → item: rationale/alternatives/lifecycle. decisionStatus
-    // (proposed/accepted/superseded/rejected) is the status-like field;
-    // projectId is the thematic container (context); supersededBy is a real
-    // decision→decision link but, same reasoning as above, stays a plain
-    // mapped property rather than contending for the one context slot.
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w4.convert.decision",
       slug: "decision",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: {
-        decisionStatus: "decisionStatus",
-        decidedAt: "decidedAt",
-        rationale: "rationale",
-        alternatives: "alternatives",
-        supersededBy: "supersededBy",
-      },
-      statusFrom: "decisionStatus",
-      contextFromProperty: "projectId",
+      note: "RETIRED (Decision 1): decision stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
     },
 
     // user_observation → item: AI-inferred observations about the user.
@@ -678,9 +649,8 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // ── W5: drift repair ─────────────────────────────────────────────────
     // Between the w4 conversions (2026-07-11 03:51) and the role-adapter
     // landing in EntityRepository.create, live doors (capture,
-    // remember_fact, research persistence) kept creating entities directly
-    // on the now-role knowledge/research profiles — 24 drifted rows on the
-    // perso pod. Same ops as w4 under fresh opKeys: convertToFacet is
+    // remember_fact) kept creating entities directly on the now-role
+    // knowledge profile. Same op as w4 under a fresh opKey: convertToFacet is
     // idempotent, so each re-run sweeps whatever drifted since the last
     // recorded run and no-ops otherwise.
     {
@@ -691,15 +661,16 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       applicableKinds: ["item"],
       propertyMapping: KNOWLEDGE_PROPERTY_MAPPING,
     },
+    // RETIRED (Decision 1): the research-drift reconvert is withdrawn alongside
+    // w4.convert.research — research stays a primary kind, so there is no
+    // now-role research profile to sweep drift onto. Kept as a ledger no-op per
+    // the append-only opKey discipline (never applied — runConversions is
+    // manual/dry-run-default).
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w5.reconvert.research-drift",
       slug: "research",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: RESEARCH_PROPERTY_MAPPING,
-      statusFrom: "researchStatus",
-      contextFromProperty: "projectId",
+      note: "RETIRED (Decision 1): research stays a primary kind — the W5 drift-reconvert onto an `item` role is withdrawn with w4.convert.research. Entry kept as a ledger no-op per append-only opKey discipline (never applied).",
     },
 
     // ─── Enterprise-OS Wave 1: campaign schema-drift repair ────────────────

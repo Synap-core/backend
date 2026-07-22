@@ -27,6 +27,7 @@ import {
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
 
 import {
@@ -615,10 +616,18 @@ export function registerEntitiesRoutes(app: HubHono): void {
         where: and(
           eq(entities.id, entityId),
           isNull(entities.deletedAt),
-          or(
-            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-            isNotNull(entities.workspaceId)
-          )
+          // READ — returns entity data. Canonical floor: pod-personal (owner) OR
+          // workspace-membership OR exposure OR role-as-lens. facetLens honors a
+          // role-shared entity on this display read. Replaces a hand-rolled
+          // `or(isNull∧owner, isNotNull(ws))` whose 2nd branch admitted EVERY
+          // workspaced row (membership only re-checked in a redundant 2nd query).
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+            facetLens: true,
+          })
         ),
       });
       if (!result) return c.body(null, 404);
@@ -1242,10 +1251,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
         where: and(
           eq(entities.id, entityId),
           isNull(entities.deletedAt),
-          or(
-            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-            isNotNull(entities.workspaceId)
-          )
+          // WRITE-TARGET existence gate — NO facetLens (a role-shared read lens
+          // must never authorize a write target). Canonical floor requires real
+          // workspace membership for a workspaced target; a subsequent
+          // verifyWorkspaceAccess re-checks it before the write lands.
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+          })
         ),
         columns: { id: true, workspaceId: true },
       });
@@ -1847,10 +1862,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
         where: and(
           eq(entities.id, entityId),
           isNull(entities.deletedAt),
-          or(
-            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-            isNotNull(entities.workspaceId)
-          )
+          // WRITE-TARGET existence gate (PATCH) — NO facetLens. Canonical floor
+          // requires real membership for a workspaced target; the write proceeds
+          // through the governed caller below.
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+          })
         ),
         columns: { id: true, workspaceId: true },
       });
@@ -2014,10 +2034,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
         where: and(
           eq(entities.id, entityId),
           isNull(entities.deletedAt),
-          or(
-            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-            isNotNull(entities.workspaceId)
-          )
+          // WRITE-TARGET existence gate (DELETE) — NO facetLens. Canonical floor
+          // requires real membership for a workspaced target; the delete proceeds
+          // through the governed caller below.
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+          })
         ),
         columns: { id: true, workspaceId: true },
       });
@@ -2157,10 +2182,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
         where: and(
           eq(entities.id, entityId),
           isNull(entities.deletedAt),
-          or(
-            and(isNull(entities.workspaceId), eq(entities.userId, authUserId)),
-            isNotNull(entities.workspaceId)
-          )
+          // READ — returns the entity's facets for display. facetLens honors a
+          // role-shared entity on this display read. Canonical floor adds the
+          // workspace-membership check the hand-rolled `isNotNull(ws)` omitted.
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId: authUserId,
+            facetLens: true,
+          })
         ),
         columns: { id: true, workspaceId: true },
       });

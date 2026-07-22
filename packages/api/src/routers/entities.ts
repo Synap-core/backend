@@ -101,7 +101,7 @@ const logger = createLogger({ module: "entities-router" });
 // here converges entities onto the SAME resolver documents/the registry use —
 // behaviour-identical to the prior hand-rolled union (proven equivalent: same
 // three branches, same default EXPOSURE_RELATION_TYPES whitelist).
-function entityVisibleWhere(userId: string) {
+function entityWriteVisibleWhere(userId: string) {
   return accessScopeWhere({
     workspaceIdColumn: entities.workspaceId,
     entityIdColumn: entities.id,
@@ -113,7 +113,7 @@ function entityVisibleWhere(userId: string) {
 // READ variant of the entity floor — the SAME resolver as above PLUS the
 // role-as-lens branch (a pod-wide entity is visible when it carries a facet in a
 // workspace the caller is a member of). Used ONLY on READ paths (get/list/search/
-// context); the mutation & dedup EXISTENCE gates keep `entityVisibleWhere` (no
+// context); the mutation & dedup EXISTENCE gates keep `entityWriteVisibleWhere` (no
 // facetLens) so that widening what a member can SEE never widens what they can
 // TARGET for a write — write-targetability stays exactly as before.
 function entityReadVisibleWhere(userId: string) {
@@ -600,7 +600,7 @@ export const entitiesRouter = router({
    *
    * ONE grouped query over `entity_facets ⋈ entities`, under the SAME lens as
    * the entity list: the facet visibility predicate (`facetVisibilityConditions`)
-   * AND the entity floor (`entityVisibleWhere`, the userVisibleWhere-based
+   * AND the entity floor (`entityWriteVisibleWhere`, the userVisibleWhere-based
    * access scope), plus an optional project narrow. A NULL facet status is its
    * own group (the kanban "no status" column).
    */
@@ -985,7 +985,7 @@ export const entitiesRouter = router({
                     where: and(
                       eq(entities.id, identity.entity.id),
                       isNull(entities.deletedAt),
-                      entityVisibleWhere(ctx.userId)
+                      entityWriteVisibleWhere(ctx.userId)
                     ),
                   })
                 : undefined;
@@ -1140,7 +1140,7 @@ export const entitiesRouter = router({
                 where: and(
                   eq(entities.id, matchedId),
                   isNull(entities.deletedAt),
-                  entityVisibleWhere(ctx.userId)
+                  entityWriteVisibleWhere(ctx.userId)
                 ),
               });
               logger.info(
@@ -1674,7 +1674,7 @@ export const entitiesRouter = router({
          * Project LENS (project-centric-scope) — narrow to one project's data.
          * In the INPUT (not a header) so it lands in the React Query key and the
          * cache separates per project. A lens only narrows: access is enforced by
-         * the floor (`entityVisibleWhere`, which already grants project members);
+         * the floor (`entityWriteVisibleWhere`, which already grants project members);
          * a forged id can never widen.
          */
         projectId: z.string().uuid().optional(),
@@ -1736,7 +1736,7 @@ export const entitiesRouter = router({
       }
       // Visibility is enforced at QUERY level — `list` is a `podProcedure`, so there
       // is NO procedure-level workspace gate. `workspaceScopeCondition` delegates to
-      // `entityLensWhere`/`entityVisibleWhere`, which restrict rows to the user floor
+      // `entityLensWhere`/`entityWriteVisibleWhere`, which restrict rows to the user floor
       // (workspace membership + pod-personal + project membership). `userId` is a
       // security predicate there, not mere attribution.
       const conditions: any[] = [isNull(entities.deletedAt)];
@@ -2391,7 +2391,7 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.id),
           isNull(entities.deletedAt),
-          entityVisibleWhere(ctx.userId)
+          entityWriteVisibleWhere(ctx.userId)
         ),
         columns: { id: true, workspaceId: true, type: true },
       });
@@ -2737,7 +2737,7 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.entityId),
           isNull(entities.deletedAt),
-          entityVisibleWhere(ctx.userId)
+          entityWriteVisibleWhere(ctx.userId)
         ),
         columns: { id: true, workspaceId: true, type: true, title: true },
       });
@@ -2756,7 +2756,7 @@ export const entitiesRouter = router({
           where: and(
             eq(entities.id, input.contextEntityId),
             isNull(entities.deletedAt),
-            entityVisibleWhere(ctx.userId)
+            entityWriteVisibleWhere(ctx.userId)
           ),
           columns: { title: true },
         });
@@ -3311,7 +3311,7 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.id),
           isNull(entities.deletedAt),
-          entityVisibleWhere(ctx.userId)
+          entityWriteVisibleWhere(ctx.userId)
         ),
         columns: { id: true, workspaceId: true, correlationId: true },
       });
@@ -3479,7 +3479,7 @@ export const entitiesRouter = router({
             where: and(
               eq(entities.id, entityId),
               isNull(entities.deletedAt),
-              entityVisibleWhere(ctx.userId)
+              entityWriteVisibleWhere(ctx.userId)
             ),
             columns: { id: true, workspaceId: true, correlationId: true },
           });
@@ -3955,15 +3955,47 @@ export const entitiesRouter = router({
         profilesCreated++;
       }
 
-      // 2. Check for existing entities (idempotency by profileSlug + title).
-      // Scope to the ambient workspace when present (identical to before); on the
-      // pod-wide path check pod-wide rows (workspace_id IS NULL).
+      // 2. Resolve per-slug placement via the ONE door, UP FRONT (cached per
+      // slug). An explicit ambient workspace PINS every row to it (rung 1 —
+      // identical to the pre-relax behavior, no extra DB query); with no
+      // ambient, a pod kind lands pod-wide and a workspace-scoped kind follows
+      // its ontology (rung 2) — which can resolve to a concrete workspace even
+      // on the headerless path. Resolving this BEFORE the idempotency check
+      // below (rather than lazily per-row during creation) lets that check key
+      // on where each slug will actually land.
+      for (const entity of input.entities) {
+        if (placementCache.has(entity.profileSlug)) continue;
+        const placement = await resolveWorkspacePlacement(database, {
+          userId: ctx.userId,
+          kindSlug: entity.profileSlug,
+          entityScope:
+            (entityScopeCache.get(entity.profileSlug) as
+              "pod" | "workspace" | null) ?? null,
+          explicitWorkspaceId: ctx.workspaceId ?? undefined,
+          ambientWorkspaceId: ctx.workspaceId,
+        });
+        placementCache.set(entity.profileSlug, placement.workspaceId);
+      }
+
+      // 3. Check for existing entities (idempotency by profileSlug + title),
+      // scoped to the RESOLVED placement workspace per slug — not
+      // unconditionally `isNull(workspaceId)`. On the headerless path a
+      // workspace-scoped kind can resolve (rung 2 ontology) into a concrete
+      // workspace; keying the dedup check on `isNull` alone missed those rows
+      // entirely, so a re-run created a duplicate instead of matching the one
+      // already placed there. Callers that pass an explicit ctx.workspaceId are
+      // unaffected — every slug still resolves to that same pinned workspace.
+      const placedWorkspaceIds = new Set(placementCache.values());
       const existingEntities = await database.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          ctx.workspaceId
-            ? eq(entities.workspaceId, ctx.workspaceId)
-            : isNull(entities.workspaceId),
+          or(
+            ...Array.from(placedWorkspaceIds).map((wsId) =>
+              wsId
+                ? eq(entities.workspaceId, wsId)
+                : isNull(entities.workspaceId)
+            )
+          ),
           inArray(
             entities.type,
             input.entities.map((e) => e.profileSlug)
@@ -3971,19 +4003,24 @@ export const entitiesRouter = router({
         ),
       });
 
-      const existingByKey = new Map<string, string>(); // "slug:title" → entityId
+      const existingByKey = new Map<string, string>(); // "slug:title:workspaceId" → entityId
       for (const e of existingEntities) {
-        existingByKey.set(`${e.type}:${e.title}`, e.id);
+        existingByKey.set(
+          `${e.type}:${e.title}:${e.workspaceId ?? "null"}`,
+          e.id
+        );
       }
 
-      // 3. Create missing entities
+      // 4. Create missing entities
       const entityIds: Record<string, string> = {};
       const errors: Array<{ refKey: string; error: string }> = [];
       let created = 0;
       let skipped = 0;
 
       for (const entity of input.entities) {
-        const cacheKey = `${entity.profileSlug}:${entity.title}`;
+        const placedWorkspaceId =
+          placementCache.get(entity.profileSlug) ?? null;
+        const cacheKey = `${entity.profileSlug}:${entity.title}:${placedWorkspaceId ?? "null"}`;
 
         // Already exists → skip
         if (existingByKey.has(cacheKey)) {
@@ -3996,25 +4033,6 @@ export const entitiesRouter = router({
           const profileId = profileCache.get(entity.profileSlug);
           if (!profileId) {
             throw new Error(`Profile ${entity.profileSlug} not in cache`);
-          }
-
-          // Per-row placement via the ONE door (cached per slug). An explicit
-          // ambient workspace PINS every row to it (rung 1 — identical to the
-          // pre-relax behavior, no extra DB query); with no ambient, a pod kind
-          // lands pod-wide and a workspace-scoped kind follows its ontology.
-          let placedWorkspaceId = placementCache.get(entity.profileSlug);
-          if (placedWorkspaceId === undefined) {
-            const placement = await resolveWorkspacePlacement(database, {
-              userId: ctx.userId,
-              kindSlug: entity.profileSlug,
-              entityScope:
-                (entityScopeCache.get(entity.profileSlug) as
-                  "pod" | "workspace" | null) ?? null,
-              explicitWorkspaceId: ctx.workspaceId ?? undefined,
-              ambientWorkspaceId: ctx.workspaceId,
-            });
-            placedWorkspaceId = placement.workspaceId;
-            placementCache.set(entity.profileSlug, placedWorkspaceId);
           }
 
           const result = await entityRepo.create(

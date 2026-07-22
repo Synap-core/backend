@@ -263,11 +263,27 @@ export class FacetRepository extends BaseRepository<
           isNull(entityFacets.deletedAt)
         )
       )
-      .returning({ id: entityFacets.id });
+      .returning({
+        id: entityFacets.id,
+        entityId: entityFacets.entityId,
+        workspaceId: entityFacets.workspaceId,
+      });
 
     if (result.length === 0) return; // already detached/gone — idempotent
 
-    await this.emitCompleted("delete", { id: facetId }, userId);
+    // Carry entityId + workspaceId so the realtime bridge can target the room
+    // (`workspace:<id>` or `user:<owner>`) AND the browser can invalidate
+    // `entities.get(entityId)` / `entities.list(workspaceId)` — without them a
+    // REVOKED role would not disappear live (the revocation case).
+    await this.emitCompleted(
+      "delete",
+      {
+        id: facetId,
+        entityId: result[0].entityId,
+        workspaceId: result[0].workspaceId,
+      },
+      userId
+    );
   }
 
   /** Update a facet's status/properties. */

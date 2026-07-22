@@ -437,13 +437,14 @@ export function accessScopeWhere(args: {
     // entity that carries a facet in that workspace — not just entities whose own
     // `workspace_id` matches. ORed narrow, still ANDed with the membership-gated
     // floor, so it can only surface an entity the floor already admits.
-    workspaceNarrow =
-      facetLens && workspaceLens !== null
-        ? or(
-            lensNarrow,
-            facetInWorkspaceLensWhere(entityIdColumn, userId, workspaceLens)
-          )!
-        : lensNarrow;
+    // `workspaceLens` is neither undefined nor null here (handled above), so the
+    // facet-aware narrow applies whenever facetLens is on.
+    workspaceNarrow = facetLens
+      ? or(
+          lensNarrow,
+          facetInWorkspaceLensWhere(entityIdColumn, userId, workspaceLens)
+        )!
+      : lensNarrow;
   }
 
   // ── Project/anchor lens (optional narrow) ─────────────────────────────────

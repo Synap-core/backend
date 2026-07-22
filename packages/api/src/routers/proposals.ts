@@ -1526,7 +1526,22 @@ export const proposalsRouter = router({
          */
         workspaceId: z.string().nullish(),
         targetType: z
-          .enum(["document", "entity", "whiteboard", "view", "profile"])
+          // Widened beyond the original 5 materialized-object types to also
+          // accept the config-object proposal targets (automation / playbook /
+          // skill). Those rows are ALREADY stored — automation-governance and
+          // permission-check write `targetType: singularType` — this filter
+          // widening just unblocks querying them (e.g. the loops-map diff
+          // overlay). Pure filter widening; no downstream code assumes only 5.
+          .enum([
+            "document",
+            "entity",
+            "whiteboard",
+            "view",
+            "profile",
+            "automation",
+            "playbook",
+            "skill",
+          ])
           .optional(),
         targetId: z.string().optional(),
         /** Filter to proposals originating from a specific chat thread */
@@ -2327,8 +2342,7 @@ export const proposalsRouter = router({
           deps: approveDeps,
         });
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : String(err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
         await db
           .update(proposals)
           .set({

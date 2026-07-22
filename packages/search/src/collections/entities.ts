@@ -22,6 +22,21 @@ export const entitiesCollectionSchema: CollectionCreateSchema = {
     // Kind+Facets: role-profile slugs attached to the entity (Wave 3B). Additive
     // field — CollectionService.reconcileNewFields adds it to existing pods.
     { name: "facetSlugs", type: "string[]", facet: true, optional: true },
+    // Visibility parity (search/DB floor): the workspace ids that grant a NON-OWNER
+    // read of this entity via membership OR role-as-lens — the entity's own
+    // `workspaceId` (when non-null) ∪ the workspace ids of its ACTIVE (non-deleted)
+    // facets. Populated by EntityIndexer.toSearchDocument from the facet workspaces
+    // threaded through IndexingService. The query-time entity floor admits
+    // `visibleInWorkspaces:=[<caller's member workspaces>]` so a shared entity is
+    // found in Cmd-K / recall, mirroring the DB `accessScopeWhere` floor. Additive
+    // field — CollectionService.reconcileNewFields adds it to existing pods; a
+    // one-time fullReindex("entities") backfills it on deploy.
+    {
+      name: "visibleInWorkspaces",
+      type: "string[]",
+      facet: true,
+      optional: true,
+    },
     { name: "projectId", type: "string", facet: true, optional: true },
     { name: "tags", type: "string[]", facet: true, optional: true },
     { name: "status", type: "string", facet: true, optional: true },

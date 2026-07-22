@@ -10,6 +10,7 @@
 
 import {
   db,
+  entities,
   entityVectors,
   eq,
   and,
@@ -23,6 +24,7 @@ import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 
 // Degradation is graceful but not invisible: the `source` flag signals a
 // vector-skip at the API boundary, and these debug logs let a pod operator see
@@ -180,8 +182,12 @@ export async function hybridRecall(
       // AND the project lens onto the vector query so the nearest-neighbour scan
       // returns project rows directly (no post-filter starvation). inArray over
       // OUR table is bounded by the project size.
+      // Visibility parity: the owner-only floor (`entityVectors.userId = userId`)
+      // is RELAXED here so candidates aren't pre-limited to the owner — a
+      // membership/role-lens/exposure-shared entity must be reachable. Access is
+      // NOT dropped: the candidate union is INTERSECTED with the real DB entity
+      // floor (`accessScopeWhere`) below, so no non-visible row survives fusion.
       const conds = [
-        drizzleSql`${entityVectors.userId} = ${userId}`,
         // Noise floor: drop candidates below MIN_VECTOR_SIMILARITY BEFORE they
         // can occupy a `widen` slot or reach fusion/slice.
         drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector <= ${MAX_VECTOR_DISTANCE}`,
@@ -238,6 +244,39 @@ export async function hybridRecall(
     }
   } catch (err) {
     logger.debug({ err }, "Typesense recall failed");
+  }
+
+  // ── Access-floor intersect (visibility parity) ──────────────────────────
+  // The vector half is no longer owner-pre-limited, and the keyword half's index
+  // floor omits the EXPOSURE axis — so intersect the candidate UNION with the
+  // REAL DB entity floor: `accessScopeWhere` with `facetLens`, the SAME resolver
+  // `entities.list` reads through (owner + workspace-membership + role-as-lens +
+  // exposure via belongs_to_project/visible_to). EXACT floor reuse — no
+  // `entity_vectors` schema change; RRF fuses only the visible survivors. This
+  // also gives the keyword half exposure-axis coverage the index alone lacks.
+  const floorUnion = [...new Set([...vectorIds, ...keywordIds])];
+  if (floorUnion.length > 0) {
+    const visibleRows = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(
+        and(
+          inArray(entities.id, floorUnion),
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+            facetLens: true,
+          })
+        )
+      );
+    const visible = new Set(visibleRows.map((r) => r.id));
+    vectorIds = vectorIds.filter((id) => visible.has(id));
+    keywordIds = keywordIds.filter((id) => visible.has(id));
+  } else {
+    vectorIds = [];
+    keywordIds = [];
   }
 
   // ── Facet post-constraint (role scope) ──────────────────────────────────
