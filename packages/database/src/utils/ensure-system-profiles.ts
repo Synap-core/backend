@@ -642,7 +642,14 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       {
         slug: "ek_claim",
         valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 1000 },
+        // 8000 (== the smart-capture SMART_TEXT_MAX ceiling), not 1000: a real
+        // `lesson`/`decision` claim routinely runs past a single line, and a
+        // whole capture already tops out at 8000 chars, so a claim can never
+        // sensibly exceed that. The old 1000 hard-failed durable captures
+        // mid-flight ("String length 1404 > maximum 1000"). ek_why=5000 /
+        // ek_evidence=2000 keep their smaller bounds — the CLAIM is the primary
+        // body and gets the most headroom.
+        constraints: { maxLength: 8000 },
         uiHints: {
           label: "Claim",
           inputType: "text",

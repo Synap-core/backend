@@ -422,7 +422,48 @@ export const tools = {
             },
             workspaceId: { type: "string" },
           },
-          required: ["title", "workspaceId"],
+          required: ["title"],
+        },
+      },
+      {
+        name: "synap_store_file",
+        description:
+          "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a large file sitting on a local disk, that's the CLI `synap upload` (an agent can't stream bytes it doesn't hold). For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB via this inline path.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            filename: {
+              type: "string",
+              description: "The file name (e.g. 'report.csv', 'diagram.png').",
+            },
+            mimeType: {
+              type: "string",
+              description:
+                "The content type (e.g. 'text/csv', 'image/png', 'application/pdf'). Must be an allowed type.",
+            },
+            content: {
+              type: "string",
+              description:
+                "UTF-8 TEXT content to store as-is. Mutually exclusive with `contentBase64`.",
+            },
+            contentBase64: {
+              type: "string",
+              description:
+                "Base64-encoded BINARY content. Mutually exclusive with `content`.",
+            },
+            title: {
+              type: "string",
+              description:
+                "Optional human-facing title (defaults to filename).",
+            },
+            workspaceId: { type: "string" },
+            attachToEntityId: {
+              type: "string",
+              description:
+                "Optional UUID of an EXISTING entity — attach the stored blob to it as provenance instead of creating a new `file` entity.",
+            },
+          },
+          required: ["filename", "mimeType"],
         },
       },
       {

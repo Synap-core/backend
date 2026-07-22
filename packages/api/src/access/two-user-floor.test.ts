@@ -41,7 +41,10 @@ import {
   cellInstances,
   artifacts,
   relations,
+  entities,
+  documents,
 } from "@synap/database/schema";
+import { accessScopeWhere } from "../utils/project-scope.js";
 import { AccessContext, scopedDb } from "./index.js";
 // withVisibility is the internal composer (not part of the public barrel) — the
 // same one ScopedDb.findMany uses to AND the floor onto a caller's `where`.
@@ -205,6 +208,84 @@ describe("two-user floor — relations share only across a workspace boundary", 
     expect(qA.params).not.toContain(B);
     expect(qB.params).toContain(B);
     expect(qB.params).not.toContain(A);
+  });
+});
+
+describe("two-user floor — role-as-lens (facet) share grant on entities", () => {
+  // Membership → Visibility: a pod-wide entity becomes visible to a workspace's
+  // members once it carries a facet there. The `entities` floor opts into
+  // `facetLens`, so its predicate gains a branch keyed on entity_facets ⋈
+  // workspace_members — bound to the CALLER, never a row owner (widening-only).
+  it("entities floor gains a facet⋈membership branch, bound to the caller", () => {
+    const qA = compile(scopedDb(accessA).predicate(entities)!);
+    const qB = compile(scopedDb(accessB).predicate(entities)!);
+
+    // The role-as-lens branch is present: an entity visible because it carries a
+    // facet in a workspace the caller is a member of.
+    expect(qA.sql).toContain("entity_facets");
+    expect(qA.sql).toContain("workspace_members");
+    // Symmetric: A's branch keys membership on A, B's on B — neither pins a row
+    // to a single owner, so it can only ADD a role-shared entity for a member.
+    expect(qA.params).toContain(A);
+    expect(qB.params).toContain(B);
+    expect(qA.params).not.toContain(B);
+    expect(qB.params).not.toContain(A);
+    // The private floor still stands: an un-faceted NULL-workspace entity is
+    // admitted only by the pod-personal owner branch (user_id = caller).
+    expect(qA.sql).toContain('"entities"."user_id" = $');
+    // REVOCATION GATE: the facet subquery filters soft-deleted rows, so a
+    // detached (revoked) role stops granting the lens. Without this a revoked
+    // teammate keeps read access forever.
+    expect(qA.sql).toContain('"entity_facets"."deleted_at" is null');
+  });
+
+  it("browsing a workspace surfaces entities role-attached there (facet-aware lens)", () => {
+    const qA = compile(
+      scopedDb(accessA.withLens("ws-shared")).predicate(entities)!
+    );
+    // The workspace narrow is facet-aware: it ORs in entities carrying a facet in
+    // the lens workspace, so a pod-wide entity with a `ws-shared` role surfaces
+    // when browsing `ws-shared` (not only entities whose own workspace_id matches).
+    expect(qA.sql).toContain("entity_facets");
+    expect(qA.params).toContain("ws-shared");
+    // Still ANDed with the membership-gated floor — the caller's id is bound, so a
+    // forged lens can never widen past what the floor already admits.
+    expect(qA.params).toContain(A);
+  });
+
+  it("the facet-aware LENS narrow is membership-gated on the LENS workspace (no cross-boundary leak)", () => {
+    // Regression lock: browsing workspace "ws-x" with facetLens must require the
+    // caller be a MEMBER of ws-x for the facet narrow to surface a role-shared
+    // entity — NOT merely a member of some other workspace where the entity has a
+    // different facet. The narrow's facet subquery must join workspace_members on
+    // the lens workspace, bound to the caller.
+    const q = compile(
+      accessScopeWhere({
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
+        userId: A,
+        workspaceLens: "ws-x",
+        facetLens: true,
+      })
+    );
+    // The lens is bound…
+    expect(q.params).toContain("ws-x");
+    // …and the facet-in-lens narrow joins workspace_members (membership gate) —
+    // keyed on the caller, never a row owner.
+    expect(q.sql).toContain("workspace_members");
+    expect(q.sql).toContain("entity_facets");
+    expect(q.params).toContain(A);
+    expect(q.params).not.toContain(B);
+  });
+
+  it("documents do NOT get the facet branch (they have no facets)", () => {
+    const qDocs = compile(scopedDb(accessA).predicate(documents)!);
+    // The opt-in is `entities`-only: documents keep the owner/workspace floor with
+    // NO entity_facets join (querying entity_facets by documents.id is meaningless).
+    expect(qDocs.sql).not.toContain("entity_facets");
+    // …and their own private floor is intact.
+    expect(qDocs.sql).toContain('"documents"."user_id"');
   });
 });
 

@@ -27,9 +27,14 @@
  * isHubProtocol but not agentUserId, so a hub read resolves actor="operator".
  */
 
+import { db, eq } from "@synap/database";
+import { podMembers } from "@synap/database/schema";
 import type { ExposureRelationType } from "../utils/project-scope.js";
 
 export type Actor = "operator" | "agent";
+
+/** Pod-level role held by a `pod_members` row. */
+export type PodRole = "owner" | "admin" | "member";
 
 /**
  * A scope-lens dimension: `undefined` = no narrowing (the user floor) · `null` =
@@ -76,8 +81,7 @@ export class AccessContext {
      * add one (subset-validated inside `accessScopeWhere`).
      */
     readonly exposureRelationTypes:
-      | readonly ExposureRelationType[]
-      | undefined = undefined
+      readonly ExposureRelationType[] | undefined = undefined
   ) {}
 
   /** Operator/UI boundary — built from the tRPC context (Kratos cookie). */
@@ -184,6 +188,53 @@ export class AccessContext {
   /** True iff a confirmed agentUserId is present (NOT merely "came via hub"). */
   get isAgent(): boolean {
     return this.actor === "agent";
+  }
+
+  /**
+   * Per-instance memoized pod-membership lookup. Resolved LAZILY rather than in
+   * the (synchronous) `AccessContext.from` factory: a boolean field would force a
+   * DB round-trip into every context construction and make the whole factory
+   * async — a large, behavior-changing blast radius. Instead the one indexed
+   * `pod_members` lookup fires at most once per AccessContext, only when a
+   * consumer asks. Wave 1 has NO consumer (dormant plumbing); Wave 2's floor
+   * uses the SQL predicate `podMemberWhere(userId)` directly, so this accessor is
+   * for JS-level branching that wants `isPodMember` / `podRole`.
+   */
+  private podMembershipCache?: Promise<{
+    isPodMember: boolean;
+    podRole: PodRole | null;
+  }>;
+
+  /** Resolve (and memoize) whether this context's user is a pod member. */
+  async podMembership(): Promise<{
+    isPodMember: boolean;
+    podRole: PodRole | null;
+  }> {
+    if (!this.podMembershipCache) {
+      this.podMembershipCache = (async () => {
+        const rows = await db
+          .select({ podRole: podMembers.podRole })
+          .from(podMembers)
+          .where(eq(podMembers.userId, this.userId))
+          .limit(1);
+        const row = rows[0];
+        return {
+          isPodMember: !!row,
+          podRole: (row?.podRole as PodRole | undefined) ?? null,
+        };
+      })();
+    }
+    return this.podMembershipCache;
+  }
+
+  /** Convenience: `true` iff this context's user has a `pod_members` row. */
+  async isPodMember(): Promise<boolean> {
+    return (await this.podMembership()).isPodMember;
+  }
+
+  /** Convenience: this context's user's pod role, or `null` if not a member. */
+  async podRole(): Promise<PodRole | null> {
+    return (await this.podMembership()).podRole;
   }
 }
 

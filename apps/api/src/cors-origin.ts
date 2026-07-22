@@ -36,9 +36,66 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
+/**
+ * The pod's own public host — PUBLIC_URL (or DOMAIN as fallback), lowercased.
+ * Compose sets both from deploy/.env and they are always updated on a domain
+ * move, which is exactly what makes the base-domain derivation below
+ * self-healing (unlike SYNAP_BASE_DOMAIN, which nothing rewrites on a change).
+ */
+function podPublicHost(): string | null {
+  const src =
+    process.env.PUBLIC_URL?.trim() ||
+    (process.env.DOMAIN?.trim() ? `https://${process.env.DOMAIN.trim()}` : "");
+  if (!src) return null;
+  try {
+    return new URL(
+      src.includes("://") ? src : `https://${src}`
+    ).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive the first-party base by dropping a pod host's conventional service
+ * label (`pod.` / `pod-admin.`): `pod.thearch.synap.live` → `thearch.synap.live`,
+ * so sibling surfaces (`pod-admin.thearch.synap.live`) are first-party. Returns
+ * null when the host carries no known service prefix or the remainder would be a
+ * bare TLD (≥2 labels required) — never widen CORS to an entire TLD.
+ */
+function deriveBaseFromHost(host: string): string | null {
+  const labels = host.split(".");
+  if (
+    (labels[0] === "pod" || labels[0] === "pod-admin") &&
+    labels.length >= 3
+  ) {
+    return labels.slice(1).join(".");
+  }
+  return null;
+}
+
+/**
+ * Base domain whose subdomains count as first-party.
+ *
+ * SELF-HEALING: derived from the pod's live PUBLIC_URL, not a separately-stored
+ * value that goes stale on a domain move. An explicit SYNAP_BASE_DOMAIN is
+ * honored ONLY when this pod actually lives under it (PUBLIC_URL host equals it
+ * or is a subdomain); a value left over from a previous domain no longer matches
+ * PUBLIC_URL, so we fall back to the value derived from the current PUBLIC_URL.
+ * When PUBLIC_URL can't be derived (e.g. a custom apex domain), the explicit
+ * value is trusted as-is.
+ */
 function getBaseDomain(): string | null {
-  const raw = process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "");
-  return raw ? raw.toLowerCase() : null;
+  const explicit =
+    process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "").toLowerCase() ||
+    null;
+  const host = podPublicHost();
+  const derived = host ? deriveBaseFromHost(host) : null;
+
+  if (!explicit) return derived; // nothing stored → self-derive from PUBLIC_URL
+  if (!host || !derived) return explicit; // can't derive (custom apex) → trust operator
+  if (host === explicit || host.endsWith(`.${explicit}`)) return explicit;
+  return derived; // explicit is stale relative to PUBLIC_URL → heal
 }
 
 /** Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL. */

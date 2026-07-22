@@ -28,11 +28,17 @@ import { describe, it, expect, vi } from "vitest";
 // from "@synap/database". All must be present or vitest throws "No X export".
 vi.mock("@synap/database", () => ({
   db: {
-    select: () => ({
-      from: () => ({
+    // Chainable stub: from → (innerJoin) → where → subquery. Supports both the
+    // facet-lens semi-join (from→innerJoin→where) and the plain subqueries
+    // (from→where).
+    select: () => {
+      const chain: any = {
+        from: () => chain,
+        innerJoin: () => chain,
         where: () => ({ _subquery: true }),
-      }),
-    }),
+      };
+      return chain;
+    },
   },
   and: (...args: unknown[]) => ({ _tag: "and", args }),
   or: (...args: unknown[]) => ({ _tag: "or", args }),
@@ -53,6 +59,15 @@ vi.mock("@synap/database/schema", () => ({
     targetEntityId: { _colName: "target_entity_id" },
     type: { _colName: "type" },
   },
+  entityFacets: {
+    entityId: { _colName: "entity_id" },
+    workspaceId: { _colName: "workspace_id" },
+    deletedAt: { _colName: "deleted_at" },
+  },
+  workspaceMembers: {
+    workspaceId: { _colName: "workspace_id" },
+    userId: { _colName: "user_id" },
+  },
 }));
 
 // ── Mock user-visible-where helpers ──────────────────────────────────────────
@@ -62,11 +77,17 @@ vi.mock("../user-visible-where.js", () => ({
     col,
     userId,
   }),
-  workspaceLensWhere: (col: unknown, userId: string, wsId: string) => ({
+  workspaceLensWhere: (
+    col: unknown,
+    userId: string,
+    wsId: string,
+    opts?: { includeGlobals?: boolean }
+  ) => ({
     _tag: "workspaceLensWhere",
     col,
     userId,
     wsId,
+    opts,
   }),
 }));
 
@@ -324,5 +345,113 @@ describe("accessScopeWhere", () => {
     }) as any;
 
     expect(findProjectNarrow(result)).toBeUndefined();
+  });
+
+  // ── Role-as-lens (facetLens) + the includeGlobalsInLens cap ────────────────
+  describe("facetLens (role-as-lens floor branch)", () => {
+    it("default OFF: floor has exactly 3 branches (no facet branch)", () => {
+      const floor = (
+        accessScopeWhere({
+          workspaceIdColumn: wsIdCol,
+          entityIdColumn: entityIdCol,
+          ownerColumn: ownerCol,
+          userId,
+        }) as any
+      ).args[0];
+      expect(floor._tag).toBe("or");
+      expect(floor.args).toHaveLength(3);
+    });
+
+    it("facetLens:true adds a 4th floor branch (facet⋈membership inArray on entityId)", () => {
+      const floor = (
+        accessScopeWhere({
+          workspaceIdColumn: wsIdCol,
+          entityIdColumn: entityIdCol,
+          ownerColumn: ownerCol,
+          userId,
+          facetLens: true,
+        }) as any
+      ).args[0];
+      expect(floor.args).toHaveLength(4);
+      // The added branch is facetLensMemberWhere = inArray(entityIdColumn, sub).
+      const facetBranch = floor.args[3];
+      expect(facetBranch._tag).toBe("inArray");
+      expect(facetBranch.col).toBe(entityIdCol);
+    });
+
+    it("facetLens:true + string lens makes the workspace narrow facet-aware (OR of ws-lens + facet inArray)", () => {
+      const result = accessScopeWhere({
+        workspaceIdColumn: wsIdCol,
+        entityIdColumn: entityIdCol,
+        ownerColumn: ownerCol,
+        userId,
+        workspaceLens: "ws-1",
+        facetLens: true,
+      }) as any;
+      // The workspace narrow is now an OR wrapping the ws-lens AND a facet inArray.
+      const facetAwareNarrow = result.args.find(
+        (a: any) =>
+          a?._tag === "or" &&
+          a.args?.some((x: any) => x?._tag === "workspaceLensWhere") &&
+          a.args?.some(
+            (x: any) => x?._tag === "inArray" && x.col === entityIdCol
+          )
+      );
+      expect(facetAwareNarrow).toBeDefined();
+    });
+
+    it("facetLens:true + null lens still narrows to podPersonal (facet branch AND-ed out)", () => {
+      const result = accessScopeWhere({
+        workspaceIdColumn: wsIdCol,
+        entityIdColumn: entityIdCol,
+        ownerColumn: ownerCol,
+        userId,
+        workspaceLens: null,
+        facetLens: true,
+      }) as any;
+      const wsLens = result.args.find(
+        (a: any) => a?._tag === "workspaceLensWhere"
+      );
+      expect(wsLens).toBeUndefined();
+      const podPersonalArm = result.args.find(
+        (a: any) =>
+          a?._tag === "and" &&
+          Array.isArray(a.args) &&
+          a.args.some((x: any) => x?._tag === "isNull")
+      );
+      expect(podPersonalArm).toBeDefined();
+    });
+  });
+
+  describe("includeGlobalsInLens cap", () => {
+    it("threads { includeGlobals: true } into workspaceLensWhere for a string lens", () => {
+      const result = accessScopeWhere({
+        workspaceIdColumn: wsIdCol,
+        entityIdColumn: entityIdCol,
+        ownerColumn: ownerCol,
+        userId,
+        workspaceLens: "ws-1",
+        includeGlobalsInLens: true,
+      }) as any;
+      const wsLens = result.args.find(
+        (a: any) => a?._tag === "workspaceLensWhere"
+      );
+      expect(wsLens).toBeDefined();
+      expect(wsLens.opts).toEqual({ includeGlobals: true });
+    });
+
+    it("default OFF: workspaceLensWhere gets no includeGlobals opts", () => {
+      const result = accessScopeWhere({
+        workspaceIdColumn: wsIdCol,
+        entityIdColumn: entityIdCol,
+        ownerColumn: ownerCol,
+        userId,
+        workspaceLens: "ws-1",
+      }) as any;
+      const wsLens = result.args.find(
+        (a: any) => a?._tag === "workspaceLensWhere"
+      );
+      expect(wsLens.opts).toBeUndefined();
+    });
   });
 });

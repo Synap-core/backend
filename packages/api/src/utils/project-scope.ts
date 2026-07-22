@@ -38,7 +38,12 @@ import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
-import { projectMembers, relations } from "@synap/database/schema";
+import {
+  projectMembers,
+  relations,
+  entityFacets,
+  workspaceMembers,
+} from "@synap/database/schema";
 import {
   userVisibleWhere,
   workspaceLensWhere,
@@ -140,6 +145,98 @@ export function exposureMemberWhere(
       exposedByAnyAnchorSubquery(anchorIds, relationTypes)
     )
   )!;
+}
+
+/**
+ * Subquery: entity ids that carry a facet (a role/overlay) in a workspace the
+ * user is a MEMBER of. `entity_facets.workspace_id` joined to
+ * `workspace_members.workspace_id` — a NULL facet workspace never joins (NULL =
+ * NULL is not TRUE in SQL), so pod-wide facets grant no lens access. Semi-join,
+ * one round-trip regardless of facet count.
+ */
+function facetLensedEntityIdsSubquery(userId: string) {
+  return (
+    db
+      .select({ id: entityFacets.entityId })
+      .from(entityFacets)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, entityFacets.workspaceId)
+      )
+      // `entity_facets` is soft-delete only (detach sets `deletedAt`, never hard
+      // deletes). Without this, a REVOKED role would keep granting the lens forever
+      // — every other reader filters it; this is the access-revocation gate.
+      .where(
+        and(eq(workspaceMembers.userId, userId), isNull(entityFacets.deletedAt))
+      )
+  );
+}
+
+/**
+ * FLOOR BRANCH — the ROLE-AS-LENS share grant (Membership → Visibility). An
+ * entity is visible to `userId` when it carries a facet (a role/overlay) in a
+ * workspace `userId` is a member of. This is the mechanism behind "entity =
+ * pod-wide identity; roles = the workspace lens": attaching a role to an entity
+ * in a shared workspace both curates it into that workspace's view AND grants
+ * that workspace's members read — while an un-roled pod-wide entity stays
+ * owner-private (this branch admits nothing for it).
+ *
+ * WIDENING-ONLY, by construction: it is ORed into the floor and can only ADD an
+ * entity the owner EXPLICITLY gave a workspace-role. It never removes a row, and
+ * it never admits a private (un-faceted, NULL-workspace) entity — so it cannot
+ * leak a solo user's private corpus. Gated on real `workspace_members`
+ * membership, symmetric across users (binds the caller's id, never a row owner).
+ *
+ * Applied ONLY where an entity-id column actually maps to `entity_facets.entity_id`
+ * (the `entities` rule) — opt-in via `accessScopeWhere({ facetLens: true })`, so
+ * tables without entity-facet identity (documents, …) are unaffected.
+ */
+export function facetLensMemberWhere(
+  entityIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return inArray(entityIdColumn, facetLensedEntityIdsSubquery(userId));
+}
+
+/**
+ * NARROW COMPANION to `facetLensMemberWhere` — entity ids that carry a facet in
+ * one of the lens workspace(s). Used to make the workspace LENS facet-aware for
+ * entities: browsing workspace W surfaces a pod-wide entity that has a role in W
+ * (not just entities whose OWN `workspace_id = W`). PURE narrow — it is ORed into
+ * the workspace narrow, which is itself ANDed with the membership-gated floor, so
+ * SELF-GATING: it joins `workspace_members` on the LENS workspace(s) for
+ * `userId`, so it only surfaces an entity role-attached to a lens workspace the
+ * caller is ACTUALLY a member of. This must NOT rely on the outer floor for
+ * membership: the floor's `facetLensMemberWhere` admits an entity with a facet in
+ * ANY member workspace, which may differ from the lens workspace — so without this
+ * join, a caller could pass a forged `input.workspaceId` (never membership-checked
+ * on `podProcedure`) for a workspace W they are NOT in and surface an entity that
+ * merely has a role in W, as long as it also has a role in some workspace they ARE
+ * in. Gating on lens-workspace membership here closes that cross-boundary leak.
+ */
+export function facetInWorkspaceLensWhere(
+  entityIdColumn: AnyPgColumn,
+  userId: string,
+  lens: string | string[]
+): SQL {
+  const ids = Array.isArray(lens) ? lens : [lens];
+  const sub = db
+    .select({ id: entityFacets.entityId })
+    .from(entityFacets)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, entityFacets.workspaceId)
+    )
+    .where(
+      and(
+        inArray(entityFacets.workspaceId, ids),
+        // The caller must be a member of the LENS workspace the facet is in.
+        eq(workspaceMembers.userId, userId),
+        // Soft-delete gate: a revoked role must stop surfacing the entity.
+        isNull(entityFacets.deletedAt)
+      )
+    );
+  return inArray(entityIdColumn, sub);
 }
 
 /**
@@ -250,6 +347,24 @@ export function accessScopeWhere(args: {
    * enforced by the `ExposureRelationType` type plus a runtime subset check.
    */
   exposureRelationTypes?: readonly ExposureRelationType[];
+  /**
+   * Opt-in (default OFF) — add the ROLE-AS-LENS floor branch: an entity is
+   * visible when it carries a facet in a workspace the caller is a member of
+   * (`facetLensMemberWhere`). Enable ONLY on tables whose `entityIdColumn` maps
+   * to `entity_facets.entity_id` (the `entities` rule). Widening-only: it can
+   * add a role-shared entity, never remove a row nor admit an un-faceted private
+   * one.
+   */
+  facetLens?: boolean;
+  /**
+   * Opt-in (default OFF) — when a SPECIFIC workspace lens is set, ALSO include
+   * pod-wide globals (`workspace_id IS NULL`) in the narrow, instead of that
+   * workspace only. Reproduces the hand-rolled `includePodWide` union
+   * (`or(pod-personal, that-workspace)`) some entity readers used. Threads
+   * `{ includeGlobals: true }` into `workspaceLensWhere`; no effect when the lens
+   * is `undefined` (already user-wide) or `null` (globals-only).
+   */
+  includeGlobalsInLens?: boolean;
 }): SQL {
   const {
     workspaceIdColumn,
@@ -259,6 +374,8 @@ export function accessScopeWhere(args: {
     workspaceLens,
     projectLens,
     exposureRelationTypes = EXPOSURE_RELATION_TYPES,
+    facetLens = false,
+    includeGlobalsInLens = false,
   } = args;
 
   // Narrow-only guard. The type already refuses off-whitelist strings at every
@@ -280,7 +397,7 @@ export function accessScopeWhere(args: {
 
   // ── Floor (security) — the union of all the ways the user may see a row. ──
   const podPersonal = and(isNull(workspaceIdColumn), eq(ownerColumn, userId))!;
-  const floor = or(
+  const floorBranches: SQL[] = [
     podPersonal,
     // `isNotNull` guard so the workspace union doesn't re-admit the NULL rows
     // the pod-personal branch already (correctly, owner-gated) covers.
@@ -292,8 +409,15 @@ export function accessScopeWhere(args: {
     // (`projects.id`) + exposure edges. Default = BOTH axes (project +
     // visible_to); a caller-supplied `exposureRelationTypes` NARROWS this
     // branch (portal guests: `visible_to` only).
-    exposureMemberWhere(entityIdColumn, userId, exposureRelationTypes)
-  )!;
+    exposureMemberWhere(entityIdColumn, userId, exposureRelationTypes),
+  ];
+  // Role-as-lens (opt-in, `entities` only): a pod-wide entity becomes visible to
+  // a workspace's members once it carries a facet there. Widening-only; an
+  // un-faceted NULL-workspace entity stays owner-gated by `podPersonal` above.
+  if (facetLens) {
+    floorBranches.push(facetLensMemberWhere(entityIdColumn, userId));
+  }
+  const floor = or(...floorBranches)!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
   // `null` = globals-only (pod-personal rows). An empty array = no narrow (the
@@ -303,11 +427,23 @@ export function accessScopeWhere(args: {
   if (workspaceLens === null) {
     workspaceNarrow = podPersonal;
   } else if (workspaceLens !== undefined && !wsEmpty) {
-    workspaceNarrow = workspaceLensWhere(
+    const lensNarrow = workspaceLensWhere(
       workspaceIdColumn,
       userId,
-      workspaceLens
+      workspaceLens,
+      includeGlobalsInLens ? { includeGlobals: true } : undefined
     );
+    // Role-as-lens (entities only): a workspace's view also surfaces a pod-wide
+    // entity that carries a facet in that workspace — not just entities whose own
+    // `workspace_id` matches. ORed narrow, still ANDed with the membership-gated
+    // floor, so it can only surface an entity the floor already admits.
+    workspaceNarrow =
+      facetLens && workspaceLens !== null
+        ? or(
+            lensNarrow,
+            facetInWorkspaceLensWhere(entityIdColumn, userId, workspaceLens)
+          )!
+        : lensNarrow;
   }
 
   // ── Project/anchor lens (optional narrow) ─────────────────────────────────

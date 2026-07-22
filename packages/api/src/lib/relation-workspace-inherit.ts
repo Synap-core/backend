@@ -13,7 +13,7 @@
  */
 export function inheritRelationWorkspaceId(
   endpointWorkspaceIds: Array<string | null>,
-  ambientFallback: string
+  ambientFallback: string | null
 ): string | null {
   if (endpointWorkspaceIds.length !== 2) return ambientFallback;
   const [a, b] = endpointWorkspaceIds;

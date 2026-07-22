@@ -272,6 +272,28 @@ backfill_federation_public_urls() {
         update_env_value "POD_ADMIN_URL" "$(pod_admin_url_for_domain "$domain")"
         echo -e "${BLUE}ℹ️  Backfilled Pod Admin handoff endpoints${NC}"
     fi
+
+    # Self-heal SYNAP_BASE_DOMAIN — the first-party CORS base that makes sibling
+    # surfaces (pod-admin.<root>) first-party to the pod (pod.<root>). It is set
+    # once at install and nothing else rewrites it, so a domain move leaves it
+    # stale and pod-admin's Kratos login is CORS-blocked. Re-derive it from the
+    # CURRENT domain + pod-admin domain on every reconcile so it can never drift.
+    # (Belt for the backend, which now also derives this from PUBLIC_URL at
+    # runtime; keeping the env value correct keeps older images working too.)
+    if [ "$domain" != "localhost" ]; then
+        local effective_pod_admin_domain
+        effective_pod_admin_domain="${configured_pod_admin_domain:-$(pod_admin_domain_for_domain "$domain")}"
+        local derived_base
+        derived_base="$(shared_cookie_domain "$domain" "$effective_pod_admin_domain")"
+        if [ -n "$derived_base" ]; then
+            local configured_base
+            configured_base=$(grep "^SYNAP_BASE_DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
+            if [ "$configured_base" != "$derived_base" ]; then
+                update_env_value "SYNAP_BASE_DOMAIN" "$derived_base"
+                echo -e "${BLUE}ℹ️  Set SYNAP_BASE_DOMAIN=${derived_base} (first-party CORS base)${NC}"
+            fi
+        fi
+    fi
 }
 
 # Pod-agent has the Docker socket, so only start its profile after the Pod
@@ -2767,11 +2789,12 @@ cmd_federation() {
             else
                 echo -e "${YELLOW}  ⚠ Couldn't reach ${cp_url}/.well-known/openid-configuration — check CONTROL_PLANE_URL.${NC}"
             fi
-            local landing="${SYNAP_LANDING_URL:-https://synap.live}"
             echo ""
-            echo -e "${GREEN}✅ This pod federates to Synap Cloud (per-pod OIDC client auto-provisioned — no key to manage).${NC}"
-            echo -e "  Finish by linking it to your account — open:"
-            echo -e "  ${BLUE}${landing}/connect?pod=${domain}${NC}"
+            echo -e "${GREEN}✅ Federated sign-in is LIVE — the login page now offers \"Continue with Synap Cloud\".${NC}"
+            echo -e "  The FIRST time you use it, Kratos links your Cloud identity to your existing"
+            echo -e "  pod account: you'll sign in once with your pod password to confirm you own"
+            echo -e "  both. After that, \"Continue with Synap Cloud\" signs you in directly."
+            echo -e "  (No account-linking URL, no key to manage — the binding is Kratos-native.)"
             ;;
         status)
             local cp lbl disabled

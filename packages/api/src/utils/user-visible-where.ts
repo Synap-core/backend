@@ -26,7 +26,11 @@ import { and, eq, inArray, isNull, or, drizzleSql } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
-import { workspaceMembers, workspaces } from "@synap/database/schema";
+import {
+  workspaceMembers,
+  workspaces,
+  podMembers,
+} from "@synap/database/schema";
 
 /**
  * The workspace lens, as a composable scope dimension:
@@ -92,6 +96,22 @@ export function userVisibleWhere(
     inArray(col, ownedWs),
     inArray(col, podVisibleWs)
   )!;
+}
+
+/**
+ * Pod-membership predicate — TRUE for a query when `userId` has a row in
+ * `pod_members` (the durable pod-membership identity, keyed on user_id since the
+ * pod is a singleton deployment). Emitted as a correlated-safe
+ * `EXISTS (SELECT 1 FROM pod_members WHERE user_id = <userId>)`, so it is a
+ * membership FACT about the caller, independent of any row's columns.
+ *
+ * DORMANT (Membership → Visibility, Wave 1): defined here so Wave 2 can AND it
+ * into a NEW `podShared` floor branch (`isNull(ws) AND <shared-to-pod> AND
+ * podMemberWhere(viewer)`). NOTHING in Wave 1 references it — no VisibilityRule /
+ * floor consumes it yet. Adding a consumer is the security-critical Wave 2 edit.
+ */
+export function podMemberWhere(userId: string): SQL {
+  return drizzleSql`EXISTS (SELECT 1 FROM ${podMembers} WHERE ${podMembers.userId} = ${userId})`;
 }
 
 /**

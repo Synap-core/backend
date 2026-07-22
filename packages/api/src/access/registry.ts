@@ -197,6 +197,11 @@ registerVisibility({
         workspaceLens: access.workspaceLens,
         projectLens: access.projectLens,
         exposureRelationTypes: access.exposureRelationTypes,
+        // Role-as-lens (Membership → Visibility): a pod-wide entity is visible to
+        // a workspace's members once it carries a facet there. `entities` only —
+        // `entity_facets.entity_id` maps to `entities.id` (documents have no
+        // facets, so their rule below stays owner/workspace-floored).
+        facetLens: true,
       }),
   },
 });

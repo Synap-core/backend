@@ -136,6 +136,25 @@ ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
+-- pod_members — durable pod-membership identity, the singleton-pod peer of
+-- workspace_members (mirrors 0205_pod_members.sql). No pod_id: the pod is a
+-- singleton deployment, so membership is keyed on user_id alone.
+CREATE TABLE IF NOT EXISTS "pod_members" (
+  "id"         uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"    text  NOT NULL,
+  "pod_role"   text  NOT NULL,
+  "invited_by" text,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "user_id"    text;
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "pod_role"   text;
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "invited_by" text;
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- One pod-membership row per user_id (the pod is a singleton — no pod_id).
+CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
+  ON "pod_members" ("user_id");
+
 -- ─── 3. events ───────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "events" (

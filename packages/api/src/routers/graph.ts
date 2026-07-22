@@ -24,7 +24,7 @@ import {
   loadFacetSlugsBatch,
 } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 import {
   getObjectGraph,
   connectionsToNeighbors,
@@ -288,7 +288,18 @@ export const graphRouter = router({
         : undefined;
       const entityRows = await db.query.entities.findMany({
         where: and(
-          userVisibleWhere(entities.workspaceId, ctx.userId),
+          // The one-door floor (not bare userVisibleWhere, which admitted ANY
+          // workspace_id IS NULL row regardless of owner — a cross-user leak of
+          // other users' pod-wide entities). accessScopeWhere owner-gates the NULL
+          // branch AND adds role-as-lens (facetLens) so a member sees pod-wide
+          // entities role-attached to their workspaces.
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId: ctx.userId,
+            facetLens: true,
+          }),
           isNull(entities.deletedAt),
           // Polymorphic (Kind + Facets): role slugs match via facet EXISTS
           // across all the user's workspaces (undefined lens + owner floor).

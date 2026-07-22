@@ -112,7 +112,12 @@ export const hubRelationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        // Optional: when omitted, relations.create DERIVES the workspace from the
+        // two endpoints (rung 4 — relational gravity) instead of demanding one.
+        // A bound service key's confinement is applied by the caller (REST door /
+        // MCP adapter) BEFORE this, so an absent value here means "derive", never
+        // "escape the clamp".
+        workspaceId: z.string().uuid().optional(),
         sourceEntityId: z.string().uuid(),
         targetEntityId: z.string().uuid(),
         /** Relation type slug, e.g. "depends_on", "assigned_to", "references" */

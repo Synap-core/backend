@@ -23,7 +23,6 @@ import {
   isNull,
   isNotNull,
   getEffectiveFacets,
-  ProfileResolutionService,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
@@ -32,11 +31,10 @@ import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership
 
 import {
   uploadBufferAsFileEntity,
-  storeDocumentFromBuffer,
   MAX_FILE_SIZE,
   isAllowedMimeType,
 } from "../../file-upload.js";
-import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
+import { createGovernedFileEntityFromBuffer } from "../../create-governed-file-entity.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
@@ -1541,8 +1539,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
   //   • multipart/form-data { file, workspaceId?, userId? } — ARBITRARY mime,
   //     up to MAX_FILE_SIZE (the general agent upload door).
   //   • application/json { workspaceId, filename, mimeType, contentBase64,
-  //     userId? } — image/* only, the ORIGINAL Discord attachment carry-through
-  //     contract (Wave 1), preserved verbatim.
+  //     userId? } — ANY allowed mime (same `isAllowedMimeType` allowlist as the
+  //     multipart branch). Originally the Discord image carry-through contract
+  //     (Wave 1); the mime gate is now the shared allowlist, not image/* only.
   // Either way the blob flows through uploadBufferAsFileEntity (provenance =
   // human), which now mints a `document` entity by default. Response shape stays
   // `{ fileEntityId, documentId }` — the `fileEntityId` field NAME is kept for
@@ -1603,7 +1602,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         }
         buffer = Buffer.from(await file.arrayBuffer());
       } else {
-        // JSON base64: image/* only (original Discord contract).
+        // JSON base64: any allowed mime (gated by isAllowedMimeType below).
         const body = (await c.req.json()) as {
           userId?: string;
           workspaceId?: string;
@@ -1626,14 +1625,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
             400
           );
         }
-        if (!body.mimeType.startsWith("image/")) {
-          return c.json(
-            {
-              error: `Only image/* uploads are allowed in JSON mode (got ${body.mimeType}) — use multipart/form-data with a file field for other types`,
-            },
-            415
-          );
-        }
+        // Mime is NOT gated to image/* here anymore: the shared
+        // `isAllowedMimeType(mimeType)` check below (same allowlist the multipart
+        // branch uses) governs BOTH branches → base64 now accepts any allowed
+        // type (image/audio/video + the docs allowlist), 415 otherwise.
         mimeType = body.mimeType;
         filename = body.filename;
         bodyUserId = body.userId;
@@ -1700,8 +1695,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const agentUserId = c.get("agentUserId") as string | undefined;
 
-    // ── JSON/base64 image mode: UNCHANGED direct path ──────────────────────
-    // The original Discord attachment carry-through (on-behalf-of-a-human).
+    // ── JSON/base64 mode: UNCHANGED direct path ────────────────────────────
+    // The original Discord attachment carry-through (on-behalf-of-a-human),
+    // now accepting any allowed mime (not just image/*).
     // Kept on the direct `uploadBufferAsFileEntity` path to avoid any behavior
     // change to the Discord bridge; provenance is attributed to the agent when
     // an agent key uploads.
@@ -1734,91 +1730,38 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     // ── Multipart (general agent) mode: GOVERNED path ──────────────────────
     // Store the blob → documents row + immutable v1 version (NO entity), then
-    // mint the `document` entity through the GOVERNED `entities.create`
-    // procedure so this write passes the SAME permission membrane as every
-    // other create: auto-applied when `entity.create ∈ DEFAULT_AUTO_APPROVE`
-    // (the common `synap upload` case, so the file still lands immediately), or
-    // returned as a `proposed` handle under a stricter workspace policy.
-    let stored: Awaited<ReturnType<typeof storeDocumentFromBuffer>>;
+    // mint the `file` entity through the GOVERNED `entities.create` procedure so
+    // this write passes the SAME permission membrane as every other create:
+    // auto-applied when `entity.create ∈ DEFAULT_AUTO_APPROVE` (the common
+    // `synap upload` case, so the file still lands immediately), or returned as a
+    // `proposed` handle under a stricter workspace policy. The store→govern core
+    // now lives in `createGovernedFileEntityFromBuffer` so the MCP tool can reuse
+    // the SAME governed entry point without HTTP.
     try {
-      stored = await storeDocumentFromBuffer({
-        userId,
-        workspaceId,
+      const result = await createGovernedFileEntityFromBuffer({
         buffer,
         mimeType,
         filename,
         title: bodyTitle,
-        // Honest provenance: this is the general agent upload door — stamp the
-        // document as agent-authored (matching the sibling entity's attribution),
-        // never falsified as human.
-        actorAgentUserId: agentUserId,
-      });
-    } catch (err) {
-      logger.error({ err }, "POST /files: document store failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
-    }
-
-    try {
-      // Resolve pod-wide vs workspace scope for the `file` kind exactly like
-      // the `entity/create` approve-executor: a pod-scope kind lands pod-wide
-      // (caller ctx.workspaceId = null) while a workspace-scoped one stays in
-      // its lens. `entities.create` still runs its own placement resolver; this
-      // only fixes the caller/governance lens.
-      const profileService = new ProfileResolutionService(db);
-      const entityScope = await profileService.getEntityScope(
-        "file",
-        workspaceId
-      );
-      const callerWorkspaceId = entityScope === "pod" ? null : workspaceId;
-
-      // Build the caller ctx through the canonical hub door — it threads the
-      // agent identity (so `entities.create`'s permission check attributes the
-      // write to the agent and routes it through the governance membrane),
-      // the session, and service-key workspace confinement.
-      const callerCtx = await createHubProtocolCallerContext(
         userId,
-        c.get("scopes") as string[],
-        callerWorkspaceId,
-        undefined,
-        c.req.header("x-session-id") ?? null,
-        agentUserId ?? null,
-        c.get("keyType") as string | undefined,
-        c.get("keyWorkspaceId") as string | null | undefined
-      );
-      const entityCaller = regularEntitiesRouter.createCaller(
-        callerCtx as Parameters<typeof regularEntitiesRouter.createCaller>[0]
-      );
+        workspaceId,
+        // Honest provenance: general agent upload door — attributed to the agent,
+        // never falsified as human.
+        agentUserId,
+        scopes: c.get("scopes") as string[],
+        sessionId: c.req.header("x-session-id") ?? null,
+        keyType: c.get("keyType") as string | undefined,
+        keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
+      });
 
-      // `agentUserId` is threaded as INPUT (entities.create reads it from the
-      // input, not the ctx) so the permission check attributes provenance.
-      const created = (await entityCaller.create({
-        profileSlug: "file",
-        title: bodyTitle ?? filename,
-        documentId: stored.documentId,
-        properties: { mimeType, fileSize: buffer.length },
-        ...(agentUserId ? { agentUserId } : {}),
-        source: "agent",
-      })) as {
-        status?: string;
-        id?: string;
-        proposalId?: string;
-        reviewUrl?: string;
-      };
-
-      // Proposed (stricter policy): return the reviewable handle. The document
-      // row is stored now and the entity is created WITH its documentId on
-      // approval (the entity/create executor forwards it). A proposed-then-
-      // REJECTED upload leaves an unlinked documents row (sweepable orphan).
-      if (created.status === "proposed" || created.proposalId) {
+      // Proposed (stricter policy): return the reviewable handle.
+      if (result.status === "proposed") {
         return c.json(
           {
-            documentId: stored.documentId,
-            proposalId: created.proposalId,
+            documentId: result.documentId,
+            proposalId: result.proposalId,
             status: "proposed" as const,
-            reviewUrl: created.reviewUrl,
+            reviewUrl: result.reviewUrl,
           },
           200
         );
@@ -1826,7 +1769,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
       // Auto-approved: same `{ fileEntityId, documentId }` shape as before.
       return c.json(
-        { fileEntityId: created.id, documentId: stored.documentId },
+        { fileEntityId: result.fileEntityId, documentId: result.documentId },
         200
       );
     } catch (err) {

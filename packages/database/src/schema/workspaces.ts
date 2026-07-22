@@ -19,18 +19,11 @@ import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
 export type WorkspaceSidebarSurfacePlacement =
-  | "main"
-  | "side"
-  | "floating"
-  | "modal"
-  | "popover"
-  | "embed";
+  "main" | "side" | "floating" | "modal" | "popover" | "embed";
 
 export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "medium" | "full";
 export type WorkspaceSidebarAppRendererType =
-  | "native"
-  | "external"
-  | "iframe-srcdoc";
+  "native" | "external" | "iframe-srcdoc";
 
 export interface WorkspaceSidebarSurface {
   kind: "cell" | "view" | "entity" | "document" | "channel" | "app" | "url";
@@ -275,11 +268,7 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
  * - suppress     → don't deliver (silences this signal domain)
  */
 export type SignalSurface =
-  | "feed"
-  | "chat"
-  | "notification"
-  | "suppress"
-  | "external";
+  "feed" | "chat" | "notification" | "suppress" | "external";
 
 /**
  * A delivery target. A surface can be a bare kind (back-compat string form) or a
@@ -367,11 +356,7 @@ export interface AgentRoutingPolicy {
  * to authenticated users on the same data pod.
  */
 export type WorkspaceVisibility =
-  | "private"
-  | "members"
-  | "pod_visible"
-  | "pod_joinable"
-  | "public_link";
+  "private" | "members" | "pod_visible" | "pod_joinable" | "public_link";
 
 export type WorkspaceSourceRole = "provider" | "consumer" | "provider-consumer";
 
@@ -933,6 +918,33 @@ export const workspaceMembers = pgTable(
     workspaceUserUnique: uniqueIndex(
       "workspace_members_workspace_user_unique"
     ).on(table.workspaceId, table.userId),
+  })
+);
+
+export const podMembers = pgTable(
+  "pod_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+
+    // The user who belongs to this pod. The pod is a SINGLETON deployment
+    // (there is no `pods` table / `pod_id`), so membership is keyed on user_id.
+    userId: text("user_id").notNull(),
+
+    // Pod-level role: 'owner' | 'admin' | 'member'
+    podRole: text("pod_role").notNull(),
+
+    // userId of the inviter (nullable — backfilled / owner rows have none)
+    invitedBy: text("invited_by"),
+
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // One pod-membership row per user. Lets onConflictDoNothing() actually dedup.
+    podMembersUserUnique: uniqueIndex("pod_members_user_unique").on(
+      table.userId
+    ),
   })
 );
 

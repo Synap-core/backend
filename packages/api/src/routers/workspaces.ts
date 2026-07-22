@@ -24,6 +24,7 @@ import {
   gt,
   workspaces,
   workspaceMembers,
+  podMembers,
   invites,
   intelligenceServices,
   entities,
@@ -1955,6 +1956,18 @@ export const workspacesRouter = router({
           workspaceId: invite.workspaceId,
         };
       } else {
+        // Pod invite. ADDITIVE (Membership → Visibility, Wave 1): record durable
+        // pod-membership identity. The workspace fan-out below is KEPT — removing
+        // it now would regress visibility before Wave 2's floor consults
+        // pod_members. onConflictDoNothing: one row per user_id.
+        await db
+          .insert(podMembers)
+          .values({
+            userId: ctx.userId,
+            podRole: "member",
+            invitedBy: invite.invitedBy ?? null,
+          })
+          .onConflictDoNothing();
         // Pod invite — add to all workspaces
         const allWorkspaces = await db.query.workspaces.findMany();
         for (const ws of allWorkspaces) {
@@ -4356,6 +4369,18 @@ export const workspacesRouter = router({
           workspaceId: invite.workspaceId,
         };
       } else {
+        // Pod invite via CP proxy. ADDITIVE (Membership → Visibility, Wave 1):
+        // record durable pod-membership identity. The workspace fan-out below is
+        // KEPT — removing it now would regress visibility before Wave 2's floor
+        // consults pod_members. onConflictDoNothing: one row per user_id.
+        await db
+          .insert(podMembers)
+          .values({
+            userId: podUser.id,
+            podRole: "member",
+            invitedBy: invite.invitedBy ?? null,
+          })
+          .onConflictDoNothing();
         const allWorkspaces = await db.query.workspaces.findMany();
         for (const ws of allWorkspaces) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({

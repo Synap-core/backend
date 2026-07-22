@@ -75,20 +75,24 @@ entity's `content`.
 
 ### "I want to add a real FILE" — the decision tree
 
-An agent has **no filesystem and no binary**, so it can never upload raw bytes
-itself. Pick by what you actually have:
+You CAN store content you **hold** — you send it inline. Pick by what you have:
 
-| You have…                                                              | Do this                                                                                         | Result                                        |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Text you **wrote** (plan, notes, deck outline)                         | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`   |
-| A **URL/link** to a file or page (Google Doc, a PDF url, an article)   | `synap_create_document` with **`url`** (no `content`), or attach it to an entity via `entityId` | an external **reference** document (no bytes) |
-| A real **binary on a local disk** (only a CLI/desktop client has this) | the CLI `synap upload <path>` / the multipart upload door                                       | a `file` entity backed by stored bytes        |
-| A binary you do **not** have                                           | you **cannot** — ask the human/client to upload it                                              | —                                             |
+| You have…                                                                                   | Do this                                                                                         | Result                                                               |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
+| Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
+| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
+| A **large file on a local disk** you don't hold in context                                  | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have          | a `file` entity backed by stored bytes                               |
+| Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
-So the honest answer to "upload this PDF" when you only have its name is: you
-can't fabricate an upload. Either reference its **url** (if you have one) or tell
-the user the file must be uploaded from a device that has it. Do **not** stuff
-the request into a note and call it done.
+**Store ≠ analyze.** `synap_store_file` / `synap_create_document` store content
+**deterministically — the file is NEVER read by an LLM.** Only fetch a document
+and reason over it when the user explicitly says "read/analyze this file."
+
+**Do NOT over-structure a file request.** "Store this file" / "how do I add this
+file" is ONE intent → at most one stored file (plus, only if asked, a linking
+relation). Never inflate it into a task + note + placeholder-file scaffold, and
+never dump the request text into a note and call it done.
 
 ### Create a document (attach to an entity)
 

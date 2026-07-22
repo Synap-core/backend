@@ -53,6 +53,7 @@ import {
   inArray,
   loadFacetSlugsBatch,
   isNull,
+  resolveWorkspacePlacement,
 } from "@synap/database";
 import {
   relations,
@@ -782,14 +783,24 @@ export const relationsRouter = router({
         });
       }
       const id = randomUUID();
-      // Resolve workspace ID: prefer explicit input, fall back to context header
-      const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId;
+      // Resolve the GOVERNANCE workspace: prefer explicit input, then the context
+      // header. When neither is supplied, DERIVE it from the two endpoints via the
+      // one door (rung 4 — relational gravity) instead of demanding a workspace.
+      // A pod-wide result (null) is valid: both endpoints are pod-wide, so the
+      // edge is a pod-personal write (checkPermissionOrPropose auto-grants it) and
+      // the D4 placement below inherits the same pod-wide lens. The resolver floors
+      // every candidate on the caller's membership, so a derived workspace is one
+      // the caller belongs to.
+      let effectiveWorkspaceId: string | null =
+        input.workspaceId || ctx.workspaceId || null;
       if (!effectiveWorkspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "workspaceId is required (pass in input or set X-Workspace-Id header)",
+        const deriveDb = await getDb();
+        const placement = await resolveWorkspacePlacement(deriveDb, {
+          userId: ctx.userId,
+          relatedEntityIds: [input.sourceEntityId, input.targetEntityId],
+          ambientWorkspaceId: null,
         });
+        effectiveWorkspaceId = placement.workspaceId;
       }
 
       // Validate type: must be a system/impact built-in OR a workspace-defined

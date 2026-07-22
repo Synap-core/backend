@@ -172,10 +172,9 @@ export function registerRelationsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
-    // The hub-protocol createRelation procedure requires a workspace.
-    if (!workspaceId) {
-      return c.json({ error: "workspaceId is required" }, 400);
-    }
+    // No 400 for a missing workspace: createRelation DERIVES it from the two
+    // endpoints (rung 4). The service-key clamp already ran (getConfinedWorkspace
+    // above), so a bound key stays pinned; an unbound/absent lens means "derive".
     try {
       // On the capture path (X-Capture: 1) attribute the edge to the seeded
       // Capture agent so relation.create auto-approves (its explicit
@@ -196,7 +195,8 @@ export function registerRelationsRoutes(app: HubHono): void {
       });
       const result = await caller.relations.createRelation({
         userId,
-        workspaceId,
+        // null (pod-personal) → undefined so the door derives from the endpoints.
+        ...(workspaceId ? { workspaceId } : {}),
         sourceEntityId: body.sourceEntityId,
         targetEntityId: body.targetEntityId,
         type: body.type,

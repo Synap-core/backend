@@ -9,10 +9,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, workspaceProcedure, podProcedure } from "../trpc.js";
+import { router, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { entitiesRouter } from "./entities.js";
-import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
+import { requireUserId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveIntelligenceService,
@@ -420,7 +420,7 @@ export const captureRouter = router({
    * Capture a raw thought — single entity classify + create.
    * Kept for backward compat with @synap/client SDK.
    */
-  thought: workspaceProcedure
+  thought: podProcedure
     .use(aiRateLimitMiddleware)
     .input(
       z.object({
@@ -434,7 +434,11 @@ export const captureRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = requireWorkspaceId(ctx.workspaceId);
+      // Pod-wide allowed (twin of capture.structure): no workspace is required.
+      // Placement is derived by the entities.create door below (which routes
+      // through resolveWorkspacePlacement) — `workspaceScoped: true` keeps a
+      // present workspace as the lens and lands pod-wide when there is none.
+      const workspaceId = ctx.workspaceId; // string | null
 
       logger.debug(
         { userId, contentLength: input.content.length },
@@ -452,7 +456,7 @@ export const captureRouter = router({
         const profileService = new ProfileResolutionService(profileDb);
         const accessibleProfiles = await profileService.getAccessibleProfiles(
           userId,
-          workspaceId
+          workspaceId ?? ""
         );
         const availableProfiles = buildAvailableProfiles(
           accessibleProfiles as unknown as AccessibleProfileLike[]
@@ -460,7 +464,7 @@ export const captureRouter = router({
 
         const { client } = await resolveIntelligenceService({
           userId,
-          workspaceId: workspaceId,
+          workspaceId: workspaceId ?? undefined,
           capability: "default",
         });
         const result = await client.structure({
@@ -1701,7 +1705,42 @@ export const captureRouter = router({
         sessionId: input.sessionId,
         relatedEntityIds: batchRelatedEntityIds,
       });
-      const resolvedProjectId = projectPlacement.projectId;
+      let resolvedProjectId = projectPlacement.projectId;
+      // An EXPLICIT pin (rung 1) must reference a REAL, visible project before we
+      // stamp a `belongs_to_project` edge. resolveProjectPlacement is a PURE
+      // resolver — it trusts the id blindly — and `relations.target_entity_id`
+      // has NO FK to `projects`, so a pin to a non-existent / invisible project
+      // would write a GHOST membership edge the project-lens read never resolves:
+      // a SILENT DROP reported as `✓ stored`. Verify existence here (same
+      // pod-wide-owner / workspace-member visibility as this door's own project
+      // list, above) so an explicit pin either LINKS a real project or is
+      // reported `not_linked` — never silently dropped. A bare-UUID pin carries
+      // no name to create a project from (the name-ref propose-create lane is
+      // `resolveCaptureProjectRef`'s `projectCandidate`), so a missing pin links
+      // nothing and says so in the receipt.
+      let explicitPinMissing = false;
+      if (resolvedProjectId && projectPlacement.rung === 1) {
+        const [pinned] = await database
+          .select({ id: projects.id })
+          .from(projects)
+          .where(
+            and(
+              eq(projects.id, resolvedProjectId),
+              or(
+                and(isNull(projects.workspaceId), eq(projects.userId, userId)),
+                and(
+                  isNotNull(projects.workspaceId),
+                  userVisibleWhere(projects.workspaceId, userId)
+                )
+              )
+            )
+          )
+          .limit(1);
+        if (!pinned) {
+          explicitPinMissing = true;
+          resolvedProjectId = null;
+        }
+      }
       // AI advisory: only when NO deterministic project resolved AND the AI's
       // pick clears the confidence floor. Recorded on the capture proposal (a
       // suggestion), NEVER linked and NEVER threaded into the governance gate —
@@ -2511,6 +2550,11 @@ export const captureRouter = router({
         // (or the MCP adapter) can state it: a DETERMINISTIC auto-link landed
         // (rung 1-4), an AI suggestion was proposed (advisory, awaiting confirm),
         // or nothing. Only present when the project axis engaged at all.
+        // Honest intent-vs-outcome on the project axis (the receipt the CLI
+        // surfaces): `linked` (a deterministic rung stamped membership),
+        // `not_linked` (an explicit pin that named a project this user can't see
+        // / that doesn't exist — the drop is NAMED, never silent), or `proposed`
+        // (an AI suggestion awaiting confirmation).
         ...(resolvedProjectId
           ? {
               project: {
@@ -2519,15 +2563,24 @@ export const captureRouter = router({
                 status: "linked" as const,
               },
             }
-          : aiProjectAdvisoryId
+          : explicitPinMissing
             ? {
                 project: {
-                  projectId: aiProjectAdvisoryId,
                   rung: null,
-                  status: "proposed" as const,
+                  status: "not_linked" as const,
+                  reason: "project-not-found",
                 },
               }
-            : {}),
+            : aiProjectAdvisoryId
+              ? {
+                  project: {
+                    projectId: aiProjectAdvisoryId,
+                    rung: null,
+                    status: "proposed" as const,
+                    reason: "inferred-not-pinned",
+                  },
+                }
+              : {}),
       };
     }),
 

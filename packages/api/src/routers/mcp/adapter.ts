@@ -15,6 +15,8 @@ import { projectsRouter } from "../projects.js";
 import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
+import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
+import { isAllowedMimeType, MAX_FILE_SIZE } from "../file-upload.js";
 import { validateCreateVerbInput } from "./validate-create-verb.js";
 import {
   getObjectGraph,
@@ -304,6 +306,7 @@ const SESSION_LINKED_TOOLS = new Set([
   "synap_create_entity",
   "synap_update_entity",
   "synap_create_document",
+  "synap_store_file",
   "synap_remember_fact",
   "synap_link_entities",
   "synap_attach_facet",
@@ -482,6 +485,21 @@ interface CaptureWriteReceipt {
   state: "applied" | "rejected";
   effectiveWorkspaceId: string | null;
   projectId?: string;
+  /**
+   * Per-requested-coordinate PROJECT outcome — intent measured against what
+   * ACTUALLY happened, so a dropped pin is never silent (the false-success bug).
+   * `linked` = a deterministic rung stamped `belongs_to_project`; `not_linked` =
+   * a coordinate the caller requested that did NOT happen (with a `reason`, e.g.
+   * `project-not-found` for a pin to a project this user can't see, or
+   * `inferred-not-pinned` for an unconfirmed AI guess); `proposed` = an AI
+   * suggestion awaiting confirmation. Omitted only when no project was requested.
+   */
+  project?: {
+    status: "linked" | "not_linked" | "proposed";
+    projectId?: string;
+    rung?: number | null;
+    reason?: string;
+  };
   source: string;
 }
 
@@ -995,6 +1013,124 @@ export async function executeMCPToolViaHubProtocol(
       });
     }
 
+    case "synap_store_file": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      // Bound the unreviewed-upload vector, same limiter bucket as POST /files.
+      // MCP hardcodes apiKeyId ("mcp") in the ctx, so key the limit on the acting
+      // caller identity (agent, else operator) for per-caller isolation.
+      try {
+        checkHubRateLimit(agentUserId ?? userId, "files");
+      } catch {
+        throw new Error(
+          "Rate limit exceeded for file storage (30/min). Retry shortly."
+        );
+      }
+
+      const filename =
+        typeof args.filename === "string" ? args.filename.trim() : "";
+      const mimeType =
+        typeof args.mimeType === "string" ? args.mimeType.trim() : "";
+      if (!filename) throw new Error("filename is required.");
+      if (!mimeType) throw new Error("mimeType is required.");
+
+      // Exactly ONE of content (UTF-8 text) | contentBase64 (binary).
+      const hasText = typeof args.content === "string";
+      const hasBase64 = typeof args.contentBase64 === "string";
+      if (hasText === hasBase64) {
+        throw new Error(
+          "Provide exactly one of `content` (UTF-8 text) or `contentBase64` (binary)."
+        );
+      }
+      const buffer = hasText
+        ? Buffer.from(args.content as string, "utf-8")
+        : Buffer.from(args.contentBase64 as string, "base64");
+
+      // SAME guards as the POST /files door: non-empty, allowed mime, size cap.
+      if (buffer.length === 0) throw new Error("Decoded file is empty.");
+      if (!isAllowedMimeType(mimeType)) {
+        throw new Error(`MIME type not allowed: ${mimeType}`);
+      }
+      if (buffer.length > MAX_FILE_SIZE) {
+        throw new Error(
+          `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB via this inline path. ` +
+            "For a large file on disk, use the CLI `synap upload`."
+        );
+      }
+
+      // Use the CONFINED workspace (service-key clamp), never a raw model id.
+      // A store needs a concrete workspace for the storage path + membership.
+      if (!requestedWorkspaceId) {
+        throw new Error(
+          "workspaceId is required (none was supplied or accessible to your key)."
+        );
+      }
+      const storeWorkspaceId = requestedWorkspaceId;
+
+      const title =
+        typeof args.title === "string" && args.title.trim()
+          ? args.title.trim()
+          : undefined;
+      const attachToEntityId =
+        typeof args.attachToEntityId === "string" &&
+        args.attachToEntityId.trim()
+          ? args.attachToEntityId.trim()
+          : undefined;
+
+      // ── Attach mode: stored blob → provenance on an existing entity ────────
+      // SAME internal door as POST /entities/:id/source-file. A stored blob,
+      // NEVER analyzed — no capture/intelligence path is touched.
+      if (attachToEntityId) {
+        const { storeEntitySourceBlob } =
+          await import("../../utils/store-entity-source-blob.js");
+        const attached = await storeEntitySourceBlob({
+          database: db,
+          userId,
+          entityId: attachToEntityId,
+          buffer,
+          mimeType,
+          filename,
+          workspaceId: storeWorkspaceId,
+        });
+        return ok({
+          entityId: attachToEntityId,
+          documentId: attached.documentId,
+          status: "attached",
+        });
+      }
+
+      // ── New `file` entity via the GOVERNED, non-HTTP entry point ───────────
+      // Deterministic store → governed `entities.create` (propose or auto-apply).
+      // `agentUserId` is threaded for honest provenance. No LLM is ever called.
+      const { createGovernedFileEntityFromBuffer } =
+        await import("../create-governed-file-entity.js");
+      const stored = await createGovernedFileEntityFromBuffer({
+        buffer,
+        mimeType,
+        filename,
+        title,
+        userId,
+        workspaceId: storeWorkspaceId,
+        agentUserId,
+        scopes: apiKeyScopes,
+        sessionId,
+        keyType,
+        keyWorkspaceId,
+      });
+      if (stored.status === "proposed") {
+        return ok({
+          proposalId: stored.proposalId,
+          documentId: stored.documentId,
+          status: "proposed",
+          reviewUrl: stored.reviewUrl,
+        });
+      }
+      return ok({
+        fileEntityId: stored.fileEntityId,
+        documentId: stored.documentId,
+        status: "created",
+      });
+    }
+
     case "synap_remember_fact": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
       // GOVERNED: a fact about the user is a `user_observation` entity now, not
@@ -1242,17 +1378,16 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_link_entities": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      // Confined workspace (service-key clamp) before the first-ws fallback, so a
-      // bound key never writes a relation into a non-bound workspace.
-      let linkWsId = requestedWorkspaceId;
-      if (!linkWsId) {
-        const ids = await getUserWorkspaceIds(userId);
-        linkWsId = ids[0];
-      }
-      if (!linkWsId) return ok({ error: "No accessible workspace found" });
+      // Placement + governance workspace are DERIVED from the two endpoints (rung
+      // 4 — relational gravity) inside relations.create. We no longer fabricate an
+      // arbitrary `getUserWorkspaceIds()[0]` (the latent wrong-placement bug —
+      // that filed the edge into a random workspace the user happened to be first
+      // in). The confined lens (requestedWorkspaceId — the service-key clamp) is
+      // passed ONLY when present so a bound key stays pinned; absent → the door
+      // derives from the endpoints' shared lens.
       const result = await caller.relations.createRelation({
         userId,
-        workspaceId: linkWsId,
+        ...(requestedWorkspaceId ? { workspaceId: requestedWorkspaceId } : {}),
         sourceEntityId: args.sourceEntityId as string,
         targetEntityId: args.targetEntityId as string,
         type: (args.type as string) || "related",
@@ -2324,9 +2459,10 @@ export async function executeMCPToolViaHubProtocol(
         movedToWorkspace?: string;
         pendingWorkspaceSwitch?: unknown;
         project?: {
-          projectId: string;
+          projectId?: string;
           rung: number | null;
-          status: "linked" | "proposed";
+          status: "linked" | "proposed" | "not_linked";
+          reason?: string;
         };
       };
       // The scope echo must be what the write ACTUALLY landed in: routing may
@@ -2341,6 +2477,10 @@ export async function executeMCPToolViaHubProtocol(
         state: "applied",
         effectiveWorkspaceId: landedWsId,
         ...(landedProjectId ? { projectId: landedProjectId } : {}),
+        // Intent-vs-outcome on the project axis: a requested pin that did NOT
+        // link (not_linked) is NAMED here, never dropped silently under an
+        // otherwise-"applied" receipt.
+        ...(ex.project ? { project: ex.project } : {}),
         source: "agent",
       };
       return ok({
@@ -2369,7 +2509,9 @@ export async function executeMCPToolViaHubProtocol(
               projectDisposition:
                 ex.project.status === "linked"
                   ? `linked by context (rung ${ex.project.rung})`
-                  : "proposed (AI suggestion — confirm to file)",
+                  : ex.project.status === "not_linked"
+                    ? `not linked (${ex.project.reason ?? "unavailable"})`
+                    : "proposed (AI suggestion — confirm to file)",
             }
           : {}),
       });

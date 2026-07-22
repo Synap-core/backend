@@ -11,6 +11,7 @@
 import { z } from "zod";
 import {
   podAdminProcedure,
+  podProcedure,
   protectedProcedure,
   router,
   workspaceProcedure,
@@ -36,9 +37,11 @@ import {
   readDocumentVersionContent,
   EntityBodyService,
   eventRepository,
+  resolveWorkspacePlacement,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { randomUUID } from "crypto";
@@ -114,18 +117,23 @@ export const documentsRouter = router({
    * Synchronous: inserts directly into DB + MinIO so the document ID is
    * immediately usable by the frontend (no event-pipeline race condition).
    */
-  create: workspaceProcedure
+  create: podProcedure
     .input(CreateDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
-        });
-      }
+      // Placement via the ONE door (no 400): an explicit input/header workspace
+      // wins (rung 1); with no signal a document lands pod-wide — documents are
+      // pod-wide-natured and the MinIO path keys on userId, not workspace.
+      const placement = await resolveWorkspacePlacement(db, {
+        userId,
+        explicitWorkspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
+        ambientWorkspaceId: ctx.workspaceId ?? null,
+      });
+      const workspaceId = placement.workspaceId;
+      // podProcedure dropped workspaceProcedure's membership gate — re-assert the
+      // write on the RESOLVED workspace (editor+ for a workspace row; the owner
+      // for a pod-wide row), never a request-supplied id.
+      await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
       const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;
@@ -198,18 +206,22 @@ export const documentsRouter = router({
    * Upload a new document.
    * Synchronous: inserts directly into DB + MinIO.
    */
-  upload: workspaceProcedure
+  upload: podProcedure
     .input(UploadDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
-        });
-      }
+      // Placement via the ONE door (no 400): an explicit input/header workspace
+      // wins (rung 1); with no signal an uploaded document lands pod-wide — the
+      // MinIO path keys on userId, so nothing storage-related needs the workspace.
+      const placement = await resolveWorkspacePlacement(db, {
+        userId,
+        explicitWorkspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
+        ambientWorkspaceId: ctx.workspaceId ?? null,
+      });
+      const workspaceId = placement.workspaceId;
+      // podProcedure dropped workspaceProcedure's membership gate — re-assert the
+      // write on the RESOLVED workspace, never a request-supplied id.
+      await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
       const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;

@@ -634,6 +634,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0020_pod_settings.sql",
   },
 
+  // pod_members — durable pod-membership identity (0205). Absence means a pod is
+  // on a pre-0205 schema where the AccessContext pod-membership lookup / the
+  // Wave 2 podShared floor branch would reference a missing table.
+  {
+    table: "pod_members",
+    column: "user_id",
+    addedBy: "0205_pod_members.sql",
+  },
+  {
+    table: "pod_members",
+    column: "pod_role",
+    addedBy: "0205_pod_members.sql",
+  },
+
   // workspaces — soft-archive support (0020)
   {
     table: "workspaces",

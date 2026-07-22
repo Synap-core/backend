@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   and: vi.fn(),
@@ -26,10 +26,73 @@ vi.mock("./middleware/security.js", () => ({
 }));
 
 import {
+  isAllowedOrigin,
   isApprovedApplicationOrigin,
   isApprovedApplicationOriginForClient,
   rejectsUnapprovedExternalPodApiRequest,
 } from "./cors-origin.js";
+
+describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
+  const KEYS = [
+    "SYNAP_BASE_DOMAIN",
+    "PUBLIC_URL",
+    "DOMAIN",
+    "ALLOWED_ORIGINS",
+  ] as const;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]])) as Record<
+      string,
+      string | undefined
+    >;
+    for (const k of KEYS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("derives the base from PUBLIC_URL when SYNAP_BASE_DOMAIN is unset — a sibling surface is first-party", () => {
+    process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
+    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://pod.thearch.synap.live")).toBe(true);
+  });
+
+  it("self-heals a STALE SYNAP_BASE_DOMAIN left over from a previous domain", () => {
+    process.env.SYNAP_BASE_DOMAIN = "team.thearchitech.xyz"; // pre-migration value
+    process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
+    // the new sibling is first-party (healed to the current PUBLIC_URL) …
+    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+    // … and the stale base no longer admits its old siblings
+    expect(isAllowedOrigin("https://pod-admin.team.thearchitech.xyz")).toBe(
+      false
+    );
+  });
+
+  it("honors an explicit SYNAP_BASE_DOMAIN when the pod lives under it (incl. a broader base)", () => {
+    process.env.SYNAP_BASE_DOMAIN = "synap.live"; // intentionally broad
+    process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
+    expect(isAllowedOrigin("https://crm.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+  });
+
+  it("trusts an explicit base for a custom apex domain it cannot derive", () => {
+    process.env.SYNAP_BASE_DOMAIN = "mycorp.io";
+    process.env.PUBLIC_URL = "https://synap.mycorp.io"; // no pod/pod-admin prefix → not derivable
+    expect(isAllowedOrigin("https://app.mycorp.io")).toBe(true);
+  });
+
+  it("never widens to a bare TLD (security guard)", () => {
+    // pod.io would strip to "io"; the ≥2-label guard rejects that
+    process.env.PUBLIC_URL = "https://pod.io";
+    expect(isAllowedOrigin("https://evil.io")).toBe(false);
+    // the pod's own exact origin still works via the explicit PUBLIC_URL allowlist
+    expect(isAllowedOrigin("https://pod.io")).toBe(true);
+  });
+});
 
 describe("approved application origin CORS policy (origin allowlist plane)", () => {
   beforeEach(() => {
