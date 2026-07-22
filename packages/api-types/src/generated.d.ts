@@ -5152,6 +5152,11 @@ export interface CreateCapabilityResult {
 			vaultRef: string;
 			secretId: string;
 		}[];
+		mcpServers: {
+			slug: string;
+			status: "created" | "reused";
+			serverId: string | null;
+		}[];
 		tools: {
 			name: string;
 			status: "created" | "proposed";
