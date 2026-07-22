@@ -41,8 +41,10 @@ import {
   playbooks as playbooksTable,
   automations as automationsTable,
   capabilities as capabilitiesTable,
+  mcpServers as mcpServersTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
+import { invalidateMcpCache } from "../../routers/channels.js";
 import type {
   CapabilityDefinition,
   CapabilitySkillDef,
@@ -169,10 +171,35 @@ export interface CapabilityAutomationDef {
   state?: Record<string, unknown>;
 }
 
-/** Definition the applier accepts — the shared contract plus optional playbooks + automations. */
+/**
+ * An MCP server the capability registers so agents get live tools and
+ * `mcp://<slug>` tools can resolve. Idempotent on (workspaceId, slug).
+ * Installing a trusted package may set `approved: true` (the install IS the
+ * trust decision); default is false (owner must approve under Settings).
+ */
+export interface CapabilityMcpServerDef {
+  slug: string;
+  name: string;
+  description?: string;
+  transport: "http" | "stdio";
+  /** Required when transport is "http". */
+  url?: string;
+  /** Required when transport is "stdio". */
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+  /** Default false — supply-chain gate. Trusted public MCP packs may set true. */
+  approved?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/** Definition the applier accepts — the shared contract plus optional playbooks + automations + MCP servers. */
 export type CapabilityDefinitionWithPlaybooks = CapabilityDefinition & {
   playbooks?: CapabilityPlaybookDef[];
   automations?: CapabilityAutomationDef[];
+  /** Register MCP server rows (live agent tools + mcp:// credential resolution). */
+  mcpServers?: CapabilityMcpServerDef[];
 };
 
 // ── Result shape ──────────────────────────────────────────────────────────────
@@ -187,6 +214,11 @@ export interface CreateCapabilityResult {
       status: "created" | "reused";
     } | null;
     vault: { ref: string; vaultRef: string; secretId: string }[];
+    mcpServers: {
+      slug: string;
+      status: "created" | "reused";
+      serverId: string | null;
+    }[];
     tools: {
       name: string;
       status: "created" | "proposed";
@@ -328,6 +360,91 @@ export async function createCapabilityFromDefinition(
     );
     vaultByRef.set(v.ref, vaultRef.vaultRef);
     createdVault.push({ ref: v.ref, ...vaultRef });
+  }
+
+  // 1b. MCP servers — register before tools so `mcp://<slug>` credentialRefs
+  //     resolve. Idempotent on (workspace scope, slug). Scope mirrors tools:
+  //     pod-scoped capability → null workspaceId; else active workspace.
+  const createdMcpServers: CreateCapabilityResult["created"]["mcpServers"] = [];
+  const mcpDefs = (def as CapabilityDefinitionWithPlaybooks).mcpServers ?? [];
+  for (const m of mcpDefs) {
+    if (m.transport === "http" && !m.url) {
+      throw new Error(
+        `Capability "${def.key}" mcpServers["${m.slug}"] transport=http requires url`
+      );
+    }
+    if (m.transport === "stdio" && !m.command) {
+      throw new Error(
+        `Capability "${def.key}" mcpServers["${m.slug}"] transport=stdio requires command`
+      );
+    }
+    const [existingMcp] = await db
+      .select({ id: mcpServersTable.id })
+      .from(mcpServersTable)
+      .where(
+        and(
+          eq(mcpServersTable.slug, m.slug),
+          connWorkspaceId
+            ? eq(mcpServersTable.workspaceId, connWorkspaceId)
+            : isNull(mcpServersTable.workspaceId)
+        )
+      )
+      .limit(1);
+
+    if (existingMcp) {
+      await db
+        .update(mcpServersTable)
+        .set({
+          name: m.name,
+          description: m.description ?? null,
+          transport: m.transport,
+          command: m.command ?? null,
+          args: m.args ?? [],
+          url: m.url ?? null,
+          env: m.env ?? {},
+          enabled: m.enabled !== false,
+          // Only promote approval (never silently demote on re-apply).
+          ...(m.approved === true ? { approved: true } : {}),
+          metadata: {
+            ...((m.metadata as Record<string, unknown>) ?? {}),
+            sourceCapability: def.key,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(mcpServersTable.id, existingMcp.id));
+      createdMcpServers.push({
+        slug: m.slug,
+        status: "reused",
+        serverId: existingMcp.id,
+      });
+    } else {
+      const [row] = await db
+        .insert(mcpServersTable)
+        .values({
+          workspaceId: connWorkspaceId ?? null,
+          slug: m.slug,
+          name: m.name,
+          description: m.description ?? null,
+          transport: m.transport,
+          command: m.command ?? null,
+          args: m.args ?? [],
+          url: m.url ?? null,
+          env: m.env ?? {},
+          enabled: m.enabled !== false,
+          approved: m.approved === true,
+          metadata: {
+            ...((m.metadata as Record<string, unknown>) ?? {}),
+            sourceCapability: def.key,
+          },
+        })
+        .returning({ id: mcpServersTable.id });
+      createdMcpServers.push({
+        slug: m.slug,
+        status: "created",
+        serverId: row?.id ?? null,
+      });
+    }
+    invalidateMcpCache(connWorkspaceId ?? null);
   }
 
   // 2. Tools — through the GOVERNED toolsRouter caller. Remap a credentialRef
@@ -894,6 +1011,7 @@ export async function createCapabilityFromDefinition(
     created: {
       container,
       vault: createdVault,
+      mcpServers: createdMcpServers,
       tools: createdTools,
       skills: createdSkills,
       playbooks: createdPlaybooks,

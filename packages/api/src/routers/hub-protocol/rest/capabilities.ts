@@ -132,6 +132,25 @@ export const PlaybookDefSchema = z.object({
   status: z.enum(["draft", "active", "paused", "archived"]).optional(),
 });
 
+export const McpServerDefSchema = z.object({
+  slug: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/),
+  name: z.string().min(1).max(128),
+  description: z.string().optional(),
+  transport: z.enum(["http", "stdio"]),
+  url: z.string().url().optional(),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  enabled: z.boolean().optional(),
+  /** Trusted package install may approve the official public MCP endpoint. */
+  approved: z.boolean().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const CapabilityDefinitionSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
@@ -140,6 +159,8 @@ export const CapabilityDefinitionSchema = z.object({
   vault: z.array(VaultDefSchema).optional(),
   tools: z.array(ToolDefSchema),
   skills: z.array(SkillDefSchema),
+  // Optional: MCP servers registered so agents get live tools + mcp:// resolves.
+  mcpServers: z.array(McpServerDefSchema).optional(),
   // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
   playbooks: z.array(PlaybookDefSchema).optional(),
   // Optional: WHEN→THEN automations seeded alongside the capability (e.g. a
@@ -185,6 +206,7 @@ const ApplyCapabilityResponseSchema = z.object({
   capabilityKey: z.string(),
   created: z.object({
     vault: z.array(z.record(z.string(), z.unknown())),
+    mcpServers: z.array(z.record(z.string(), z.unknown())).optional(),
     tools: z.array(z.record(z.string(), z.unknown())),
     skills: z.array(z.record(z.string(), z.unknown())),
     playbooks: z.array(z.record(z.string(), z.unknown())),

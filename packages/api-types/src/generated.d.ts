@@ -3493,7 +3493,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "workspace";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates" | "provides_credential";
 /**
@@ -5308,7 +5308,7 @@ export interface GraphNeighbor extends GraphNode {
 	edgeType: string;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
-	via: "links" | "relations" | "property" | "channel" | "session";
+	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation";
 }
 /** "Fetch X, get X + everything it's linked to, typed." */
 export interface GraphEnvelope {
@@ -12695,7 +12695,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getObjectGraph: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
-				type?: "session" | "source" | "channel" | "command" | "tool" | "skill" | "workspace" | "project" | "entity" | "view" | "document" | "playbook" | "participant" | "automation" | undefined;
+				type?: "session" | "source" | "channel" | "command" | "tool" | "skill" | "workspace" | "project" | "entity" | "view" | "document" | "agent" | "playbook" | "participant" | "automation" | "capability" | undefined;
 				workspaceId?: string | null | undefined;
 			};
 			output: GraphEnvelope;
@@ -19356,6 +19356,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					createdAt: Date;
 					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		feedTargets: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+			} | undefined;
+			output: {
+				targets: {
+					automationId: string;
+					mode: "per_type" | "per_entity" | "trigger";
+					channelId?: string;
+					channelTitle?: string;
+					subjectProfileSlug?: string;
+					fansOut?: boolean;
 				}[];
 			};
 			meta: object;
