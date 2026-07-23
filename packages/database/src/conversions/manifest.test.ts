@@ -161,21 +161,62 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
     }
   });
 
-  it("declares the two remaining knowledge-family convertToFacet ops, all targeting item", () => {
-    // Decision 1 retired question/research/decision as convert ops — they stay
-    // primary KINDS. Only knowledge + user_observation still convert onto item.
-    const expected = [
-      ["w4.convert.user_observation", "user_observation"],
-      ["w4.convert.knowledge", "knowledge"],
+  it("retires knowledge + user_observation convert ops to keeps (Decision 1 — the whole knowledge-workflow family stays KINDS)", () => {
+    // The full knowledge-workflow family are distinct entities related by edges,
+    // not identity hats — so all five stay primary kinds. knowledge keeps ek_type
+    // as a PROPERTY enum (not four sub-roles). These were the last two still
+    // converting onto item; now retired to ledger keeps.
+    const retired = [
+      "w4.convert.user_observation",
+      "w4.convert.knowledge",
+      "w5.reconvert.knowledge-drift",
     ] as const;
-    for (const [opKey, slug] of expected) {
+    for (const opKey of retired) {
       const op = CONVERSION_MANIFEST.ops.find((o) => o.opKey === opKey);
       expect(op).toBeDefined();
-      expect(op?.op).toBe("convertToFacet");
-      if (op?.op === "convertToFacet") {
+      expect(op?.op).toBe("keep");
+    }
+  });
+
+  it("reverts the whole knowledge-workflow family to kinds via w6 convertToKind ops", () => {
+    const family = [
+      "question",
+      "research",
+      "decision",
+      "knowledge",
+      "user_observation",
+    ] as const;
+    for (const slug of family) {
+      const op = CONVERSION_MANIFEST.ops.find(
+        (o) => o.opKey === `w6.revert.${slug}`
+      );
+      expect(op).toBeDefined();
+      expect(op?.op).toBe("convertToKind");
+      if (op?.op === "convertToKind") {
         expect(op.slug).toBe(slug);
-        expect(op.targetKindSlug).toBe("item");
-        expect(op.applicableKinds).toEqual(["item"]);
+        expect(op.fromKindSlug).toBe("item");
+        // familySlugs must cover the whole family so the park guard is symmetric.
+        expect([...op.familySlugs].sort()).toEqual([...family].sort());
+      }
+    }
+    // question/research/decision restore their status + project context; the two
+    // annotation kinds (knowledge/user_observation) carried neither.
+    for (const slug of ["question", "research", "decision"] as const) {
+      const op = CONVERSION_MANIFEST.ops.find(
+        (o) => o.opKey === `w6.revert.${slug}`
+      );
+      if (op?.op === "convertToKind") {
+        expect(op.statusInto).toBeTruthy();
+        expect(op.contextInto).toBe("projectId");
+      }
+    }
+    for (const slug of ["knowledge", "user_observation"] as const) {
+      const op = CONVERSION_MANIFEST.ops.find(
+        (o) => o.opKey === `w6.revert.${slug}`
+      );
+      if (op?.op === "convertToKind") {
+        expect(op.statusInto).toBeUndefined();
+        expect(op.contextInto).toBeUndefined();
       }
     }
   });
@@ -195,17 +236,22 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
     }
   });
 
-  it("every w4 convertToFacet op has a non-empty propertyMapping with real slugs", () => {
+  it("has no remaining w4 convertToFacet ops — the knowledge-workflow family is fully retired to kinds", () => {
+    // Decision 1 retired every w4 knowledge-family convert; the CRM roles convert
+    // under w3c opKeys, so zero w4 convertToFacet ops should remain.
     const w4Converts = CONVERSION_MANIFEST.ops.filter(
       (o) => o.op === "convertToFacet" && o.opKey.startsWith("w4.")
     );
-    expect(w4Converts.length).toBe(2);
-    for (const op of w4Converts) {
-      if (op.op !== "convertToFacet") continue;
-      const mapping = op.propertyMapping ?? {};
-      const entries = Object.entries(mapping);
-      expect(entries.length).toBeGreaterThan(0);
-      for (const [src, tgt] of entries) {
+    expect(w4Converts.length).toBe(0);
+  });
+
+  it("every convertToFacet op that carries a propertyMapping has real slugs", () => {
+    const converts = CONVERSION_MANIFEST.ops.filter(
+      (o) => o.op === "convertToFacet"
+    );
+    for (const op of converts) {
+      if (op.op !== "convertToFacet" || !op.propertyMapping) continue;
+      for (const [src, tgt] of Object.entries(op.propertyMapping)) {
         expect(src.trim().length).toBeGreaterThan(0);
         expect(tgt.trim().length).toBeGreaterThan(0);
       }
@@ -277,6 +323,40 @@ describe("validateManifest", () => {
       ],
     };
     expect(() => validateManifest(m)).toThrow(/at least one applicableKind/);
+  });
+
+  it("rejects convertToKind promoting from its own slug", () => {
+    const m: ConversionManifest = {
+      version: 1,
+      ops: [
+        {
+          op: "convertToKind",
+          opKey: "x",
+          slug: "knowledge",
+          fromKindSlug: "knowledge",
+          familySlugs: ["knowledge"],
+        },
+      ],
+    };
+    expect(() => validateManifest(m)).toThrow(
+      /cannot promote from its own slug/
+    );
+  });
+
+  it("rejects convertToKind with empty familySlugs", () => {
+    const m: ConversionManifest = {
+      version: 1,
+      ops: [
+        {
+          op: "convertToKind",
+          opKey: "x",
+          slug: "knowledge",
+          fromKindSlug: "item",
+          familySlugs: [],
+        },
+      ],
+    };
+    expect(() => validateManifest(m)).toThrow(/familySlugs/);
   });
 
   it("rejects mergeInto merging a slug into itself", () => {

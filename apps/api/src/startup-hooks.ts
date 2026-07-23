@@ -34,6 +34,7 @@ import {
   fetchFederationMetadata,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
+import { backfillFederationOidcCredentials } from "./routers/federation.js";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -552,6 +553,10 @@ export async function runStartupHooks(): Promise<void> {
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod
   await seedControlPlaneIssuer(); // Deterministically trust the CP for federated sign-in
+  // Self-heal existing federated identities: attach the `cp` OIDC credential so
+  // "Continue with Synap Cloud" completes silently (no Kratos account-linking).
+  // Idempotent + best-effort.
+  await backfillFederationOidcCredentials();
   await loadCorsOrigins();
   await configureN8NWebhook();
   await configureLangFlow();

@@ -101,6 +101,115 @@ export async function getIdentityById(identityId: string): Promise<any | null> {
 }
 
 /**
+ * Attach an OIDC provider credential to an EXISTING Kratos identity.
+ *
+ * This is the missing wire behind silent federated sign-in: the pod records a
+ * federated link in its own DB, but Kratos only completes an OIDC login without
+ * a manual account-linking step if the identity actually carries the matching
+ * `oidc` credential. Kratos has no "add one credential" admin endpoint, so we
+ * fetch the identity WITH its credential configs, merge the new provider into
+ * `oidc.config.providers`, and PUT the whole identity back — re-supplying the
+ * existing `hashed_password` so the password credential is preserved, never
+ * wiped. Idempotent: a provider+subject already present is a no-op.
+ *
+ * @returns { ok: true } on success (or already-linked), else a reason string.
+ */
+export async function attachOidcCredentialToIdentity(input: {
+  kratosIdentityId: string;
+  provider: string; // Kratos oidc provider id, e.g. "cp"
+  subject: string; // the OIDC `sub` claim (the CP user id)
+}): Promise<{ ok: boolean; reason?: string }> {
+  const id = input.kratosIdentityId.trim();
+  const provider = input.provider.trim();
+  const subject = input.subject.trim();
+  if (!id || !provider || !subject) {
+    return { ok: false, reason: "missing-input" };
+  }
+
+  // 1. Read the identity WITH its credential configs (password hash + any
+  //    existing oidc providers). Without include_credential the configs are
+  //    redacted and a PUT would drop the password.
+  const getRes = await fetch(
+    `${kratosAdminUrl}/admin/identities/${encodeURIComponent(id)}` +
+      `?include_credential=password&include_credential=oidc`,
+    { signal: AbortSignal.timeout(8_000) }
+  ).catch(() => null);
+  if (!getRes?.ok) {
+    return {
+      ok: false,
+      reason: `identity-fetch-failed:${getRes?.status ?? "network"}`,
+    };
+  }
+  const identity = (await getRes.json().catch(() => null)) as {
+    schema_id?: string;
+    state?: string;
+    traits?: unknown;
+    metadata_public?: unknown;
+    metadata_admin?: unknown;
+    credentials?: {
+      password?: { config?: { hashed_password?: string } };
+      oidc?: {
+        config?: { providers?: Array<{ provider?: string; subject?: string }> };
+      };
+    };
+  } | null;
+  if (!identity?.schema_id) {
+    return { ok: false, reason: "identity-malformed" };
+  }
+
+  const existingProviders = identity.credentials?.oidc?.config?.providers ?? [];
+  if (
+    existingProviders.some(
+      (p) => p.provider === provider && p.subject === subject
+    )
+  ) {
+    return { ok: true }; // already linked — idempotent
+  }
+
+  const hashedPassword =
+    identity.credentials?.password?.config?.hashed_password;
+  const body = {
+    schema_id: identity.schema_id,
+    state: identity.state ?? "active",
+    traits: identity.traits,
+    ...(identity.metadata_public !== undefined
+      ? { metadata_public: identity.metadata_public }
+      : {}),
+    ...(identity.metadata_admin !== undefined
+      ? { metadata_admin: identity.metadata_admin }
+      : {}),
+    credentials: {
+      // Preserve the existing password credential by re-supplying its hash.
+      ...(hashedPassword
+        ? { password: { config: { hashed_password: hashedPassword } } }
+        : {}),
+      oidc: {
+        config: {
+          providers: [...existingProviders, { subject, provider }],
+        },
+      },
+    },
+  };
+
+  const putRes = await fetch(
+    `${kratosAdminUrl}/admin/identities/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8_000),
+    }
+  ).catch(() => null);
+  if (!putRes?.ok) {
+    return {
+      ok: false,
+      reason: `identity-update-failed:${putRes?.status ?? "network"}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * Get session from Kratos using an API session token (X-Session-Token header).
  * Used by Telegram Mini App and other API clients that authenticate via
  * Kratos API flows (which return session tokens, not cookies).

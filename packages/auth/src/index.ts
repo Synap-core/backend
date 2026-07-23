@@ -15,6 +15,7 @@ export {
   getKratosSessionByCookie,
   getIdentityById,
   getSession,
+  attachOidcCredentialToIdentity,
 } from "./ory-kratos.js";
 
 // Re-export Ory Hydra (OAuth2 Server)

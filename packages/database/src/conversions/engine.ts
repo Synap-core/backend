@@ -22,6 +22,7 @@ import type {
   ConversionManifest,
   ConversionOp,
   ConvertToFacetOp,
+  ConvertToKindOp,
   MergeIntoOp,
   SeedKindProfileOp,
   DeclareKindOp,
@@ -39,6 +40,10 @@ export interface OpCounts {
   entitiesRepointed?: number;
   facetsCreated?: number;
   facetsRepointed?: number;
+  /** convertToKind: facet rows soft-deleted as their props folded back to the entity. */
+  facetsDeactivated?: number;
+  /** convertToKind: multi-hat entities left as-is (wear >1 family facet). */
+  entitiesParked?: number;
   entitiesRescoped?: number;
   viewsRewritten?: number;
   propertyDefsRepointed?: number;
@@ -46,12 +51,7 @@ export interface OpCounts {
 }
 
 export type OpStatus =
-  | "applied"
-  | "skipped"
-  | "dry-run"
-  | "noop"
-  | "deferred"
-  | "error";
+  "applied" | "skipped" | "dry-run" | "noop" | "deferred" | "error";
 
 export interface OpResult {
   opKey: string;
@@ -277,6 +277,8 @@ async function applyOp(
       return applySeedKindProfile(tx, op);
     case "convertToFacet":
       return applyConvertToFacet(tx, op);
+    case "convertToKind":
+      return applyConvertToKind(tx, op);
     case "mergeInto":
       return applyMergeInto(tx, op, options.destructiveTail);
     case "dedupeProfileRows":
@@ -455,6 +457,122 @@ export async function applyConvertToFacet(
   }
 
   return { facetsCreated, entitiesConverted };
+}
+
+/**
+ * The INVERSE of `applyConvertToFacet`: promote a role slug back to a KIND and
+ * re-home its facet-wearing entities off the `item` shell back onto it. See
+ * `ConvertToKindOp` for the contract. One transaction (runConversions wraps
+ * applyOp in `sql.begin`), idempotent, retry-safe.
+ *
+ * Selection keys on the FACET's profile slug (not `profile_kind`), so it still
+ * moves entities even if a transient `declareKind` already flipped the profile
+ * to a kind (leaving its entities stranded on `item`). Facet-wins on property
+ * collision; multi-hat entities (wearing >1 family facet) are PARKED, not moved.
+ */
+export async function applyConvertToKind(
+  tx: Sql,
+  op: ConvertToKindOp
+): Promise<OpCounts> {
+  // Every active profile row for the slug — the kind we promote back to. The
+  // forward op flipped these IN PLACE (same id, kind→role) and never moved their
+  // property_defs, so repointing an entity onto this row restores its full
+  // schema. A slug may carry several rows (system + a workspace-scope duplicate).
+  const targetRows = await tx<Array<{ id: string }>>`
+    SELECT id FROM profiles WHERE slug = ${op.slug} AND is_active = true
+  `;
+  if (targetRows.length === 0) return {}; // Nothing on this pod.
+
+  const familyOthers = op.familySlugs.filter((s) => s !== op.slug);
+
+  // Restore facet.status / facet.context_entity_id back into entity.properties
+  // (inverse of statusFrom / contextFromProperty). Empty fragment when unset.
+  const statusFold = op.statusInto
+    ? tx`|| (CASE WHEN f.status IS NOT NULL AND f.status <> ''
+              THEN jsonb_build_object(${op.statusInto}::text, to_jsonb(f.status))
+              ELSE '{}'::jsonb END)`
+    : tx``;
+  const contextFold = op.contextInto
+    ? tx`|| (CASE WHEN f.context_entity_id IS NOT NULL
+              THEN jsonb_build_object(${op.contextInto}::text, to_jsonb(f.context_entity_id::text))
+              ELSE '{}'::jsonb END)`
+    : tx``;
+
+  let entitiesRepointed = 0;
+  let facetsDeactivated = 0;
+  let entitiesParked = 0;
+  let profilesUpdated = 0;
+
+  for (const tgt of targetRows) {
+    // (a) fold facet props back (facet-wins) + restore status/context, and
+    // repoint the entity off the shell onto this kind row (type = slug). Only
+    // shell-kind entities wearing a live facet on this row, NOT wearing a facet
+    // of any OTHER family slug (the multi-hat PARK guard).
+    const repointed = await tx`
+      UPDATE entities e
+      SET properties =
+            COALESCE(e.properties, '{}'::jsonb) || COALESCE(f.properties, '{}'::jsonb) ${statusFold} ${contextFold},
+          profile_id = ${tgt.id},
+          type = ${op.slug},
+          updated_at = now()
+      FROM entity_facets f, profiles shell
+      WHERE f.entity_id = e.id AND f.profile_id = ${tgt.id} AND f.deleted_at IS NULL
+        AND shell.slug = ${op.fromKindSlug} AND e.profile_id = shell.id
+        AND e.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets f2
+          JOIN profiles p2 ON p2.id = f2.profile_id
+          WHERE f2.entity_id = e.id AND f2.deleted_at IS NULL
+            AND p2.slug = ANY(${familyOthers}::text[])
+        )
+    `;
+    entitiesRepointed += repointed.count ?? 0;
+
+    // (b) soft-delete the facets we just folded — the entities now repointed
+    // onto this row (audit breadcrumb `metadata.convertedFrom` preserved).
+    const deactivated = await tx`
+      UPDATE entity_facets f
+      SET deleted_at = now()
+      WHERE f.profile_id = ${tgt.id} AND f.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM entities e
+          WHERE e.id = f.entity_id AND e.profile_id = ${tgt.id}
+            AND e.type = ${op.slug} AND e.deleted_at IS NULL
+        )
+    `;
+    facetsDeactivated += deactivated.count ?? 0;
+
+    // (c) count PARKED entities: still on the shell, wearing this facet AND
+    // another family facet — left as-is for manual follow-up (no single kind).
+    const parked = await tx<Array<{ n: number }>>`
+      SELECT COUNT(DISTINCT e.id)::int AS n FROM entities e
+      JOIN entity_facets f ON f.entity_id = e.id AND f.profile_id = ${tgt.id} AND f.deleted_at IS NULL
+      JOIN profiles shell ON shell.slug = ${op.fromKindSlug} AND e.profile_id = shell.id
+      WHERE e.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM entity_facets f2
+          JOIN profiles p2 ON p2.id = f2.profile_id
+          WHERE f2.entity_id = e.id AND f2.deleted_at IS NULL
+            AND p2.slug = ANY(${familyOthers}::text[])
+        )
+    `;
+    entitiesParked += parked[0]?.n ?? 0;
+
+    // (d) flip this profile row role→kind (no-op if already a kind).
+    const flipped = await tx`
+      UPDATE profiles
+      SET profile_kind = 'kind', applicable_kinds = NULL, updated_at = now()
+      WHERE id = ${tgt.id} AND profile_kind = 'role'
+    `;
+    profilesUpdated += flipped.count ?? 0;
+  }
+
+  const counts: OpCounts = {};
+  if (entitiesRepointed) counts.entitiesRepointed = entitiesRepointed;
+  if (facetsDeactivated) counts.facetsDeactivated = facetsDeactivated;
+  if (entitiesParked) counts.entitiesParked = entitiesParked;
+  if (profilesUpdated) counts.profilesUpdated = profilesUpdated;
+  return counts;
 }
 
 async function applyMergeInto(
@@ -740,6 +858,29 @@ async function computeCounts(
       `;
       const n = r[0]?.n ?? 0;
       return { entitiesConverted: n, facetsCreated: n };
+    }
+    case "convertToKind": {
+      // Count entities that WOULD be repointed off the shell: on `fromKindSlug`,
+      // wearing a live facet on this slug's profile, and NOT wearing a facet of
+      // any OTHER family slug (the park guard) — mirrors applyConvertToKind's set.
+      const familyOthers = op.familySlugs.filter((s) => s !== op.slug);
+      const r = await sql<Array<{ n: number }>>`
+        SELECT COUNT(DISTINCT e.id)::int AS n FROM entities e
+        JOIN entity_facets f ON f.entity_id = e.id AND f.deleted_at IS NULL
+        JOIN profiles src ON src.id = f.profile_id
+          AND src.slug = ${op.slug} AND src.is_active = true
+        JOIN profiles shell ON shell.slug = ${op.fromKindSlug}
+          AND e.profile_id = shell.id
+        WHERE e.deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM entity_facets f2
+            JOIN profiles p2 ON p2.id = f2.profile_id
+            WHERE f2.entity_id = e.id AND f2.deleted_at IS NULL
+              AND p2.slug = ANY(${familyOthers}::text[])
+          )
+      `;
+      const n = r[0]?.n ?? 0;
+      return n > 0 ? { entitiesRepointed: n } : {};
     }
     case "mergeInto":
       return computeMergeCounts(sql, op, options.destructiveTail);

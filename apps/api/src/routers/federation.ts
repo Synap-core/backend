@@ -10,7 +10,7 @@ import { z } from "zod";
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import jwt from "jsonwebtoken";
 import { createLogger } from "@synap-core/core";
-import { authMiddleware } from "@synap/auth";
+import { authMiddleware, attachOidcCredentialToIdentity } from "@synap/auth";
 import {
   activateFederatedMember,
   assertFederatedAccessTarget,
@@ -22,6 +22,7 @@ import {
   arrayContains,
   eq,
   getDb,
+  podSettings,
   projectPodUserAccess,
   PodOwnerAlreadyClaimedError,
   FederatedApplicationConnectionService,
@@ -211,6 +212,119 @@ function podAudience(): string | null {
 function canonicalIssuerUrl(value: string): string | null {
   const normalized = normalizeIssuerUrl(value);
   return normalized === value ? normalized : null;
+}
+
+/**
+ * The fixed Kratos OIDC provider id for CP (Synap Cloud) federation — see
+ * `kratos/oidc.cp.jsonnet`. "Continue with Synap Cloud" submits
+ * `provider: "cp"`, so an attached credential must carry exactly this id to be
+ * matched by Kratos on the callback.
+ */
+const CP_OIDC_PROVIDER = "cp";
+
+/**
+ * This pod's configured CP OIDC federation issuer (pushed by the CP into
+ * `pod_settings.federationOidcClient`). Null when the pod has no federation set
+ * up — attaching a `cp` credential would then be meaningless.
+ */
+async function getFederationOidcIssuer(): Promise<string | null> {
+  try {
+    const db = await getDb();
+    const [row] = await db
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    return row?.settings?.federationOidcClient?.issuer ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Attach the `cp` OIDC credential to a just-provisioned Kratos identity so a
+ * later "Continue with Synap Cloud" login completes SILENTLY.
+ *
+ * WHY: the pod records federated links in its own DB, but Kratos only skips its
+ * account-linking step — which returns a UI flow a native SPA can't complete —
+ * when the identity actually carries the matching `oidc` credential. This is
+ * the missing wire between the pod's link ledger and Kratos.
+ *
+ * Gated: only when this pod has CP OIDC federation configured AND the granting
+ * issuer IS that federation issuer, so a different trusted issuer can never
+ * mislabel a `cp` credential. Best-effort — never throws; a failure here must
+ * not fail the grant/bootstrap that triggered it.
+ */
+async function attachCpOidcCredentialBestEffort(input: {
+  issuerUrl: string;
+  issuerSubject: string;
+  kratosIdentityId: string;
+}): Promise<void> {
+  try {
+    const fedIssuer = await getFederationOidcIssuer();
+    if (!fedIssuer) return;
+    if (normalizeIssuerUrl(fedIssuer) !== normalizeIssuerUrl(input.issuerUrl)) {
+      return;
+    }
+    const result = await attachOidcCredentialToIdentity({
+      kratosIdentityId: input.kratosIdentityId,
+      provider: CP_OIDC_PROVIDER,
+      subject: input.issuerSubject,
+    });
+    if (!result.ok) {
+      logger.warn(
+        { reason: result.reason, kratosIdentityId: input.kratosIdentityId },
+        "CP OIDC credential attach failed (best-effort)"
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "CP OIDC credential attach threw (best-effort)");
+  }
+}
+
+/**
+ * One-time, idempotent boot backfill: every pre-existing federated identity
+ * link created before the credential wire above gets its `cp` OIDC credential
+ * attached now, so already-provisioned pods self-heal on the next deploy —
+ * their owner/members sign in via Cloud silently with no manual step.
+ * `attachOidcCredentialToIdentity` is idempotent, so re-runs are no-ops.
+ */
+export async function backfillFederationOidcCredentials(): Promise<void> {
+  try {
+    const fedIssuer = await getFederationOidcIssuer();
+    if (!fedIssuer) return;
+    const normalized = normalizeIssuerUrl(fedIssuer);
+    if (!normalized) return;
+    const issuer = await new TrustedIssuerService().getByUrl(normalized);
+    if (!issuer) return;
+    const db = await getDb();
+    const links = await db
+      .select({
+        userId: federatedIdentityLinks.userId,
+        issuerSubject: federatedIdentityLinks.issuerSubject,
+      })
+      .from(federatedIdentityLinks)
+      .where(eq(federatedIdentityLinks.issuerId, issuer.id));
+    let linked = 0;
+    let failed = 0;
+    for (const link of links) {
+      const result = await attachOidcCredentialToIdentity({
+        kratosIdentityId: link.userId,
+        provider: CP_OIDC_PROVIDER,
+        subject: link.issuerSubject,
+      });
+      if (result.ok) linked += 1;
+      else failed += 1;
+    }
+    if (links.length > 0) {
+      logger.info(
+        { total: links.length, linked, failed },
+        "Backfilled CP OIDC credentials onto existing federated identities"
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "CP OIDC credential backfill failed (best-effort)");
+  }
 }
 
 /**
@@ -1577,6 +1691,14 @@ federationRouter.post("/access-grants", async (c) => {
             projectId: claims.data.scope.id,
             role: claims.data.role,
           });
+    // Federated-native: attach the CP `cp` OIDC credential now that the
+    // identity is provisioned, so this user's next "Continue with Synap Cloud"
+    // completes silently (no Kratos account-linking step). Best-effort.
+    await attachCpOidcCredentialBestEffort({
+      issuerUrl: issuer.issuerUrl,
+      issuerSubject: claims.data.sub,
+      kratosIdentityId: kratosIdentity.identityId,
+    });
     return c.json({ success: true, ...result });
   } catch (error) {
     const compensationSucceeded =
@@ -1626,7 +1748,10 @@ federationRouter.post("/exchange", async (c) => {
     // can only say "the exact reason wasn't reported", which is a dead end for
     // the person trying to sign in AND for the owner trying to diagnose it.
     return c.json(
-      { error: "Invalid federated user assertion", code: "ASSERTION_MALFORMED" },
+      {
+        error: "Invalid federated user assertion",
+        code: "ASSERTION_MALFORMED",
+      },
       401
     );
   }
@@ -1773,7 +1898,10 @@ federationRouter.post("/exchange", async (c) => {
   const session = await mintKratosSession(user.kratosIdentityId);
   if (!session)
     return c.json(
-      { error: "Could not create Pod session", code: "POD_SESSION_MINT_FAILED" },
+      {
+        error: "Could not create Pod session",
+        code: "POD_SESSION_MINT_FAILED",
+      },
       503
     );
   setSessionCookie(c, session.sessionToken);
@@ -1926,6 +2054,15 @@ federationRouter.post("/bootstrap", async (c) => {
     }
     return c.json({ error: "Could not bootstrap Pod owner" }, 409);
   }
+
+  // Federated-native owner: attach the CP `cp` OIDC credential so the owner's
+  // first "Continue with Synap Cloud" completes silently. Best-effort; the boot
+  // backfill is the safety net if federation config lands after bootstrap.
+  await attachCpOidcCredentialBestEffort({
+    issuerUrl,
+    issuerSubject: claims.data.sub,
+    kratosIdentityId: kratosIdentity.identityId,
+  });
 
   const requiredCapabilities = [...bootstrapIssuerCapabilities];
   if (issuer.status === "pending") {

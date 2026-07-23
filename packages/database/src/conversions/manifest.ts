@@ -22,6 +22,7 @@ export type ConversionOp =
   | DeclareKindOp
   | SeedKindProfileOp
   | ConvertToFacetOp
+  | ConvertToKindOp
   | MergeIntoOp
   | KeepOp
   | ExtractNonEntityOp
@@ -88,6 +89,52 @@ export interface ConvertToFacetOp extends BaseOp {
   statusFrom?: string;
   /** Entity-property key whose (uuid) value seeds facet.context_entity_id. */
   contextFromProperty?: string;
+}
+
+/**
+ * The INVERSE of `convertToFacet`: promote a role back to a first-class kind and
+ * re-home its facet-wearing entities off the `item` shell back onto it. Ships
+ * the Decision-1 revert of the knowledge-workflow family (question / research /
+ * decision / knowledge / user_observation) from `item` roles to KINDS.
+ *
+ * Retiring the forward op to a `keep` no-op only stops FRESH pods from
+ * converting; the ledger makes a forward run one-way, so already-converted data
+ * needs this NEW-opKey op to move back. Per active profile row for `slug`:
+ *   (a) every entity currently on `fromKindSlug` (the shell `item`) that wears a
+ *       live facet on this row — and is NOT wearing a facet of any OTHER
+ *       `familySlugs` member (the multi-hat PARK guard) — has that facet's
+ *       properties folded back onto the entity (facet-wins: `e.properties ||
+ *       f.properties`), plus `statusInto`/`contextInto` restored from the facet
+ *       columns, and is repointed `profile_id → this row`, `type = slug`;
+ *   (b) the folded facet rows are SOFT-deleted (the `convertedFrom` audit
+ *       breadcrumb survives);
+ *   (c) the profile row flips `role → kind` (`applicable_kinds = NULL`) if it is
+ *       still a role.
+ *
+ * Entity selection keys off the facet's profile slug, NOT `profile_kind`, so it
+ * still moves the data even if a transient `declareKind` already flipped the
+ * profile to a kind (leaving its entities stranded on `item`). Idempotent: after
+ * a run the converted entities are off the shell and their facets deleted, so a
+ * re-run selects an empty set. Multi-hat items are counted (`entitiesParked`),
+ * never arbitrarily assigned. NOT destructive-tail (it PROMOTES a profile, never
+ * deactivates one) — so it auto-applies at boot and pods self-heal to kinds.
+ */
+export interface ConvertToKindOp extends BaseOp {
+  op: "convertToKind";
+  /** Slug of the profile being promoted from a role back into a primary kind. */
+  slug: string;
+  /** Kind the facet-wearing entities currently sit on (the shell — `item`). */
+  fromKindSlug: string;
+  /**
+   * All slugs in the revert family. An entity also wearing a facet of ANY OTHER
+   * member is PARKED (left as-is, counted) — a multi-hat item has no single
+   * correct kind.
+   */
+  familySlugs: string[];
+  /** Facet.status → this entity-property key (inverse of `statusFrom`). */
+  statusInto?: string;
+  /** Facet.context_entity_id → this entity-property key (inverse of `contextFromProperty`). */
+  contextInto?: string;
 }
 
 /**
@@ -175,17 +222,6 @@ export interface ConversionManifest {
   version: number;
   ops: ConversionOp[];
 }
-
-// Shared propertyMapping for the `knowledge` kind's w4 conversion and its w5
-// drift-repair re-run (same fields, fresh opKey — see the W5 section below).
-// One literal object referenced by both ops so the two can never silently
-// drift apart.
-const KNOWLEDGE_PROPERTY_MAPPING: Record<string, string> = {
-  ek_type: "ek_type",
-  ek_claim: "ek_claim",
-  ek_why: "ek_why",
-  ek_evidence: "ek_evidence",
-};
 
 /**
  * The Wave 3A manifest.
@@ -550,17 +586,10 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // contextFromProperty here — all four uo_* properties map straight
     // through.
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w4.convert.user_observation",
       slug: "user_observation",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: {
-        uo_observation: "uo_observation",
-        uo_category: "uo_category",
-        uo_confidence: "uo_confidence",
-        uo_validated: "uo_validated",
-      },
+      note: "RETIRED (Decision 1): user_observation stays a primary KIND. The earlier W4 intent to convert it into an `item` role is withdrawn; kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions (index.ts runs runConversions with dryRun:false), so pods that already booted this convert carry it as a role — they are moved back by w6.revert.user_observation below; retiring this op to a keep only stops FRESH pods converting.",
     },
 
     // knowledge → item: validated knowledge (gotchas/lessons/decisions/
@@ -584,12 +613,10 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // ek_type is NOT used as statusFrom — it's a category discriminator, not
     // a lifecycle status (contrast decisionStatus/questionStatus above).
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w4.convert.knowledge",
       slug: "knowledge",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: KNOWLEDGE_PROPERTY_MAPPING,
+      note: "RETIRED (Decision 1): knowledge stays a primary KIND, with ek_type as an ordinary PROPERTY enum (gotcha/lesson/decision/reference) — NOT four sub-roles (facets are an additive set; ek_type is a mutually-exclusive choice an enum enforces for free). The W4 convert into an `item` role is withdrawn; kept as a ledger no-op per append-only opKey discipline. Already-converted pods (boot auto-applies) are moved back by w6.revert.knowledge below.",
     },
 
     // Duplicate-row note: the live perso pod has TWO `knowledge` profile
@@ -654,12 +681,10 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // idempotent, so each re-run sweeps whatever drifted since the last
     // recorded run and no-ops otherwise.
     {
-      op: "convertToFacet",
+      op: "keep",
       opKey: "w5.reconvert.knowledge-drift",
       slug: "knowledge",
-      targetKindSlug: "item",
-      applicableKinds: ["item"],
-      propertyMapping: KNOWLEDGE_PROPERTY_MAPPING,
+      note: "RETIRED (Decision 1): the knowledge drift-reconvert onto an `item` role is withdrawn with w4.convert.knowledge — knowledge stays a primary kind. Kept as a ledger no-op per append-only opKey discipline. Any entities this op or w4.convert.knowledge moved to a role are reverted by w6.revert.knowledge below.",
     },
     // RETIRED (Decision 1): the research-drift reconvert is withdrawn alongside
     // w4.convert.research — research stays a primary kind, so there is no
@@ -744,6 +769,105 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       opKey: "w4.reconcile.campaign",
       slug: "campaign",
     },
+
+    // ─── Wave 6: Decision 1 — revert the knowledge-workflow family to KINDS ────
+    //
+    // The knowledge-workflow family (question/research/decision/knowledge/
+    // user_observation) are distinct entities related by EDGES, not co-occurring
+    // identity hats — so they are first-class KINDS, not `item` facet-roles. The
+    // forward w4/w5 `convertToFacet` ops (now retired to `keep` above) auto-ran
+    // on boot (index.ts runs runConversions with dryRun:false) on any pod that
+    // booted an earlier manifest, so those pods carry the family as ROLES with
+    // real data. Retiring the forward op froze that state (a ledgered opKey never
+    // re-runs); moving the data back needs these NEW-opKey `convertToKind` ops.
+    //
+    // convertToKind flips the profile role→kind AND re-homes its facet-wearing
+    // entities off the `item` shell (folding facet props, restoring status/
+    // context, soft-deleting the facet). Non-destructive → auto-applies on boot,
+    // so converted pods SELF-HEAL to kinds; a fresh pod (already kinds) selects
+    // empty and no-ops. `familySlugs` is the whole family so the multi-hat PARK
+    // guard is symmetric — an `item` wearing two family facets is left as-is
+    // (counted `entitiesParked`), never arbitrarily assigned to one kind.
+    //
+    // question/research/decision restore their forward statusFrom/
+    // contextFromProperty (questionStatus/researchStatus/decisionStatus +
+    // projectId) from the facet columns; knowledge/user_observation had neither.
+    //
+    // POST-MIGRATION: the repoint changes entities.type (item → the kind), so the
+    // Typesense `entityType`/`facetSlugs` docs and `entity_vectors.entityType`
+    // for the reverted entities are stale — a targeted reindex of the five kinds
+    // must follow a real (non-dry) run (W3).
+    {
+      op: "convertToKind",
+      opKey: "w6.revert.question",
+      slug: "question",
+      fromKindSlug: "item",
+      familySlugs: [
+        "question",
+        "research",
+        "decision",
+        "knowledge",
+        "user_observation",
+      ],
+      statusInto: "questionStatus",
+      contextInto: "projectId",
+    },
+    {
+      op: "convertToKind",
+      opKey: "w6.revert.research",
+      slug: "research",
+      fromKindSlug: "item",
+      familySlugs: [
+        "question",
+        "research",
+        "decision",
+        "knowledge",
+        "user_observation",
+      ],
+      statusInto: "researchStatus",
+      contextInto: "projectId",
+    },
+    {
+      op: "convertToKind",
+      opKey: "w6.revert.decision",
+      slug: "decision",
+      fromKindSlug: "item",
+      familySlugs: [
+        "question",
+        "research",
+        "decision",
+        "knowledge",
+        "user_observation",
+      ],
+      statusInto: "decisionStatus",
+      contextInto: "projectId",
+    },
+    {
+      op: "convertToKind",
+      opKey: "w6.revert.knowledge",
+      slug: "knowledge",
+      fromKindSlug: "item",
+      familySlugs: [
+        "question",
+        "research",
+        "decision",
+        "knowledge",
+        "user_observation",
+      ],
+    },
+    {
+      op: "convertToKind",
+      opKey: "w6.revert.user_observation",
+      slug: "user_observation",
+      fromKindSlug: "item",
+      familySlugs: [
+        "question",
+        "research",
+        "decision",
+        "knowledge",
+        "user_observation",
+      ],
+    },
   ],
 };
 
@@ -754,6 +878,7 @@ export const CONVERSION_OP_TYPES = [
   "declareKind",
   "seedKindProfile",
   "convertToFacet",
+  "convertToKind",
   "mergeInto",
   "keep",
   "extractNonEntity",
@@ -854,6 +979,20 @@ export function validateManifest(manifest: ConversionManifest): void {
         ) {
           throw new Error(
             `Conversion manifest: convertToFacet '${op.opKey}' needs at least one applicableKind`
+          );
+        }
+        break;
+      case "convertToKind":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.fromKindSlug, "fromKindSlug");
+        if (op.slug === op.fromKindSlug) {
+          throw new Error(
+            `Conversion manifest: convertToKind '${op.opKey}' cannot promote from its own slug '${op.slug}'`
+          );
+        }
+        if (!Array.isArray(op.familySlugs) || op.familySlugs.length === 0) {
+          throw new Error(
+            `Conversion manifest: convertToKind '${op.opKey}' needs a non-empty familySlugs (the park-guard set)`
           );
         }
         break;
