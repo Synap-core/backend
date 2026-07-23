@@ -246,9 +246,24 @@ app.use("*", async (c, next) => {
     Boolean(origin) &&
     !firstPartyOrigin &&
     (await isApprovedApplicationOrigin(origin));
+  // Kratos public bootstrap (`/.ory/kratos/public/*`, legacy `/self-service/*`):
+  // the pre-auth login/OIDC flow. See the `requiresExplicitPodToken` exemption
+  // below for the full rationale.
+  const authBootstrapPath =
+    c.req.path.startsWith("/.ory/kratos/public/") ||
+    c.req.path.startsWith("/self-service/");
   if (origin && (firstPartyOrigin || approvedApplicationOrigin)) {
     c.header("Access-Control-Allow-Origin", origin);
-    if (firstPartyOrigin) {
+    // Credentials are granted to first-party surfaces AND to an approved app
+    // origin ON THE KRATOS BOOTSTRAP PATHS ONLY. The native OIDC login flow
+    // sets an `ory_kratos_continuity` cookie on the `oidc` submit that Kratos
+    // requires back on its provider callback; without a credentialed fetch the
+    // browser silently drops that Set-Cookie and the callback restarts a fresh
+    // flow (bouncing the user to the pod login) instead of completing the
+    // exchange. Approved app origins are same-site Synap surfaces, so the Lax
+    // continuity cookie is legitimately theirs to carry. Data APIs stay
+    // credential-less for approved apps (they use an explicit X-Session-Token).
+    if (firstPartyOrigin || (approvedApplicationOrigin && authBootstrapPath)) {
       c.header("Access-Control-Allow-Credentials", "true");
     }
     c.header("Vary", "Origin");
@@ -295,19 +310,18 @@ app.use("*", async (c, next) => {
       403
     );
   }
-  // The Kratos public bootstrap (`/.ory/kratos/public/*` and the legacy
-  // `/self-service/*` alias) is PRE-authentication: an approved external app
-  // initializes a login flow and redeems a session-token-exchange code there
-  // BEFORE it has any Pod session token — requiring one is a chicken-and-egg
-  // that 401s the very first federated sign-in step. Kratos owns its own
-  // CSRF/flow protection, no Pod data is exposed, and an approved-app origin
-  // never receives ACA-Credentials so no ambient cookie can ride along. Exempt
-  // it, exactly as `/api/federation/exchange` is exempt.
-  const authBootstrapPath =
-    c.req.path.startsWith("/.ory/kratos/public/") ||
-    c.req.path.startsWith("/self-service/");
+  // `authBootstrapPath` (computed above) is the Kratos public bootstrap
+  // (`/.ory/kratos/public/*`, legacy `/self-service/*`) — PRE-authentication:
+  // an approved external app initializes a login flow and redeems a
+  // session-token-exchange code there BEFORE it has any Pod session token, so
+  // requiring one is a chicken-and-egg that 401s the very first federated
+  // sign-in step. Kratos owns its own CSRF/flow protection and no Pod data is
+  // exposed. (Credentials ARE granted here — see the CORS block above — so the
+  // native-OIDC `ory_kratos_continuity` cookie survives the flow.) Exempt it,
+  // exactly as `/api/federation/exchange` is exempt.
   // An owner-approved external origin is allowed to use an explicit Pod token
-  // for normal APIs. It must never fall back to an ambient Kratos cookie:
+  // for normal (non-bootstrap) APIs. It must never fall back to an ambient
+  // Kratos SESSION cookie there:
   // CORS does not stop a cross-site request from being sent, only from being
   // read. Bootstrap and opaque continuation routes have their own assertion /
   // capability checks and intentionally do not carry this session token.

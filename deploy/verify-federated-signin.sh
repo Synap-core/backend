@@ -76,6 +76,17 @@ ACAO=$(curl -sS -o /dev/null -D - -H "Origin: https://not-approved.example.com" 
 [ -z "$ACAO" ] && ok "6. unapproved origin gets no ACAO (cannot read the flow)" \
   || no "6. SECURITY: unapproved origin got a CORS grant: $ACAO"
 
+# 7b. CRITICAL: the approved app origin must get ACA-Credentials on the Kratos
+#     bootstrap path, or the browser drops the `ory_kratos_continuity` cookie the
+#     oidc submit sets and the CP→pod callback restarts a fresh flow (bounce to
+#     the pod picker). Checked on the OPTIONS preflight of the oidc-submit path.
+ACR=$(curl -sS -o /dev/null -D - -X OPTIONS -H "Origin: $APP_ORIGIN" \
+  -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type" \
+  "$POD/.ory/kratos/public/self-service/login?flow=x" | grep -i '^access-control-allow-credentials:' | tr -d '\r')
+echo "$ACR" | grep -qi "true" \
+  && ok "7b. approved origin gets ACA-Credentials on Kratos bootstrap (continuity cookie survives)" \
+  || no "7b. NO ACA-Credentials for $APP_ORIGIN on Kratos path → continuity cookie dropped → sign-in bounces (deploy the pod fix)"
+
 # 7. the token-exchange endpoint (callback's final hop) is wired + CORS-readable.
 #    Dummy codes → Kratos "no session yet for this code" (route exists); a REAL
 #    completed flow returns the session_token here.
