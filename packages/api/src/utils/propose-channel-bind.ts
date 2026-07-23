@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { checkPermissionOrPropose } from "./permission-check.js";
 
 /**
@@ -34,8 +33,6 @@ export interface ProposeChannelBindInput {
 }
 
 export async function proposeChannelBind(input: ProposeChannelBindInput) {
-  const proposalId = randomUUID();
-
   const perm = await checkPermissionOrPropose({
     userId: input.userId,
     workspaceId: input.workspaceId,
@@ -43,7 +40,18 @@ export async function proposeChannelBind(input: ProposeChannelBindInput) {
     action: "bind",
     source: "intelligence",
     data: {
-      id: proposalId,
+      // `id` IS the subject of this proposal — the channel being bound. It is what
+      // permission-check derives `proposals.targetId` from (`data.documentId ||
+      // data.entityId || data.id || randomUUID()`), so it MUST be the real channel
+      // id: a fresh randomUUID per call made the row un-addressable by its subject
+      // AND made the pending-proposal dedup guard (which narrows on targetId and
+      // hashes the payload) structurally unable to ever match — every repeated
+      // sweep filed another pending bind for the same channel. The approve
+      // executor reads `data.channelId`, never `data.id`, so execution is
+      // unaffected. Two DIFFERENT binds for the same channel still coexist: the
+      // dedup is exact-match on the normalized payload, so a different
+      // contextObjectId/branchPurpose hashes differently.
+      id: input.channelId,
       channelId: input.channelId,
       contextObjectType: input.contextObjectType,
       contextObjectId: input.contextObjectId,

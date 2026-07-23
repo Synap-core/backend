@@ -2030,8 +2030,14 @@ export interface PodProactiveDefaults {
  * (e.g. a retired `category`) — a permanent, operator-fixable fault, not a
  * transient outage. `/health` surfaces it as `catalog:<key>:misconfigured` so a
  * 400 can never masquerade as "source temporarily unavailable".
+ *
+ * `partial` is distinct again: the fetch SUCCEEDED but could not be proven
+ * complete (a page failed mid-pagination, the source reported more rows than it
+ * served, or the sync's page-count safety cap was hit). The pod upserted what it
+ * retrieved but deliberately SKIPPED the prune — the cache is a trusted superset,
+ * not a truncated set — so no live catalog entry is deleted against a partial page.
  */
-export type CatalogSyncStatus = "ok" | "empty" | "unreachable" | "misconfigured";
+export type CatalogSyncStatus = "ok" | "empty" | "unreachable" | "misconfigured" | "partial";
 export interface CatalogSyncStamp {
 	/** ISO timestamp of the last completed sync attempt (any outcome). */
 	lastSyncAt: string;
@@ -3726,6 +3732,30 @@ export interface ReconcileReport {
 		added: string[];
 		skipped: string[];
 		unresolved: string[];
+	};
+	/**
+	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
+	 * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
+	 * dashboard.
+	 *   `created`   = the workspace had no home view yet, so one was created from
+	 *                 the overlay's bento (mirrors the create path).
+	 *   `blocksAdded` = block ids appended below the base blocks (see the merge
+	 *                 semantics in the step-5 comment).
+	 *   `skipped`   = overlay declared no bento, or an existing home view already
+	 *                 rendered every declared view block (nothing to append).
+	 */
+	home: {
+		created: boolean;
+		blocksAdded: string[];
+		skipped: boolean;
+	};
+	/**
+	 * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
+	 * kept, overlay items appended, deduped by a stable per-kind key. `added` =
+	 * the dedup keys of overlay items appended to the workspace's sidebar.
+	 */
+	layout: {
+		sidebarItemsAdded: string[];
 	};
 }
 /**

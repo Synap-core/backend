@@ -35,7 +35,11 @@ import type { AutomationTriggerConfig, FlowDefinition } from "@synap/database";
 // Shared with the runtime run-narration resolver (post-run-summary.ts): the ONE
 // SSOT for `metadata.resultRouting`. Imported (not re-copied) — the static
 // feedTargets resolver must classify routing identically to `resolveRunChannel`.
-import { resolveResultRouting } from "@synap/jobs/utils/post-run-summary.js";
+import {
+  resolveResultRouting,
+  selectRunChannelBranch,
+} from "@synap/jobs/utils/post-run-summary.js";
+import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -221,33 +225,39 @@ export const automationsRouter = router({
         const mode = resolveResultRouting(a.metadata);
         const trigger = a.triggerConfig as AutomationTriggerConfig | null;
 
-        // (1) per_entity + subject KIND → fan out over that kind (no channelId).
-        if (mode === "per_entity") {
-          const slug = trigger?.filters?.profileSlug as string | undefined;
-          if (slug) {
-            targets.push({
-              automationId: a.id,
-              mode,
-              subjectProfileSlug: slug,
-              fansOut: true,
-            });
-            continue;
-          }
-          // slug absent → fall through to trigger/per_type below.
-        }
+        // The branch order is NOT re-derived here — it comes from the same pure
+        // door `resolveRunChannel` uses, so this preview cannot drift from where
+        // runs actually land. This is a PREDICTION over an automation with no
+        // run, so the run-level "does this run have a subject?" question becomes
+        // "does this automation have a subject KIND to fan out over?".
+        const slug = trigger?.filters?.profileSlug as string | undefined;
+        const decision = selectRunChannelBranch({
+          routing: mode,
+          hasSubject: Boolean(slug),
+          triggerChannelId: trigger?.channelId as string | undefined,
+        });
 
-        // (2) explicit trigger-bound channel wins for every non-per_entity route.
-        const triggerChannelId = trigger?.channelId as string | undefined;
-        if (triggerChannelId) {
+        // per_entity + subject KIND → fan out over that kind (no single channel).
+        if (decision.branch === "subject_entity") {
           targets.push({
             automationId: a.id,
             mode,
-            channelId: triggerChannelId,
+            subjectProfileSlug: slug,
+            fansOut: true,
           });
           continue;
         }
 
-        // (3) per_type durable run channel — READ-ONLY, never created.
+        if (decision.branch === "trigger_channel") {
+          targets.push({
+            automationId: a.id,
+            mode,
+            channelId: decision.channelId,
+          });
+          continue;
+        }
+
+        // per_type durable run channel — READ-ONLY, never created.
         const runChannel = await channelRepo.findAutomationRunChannel(a.id);
         if (runChannel) {
           targets.push({ automationId: a.id, mode, channelId: runChannel.id });
@@ -1030,15 +1040,11 @@ export const automationsRouter = router({
         });
       }
       // Older generic action renderers send the entity in payload. Accept that
-      // compatibility shape, but only persist a UUID as the durable subject
-      // lens; callers can use the explicit input for new integrations.
-      const payloadSubject = z
-        .string()
-        .uuid()
-        .safeParse(input.payload?.entityId);
+      // compatibility shape via the shared subject door (which enforces the
+      // UUID-only rule every run-creating path shares); callers can use the
+      // explicit input for new integrations.
       const subjectEntityId =
-        input.subjectEntityId ??
-        (payloadSubject.success ? payloadSubject.data : undefined);
+        input.subjectEntityId ?? subjectEntityIdFromPayload(input.payload);
 
       const [run] = await database
         .insert(automationRuns)

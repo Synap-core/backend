@@ -45,7 +45,10 @@ import { ViewRepository } from "../repositories/view-repository.js";
 import { views } from "../schema/views.js";
 import { profileRelations } from "../schema/profile-relations.js";
 import { workspaces } from "../schema/workspaces.js";
-import type { WorkspaceSettings } from "../schema/workspaces.js";
+import type {
+  WorkspaceSettings,
+  WorkspaceLayoutConfig,
+} from "../schema/workspaces.js";
 import type { WorkspaceDefinitionInput } from "./create-workspace-from-definition.js";
 import { createLogger } from "@synap-core/core";
 
@@ -133,6 +136,24 @@ export interface ReconcileReport {
    * profile in this workspace — left untouched, non-fatal.
    */
   entityLinks: { added: string[]; skipped: string[]; unresolved: string[] };
+  /**
+   * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
+   * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
+   * dashboard.
+   *   `created`   = the workspace had no home view yet, so one was created from
+   *                 the overlay's bento (mirrors the create path).
+   *   `blocksAdded` = block ids appended below the base blocks (see the merge
+   *                 semantics in the step-5 comment).
+   *   `skipped`   = overlay declared no bento, or an existing home view already
+   *                 rendered every declared view block (nothing to append).
+   */
+  home: { created: boolean; blocksAdded: string[]; skipped: boolean };
+  /**
+   * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
+   * kept, overlay items appended, deduped by a stable per-kind key. `added` =
+   * the dedup keys of overlay items appended to the workspace's sidebar.
+   */
+  layout: { sidebarItemsAdded: string[] };
 }
 
 export async function reconcileWorkspaceFromDefinition(
@@ -174,6 +195,8 @@ export async function reconcileWorkspaceFromDefinition(
     properties: { added: [], skipped: [], enumsUpdated: [], conflicts: [] },
     views: { added: [], skipped: [], deferred: [] },
     entityLinks: { added: [], skipped: [], unresolved: [] },
+    home: { created: false, blocksAdded: [], skipped: true },
+    layout: { sidebarItemsAdded: [] },
   };
 
   // ── 1. Settings merge (capabilities / subtype / visibility) ────────────────
@@ -530,6 +553,247 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
+  // ── 5. Home bento dashboard — ADDITIVE merge (never overwrite) ──────────────
+  //
+  // The create path materializes a workspace's home dashboard from
+  // `bentoLayout` (widget blocks) + `bentoViewBlocks` (view blocks) into ONE
+  // bento view stamped `metadata.homeScope === "workspace"`. This pass never
+  // did — so a compose-OVERLAY declaring its own dashboard silently lost it.
+  //
+  // MERGE SEMANTICS (deterministic, additive-only):
+  //   • Base blocks are kept first, in place.
+  //   • Overlay blocks are DEDUPED against the base — view blocks by `viewId`
+  //     (a block is identified by the view it renders), widget blocks by a
+  //     content signature `widgetType + config` (widgets carry no stable id,
+  //     and this is what makes a repeated compose-overlay IDEMPOTENT instead of
+  //     appending duplicates every apply).
+  //   • Surviving overlay blocks are STACKED BELOW the base: each is shifted
+  //     down by the base's bottom row (`max(y + h)`) so the two dashboards never
+  //     visually overlap, and re-id'd to stay unique within the merged array.
+  //   • If no home view exists yet, one is CREATED from the overlay's bento
+  //     (mirrors the create path's `homeScope:"workspace"` view + settings
+  //     `homeDashboardViewId`).
+  //
+  // FLAGGED FOR REVIEW: "stack the overlay dashboard below the base" is the
+  // least-surprising rule for combining two full-grid layouts additively —
+  // chosen over interleaving/positional-overwrite (which would drop data). If a
+  // future overlay wants to weave blocks INTO the base grid, that needs an
+  // explicit block-anchor contract, not this default.
+  {
+    const declaredBento =
+      (definition.bentoLayout ?? []).length > 0 ||
+      (definition.bentoViewBlocks ?? []).length > 0;
+    if (declaredBento) {
+      const wsViews = await dbConn.query.views.findMany({
+        where: eq(views.workspaceId, workspaceId),
+      });
+      const viewIdByName: Record<string, string> = {};
+      for (const v of wsViews) if (v.name) viewIdByName[v.name] = v.id;
+      // Resolve a bentoViewBlock's `viewSlug`/`viewName` → live viewId. Slugs are
+      // matched through the definition's own view list (slug is not a DB column).
+      const viewIdBySlug: Record<string, string> = {};
+      for (const dv of definition.views ?? []) {
+        const nm = dv.name ?? dv.displayName;
+        const slug = (dv as { slug?: string }).slug;
+        if (slug && nm && viewIdByName[nm])
+          viewIdBySlug[slug] = viewIdByName[nm];
+      }
+
+      const overlayWidgetBlocks: Array<Record<string, unknown>> = (
+        definition.bentoLayout ?? []
+      ).map((widget, idx) => ({
+        id: `overlay-widget-${idx}`,
+        kind: "widget" as const,
+        widgetType: widget.widgetType,
+        pos: widget.pos,
+        config: widget.config ?? {},
+      }));
+      const overlayViewBlocks: Array<Record<string, unknown>> = (
+        definition.bentoViewBlocks ?? []
+      )
+        .map((vb, idx) => {
+          const resolvedId =
+            viewIdBySlug[vb.viewSlug ?? ""] ?? viewIdByName[vb.viewName];
+          if (!resolvedId) {
+            logger.warn(
+              { viewName: vb.viewName, viewSlug: vb.viewSlug, workspaceId },
+              "reconcile: overlay bentoViewBlock references unknown view — skipping"
+            );
+            return null;
+          }
+          return {
+            id: `overlay-view-${idx}`,
+            kind: "view" as const,
+            viewId: resolvedId,
+            pos: vb.pos,
+            overrides: vb.overrides,
+          };
+        })
+        .filter(Boolean) as Array<Record<string, unknown>>;
+
+      const home = wsViews.find(
+        (v) =>
+          (v.metadata as Record<string, unknown> | null)?.homeScope ===
+          "workspace"
+      );
+
+      const blockSig = (b: Record<string, unknown>): string =>
+        `${b.widgetType}:${JSON.stringify(b.config ?? {})}`;
+      const posBottom = (b: Record<string, unknown>): number => {
+        const pos = b.pos as { y?: number; h?: number } | undefined;
+        return (pos?.y ?? 0) + (pos?.h ?? 0);
+      };
+      const shiftDown = (
+        b: Record<string, unknown>,
+        dy: number,
+        newId: string
+      ): Record<string, unknown> => {
+        const pos = (b.pos as Record<string, unknown>) ?? {};
+        return {
+          ...b,
+          id: newId,
+          pos: { ...pos, y: ((pos.y as number | undefined) ?? 0) + dy },
+        };
+      };
+
+      if (!home) {
+        // No dashboard yet → create one from the overlay bento (mirror create).
+        const blocks = [...overlayWidgetBlocks, ...overlayViewBlocks];
+        if (blocks.length > 0) {
+          report.home.created = true;
+          report.home.skipped = false;
+          report.home.blocksAdded = blocks.map((b) => b.id as string);
+          if (!dryRun) {
+            const created = await viewRepo.create(
+              {
+                name: definition.bentoViewName ?? "Home",
+                type: "bento",
+                config: { layout: "bento", blocks },
+                metadata: { homeScope: "workspace" },
+                workspaceId,
+                userId,
+              },
+              userId
+            );
+            await workspaceRepo.mergeSettings(
+              workspaceId,
+              { homeDashboardViewId: created.id },
+              userId
+            );
+          }
+        }
+      } else {
+        const homeConfig =
+          (home.config as Record<string, unknown> | null) ?? {};
+        const baseBlocks = Array.isArray(homeConfig.blocks)
+          ? (homeConfig.blocks as Array<Record<string, unknown>>)
+          : [];
+        const baseViewIds = new Set(
+          baseBlocks
+            .filter((b) => b.kind === "view")
+            .map((b) => b.viewId as string)
+        );
+        const baseWidgetSigs = new Set(
+          baseBlocks.filter((b) => b.kind === "widget").map(blockSig)
+        );
+        const dedupedWidgets = overlayWidgetBlocks.filter(
+          (b) => !baseWidgetSigs.has(blockSig(b))
+        );
+        const dedupedViews = overlayViewBlocks.filter(
+          (b) => !baseViewIds.has(b.viewId as string)
+        );
+        const toAppendRaw = [...dedupedWidgets, ...dedupedViews];
+        if (toAppendRaw.length > 0) {
+          const baseBottom = baseBlocks.reduce(
+            (m, b) => Math.max(m, posBottom(b)),
+            0
+          );
+          const appended = toAppendRaw.map((b, i) =>
+            shiftDown(
+              b,
+              baseBottom,
+              `${b.id as string}-a${baseBlocks.length + i}`
+            )
+          );
+          report.home.skipped = false;
+          report.home.blocksAdded = appended.map((b) => b.id as string);
+          if (!dryRun) {
+            await viewRepo.update(
+              home.id,
+              {
+                config: { ...homeConfig, blocks: [...baseBlocks, ...appended] },
+              },
+              home.userId
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // ── 6. Sidebar layout — ADDITIVE union (base first, overlay appended) ───────
+  // An overlay's `layoutConfig.sidebarItems` are unioned onto the workspace's
+  // live sidebar, deduped by a stable per-kind key (profileSlug / viewId /
+  // viewName / appId / url / cellKey), so a re-applied overlay never duplicates
+  // a tab. `viewName` references are resolved to `viewId` (create-path parity).
+  {
+    const overlaySidebar =
+      (definition.layoutConfig as WorkspaceLayoutConfig | undefined)
+        ?.sidebarItems ?? [];
+    if (overlaySidebar.length > 0) {
+      const liveSettings = (ws.settings as WorkspaceSettings | null) ?? {};
+      const liveLayout = liveSettings.layout ?? {};
+      const baseItems = liveLayout.sidebarItems ?? [];
+      const wsViews2 = await dbConn.query.views.findMany({
+        where: eq(views.workspaceId, workspaceId),
+      });
+      const viewIdByName2: Record<string, string> = {};
+      for (const v of wsViews2) if (v.name) viewIdByName2[v.name] = v.id;
+
+      type SidebarItem = NonNullable<
+        WorkspaceLayoutConfig["sidebarItems"]
+      >[number];
+      const keyOf = (item: SidebarItem): string => {
+        if (item.profileSlug) return `profile:${item.profileSlug}`;
+        if (item.viewId) return `view:${item.viewId}`;
+        if (item.viewName) return `viewName:${item.viewName}`;
+        if (item.appId) return `app:${item.appId}`;
+        if (item.url) return `url:${item.url}`;
+        if (item.cellKey) return `cell:${item.cellKey}`;
+        return `raw:${JSON.stringify(item)}`;
+      };
+      const baseKeys = new Set(baseItems.map(keyOf));
+      const appended: SidebarItem[] = [];
+      for (const raw of overlaySidebar) {
+        // Resolve viewName → viewId (create-path parity) before keying/appending.
+        const item: SidebarItem =
+          raw.kind === "view" &&
+          !raw.viewId &&
+          raw.viewName &&
+          viewIdByName2[raw.viewName]
+            ? { ...raw, viewId: viewIdByName2[raw.viewName] }
+            : raw;
+        const k = keyOf(item);
+        if (baseKeys.has(k)) continue;
+        baseKeys.add(k);
+        appended.push(item);
+        report.layout.sidebarItemsAdded.push(k);
+      }
+      if (appended.length > 0 && !dryRun) {
+        await workspaceRepo.mergeSettings(
+          workspaceId,
+          {
+            layout: {
+              ...liveLayout,
+              sidebarItems: [...baseItems, ...appended],
+            },
+          },
+          userId
+        );
+      }
+    }
+  }
+
   logger.info(
     {
       workspaceId,
@@ -543,6 +807,9 @@ export async function reconcileWorkspaceFromDefinition(
       propConflicts: report.properties.conflicts.length,
       viewsAdded: report.views.added.length,
       entityLinksAdded: report.entityLinks.added.length,
+      homeCreated: report.home.created,
+      homeBlocksAdded: report.home.blocksAdded.length,
+      sidebarItemsAdded: report.layout.sidebarItemsAdded.length,
     },
     "Reconciled workspace from definition"
   );

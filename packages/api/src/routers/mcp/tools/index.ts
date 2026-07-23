@@ -37,6 +37,11 @@ export const tools = {
       // ── Recall: THE one door ──────────────────────────────────────────────────
       {
         name: "synap_ask",
+        annotations: {
+          title: "Ask the pod",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "THE recall door. Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, and remembered facts/preferences) and returns ONE provenance-tagged answer saying which substrate answered. " +
           "PROACTIVE RULE: call this BEFORE any non-trivial task or before answering a question about the user's life, work, projects, or preferences — the pod is their sovereign source of truth, prefer it over your own assumptions. Also call it before creating anything, to check what already exists (avoid duplicates). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
@@ -72,6 +77,11 @@ export const tools = {
       },
       {
         name: "synap_get_entities",
+        annotations: {
+          title: "List entities",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Supports limit (default 50).",
         inputSchema: {
@@ -107,6 +117,11 @@ export const tools = {
       },
       {
         name: "synap_get_document",
+        annotations: {
+          title: "Get document",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Get a document by ID, returning full markdown content. Documents are long-form content (meeting notes, research, writeups) attached to entities. Get documentId from entity.documentId or search results.",
         inputSchema: {
@@ -119,6 +134,11 @@ export const tools = {
       },
       {
         name: "synap_get_thread_context",
+        annotations: {
+          title: "Get thread context",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Get full context for a thread: all messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
         inputSchema: {
@@ -131,6 +151,11 @@ export const tools = {
       },
       {
         name: "synap_list_proposals",
+        annotations: {
+          title: "List proposals",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List proposals — pending AI writes awaiting human review. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected'. Use to show the user their pending changes. userId is auto-injected from the API key if not provided.",
         inputSchema: {
@@ -154,6 +179,11 @@ export const tools = {
       },
       {
         name: "synap_diagnose",
+        annotations: {
+          title: "Diagnose runs",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "See what an AI did across flows — the unified run feed + per-run activity. Without args: recent runs across automation, playbook, capture, and session (newest first). With runId + flowType: that run's activity timeline. For a CAPTURE run this is its decision + trace events — WHY a facet/entity was dropped or a route chosen, each with a machine-readable reason + an actionable fixHint. Use this instead of guessing when a capture or automation didn't do what was expected. USER-scoped automatically.",
         inputSchema: {
@@ -182,6 +212,11 @@ export const tools = {
       },
       {
         name: "synap_get_entity",
+        annotations: {
+          title: "Get entity",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Get a single entity by ID with full details: all properties and metadata. Use after synap_ask to get complete data on a result. The id comes from synap_ask results or synap_create_entity responses.",
         inputSchema: {
@@ -198,6 +233,11 @@ export const tools = {
       },
       {
         name: "synap_list_profiles",
+        annotations: {
+          title: "List profiles",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List all available entity types (profiles) — system profiles plus custom types. ALWAYS call at session start before creating entities. Never assume 'deal' or custom types exist — workspaces differ. Returns a lightweight digest per profile: id, slug, displayName, entityScope (pod-wide vs workspace-scoped), description, icon. For full property schemas use synap_orient or GET /discover.",
         inputSchema: {
@@ -220,6 +260,11 @@ export const tools = {
       },
       {
         name: "synap_get_relations",
+        annotations: {
+          title: "Get relations",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Get all relations for an entity — inbound and outbound. Returns typed edges with sourceEntityId, targetEntityId, and relation type. Check before synap_link_entities to avoid duplicates. Use to understand an entity's connections.",
         inputSchema: {
@@ -239,6 +284,11 @@ export const tools = {
       },
       {
         name: "synap_resolve_identity",
+        annotations: {
+          title: "Resolve identity",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Read-only identity PRE-CHECK — call BEFORE creating an entity to decide create-vs-enrich-vs-attach_facet. Pass the strong signals you have (email/phone/url/twitter/github/externalId) and/or a title + kindSlug. Returns match:'strong' (a globally-unique signal already resolves to an entity → do NOT create; enrich it or synap_attach_facet a new role onto entityId instead), match:'weak' (same-name candidates — advisory, inspect `candidates` before deciding), or match:'none' (safe to create). This is the dedup door: an entity exists ONCE (a person, a company); roles are facets, never second entities. Never writes.",
         inputSchema: {
@@ -288,6 +338,11 @@ export const tools = {
       },
       {
         name: "synap_get_graph",
+        annotations: {
+          title: "Get graph",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighbors[], counts }. Each neighbor is { kind, subtype, name, id, edgeType, direction, via } — so you see a person linked to a deal, a skill linked to its tools, a session to its produced entities, etc. Graph by default: call this to understand an object's place in the pod before acting. Works for entity, project, view, channel, session, playbook, tool, skill, automation, document.",
         inputSchema: {
@@ -326,6 +381,12 @@ export const tools = {
       // ── Writes (governed — may create proposals) ───────────────────────────
       {
         name: "synap_create_entity",
+        annotations: {
+          title: "Create entity",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates.",
         inputSchema: {
@@ -379,6 +440,12 @@ export const tools = {
       },
       {
         name: "synap_update_entity",
+        annotations: {
+          title: "Update entity",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Update an entity's title, description, or properties (JSONB). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, corrections.",
         inputSchema: {
@@ -399,6 +466,12 @@ export const tools = {
       },
       {
         name: "synap_create_document",
+        annotations: {
+          title: "Create document",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store a real binary from disk, that's the CLI `synap upload` / the multipart upload door — an agent can't do it here. Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
@@ -427,6 +500,12 @@ export const tools = {
       },
       {
         name: "synap_store_file",
+        annotations: {
+          title: "Store file",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a large file sitting on a local disk, that's the CLI `synap upload` (an agent can't stream bytes it doesn't hold). For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB via this inline path.",
         inputSchema: {
@@ -468,6 +547,12 @@ export const tools = {
       },
       {
         name: "synap_remember_fact",
+        annotations: {
+          title: "Remember fact",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           'Store a durable fact about the user (preference, habit, working style, technical context) as a governed `user_observation`. Returns status:"proposed" with a `reviewUrl` when the fact is your own inference — that is normal, not an error — or status:"created" when you pass userStated:true because the user told you directly. Returns the record\'s id so you can link or revert it.',
         inputSchema: {
@@ -503,6 +588,12 @@ export const tools = {
       },
       {
         name: "synap_link_entities",
+        annotations: {
+          title: "Link entities",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. Check synap_get_relations first to avoid duplicates. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
@@ -534,6 +625,12 @@ export const tools = {
       // ── Kind + Facets (roles) ──────────────────────────────────────────────
       {
         name: "synap_attach_facet",
+        annotations: {
+          title: "Attach facet",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Attach a ROLE to an existing entity (Kind + Facets). A role — client, partner, prospect, investor, sponsor — is a FACET, never its own entity: an entity IS one kind (person, company) and HAS many roles. Resolve identity FIRST (synap_ask / synap_get_entities on strong signals like email / phone / website) so you attach the role to the REAL entity instead of creating a duplicate. Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error. Use synap_list_profiles to find role slugs (profileKind='role') and which kinds they apply to (applicableKinds).",
         inputSchema: {
@@ -568,6 +665,12 @@ export const tools = {
       },
       {
         name: "synap_detach_facet",
+        annotations: {
+          title: "Detach facet",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Detach (soft-delete) a role from an entity (Kind + Facets). Provide the entityId + facetSlug of the role to remove (or a facetId directly). Governed like any write: may return 'proposed' — NEVER treat that as an error. Removing a role never deletes the entity; only the role-facet is retired.",
         inputSchema: {
@@ -599,6 +702,12 @@ export const tools = {
       },
       {
         name: "synap_define_role",
+        annotations: {
+          title: "Define role type",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Escalation L3: call ONLY after synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed: may return 'proposed' — NEVER treat that as an error.",
         inputSchema: {
@@ -644,6 +753,11 @@ export const tools = {
       // ── Session bootstrap & governance ─────────────────────────────────────
       {
         name: "synap_orient",
+        annotations: {
+          title: "Orient in pod",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. This also lists your projects (it supersedes the old synap_list_projects tool) — pass scope:['projects'] and/or workspaceId to narrow. Pass detail:'full' for workspace descriptions, full onboarding specs, and per-workspace profiles. Drill into a workspace's full property schemas via synap_list_profiles.",
         inputSchema: {
@@ -679,6 +793,12 @@ export const tools = {
       },
       {
         name: "synap_start_session",
+        annotations: {
+          title: "Start focus session",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership.",
         inputSchema: {
@@ -751,6 +871,12 @@ export const tools = {
       },
       {
         name: "synap_update_session",
+        annotations: {
+          title: "Update focus session",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label). Cannot close — use synap_complete_session for that.",
         inputSchema: {
@@ -821,6 +947,12 @@ export const tools = {
       },
       {
         name: "synap_complete_session",
+        annotations: {
+          title: "Complete focus session",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Close a focus session with a summary and optional reports; also closes any running playbook_run.",
         inputSchema: {
@@ -846,6 +978,11 @@ export const tools = {
       },
       {
         name: "synap_get_session",
+        annotations: {
+          title: "Get focus session",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Re-find a focus session — read-only. Call it with NO arguments to get YOUR CURRENT session (the most recent non-closed one) when you've lost the id that synap_start_session returned; pass sessionId to fetch a specific one. Returns the session with its goal, status, progress, stage and expectedOutputs, or { session: null } when there is none. Always yours: sessions are scoped to the calling user.",
         inputSchema: {
@@ -862,6 +999,11 @@ export const tools = {
       },
       {
         name: "synap_list_sessions",
+        annotations: {
+          title: "List focus sessions",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List YOUR focus sessions, newest first — read-only. Use it to see what work is open before starting something new (don't start a second session for work that already has one), or to find a session you closed earlier. Filter by status and/or narrow to a workspace or project.",
         inputSchema: {
@@ -904,6 +1046,12 @@ export const tools = {
       // ── Cell authoring & renderer binding ───────────────────────────────────
       {
         name: "synap_create_cell",
+        annotations: {
+          title: "Define cell",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Creates the definition ONLY; surface it with synap_promote_cell_to_renderer.",
         inputSchema: {
@@ -933,6 +1081,12 @@ export const tools = {
       },
       {
         name: "synap_promote_cell_to_renderer",
+        annotations: {
+          title: "Promote cell to renderer",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
         inputSchema: {
@@ -972,6 +1126,12 @@ export const tools = {
       },
       {
         name: "synap_promote_session_to_playbook",
+        annotations: {
+          title: "Promote session to playbook",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): re-grants capabilities used and records lineage. May propose; never promote failed or speculative sessions.",
         inputSchema: {
@@ -988,6 +1148,11 @@ export const tools = {
       // ── Playbooks (reusable session templates) ──────────────────────────────
       {
         name: "synap_list_playbooks",
+        annotations: {
+          title: "List playbooks",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List existing playbooks (reusable process/session templates) visible in a workspace. Call this to discover what already exists BEFORE improvising a new process. A playbook can then be started as a runtime session via synap_start_session, passing its id as templateId.",
         inputSchema: {
@@ -1009,6 +1174,11 @@ export const tools = {
       },
       {
         name: "synap_match_playbooks",
+        annotations: {
+          title: "Match playbooks",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Given an entity's profile (e.g. 'post', 'deal', 'lead'), find active playbooks whose SUBJECT is that kind of entity — the Capture→Session matcher answering 'is there a playbook FOR this thing?'. Read-only. Returns candidates ({ id, name, goalTemplate, subjectProfileSlug, params, executor }); [] when none. Launch a returned candidate as an entity-bound session with synap_start_session (its id as templateId + the entity as subjectEntityId).",
         inputSchema: {
@@ -1035,6 +1205,12 @@ export const tools = {
       },
       {
         name: "synap_create_playbook",
+        annotations: {
+          title: "Create playbook",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, run via synap_start_session with templateId. goalTemplate may contain {{param}} placeholders.",
         inputSchema: {
@@ -1085,6 +1261,11 @@ export const tools = {
       },
       {
         name: "synap_governance",
+        annotations: {
+          title: "Get governance policy",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created.",
         inputSchema: {
@@ -1099,6 +1280,12 @@ export const tools = {
       // ── Capture ─────────────────────────────────────────────────────────────
       {
         name: "synap_capture",
+        annotations: {
+          title: "Capture",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n" +
           "• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n" +
@@ -1252,6 +1439,12 @@ export const tools = {
       // ── Workspace & view creation ───────────────────────────────────────────
       {
         name: "synap_create_workspace",
+        annotations: {
+          title: "Create workspace",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency.",
         inputSchema: {
@@ -1272,6 +1465,12 @@ export const tools = {
       },
       {
         name: "synap_declare_workspace_source",
+        annotations: {
+          title: "Declare workspace source edge",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Declare a cross-workspace DATA EDGE on an EXISTING workspace by setting/merging its edge fields. `sourceRoles` = per-domain role this workspace plays (provider | consumer | provider-consumer), e.g. Marketing consumes Comms → { comms: 'consumer' }. `defaultSources` = per-domain the workspace to READ that domain from (the source of truth), e.g. { comms: { workspaceId: '<comms-ws-id>' } }. MERGES per-domain — existing domains and all other settings are preserved, never clobbered. Use this to wire the enterprise graph (provides/consumes) instead of copying data between workspaces. Editor+ membership required.",
         inputSchema: {
@@ -1312,6 +1511,12 @@ export const tools = {
       },
       {
         name: "synap_create_project",
+        annotations: {
+          title: "Create project",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. If a same/similar project already exists it is reused (or surfaced) — reuse it instead of making a near-duplicate.",
         inputSchema: {
@@ -1336,6 +1541,12 @@ export const tools = {
       },
       {
         name: "synap_create_view",
+        annotations: {
+          title: "Create view",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call list_views first — don't duplicate. Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose.",
         inputSchema: {
@@ -1373,6 +1584,12 @@ export const tools = {
       // ── Channel & messaging ─────────────────────────────────────────────────
       {
         name: "synap_get_channel",
+        annotations: {
+          title: "Get or create channel",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document.",
         inputSchema: {
@@ -1398,6 +1615,12 @@ export const tools = {
       },
       {
         name: "synap_post_message",
+        annotations: {
+          title: "Post message",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. Pass role (default assistant) and triggerAI to start an agent turn.",
         inputSchema: {
@@ -1426,6 +1649,12 @@ export const tools = {
       // ── Proposals & knowledge ───────────────────────────────────────────────
       {
         name: "synap_revise_proposal",
+        annotations: {
+          title: "Revise proposal",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
         description:
           "Update the summary or reasoning of a pending proposal (e.g. after user feedback). Does not re-run the event pipeline.",
         inputSchema: {
@@ -1444,6 +1673,11 @@ export const tools = {
       // ── Capabilities (connected-service verbs: Gmail, Calendar, Drive, …) ────
       {
         name: "synap_list_capabilities",
+        annotations: {
+          title: "List capabilities",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           'List the runnable capabilities in a workspace — the verbs unlocked by the user\'s connected services and applied templates (e.g. gmail_send, gmail_search, calendar_list, calendar_create, drive_search). Each entry has its name (the verbId you pass to synap_run_capability), a label, the backing tool, whether it is ENABLED (approved) or still DRAFT, and its governance. Call this to discover what the user can actually DO with their connections before running anything. A DRAFT capability must be enabled by the user (Settings → Capabilities) before it will run. Pass `query` to SEARCH instead of dumping everything (e.g. query:"send email") — ranked, compact results with parameter schemas.',
         inputSchema: {
@@ -1471,6 +1705,12 @@ export const tools = {
       },
       {
         name: "synap_run_capability",
+        annotations: {
+          title: "Run capability",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+        },
         description:
           "Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first.",
         inputSchema: {
@@ -1497,6 +1737,12 @@ export const tools = {
       },
       {
         name: "synap_create_verb",
+        annotations: {
+          title: "Create verb",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
         inputSchema: {
@@ -1556,6 +1802,11 @@ export const tools = {
       },
       {
         name: "synap_list_automations",
+        annotations: {
+          title: "List automations",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "List automations (WHEN-triggered flows) visible in a workspace — the reactive rules a user has set up (e.g. 'on new lead → draft a follow-up', 'every morning → recap yesterday'). Each entry has its id (pass to synap_trigger_automation), name, triggerType (event | cron | webhook | manual), and status (active | draft | paused | error). Read-only. Call this to discover what already reacts BEFORE creating a new automation. Omit workspaceId to list everything accessible.",
         inputSchema: {
@@ -1580,6 +1831,12 @@ export const tools = {
       },
       {
         name: "synap_trigger_automation",
+        annotations: {
+          title: "Trigger automation",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+        },
         description:
           "Run an existing automation NOW, on demand (discover ids via synap_list_automations) — e.g. fire a 'daily client recap' immediately instead of waiting for its schedule. Pass the automation id; optionally a payload injected as the run's trigger.payload. This is a RUN, not a proposal: it returns { status: 'triggered', runId } once enqueued (gated by your write access to the automation's workspace). Any entity writes the run then performs are separately reviewed under the automation's own governance. A draft automation is runnable on demand this way; paused/error non-manual ones are refused.",
         inputSchema: {
@@ -1605,6 +1862,12 @@ export const tools = {
       },
       {
         name: "synap_create_automation",
+        annotations: {
+          title: "Create automation",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger and a flowDefinition ({ nodes, edges }). For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
         inputSchema: {
@@ -1661,6 +1924,12 @@ export const tools = {
       },
       {
         name: "synap_run_playbook",
+        annotations: {
+          title: "Run playbook",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+        },
         description:
           "LAUNCH a playbook via its executor (discover ids via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). This is the EXECUTOR launch, distinct from synap_start_session(templateId) which opens a working session for you to drive by hand. Governed: an agent launch returns status='proposed' for review; only on approval does the run execute. Pass params to fill {{placeholders}}, and subjectId to bind the run to an entity.",
         inputSchema: {
@@ -1701,6 +1970,12 @@ export const tools = {
       },
       {
         name: "synap_create_skill",
+        annotations: {
+          title: "Create code skill",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
         description:
           "Author a runnable CODE skill — a sandboxed executable (plus its docs) the agent can later run, e.g. a custom transform/enrichment that no connected-service verb covers. Use this when you need CODE; for a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed the same as every write: an agent create returns status='proposed'. Once approved, a code skill is born UNAPPROVED — it does NOT load or run as a tool until the owner explicitly approves it (code executes, so it needs a deliberate human OK). `code` is required.",
         inputSchema: {
@@ -1741,6 +2016,11 @@ export const tools = {
       },
       {
         name: "synap_load_skill",
+        annotations: {
+          title: "Load skill",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
         description:
           "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic.",
         inputSchema: {

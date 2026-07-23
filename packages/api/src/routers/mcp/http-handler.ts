@@ -5,8 +5,16 @@
  * over HTTP. External agents (ZeroClaw, OpenClaw, Claude Desktop, Cursor)
  * can use this endpoint to read/write Synap data with full governance.
  *
- * Protocol: MCP Streamable HTTP transport spec 2025-03-26
+ * Protocol: MCP Streamable HTTP. The installed SDK (1.29.0) declares
+ *           LATEST_PROTOCOL_VERSION = "2025-11-25" and negotiates down through
+ *           2025-06-18 / 2025-03-26 / 2024-11-05 / 2024-10-07, falling back to
+ *           2025-03-26 only when the client sends no version information. This
+ *           handler is not pinned to any one revision.
  * Auth:     Hub Protocol API key in Authorization: Bearer <key>
+ *           NOTE: there is no OAuth here yet — no /.well-known/
+ *           oauth-protected-resource and no WWW-Authenticate on the 401 below.
+ *           That is why claude.ai's connector UI cannot authenticate against
+ *           this endpoint. See MCP-OAUTH-AND-CONNECT-PLAN.md.
  * Endpoint: POST /mcp   — JSON-RPC 2.0 request (SSE stream or JSON response)
  *           GET  /mcp   — SSE stream for server-initiated messages
  *           DELETE /mcp — End session
@@ -265,12 +273,20 @@ mcpHttpApp.post("/", async (c) => {
   // ?projectId= (project focus lens). Both narrow tool calls; orthogonal.
   const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
   const defaultProjectId = c.req.query("projectId") ?? undefined;
-  // `?sessionId=` — an EXPLICIT STATE HANDLE (a `focus_sessions` row id), not
-  // transport session state. MCP 2026-07-28 removes `Mcp-Session-Id` and the
-  // initialize handshake (SEP-2575 "Make MCP Stateless" / SEP-2567 "Sessionless
-  // MCP via Explicit State Handles"), so the handle rides the URL per request
-  // and is threaded server-side into the executor — never advertised on tool
-  // schemas. It is a SCOPE HINT only: downstream governance still authorizes.
+  // `?sessionId=` — a `focus_sessions` row id used as an out-of-band SCOPE
+  // HINT. It is NOT transport session state (this handler is stateless and
+  // sets no `Mcp-Session-Id`), and downstream governance still authorizes
+  // independently of it.
+  //
+  // CORRECTION (2026-07-23): an earlier version of this comment cited SEP-2567
+  // "Sessionless MCP via Explicit State Handles" as the basis for this design.
+  // That citation was wrong and has been removed. A SEP-2567 state handle is an
+  // ordinary string returned in `structuredContent` and passed back as a normal,
+  // model-visible TOOL ARGUMENT. This parameter is the opposite: it rides the
+  // URL and is deliberately never advertised on a tool schema. The mechanism
+  // here is fine on its own terms — it simply is not an instance of that SEP.
+  // (SEP-2567/2575 and the 2026-07-28 revision are real; the installed SDK
+  // 1.29.0 implements none of it and still requires the initialize handshake.)
   const defaultSessionId = c.req.query("sessionId") ?? undefined;
   // Live grounding is only consumed by the client at the `initialize` handshake
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a

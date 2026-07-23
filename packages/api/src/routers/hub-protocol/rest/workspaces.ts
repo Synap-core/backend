@@ -1438,9 +1438,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     // agentUserId is the acting agent identity set on an agent-key request (never
     // a body field).
     const agentUserId = c.get("agentUserId") as string | undefined;
-    const { checkPermissionOrPropose } = await import(
-      "../../../utils/permission-check.js"
-    );
+    const { checkPermissionOrPropose } =
+      await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,
@@ -1599,8 +1598,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceId,
         eveProviderRouting:
           (settings.eveProviderRouting as
-            | Record<string, unknown>
-            | undefined) ?? null,
+            Record<string, unknown> | undefined) ?? null,
       });
     } catch (err) {
       logger.error(
@@ -1700,6 +1698,63 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "GET /workspaces/:workspaceId/home failed"
       );
       return c.json({ error: "Failed to read home layout" }, 500);
+    }
+  });
+
+  /**
+   * POST /workspaces/:workspaceId/to-template
+   *
+   * Reverse-serialize a LIVE workspace into a `PackageDefinition` — the inverse
+   * of `createWorkspaceFromDefinition` — so a hand-built workspace can be
+   * re-published as a reusable template. Captures the FULL definition (profiles
+   * + property overlays, views, home bento, entity-links, automations,
+   * playbooks, capabilities, action-placements, sidebar layout, display
+   * templates, onboarding, …), NOT the lossy subset the frontend export hook
+   * emits. Read-only; gated on the caller's membership of THIS workspace.
+   *
+   * Registered as a distinct literal suffix (`/:workspaceId/to-template`), so it
+   * never collides with a bare `/:workspaceId` catch-all.
+   */
+  app.post("/workspaces/:workspaceId/to-template", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+      columns: { role: true },
+    });
+    if (!membership) return c.json({ error: "Access denied" }, 403);
+
+    try {
+      const { workspaceToPackageDefinition } =
+        await import("../../../services/workspace-to-package-definition.js");
+      const definition = await workspaceToPackageDefinition({
+        workspaceId,
+        userId,
+      });
+      return c.json({ workspaceId, definition }, 200);
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "POST /workspaces/:workspaceId/to-template failed"
+      );
+      return c.json(
+        {
+          error: "Failed to serialize workspace to template",
+          detail: (err as Error).message,
+        },
+        500
+      );
     }
   });
 

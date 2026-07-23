@@ -108,6 +108,20 @@ type SourceFetch<T> =
   | { ok: false; clientError: false }
   | { ok: false; clientError: true; status: number };
 
+/**
+ * List endpoints are limit/offset-paginated with a max page of 100 (see the CP
+ * `/api/packages` and `/api/marketplace/cells` validators). We page at the max
+ * and loop until the server's `total` is reached.
+ */
+const PAGE_SIZE = 100;
+/**
+ * Safety cap on pages per (source, kind) — bounds a run at PAGE_SIZE*MAX_PAGES
+ * (10 000) entries so a pathological/looping source response can't spin forever.
+ * Hitting it is treated as an INCOMPLETE fetch (prune skipped), never as a full
+ * set to prune against.
+ */
+const MAX_PAGES = 100;
+
 /** Shared 8s-timeout GET. Distinguishes a 4xx (permanent) from a transient failure. */
 async function safeFetchJson(url: string): Promise<SourceFetch<unknown>> {
   try {
@@ -127,10 +141,76 @@ async function safeFetchJson(url: string): Promise<SourceFetch<unknown>> {
   }
 }
 
-/** GET {source}/api/marketplace/capabilities → SourceFetch<CatalogEntry[]>. */
+/**
+ * A fully-resolved fetch for one (source, kind): the mapped entries plus whether
+ * the set is PROVABLY complete. `complete` is the invariant the prune gates on —
+ * an incomplete set (a page failed mid-loop, the source reported more rows than
+ * it served, or the safety cap was hit) is upserted but MUST NEVER be pruned
+ * against, or the pod would silently delete live catalog entries it never saw.
+ */
+interface CatalogFetch {
+  entries: CatalogEntry[];
+  complete: boolean;
+}
+
+/** One page of a limit/offset list endpoint: mapped rows + the whole-filter total. */
+interface CatalogPage {
+  entries: CatalogEntry[];
+  /** The server's row count for the WHOLE filter, not just this page. */
+  total: number;
+}
+
+/**
+ * Page through a limit/offset list endpoint until the server's `total` is
+ * retrieved, returning a `CatalogFetch`. Completeness rules:
+ *   - first page fails with nothing collected → propagate the failure (keeps the
+ *     caller's 4xx-vs-transient stamp; cache left intact);
+ *   - a LATER page fails → return what we have as `complete:false` (upsert, no prune);
+ *   - source reports more rows than it serves (empty page before `total`) →
+ *     `complete:false`;
+ *   - the MAX_PAGES safety cap is hit before `total` → `complete:false`.
+ * Only a run that reaches `total` returns `complete:true`.
+ */
+async function fetchAllPages(
+  fetchPage: (
+    limit: number,
+    offset: number
+  ) => Promise<SourceFetch<CatalogPage>>
+): Promise<SourceFetch<CatalogFetch>> {
+  const entries: CatalogEntry[] = [];
+  let offset = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await fetchPage(PAGE_SIZE, offset);
+    if (!res.ok) {
+      // First page failed with nothing collected → propagate so the caller
+      // keeps the 4xx (misconfigured) vs transient (unreachable) distinction.
+      if (entries.length === 0) return res;
+      // A later page failed → we hold a PARTIAL set. Upsert it, never prune.
+      return { ok: true, data: { entries, complete: false } };
+    }
+    entries.push(...res.data.entries);
+    if (entries.length >= res.data.total) {
+      return { ok: true, data: { entries, complete: true } };
+    }
+    if (res.data.entries.length === 0) {
+      // Source signalled more rows (`total` > collected) yet served an empty
+      // page — an inconsistency we cannot reconcile. Treat as INCOMPLETE.
+      return { ok: true, data: { entries, complete: false } };
+    }
+    offset += PAGE_SIZE;
+  }
+  // Safety cap hit before reaching `total` → INCOMPLETE, never prune.
+  return { ok: true, data: { entries, complete: false } };
+}
+
+/**
+ * GET {source}/api/marketplace/capabilities. This route is UNPAGINATED — it
+ * returns the whole capability set in one response — so a successful fetch is
+ * always complete.
+ */
 async function fetchCapabilities(
   source: string
-): Promise<SourceFetch<CatalogEntry[]>> {
+): Promise<SourceFetch<CatalogFetch>> {
   const result = await safeFetchJson(`${source}/api/marketplace/capabilities`);
   if (!result.ok) return result;
   const body = result.data as {
@@ -145,106 +225,126 @@ async function fetchCapabilities(
   const list = Array.isArray(body?.capabilities) ? body.capabilities : [];
   return {
     ok: true,
-    data: list.map((c) => ({
-      slug: c.key,
-      name: c.name,
-      description: c.description ?? null,
-      version: c.version ?? null,
-      definition: c.definition ?? null,
-    })),
+    data: {
+      entries: list.map((c) => ({
+        slug: c.key,
+        name: c.name,
+        description: c.description ?? null,
+        version: c.version ?? null,
+        definition: c.definition ?? null,
+      })),
+      complete: true,
+    },
   };
 }
 
 /**
- * GET {source}/api/packages?category={category} → SourceFetch<CatalogEntry[]>
- * (list view — no `definition`). `category` is the CP's LIVE `PACKAGE_TYPES`
- * vocabulary (`workspace` / `workflow`), NOT the pod's internal cache `kind` —
- * see fetchKind for the mapping and the header note.
+ * GET {source}/api/packages?category={category}&limit=&offset= — paginated list
+ * view (no `definition`). `category` is the CP's LIVE `PACKAGE_TYPES` vocabulary
+ * (`workspace` / `workflow`), NOT the pod's internal cache `kind` — see fetchKind
+ * for the mapping and the header note. Pages until the response `total` is
+ * retrieved so the cache is NEVER truncated to the first page (the CP orders by
+ * `installCount DESC, createdAt DESC`, so a first-page-only fetch would prune
+ * every new author's template first).
  */
 async function fetchPackages(
   source: string,
   category: "workspace" | "workflow"
-): Promise<SourceFetch<CatalogEntry[]>> {
-  const result = await safeFetchJson(
-    `${source}/api/packages?category=${category}&limit=100`
-  );
-  if (!result.ok) return result;
-  const body = result.data as {
-    packages?: Array<{
-      slug: string;
-      displayName: string;
-      description?: string | null;
-      version?: string;
-      requiredTier?: string | null;
-      vendorId?: string | null;
-      tags?: string[];
-    }>;
-  } | null;
-  const list = Array.isArray(body?.packages) ? body.packages : [];
-  return {
-    ok: true,
-    data: list.map((p) => ({
-      slug: p.slug,
-      name: p.displayName,
-      description: p.description ?? null,
-      version: p.version ?? null,
-      tier: p.requiredTier ?? null,
-      vendor: p.vendorId ?? null,
-      tags: p.tags ?? null,
-      // List view omits the definition body by design — null here means a
-      // per-slug GET /api/packages/:slug/:version fetch is required at install
-      // time (Wave 3b's concern).
-      definition: null,
-    })),
-  };
+): Promise<SourceFetch<CatalogFetch>> {
+  return fetchAllPages(async (limit, offset) => {
+    const result = await safeFetchJson(
+      `${source}/api/packages?category=${category}&limit=${limit}&offset=${offset}`
+    );
+    if (!result.ok) return result;
+    const body = result.data as {
+      packages?: Array<{
+        slug: string;
+        displayName: string;
+        description?: string | null;
+        version?: string;
+        requiredTier?: string | null;
+        vendorId?: string | null;
+        tags?: string[];
+      }>;
+      total?: number;
+    } | null;
+    const list = Array.isArray(body?.packages) ? body.packages : [];
+    const total = typeof body?.total === "number" ? body.total : list.length;
+    return {
+      ok: true,
+      data: {
+        entries: list.map((p) => ({
+          slug: p.slug,
+          name: p.displayName,
+          description: p.description ?? null,
+          version: p.version ?? null,
+          tier: p.requiredTier ?? null,
+          vendor: p.vendorId ?? null,
+          tags: p.tags ?? null,
+          // List view omits the definition body by design — null here means a
+          // per-slug GET /api/packages/:slug/:version fetch is required at
+          // install time (Wave 3b's concern).
+          definition: null,
+        })),
+        total,
+      },
+    };
+  });
 }
 
-/** GET {source}/api/marketplace/cells → SourceFetch<CatalogEntry[]>. */
-async function fetchCells(
-  source: string
-): Promise<SourceFetch<CatalogEntry[]>> {
-  const result = await safeFetchJson(`${source}/api/marketplace/cells?limit=100`);
-  if (!result.ok) return result;
-  const body = result.data as {
-    cells?: Array<{
-      key: string;
-      name: string;
-      packageSlug: string;
-      code: string;
-      deps?: Record<string, string>;
-      previewCode?: string;
-      defaultSize?: { w: number; h: number };
-      configSchema?: Record<string, unknown>;
-      author?: string;
-    }>;
-  } | null;
-  const list = Array.isArray(body?.cells) ? body.cells : [];
-  return {
-    ok: true,
-    data: list.map((cell) => ({
-      // Cells aren't independently versioned/sluggable in the CP today — scope
-      // the cache slug to the owning package so two packages' same-named cell
-      // never collides under the (source, kind, slug) unique index.
-      slug: `${cell.packageSlug}/${cell.key}`,
-      name: cell.name,
-      vendor: cell.author ?? null,
-      definition: {
-        key: cell.key,
-        code: cell.code,
-        deps: cell.deps,
-        previewCode: cell.previewCode,
-        defaultSize: cell.defaultSize,
-        configSchema: cell.configSchema,
-        packageSlug: cell.packageSlug,
+/** GET {source}/api/marketplace/cells?limit=&offset= — paginated, same contract as packages. */
+async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
+  return fetchAllPages(async (limit, offset) => {
+    const result = await safeFetchJson(
+      `${source}/api/marketplace/cells?limit=${limit}&offset=${offset}`
+    );
+    if (!result.ok) return result;
+    const body = result.data as {
+      cells?: Array<{
+        key: string;
+        name: string;
+        packageSlug: string;
+        code: string;
+        deps?: Record<string, string>;
+        previewCode?: string;
+        defaultSize?: { w: number; h: number };
+        configSchema?: Record<string, unknown>;
+        author?: string;
+      }>;
+      total?: number;
+    } | null;
+    const list = Array.isArray(body?.cells) ? body.cells : [];
+    const total = typeof body?.total === "number" ? body.total : list.length;
+    return {
+      ok: true,
+      data: {
+        entries: list.map((cell) => ({
+          // Cells aren't independently versioned/sluggable in the CP today —
+          // scope the cache slug to the owning package so two packages' same-
+          // named cell never collides under the (source, kind, slug) index.
+          slug: `${cell.packageSlug}/${cell.key}`,
+          name: cell.name,
+          vendor: cell.author ?? null,
+          definition: {
+            key: cell.key,
+            code: cell.code,
+            deps: cell.deps,
+            previewCode: cell.previewCode,
+            defaultSize: cell.defaultSize,
+            configSchema: cell.configSchema,
+            packageSlug: cell.packageSlug,
+          },
+        })),
+        total,
       },
-    })),
-  };
+    };
+  });
 }
 
 async function fetchKind(
   source: string,
   kind: CatalogKind
-): Promise<SourceFetch<CatalogEntry[]>> {
+): Promise<SourceFetch<CatalogFetch>> {
   switch (kind) {
     case "capability":
       return fetchCapabilities(source);
@@ -284,7 +384,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     await recordCatalogSyncStamp(source, kind, "unreachable", 0);
     return;
   }
-  const entries = result.data;
+  const { entries, complete } = result.data;
   if (entries.length === 0) {
     logger.info(
       { source, kind },
@@ -332,6 +432,21 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
           syncedAt: now,
         },
       });
+
+    // PRUNE GUARD — the invariant that matters most. Delete only when the fetch
+    // was PROVABLY complete. On an incomplete fetch (a page failed mid-loop, the
+    // source reported more rows than it served, or the safety cap was hit) we
+    // keep the upserted superset and skip the prune: pruning against a truncated
+    // set would silently delete live catalog entries the pod never saw — exactly
+    // the top-100 ceiling that pruned every new author's template first.
+    if (!complete) {
+      logger.warn(
+        { source, kind, upserted: rows.length },
+        "Catalog fetch INCOMPLETE — upserted the retrieved page(s) but SKIPPED prune to avoid deleting entries the pod never saw. Cache left as a superset until the next full sync."
+      );
+      await recordCatalogSyncStamp(source, kind, "partial", rows.length);
+      return;
+    }
 
     const fetchedSlugs = rows.map((r) => r.slug);
     const pruned = await db

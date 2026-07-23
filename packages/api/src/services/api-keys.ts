@@ -89,6 +89,37 @@ const verificationCache = new Map<
 const VERIFICATION_CACHE_TTL_MS = 30_000; // 30 seconds
 
 /**
+ * Identity / confinement fields carried over when a key is RE-MINTED (rotation)
+ * rather than created fresh.
+ *
+ * SECURITY: these are the columns that define WHO a key is and WHAT it is
+ * confined to. A fresh mint legitimately leaves them at their schema defaults;
+ * a ROTATION that leaves them at their defaults silently ESCALATES the key —
+ * see the field-by-field reasoning on `ApiKeyRepository.rotate()`
+ * (packages/database/src/repositories/api-key-repository.ts), which this mirrors
+ * for the service-level mint door.
+ *
+ * Every field is optional and, when the whole object is omitted, the INSERT is
+ * byte-identical to the pre-existing one — so ordinary (non-rotation) callers
+ * are unaffected.
+ */
+export interface ApiKeyIdentity {
+  /** Categorical purpose label. Default 'hub_inbound' — a rotated 'service'
+   * key that falls back to the default stops being confined by
+   * `resolveConfinedWorkspace`. */
+  keyType?: ApiKeyRecord["keyType"];
+  /** Service-key confinement binding. NULL = pod-wide. */
+  workspaceId?: string | null;
+  /** Agent→operator identity link. NULL = the agent's writes stop routing
+   * through the governance membrane as proposals. */
+  linkedUserId?: string | null;
+  /** Per-instance rotation scoping. */
+  instanceId?: string | null;
+  /** Human-readable purpose of the credential. */
+  description?: string | null;
+}
+
+/**
  * API Key Service
  */
 export class ApiKeyService {
@@ -136,6 +167,12 @@ export class ApiKeyService {
    *   undefined,
    *   parentKey.id,
    * );
+   *
+   * @param identity - Optional identity/confinement carry-over, for callers that
+   *   RE-MINT an existing credential (rotation) rather than create a new one.
+   *   OMIT IT for ordinary mints: when absent, none of these columns are written
+   *   and the row falls to its schema defaults exactly as before. See
+   *   `ApiKeyIdentity` for why a rotation that omits them escalates the key.
    */
   async generateApiKey(
     userId: string,
@@ -143,7 +180,8 @@ export class ApiKeyService {
     scope: ApiKeyScope[],
     hubId?: string,
     expiresInDays?: number,
-    parentKeyId?: string
+    parentKeyId?: string,
+    identity?: ApiKeyIdentity
   ): Promise<{ key: string; keyId: string }> {
     // 0. Sub-token validation — verify parent + enforce scope subset.
     let effectiveScope: ApiKeyScope[] = scope;
@@ -246,6 +284,25 @@ export class ApiKeyService {
         isActive: true,
         createdBy: userId,
         parentKeyId: parentKeyId ?? null,
+        // Identity / confinement carry-over — ONLY for re-mints (rotation).
+        // Spread conditionally so that when `identity` is omitted the object is
+        // byte-identical to the pre-existing one and every ordinary caller keeps
+        // falling to the schema defaults exactly as before.
+        ...(identity?.keyType !== undefined
+          ? { keyType: identity.keyType }
+          : {}),
+        ...(identity?.workspaceId !== undefined
+          ? { workspaceId: identity.workspaceId }
+          : {}),
+        ...(identity?.linkedUserId !== undefined
+          ? { linkedUserId: identity.linkedUserId }
+          : {}),
+        ...(identity?.instanceId !== undefined
+          ? { instanceId: identity.instanceId }
+          : {}),
+        ...(identity?.description !== undefined
+          ? { description: identity.description }
+          : {}),
       })
       .returning({ id: apiKeys.id });
 

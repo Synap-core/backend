@@ -132,6 +132,13 @@ const PackageApplySchema = z.object({
    * exactly as before (create-new, or compose onto a declared dependency).
    */
   targetWorkspaceId: z.string().uuid().optional(),
+  /**
+   * Bypass ADVISORY preflight findings (e.g. the wave-2 pure `validateTemplate`
+   * lint below). It MUST NOT bypass a LIVE structural failure — a profileKind
+   * conflict or duplicate slug is a pod-integrity invariant, not advice — so the
+   * live preflight gate below returns 422 regardless of this flag.
+   */
+  force: z.boolean().optional(),
   _meta: z
     .object({
       slug: z.string().optional(),
@@ -267,6 +274,53 @@ export function registerPackagesRoutes(app: HubHono): void {
     const agentUserId = c.get("agentUserId") ?? undefined;
     const body = PackageApplySchema.parse(await c.req.json());
     const result: Record<string, unknown> = {};
+
+    // ── LIVE preflight gate ───────────────────────────────────────────────
+    // Run the write-free create-path resolver against the LIVE pod catalog
+    // BEFORE governance/materialize. `preflightWorkspaceFromDefinition.ok` is
+    // false ONLY on a structural/integrity failure — a duplicate/invalid slug
+    // (`validationErrors`) or a profileKind conflict with an existing pod
+    // profile (`profiles.conflicts`), plus their downstream unresolved
+    // entityLinks / scope-orphaned views. These are pod-integrity invariants, so
+    // `force` does NOT bypass them (a re-applied same-kind template resolves as
+    // `reused`, never a conflict — so a legitimate reinstall never trips this).
+    // Advisory findings (deferred / scopeConflicts) never flip `ok`, so they
+    // never block here; the wave-2 PURE `validateTemplate` lint is where `force`
+    // will actually bypass advice.
+    //
+    // TODO(wave2): also run the PURE validateTemplate(def) from
+    // @synap-core/workspace-templates once that export is republished into
+    // node_modules — return 400/422 on !ok (bypassable by `force` for ADVISORY
+    // lint only, never for a structural conflict). Not imported now: the export
+    // isn't in this repo's installed package version yet, so importing it breaks
+    // typecheck.
+    const preflight = await preflightWorkspaceFromDefinition({
+      definition: body as unknown as WorkspaceDefinitionInput,
+      userId,
+    });
+    if (!preflight.ok) {
+      return c.json(
+        {
+          error: "Preflight validation failed",
+          detail:
+            preflight.validationErrors.length > 0
+              ? preflight.validationErrors.join("; ")
+              : preflight.profiles.conflicts.length > 0
+                ? `profileKind conflict: ${preflight.profiles.conflicts
+                    .map(
+                      (cf) =>
+                        `${cf.slug} (declared ${cf.declaredKind}, exists as ${cf.existingKind})`
+                    )
+                    .join(", ")}`
+                : "template would not resolve cleanly against the pod catalog",
+          validationErrors: preflight.validationErrors,
+          conflicts: preflight.profiles.conflicts,
+          entityLinks: preflight.entityLinks,
+          views: preflight.views,
+        },
+        422
+      );
+    }
 
     // ── Permission check ──────────────────────────────────────────────────
     // Store the FULL package body as `definition` so the workspace/create

@@ -81,6 +81,10 @@ export {
   type TemplateDependencyRef,
   type TemplateLookup,
 } from "./services/workspace-reconcile-order.js";
+export {
+  resolveWorkspaceTemplate,
+  type ResolvedWorkspaceTemplate,
+} from "./services/capabilities/resolve-workspace-template.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

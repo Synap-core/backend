@@ -86,6 +86,7 @@ import {
   postRunSummary,
   resolveRunChannel,
 } from "../utils/post-run-summary.js";
+import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -1669,19 +1670,33 @@ async function executeFetchStep(
  * Execute a query step: queries entities by profile slug with optional filter.
  */
 async function executeQueryStep(
-  data: { profileSlug: string; filter: string; limit: number },
+  data: { profileSlug: string; filter: string; limit: number; scope?: string },
   context: StepContext,
-  workspaceId: string
+  workspaceId: string,
+  ownerId?: string
 ): Promise<Record<string, unknown>> {
   const profileSlug = resolveTemplate(data.profileSlug, context);
   const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
 
   if (!profileSlug) throw new Error("query node: profileSlug is required");
 
-  const conditions = [
-    eq(entities.workspaceId, workspaceId),
-    eq(entities.type, profileSlug),
-  ];
+  // scope "pod" = the EXPLICIT opt-in to enumerate POD-WIDE entities
+  // (`workspaceId IS NULL`), owner-gated — mirrors the entity.query verb's
+  // `null` lens (accessScopeWhere's pod-personal branch). This is what lets a
+  // workspace-lensed automation fan out over pod-wide clients/companies.
+  // Default (unset / "workspace") is byte-for-byte the prior workspace-only read.
+  const podScope = data.scope === "pod";
+  const conditions = [eq(entities.type, profileSlug)];
+  if (podScope) {
+    // Owner-gate the pod-wide rows so this never returns another user's private
+    // pod-wide entities. Fail closed when the owner is unknown.
+    if (!ownerId) {
+      throw new Error("query node: scope 'pod' requires an owner");
+    }
+    conditions.push(isNull(entities.workspaceId), eq(entities.userId, ownerId));
+  } else {
+    conditions.push(eq(entities.workspaceId, workspaceId));
+  }
 
   // Apply optional filter: { propertyKey: value } pairs as JSONB equality conditions
   const resolvedFilter = resolveTemplate(data.filter ?? "", context);
@@ -3137,9 +3152,11 @@ async function executeAutomationFlow(params: {
                             profileSlug: string;
                             filter: string;
                             limit: number;
+                            scope?: string;
                           },
                           context,
-                          workspaceId
+                          workspaceId,
+                          ownerId
                         );
                         break;
                       case "fetch":
@@ -3238,8 +3255,14 @@ async function executeAutomationFlow(params: {
                 profileSlug: string;
                 filter: string;
                 limit: number;
+                scope?: string;
               };
-              output = await executeQueryStep(data, context, workspaceId);
+              output = await executeQueryStep(
+                data,
+                context,
+                workspaceId,
+                ownerId
+              );
               break;
             }
 
@@ -3451,12 +3474,26 @@ async function executeAutomationFlow(params: {
                 context
               );
 
-              // Create a child run record
+              // Create a child run record.
+              //
+              // The child's subject is its OWN resolved payload's `entityId` when
+              // the author mapped one — this is the flagship "cron parent →
+              // for-each-client → per-client child" shape, where the loop item
+              // maps onto `entityId` and each child must route to ITS client's
+              // channel. With no per-child subject mapped, the child inherits the
+              // parent run's subject: a chained automation is still "about" the
+              // same entity. NULL (a bare cron parent with no mapping) correctly
+              // degrades per_entity to the per-type feed.
+              const childSubjectEntityId =
+                subjectEntityIdFromPayload(resolvedPayload) ??
+                run?.subjectEntityId;
+
               const childRunId = randomUUID();
               await db.insert(automationRuns).values({
                 id: childRunId,
                 automationId: targetId,
                 workspaceId,
+                subjectEntityId: childSubjectEntityId,
                 triggeredBy: "automation",
                 status: "running",
                 triggerPayload: resolvedPayload,

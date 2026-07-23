@@ -145,6 +145,56 @@ export function resolveResultRouting(
 }
 
 /**
+ * Which of the three rooms a run's activity lands in. The `subject_entity`
+ * branch names the ROUTE, not the room: the caller turns it into a channel
+ * (`resolveRunChannel`) or into a fan-out marker over the subject kind (the
+ * read-only `automations.feedTargets` preview).
+ */
+export type RunChannelBranch =
+  | { branch: "subject_entity" }
+  | { branch: "trigger_channel"; channelId: string }
+  | { branch: "automation_run_channel" };
+
+/**
+ * The branch ORDER — the one door for "where does a run's result go?".
+ *
+ * Kept as a pure decision (no DB, no channel creation) because its two callers
+ * need different things from it: `resolveRunChannel` ENSURES the resolved
+ * channel exists, while `automations.feedTargets` is a strictly read-only
+ * preview that must never mint a channel and renders `subject_entity` as a
+ * fan-out over the automation's subject kind rather than one room. Sharing the
+ * decision — instead of a second hand-copied if/else — is what stops the two
+ * from drifting.
+ *
+ *  - `per_entity` WITH a subject → the subject's own channel. Choosing
+ *    `per_entity` is a deliberate opt-in, so it wins over a trigger-bound
+ *    channel.
+ *  - otherwise an explicit trigger-bound channel wins (a Discord-triggered
+ *    automation posts back to its source channel) — the historical default, and
+ *    the `trigger` mode made explicit.
+ *  - else the automation's durable per-type run channel — ONE feed for all its
+ *    runs. This is the `per_type` default, and the fall-back for a `per_entity`
+ *    run with no subject or a `trigger` automation with no configured channel.
+ *
+ * With no `resultRouting` set (`per_type`), this is exactly the pre-`per_entity`
+ * order: trigger channel first, else the per-type run channel.
+ */
+export function selectRunChannelBranch(input: {
+  routing: ResultRouting;
+  /** `per_entity` only routes to a subject when there IS one to route to. */
+  hasSubject: boolean;
+  triggerChannelId?: string | null;
+}): RunChannelBranch {
+  if (input.routing === "per_entity" && input.hasSubject) {
+    return { branch: "subject_entity" };
+  }
+  if (input.triggerChannelId) {
+    return { branch: "trigger_channel", channelId: input.triggerChannelId };
+  }
+  return { branch: "automation_run_channel" };
+}
+
+/**
  * Resolve the channel a run's activity lands in — the ONE door shared by the
  * run-narration path (`postRunSummary`) and the executor's per-run session open
  * (`executeAutomationFlow`). Previously duplicated as two copy-pasted resolvers;
@@ -168,23 +218,28 @@ export async function resolveRunChannel(
   automation: Automation,
   run: AutomationRun
 ): Promise<string> {
-  const routing = resolveResultRouting(automation.metadata);
+  const decision = selectRunChannelBranch({
+    routing: resolveResultRouting(automation.metadata),
+    hasSubject: Boolean(run.subjectEntityId),
+    triggerChannelId: (
+      automation.triggerConfig as AutomationTriggerConfig | null
+    )?.channelId,
+  });
+
+  if (decision.branch === "trigger_channel") return decision.channelId;
+
   const repo = new ChannelRepository(db);
 
-  if (routing === "per_entity" && run.subjectEntityId) {
+  if (decision.branch === "subject_entity") {
     const channel = await repo.ensureEntityChannel(
-      run.subjectEntityId,
+      // Narrowed by `hasSubject` above — the branch is only returned when set.
+      run.subjectEntityId!,
       automation.createdBy,
       run.workspaceId ?? undefined,
       { title: automation.name ?? undefined }
     );
     return channel.id;
   }
-
-  const triggerChannelId = (
-    automation.triggerConfig as AutomationTriggerConfig | null
-  )?.channelId;
-  if (triggerChannelId) return triggerChannelId;
 
   const channel = await repo.ensureAutomationRunChannel(
     automation.id,

@@ -8,6 +8,27 @@
 import type { MergedProperty } from "./property-merging-service.js";
 
 /**
+ * Resolve the human label for a property when generating a column title.
+ *
+ * Precedence mirrors the frontend `resolvePropertyLabel`
+ * (`@synap-core/property-renderer`): `displayName` → `label` → raw slug. The
+ * system-profile seeds write `uiHints.label`, so reading `displayName` alone
+ * produced raw-slug column headers ("ek_claim" instead of "Claim"). Backend
+ * cannot import the frontend helper, so the precedence is inlined here — keep
+ * the two in sync.
+ */
+function resolveColumnTitle(prop: {
+  slug: string;
+  uiHints?: { displayName?: unknown; label?: unknown } | null;
+}): string {
+  const hints = prop.uiHints ?? {};
+  const displayName =
+    typeof hints.displayName === "string" ? hints.displayName.trim() : "";
+  const label = typeof hints.label === "string" ? hints.label.trim() : "";
+  return displayName || label || prop.slug;
+}
+
+/**
  * Column definition for views
  */
 export interface ViewColumn {
@@ -54,7 +75,7 @@ export class ViewDefaultColumnsService {
     const propertyColumns = commonProperties.map((prop) => ({
       id: prop.slug,
       field: `properties.${prop.slug}`,
-      title: (prop.uiHints?.displayName as string) || prop.slug,
+      title: resolveColumnTitle(prop),
       valueType: prop.valueType,
       indexed: prop.indexed,
       visible: true,
@@ -83,9 +104,7 @@ export class ViewDefaultColumnsService {
         {
           id: groupByCandidate.slug,
           field: `properties.${groupByCandidate.slug}`,
-          title:
-            (groupByCandidate.uiHints?.displayName as string) ||
-            groupByCandidate.slug,
+          title: resolveColumnTitle(groupByCandidate),
           valueType: groupByCandidate.valueType,
           indexed: groupByCandidate.indexed,
         },
@@ -115,7 +134,7 @@ export class ViewDefaultColumnsService {
     const propertyColumns = commonProperties.map((prop) => ({
       id: prop.slug,
       field: `properties.${prop.slug}`,
-      title: (prop.uiHints?.displayName as string) || prop.slug,
+      title: resolveColumnTitle(prop),
       valueType: prop.valueType,
       indexed: prop.indexed,
       visible: true,

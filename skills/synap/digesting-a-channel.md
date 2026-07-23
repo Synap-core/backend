@@ -22,6 +22,31 @@ Do NOT assume this channel is a CRM. Do NOT reach for a contacts/notes/links tem
 
 Every person, company, deal, or resource you are about to propose may already exist. Resolve first, create only what is new. Match on STRONG signals — email, phone, url, handle — not a fuzzy name. Run ONE batched search over all candidates, reuse on match (add the newly-seen handle or spelling as an alias), and mint an entity only for something genuinely absent. The full resolve → reuse → alias discipline in `crm.md` applies here verbatim.
 
+## When the channel is UNBOUND — classify it and PROPOSE a bind
+
+A channel that is **not yet bound to any entity** (no `contextObjectId`, no `branchPurpose`) is a different job from a normal digest. Before you mine it for signal, answer a prior question: **what IS this channel, and which entity does it belong to?** This is the "I think #acme is a client — link it?" affordance.
+
+Work it in this order — identity FIRST, classification, then propose:
+
+1. **Read the window + the channel NAME.** The name (`acme`, `weex-partnership`, `general`, `eng-team`) is often the strongest single signal; the messages confirm or correct it. Who posts, what they talk about, whether it reads client-facing or internal.
+2. **Resolve the entity FIRST — do NOT mint a duplicate.** Match the channel to something that already exists in the pod on STRONG signals — the name, a domain/email/url mentioned, a handle — using `resolve_identity` / a batched search. Only if nothing genuinely matches do you consider a new entity, and even then propose the entity through the normal capture door, never a throwaway. The whole point of binding is to point the channel at the REAL thing; binding to a fabricated duplicate is worse than not binding at all.
+3. **Classify what the channel is** — pick the one that fits:
+   - **client** — a client-facing channel (mixes their people and ours). Suggests `branchPurpose: "client-comms"`.
+   - **partner** — a partner/vendor relationship channel. Suggests `branchPurpose` like `"partner"` (or leave to the human).
+   - **internal team** — everyone here is OUR team; ops/eng/planning. Suggests `branchPurpose: "team"`.
+   - **project** — work-scoped, cross-cutting. Suggests a project-oriented purpose (or `"team"` if internal).
+4. **Emit ONE governed bind proposal** with `propose_channel_bind` — `channelId` (the Synap channel UUID), the resolved `contextObjectId`, and your suggested `branchPurpose` + a one-line `reasoning`. The result comes back `proposed`: that is the system working. You do not bind — the operator confirms.
+
+### The firewall — the one rule you never bend
+
+`branchPurpose: "client-comms"` is **irreversible**. Once a channel is client-comms the backend refuses to reclassify it. So:
+
+- **Only suggest `client-comms` when you are confident the channel is client-facing.** A `general`, `random`, or internal team channel must NEVER be proposed as client-comms — misfiling an internal room as client comms is exactly the mistake the firewall exists to prevent.
+- **When the side is unclear, OMIT `branchPurpose`** and let the human choose on approval. An unbound bind with the purpose left open is fine; a wrong client-comms bind is not.
+- You always PROPOSE. There is no path here where you silently set client-comms. The human owns that decision by approving.
+
+Auto-binding on strong identity signals lives elsewhere; **from this skill you always propose.**
+
 ## Role-aware people guard (read this twice)
 
 WHO is in the channel changes what a person IS. Get this wrong and you propose your own teammates as leads.

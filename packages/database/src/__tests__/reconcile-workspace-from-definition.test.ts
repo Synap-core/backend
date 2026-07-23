@@ -223,3 +223,160 @@ describe.skipIf(!SCHEMA_LOADS)(
     });
   }
 );
+
+// ── Overlay bento/layout ADDITIVE merge ──────────────────────────────────────
+// A compose-overlay declaring its own `bentoLayout` / `layoutConfig.sidebarItems`
+// used to be SILENTLY DROPPED by reconcile. Proves the additive contract: base
+// dashboard blocks + sidebar items are RETAINED, overlay ones are APPENDED
+// (deduped, stacked below), and a re-apply is idempotent (never overwrites,
+// never duplicates).
+const bSuf = crypto.randomUUID().slice(0, 8);
+const bUserId = `test-bento-${bSuf}`;
+const bProfileSlug = `bproj-${bSuf}`;
+let bWorkspaceId: string;
+
+const bentoBase: WorkspaceDefinitionInput = {
+  workspaceName: `Bento Base ${bSuf}`,
+  profiles: [{ slug: bProfileSlug, displayName: "BProj" }],
+  // Base home dashboard carries ONE widget the overlay must never clobber.
+  bentoLayout: [
+    {
+      widgetType: "section-header",
+      pos: { x: 0, y: 0, w: 12, h: 2 },
+      config: { title: "Base Header" },
+    },
+  ],
+  bentoViewName: "Home",
+};
+
+// Overlay adds a NEW widget + a sidebar item; declares NO profiles of its own.
+const bentoOverlay: WorkspaceDefinitionInput = {
+  workspaceName: `Bento Base ${bSuf}`,
+  bentoLayout: [
+    {
+      widgetType: "stat-card",
+      pos: { x: 0, y: 0, w: 3, h: 3 },
+      config: { label: "Overlay Stat" },
+    },
+  ],
+  layoutConfig: {
+    sidebarItems: [
+      {
+        kind: "external",
+        url: "https://example.com/overlay",
+        label: "Overlay",
+      },
+    ],
+  },
+};
+
+describe.skipIf(!SCHEMA_LOADS)(
+  "reconcileWorkspaceFromDefinition — overlay bento/layout additive merge",
+  () => {
+    beforeAll(async () => {
+      await sql`
+      INSERT INTO users (id, email, name)
+      VALUES (${bUserId}, ${`${bUserId}@test.local`}, 'Bento Test')
+      ON CONFLICT (id) DO NOTHING
+    `;
+      const result = await createWorkspaceFromDefinition({
+        definition: bentoBase,
+        userId: bUserId,
+        createdBy: "user",
+      });
+      bWorkspaceId = result.workspaceId;
+    });
+
+    afterAll(async () => {
+      if (!bWorkspaceId) {
+        await sql`DELETE FROM users WHERE id = ${bUserId}`;
+        return;
+      }
+      await sql`DELETE FROM profile_properties WHERE profile_id IN (SELECT id FROM profiles WHERE workspace_id = ${bWorkspaceId})`;
+      await sql`DELETE FROM property_defs WHERE profile_id IN (SELECT id FROM profiles WHERE workspace_id = ${bWorkspaceId})`;
+      await sql`DELETE FROM views WHERE workspace_id = ${bWorkspaceId}`;
+      await sql`DELETE FROM profiles WHERE workspace_id = ${bWorkspaceId}`;
+      await sql`DELETE FROM workspace_members WHERE workspace_id = ${bWorkspaceId}`;
+      await sql`DELETE FROM workspaces WHERE id = ${bWorkspaceId}`;
+      await sql`DELETE FROM users WHERE id = ${bUserId}`;
+    });
+
+    it("appends overlay bento blocks + sidebar items without dropping the base", async () => {
+      // Base home view exists with the base header block.
+      const [homeBefore] = await sql`
+      SELECT id, config FROM views
+      WHERE workspace_id = ${bWorkspaceId} AND type = 'bento'
+        AND (metadata->>'homeScope') = 'workspace'
+    `;
+      expect(homeBefore?.id).toBeTruthy();
+      const baseBlocks = (homeBefore.config?.blocks ?? []) as Array<
+        Record<string, unknown>
+      >;
+      const baseWidgetTypes = baseBlocks.map((b) => b.widgetType);
+      expect(baseWidgetTypes).toContain("section-header");
+      expect(baseWidgetTypes).not.toContain("stat-card");
+
+      const report = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: bentoOverlay,
+      });
+
+      // ── Report ──────────────────────────────────────────────────────────
+      expect(report.home.created).toBe(false); // merged into existing home
+      expect(report.home.skipped).toBe(false);
+      expect(report.home.blocksAdded.length).toBe(1);
+      expect(report.layout.sidebarItemsAdded).toContain(
+        "url:https://example.com/overlay"
+      );
+
+      // ── DB: base retained + overlay appended (stacked below) ────────────
+      const [homeAfter] = await sql`
+      SELECT config FROM views WHERE workspace_id = ${bWorkspaceId} AND type = 'bento'
+        AND (metadata->>'homeScope') = 'workspace'
+    `;
+      const mergedBlocks = (homeAfter.config?.blocks ?? []) as Array<
+        Record<string, unknown>
+      >;
+      const mergedTypes = mergedBlocks.map((b) => b.widgetType);
+      expect(mergedTypes).toContain("section-header"); // base retained
+      expect(mergedTypes).toContain("stat-card"); // overlay present
+      // Overlay stat-card was stacked BELOW the base header (y shifted down).
+      const stat = mergedBlocks.find((b) => b.widgetType === "stat-card") as
+        { pos?: { y?: number } } | undefined;
+      expect(stat?.pos?.y).toBeGreaterThanOrEqual(2);
+
+      // ── Sidebar item landed in settings.layout ──────────────────────────
+      const [ws] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      const sidebar = (ws.settings?.layout?.sidebarItems ?? []) as Array<
+        Record<string, unknown>
+      >;
+      expect(sidebar.some((s) => s.url === "https://example.com/overlay")).toBe(
+        true
+      );
+    });
+
+    it("re-applying the same overlay is a no-op (idempotent, no duplicate blocks)", async () => {
+      const report = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: bentoOverlay,
+      });
+      expect(report.home.blocksAdded).toHaveLength(0);
+      expect(report.layout.sidebarItemsAdded).toHaveLength(0);
+
+      const [homeAfter] = await sql`
+      SELECT config FROM views WHERE workspace_id = ${bWorkspaceId} AND type = 'bento'
+        AND (metadata->>'homeScope') = 'workspace'
+    `;
+      const blocks = (homeAfter.config?.blocks ?? []) as Array<
+        Record<string, unknown>
+      >;
+      // Exactly one stat-card — the overlay widget was NOT re-appended.
+      expect(blocks.filter((b) => b.widgetType === "stat-card")).toHaveLength(
+        1
+      );
+    });
+  }
+);

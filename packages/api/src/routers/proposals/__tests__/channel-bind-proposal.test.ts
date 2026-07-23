@@ -15,6 +15,7 @@
  *   (b) approving binds context_object_id + branch_purpose via the ONE door
  *   (c) a client-comms→other bind is refused (immutability preserved)
  *   (d) null-context eager mint is unbound + idempotent
+ *   (e) the proposal is IDENTIFIED by its channel, so a repeat sweep dedups
  */
 
 import { describe, it, expect } from "vitest";
@@ -25,6 +26,7 @@ import {
   isAutoApproved,
   decideAgentPolicy,
 } from "@synap/governance-policy";
+import { computeProposalDedupHash } from "@synap/database";
 
 // vitest cwd is the api package root (mirrors workspace-create-executor.test.ts).
 const API_SRC = join(process.cwd(), "src");
@@ -86,6 +88,20 @@ describe("(a) channel.bind is never auto-approved", () => {
     expect(helper).not.toContain("caller.updateChannel");
     expect(helper).not.toMatch(/\bawait\s+setChannelBranchPurpose\(/);
     expect(helper).not.toMatch(/\.set\(/);
+  });
+
+  it("the gate data identifies the SUBJECT: id === the channel being bound (never a fresh uuid)", () => {
+    // permission-check derives proposals.targetId from
+    // `data.documentId || data.entityId || data.id || randomUUID()`. A random
+    // `data.id` made the row un-addressable by its subject AND defeated the
+    // pending-proposal dedup guard (which narrows on targetId).
+    const helper = readSrc("utils/propose-channel-bind.ts");
+    expect(helper).toMatch(/\bid:\s*input\.channelId\b/);
+    // No uuid minting of any kind survives (the import is gone; only the
+    // explanatory comment may still name the retired behaviour).
+    expect(helper).not.toMatch(/from\s*["']crypto["']/);
+    expect(helper).not.toMatch(/=\s*randomUUID\(\)/);
+    expect(helper).not.toMatch(/\bid:\s*randomUUID/);
   });
 
   it("branchPurpose is passed through as explicit data, never default-forced", () => {
@@ -269,5 +285,103 @@ describe("(d) POST /channels eager mint: null context is unbound + idempotent", 
     expect(
       computeBind({ contextObjectId: "e2", relink: true }, "already")
     ).toBe(true);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// (e) a repeated sweep does NOT file a second pending bind for the same channel.
+//
+// The pending-proposal dedup guard narrows candidates by `proposals.targetId`
+// (for every non-`create` proposalType) and then compares an exact payload hash.
+// `channel/bind` files with `proposalType: "bind"`, so BOTH halves apply — and
+// both are only satisfiable when the gate data's `id` is the CHANNEL id rather
+// than a fresh uuid per call. Proven executably against the real
+// `computeProposalDedupHash`.
+// ───────────────────────────────────────────────────────────────────────────
+describe("(e) a second identical channel/bind proposal is deduped", () => {
+  const WS = "11111111-1111-1111-1111-111111111111";
+  const CHANNEL = "01dc4e24-0000-4000-8000-000000000001";
+  const CLIENT = "aaaaaaaa-0000-4000-8000-000000000002";
+
+  /** Mirror of permission-check's targetId derivation (createProposal). */
+  function deriveTargetId(
+    data: Record<string, unknown>,
+    fallback: string
+  ): string {
+    return (data.documentId || data.entityId || data.id || fallback) as string;
+  }
+
+  /** The stored request-shaped payload createProposal persists, for one attempt. */
+  function storedData(
+    gateData: Record<string, unknown>,
+    attempt: { requestId: string; correlationId: string; reasoning: string }
+  ) {
+    return {
+      requestId: attempt.requestId,
+      source: "intelligence",
+      sourceId: "user-1",
+      workspaceId: WS,
+      targetType: "channel",
+      targetId: deriveTargetId(gateData, `fallback-${attempt.requestId}`),
+      changeType: "bind",
+      data: gateData,
+      reasoning: attempt.reasoning,
+      summary: "Bind channel",
+      correlationId: attempt.correlationId,
+    };
+  }
+
+  /** The gate data proposeChannelBind builds today (id === channelId). */
+  const gateData = (contextObjectId = CLIENT) => ({
+    id: CHANNEL,
+    channelId: CHANNEL,
+    contextObjectType: "entity",
+    contextObjectId,
+  });
+
+  function hashFor(gate: Record<string, unknown>, n: number) {
+    const data = storedData(gate, {
+      requestId: `req-${n}`,
+      correlationId: `corr-${n}`,
+      reasoning: `attempt ${n} prose`,
+    });
+    return computeProposalDedupHash({
+      workspaceId: WS,
+      proposalType: "bind",
+      targetType: "channel",
+      targetId: data.targetId,
+      data: data as unknown as Record<string, unknown>,
+    });
+  }
+
+  it("the dedup guard NARROWS by targetId for a bind (only `create` is exempt)", () => {
+    expect("bind").not.toBe("create");
+    // …and targetId is now the real channel, so the narrowing can actually match.
+    expect(deriveTargetId(gateData(), "fallback")).toBe(CHANNEL);
+  });
+
+  it("two identical bind proposals for the same channel hash EQUAL (deduped)", () => {
+    expect(hashFor(gateData(), 1)).toBe(hashFor(gateData(), 2));
+  });
+
+  it("REGRESSION: a fresh random `data.id` per call could never dedup", () => {
+    const randomIdGate = (n: number) => ({
+      id: `random-uuid-${n}`,
+      channelId: CHANNEL,
+      contextObjectType: "entity",
+      contextObjectId: CLIENT,
+    });
+    // Both the narrowing key and the payload hash diverge — the old behaviour.
+    expect(deriveTargetId(randomIdGate(1), "fallback")).not.toBe(
+      deriveTargetId(randomIdGate(2), "fallback")
+    );
+    expect(hashFor(randomIdGate(1), 1)).not.toBe(hashFor(randomIdGate(2), 2));
+  });
+
+  it("a DIFFERENT bind for the same channel is NOT collapsed", () => {
+    // Dedup is exact-match on the normalized payload: proposing the same channel
+    // against a different context object stays its own pending decision.
+    const other = "bbbbbbbb-0000-4000-8000-000000000003";
+    expect(hashFor(gateData(), 1)).not.toBe(hashFor(gateData(other), 2));
   });
 });

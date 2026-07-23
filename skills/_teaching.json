@@ -145,11 +145,12 @@
       "create_entity",
       "update_entity",
       "propose_entity_graph",
-      "create_relation"
+      "create_relation",
+      "propose_channel_bind"
     ],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Digesting a chat channel: advise (don't bookkeep), structure any real signal into the shape that fits, resolve-before-create, and the role-aware people guard (teammates in an internal channel are never clients).",
+    "summary": "Digesting a chat channel: advise (don't bookkeep), structure any real signal into the shape that fits, resolve-before-create, classify an UNBOUND channel and propose a governed bind (propose_channel_bind, never client-comms on doubt), and the role-aware people guard (teammates in an internal channel are never clients).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

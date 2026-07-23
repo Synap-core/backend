@@ -46,9 +46,15 @@ export interface PodProactiveDefaults {
  * (e.g. a retired `category`) — a permanent, operator-fixable fault, not a
  * transient outage. `/health` surfaces it as `catalog:<key>:misconfigured` so a
  * 400 can never masquerade as "source temporarily unavailable".
+ *
+ * `partial` is distinct again: the fetch SUCCEEDED but could not be proven
+ * complete (a page failed mid-pagination, the source reported more rows than it
+ * served, or the sync's page-count safety cap was hit). The pod upserted what it
+ * retrieved but deliberately SKIPPED the prune — the cache is a trusted superset,
+ * not a truncated set — so no live catalog entry is deleted against a partial page.
  */
 export type CatalogSyncStatus =
-  "ok" | "empty" | "unreachable" | "misconfigured";
+  "ok" | "empty" | "unreachable" | "misconfigured" | "partial";
 export interface CatalogSyncStamp {
   /** ISO timestamp of the last completed sync attempt (any outcome). */
   lastSyncAt: string;

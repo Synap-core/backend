@@ -15,7 +15,9 @@ import {
   resolveResultRouting,
   DEFAULT_RESULT_ROUTING,
   resolveRunChannel,
+  selectRunChannelBranch,
 } from "../../utils/post-run-summary.js";
+import { deriveEventSubjectEntityId } from "../../utils/run-subject.js";
 
 // The exactly-once claim guards on `summary_message_id IS NULL`. The claim
 // UPDATE ANDs this with `id = runId`; if a future edit keyed the guard on the
@@ -143,6 +145,84 @@ describe("resolveRunChannel routing", () => {
     expect(id).toBe("trig-ch");
     expect(entitySpy).not.toHaveBeenCalled();
     expect(typeSpy).not.toHaveBeenCalled();
+  });
+
+  // The flagship regression: an EVENT-driven run used to leave subjectEntityId
+  // NULL, so `per_entity` silently degraded to the per-type feed for every run
+  // the matcher opened. Compose the real seam — derive the subject from the
+  // event exactly as automation-trigger-matcher does, stamp it on the run, then
+  // resolve — and assert the recap lands in THAT client's own channel.
+  it("per_entity + an event-driven run → the event's subject entity's own channel", async () => {
+    const clientId = "33333333-3333-4333-8333-333333333333";
+    const subjectEntityId = deriveEventSubjectEntityId({
+      eventType: "external_message.received.completed",
+      subjectId: clientId,
+      data: {
+        entityId: clientId,
+        channelId: "discord-ch",
+        provider: "discord",
+      },
+    });
+    expect(subjectEntityId).toBe(clientId);
+
+    const id = await resolveRunChannel(
+      automationFor({
+        metadata: { resultRouting: "per_entity" },
+        // A trigger-bound channel is present and must LOSE: per_entity is a
+        // deliberate opt-in, so the client's room wins over the source channel.
+        triggerConfig: { channelId: "trig-ch" } as never,
+      }),
+      run({ subjectEntityId, workspaceId: "ws-1" })
+    );
+
+    expect(id).toBe("entity-ch");
+    expect(entitySpy).toHaveBeenCalledWith(clientId, "owner-1", "ws-1", {
+      title: "Nightly Sync",
+    });
+    expect(typeSpy).not.toHaveBeenCalled();
+  });
+});
+
+// The branch ORDER is one exported pure decision so the async resolver and the
+// read-only `automations.feedTargets` preview cannot drift apart.
+describe("selectRunChannelBranch", () => {
+  it("per_entity + a subject → the subject route, even against a trigger channel", () => {
+    expect(
+      selectRunChannelBranch({
+        routing: "per_entity",
+        hasSubject: true,
+        triggerChannelId: "trig-ch",
+      })
+    ).toEqual({ branch: "subject_entity" });
+  });
+
+  it("per_entity with NO subject → falls through to the trigger channel", () => {
+    expect(
+      selectRunChannelBranch({
+        routing: "per_entity",
+        hasSubject: false,
+        triggerChannelId: "trig-ch",
+      })
+    ).toEqual({ branch: "trigger_channel", channelId: "trig-ch" });
+  });
+
+  it("per_entity with no subject and no trigger channel → the per-type run channel", () => {
+    expect(
+      selectRunChannelBranch({ routing: "per_entity", hasSubject: false })
+    ).toEqual({ branch: "automation_run_channel" });
+  });
+
+  it("per_type ignores a subject — the historical order is unchanged", () => {
+    expect(
+      selectRunChannelBranch({ routing: "per_type", hasSubject: true })
+    ).toEqual({ branch: "automation_run_channel" });
+    expect(
+      selectRunChannelBranch({
+        routing: "per_type",
+        hasSubject: true,
+        triggerChannelId: "trig-ch",
+      })
+    ).toEqual({ branch: "trigger_channel", channelId: "trig-ch" });
   });
 });
 

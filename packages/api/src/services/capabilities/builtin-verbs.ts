@@ -410,6 +410,17 @@ async function getReadScope(
   return scopedDb(access);
 }
 
+/** Like getReadScope but pins the GLOBALS-ONLY (`null`) lens — pod-personal
+ *  rows (`workspaceId IS NULL`, owner-gated). Kept SEPARATE from getReadScope
+ *  because that helper maps null→undefined (the full user floor) for the
+ *  no-workspace DATA-table case; the pod-wide opt-in needs the `null` lens
+ *  preserved so the read returns exactly the caller's pod-wide entities and
+ *  never a focused workspace's rows. */
+async function getGlobalsReadScope(userId: string): Promise<ScopedDb> {
+  const { AccessContext, scopedDb } = await import("../../access/index.js");
+  return scopedDb(AccessContext.operator({ userId }).withLens(null));
+}
+
 /** entity.query — READ entities of a profile, scoped by the caller's floor. */
 const entityQueryParams = z.object({
   /** Entity profile slug (e.g. "task", "deal") — the `type` discriminator. */
@@ -418,6 +429,18 @@ const entityQueryParams = z.object({
   filter: z.record(z.string(), z.unknown()).optional(),
   /** Optional workspace lens; omit for the full user floor (pod-wide). */
   workspaceId: z.string().uuid().optional(),
+  /**
+   * Read scope. "workspace" (default) = today's behavior EXACTLY: the explicit
+   * `workspaceId`, else the acting workspace lens, else the full user floor.
+   * "pod" = the EXPLICIT opt-in to enumerate POD-WIDE entities (`workspaceId IS
+   * NULL`, owner-gated) even when running under an active workspace lens — the
+   * flagship "list my pod-wide clients/companies" case. This is an explicit
+   * request, NOT the "globals silently bleed into a focused workspace" that the
+   * default deliberately forbids. A specific `workspaceId` is IGNORED under
+   * "pod". Plain string values survive the automation engine's String()
+   * coercion, so no z.coerce is needed.
+   */
+  scope: z.enum(["workspace", "pod"]).optional(),
   // coerce: the CLI + automation engine pass params as strings ("50").
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
@@ -425,14 +448,24 @@ const entityQueryParams = z.object({
 const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = entityQueryParams.parse(params);
   const limit = input.limit ?? 20;
-  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+  // "pod" scope pins the globals-only (`null`) lens: pod-wide entities
+  // (`workspaceId IS NULL`, owner-gated). Default "workspace" is byte-for-byte
+  // the prior behavior (explicit id → acting lens → full user floor).
+  const podScope = input.scope === "pod";
+  const workspaceId = podScope
+    ? null
+    : (input.workspaceId ?? ctx.workspaceId ?? undefined);
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     ctx.userId,
     workspaceId
   );
 
-  // The lens is the query's explicit workspaceId, else the acting lens.
-  const scoped = await getReadScope(ctx.userId, workspaceId);
+  // The lens is the query's explicit workspaceId, else the acting lens. For
+  // "pod" we pin the globals-only (`null`) lens via getGlobalsReadScope, since
+  // getReadScope deliberately maps null→undefined (the full user floor).
+  const scoped = podScope
+    ? await getGlobalsReadScope(ctx.userId)
+    : await getReadScope(ctx.userId, workspaceId);
 
   // Polymorphic (Kind + Facets): a role slug (client/partner/…) matches via
   // the facet EXISTS, a kind slug via entities.type — same one-door routing

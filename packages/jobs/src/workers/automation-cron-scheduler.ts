@@ -126,7 +126,16 @@ export async function handleAutomationCronScheduler(): Promise<void> {
       const triggerConfig = automation.triggerConfig as Record<string, unknown>;
       const cronExpression = triggerConfig?.expression as string;
 
-      // Create run record
+      // Create run record.
+      //
+      // `subjectEntityId` is deliberately left NULL: a clock tick is about no
+      // entity, so there is nothing honest to derive. A `per_entity` cron
+      // automation therefore narrates its PARENT run into the per-type feed
+      // (`resolveRunChannel`'s intended fallback) and gets its per-entity routing
+      // from the children it spawns — the flagship shape is a cron parent that
+      // fans out over clients via `sub_automation`, and the executor stamps each
+      // child with the subject its payload mapping resolved. Inventing a subject
+      // here (e.g. the first matching entity) would misroute every recap.
       const [run] = await db
         .insert(automationRuns)
         .values({

@@ -26,6 +26,7 @@ import {
 import type { AutomationTriggerConfig } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
+import { deriveEventSubjectEntityId } from "../utils/run-subject.js";
 
 const logger = createLogger({ module: "automation-trigger-matcher" });
 
@@ -446,6 +447,17 @@ export async function handleAutomationTriggerMatch(job: {
   }
   if (allAutomations.length === 0) return;
 
+  // The entity this EVENT is about — the durable per-run lens `resolveRunChannel`
+  // reads for `resultRouting: "per_entity"`. A property of the event, not of the
+  // automation, so it is derived once and stamped on every run this event opens.
+  // `undefined` for an event with no entity subject (a per_entity automation then
+  // degrades to its per-type feed, which is the intended fallback).
+  const subjectEntityId = deriveEventSubjectEntityId({
+    eventType,
+    subjectId,
+    data,
+  });
+
   const boss = getBoss();
 
   for (const automation of allAutomations) {
@@ -488,6 +500,7 @@ export async function handleAutomationTriggerMatch(job: {
       .values({
         automationId: automation.id,
         workspaceId: runWorkspaceId,
+        subjectEntityId,
         triggeredBy: automationContext ? "system" : userId,
         triggerPayload: {
           eventType,

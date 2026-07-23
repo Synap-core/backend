@@ -15,7 +15,13 @@ import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
 import { getKratosSessionByCookie, getKratosSessionByToken } from "@synap/auth";
-import { db, and, eq } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  arrayContains,
+  federatedApplicationConnections,
+} from "@synap/database";
 import { workspaceMembers, channels, views } from "@synap/database/schema";
 
 /** Is `userId` a member of `workspaceId`? */
@@ -79,12 +85,19 @@ const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 /**
- * First-party origin policy — mirrors apps/api/src/cors-origin.ts. This is a
- * separate process/package so the small check is duplicated by design.
- * The Socket.IO handshake is cookie-authed, so reflecting every origin is a
- * CSWSH surface; derive from SYNAP_BASE_DOMAIN + the explicit allowlist instead.
+ * Origin policy — mirrors apps/api/src/cors-origin.ts. This is a separate
+ * process/package so the check is duplicated by design. The Socket.IO handshake
+ * is credentialed, so reflecting every origin is a CSWSH surface; trust only
+ * first-party origins (env/base-domain) and APPROVED cross-origin applications.
+ *
+ * Async because the approved-application check hits the DB — the same
+ * `federated_application_connections` table the HTTP door consults. Omitting
+ * that path was the bug: an approved app (e.g. crm.synap.live) was authorized
+ * for HTTP/tRPC but its Socket.IO handshake was rejected with no
+ * Access-Control-Allow-Origin, so realtime was silently down for every approved
+ * cross-origin app.
  */
-function isAllowedRealtimeOrigin(origin?: string): boolean {
+async function isAllowedRealtimeOrigin(origin?: string): Promise<boolean> {
   if (!origin || origin === "null") return true; // native/same-origin or Electron (opaque origin) — CORS does not apply
   let u: URL;
   try {
@@ -115,13 +128,37 @@ function isAllowedRealtimeOrigin(origin?: string): boolean {
     process.env.PUBLIC_URL ?? "",
     ...(process.env.FRONTEND_URL ? [FRONTEND_URL] : []),
   ].filter(Boolean);
-  return explicit.some((o) => {
-    try {
-      return new URL(o).origin === u.origin;
-    } catch {
-      return false;
-    }
-  });
+  if (
+    explicit.some((o) => {
+      try {
+        return new URL(o).origin === u.origin;
+      } catch {
+        return false;
+      }
+    })
+  ) {
+    return true;
+  }
+  // Approved cross-origin applications — trusted exactly as the HTTP CORS door
+  // trusts them (`isApprovedApplicationOrigin`): an APPROVED row whose
+  // `allowed_origins` contains this exact origin. A DB outage fails CLOSED —
+  // never reflect an unknown Origin onto a credentialed WebSocket.
+  try {
+    const connection = await db.query.federatedApplicationConnections.findFirst(
+      {
+        where: and(
+          eq(federatedApplicationConnections.status, "approved"),
+          arrayContains(federatedApplicationConnections.allowedOrigins, [
+            u.origin,
+          ])
+        ),
+        columns: { id: true },
+      }
+    );
+    return Boolean(connection);
+  } catch {
+    return false;
+  }
 }
 
 // Create HTTP server
@@ -130,7 +167,12 @@ const httpServer = createServer();
 // Create Socket.IO server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: (origin, cb) => cb(null, isAllowedRealtimeOrigin(origin)),
+    origin: (origin, cb) => {
+      void isAllowedRealtimeOrigin(origin)
+        .then((ok) => cb(null, ok))
+        // Never surface the DB/parse error to the client as a 500 — deny.
+        .catch(() => cb(null, false));
+    },
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"], // Include OPTIONS for preflight
   },
@@ -369,11 +411,7 @@ presenceNamespace.on("connection", (socket) => {
   const session = collaborationManager.userJoined({
     viewId: effectiveViewId,
     viewType: (viewType || (workspaceId ? "workspace" : "document")) as
-      | "whiteboard"
-      | "document"
-      | "timeline"
-      | "kanban"
-      | "ai-chat",
+      "whiteboard" | "document" | "timeline" | "kanban" | "ai-chat",
     userId,
     userName: userName || (isServiceAccount ? "Service" : "Anonymous"),
     socketId: socket.id,

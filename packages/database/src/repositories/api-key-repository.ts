@@ -6,6 +6,7 @@
  */
 
 import { eq, and } from "drizzle-orm";
+import { createHash } from "crypto";
 import { apiKeys } from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -151,20 +152,45 @@ export class ApiKeyRepository extends BaseRepository<
     const bcrypt = await import("bcrypt");
     const keyHash = await bcrypt.hash(newKey, 12);
 
-    // Create new key
+    // Create new key.
+    //
+    // SECURITY: rotation MUST be identity-preserving — the replacement key is
+    // the SAME credential with fresh material, never a fresh (and therefore
+    // schema-default) one. Every column below that comes from `oldKey` defines
+    // the key's identity, confinement or governance, and dropping any of them
+    // silently ESCALATES the rotated key:
+    //   - keyType: defaults to 'hub_inbound', so a rotated 'service' key would
+    //     stop being a service key and skip `resolveConfinedWorkspace`.
+    //   - workspaceId: the service-key confinement binding; NULL = pod-wide.
+    //   - linkedUserId: the agent→operator identity link; NULL = the agent's
+    //     writes stop routing through the governance membrane as proposals.
+    //   - instanceId / parentKeyId: per-instance rotation scoping and sub-token
+    //     lineage (a parent revoke must still cascade to the rotated child).
+    //   - description: the human-readable purpose of the credential.
+    // keyLookupHash is the ONE field that must NOT be copied: it is derived
+    // from the KEY MATERIAL (sha256 of the plaintext), so it is recomputed for
+    // the new key exactly as the api-keys service does on mint.
     const [newApiKey] = await this.db
       .insert(apiKeys)
       .values({
         keyName: oldKey.keyName,
         keyPrefix: oldKey.keyPrefix,
         keyHash,
+        keyLookupHash: createHash("sha256").update(newKey).digest("hex"),
+        keyType: oldKey.keyType,
+        description: oldKey.description,
         hubId: oldKey.hubId,
         scope: oldKey.scope,
         expiresAt: oldKey.expiresAt,
         userId: oldKey.userId,
+        workspaceId: oldKey.workspaceId,
+        linkedUserId: oldKey.linkedUserId,
+        instanceId: oldKey.instanceId,
+        parentKeyId: oldKey.parentKeyId,
         isActive: true,
         usageCount: 0,
         rotatedFromId: id,
+        createdBy: userId,
       })
       .returning();
 

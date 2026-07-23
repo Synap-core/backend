@@ -70,7 +70,8 @@ export function registerKeysRoutes(app: HubHono): void {
         );
       }
 
-      // Load the full key record so we can forward keyName and hubId to the new key.
+      // Load the full key record so we can forward the calling key's identity
+      // to the replacement key.
       const keyRecord = await db.query.apiKeys.findFirst({
         where: eq(apiKeys.id, keyId),
       });
@@ -80,12 +81,38 @@ export function registerKeysRoutes(app: HubHono): void {
       }
 
       try {
+        // SECURITY: this is a ROTATION, so the new key must be the SAME
+        // credential with fresh material — only the SCOPE SET is deliberately
+        // refreshed to INTEGRATION_HUB_SCOPES.cli. Everything that defines the
+        // key's identity, confinement and governance is carried over verbatim;
+        // letting any of it fall back to a schema default silently escalates the
+        // rotated key (keyType → a 'service' key stops being confined by
+        // `resolveConfinedWorkspace`; workspaceId → the confinement binding
+        // itself; linkedUserId → the agent's writes stop routing through the
+        // governance membrane as proposals; instanceId → per-instance rotation
+        // scoping). Mirrors `ApiKeyRepository.rotate()`.
         const { key: newKey, keyId: newKeyId } =
           await apiKeyService.generateApiKey(
             keyRecord.userId,
             keyRecord.keyName,
             INTEGRATION_HUB_SCOPES.cli as ApiKeyScope[],
-            keyRecord.hubId ?? undefined
+            keyRecord.hubId ?? undefined,
+            undefined, // expiresInDays — unchanged by rotation
+            // parentKeyId is deliberately NOT carried: passing it re-runs
+            // sub-token validation, which enforces a scope SUBSET of the parent
+            // — and this door intentionally RE-SCOPES to the CLI set, which need
+            // not be a subset. KNOWN RESIDUAL GAP: if a CLI key were ever also a
+            // sub-token, the rotated key would escape its parent's cascade
+            // revoke. No current mint path produces such a key, but this is not
+            // structurally enforced. Revisit when the `connections` SSOT lands.
+            undefined,
+            {
+              keyType: keyRecord.keyType,
+              workspaceId: keyRecord.workspaceId,
+              linkedUserId: keyRecord.linkedUserId,
+              instanceId: keyRecord.instanceId,
+              description: keyRecord.description,
+            }
           );
 
         await apiKeyService.revokeApiKey(

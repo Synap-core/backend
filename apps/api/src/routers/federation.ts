@@ -274,11 +274,19 @@ async function attachCpOidcCredentialBestEffort(input: {
     if (!result.ok) {
       logger.warn(
         { reason: result.reason, kratosIdentityId: input.kratosIdentityId },
-        "CP OIDC credential attach failed (best-effort)"
+        `[synap:invite] cp oidc credential attach → failed (${result.reason})`
       );
+      return;
     }
+    logger.info(
+      { kratosIdentityId: input.kratosIdentityId },
+      "[synap:invite] cp oidc credential attach → ok"
+    );
   } catch (err) {
-    logger.warn({ err }, "CP OIDC credential attach threw (best-effort)");
+    logger.warn(
+      { err, kratosIdentityId: input.kratosIdentityId },
+      "[synap:invite] cp oidc credential attach → threw (best-effort)"
+    );
   }
 }
 
@@ -1666,6 +1674,15 @@ federationRouter.post("/access-grants", async (c) => {
     return c.json({ error: "Pod auth service is unavailable" }, 503);
   if (kratosIdentity.status !== "resolved")
     return c.json({ error: "Could not resolve Pod identity" }, 502);
+  logger.info(
+    {
+      email,
+      scopeKind: claims.data.scope.kind,
+      scopeId: claims.data.scope.id,
+      kratosIdentity: kratosIdentity.created ? "created" : "resolved",
+    },
+    "[synap:invite] access-grant → provisioning member"
+  );
   try {
     const result =
       claims.data.scope.kind === "workspace"
@@ -1699,6 +1716,14 @@ federationRouter.post("/access-grants", async (c) => {
       issuerSubject: claims.data.sub,
       kratosIdentityId: kratosIdentity.identityId,
     });
+    logger.info(
+      {
+        email,
+        scopeKind: claims.data.scope.kind,
+        scopeId: claims.data.scope.id,
+      },
+      "[synap:invite] access-grant → member provisioned"
+    );
     return c.json({ success: true, ...result });
   } catch (error) {
     const compensationSucceeded =
