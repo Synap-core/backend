@@ -44,6 +44,9 @@ const FROZEN: Record<string, number> = {
   "packages/api/src/routers/webhooks-inbound.ts": 1,
   "packages/api/src/services/event-end/run-event-end.ts": 1,
   "packages/api/src/services/event-sync/run-event-sync.ts": 1,
+  // Layer-2 dedup queries `event` by (start-window, title) — `event` is a pure
+  // PRIMARY kind (no role/facet wearers), the sanctioned literal-kind case.
+  "packages/api/src/services/event-sync/run-gcal-import.ts": 1,
   "packages/api/src/utils/assert-known-profile-slug.ts": 1, // JSDoc: names the row-blind fallback it deliberately preserves, not code
   "packages/api/src/utils/user-scoped.ts": 1, // JSDoc example, not code
   "packages/database/src/repositories/entity-repository.ts": 1,

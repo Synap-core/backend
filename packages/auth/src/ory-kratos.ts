@@ -126,12 +126,24 @@ export async function attachOidcCredentialToIdentity(input: {
     return { ok: false, reason: "missing-input" };
   }
 
-  // 1. Read the identity WITH its credential configs (password hash + any
-  //    existing oidc providers). Without include_credential the configs are
-  //    redacted and a PUT would drop the password.
+  // 1. Read the identity WITH *every* credential config. Kratos redacts
+  //    credential configs unless each type is named in `include_credential`,
+  //    and (step 3) the PUT is a FULL REPLACE — any credential type absent from
+  //    the body is DELETED. So we must fetch them ALL and re-supply them ALL, or
+  //    attaching an oidc provider would silently strip the user's password AND
+  //    their 2FA (totp / webauthn / lookup_secret) and passwordless `code`.
+  const includeCredentials = [
+    "password",
+    "oidc",
+    "totp",
+    "webauthn",
+    "lookup_secret",
+    "code",
+  ]
+    .map((t) => `include_credential=${t}`)
+    .join("&");
   const getRes = await fetch(
-    `${kratosAdminUrl}/admin/identities/${encodeURIComponent(id)}` +
-      `?include_credential=password&include_credential=oidc`,
+    `${kratosAdminUrl}/admin/identities/${encodeURIComponent(id)}?${includeCredentials}`,
     { signal: AbortSignal.timeout(8_000) }
   ).catch(() => null);
   if (!getRes?.ok) {
@@ -146,18 +158,20 @@ export async function attachOidcCredentialToIdentity(input: {
     traits?: unknown;
     metadata_public?: unknown;
     metadata_admin?: unknown;
-    credentials?: {
-      password?: { config?: { hashed_password?: string } };
-      oidc?: {
-        config?: { providers?: Array<{ provider?: string; subject?: string }> };
-      };
-    };
+    // A map keyed by credential method (password | oidc | totp | webauthn |
+    // lookup_secret | code | …). Kept generic so unknown/future types round-trip
+    // untouched instead of being dropped.
+    credentials?: Record<string, { config?: Record<string, unknown> }>;
   } | null;
   if (!identity?.schema_id) {
     return { ok: false, reason: "identity-malformed" };
   }
 
-  const existingProviders = identity.credentials?.oidc?.config?.providers ?? [];
+  const credentials = identity.credentials ?? {};
+  const oidcConfig = (credentials.oidc?.config ?? {}) as {
+    providers?: Array<{ provider?: string; subject?: string }>;
+  };
+  const existingProviders = oidcConfig.providers ?? [];
   if (
     existingProviders.some(
       (p) => p.provider === provider && p.subject === subject
@@ -166,8 +180,6 @@ export async function attachOidcCredentialToIdentity(input: {
     return { ok: true }; // already linked — idempotent
   }
 
-  const hashedPassword =
-    identity.credentials?.password?.config?.hashed_password;
   const body = {
     schema_id: identity.schema_id,
     state: identity.state ?? "active",
@@ -178,13 +190,16 @@ export async function attachOidcCredentialToIdentity(input: {
     ...(identity.metadata_admin !== undefined
       ? { metadata_admin: identity.metadata_admin }
       : {}),
+    // Re-supply EVERY credential the identity carries (password hash, totp,
+    // webauthn, lookup_secret, code, …) untouched, and splice only the new
+    // provider into `oidc`. This is what stops the full-replace PUT from wiping
+    // credentials it didn't explicitly know about.
     credentials: {
-      // Preserve the existing password credential by re-supplying its hash.
-      ...(hashedPassword
-        ? { password: { config: { hashed_password: hashedPassword } } }
-        : {}),
+      ...credentials,
       oidc: {
+        ...(credentials.oidc ?? {}),
         config: {
+          ...oidcConfig,
           providers: [...existingProviders, { subject, provider }],
         },
       },

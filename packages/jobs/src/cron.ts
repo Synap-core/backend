@@ -208,10 +208,10 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "cal-backfill-cron", "*/30 * * * *", {});
   logger.info("Registered cron: cal-backfill-cron (every 30min)");
 
-  // Event sync (every 6 hours — the cron worker invokes the api-side event-sync
-  // runner in-process (IoC slot) to mirror upcoming Synap events + Stellar
-  // deadlines + Google Calendar into native Discord scheduled events). No-ops
-  // unless the pod's Discord tool has
+  // Event sync (every 6 hours — the cron worker invokes the api-side runner
+  // in-process (IoC slot): FIRST imports Google Calendar → Synap `event`
+  // entities, THEN mirrors upcoming Synap events + Stellar deadlines into
+  // native Discord scheduled events). No-ops unless the pod's Discord tool has
   // eventSync.enabled.
   await scheduleSafe(boss, "event-sync-cron", "0 */6 * * *", {});
   logger.info("Registered cron: event-sync-cron (every 6h)");

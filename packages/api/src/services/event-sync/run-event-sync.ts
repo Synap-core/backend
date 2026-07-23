@@ -3,12 +3,15 @@
  *
  * Runs on a schedule: the jobs `event-sync-cron` worker invokes this in-process
  * via the `registerEventSyncRunner` IoC slot. For the pod's Discord tool with a
- * `metadata.discord.eventSync` config it collects upcoming events from three
+ * `metadata.discord.eventSync` config it collects upcoming events from two
  * sources and creates one native Discord "external" scheduled event per new item:
  *   A. `event` entities             — Synap-native events (properties.startDate…)
  *   B. Stellar grant deadlines      — the SAME `type='event'` rows tagged
  *                                     `properties.source==='stellar'`
- *   C. Google Calendar              — via the `calendar_list` capability
+ *
+ * Google Calendar no longer pushes to Discord DIRECTLY: `run-gcal-import.ts`
+ * imports Google events into Synap `event` entities FIRST (same tick, before
+ * this pass), so they mirror through source A like any other event.
  *
  * Each event's location is the Google Meet link (when present) else the physical
  * address; the full address / details ride in the Discord event `description`.
@@ -18,9 +21,9 @@
  * Keys are rebuilt from the current window each run, so past / out-of-window
  * events prune themselves and the map never grows unbounded.
  *
- * Lives in `@synap/api` because `calendar_list` (executeCapability) is api-side;
- * the jobs `event-sync-cron` worker invokes it in-process via the
- * `registerEventSyncRunner` IoC slot (jobs can't import @synap/api).
+ * Lives in `@synap/api` because the jobs `event-sync-cron` worker invokes it
+ * in-process via the `registerEventSyncRunner` IoC slot (jobs can't import
+ * @synap/api).
  */
 
 import {
@@ -35,18 +38,11 @@ import {
   insertChannelMessage,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { executeCapability } from "../capabilities/execute-capability.js";
-import {
-  notifyConnectorUnhealthy,
-  isConnectionAuthError,
-  capErrorMessage,
-  resolveNoticeChannelId,
-} from "../connection-health/notify-connector-unhealthy.js";
 
 const logger = createLogger({ module: "event-sync" });
 
 const DEFAULT_WINDOW_DAYS = 60;
-const ALL_SOURCES = ["event", "calendar", "deadline"] as const;
+const ALL_SOURCES = ["event", "deadline"] as const;
 const HOUR_MS = 3_600_000;
 
 // ── Config + wire types ────────────────────────────────────────────────────────
@@ -61,8 +57,6 @@ export interface EventSyncConfig {
   announceChannelId?: string;
   /** Dedup map: sourceKey → created Discord scheduled-event id. */
   synced?: Record<string, string>;
-  /** Optional: pin the event sync to a specific Google connection (1-of-N). Absent → the install-default connection. */
-  connectionId?: string;
 }
 
 interface DiscordToolMetadata {
@@ -70,7 +64,7 @@ interface DiscordToolMetadata {
   [k: string]: unknown;
 }
 
-export type EventSourceType = "synap_event" | "deadline" | "google_calendar";
+export type EventSourceType = "synap_event" | "deadline";
 
 /** One upcoming event normalized across all sources. */
 export interface UpcomingEvent {
@@ -162,14 +156,6 @@ export function buildEventLocation(evt: UpcomingEvent): {
   };
 }
 
-/** Extract an ISO time from a Google Calendar start/end field. */
-function gcalTime(t: unknown): string | undefined {
-  if (!t) return undefined;
-  if (typeof t === "string") return t;
-  const obj = t as { dateTime?: string; date?: string };
-  return obj.dateTime || obj.date || undefined;
-}
-
 interface EntityRow {
   id: string;
   title: string | null;
@@ -201,33 +187,6 @@ export function normalizeEntity(row: EntityRow): UpcomingEvent | null {
     description:
       typeof props.description === "string" ? props.description : undefined,
     linkedEntityId: row.id,
-  };
-}
-
-interface GCalItem {
-  id?: string;
-  summary?: string;
-  start?: unknown;
-  end?: unknown;
-  location?: string;
-  htmlLink?: string;
-  hangoutLink?: string;
-  description?: string;
-}
-
-/** Normalize one Google Calendar item → UpcomingEvent (null when no id/start). */
-export function normalizeCalendarItem(item: GCalItem): UpcomingEvent | null {
-  const startsAt = gcalTime(item.start);
-  if (!item.id || !startsAt) return null;
-  return {
-    sourceType: "google_calendar",
-    sourceId: item.id,
-    title: item.summary?.trim() || "(untitled event)",
-    startsAt,
-    endsAt: gcalTime(item.end),
-    location: item.location,
-    url: item.hangoutLink,
-    description: item.description,
   };
 }
 
@@ -290,47 +249,6 @@ async function fetchEntityEvents(
   return out;
 }
 
-/** Source C — Google Calendar via the `calendar_list` capability. Returns the
- * events plus an `authError` message when the connection is dead (so the caller
- * can nudge the operator to reconnect instead of silently syncing nothing). */
-async function fetchCalendarEvents(
-  owner: string,
-  workspaceId: string | null,
-  connectionId: string | null | undefined
-): Promise<{ events: UpcomingEvent[]; authError?: string }> {
-  // maxResults at the verb's clamp ceiling (50) to reduce the chance an in-window
-  // event is missed — the synced dedup map is rebuilt from each fetch, so an
-  // in-window event beyond the fetch limit could be pruned and later re-created.
-  const cap = await executeCapability({
-    verbId: "calendar_list",
-    parameters: { timeMin: "@now", maxResults: 50 },
-    userId: owner,
-    workspaceId,
-    connectionSelector: connectionId ? { connectionId } : undefined,
-  });
-
-  // A dead Google connection surfaces as an error envelope inside a kind:"run"
-  // result (execute-provider-verb returns it as-is on failure) — flag it so the
-  // caller can nudge the operator, rather than silently returning no events.
-  const capErr = capErrorMessage(cap);
-  if (capErr && isConnectionAuthError(capErr)) {
-    return { events: [], authError: capErr };
-  }
-  if (cap.kind !== "run") {
-    logger.warn({ capKind: cap.kind }, "calendar_list did not run — skipping");
-    return { events: [] };
-  }
-
-  const result = cap.result as { events?: GCalItem[] } | undefined;
-  const items = Array.isArray(result?.events) ? result!.events : [];
-  const out: UpcomingEvent[] = [];
-  for (const item of items) {
-    const evt = normalizeCalendarItem(item);
-    if (evt) out.push(evt);
-  }
-  return { events: out };
-}
-
 // ── Main ────────────────────────────────────────────────────────────────────────
 
 export async function runEventSync(): Promise<RunEventSyncResult> {
@@ -365,38 +283,10 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
   const windowDays = eventSync.windowDays ?? DEFAULT_WINDOW_DAYS;
   const existingSynced = eventSync.synced ?? {};
 
-  // Collect + normalize upcoming events across all enabled sources.
+  // Collect + normalize upcoming events. Google events are already Synap `event`
+  // entities by now (run-gcal-import ran first this tick), so source A covers them.
   const events: UpcomingEvent[] = [];
   events.push(...(await fetchEntityEvents(windowDays, sources)));
-  if (sources.includes("calendar")) {
-    const cal = await fetchCalendarEvents(
-      owner,
-      workspaceId,
-      eventSync.connectionId
-    );
-    events.push(...cal.events);
-    // Dead Google connection → nudge the operator to reconnect (deduped), instead
-    // of silently mirroring nothing every 6h.
-    if (cal.authError) {
-      await notifyConnectorUnhealthy({
-        connectorKey: "google",
-        connectorName: "Google Workspace",
-        reconnectHint:
-          "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
-        userId: owner,
-        workspaceId,
-        watermarkToolId: discordTool.id,
-        watermarkMetadata: metadata,
-        // System notice → the configured feedback/notices channel, not the
-        // event-announce channel (which is where the reconnect nudge wrongly landed).
-        discordTeamChannelId: resolveNoticeChannelId(
-          metadata,
-          eventSync.announceChannelId
-        ),
-        errorMessage: cal.authError,
-      });
-    }
-  }
 
   const now = Date.now();
   const nextSynced: Record<string, string> = {};

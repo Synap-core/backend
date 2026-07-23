@@ -5,13 +5,12 @@ import {
   keepEntityRow,
   buildEventLocation,
   normalizeEntity,
-  normalizeCalendarItem,
   type UpcomingEvent,
 } from "./run-event-sync.js";
 
 describe("sourceKey", () => {
   it("namespaces the id by source type", () => {
-    expect(sourceKey("google_calendar", "abc")).toBe("google_calendar:abc");
+    expect(sourceKey("synap_event", "abc")).toBe("synap_event:abc");
     expect(sourceKey("deadline", "e1")).toBe("deadline:e1");
   });
 });
@@ -49,7 +48,7 @@ describe("keepEntityRow (source filtering by config)", () => {
 describe("buildEventLocation", () => {
   it("prefers the meet link and surfaces the address in the description", () => {
     const evt: UpcomingEvent = {
-      sourceType: "google_calendar",
+      sourceType: "synap_event",
       sourceId: "g1",
       title: "Sync",
       startsAt: "2026-07-01T10:00:00Z",
@@ -135,31 +134,5 @@ describe("normalizeEntity", () => {
     expect(
       normalizeEntity({ id: "ent-3", title: "x", properties: {} })
     ).toBeNull();
-  });
-});
-
-describe("normalizeCalendarItem", () => {
-  it("extracts dateTime from Google Calendar start/end objects", () => {
-    const evt = normalizeCalendarItem({
-      id: "gcal-1",
-      summary: "Standup",
-      start: { dateTime: "2026-07-01T09:00:00Z" },
-      end: { dateTime: "2026-07-01T09:15:00Z" },
-      hangoutLink: "https://meet.google.com/xyz",
-    });
-    expect(evt!.sourceType).toBe("google_calendar");
-    expect(evt!.startsAt).toBe("2026-07-01T09:00:00Z");
-    expect(evt!.endsAt).toBe("2026-07-01T09:15:00Z");
-    expect(evt!.url).toBe("https://meet.google.com/xyz");
-  });
-
-  it("handles all-day events (date only) and missing id", () => {
-    const allDay = normalizeCalendarItem({
-      id: "gcal-2",
-      summary: "Holiday",
-      start: { date: "2026-07-04" },
-    });
-    expect(allDay!.startsAt).toBe("2026-07-04");
-    expect(normalizeCalendarItem({ summary: "no id" })).toBeNull();
   });
 });

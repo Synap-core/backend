@@ -56,7 +56,7 @@ export const workerRegistry: WorkerMetadata[] = [
     id: "event-sync-cron",
     name: "Event Sync",
     description:
-      "Every 6h, runs the api-side event-sync runner (in-process) which mirrors upcoming Synap events, Stellar grant deadlines, and Google Calendar events into native Discord scheduled events (idempotent via a dedup map in the Discord tool metadata). No-ops unless the Discord tool has eventSync.enabled.",
+      "Every 6h (in-process): FIRST imports upcoming Google Calendar events into Synap `event` entities (run-gcal-import), THEN mirrors upcoming Synap events + Stellar grant deadlines into native Discord scheduled events (run-event-sync, idempotent via a dedup map in the Discord tool metadata). Google no longer pushes to Discord directly — it flows through Synap entities. No-ops unless the Discord tool has eventSync.enabled.",
     triggers: ["cron:0 */6 * * *"],
     outputs: ["discord.scheduled_event.created"],
     category: "ai",

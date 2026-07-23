@@ -770,6 +770,10 @@ export {
   type RunEventSyncResult,
 } from "./services/event-sync/run-event-sync.js";
 export {
+  runGcalImport,
+  type RunGcalImportResult,
+} from "./services/event-sync/run-gcal-import.js";
+export {
   runEventEnd,
   type RunEventEndResult,
 } from "./services/event-end/run-event-end.js";

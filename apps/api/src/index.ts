@@ -1806,7 +1806,15 @@ try {
             registerCapabilityExecutor((input) => api.executeCapability(input));
             registerMailFeedRunner(() => api.runMailFeed());
             registerCalBackfillRunner(() => api.runCalBackfill());
-            registerEventSyncRunner(() => api.runEventSync());
+            // ONE schedule, correct ordering: import Google Calendar → Synap
+            // `event` entities FIRST, then the source-A mirror pass pushes those
+            // (and native/Stellar events) to Discord — so a Google event lands as
+            // a Synap entity before it is mirrored, never straight to Discord.
+            registerEventSyncRunner(async () => {
+              const imported = await api.runGcalImport();
+              const mirrored = await api.runEventSync();
+              return { imported, mirrored };
+            });
             registerEventEndRunner(() => api.runEventEnd());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
