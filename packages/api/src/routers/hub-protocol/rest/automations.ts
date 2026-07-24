@@ -206,20 +206,14 @@ export function registerAutomationsRoutes(app: HubHono): void {
         name: body.name as string,
         description: body.description as string | undefined,
         triggerType: body.triggerType as
-          | "event"
-          | "cron"
-          | "webhook"
-          | "manual",
+          "event" | "cron" | "webhook" | "manual",
         triggerConfig: (body.triggerConfig as Record<string, unknown>) ?? {},
         flowDefinition: body.flowDefinition as {
           nodes: Record<string, unknown>[];
           edges: Record<string, unknown>[];
         },
         status: ((body.status as string) ?? "draft") as
-          | "draft"
-          | "active"
-          | "paused"
-          | "error",
+          "draft" | "active" | "paused" | "error",
         metadata: body.metadata as Record<string, unknown> | undefined,
       });
       return c.json(result);
@@ -255,11 +249,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
         userId,
         workspaceId: workspaceId ?? null,
         status: (c.req.query("status") || undefined) as
-          | "draft"
-          | "active"
-          | "paused"
-          | "error"
-          | undefined,
+          "draft" | "active" | "paused" | "error" | undefined,
         limit: c.req.query("limit")
           ? parseInt(c.req.query("limit")!, 10)
           : undefined,
@@ -358,6 +348,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
       return c.json({ error: "userId is required" }, 400);
     }
 
+    // body.agentUserId wins; fall back to the auto-injected context value so
+    // an IS call that authenticates as the agent (rather than passing the
+    // field explicitly) still routes through the governance gate.
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+
     try {
       const caller = await getCaller(c, { userId, workspaceId });
       const result = await caller.automations.triggerAutomation({
@@ -365,6 +361,10 @@ export function registerAutomationsRoutes(app: HubHono): void {
         workspaceId,
         id: c.req.param("automationId"),
         payload: body.payload as Record<string, unknown> | undefined,
+        ...(resolvedAgentUserId
+          ? { agentUserId: resolvedAgentUserId as string }
+          : {}),
+        reasoning: body.reasoning as string | undefined,
       });
       return c.json(result);
     } catch (err) {
@@ -418,14 +418,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
         name: body.name as string | undefined,
         description: body.description as string | undefined,
         triggerType: body.triggerType as
-          | "event"
-          | "cron"
-          | "webhook"
-          | "manual"
-          | undefined,
+          "event" | "cron" | "webhook" | "manual" | undefined,
         triggerConfig: body.triggerConfig as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         flowDefinition: body.flowDefinition as
           | {
               nodes: Record<string, unknown>[];
@@ -433,11 +428,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
             }
           | undefined,
         status: body.status as
-          | "draft"
-          | "active"
-          | "paused"
-          | "error"
-          | undefined,
+          "draft" | "active" | "paused" | "error" | undefined,
         metadata: body.metadata as Record<string, unknown> | undefined,
       });
       return c.json(result);

@@ -662,6 +662,48 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0206_mcp_connect_codes.sql",
   },
 
+  // oauth_clients / oauth_authorization_codes — the pod as its own OAuth 2.1
+  // authorization server (0207, "Path B": claude.ai connects straight to the pod
+  // with the control plane out of the trust path). Absence means a pod is on a
+  // pre-0207 schema where GET /authorize, POST /register and POST /token would
+  // reference missing tables.
+  {
+    table: "oauth_clients",
+    column: "client_id",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "redirect_uris",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "code_hash",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  // The governance-critical column: the consenting human copied onto the minted
+  // key as linkedUserId, which is what makes agentUserId defined on the MCP
+  // request and routes Claude's writes through checkPermissionOrPropose().
+  {
+    table: "oauth_authorization_codes",
+    column: "user_id",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "code_challenge",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  // Single-use rides entirely on this column: the atomic claim is
+  // `UPDATE … WHERE consumed_at IS NULL … RETURNING`. Without it a code could be
+  // replayed into a second access token, so its absence must fail startup.
+  {
+    table: "oauth_authorization_codes",
+    column: "consumed_at",
+    addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+
   // workspaces — soft-archive support (0020)
   {
     table: "workspaces",

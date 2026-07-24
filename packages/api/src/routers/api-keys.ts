@@ -41,6 +41,52 @@ import {
 } from "../services/hub-integration-registration.js";
 import { createAndVerifyHubInboundKey } from "../services/external-registration.js";
 import { toRegistrationTrace } from "../services/external-registration.js";
+import {
+  AuthorizeUserError,
+  decideOAuthAuthorization,
+  getOAuthConsentContext,
+} from "./oauth/consent.js";
+import { OAuthError } from "./oauth/protocol.js";
+
+/**
+ * The authorize parameters pod-admin's consent screen round-trips.
+ *
+ * Bounded lengths only — the SEMANTIC validation (does this client exist? is
+ * this redirect_uri registered to it? is the challenge a well-formed S256
+ * value?) deliberately lives in `oauth/consent.ts`, which re-derives everything
+ * from the stored client. Duplicating those rules here as Zod refinements would
+ * create a second place for them to drift.
+ */
+const oauthAuthorizeParamsSchema = z.object({
+  clientId: z.string().min(1).max(200),
+  redirectUri: z.string().min(1).max(2048),
+  responseType: z.string().max(64).optional(),
+  scope: z.string().max(1024).optional(),
+  state: z.string().max(2048).optional(),
+  codeChallenge: z.string().max(256).optional(),
+  codeChallengeMethod: z.string().max(64).optional(),
+});
+
+/**
+ * Map an OAuth-layer failure to a tRPC error the consent screen can render.
+ *
+ * `AuthorizeUserError` means the request itself is unusable (unknown client,
+ * unregistered redirect_uri, non-human caller) — BAD_REQUEST. `OAuthError`
+ * carries a protocol error code the screen shows verbatim. Anything else
+ * propagates unchanged so a genuine bug is never disguised as a client error.
+ */
+function toConsentTrpcError(err: unknown): unknown {
+  if (err instanceof AuthorizeUserError) {
+    return new TRPCError({ code: "BAD_REQUEST", message: err.message });
+  }
+  if (err instanceof OAuthError) {
+    return new TRPCError({
+      code: "BAD_REQUEST",
+      message: `${err.code}: ${err.message}`,
+    });
+  }
+  return err;
+}
 
 /**
  * Generate API key with proper prefix
@@ -886,6 +932,62 @@ export const apiKeysRouter = router({
       });
 
       return { code, expiresAt: expiresAt.toISOString() };
+    }),
+
+  /**
+   * getOAuthConsentContext — what pod-admin's `/oauth/consent` screen renders.
+   *
+   * Path B (pod-as-authorization-server). The pod's own `GET /authorize` bounced
+   * the browser here; this resolves the registered client so the screen shows
+   * the client's REAL name, REAL redirect host and REAL granted scopes rather
+   * than anything carried in the (user-rewritable) query string.
+   *
+   * Session-authed like `beginMcpConnect` — the consent screen is only reachable
+   * with a valid Kratos session, and this call re-establishes who is deciding.
+   */
+  getOAuthConsentContext: protectedProcedure
+    .input(oauthAuthorizeParamsSchema)
+    .query(async ({ input }) => {
+      try {
+        return await getOAuthConsentContext(input);
+      } catch (err) {
+        throw toConsentTrpcError(err);
+      }
+    }),
+
+  /**
+   * decideOAuthAuthorization — the human clicked Allow or Deny.
+   *
+   * On Allow this mints the authorization code bound to the PKCE challenge, with
+   * `userId` = THIS caller. That id becomes the access token's `linkedUserId` at
+   * /token, which is the only thing that makes Claude's writes land as governed
+   * proposals rather than silently auto-applying as the operator.
+   *
+   * Returns the absolute URL to navigate to — built server-side from the
+   * client's REGISTERED redirect_uri, never from user input, so this can never
+   * become an open redirect.
+   */
+  decideOAuthAuthorization: protectedProcedure
+    .input(oauthAuthorizeParamsSchema.extend({ approve: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await decideOAuthAuthorization(input, ctx.userId);
+        auditLog({
+          subjectType: "apiKey",
+          action: "create",
+          phase: "completed",
+          subjectId: input.clientId,
+          userId: ctx.userId,
+          data: {
+            kind: "pod_oauth_authorization",
+            approve: input.approve,
+            scopes: input.scope ?? null,
+          },
+        });
+        return result;
+      } catch (err) {
+        throw toConsentTrpcError(err);
+      }
     }),
 
   /**

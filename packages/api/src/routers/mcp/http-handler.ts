@@ -10,11 +10,13 @@
  *           2025-06-18 / 2025-03-26 / 2024-11-05 / 2024-10-07, falling back to
  *           2025-03-26 only when the client sends no version information. This
  *           handler is not pinned to any one revision.
- * Auth:     Hub Protocol API key in Authorization: Bearer <key>
- *           NOTE: there is no OAuth here yet — no /.well-known/
- *           oauth-protected-resource and no WWW-Authenticate on the 401 below.
- *           That is why claude.ai's connector UI cannot authenticate against
- *           this endpoint. See MCP-OAUTH-AND-CONNECT-PLAN.md.
+ * Auth:     Hub Protocol API key in Authorization: Bearer <key>. The key may be
+ *           minted directly by the pod's own OAuth authorization server (Path B,
+ *           `routers/oauth/`) — an unauthenticated request answers 401 with the
+ *           RFC 9728 `WWW-Authenticate: Bearer resource_metadata="…"` hop, which
+ *           is how claude.ai discovers where to authenticate. Path A (control
+ *           plane as AS, proxying to this endpoint) also remains supported.
+ *           See MCP-OAUTH-AND-CONNECT-PLAN.md.
  * Endpoint: POST /mcp   — JSON-RPC 2.0 request (SSE stream or JSON response)
  *           GET  /mcp   — SSE stream for server-initiated messages
  *           DELETE /mcp — End session
@@ -32,21 +34,77 @@ import { apiKeyService } from "../../services/api-keys.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer } from "./index.js";
+import { resolveIssuer } from "../oauth/config.js";
 import {
   db,
+  entities,
   projects,
   workspaceMembers,
   workspaces,
   eq,
   inArray,
+  drizzleSql,
 } from "@synap/database";
 
+/** Workspaces named individually before collapsing to a summary count. */
+const GROUNDING_WS_LIMIT = 12;
+
 /**
- * Build a one-line LIVE grounding snapshot for the authed user — the workspaces
- * they can see — so the MCP `instructions` arrive pre-grounded (the model knows
- * the user's pod shape without calling synap_orient first). Cheap (one join);
- * never throws (grounding is best-effort — a hiccup must not block the session).
+ * Build a LIVE grounding snapshot for the authed user so the MCP `instructions`
+ * arrive pre-grounded (the model knows the user's pod shape without having to
+ * call synap_orient first). Best-effort; never throws (a hiccup must not block
+ * the session).
+ *
+ * WHY THIS CARRIES IDs AND ENTITY COUNTS (2026-07-24, from live dogfood):
+ * this previously emitted workspace NAMES only, and collapsed to a bare count
+ * above 8 ("15 workspaces (operational domains)"). A real pod with 15
+ * workspaces therefore told the model NOTHING actionable — no names, no ids —
+ * so a write could not be aimed at a specific workspace without a separate
+ * orient round-trip, and an agent that guessed wrote to the wrong place. That
+ * is exactly what happened: a session had to RETRY to land prospects in "CRM".
+ *
+ * So: emit `name (id, N entities)`, ACTIVE (non-empty) workspaces first, and
+ * state the write rule explicitly. Ranking by entity count also stops a pod
+ * whose structure runs ahead of its content (10 empty workspaces) from burying
+ * the 2-3 live ones — the model sees where work actually happens.
  */
+/**
+ * Render the grounding sentence. Pure (no DB) so the formatting rules that
+ * actually matter — ids present, busiest first, the cap, the write rule — are
+ * unit-testable without mocking three queries. Exported for tests only.
+ */
+export function formatGrounding(
+  projPart: string,
+  workspacesWithCounts: ReadonlyArray<{ id: string; name: string; n: number }>,
+  hasProjects: boolean
+): string {
+  // Busiest first: where the user actually works leads, empty scaffolds trail.
+  const ranked = [...workspacesWithCounts].sort(
+    (a, b) => b.n - a.n || a.name.localeCompare(b.name)
+  );
+  const shown = ranked.slice(0, GROUNDING_WS_LIMIT);
+  const hidden = ranked.length - shown.length;
+  const list = shown
+    .map((w) => `${w.name} (${w.id}, ${w.n} entities)`)
+    .join("; ");
+  const more = hidden > 0 ? ` …and ${hidden} more` : "";
+  const emptyNote = ranked.some((w) => w.n === 0)
+    ? " Workspaces with 0 entities are empty scaffolds — prefer an active one unless the user names another."
+    : "";
+  const compose = hasProjects
+    ? " Projects organize; workspaces hold the data."
+    : "";
+  // The WRITE rule is stated explicitly: reads may go pod-wide, but a write with
+  // no workspaceId lands against an arbitrary membership and is the #1 way data
+  // ends up "somewhere else" from the user's point of view.
+  return (
+    `${projPart}Workspaces (operational domains), busiest first: ${list}${more}.${compose}${emptyNote}` +
+    ` For READS omit workspaceId for pod-wide recall, or pass one to scope.` +
+    ` For WRITES always pass the workspaceId of the matching domain — pass the id above verbatim,` +
+    ` and only omit it when the fact is genuinely cross-cutting.`
+  );
+}
+
 async function buildGrounding(userId: string): Promise<string | undefined> {
   try {
     const memberRows = await db
@@ -72,25 +130,37 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
     const wsRows = await db
-      .select({ name: workspaces.name })
+      .select({ id: workspaces.id, name: workspaces.name })
       .from(workspaces)
       .where(inArray(workspaces.id, wsIds));
-    const names = wsRows.map((w) => w.name).filter(Boolean);
-    if (names.length === 0) {
+    const named = wsRows.filter((w) => Boolean(w.name));
+    if (named.length === 0) {
       if (projNames.length === 0) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
-    const wsPart =
-      names.length === 1
-        ? `Workspaces (operational domains): ${names[0]}`
-        : names.length <= 8
-          ? `Workspaces (operational domains): ${names.join(", ")}`
-          : `${names.length} workspaces (operational domains)`;
-    const compose =
+
+    // Entity counts per workspace, so the model can tell a LIVE workspace from
+    // an empty scaffold. One grouped query — `entities.workspaceId` is nullable
+    // (null = pod-wide/global), and those rows simply don't group into any
+    // workspace bucket, which is the behaviour we want here.
+    const countRows = await db
+      .select({
+        workspaceId: entities.workspaceId,
+        n: drizzleSql<number>`count(*)::int`,
+      })
+      .from(entities)
+      .where(inArray(entities.workspaceId, wsIds))
+      .groupBy(entities.workspaceId);
+    const counts = new Map<string, number>();
+    for (const r of countRows) {
+      if (r.workspaceId) counts.set(r.workspaceId, Number(r.n) || 0);
+    }
+
+    return formatGrounding(
+      projPart,
+      named.map((w) => ({ ...w, n: counts.get(w.id) ?? 0 })),
       projNames.length > 0
-        ? " Projects organize; workspaces hold the data."
-        : "";
-    return `${projPart}${wsPart}.${compose} Omit workspaceId for pod-wide recall, or pass one to scope.`;
+    );
   } catch {
     return undefined;
   }
@@ -147,10 +217,33 @@ function extractBearer(authHeader: string | null): string | null {
   return m ? m[1].trim() : null;
 }
 
+/**
+ * The RFC 9728 discovery hop.
+ *
+ * An unauthenticated MCP request must answer 401 WITH
+ * `WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource"`.
+ * That header is the ONLY thing that tells claude.ai where to begin OAuth — a
+ * bare 401 just reads as "denied" and the connector cannot self-configure. It is
+ * what makes Path B (pod-as-authorization-server, no control plane) reachable at
+ * all; the CP's own /mcp has emitted it since Path A.
+ *
+ * `resolveIssuer()` returns null when the pod has no canonical PUBLIC_URL, in
+ * which case we emit a bare 401 rather than advertise a malformed discovery URL.
+ */
 function jsonRpcError(id: unknown, code: number, message: string) {
+  const issuer = resolveIssuer();
   return Response.json(
     { jsonrpc: "2.0", id, error: { code, message } },
-    { status: 401 }
+    {
+      status: 401,
+      ...(issuer
+        ? {
+            headers: {
+              "WWW-Authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource"`,
+            },
+          }
+        : {}),
+    }
   );
 }
 

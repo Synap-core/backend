@@ -5,6 +5,7 @@
  * Mirror the original helpers from hub-protocol-rest.ts so behavior is preserved.
  */
 
+import { z } from "@hono/zod-openapi";
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -98,6 +99,30 @@ export type HubHono = OpenAPIHono<{ Variables: HubVariables }>;
 export function hasScope(scopes: string[], required: string): boolean {
   return scopes.includes(required);
 }
+
+/**
+ * Canonical path-param schema for an id that maps to a Postgres `uuid` column.
+ *
+ * WHY: `params: z.object({ id: z.string() })` accepts anything, so a truncated
+ * or mistyped id (e.g. `c074e8ac`) reached the query builder and Postgres threw
+ * `invalid input syntax for type uuid`. Drizzle wraps that in a
+ * `DrizzleQueryError` — and the handler's catch-all turned a caller mistake into
+ * a 500. A malformed id is a CLIENT error and must be a 400 at the door.
+ *
+ * Use for every path/query param bound to a `uuid` column. Do NOT use for ids
+ * that may legitimately be a slug or an external provider id.
+ *
+ * Validation failures are shaped by the parent app's `defaultHook`
+ * (hub-protocol-rest.ts), which renders `"<field>: <message>"` — so the message
+ * below reads as a full sentence after the field name and states both the
+ * condition and the recovery action, matching the `key_revoked` envelope.
+ */
+export const uuidPathParam = z.string().uuid({
+  message:
+    "must be a full 36-character UUID (8-4-4-4-12 hex). A truncated or " +
+    "display-shortened id will not resolve — re-fetch the full id from the " +
+    "corresponding list endpoint (e.g. GET /api/hub/entities) and retry.",
+});
 
 /**
  * SECURITY — reject a proposal REVIEW action (approve / revert) performed with

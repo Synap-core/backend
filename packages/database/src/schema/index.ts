@@ -19,6 +19,7 @@ export * from "./ai-suggestions.js";
 export * from "./api-keys.js";
 export * from "./api-key-external-users.js";
 export * from "./mcp-connect-codes.js";
+export * from "./pod-oauth.js";
 export * from "./webhook_subscriptions.js";
 
 // Channels system (replaces chat-threads + thread-entities + thread-documents)

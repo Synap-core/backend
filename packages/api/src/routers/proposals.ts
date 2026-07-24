@@ -78,8 +78,9 @@ import type {
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import {
-  proposalExecRegistry,
+  dispatchProposalApproval,
   type ProposalExecutorDeps,
+  type ProposalExecutorResult,
 } from "./proposals/execution-registry.js";
 import { registerApproveExecutors } from "./proposals/approve-executors.js";
 import {
@@ -1508,6 +1509,491 @@ export function planProposalRevert(
   };
 }
 
+/**
+ * Apply an APPROVED proposal — the ONE door both `approve` and `batchApprove`
+ * go through, so a batch approve is exactly N single approves.
+ *
+ * Callers own AUTHORITY (who may approve) and STATUS eligibility; this owns
+ * MATERIALIZATION. Order is the historical top-down if-chain:
+ *   1. composite (multi-op graph)  — keyed off PAYLOAD SHAPE, not a type string
+ *   2. document-content (AI edit)  — same
+ *   3. the proposal-execution registry (every typed key + the catch-all)
+ *
+ * Extracted because `batchApprove` used to inline ONLY step 3's generic
+ * `.validated`-emit tail and never resolved an executor at all: "Approve all"
+ * flipped the row to APPROVED and silently did nothing for every proposal type
+ * the materializer has no case for (automation/execute, document/create,
+ * project/create, playbook/*, capability.*, provider.action, …) and ran the
+ * WRONG generic path for the ~13 it does. A second implementation that drifts
+ * from the first is exactly the bug class that produced this — hence one door,
+ * not two.
+ */
+async function applyProposalApproval(args: {
+  proposal: NonNullable<
+    Awaited<ReturnType<typeof db.query.proposals.findFirst>>
+  >;
+  userId: string;
+  input: {
+    proposalId: string;
+    comment?: string;
+    /** Composite-only per-item dispositions. Absent on the batch door. */
+    dispositions?: GraphDispositionMap;
+  };
+  ctx: Context;
+}): Promise<ProposalExecutorResult> {
+  const { proposal, userId, input, ctx } = args;
+
+  const payload = proposal.data as StoredProposalData | null | undefined;
+
+  // B0: Composite (multi-op) GRAPH proposal — one approval creates N
+  // entities AND M relations among them, atomically validated as a unit
+  // (e.g. an imported note graph, or a Question + links to its captures).
+  // Checked BEFORE the single-op branches. Pass 1 creates every
+  // create_entity op via the canonical entity path (full side effects),
+  // building a ref→realId map; pass 2 creates relations resolving each
+  // sourceRef/targetRef ($opN / op `ref` / PRIMARY_REF / real UUID).
+  // Linking is best-effort — an individual relation failure is logged but
+  // never discards the (valid) created entities.
+  if (isCompositeProposalData(payload)) {
+    let compositeCtx: {
+      db: typeof db;
+      authenticated: true;
+      userId: string;
+      workspaceId: string | null;
+      workspaceRole: string;
+      // The session this proposal belongs to (import.graph carries it).
+      // entities.create reads ctx.sessionId to write the
+      // `session --produced--> entity` link and stamp the side-effect so
+      // playbook automations fire for these entities. Mirrors the import
+      // orchestrator's apply() path for the governed-approval route.
+      sessionId: string | null;
+    };
+    if (proposal.workspaceId) {
+      const membership = await getWorkspaceMembership(
+        db,
+        proposal.workspaceId,
+        userId
+      );
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      compositeCtx = {
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: proposal.workspaceId,
+        workspaceRole: membership.role,
+        sessionId: proposal.sessionId ?? null,
+      };
+    } else {
+      compositeCtx = {
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: null,
+        workspaceRole: "owner",
+        sessionId: proposal.sessionId ?? null,
+      };
+    }
+
+    const entityCaller = regularEntitiesRouter.createCaller(
+      compositeCtx as unknown as Context
+    );
+    const relationCaller = relationsRouter.createCaller(
+      compositeCtx as unknown as Context
+    );
+
+    // Phase 2 — per-item dispositions (partial apply). When the reviewer
+    // sent a `dispositions` map, filter the ops BEFORE materialize: drop
+    // rejected entities, merge edits, cascade-drop relations/facets whose
+    // endpoint is a rejected entity. Absent map ⇒ apply-all (byte-identical
+    // to the whole-proposal path). `materializeCompositeGraph` is already
+    // per-op resilient and needs no internal change — the cascade guarantees
+    // no dangling ref reaches it.
+    // Source of truth = the dispositions persisted incrementally by
+    // `rejectItem` (immediate-commit deny), MERGED with any map the client
+    // sends on Approve (which wins for last-second changes). Either alone
+    // works — a purely staged client, or a purely immediate-commit flow.
+    const persistedDisp = (payload as { dispositions?: GraphDispositionMap })
+      .dispositions;
+    const clientDisp = input.dispositions as GraphDispositionMap | undefined;
+    const dispositions: GraphDispositionMap | undefined =
+      persistedDisp || clientDisp
+        ? { ...(persistedDisp ?? {}), ...(clientDisp ?? {}) }
+        : undefined;
+    const operationsToMaterialize =
+      dispositions && Object.keys(dispositions).length > 0
+        ? applyGraphDispositions(payload.operations, dispositions)
+        : payload.operations;
+
+    // Shared materialization: N entities → ref map → M relations.
+    // Same logic the user-import (/import/apply) path uses.
+    const {
+      created: createdCount,
+      linked,
+      primaryId,
+      entities: createdEntities,
+      refToRealId,
+    } = await materializeCompositeGraph(
+      operationsToMaterialize,
+      entityCaller,
+      relationCaller,
+      (err, type) =>
+        logger.warn(
+          { err, type },
+          "composite proposal: relation create failed (entities kept)"
+        ),
+      // Workspace-scoped imports must pin their entities to the target
+      // workspace on approval (overriding pod-default profile entityScope),
+      // mirroring rest/capture.ts /import/apply. Only when the proposal is
+      // workspace-bound; interactive pod-default approvals stay global.
+      // `entityCaller` is the full entitiesRouter caller (same ctx), so it
+      // doubles as the facetCaller — attaching declared facets (op.facets)
+      // right after each entity materializes.
+      {
+        ...(proposal.workspaceId ? { workspaceScoped: true } : {}),
+        facetCaller: entityCaller,
+        // Graph submitters persist their origin in proposal data. Reuse it
+        // on approval so source attribution survives the proposal boundary.
+        ...(typeof payload.source === "string"
+          ? { source: payload.source }
+          : {}),
+      }
+    );
+
+    // Record what we materialized so `revert` can compute the inverse.
+    // Only entities CREATED here (not pre-existing linked ones) are ours to
+    // undo. Relation ids aren't returned by the materializer, so revert of a
+    // composite undoes the created entities (the cascade removes the
+    // relations touching them).
+    const compositeMaterialized: ProposalMaterializedRecord = {
+      entityIds: createdEntities
+        .filter((entity) => !entity.linked)
+        .map((entity) => entity.entityId),
+    };
+    // `data.materialized` reflects ONLY the applied ops' created entities
+    // (rejected ops never materialize, so they never appear) — `revert`'s
+    // planner reads exactly this. Persist the disposition map alongside so
+    // the partial-apply decision is durable (drives the review UI's
+    // post-approve state + the item-scoped flywheel). We rebuild the WHOLE
+    // `data` object here, so this is a full JSONB replace — no partial merge.
+    const compositePayload: StoredProposalData = {
+      ...payload,
+      materialized: compositeMaterialized,
+      ...(dispositions && Object.keys(dispositions).length > 0
+        ? { dispositions }
+        : {}),
+    };
+
+    // Provenance: record `session --produced--> entity` for every entity this
+    // session created (the composite/AI-capture path doesn't flow through the
+    // worker's materializeEntity hook). Together with that hook and the explicit
+    // BYOA capture-back, the session room's Deliverable surface populates by
+    // construction. Idempotent via the links unique-edge index.
+    const producedEntityIds = compositeMaterialized.entityIds ?? [];
+    if (proposal.sessionId && producedEntityIds.length > 0) {
+      await db
+        .insert(links)
+        .values(
+          producedEntityIds.map((entityId) => ({
+            workspaceId: proposal.workspaceId ?? null,
+            fromType: "session" as LinkEndpointType,
+            fromId: proposal.sessionId as string,
+            toType: "entity" as LinkEndpointType,
+            toId: entityId,
+            linkType: "produced" as LinkType,
+            metadata: {},
+          }))
+        )
+        .onConflictDoNothing();
+    }
+    // Membership: project lens (entity → belongs_to_project → project).
+    await stampProjectMembership(proposal, producedEntityIds, userId);
+
+    // ONBOARDING bindings: a graph proposal from /capture/graph may carry
+    // `bindings` (Discord channel → entity ref + firewall role). Now that the
+    // entities are materialized, bind each channel to its real entity id and
+    // stamp its branchPurpose — so /whois + the firewall light up on accept.
+    // Additive: only onboarding graph proposals carry bindings; every other
+    // composite proposal skips this (no bindings) as a no-op.
+    const graphBindings = (
+      payload as {
+        bindings?: Array<{
+          externalChannelId: string;
+          entityRef: string;
+          branchPurpose?: string;
+          title?: string;
+        }>;
+      }
+    ).bindings;
+    if (
+      Array.isArray(graphBindings) &&
+      graphBindings.length > 0 &&
+      proposal.workspaceId
+    ) {
+      const { resolveOrCreateExternalChannel } =
+        await import("../services/connectors/inbound-recorder.js");
+      for (const b of graphBindings) {
+        // Resolve the binding's entity ref to the materialized id. Skip (not
+        // fall back to the raw ref) if the entity didn't materialize — binding
+        // a channel to a non-id ref string would set a bogus contextObjectId.
+        const entityId = refToRealId[b.entityRef];
+        if (!b.externalChannelId || !entityId) continue;
+        try {
+          const { channelId } = await resolveOrCreateExternalChannel({
+            provider: "discord",
+            externalId: b.externalChannelId,
+            userId,
+            workspaceId: proposal.workspaceId,
+            requireExistingWorkspace: true,
+            title: b.title ?? b.externalChannelId,
+          });
+          await db
+            .update(channels)
+            .set({
+              contextObjectType: "entity",
+              contextObjectId: entityId,
+              updatedAt: new Date(),
+            })
+            .where(eq(channels.id, channelId));
+          // Firewall role goes through the ONE door (client-comms immutable).
+          if (b.branchPurpose) {
+            await setChannelBranchPurpose({
+              channelId,
+              branchPurpose: b.branchPurpose,
+            });
+          }
+        } catch (err) {
+          if (err instanceof ChannelFirewallImmutableError) {
+            // Fail-SAFE: the channel stays client-comms (the protected
+            // outcome). Surface it distinctly so it's not lost in generic
+            // bind noise — an onboarding binding tried to reclassify a
+            // client-comms channel and was refused.
+            logger.warn(
+              { channelId: err.channelId, binding: b },
+              "onboarding: refused to reclassify a client-comms channel (firewall) — left unchanged"
+            );
+          } else {
+            logger.warn(
+              { err, binding: b },
+              "onboarding: channel bind failed (entities kept)"
+            );
+          }
+        }
+      }
+    }
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        data: compositePayload,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    // Report to IS telemetry (fire-and-forget — never blocks). This is the
+    // CAPTURE lane: `reportProposalOutcome`'s guard is explicitly widened to
+    // fire for capture proposals (no agentUserId) "so rejected captures also
+    // feed the IS learning sink" — but the approve side never called it, so
+    // the sink only ever saw captures the user REJECTED. That asymmetry
+    // taught the AI its failures and none of its successes.
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+
+    // Per-item reasoned reject → flywheel, item-scoped (Phase 2, Gap 3).
+    // For EACH item the reviewer rejected WITH a reason/reasonCode, emit an
+    // item-scoped ai_correction: subjectId = the item's ref (rejected items
+    // never materialize, so there is no created id to point at). Mirrors the
+    // whole-proposal reject emit — fire on any reasoned rejection (no
+    // capture.graph gate). Best-effort: emitAiCorrection swallows + never
+    // fails the approve.
+    if (dispositions) {
+      for (const [itemRef, disp] of Object.entries(dispositions)) {
+        if (disp.status !== "reject") continue;
+        if (!disp.reason && !disp.reasonCode) continue;
+        await emitAiCorrection({
+          action: "reject",
+          userId,
+          subjectId: itemRef,
+          workspaceId: proposal.workspaceId ?? undefined,
+          data: {
+            kind: AI_KIND.EXTRACT,
+            correlationId: proposal.correlationId ?? input.proposalId,
+            itemRef,
+            ...(disp.reason ? { reason: disp.reason } : {}),
+            ...(disp.reasonCode ? { reasonCode: disp.reasonCode } : {}),
+          },
+        });
+      }
+    }
+
+    return { success: true, primaryId, created: createdCount, linked };
+  }
+
+  // B3: Document content proposal (hub/chat/user_edit) – apply content directly
+  if (
+    proposal.targetType === "document" &&
+    isDocumentContentProposalData(payload)
+  ) {
+    const { storage } = await import("@synap/storage");
+    const { documents, documentVersions } =
+      await import("@synap/database/schema");
+
+    const document = await db.query.documents.findFirst({
+      where: eq(documents.id, proposal.targetId),
+    });
+
+    if (!document?.storageKey) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Document not found or has no storage key",
+      });
+    }
+
+    const newVersion = (document.currentVersion ?? 1) + 1;
+    const content = payload.proposedContent;
+
+    await storage.upload(document.storageKey, Buffer.from(content, "utf-8"), {
+      contentType: document.mimeType || "text/plain",
+    });
+    const versionId = randomUUID();
+    const snapshot = await uploadDocumentVersionSnapshot({
+      userId,
+      documentId: proposal.targetId,
+      versionId,
+      documentType: document.type,
+      mimeType: document.mimeType || "text/plain",
+      content,
+    });
+
+    await db.insert(documentVersions).values({
+      id: versionId,
+      documentId: proposal.targetId,
+      version: newVersion,
+      ...storedVersionValues(snapshot),
+      author: "user",
+      authorId: userId,
+      message: "AI edit accepted",
+    });
+
+    await db
+      .update(documents)
+      .set({
+        currentVersion: newVersion,
+        lastSavedVersion: newVersion,
+        updatedAt: new Date(),
+      })
+      .where(eq(documents.id, proposal.targetId));
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    // Report to IS telemetry (fire-and-forget — never blocks)
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // ── Registry dispatch ──────────────────────────────────────────────────
+  // Composite (above) and document-content (B3 above) stay inline because
+  // they key off PAYLOAD SHAPE, not a type string. Everything else resolves
+  // through the proposal-execution registry: exact `${targetType}/${proposalType}`
+  // first (e.g. "entity/create", "document/create"), then proposalType-only
+  // (e.g. "messaging.external.send", "provider.action"), then the catch-all
+  // (the generic request-shaped `.validated`-emit path). Each executor's body
+  // is the verbatim former branch — same callers, same db updates, same
+  // emitProposalReviewed/reportProposalOutcome calls, same returns and
+  // idempotency guards. NOT_IMPLEMENTED now fires ONLY for a truly-unregistered
+  // key (the catch-all itself throws for non-request-shaped payloads),
+  // eliminating the silent forgotten-branch failure mode.
+  const approveDeps: ProposalExecutorDeps = {
+    db,
+    emitProposalReviewed,
+    reportProposalOutcome,
+    stampProjectMembership,
+    resolveMessagingAccountForPlatform: (uid, platform) =>
+      resolveMessagingAccountForPlatform(db, uid, platform),
+    isRequestShapedProposalData,
+  };
+
+  // The executor flips status → APPROVED only on success. If it throws (e.g.
+  // the target project/entity was deleted after the proposal was filed), the
+  // proposal would otherwise stay PENDING forever — a zombie the user clicked
+  // Approve on but can never resolve. We do NOT reject (the user's Approve
+  // intent is real and feeds the AI flywheel); instead we record the terminal
+  // failure as APPROVAL_FAILED + rejectionReason, then RE-THROW so the caller
+  // still sees it: single approve → frontend toast; batch approve → that
+  // item's `error` field, with every other item still attempted. A retry is
+  // allowed — there is no PENDING-only status guard, so re-approving an
+  // APPROVAL_FAILED proposal re-runs the executor and flips to APPROVED on
+  // success.
+  return await dispatchProposalApproval(
+    {
+      proposal: proposal as never,
+      payload,
+      userId,
+      input,
+      ctx,
+      deps: approveDeps,
+    },
+    async (proposalId, errorMessage) => {
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVAL_FAILED,
+          rejectionReason: errorMessage,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, proposalId));
+    }
+  );
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -1919,442 +2405,10 @@ export const proposalsRouter = router({
         }
       }
 
-      const payload = proposal.data as StoredProposalData | null | undefined;
-
-      // B0: Composite (multi-op) GRAPH proposal — one approval creates N
-      // entities AND M relations among them, atomically validated as a unit
-      // (e.g. an imported note graph, or a Question + links to its captures).
-      // Checked BEFORE the single-op branches. Pass 1 creates every
-      // create_entity op via the canonical entity path (full side effects),
-      // building a ref→realId map; pass 2 creates relations resolving each
-      // sourceRef/targetRef ($opN / op `ref` / PRIMARY_REF / real UUID).
-      // Linking is best-effort — an individual relation failure is logged but
-      // never discards the (valid) created entities.
-      if (isCompositeProposalData(payload)) {
-        let compositeCtx: {
-          db: typeof db;
-          authenticated: true;
-          userId: string;
-          workspaceId: string | null;
-          workspaceRole: string;
-          // The session this proposal belongs to (import.graph carries it).
-          // entities.create reads ctx.sessionId to write the
-          // `session --produced--> entity` link and stamp the side-effect so
-          // playbook automations fire for these entities. Mirrors the import
-          // orchestrator's apply() path for the governed-approval route.
-          sessionId: string | null;
-        };
-        if (proposal.workspaceId) {
-          const membership = await getWorkspaceMembership(
-            db,
-            proposal.workspaceId,
-            userId
-          );
-          if (!membership) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "No workspace access",
-            });
-          }
-          compositeCtx = {
-            db,
-            authenticated: true as const,
-            userId,
-            workspaceId: proposal.workspaceId,
-            workspaceRole: membership.role,
-            sessionId: proposal.sessionId ?? null,
-          };
-        } else {
-          compositeCtx = {
-            db,
-            authenticated: true as const,
-            userId,
-            workspaceId: null,
-            workspaceRole: "owner",
-            sessionId: proposal.sessionId ?? null,
-          };
-        }
-
-        const entityCaller = regularEntitiesRouter.createCaller(
-          compositeCtx as unknown as Context
-        );
-        const relationCaller = relationsRouter.createCaller(
-          compositeCtx as unknown as Context
-        );
-
-        // Phase 2 — per-item dispositions (partial apply). When the reviewer
-        // sent a `dispositions` map, filter the ops BEFORE materialize: drop
-        // rejected entities, merge edits, cascade-drop relations/facets whose
-        // endpoint is a rejected entity. Absent map ⇒ apply-all (byte-identical
-        // to the whole-proposal path). `materializeCompositeGraph` is already
-        // per-op resilient and needs no internal change — the cascade guarantees
-        // no dangling ref reaches it.
-        // Source of truth = the dispositions persisted incrementally by
-        // `rejectItem` (immediate-commit deny), MERGED with any map the client
-        // sends on Approve (which wins for last-second changes). Either alone
-        // works — a purely staged client, or a purely immediate-commit flow.
-        const persistedDisp = (
-          payload as { dispositions?: GraphDispositionMap }
-        ).dispositions;
-        const clientDisp = input.dispositions as
-          GraphDispositionMap | undefined;
-        const dispositions: GraphDispositionMap | undefined =
-          persistedDisp || clientDisp
-            ? { ...(persistedDisp ?? {}), ...(clientDisp ?? {}) }
-            : undefined;
-        const operationsToMaterialize =
-          dispositions && Object.keys(dispositions).length > 0
-            ? applyGraphDispositions(payload.operations, dispositions)
-            : payload.operations;
-
-        // Shared materialization: N entities → ref map → M relations.
-        // Same logic the user-import (/import/apply) path uses.
-        const {
-          created: createdCount,
-          linked,
-          primaryId,
-          entities: createdEntities,
-          refToRealId,
-        } = await materializeCompositeGraph(
-          operationsToMaterialize,
-          entityCaller,
-          relationCaller,
-          (err, type) =>
-            logger.warn(
-              { err, type },
-              "composite proposal: relation create failed (entities kept)"
-            ),
-          // Workspace-scoped imports must pin their entities to the target
-          // workspace on approval (overriding pod-default profile entityScope),
-          // mirroring rest/capture.ts /import/apply. Only when the proposal is
-          // workspace-bound; interactive pod-default approvals stay global.
-          // `entityCaller` is the full entitiesRouter caller (same ctx), so it
-          // doubles as the facetCaller — attaching declared facets (op.facets)
-          // right after each entity materializes.
-          {
-            ...(proposal.workspaceId ? { workspaceScoped: true } : {}),
-            facetCaller: entityCaller,
-            // Graph submitters persist their origin in proposal data. Reuse it
-            // on approval so source attribution survives the proposal boundary.
-            ...(typeof payload.source === "string"
-              ? { source: payload.source }
-              : {}),
-          }
-        );
-
-        // Record what we materialized so `revert` can compute the inverse.
-        // Only entities CREATED here (not pre-existing linked ones) are ours to
-        // undo. Relation ids aren't returned by the materializer, so revert of a
-        // composite undoes the created entities (the cascade removes the
-        // relations touching them).
-        const compositeMaterialized: ProposalMaterializedRecord = {
-          entityIds: createdEntities
-            .filter((entity) => !entity.linked)
-            .map((entity) => entity.entityId),
-        };
-        // `data.materialized` reflects ONLY the applied ops' created entities
-        // (rejected ops never materialize, so they never appear) — `revert`'s
-        // planner reads exactly this. Persist the disposition map alongside so
-        // the partial-apply decision is durable (drives the review UI's
-        // post-approve state + the item-scoped flywheel). We rebuild the WHOLE
-        // `data` object here, so this is a full JSONB replace — no partial merge.
-        const compositePayload: StoredProposalData = {
-          ...payload,
-          materialized: compositeMaterialized,
-          ...(dispositions && Object.keys(dispositions).length > 0
-            ? { dispositions }
-            : {}),
-        };
-
-        // Provenance: record `session --produced--> entity` for every entity this
-        // session created (the composite/AI-capture path doesn't flow through the
-        // worker's materializeEntity hook). Together with that hook and the explicit
-        // BYOA capture-back, the session room's Deliverable surface populates by
-        // construction. Idempotent via the links unique-edge index.
-        const producedEntityIds = compositeMaterialized.entityIds ?? [];
-        if (proposal.sessionId && producedEntityIds.length > 0) {
-          await db
-            .insert(links)
-            .values(
-              producedEntityIds.map((entityId) => ({
-                workspaceId: proposal.workspaceId ?? null,
-                fromType: "session" as LinkEndpointType,
-                fromId: proposal.sessionId as string,
-                toType: "entity" as LinkEndpointType,
-                toId: entityId,
-                linkType: "produced" as LinkType,
-                metadata: {},
-              }))
-            )
-            .onConflictDoNothing();
-        }
-        // Membership: project lens (entity → belongs_to_project → project).
-        await stampProjectMembership(proposal, producedEntityIds, userId);
-
-        // ONBOARDING bindings: a graph proposal from /capture/graph may carry
-        // `bindings` (Discord channel → entity ref + firewall role). Now that the
-        // entities are materialized, bind each channel to its real entity id and
-        // stamp its branchPurpose — so /whois + the firewall light up on accept.
-        // Additive: only onboarding graph proposals carry bindings; every other
-        // composite proposal skips this (no bindings) as a no-op.
-        const graphBindings = (
-          payload as {
-            bindings?: Array<{
-              externalChannelId: string;
-              entityRef: string;
-              branchPurpose?: string;
-              title?: string;
-            }>;
-          }
-        ).bindings;
-        if (
-          Array.isArray(graphBindings) &&
-          graphBindings.length > 0 &&
-          proposal.workspaceId
-        ) {
-          const { resolveOrCreateExternalChannel } =
-            await import("../services/connectors/inbound-recorder.js");
-          for (const b of graphBindings) {
-            // Resolve the binding's entity ref to the materialized id. Skip (not
-            // fall back to the raw ref) if the entity didn't materialize — binding
-            // a channel to a non-id ref string would set a bogus contextObjectId.
-            const entityId = refToRealId[b.entityRef];
-            if (!b.externalChannelId || !entityId) continue;
-            try {
-              const { channelId } = await resolveOrCreateExternalChannel({
-                provider: "discord",
-                externalId: b.externalChannelId,
-                userId,
-                workspaceId: proposal.workspaceId,
-                requireExistingWorkspace: true,
-                title: b.title ?? b.externalChannelId,
-              });
-              await db
-                .update(channels)
-                .set({
-                  contextObjectType: "entity",
-                  contextObjectId: entityId,
-                  updatedAt: new Date(),
-                })
-                .where(eq(channels.id, channelId));
-              // Firewall role goes through the ONE door (client-comms immutable).
-              if (b.branchPurpose) {
-                await setChannelBranchPurpose({
-                  channelId,
-                  branchPurpose: b.branchPurpose,
-                });
-              }
-            } catch (err) {
-              if (err instanceof ChannelFirewallImmutableError) {
-                // Fail-SAFE: the channel stays client-comms (the protected
-                // outcome). Surface it distinctly so it's not lost in generic
-                // bind noise — an onboarding binding tried to reclassify a
-                // client-comms channel and was refused.
-                logger.warn(
-                  { channelId: err.channelId, binding: b },
-                  "onboarding: refused to reclassify a client-comms channel (firewall) — left unchanged"
-                );
-              } else {
-                logger.warn(
-                  { err, binding: b },
-                  "onboarding: channel bind failed (entities kept)"
-                );
-              }
-            }
-          }
-        }
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            data: compositePayload,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-
-        // Per-item reasoned reject → flywheel, item-scoped (Phase 2, Gap 3).
-        // For EACH item the reviewer rejected WITH a reason/reasonCode, emit an
-        // item-scoped ai_correction: subjectId = the item's ref (rejected items
-        // never materialize, so there is no created id to point at). Mirrors the
-        // whole-proposal reject emit — fire on any reasoned rejection (no
-        // capture.graph gate). Best-effort: emitAiCorrection swallows + never
-        // fails the approve.
-        if (dispositions) {
-          for (const [itemRef, disp] of Object.entries(dispositions)) {
-            if (disp.status !== "reject") continue;
-            if (!disp.reason && !disp.reasonCode) continue;
-            await emitAiCorrection({
-              action: "reject",
-              userId,
-              subjectId: itemRef,
-              workspaceId: proposal.workspaceId ?? undefined,
-              data: {
-                kind: AI_KIND.EXTRACT,
-                correlationId: proposal.correlationId ?? input.proposalId,
-                itemRef,
-                ...(disp.reason ? { reason: disp.reason } : {}),
-                ...(disp.reasonCode ? { reasonCode: disp.reasonCode } : {}),
-              },
-            });
-          }
-        }
-
-        return { success: true, primaryId, created: createdCount, linked };
-      }
-
-      // B3: Document content proposal (hub/chat/user_edit) – apply content directly
-      if (
-        proposal.targetType === "document" &&
-        isDocumentContentProposalData(payload)
-      ) {
-        const { storage } = await import("@synap/storage");
-        const { documents, documentVersions } =
-          await import("@synap/database/schema");
-
-        const document = await db.query.documents.findFirst({
-          where: eq(documents.id, proposal.targetId),
-        });
-
-        if (!document?.storageKey) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Document not found or has no storage key",
-          });
-        }
-
-        const newVersion = (document.currentVersion ?? 1) + 1;
-        const content = payload.proposedContent;
-
-        await storage.upload(
-          document.storageKey,
-          Buffer.from(content, "utf-8"),
-          { contentType: document.mimeType || "text/plain" }
-        );
-        const versionId = randomUUID();
-        const snapshot = await uploadDocumentVersionSnapshot({
-          userId,
-          documentId: proposal.targetId,
-          versionId,
-          documentType: document.type,
-          mimeType: document.mimeType || "text/plain",
-          content,
-        });
-
-        await db.insert(documentVersions).values({
-          id: versionId,
-          documentId: proposal.targetId,
-          version: newVersion,
-          ...storedVersionValues(snapshot),
-          author: "user",
-          authorId: userId,
-          message: "AI edit accepted",
-        });
-
-        await db
-          .update(documents)
-          .set({
-            currentVersion: newVersion,
-            lastSavedVersion: newVersion,
-            updatedAt: new Date(),
-          })
-          .where(eq(documents.id, proposal.targetId));
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // ── Registry dispatch ──────────────────────────────────────────────────
-      // Composite (above) and document-content (B3 above) stay inline because
-      // they key off PAYLOAD SHAPE, not a type string. Everything else resolves
-      // through the proposal-execution registry: exact `${targetType}/${proposalType}`
-      // first (e.g. "entity/create", "document/create"), then proposalType-only
-      // (e.g. "messaging.external.send", "provider.action"), then the `*/*`
-      // catch-all (the generic request-shaped `.validated`-emit path). Each
-      // executor's body is the verbatim former branch — same callers, same db
-      // updates, same emitProposalReviewed/reportProposalOutcome calls, same
-      // returns and idempotency guards. NOT_IMPLEMENTED now fires ONLY for a
-      // truly-unregistered key (the catch-all itself throws for non-request-shaped
-      // payloads), eliminating the silent forgotten-branch failure mode.
-      const approveDeps: ProposalExecutorDeps = {
-        db,
-        emitProposalReviewed,
-        reportProposalOutcome,
-        stampProjectMembership,
-        resolveMessagingAccountForPlatform: (uid, platform) =>
-          resolveMessagingAccountForPlatform(db, uid, platform),
-        isRequestShapedProposalData,
-      };
-
-      const executor = proposalExecRegistry.resolve(
-        `${proposal.targetType}/${proposal.proposalType}`,
-        proposal.proposalType ?? ""
-      );
-
-      if (!executor) {
-        throw new TRPCError({
-          code: "NOT_IMPLEMENTED",
-          message: `Proposal approval for type '${proposal.targetType}' is not yet implemented`,
-        });
-      }
-
-      // The executor flips status → APPROVED only on success. If it throws
-      // (e.g. the target project/entity was deleted after the proposal was
-      // filed), the proposal would otherwise stay PENDING forever — a zombie
-      // the user clicked Approve on but can never resolve. We do NOT reject
-      // (the user's Approve intent is real and feeds the AI flywheel); instead
-      // we record the terminal failure as APPROVAL_FAILED with the error, then
-      // re-throw so the caller still sees the failure (frontend toast fires).
-      // A retry of approve is allowed — there is no PENDING-only status guard
-      // above, so re-approving an APPROVAL_FAILED proposal re-runs the executor
-      // and flips to APPROVED on success.
-      try {
-        return await executor.execute({
-          proposal: proposal as never,
-          payload,
-          userId,
-          input,
-          ctx,
-          deps: approveDeps,
-        });
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVAL_FAILED,
-            rejectionReason: errorMessage,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-        throw err;
-      }
+      // Composite, document-content and registry dispatch all live in the ONE
+      // shared door below — `batchApprove` calls the SAME function, so a batch
+      // approve is exactly N single approves and the two can never drift.
+      return await applyProposalApproval({ proposal, userId, input, ctx });
     }),
 
   /**
@@ -3210,96 +3264,36 @@ export const proposalsRouter = router({
             }
           }
 
-          // Emit .validated event for generic proposals (same as single approve)
-          const payload = proposal.data as
-            StoredProposalData | null | undefined;
-
-          if (payload && isRequestShapedProposalData(payload)) {
-            const {
-              targetType,
-              changeType,
-              data: requestData,
-              correlationId: proposalCorrelationId,
-            } = payload as typeof payload & { correlationId?: string };
-
-            const eventPayload =
-              typeof requestData === "object" && requestData !== null
-                ? { ...requestData }
-                : {};
-
-            if (targetType === "entity") {
-              if (
-                changeType === "update" &&
-                eventPayload.entityId != null &&
-                eventPayload.id == null
-              ) {
-                eventPayload.id = eventPayload.entityId;
-              }
-              if (
-                changeType === "create" &&
-                eventPayload.description != null &&
-                eventPayload.preview == null
-              ) {
-                eventPayload.preview = eventPayload.description;
-              }
-            }
-
-            const subjectId = (eventPayload.id as string) || proposal.targetId;
-
-            const validatedEvent = await auditLog({
-              subjectType: targetType,
-              action: changeType,
-              phase: "validated",
-              // Governance-critical (batch): failed `.validated` append → throw,
-              // caught per-item below so this proposal is reported failed and NOT
-              // flipped to APPROVED-but-unmaterialized.
-              throwOnError: true,
-              subjectId,
-              userId,
-              // The CHANGE was authored by the proposing agent (the human here is
-              // only the APPROVER, kept in data.approvedBy). Stamp the agent so the
-              // resulting activity attributes to it — "the agent did this, you
-              // approved it" — instead of collapsing under the operator. Absent
-              // (operator-authored proposal) → owner write, is_agent stays null.
-              agentUserId: proposal.agentUserId ?? undefined,
-              workspaceId: proposal.workspaceId ?? undefined,
-              correlationId: proposalCorrelationId,
-              data: {
-                ...eventPayload,
-                workspaceId: proposal.workspaceId,
-                approvedBy: userId,
-                approvedAt: new Date().toISOString(),
-                approvalComment: input.comment,
-                sourceProposalId: proposalId,
-              },
-              source: "api",
-            });
-
-            if (validatedEvent) {
-              payload.validatedEventId = validatedEvent.id;
-            }
-          }
-
-          await db
-            .update(proposals)
-            .set({
-              status: ProposalStatus.APPROVED,
-              ...(payload && isRequestShapedProposalData(payload)
-                ? { data: payload }
+          // ONE door — the SAME `applyProposalApproval` single approve runs.
+          // This block used to inline only the generic `.validated`-emit tail
+          // and never resolved an executor, so "Approve all" flipped the row
+          // to APPROVED and silently did NOTHING for every proposal type the
+          // materializer has no case for, and ran the wrong (generic) path for
+          // the ones it does.
+          //
+          // SEQUENTIAL and per-item best-effort, deliberately: executors do
+          // real writes (entity creates that dedup against each other, project
+          // membership stamps, workspace provisioning), so items must settle in
+          // the order the user selected them — the same order N single approves
+          // would produce. Concurrency would buy nothing at max 50 items and
+          // would make dedup/ordering races nondeterministic. A throw is caught
+          // below: that item is reported failed (and was already flipped to
+          // APPROVAL_FAILED + rejectionReason by the shared dispatch, exactly as
+          // single approve does) while every remaining item is still attempted.
+          // Idempotency is layered: the status guard above skips terminal rows,
+          // and each executor keeps its own already-APPROVED short-circuit.
+          const result = await applyProposalApproval({
+            proposal,
+            userId,
+            input: {
+              proposalId,
+              ...(input.comment !== undefined
+                ? { comment: input.comment }
                 : {}),
-              reviewedBy: userId,
-              reviewedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(proposals.id, proposalId));
-
-          emitProposalReviewed(
-            proposalId,
-            proposal.workspaceId,
-            "approved",
-            userId
-          );
-          results.push({ proposalId, success: true });
+            },
+            ctx,
+          });
+          results.push({ proposalId, success: result.success });
         } catch (error) {
           results.push({
             proposalId,

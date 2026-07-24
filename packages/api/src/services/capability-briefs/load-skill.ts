@@ -52,7 +52,16 @@ export async function resolveSkillContent(
 ): Promise<string> {
   if (ref === "catalog") return loadSkillCatalog();
 
-  const candidates = ref.startsWith("system/") ? [ref] : [ref, `system/${ref}`];
+  // Seeded slugs have no extension (`ensureSystemSkills` strips it), but the
+  // always-on session instructions spliced from `skills/synap/reflexes.md` refer
+  // to siblings BY FILENAME — "Full detail: `escalation-ladder.md`", "see
+  // `writes.md`", "`inline-patterns.md`". Without this strip those pointers
+  // resolve to nothing and the agent burns a turn on "No skill found matching…"
+  // — a dangling pointer in ambient instructions is worse than no pointer.
+  const stem = ref.replace(/\.md$/i, "");
+  const candidates = stem.startsWith("system/")
+    ? [stem]
+    : [stem, `system/${stem}`];
 
   const [row] = await db
     .select({ slug: skills.slug, body: skills.body, name: skills.name })
@@ -62,7 +71,7 @@ export async function resolveSkillContent(
         eq(skills.kind, "instruction"),
         eq(skills.status, "active"),
         eq(skills.approved, true),
-        or(inArray(skills.slug, candidates), like(skills.slug, `%/${ref}`)),
+        or(inArray(skills.slug, candidates), like(skills.slug, `%/${stem}`)),
         or(isNull(skills.workspaceId), eq(skills.userId, userId))
       )
     )

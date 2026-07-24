@@ -2881,7 +2881,7 @@ export async function executeMCPToolViaHubProtocol(
         await import("../../services/capabilities/capability-registry.js");
       const { projectRunnableActions } =
         await import("../../services/capabilities/action-projection.js");
-      const capabilities = await listCapabilities(
+      let capabilities = await listCapabilities(
         { workspaceId: wsId, userId },
         query || kind || limit !== undefined
           ? {
@@ -2892,10 +2892,68 @@ export async function executeMCPToolViaHubProtocol(
           : undefined
       );
 
+      // ── ZERO-HIT RESCUE ───────────────────────────────────────────────────
+      // `query` ranks by scoreTextMatch, which is pure lowercase SUBSTRING
+      // matching, hard-filtered to score > 0 (capability-registry.ts). So a
+      // semantically CORRECT query with no literal overlap — "web search",
+      // "internet research", "look things up online" — returns the EMPTY SET
+      // even when a matching capability is installed and enabled.
+      //
+      // Returning a bare [] hands the agent positive evidence of ABSENCE, and a
+      // well-behaved agent then truthfully tells the user the pod cannot do the
+      // thing it can in fact do. That is exactly how an installed, working
+      // ExaSearch was reported as "not accessible" (2026-07-24).
+      //
+      // So: never answer a search with silence. Fall back to the unfiltered
+      // catalog and SAY that the query matched nothing, so the model can scan
+      // what actually exists instead of concluding the pod is incapable.
+      let zeroHitNote: string | undefined;
+      if (query && capabilities.length === 0) {
+        capabilities = await listCapabilities(
+          { workspaceId: wsId, userId },
+          // Drop `query` (that's what matched nothing) but keep the kind filter
+          // if the caller set one — they asked for a category, not this string.
+          kind || limit !== undefined
+            ? { kind: kind as never, limit }
+            : undefined
+        );
+        zeroHitNote =
+          `No capability NAME, verb label, or description literally contains "${query}" ` +
+          `(matching is substring-based, not semantic). That is NOT proof the pod cannot do this — ` +
+          `the full list below is what IS available; scan it before concluding anything is impossible. ` +
+          `If nothing fits, search the marketplace: synap_run_capability({ verbId: "market.search", parameters: { query: "..." } }).`;
+      }
+
       // MCP and Hub REST intentionally share this projection: never expose a
       // catalog-only, draft, or disconnected action as executable on one
       // surface while hiding it on the other.
       const runnable = projectRunnableActions(capabilities);
+
+      // `runnable` silently EXCLUDES anything not yet approved / not connected.
+      // An agent reading `runnable` as "what I can do" would conclude a DRAFT
+      // capability doesn't exist. Name the gap instead of hiding it.
+      // `runnable` is projected per ACTION (skillId / verbId / tool), not per
+      // capability, so identify coverage by any of those handles.
+      const runnableHandles = new Set(
+        runnable.flatMap((r) =>
+          [r.skillId, r.verbId, r.tool].filter(
+            (h): h is string => typeof h === "string" && h.length > 0
+          )
+        )
+      );
+      const blocked = capabilities
+        .filter(
+          (c) =>
+            !runnableHandles.has(c.id) &&
+            !runnableHandles.has(c.name) &&
+            !(c.verbs ?? []).some((v) => runnableHandles.has(v.id))
+        )
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          reason:
+            "listed but NOT runnable — it needs enabling (Settings → Capabilities) or its backing service connected",
+        }));
 
       // Response size discipline: with a query, drop the full verb catalog dump
       // (grant/govDefault noise) — the compact projection carries name/kind/
@@ -2912,7 +2970,12 @@ export async function executeMCPToolViaHubProtocol(
           }))
         : capabilities;
 
-      return ok({ capabilities: responseCapabilities, runnable });
+      return ok({
+        capabilities: responseCapabilities,
+        runnable,
+        ...(blocked.length > 0 ? { blocked } : {}),
+        ...(zeroHitNote ? { note: zeroHitNote } : {}),
+      });
     }
 
     case "synap_run_capability": {
@@ -3057,6 +3120,7 @@ export async function executeMCPToolViaHubProtocol(
         workspaceId: requestedWorkspaceId ?? null,
         id: args.id,
         payload: args.payload as Record<string, unknown> | undefined,
+        agentUserId: agentUserId ?? undefined,
       });
       return ok(result);
     }

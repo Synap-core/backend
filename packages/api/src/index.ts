@@ -40,6 +40,14 @@ export {
   getAgentIdBySlug,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
+// Pod-as-OAuth-2.1-authorization-server (Path B): /.well-known/*, /register,
+// /authorize, /token. Mounted at the pod root in apps/api/src/index.ts.
+export { oauthApp } from "./routers/oauth/routes.js";
+export {
+  configuredPodAdminBase,
+  configuredPodAdminConsentUrl,
+  type PodAdminConfigResult,
+} from "./utils/pod-admin-url.js";
 export { fileUploadApp } from "./routers/file-upload.js";
 export { externalSkillsApp } from "./routers/external/skills.js";
 export { externalChatApp } from "./routers/external/chat.js";
@@ -120,6 +128,10 @@ export {
   userScopeAnd,
   type EventDataWithUser,
 } from "./utils/user-scoped.js";
+
+// Export the 5xx error-egress sanitizer (the one door for what a server fault
+// may tell a client — see middleware/error-egress.ts).
+export { sanitizeErrorEgress } from "./middleware/error-egress.js";
 
 // Export event streaming utilities
 export { eventStreamManager } from "./event-stream-manager.js";

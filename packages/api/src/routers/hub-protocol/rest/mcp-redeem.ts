@@ -1,30 +1,106 @@
 /**
- * Hub Protocol REST — CP-MCP consent-code redeem endpoint.
+ * Hub Protocol REST — CP-MCP consent-code redeem + revoke endpoints.
  *
  * The server-to-server half of the CP-MCP pod-accept gate
  * (MCP-OAUTH-AND-CONNECT-PLAN §2-3). The control plane (CP) holds a pod master
  * key and, after the user authorized it at pod-admin `/connect`, redeems the
  * one-time consent code minted there. The pod mints the `claude-web` agent key
  * AT REDEEM (never at Allow) so no plaintext key ever travels through a
- * browser-facing channel.
+ * browser-facing channel. On disconnect the CP calls the sibling /mcp/revoke
+ * endpoint to kill that same key server-to-server.
  *
- * Auth = BOTH credentials:
- *   1. a valid pod key Bearer (the CP master key) — enforced by the hub-protocol
- *      auth middleware (this route is intentionally NOT in skipAuthPaths).
- *   2. the one-time consent `code` in the body — single-use, short-TTL, verified
- *      here against a stored sha256 hash.
+ * Auth for BOTH routes = a CP TRUSTED-ISSUER assertion (verifyCpAssertion
+ * below), NOT a hub API key: the CP-held pod credential (`intelligenceApiKey`)
+ * is a random bootstrap secret, not a `synap_*` key, so it could never pass the
+ * key-format middleware. Both routes are listed in `skipAuthPaths`
+ * (hub-protocol-rest.ts) so that middleware doesn't run, and each verifies its
+ * OWN purpose claim (`mcp_redeem` / `mcp_revoke`) so a redeem assertion can't
+ * be replayed as a revoke and vice-versa.
  *
- * Mounted at POST /mcp/redeem (→ /api/hub/mcp/redeem).
+ * redeem additionally requires the one-time consent `code` in the body —
+ * single-use, short-TTL, verified against a stored sha256 hash.
+ *
+ * Mounted at POST /mcp/redeem and POST /mcp/revoke (→ /api/hub/mcp/*).
  */
 
 import { createHash } from "crypto";
 
-import { db, mcpConnectCodes, and, eq, isNull, gt } from "@synap/database";
-import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
+import {
+  db,
+  mcpConnectCodes,
+  and,
+  eq,
+  isNull,
+  gt,
+  users,
+  ApiKeyRepository,
+  EventRepository,
+  sql,
+} from "@synap/database";
+import {
+  apiKeys,
+  isValidScope,
+  type ApiKeyScope,
+} from "@synap/database/schema";
 
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
 import { logger, type HubHono } from "./_shared.js";
+
+/**
+ * Minimal shape both routes' `c` argument needs from the Hono context — kept
+ * loose (rather than importing Hono's `Context<...>` generic) so this helper
+ * is trivially reusable across both route handlers below.
+ */
+interface CpAssertionContext {
+  req: { header: (name: string) => string | undefined };
+  json: (body: unknown, status: number) => Response;
+}
+
+/**
+ * Verify a CP trusted-issuer assertion carrying the given purpose claim
+ * (`mcp_redeem` or `mcp_revoke`). Returns the 401/500 `Response` to return
+ * immediately on failure, or `null` when the assertion is valid — the SAME
+ * auth block both /mcp/redeem and /mcp/revoke share, factored out so the two
+ * routes can't drift.
+ */
+async function verifyCpAssertion(
+  c: CpAssertionContext,
+  purposeClaim: "mcp_redeem" | "mcp_revoke"
+): Promise<Response | null> {
+  const authToken = c.req
+    .header("authorization")
+    ?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const audience = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+  if (!audience) {
+    logger.error(
+      `mcp/${purposeClaim}: PUBLIC_URL not configured — cannot verify CP assertion`
+    );
+    return c.json({ error: "Pod misconfigured (PUBLIC_URL)" }, 500);
+  }
+  if (!authToken) {
+    return c.json({ error: "unauthorized", reason: "missing_assertion" }, 401);
+  }
+  const claims = await verifyTrustedIssuerJwt<Record<string, unknown>>(
+    authToken,
+    { audience }
+  );
+  if (!claims) {
+    logger.warn(
+      `mcp/${purposeClaim}: CP assertion failed trusted-issuer verification`
+    );
+    return c.json({ error: "unauthorized", reason: "invalid_assertion" }, 401);
+  }
+  // Defense in depth: the assertion must have been minted FOR this purpose, so
+  // a CP JWT signed for the other route can't be replayed here.
+  if (claims[purposeClaim] !== true) {
+    logger.warn(
+      `mcp/${purposeClaim}: CP assertion not scoped to ${purposeClaim}`
+    );
+    return c.json({ error: "unauthorized", reason: "wrong_purpose" }, 401);
+  }
+  return null;
+}
 
 /**
  * Functional default scope set for a claude-web MCP agent key — the same
@@ -75,48 +151,11 @@ export function mapCpScopesToPodScopes(
 
 export function registerMcpRedeemRoutes(app: HubHono): void {
   app.post("/mcp/redeem", async (c) => {
-    // ── Auth: a CP TRUSTED-ISSUER assertion (NOT a hub API key) ──────────────
     // This route is in `skipAuthPaths`, so the key-format middleware does NOT
-    // run. CP authenticates with a short-lived JWT it signs (`signCpJwt`), which
-    // the pod verifies against its `trusted_issuers` registry — the SAME trust
-    // primitive `/auth/exchange` uses. (The CP-held pod credential is a random
-    // bootstrap secret, not a `synap_*` key, so a key Bearer could never work.)
+    // run — see `verifyCpAssertion` above for the CP-trusted-issuer auth block.
     // The one-time `code` below is the SECOND required credential.
-    const authToken = c.req
-      .header("authorization")
-      ?.match(/^Bearer\s+(.+)$/i)?.[1];
-    const audience = process.env.PUBLIC_URL?.replace(/\/+$/, "");
-    if (!audience) {
-      logger.error(
-        "mcp/redeem: PUBLIC_URL not configured — cannot verify CP assertion"
-      );
-      return c.json({ error: "Pod misconfigured (PUBLIC_URL)" }, 500);
-    }
-    if (!authToken) {
-      return c.json(
-        { error: "unauthorized", reason: "missing_assertion" },
-        401
-      );
-    }
-    const cpClaims = await verifyTrustedIssuerJwt<{ mcp_redeem?: unknown }>(
-      authToken,
-      { audience }
-    );
-    if (!cpClaims) {
-      logger.warn(
-        "mcp/redeem: CP assertion failed trusted-issuer verification"
-      );
-      return c.json(
-        { error: "unauthorized", reason: "invalid_assertion" },
-        401
-      );
-    }
-    // Defense in depth: the assertion must have been minted FOR redeem, so a CP
-    // JWT signed for another purpose can't be replayed here.
-    if (cpClaims.mcp_redeem !== true) {
-      logger.warn("mcp/redeem: CP assertion not scoped to mcp_redeem");
-      return c.json({ error: "unauthorized", reason: "wrong_purpose" }, 401);
-    }
+    const authFailure = await verifyCpAssertion(c, "mcp_redeem");
+    if (authFailure) return authFailure;
 
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== "object") {
@@ -253,6 +292,81 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         { err, podUserId: row.podUserId },
         "mcp/redeem: mint failed"
       );
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  });
+
+  // ── POST /mcp/revoke ───────────────────────────────────────────────────────
+  //
+  // Server-to-server counterpart to /mcp/redeem: the CP calls this on
+  // disconnect to kill the claude-web key it holds encrypted (rather than the
+  // broken `apiKeys.delete` tRPC call via the CP's non-`synap_*` bootstrap
+  // secret — see connect-mcp.ts `revokeGrant`). Idempotent and side-channel-
+  // safe: an unknown/foreign/already-revoked keyId all collapse to
+  // `{ revoked: false }`, 200 — never a 4xx that would let a caller distinguish
+  // "doesn't exist" from "isn't yours" from "already gone".
+  app.post("/mcp/revoke", async (c) => {
+    const authFailure = await verifyCpAssertion(c, "mcp_revoke");
+    if (authFailure) return authFailure;
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+    const keyId =
+      typeof (body as Record<string, unknown>).keyId === "string"
+        ? ((body as Record<string, unknown>).keyId as string).trim()
+        : "";
+    if (!keyId) {
+      return c.json({ error: "keyId is required" }, 400);
+    }
+
+    const keyRow = await db.query.apiKeys.findFirst({
+      where: eq(apiKeys.id, keyId),
+      columns: { id: true, userId: true, revokedAt: true },
+    });
+    if (!keyRow) {
+      // Unknown keyId — never leak existence, just report not-revoked.
+      return c.json({ revoked: false });
+    }
+    if (keyRow.revokedAt) {
+      // Already revoked — safely retryable, still 200.
+      return c.json({ revoked: false });
+    }
+
+    // SECURITY FLOOR: only revoke a key that is plausibly an MCP-connect
+    // claude-web agent key — i.e. its owner is the pod-wide `claude-web` agent
+    // user minted by `provisionSurfaceAgentKey` in /mcp/redeem above (userType
+    // "agent", agentType "claude-web"). This stops a CP assertion (scoped only
+    // to `mcp_revoke`, not to a specific pod user) from being used to kill an
+    // arbitrary pod key by guessing/leaking a keyId — the floor this schema CAN
+    // express. It does NOT confine to the specific (podUserId, instanceId) pair
+    // the CP's grant row names, because `api_keys` carries no direct link back
+    // to a `pod_mcp_grants` row on the CP side to check against; agentType is
+    // the tightest check available from the pod's own schema.
+    const owner = await db.query.users.findFirst({
+      where: eq(users.id, keyRow.userId),
+      columns: { userType: true, agentType: true },
+    });
+    if (owner?.userType !== "agent" || owner.agentType !== "claude-web") {
+      logger.warn(
+        { keyId },
+        "mcp/revoke: keyId does not belong to a claude-web agent — refusing to revoke"
+      );
+      return c.json({ revoked: false });
+    }
+
+    try {
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+      // revokedBy = the key's own owner (the agent user) — there is no human
+      // actor in this CP-triggered flow, mirroring the same convention
+      // `provisionSurfaceAgentKey`'s revoke+mint step uses (revokedBy: agentUserId).
+      await apiKeyRepo.revoke(keyId, keyRow.userId, "CP-MCP disconnect");
+      logger.info({ keyId }, "mcp/revoke: claude-web agent key revoked");
+      return c.json({ revoked: true });
+    } catch (err) {
+      logger.error({ err, keyId }, "mcp/revoke: revoke failed");
       return c.json({ error: "Internal server error" }, 500);
     }
   });

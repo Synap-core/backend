@@ -597,6 +597,39 @@ export function registerSetupRoutes(app: HubHono): void {
                 "explicit linkedUserId to bind it to the intended human."
             );
           }
+        } else {
+          // ── FAIL CLOSED: no human on this pod yet ──────────────────────────
+          // Previously this branch did not exist: with zero human rows,
+          // resolvedLinkedUserId stayed undefined and the key was minted with
+          // `linkedUserId: null` (below). That is a SILENT GOVERNANCE BYPASS —
+          // the pod derives `agentUserId = linkedUserId ? userId : undefined`
+          // (hub-protocol-rest.ts), and a defined agentUserId is the ONLY thing
+          // routing an agent write through checkPermissionOrPropose() into a
+          // proposal. A null-linked key therefore writes DIRECTLY, forever, with
+          // no error and no signal — and nothing repairs it once a human appears.
+          //
+          // Reachable via the PROVISIONING_TOKEN door during pod bootstrap,
+          // which is exactly the window where no human exists yet.
+          //
+          // Failing closed is correct on the merits too: an agent key is minted
+          // to act ON BEHALF OF a human, so "no human yet" is not a state in
+          // which a meaningful agent key can exist.
+          logger.error(
+            { agentType, authMethod },
+            "setup/agent: refusing to mint an agent key on a pod with no human " +
+              "owner — a key with no linkedUserId would bypass governance permanently"
+          );
+          return c.json(
+            {
+              error: "Pod has no human owner yet",
+              code: "NO_HUMAN_OWNER",
+              detail:
+                "An agent key must be linked to a human (it acts on their behalf, and that link is " +
+                "what routes its writes through governance). Create the pod owner first, then " +
+                "provision agents — or pass an explicit linkedUserId.",
+            },
+            409
+          );
         }
       }
 

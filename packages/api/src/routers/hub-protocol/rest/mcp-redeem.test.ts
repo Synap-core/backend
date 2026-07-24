@@ -1,5 +1,5 @@
 /**
- * Hub Protocol REST — CP-MCP redeem endpoint tests.
+ * Hub Protocol REST — CP-MCP redeem + revoke endpoint tests.
  *
  * Covers the security-critical contract Wave B consumes:
  *   (b) redeem rejects an expired / consumed / unknown code (all collapse to an
@@ -8,11 +8,20 @@
  *       linkedUserId = createdByUserId = podUserId, returning the contract shape.
  *   (d) scope-grammar mapping: mcp:read → mcp.read, mcp:write → mcp.write (+ the
  *       hub-protocol peers), unknown dropped, empty → functional default set.
+ *   (e) revoke shares the SAME CP-trusted-issuer auth block as redeem, but scoped
+ *       to its own `mcp_revoke` purpose claim — a `mcp_redeem`-scoped assertion
+ *       must NOT work here (cross-purpose replay), and vice-versa.
+ *   (f) revoke is idempotent + side-channel-safe: unknown / already-revoked /
+ *       non-claude-web keyIds all collapse to 200 `{ revoked: false }`, never a
+ *       4xx that would let a caller distinguish the reason.
  *
- * Strategy: mock `@synap/database` (the update→set→where→returning chain) +
- * `provisionSurfaceAgentKey` + the module logger, mount ONLY the redeem route on
- * an isolated Hono app. No live Postgres. `@synap/database/schema` is left REAL so
- * the scope mapping exercises the actual `isValidScope`.
+ * Strategy: mock `@synap/database` (the update→set→where→returning chain used by
+ * redeem's atomic claim, PLUS `db.query.apiKeys`/`db.query.users` used by revoke's
+ * security floor) + `provisionSurfaceAgentKey` + `ApiKeyRepository` + the module
+ * logger, mount ONLY these routes on an isolated Hono app. No live Postgres.
+ * `@synap/database/schema` is left REAL so the scope mapping exercises the actual
+ * `isValidScope`, and `apiKeys`/`users` are real column objects (their identity
+ * doesn't matter since `eq`/`db.query.*.findFirst` are mocked below).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -24,6 +33,14 @@ import { Hono } from "hono";
 // `.set(...)` payload so we can assert the row is marked consumed.
 const claim: { rows: unknown[] } = { rows: [] };
 const setSpy = vi.fn();
+
+// revoke's security-floor lookups: the api_keys row being revoked, and its
+// owner's `users` row (userType/agentType), controlled per-test.
+const revokeDb: {
+  apiKeyRow: Record<string, unknown> | null;
+  userRow: Record<string, unknown> | null;
+} = { apiKeyRow: null, userRow: null };
+const apiKeyRepoRevokeSpy = vi.fn((..._args: unknown[]) => Promise.resolve());
 
 vi.mock("@synap/database", () => {
   const update = vi.fn(() => ({
@@ -37,7 +54,17 @@ vi.mock("@synap/database", () => {
     },
   }));
   return {
-    db: { update },
+    db: {
+      update,
+      query: {
+        apiKeys: {
+          findFirst: vi.fn(() => Promise.resolve(revokeDb.apiKeyRow)),
+        },
+        users: {
+          findFirst: vi.fn(() => Promise.resolve(revokeDb.userRow)),
+        },
+      },
+    },
     mcpConnectCodes: {
       codeHash: "code_hash",
       podUserId: "pod_user_id",
@@ -46,10 +73,20 @@ vi.mock("@synap/database", () => {
       consumedAt: "consumed_at",
       expiresAt: "expires_at",
     },
+    users: { id: "users.id" },
     and: (...args: unknown[]) => ({ _and: args }),
     eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
     isNull: (a: unknown) => ({ _isNull: a }),
     gt: (a: unknown, b: unknown) => ({ _gt: [a, b] }),
+    // Revoke's repository door — spy on `.revoke(id, userId, reason)` without
+    // touching a real DB/bcrypt.
+    ApiKeyRepository: class {
+      revoke(...args: unknown[]) {
+        return apiKeyRepoRevokeSpy(...args);
+      }
+    },
+    EventRepository: class {},
+    sql: {},
   };
 });
 
@@ -101,11 +138,26 @@ beforeEach(() => {
   claim.rows = [];
   setSpy.mockClear();
   provisionSpy.mockReset();
-  // The redeem handler reads PUBLIC_URL as the assertion audience.
+  revokeDb.apiKeyRow = null;
+  revokeDb.userRow = null;
+  apiKeyRepoRevokeSpy.mockClear();
+  // The redeem/revoke handlers read PUBLIC_URL as the assertion audience.
   process.env.PUBLIC_URL = "https://pod.test.synap.live";
   verifyCpSpy.mockReset();
   verifyCpSpy.mockResolvedValue({ mcp_redeem: true });
 });
+
+async function postRevoke(app: Hono, body: unknown) {
+  return app.request("/mcp/revoke", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      // A CP trusted-issuer assertion (mock verifier accepts it by default).
+      authorization: "Bearer test-cp-assertion",
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 // ─── (d) scope-grammar mapping ────────────────────────────────────────────────
 
@@ -268,5 +320,99 @@ describe("POST /mcp/redeem — success", () => {
     expect(res.status).toBe(500);
     const json = (await res.json()) as { code?: string };
     expect(json.code).toBe("KEY_MINTED_BUT_VERIFICATION_FAILED");
+  });
+});
+
+// ─── POST /mcp/revoke ─────────────────────────────────────────────────────────
+
+const CLAUDE_WEB_KEY_ROW = {
+  id: "podkey-1",
+  userId: "agent-user-1",
+  revokedAt: null,
+};
+const CLAUDE_WEB_OWNER = { userType: "agent", agentType: "claude-web" };
+
+describe("POST /mcp/revoke — auth", () => {
+  it("401 when the Authorization header is missing", async () => {
+    const res = await buildApp().request("/mcp/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyId: "podkey-1" }),
+    });
+    expect(res.status).toBe(401);
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("401 when the CP trusted-issuer assertion fails verification", async () => {
+    verifyCpSpy.mockResolvedValueOnce(null);
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(401);
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("401 CROSS-PURPOSE REPLAY: a valid CP JWT scoped to mcp_redeem (not mcp_revoke) is rejected here", async () => {
+    verifyCpSpy.mockResolvedValueOnce({ mcp_redeem: true }); // no mcp_revoke claim
+    revokeDb.apiKeyRow = CLAUDE_WEB_KEY_ROW;
+    revokeDb.userRow = CLAUDE_WEB_OWNER;
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as { reason?: string };
+    expect(json.reason).toBe("wrong_purpose");
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("400 when keyId is missing", async () => {
+    verifyCpSpy.mockResolvedValueOnce({ mcp_revoke: true });
+    const res = await postRevoke(buildApp(), {});
+    expect(res.status).toBe(400);
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /mcp/revoke — idempotent / security floor", () => {
+  beforeEach(() => {
+    // Every test in this block presents a validly-scoped mcp_revoke assertion —
+    // only the DB-side state under test varies.
+    verifyCpSpy.mockResolvedValue({ mcp_revoke: true });
+  });
+
+  it("200 { revoked: false } for an unknown keyId — never leaks existence", async () => {
+    revokeDb.apiKeyRow = null;
+    const res = await postRevoke(buildApp(), { keyId: "does-not-exist" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: false });
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("200 { revoked: false } for an already-revoked key — safely retryable", async () => {
+    revokeDb.apiKeyRow = { ...CLAUDE_WEB_KEY_ROW, revokedAt: new Date() };
+    revokeDb.userRow = CLAUDE_WEB_OWNER;
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: false });
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("200 { revoked: false } — SECURITY FLOOR: refuses a key whose owner is not the claude-web agent", async () => {
+    revokeDb.apiKeyRow = CLAUDE_WEB_KEY_ROW;
+    revokeDb.userRow = { userType: "agent", agentType: "some-other-agent" };
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: false });
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("200 { revoked: true } — happy path calls the repository revoke door with the right keyId", async () => {
+    revokeDb.apiKeyRow = CLAUDE_WEB_KEY_ROW;
+    revokeDb.userRow = CLAUDE_WEB_OWNER;
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: true });
+    expect(apiKeyRepoRevokeSpy).toHaveBeenCalledTimes(1);
+    expect(apiKeyRepoRevokeSpy).toHaveBeenCalledWith(
+      "podkey-1",
+      "agent-user-1", // revokedBy = the key's own owner (no human actor here)
+      expect.any(String)
+    );
   });
 });

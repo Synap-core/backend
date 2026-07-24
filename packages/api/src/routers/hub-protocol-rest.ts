@@ -251,6 +251,9 @@ app.use("/*", async (c, next) => {
     // a bootstrap secret, not a `synap_*` key, so it can't pass the key-format
     // middleware. The handler verifies the CP assertion + the one-time code.
     "/mcp/redeem",
+    // CP-MCP disconnect revoke — same CP-trusted-issuer auth as /mcp/redeem,
+    // scoped to its own `mcp_revoke` purpose claim (not replayable as a redeem).
+    "/mcp/revoke",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the
@@ -587,7 +590,7 @@ registerProactiveRoutes(app); // /proactive/post
 registerNotificationsRoutes(app); // /notifications
 registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
-registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key)
+registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key), /mcp/revoke (disconnect)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn

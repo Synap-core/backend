@@ -69,15 +69,18 @@ export async function proxy(req: NextRequest) {
   }
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
-  // /connect, /my-connections, and /approve-agent/* are self-service
-  // surfaces for any signed-in pod user (CLI/Raycast/Claude Desktop key
-  // minting, viewing/revoking your own keys, and the matching agent-key
-  // approval). The backend endpoints they call already re-verify the
-  // Kratos session server-side — we just need a valid session here, not
-  // the pod_admin role.
+  // /connect, /my-connections, /approve-agent/* and /oauth/consent are
+  // self-service surfaces for any signed-in pod user (CLI/Raycast/Claude
+  // Desktop key minting, viewing/revoking your own keys, the matching
+  // agent-key approval, and authorizing an OAuth client against your own
+  // data). The backend endpoints they call already re-verify the Kratos
+  // session server-side — we just need a valid session here, not the
+  // pod_admin role. Requiring pod_admin on /oauth/consent would lock every
+  // non-admin pod member out of connecting claude.ai to their own pod.
   const isSelfService =
     path === "/connect" ||
     path === "/my-connections" ||
+    path === "/oauth/consent" ||
     path.startsWith("/approve-agent") ||
     path.startsWith("/connection-requests/");
   if (!isSelfService) {

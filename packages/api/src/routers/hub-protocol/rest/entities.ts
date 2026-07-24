@@ -70,6 +70,7 @@ import {
   logger,
   resolveActingContext,
   resolveActorId,
+  uuidPathParam,
   verifyWorkspaceReadAccess,
   verifyWorkspaceAccess,
   type HubHono,
@@ -472,7 +473,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "Returns up to `limit` relations (default 50, max 200) connected to " +
       "the entity. Workspace-scoped on shared pods.",
     request: {
-      params: z.object({ id: z.string() }),
+      params: z.object({ id: uuidPathParam }),
       query: z.object({
         userId: z.string().optional(),
         workspaceId: z.string().optional(),
@@ -566,7 +567,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     description:
       "Returns the entity row by ID. Verifies workspace access on shared pods.",
     request: {
-      params: z.object({ id: z.string() }),
+      params: z.object({ id: uuidPathParam }),
       // No workspaceId: a single-entity fetch resolves visibility from the user
       // floor (verified below against the entity's OWN workspace), never the
       // caller's lens. The param was accepted and advertised in OpenAPI but the
@@ -1132,7 +1133,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "the file is linked to :entityId via a `references` relation. Upload mode: " +
       "max 10MB, image/* only. Requires scope hub-protocol.write.",
     request: {
-      params: z.object({ entityId: z.string() }),
+      params: z.object({ entityId: uuidPathParam }),
       body: {
         content: {
           "application/json": {
@@ -1806,7 +1807,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     description:
       "Patch entity title / preview / metadata. Supports `Idempotency-Key`.",
     request: {
-      params: z.object({ entityId: z.string() }),
+      params: z.object({ entityId: uuidPathParam }),
       body: {
         content: {
           "application/json": { schema: UpdateEntityRequestSchema },
@@ -1983,7 +1984,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "agent keys this is proposal-gated (returns { status: 'proposed', proposalId }); " +
       "auto-approved contexts complete inline. Acting identity is bound to the principal.",
     request: {
-      params: z.object({ entityId: z.string() }),
+      params: z.object({ entityId: uuidPathParam }),
       query: z.object({
         workspaceId: z.string().optional(),
         userId: z.string().optional(),
@@ -2145,7 +2146,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "Returns the entity's live facets joined with their role-profile + that " +
       "profile's effective properties (workspace-lensed). Requires hub-protocol.read.",
     request: {
-      params: z.object({ entityId: z.string() }),
+      params: z.object({ entityId: uuidPathParam }),
     },
     responses: {
       200: {
@@ -2231,7 +2232,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "governed entities.attachFacet door (proposal-gated for agents). " +
       "Requires hub-protocol.write.",
     request: {
-      params: z.object({ entityId: z.string() }),
+      params: z.object({ entityId: uuidPathParam }),
       body: {
         content: {
           "application/json": {
@@ -2329,7 +2330,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "Thin wrapper over the governed entities.updateFacet door. Requires " +
       "hub-protocol.write.",
     request: {
-      params: z.object({ facetId: z.string() }),
+      params: z.object({ facetId: uuidPathParam }),
       body: {
         content: {
           "application/json": {
@@ -2419,7 +2420,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "Thin wrapper over the governed entities.detachFacet door. Requires " +
       "hub-protocol.write.",
     request: {
-      params: z.object({ facetId: z.string() }),
+      params: z.object({ facetId: uuidPathParam }),
       query: z.object({
         userId: z.string().optional(),
         agentUserId: z.string().optional(),

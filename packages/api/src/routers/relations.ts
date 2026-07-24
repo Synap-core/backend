@@ -864,6 +864,10 @@ export const relationsRouter = router({
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
+          // Carry the edge metadata through the governance membrane — the
+          // materializer reads `data.metadata` back verbatim, so omitting it
+          // made an approved proposal materialize an edge with `{}`.
+          metadata: input.metadata,
           // I3: persist the resolved D4 placement (may be an explicit null for a
           // pod-wide edge) so materializeRelation reads it back verbatim via
           // resolveMaterializedRelationWorkspaceId — auto-approved + proposal-

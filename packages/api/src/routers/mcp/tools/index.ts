@@ -1622,7 +1622,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. Pass role (default assistant) and triggerAI to start an agent turn.",
+          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one.",
         inputSchema: {
           type: "object",
           properties: {

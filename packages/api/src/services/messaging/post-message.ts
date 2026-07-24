@@ -73,14 +73,23 @@ export async function postChannelMessage(
     // reply. Fire the canonical one-path kickoff so a real headless turn is
     // produced. The helper gates to THREAD/AGENT_COLLAB channels with a
     // workspaceId (other channel types are a no-op today).
-    const { triggerAutoRespond } =
-      await import("../../utils/trigger-auto-respond.js");
-    await triggerAutoRespond({
-      channelId,
-      userMessageId: msgId,
-      content,
-      sourceUserId: userId,
-    });
+    //
+    // ROLE GATE: only a USER message may kick off an agent turn. Mirrors the Hub
+    // REST door (`hub-protocol/rest/threads.ts` postMessage: `autoRespond ===
+    // true && role === "user"`). Without it, `{ role: "assistant", triggerAI:
+    // true }` — reachable straight from the MCP `synap_post_message` tool, which
+    // exposes both fields — makes an agent respond to an assistant message, i.e.
+    // an agent can trigger a turn on its own (or another agent's) output.
+    if (roleEnum === MessageRole.USER) {
+      const { triggerAutoRespond } =
+        await import("../../utils/trigger-auto-respond.js");
+      await triggerAutoRespond({
+        channelId,
+        userMessageId: msgId,
+        content,
+        sourceUserId: userId,
+      });
+    }
   }
 
   return { success: true, messageId: msgId, channelId };

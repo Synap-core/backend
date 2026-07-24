@@ -1000,6 +1000,10 @@ export const automationsRouter = router({
         subjectEntityId: z.string().uuid().optional(),
         /** Optional payload to inject as trigger.payload in the execution context */
         payload: z.record(z.string(), z.unknown()).optional(),
+        /** Explicit agent user ID when an AI agent asks for the run (governed). */
+        agentUserId: z.string().uuid().optional(),
+        /** AI reasoning surfaced on the proposal card. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1039,6 +1043,52 @@ export const automationsRouter = router({
           message: `Cannot trigger automation with status="${existing.status}". Activate it, or use a manual trigger type.`,
         });
       }
+      // Governance membrane for the AGENT caller. Triggering runs the whole
+      // flow — including `webhook` and `command` nodes — so this is CODE
+      // EXECUTION, strictly wider than `run_command`, which IS gated
+      // (hub-protocol/rest/commands.ts `POST /commands/execute`). `automation`
+      // + `execute` mirrors that door's `{command, execute}` pair and reuses an
+      // already-inventoried verb (`requiredPermissionFor("execute") = "write"`).
+      // `automation.execute` is NOT in DEFAULT_AUTO_APPROVE, so an agent run
+      // routes to a proposal.
+      //
+      // Operator-initiated triggers are DIRECT, exactly like the create door:
+      // gate only `if (agentUserId)`. Hub-protocol calls are all branded
+      // source:"intelligence", so gating on source would send an operator's own
+      // UI/CLI "run now" to a proposal. RBAC for the operator path is unchanged
+      // (assertWorkspaceWrite above); the agent path additionally runs the gate,
+      // which owns the agent's own RBAC + propose/execute decision.
+      const agentUserId = input.agentUserId ?? ctx.agentUserId ?? undefined;
+      if (agentUserId) {
+        const perm = await checkPermissionOrPropose({
+          userId: ctx.userId!,
+          agentUserId,
+          workspaceId: existing.workspaceId ?? null,
+          subjectType: "automation",
+          action: "execute",
+          source: "intelligence",
+          data: {
+            automationId: existing.id,
+            name: existing.name,
+            triggerType: existing.triggerType,
+            payload: input.payload,
+            subjectEntityId: input.subjectEntityId,
+          },
+          reasoning: input.reasoning,
+        });
+        if ("denied" in perm && perm.denied) {
+          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        }
+        if ("proposalId" in perm) {
+          return {
+            status: "proposed" as const,
+            runId: null as string | null,
+            proposalId: perm.proposalId as string | null,
+            message: `Running "${existing.name}" proposed for review`,
+          };
+        }
+      }
+
       // Older generic action renderers send the entity in payload. Accept that
       // compatibility shape via the shared subject door (which enforces the
       // UUID-only rule every run-creating path shares); callers can use the
@@ -1077,6 +1127,10 @@ export const automationsRouter = router({
         },
       });
 
-      return { status: "triggered", runId: run.id };
+      return {
+        status: "triggered" as const,
+        runId: run.id as string | null,
+        proposalId: null as string | null,
+      };
     }),
 });

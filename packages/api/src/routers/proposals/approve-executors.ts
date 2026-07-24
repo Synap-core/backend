@@ -139,6 +139,18 @@ export function registerApproveExecutors(): void {
           })
           .where(eq(proposals.id, input.proposalId));
 
+        // Report to IS telemetry (fire-and-forget — never blocks)
+        deps.reportProposalOutcome({
+          proposalId: input.proposalId,
+          outcome: "approved",
+          sourceMessageId: proposal.sourceMessageId,
+          agentUserId: proposal.agentUserId,
+          targetType: proposal.targetType,
+          proposalType: proposal.proposalType,
+          source: (proposal.data as Record<string, unknown> | null)?.source as
+            string | undefined,
+        });
+
         deps.emitProposalReviewed(
           input.proposalId,
           proposal.workspaceId,
@@ -203,6 +215,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -265,6 +289,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -323,6 +359,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -386,6 +434,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -478,6 +538,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -559,6 +631,11 @@ export function registerApproveExecutors(): void {
         entityCallerCtx as unknown as Context
       );
       const storedEntityId = innerData.id as string | undefined;
+      // `proposedEntityId` is the id minted at PROPOSE time. `entities.create`
+      // honors it when nothing matches, but its identity-first dedup may return
+      // a DIFFERENT, pre-existing entity (strong email/phone/url match) with
+      // `deduplicated: true` — the whole point of routing approval through the
+      // one create door. Read the RETURNED id below for every downstream write.
       const createdEntity = (await entityCaller.create({
         proposedEntityId: storedEntityId,
         profileSlug,
@@ -572,17 +649,35 @@ export function registerApproveExecutors(): void {
         // long-content entity that proposed) lost its document link. Forward it.
         documentId: innerData.documentId as string | undefined,
         source: "system",
-      })) as { id?: string };
+      })) as { id?: string; deduplicated?: boolean };
 
-      const createMaterialized: ProposalMaterializedRecord = createdEntity?.id
-        ? { entityIds: [createdEntity.id] }
-        : {};
+      // Did this approval MERGE onto an entity that already existed independently
+      // of this proposal? `deduplicated` alone isn't enough: a retry (re-approve,
+      // or an approve after APPROVAL_FAILED) re-runs this executor and dedups onto
+      // the row the FIRST attempt created — same id as the pre-minted one, and
+      // ours to own. A merge onto a DIFFERENT id is a pre-existing entity.
+      const mergedOntoExisting =
+        createdEntity?.deduplicated === true &&
+        !!createdEntity.id &&
+        createdEntity.id !== storedEntityId;
+
+      // Mirror the composite path (proposals.ts): only entities this proposal
+      // actually CREATED are ours to undo / to claim as session output / to file
+      // into the proposal's project. A merged-onto entity is recorded nowhere, so
+      // `revert` can never delete (nor `belongs_to_project`-widen) a row this
+      // proposal did not create. Revert of a merged approval consequently fails
+      // loud ("could not undo") rather than destroying the pre-existing subject —
+      // the same stance planProposalRevert takes for update proposals.
+      const createMaterialized: ProposalMaterializedRecord =
+        createdEntity?.id && !mergedOntoExisting
+          ? { entityIds: [createdEntity.id] }
+          : {};
       const createPayload: StoredProposalData = {
         ...(payload as StoredProposalData),
         materialized: createMaterialized,
       };
 
-      if (proposal.sessionId && createdEntity?.id) {
+      if (proposal.sessionId && createdEntity?.id && !mergedOntoExisting) {
         await db
           .insert(links)
           .values({
@@ -596,7 +691,7 @@ export function registerApproveExecutors(): void {
           })
           .onConflictDoNothing();
       }
-      if (createdEntity?.id) {
+      if (createdEntity?.id && !mergedOntoExisting) {
         await deps.stampProjectMembership(proposal, [createdEntity.id], userId);
       }
 
@@ -610,6 +705,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -687,6 +794,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -784,6 +903,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -873,6 +1004,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -993,6 +1136,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1106,6 +1261,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1183,6 +1350,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1262,6 +1441,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1269,6 +1460,117 @@ export function registerApproveExecutors(): void {
         userId
       );
       return { success: true };
+    },
+  });
+
+  // ── automation / execute ─────────────────────────────────────────────────────
+  // A gated manual RUN of an existing automation (`automations.trigger` gates the
+  // `agentUserId` path — running a flow is CODE EXECUTION, so `automation.execute`
+  // is not auto-approved) lands here on approval.
+  //
+  // WHY THIS EXECUTOR EXISTS: without it the `*/*` catch-all flips the proposal
+  // APPROVED and emits `automation.execute.validated`, but the materializer's
+  // subject switch (packages/jobs/src/workers/materializer.ts) has NO `automation`
+  // case — the job falls into `default:` ("Unknown subject type for
+  // materialization") and returns. So approval was a silent no-op: the user
+  // approved a run that never ran. (Contrast `command/execute`, which the
+  // catch-all path DOES materialize via `materializeCommand` — that key
+  // deliberately has no executor here; see the tests.)
+  //
+  // Materializes via the SAME automationsRouter.trigger the direct path uses —
+  // re-run as the APPROVER with NO agentUserId, which takes the operator branch
+  // (assertWorkspaceWrite on the LOADED row, then enqueue; never re-propose).
+  //
+  // targetId NOTE: the gate `data` carries no `id`/`entityId`/`documentId`, so
+  // `proposals.targetId` is a RANDOM uuid for this key — the automation is
+  // identified by `data.automationId` only. Never read targetId here.
+  registerProposalExecutor({
+    key: "automation/execute",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const automationId = innerData.automationId as string | undefined;
+      if (!automationId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Automation run proposal is missing automationId",
+        });
+      }
+
+      // Idempotency: trigger enqueues a NEW run each call, so a double-approve
+      // would run the flow twice. Skip once the row is already APPROVED.
+      // (APPROVAL_FAILED is intentionally NOT skipped — the dispatch site allows
+      // re-approve to retry, and a failed trigger never enqueued a run.)
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { automationsRouter } = await import("../automations.js");
+      const automationCaller = automationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+      } as unknown as Context);
+      // NO agentUserId — neither in the ctx literal above nor in the input below.
+      // `trigger` computes `input.agentUserId ?? ctx.agentUserId ?? undefined`
+      // and only calls checkPermissionOrPropose `if (agentUserId)`, so this
+      // re-entry CANNOT re-trigger the gate (no proposal loop). RBAC is not
+      // skipped: `trigger` still runs assertWorkspaceWrite against the LOADED
+      // automation's workspace + owner for the approver.
+      //
+      // workspaceId is deliberately NOT passed: `trigger` rejects a mismatch
+      // with the automation's own workspace, and the proposal's workspace lens
+      // need not equal it (pod-wide automations carry a null workspace).
+      const result = await automationCaller.trigger({
+        id: automationId,
+        subjectEntityId: innerData.subjectEntityId as string | undefined,
+        payload: innerData.payload as Record<string, unknown> | undefined,
+      });
+
+      // Belt-and-braces on the no-re-gate invariant: if `trigger` ever returned
+      // "proposed" from here it would mean the approval spawned ANOTHER proposal.
+      // Fail loudly (proposal stays un-approved, dispatch site records
+      // APPROVAL_FAILED and re-throws to the user) rather than reporting success.
+      if (result.status !== "triggered") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Approved automation run did not start (status="${result.status}")`,
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: result.runId ?? undefined };
     },
   });
 
@@ -1368,6 +1670,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1437,6 +1751,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1497,6 +1823,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1565,6 +1903,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1623,6 +1973,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1679,6 +2041,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1874,6 +2248,18 @@ export function registerApproveExecutors(): void {
         data: { reason: "entity.merge", winnerId: result.winnerId },
       });
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -1943,6 +2329,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2005,6 +2403,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2059,6 +2469,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2231,6 +2653,18 @@ export function registerApproveExecutors(): void {
         }
       }
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2286,6 +2720,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2369,6 +2815,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2446,6 +2904,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2594,6 +3064,18 @@ export function registerApproveExecutors(): void {
         });
       }
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2705,6 +3187,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2797,6 +3291,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2892,6 +3398,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -2955,6 +3473,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3020,6 +3550,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3119,6 +3661,18 @@ export function registerApproveExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3231,6 +3785,18 @@ export function registerApproveExecutors(): void {
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      deps.reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          string | undefined,
+      });
+
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -3299,6 +3865,14 @@ export function registerApproveExecutors(): void {
           throwOnError: true,
           subjectId,
           userId,
+          // The CHANGE was authored by the proposing agent (the human here is
+          // only the APPROVER, kept in data.approvedBy). Stamp the agent so the
+          // resulting activity attributes to it — "the agent did this, you
+          // approved it" — instead of collapsing under the operator. Absent
+          // (operator-authored proposal) → owner write, is_agent stays null.
+          // This mirrors `batchApprove`'s inline emit, which always carried the
+          // stamp; routing batch through this executor would otherwise DROP it.
+          agentUserId: proposal.agentUserId ?? undefined,
           workspaceId: proposal.workspaceId ?? undefined,
           correlationId: proposalCorrelationId,
           data: {

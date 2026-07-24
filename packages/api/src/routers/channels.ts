@@ -642,6 +642,16 @@ async function listChannelsWithFlags(params: {
   assignedAgentId?: string;
   /** Agent INSTANCE (users.id) — channels where this agent-user is an ai_agent member. */
   agentMemberId?: string;
+  /**
+   * Include channels whose status is `archived` / `merged`. Default FALSE.
+   *
+   * Archiving is what the sidebar's "Delete" action does (it sets
+   * `status: ARCHIVED`), but this query historically applied NO status filter —
+   * so archived channels kept rendering forever and "Delete" appeared to do
+   * nothing. Callers that genuinely want the full set (an archive browser,
+   * restore flows) opt in explicitly.
+   */
+  includeArchived?: boolean;
   limit: number;
   offset?: number;
 }): Promise<
@@ -663,6 +673,13 @@ async function listChannelsWithFlags(params: {
   // Canonical channel visibility — see utils/channel-visibility.ts.
   const accessPredicate = channelVisibilityWhere(params.userId);
   const conditions: any[] = [accessPredicate];
+
+  // Live channels only, unless the caller explicitly asks for the archive.
+  // Without this, `archiveChannel` (status → ARCHIVED) had no visible effect:
+  // the channel stayed in every list forever.
+  if (!params.includeArchived) {
+    conditions.push(eq(channels.status, ChannelStatus.ACTIVE));
+  }
 
   if (params.workspaceId !== undefined) {
     // Include workspace channels + pod-wide channels (personal-style thread + feed)
@@ -3417,6 +3434,8 @@ export const channelsRouter = router({
         assignedAgentId: z.string().uuid().optional(),
         /** Agent INSTANCE (agent-user) id — channels this agent participates in. */
         agentUserId: z.string().uuid().optional(),
+        /** Include archived/merged channels. Default false — see helper doc. */
+        includeArchived: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -3429,6 +3448,7 @@ export const channelsRouter = router({
         contextObjectType: input.contextObjectType,
         assignedAgentId: input.assignedAgentId,
         agentMemberId: input.agentUserId,
+        includeArchived: input.includeArchived,
         limit: input.limit,
       });
 

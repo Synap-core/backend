@@ -4724,6 +4724,15 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
+export interface OAuthConsentContext {
+	clientId: string;
+	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
+	clientName: string;
+	redirectUri: string;
+	/** Where the code will actually be delivered — shown so the human can judge. */
+	redirectHost: string;
+	scopes: string[];
+}
 export interface QueueHealth {
 	failed: number;
 	pastDue: number;
@@ -7891,6 +7900,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextObjectType?: "entity" | "view" | "document" | undefined;
 				assignedAgentId?: string | undefined;
 				agentUserId?: string | undefined;
+				includeArchived?: boolean | undefined;
 			};
 			output: {
 				channels: (Channel & {
@@ -10037,6 +10047,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				code: string;
 				expiresAt: string;
+			};
+			meta: object;
+		}>;
+		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				clientId: string;
+				redirectUri: string;
+				responseType?: string | undefined;
+				scope?: string | undefined;
+				state?: string | undefined;
+				codeChallenge?: string | undefined;
+				codeChallengeMethod?: string | undefined;
+			};
+			output: OAuthConsentContext;
+			meta: object;
+		}>;
+		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				clientId: string;
+				redirectUri: string;
+				approve: boolean;
+				responseType?: string | undefined;
+				scope?: string | undefined;
+				state?: string | undefined;
+				codeChallenge?: string | undefined;
+				codeChallengeMethod?: string | undefined;
+			};
+			output: {
+				redirectTo: string;
 			};
 			meta: object;
 		}>;

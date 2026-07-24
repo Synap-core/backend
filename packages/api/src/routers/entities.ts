@@ -960,228 +960,229 @@ export const entitiesRouter = router({
       // instead of creating a duplicate, and return it with `deduplicated: true`.
       // WEAK / no signal falls through to create (zero-friction by design). The
       // enrich + facet attach ride their own governed doors (update/attachFacet),
-      // so agent writes stay proposal-gated. Skipped for a propose-time id
-      // (`proposedEntityId` must reuse its assigned id). Never blocks: a resolver
-      // hiccup falls through to a normal create.
-      if (!input.proposedEntityId) {
-        const dedupSignals = extractIdentitySignals(input.properties ?? {});
-        if (dedupSignals.length > 0) {
-          try {
-            const resolveDb = await getDb();
-            const identity = await resolveIdentity(resolveDb, {
-              userId: ctx.userId,
-              kindSlug: profileSlug,
-              name: input.title ?? null,
-              signals: dedupSignals,
-              userScope: userVisibleWhere(entities.workspaceId, ctx.userId),
-              limit: 5,
-            });
-            // SECURITY GATE — the strong identity index is deliberately GLOBAL
-            // (frozen policy: one subject per email/phone pod-wide), so the
-            // matched id may belong to an entity the CALLER cannot see
-            // (another user's private workspace). Never dedupe onto something
-            // the caller can't see: an invisible match falls through to a
-            // normal create. Without this gate the response below would leak
-            // the matched row's title/properties to an unauthorized caller
-            // (the enrich/attach doors deny the writes, but the read leaked).
-            const visibleMatch =
-              identity.match === "strong" && identity.entity
-                ? await resolveDb.query.entities.findFirst({
-                    where: and(
-                      eq(entities.id, identity.entity.id),
-                      isNull(entities.deletedAt),
-                      entityWriteVisibleWhere(ctx.userId)
-                    ),
-                  })
-                : undefined;
-            if (
-              identity.match === "strong" &&
-              identity.entity &&
-              !visibleMatch
-            ) {
-              logger.info(
-                {
-                  // Stable observability event (T3a) — the backend metrics
-                  // registry lives in @synap-core/core (no built dist, not a
-                  // tsconfig reference of @synap/api), so a new prom Counter there
-                  // would couple this router to a cross-package rebuild. This
-                  // structured log with a stable `event`+`outcome` is the honest
-                  // minimal surfacing of the resolve-then-merge decision.
-                  event: "identity_resolve_merge",
-                  outcome: "blocked_invisible",
-                  userId: ctx.userId,
-                  profileSlug,
-                },
-                "[entities.create] strong identity match not visible to caller — creating instead of merging"
-              );
+      // so agent writes stay proposal-gated. Never blocks: a resolver hiccup
+      // falls through to a normal create.
+      //
+      // Runs on the `proposedEntityId` (proposal-approval replay) path TOO. It
+      // used to be skipped there — "the approval must reuse its assigned id" —
+      // which meant approving a proposed contact whose email already existed
+      // CREATED A DUPLICATE, the one create door that silently skipped dedup.
+      // The pre-minted id is a *preference*, not an invariant: it is honored
+      // when nothing matches (below, `entityId`), and a strong match wins over
+      // it. No consumer requires the returned id to equal the pre-minted one —
+      // the composite materializer keys its `$opN` ref map on the id create
+      // RETURNS (utils/materialize-composite.ts), and the single-op approve
+      // executor reads `createdEntity.id` for every downstream write. Approving
+      // a proposal that merges is reported with `deduplicated: true` so the
+      // executor records it as LINKED, not created (see approve-executors.ts).
+      const dedupSignals = extractIdentitySignals(input.properties ?? {});
+      if (dedupSignals.length > 0) {
+        try {
+          const resolveDb = await getDb();
+          const identity = await resolveIdentity(resolveDb, {
+            userId: ctx.userId,
+            kindSlug: profileSlug,
+            name: input.title ?? null,
+            signals: dedupSignals,
+            userScope: userVisibleWhere(entities.workspaceId, ctx.userId),
+            limit: 5,
+          });
+          // SECURITY GATE — the strong identity index is deliberately GLOBAL
+          // (frozen policy: one subject per email/phone pod-wide), so the
+          // matched id may belong to an entity the CALLER cannot see
+          // (another user's private workspace). Never dedupe onto something
+          // the caller can't see: an invisible match falls through to a
+          // normal create. Without this gate the response below would leak
+          // the matched row's title/properties to an unauthorized caller
+          // (the enrich/attach doors deny the writes, but the read leaked).
+          const visibleMatch =
+            identity.match === "strong" && identity.entity
+              ? await resolveDb.query.entities.findFirst({
+                  where: and(
+                    eq(entities.id, identity.entity.id),
+                    isNull(entities.deletedAt),
+                    entityWriteVisibleWhere(ctx.userId)
+                  ),
+                })
+              : undefined;
+          if (identity.match === "strong" && identity.entity && !visibleMatch) {
+            logger.info(
+              {
+                // Stable observability event (T3a) — the backend metrics
+                // registry lives in @synap-core/core (no built dist, not a
+                // tsconfig reference of @synap/api), so a new prom Counter there
+                // would couple this router to a cross-package rebuild. This
+                // structured log with a stable `event`+`outcome` is the honest
+                // minimal surfacing of the resolve-then-merge decision.
+                event: "identity_resolve_merge",
+                outcome: "blocked_invisible",
+                userId: ctx.userId,
+                profileSlug,
+              },
+              "[entities.create] strong identity match not visible to caller — creating instead of merging"
+            );
+          }
+          if (identity.match === "strong" && identity.entity && visibleMatch) {
+            const matchedId = identity.entity.id;
+            const enrichCaller = entitiesRouter.createCaller(
+              ctx as unknown as Parameters<
+                typeof entitiesRouter.createCaller
+              >[0]
+            );
+            // update's source enum is narrower than create's — connector
+            // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
+            // Governance only branches on ai/intelligence anyway, so map the
+            // non-AI connector sources to "user" (first-party write).
+            const enrichSource =
+              input.source === "ai" ||
+              input.source === "intelligence" ||
+              input.source === "agent" ||
+              input.source === "system" ||
+              input.source === "extension" ||
+              input.source === "user"
+                ? input.source
+                : "user";
+            const nonEmptyProperties = Object.fromEntries(
+              Object.entries(input.properties ?? {}).filter(
+                ([, v]) => v !== undefined && v !== null && v !== ""
+              )
+            );
+            if (Object.keys(nonEmptyProperties).length > 0) {
+              try {
+                await enrichCaller.update({
+                  id: matchedId,
+                  properties: nonEmptyProperties,
+                  source: enrichSource,
+                  agentUserId: input.agentUserId,
+                  reasoning: input.reasoning,
+                });
+              } catch (enrichErr) {
+                logger.warn(
+                  { enrichErr, entityId: matchedId },
+                  "[entities.create] dedup enrich failed — returning matched entity unenriched"
+                );
+              }
             }
-            if (
-              identity.match === "strong" &&
-              identity.entity &&
-              visibleMatch
-            ) {
-              const matchedId = identity.entity.id;
-              const enrichCaller = entitiesRouter.createCaller(
-                ctx as unknown as Parameters<
-                  typeof entitiesRouter.createCaller
-                >[0]
-              );
-              // update's source enum is narrower than create's — connector
-              // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
-              // Governance only branches on ai/intelligence anyway, so map the
-              // non-AI connector sources to "user" (first-party write).
-              const enrichSource =
-                input.source === "ai" ||
-                input.source === "intelligence" ||
-                input.source === "agent" ||
-                input.source === "system" ||
-                input.source === "extension" ||
-                input.source === "user"
-                  ? input.source
-                  : "user";
-              const nonEmptyProperties = Object.fromEntries(
-                Object.entries(input.properties ?? {}).filter(
-                  ([, v]) => v !== undefined && v !== null && v !== ""
-                )
-              );
-              if (Object.keys(nonEmptyProperties).length > 0) {
+
+            // B3 FIX: a dedup used to SILENTLY DROP a long-form body carried by
+            // this create. Recover it — materialize the body via the canonical
+            // door (EntityBodyService) and link it onto the deduped entity — but
+            // ONLY when the match has no existing body (no documentId, no inline
+            // content). Appending onto an entity that ALREADY has a body needs a
+            // version-onto-existing primitive the body service does not expose;
+            // clobbering would lose the prior body, so that case still reports
+            // the body as dropped rather than overwrite it.
+            let dedupContentDropped = false;
+            if (input.content && input.content.trim().length > 0) {
+              const matchHasBody =
+                !!(visibleMatch as { documentId?: string | null }).documentId ||
+                !!(
+                  (visibleMatch as { properties?: Record<string, unknown> })
+                    .properties as { content?: unknown } | undefined
+                )?.content;
+              if (matchHasBody) {
+                dedupContentDropped = true;
+              } else {
                 try {
-                  await enrichCaller.update({
-                    id: matchedId,
-                    properties: nonEmptyProperties,
-                    source: enrichSource,
-                    agentUserId: input.agentUserId,
-                    reasoning: input.reasoning,
+                  const matchWorkspaceId =
+                    (visibleMatch as { workspaceId?: string | null })
+                      .workspaceId ?? null;
+                  const body = await new EntityBodyService(
+                    resolveDb,
+                    eventRepository
+                  ).setBody({
+                    entityId: matchedId,
+                    userId: ctx.userId,
+                    workspaceId: matchWorkspaceId,
+                    title: input.title || undefined,
+                    provenance: {
+                      createdByKind: "human",
+                      createdByUserId: ctx.userId,
+                    },
+                    text: input.content,
                   });
-                } catch (enrichErr) {
+                  if (body.documentId) {
+                    const bodyDocId = body.documentId;
+                    await enrichCaller.update({
+                      id: matchedId,
+                      documentId: bodyDocId,
+                      source: enrichSource,
+                      agentUserId: input.agentUserId,
+                      reasoning: input.reasoning,
+                    });
+                    emitSideEffects({
+                      subjectType: "document",
+                      action: "create",
+                      subjectId: bodyDocId,
+                      userId: ctx.userId,
+                      workspaceId: matchWorkspaceId ?? undefined,
+                    }).catch((err) =>
+                      logger.warn(
+                        { err, documentId: bodyDocId },
+                        "Document Typesense indexing failed (document still persisted)"
+                      )
+                    );
+                  } else if (body.inlineContent !== undefined) {
+                    await enrichCaller.update({
+                      id: matchedId,
+                      properties: { content: body.inlineContent },
+                      source: enrichSource,
+                      agentUserId: input.agentUserId,
+                      reasoning: input.reasoning,
+                    });
+                  }
+                } catch (bodyErr) {
+                  dedupContentDropped = true;
                   logger.warn(
-                    { enrichErr, entityId: matchedId },
-                    "[entities.create] dedup enrich failed — returning matched entity unenriched"
+                    { bodyErr, entityId: matchedId },
+                    "[entities.create] dedup body recovery failed — body not merged"
                   );
                 }
               }
-
-              // B3 FIX: a dedup used to SILENTLY DROP a long-form body carried by
-              // this create. Recover it — materialize the body via the canonical
-              // door (EntityBodyService) and link it onto the deduped entity — but
-              // ONLY when the match has no existing body (no documentId, no inline
-              // content). Appending onto an entity that ALREADY has a body needs a
-              // version-onto-existing primitive the body service does not expose;
-              // clobbering would lose the prior body, so that case still reports
-              // the body as dropped rather than overwrite it.
-              let dedupContentDropped = false;
-              if (input.content && input.content.trim().length > 0) {
-                const matchHasBody =
-                  !!(visibleMatch as { documentId?: string | null })
-                    .documentId ||
-                  !!(
-                    (visibleMatch as { properties?: Record<string, unknown> })
-                      .properties as { content?: unknown } | undefined
-                  )?.content;
-                if (matchHasBody) {
-                  dedupContentDropped = true;
-                } else {
-                  try {
-                    const matchWorkspaceId =
-                      (visibleMatch as { workspaceId?: string | null })
-                        .workspaceId ?? null;
-                    const body = await new EntityBodyService(
-                      resolveDb,
-                      eventRepository
-                    ).setBody({
-                      entityId: matchedId,
-                      userId: ctx.userId,
-                      workspaceId: matchWorkspaceId,
-                      title: input.title || undefined,
-                      provenance: {
-                        createdByKind: "human",
-                        createdByUserId: ctx.userId,
-                      },
-                      text: input.content,
-                    });
-                    if (body.documentId) {
-                      const bodyDocId = body.documentId;
-                      await enrichCaller.update({
-                        id: matchedId,
-                        documentId: bodyDocId,
-                        source: enrichSource,
-                        agentUserId: input.agentUserId,
-                        reasoning: input.reasoning,
-                      });
-                      emitSideEffects({
-                        subjectType: "document",
-                        action: "create",
-                        subjectId: bodyDocId,
-                        userId: ctx.userId,
-                        workspaceId: matchWorkspaceId ?? undefined,
-                      }).catch((err) =>
-                        logger.warn(
-                          { err, documentId: bodyDocId },
-                          "Document Typesense indexing failed (document still persisted)"
-                        )
-                      );
-                    } else if (body.inlineContent !== undefined) {
-                      await enrichCaller.update({
-                        id: matchedId,
-                        properties: { content: body.inlineContent },
-                        source: enrichSource,
-                        agentUserId: input.agentUserId,
-                        reasoning: input.reasoning,
-                      });
-                    }
-                  } catch (bodyErr) {
-                    dedupContentDropped = true;
-                    logger.warn(
-                      { bodyErr, entityId: matchedId },
-                      "[entities.create] dedup body recovery failed — body not merged"
-                    );
-                  }
-                }
-              }
-              const dedupFacets = await attachRequestedFacets(matchedId);
-              // Refetch SCOPED (same visibility gate as above) so the response
-              // reflects the enrich, and an unauthorized row can never surface.
-              const matched = await resolveDb.query.entities.findFirst({
-                where: and(
-                  eq(entities.id, matchedId),
-                  isNull(entities.deletedAt),
-                  entityWriteVisibleWhere(ctx.userId)
-                ),
-              });
-              logger.info(
-                {
-                  // Stable observability event (T3a) — see the blocked_invisible
-                  // sibling above for why this is a structured log, not a counter.
-                  event: "identity_resolve_merge",
-                  outcome: "merged",
-                  userId: ctx.userId,
-                  entityId: matchedId,
-                  profileSlug,
-                },
-                "[entities.create] deduplicated onto existing entity (strong identity match)"
-              );
-              return {
-                status: "created",
-                message:
-                  "Entity deduplicated onto existing (strong identity match)",
-                id: matchedId,
-                entity: matched ? toApiEntity(matched) : null,
-                // Additive: signals this create merged onto an existing entity.
-                deduplicated: true,
-                // B3: whether a long-form body carried by this create could NOT
-                // be recovered onto the deduped entity (true only when the match
-                // already had a body we won't clobber). Consumed by the composite
-                // materializer's `contentDropped` diagnostic.
-                contentDropped: dedupContentDropped,
-                facets: dedupFacets,
-              };
             }
-          } catch (resolveErr) {
-            logger.warn(
-              { resolveErr },
-              "[entities.create] identity resolve failed — proceeding to create"
+            const dedupFacets = await attachRequestedFacets(matchedId);
+            // Refetch SCOPED (same visibility gate as above) so the response
+            // reflects the enrich, and an unauthorized row can never surface.
+            const matched = await resolveDb.query.entities.findFirst({
+              where: and(
+                eq(entities.id, matchedId),
+                isNull(entities.deletedAt),
+                entityWriteVisibleWhere(ctx.userId)
+              ),
+            });
+            logger.info(
+              {
+                // Stable observability event (T3a) — see the blocked_invisible
+                // sibling above for why this is a structured log, not a counter.
+                event: "identity_resolve_merge",
+                outcome: "merged",
+                userId: ctx.userId,
+                entityId: matchedId,
+                profileSlug,
+              },
+              "[entities.create] deduplicated onto existing entity (strong identity match)"
             );
+            return {
+              status: "created",
+              message:
+                "Entity deduplicated onto existing (strong identity match)",
+              id: matchedId,
+              entity: matched ? toApiEntity(matched) : null,
+              // Additive: signals this create merged onto an existing entity.
+              deduplicated: true,
+              // B3: whether a long-form body carried by this create could NOT
+              // be recovered onto the deduped entity (true only when the match
+              // already had a body we won't clobber). Consumed by the composite
+              // materializer's `contentDropped` diagnostic.
+              contentDropped: dedupContentDropped,
+              facets: dedupFacets,
+            };
           }
+        } catch (resolveErr) {
+          logger.warn(
+            { resolveErr },
+            "[entities.create] identity resolve failed — proceeding to create"
+          );
         }
       }
 

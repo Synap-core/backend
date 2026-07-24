@@ -87,6 +87,17 @@ export const UpdateAutomationRequestSchema = z
 export const TriggerAutomationRequestSchema = z
   .object({
     userId: z.string().optional(),
+    agentUserId: z
+      .string()
+      .optional()
+      .describe(
+        "Explicit agent user ID when an AI agent asks for the run — routes through the governance gate."
+      ),
+    reasoning: z
+      .string()
+      .max(2000)
+      .optional()
+      .describe("AI reasoning surfaced on the proposal card."),
     workspaceId: z.string().nullable().optional(),
     payload: z
       .record(z.string(), z.unknown())

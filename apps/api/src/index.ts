@@ -39,6 +39,7 @@ import {
   hubProtocolRouter,
   integrationsCapabilitiesApp,
   mcpHttpApp,
+  oauthApp,
   fileUploadApp,
   externalSkillsApp,
   externalChatApp,
@@ -47,6 +48,7 @@ import {
   webhooksInboundRouter,
   fetchFederationMetadata,
   normalizeIssuerUrl,
+  sanitizeErrorEgress,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -380,6 +382,19 @@ app.use("*", async (c, next) => {
 app.use("*", requestSizeLimit); // Max 10MB requests
 app.use("*", rateLimitMiddleware); // 500 req/15min per IP
 app.use("*", secureHeaders()); // Hono built-in security headers
+
+// 5xx egress sanitizer — registered as the OUTERMOST response-shaping
+// middleware so it observes every server-fault body, whether the handler threw
+// (converted by app.onError below) or returned `c.json({ error: <driver
+// message> }, 500)` directly. See middleware/error-egress.ts for the full
+// rationale and the deliberate exemptions (dev, tRPC, non-JSON).
+app.use(
+  "*",
+  sanitizeErrorEgress({
+    isDev: config.server.nodeEnv === "development",
+    log: apiLogger,
+  })
+);
 apiLogger.info("Security middleware registered");
 
 // HTTP Cache Headers — allow short browser caching for GET (query) requests,
@@ -1201,6 +1216,22 @@ app.route("/api/channels/gateway", channelGatewayApp);
 // Protocol: JSON-RPC 2.0 over HTTP POST
 app.route("/mcp", mcpHttpApp);
 
+// The pod as its OWN OAuth 2.1 authorization server (Path B — claude.ai talks
+// straight to this pod, no control plane in the trust path).
+//
+// Mounted at the ROOT because RFC 8414 §3 fixes `/.well-known/oauth-
+// authorization-server` at the issuer's origin and every other endpoint is
+// derived from that same issuer (`${PUBLIC_URL}/register|/authorize|/token`),
+// so none of them may sit under an `/api` prefix. Mounting a sub-app at "/"
+// registers only ITS declared paths — unmatched requests fall through to the
+// handlers below, so this does not shadow anything.
+//   GET  /.well-known/oauth-protected-resource[/mcp]    (RFC 9728)
+//   GET  /.well-known/oauth-authorization-server[/mcp]  (RFC 8414)
+//   POST /register   (RFC 7591 DCR — public)
+//   GET  /authorize  (PKCE S256 → pod-admin consent screen)
+//   POST /token      (code → an `api_keys` row; PKCE verifier enforced)
+app.route("/", oauthApp);
+
 // External API — Skills invocation (API key auth, scope: skills.invoke)
 // GET  /api/external/skills         — list active skills
 // POST /api/external/skills/:id/invoke — invoke a skill
@@ -1524,12 +1555,40 @@ app.onError((err, c) => {
   // Cast statusCode to satisfy Hono's type requirements
   const statusCode = synapError.statusCode as
     400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
+
+  // 5xx = server fault. `toSynapError()` puts the ORIGINAL error's message and
+  // stack into `context` ({ originalError, stack }), so spreading `context`
+  // unconditionally shipped the raw driver text — for a Drizzle failure that is
+  // the entire SQL statement plus every bound parameter — to the caller. The
+  // pre-existing `isDev` gate below only covered `errorId`/`stack` and never
+  // `context`, which already carried both.
+  //
+  // 4xx keeps `context`: validation errors legitimately carry field-level
+  // detail and clients render it. Only a server fault is opaque.
+  //
+  // `errorId` is now ALWAYS returned on 5xx (not dev-only) — it is the sole
+  // thread from a user's bug report back to the full stack in the server log,
+  // and it carries no internal detail itself.
+  const isServerFault = statusCode >= 500;
+  if (isServerFault && !isDev) {
+    return c.json(
+      {
+        error: synapError.name,
+        code: synapError.code,
+        message: "An unexpected server error occurred",
+        errorId,
+      },
+      statusCode
+    );
+  }
+
   return c.json(
     {
       error: synapError.name,
       code: synapError.code,
       message: synapError.message,
       ...(synapError.context && { context: synapError.context }),
+      ...(isServerFault && { errorId }),
       ...(isDev && {
         errorId,
         ...(shouldLogStack && { stack: synapError.stack }),

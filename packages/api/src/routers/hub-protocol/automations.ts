@@ -251,6 +251,8 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().max(2000).optional(),
         workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
         payload: z.record(z.string(), z.unknown()).optional(),
@@ -268,6 +270,8 @@ export const hubAutomationsRouter = router({
         id: input.id,
         workspaceId: input.workspaceId ?? null,
         payload: input.payload,
+        agentUserId: input.agentUserId,
+        reasoning: input.reasoning,
       });
     }),
 

@@ -178,6 +178,48 @@ ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "consumed_at" timestamp
 CREATE INDEX IF NOT EXISTS "mcp_connect_codes_expires_at_idx"
   ON "mcp_connect_codes" ("expires_at");
 
+-- oauth_clients / oauth_authorization_codes — the pod as its OWN OAuth 2.1
+-- authorization server (mirrors 0207_pod_oauth_authorization_server.sql). This
+-- is Path B: claude.ai talks straight to `<pod>/mcp` with the control plane out
+-- of the trust path entirely. Clients are PUBLIC (no secret — PKCE S256 protects
+-- the exchange); only sha256(code) is stored, single-use via consumed_at. The
+-- access token is an `api_keys` row minted at /token, not a row here.
+CREATE TABLE IF NOT EXISTS "oauth_clients" (
+  "client_id"     text PRIMARY KEY,
+  "client_name"   text NOT NULL,
+  "redirect_uris" text[] NOT NULL DEFAULT '{}',
+  "scopes"        text[] NOT NULL DEFAULT '{}',
+  "created_at"    timestamp with time zone NOT NULL DEFAULT now()
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_name"   text;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "redirect_uris" text[] DEFAULT '{}';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "scopes"        text[] DEFAULT '{}';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "created_at"    timestamp with time zone DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
+  "code_hash"      text PRIMARY KEY,
+  "client_id"      text NOT NULL,
+  "user_id"        text NOT NULL,
+  "redirect_uri"   text NOT NULL,
+  "scopes"         text[] NOT NULL DEFAULT '{}',
+  "code_challenge" text NOT NULL,
+  "created_at"     timestamp with time zone NOT NULL DEFAULT now(),
+  "expires_at"     timestamp with time zone NOT NULL,
+  "consumed_at"    timestamp with time zone
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "client_id"      text;
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "user_id"        text;
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "redirect_uri"   text;
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "scopes"         text[] DEFAULT '{}';
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge" text;
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "created_at"     timestamp with time zone DEFAULT now();
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at"     timestamp with time zone;
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "consumed_at"    timestamp with time zone;
+CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
+  ON "oauth_authorization_codes" ("expires_at");
+
 -- ─── 3. events ───────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "events" (

@@ -200,7 +200,17 @@ export function registerCellsRoutes(app: HubHono): void {
    * Define a new cell from raw source (Capability B: AI-generated cells).
    * Idempotent upsert on (typeKey, workspaceId).
    * When workspaceId is omitted the cell is pod-global (visible in all workspaces).
-   * Body: { name, rendererSource, workspaceId?, typeKey?, description?, defaultSize? }
+   * Body: { name, rendererSource, workspaceId?, typeKey?, description?, defaultSize?,
+   *         agentUserId?, reasoning? }
+   *
+   * GOVERNED (agent callers only) — the SAME `{cell, define}` gate the MCP door
+   * (`mcp/adapter.ts` synap_create_cell) already applies: two doors, one gate.
+   * Defining a cell writes AI-generated renderer SOURCE (arbitrary JS executed in
+   * the cell-runtime sandbox) into `widget_definitions` with
+   * `trustLevel: "generated"`, so `cell.define` is deliberately NOT in
+   * DEFAULT_AUTO_APPROVE and an agent gets a proposal. On propose the source
+   * rides in the gate `data` so the existing `cell/define` approve-executor
+   * materializes through THIS same `defineCell` door on approval.
    */
   app.post("/cells/define", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -229,6 +239,13 @@ export function registerCellsRoutes(app: HubHono): void {
               ctx.addIssue({ code: z.ZodIssueCode.custom, message });
             }
           }),
+        // Governance identity + provenance. The IS hub client has always SENT
+        // these (`is-hub-client.ts` defineCell) — the schema used to drop them,
+        // so the agent caller was indistinguishable from an operator here.
+        // Not `.uuid()`: a malformed id must not 400 the door, it must simply
+        // fail the agent-user lookup inside the gate.
+        agentUserId: z.string().min(1).optional(),
+        reasoning: z.string().max(2000).optional(),
       })
       .safeParse(rawBody);
 
@@ -246,15 +263,77 @@ export function registerCellsRoutes(app: HubHono): void {
       description,
       defaultSize,
       deps,
+      reasoning,
     } = parsed.data;
     const userId = c.get("userId");
+    // body.agentUserId wins; fall back to the auto-injected context value the
+    // auth middleware sets for an agent API key (same resolution order as the
+    // entities door).
+    const agentUserId =
+      parsed.data.agentUserId ?? (c.get("agentUserId") as string | undefined);
 
-    // Only gate workspace access when a specific workspace is targeted
-    if (workspaceId && !(await verifyWorkspaceAccess(userId, workspaceId))) {
+    // Only gate workspace access when a specific workspace is targeted — and
+    // only on the OPERATOR path. An agent routes through the governance gate
+    // below, which owns RBAC (including turning a non-member agent into a
+    // `workspace.join` proposal); a manual verifyWorkspaceAccess here would
+    // hard-deny what the gate would otherwise let PROPOSE. Same reasoning as the
+    // MCP `synap_create_cell` door.
+    if (
+      !agentUserId &&
+      workspaceId &&
+      !(await verifyWorkspaceAccess(userId, workspaceId))
+    ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
     try {
+      // Governance membrane — AGENT callers only. Operator-initiated defines
+      // (CLI `synap cell push` / `synap artifact`, which post to this same
+      // route with no agentUserId) stay DIRECT writes: hub-protocol calls are
+      // all branded source:"intelligence", so gating them unconditionally would
+      // route an operator's own CLI push to a proposal. Mirrors the identical
+      // `if (input.agentUserId)` carve-out in automationsRouter.create.
+      if (agentUserId) {
+        const { checkPermissionOrPropose } =
+          await import("../../../utils/permission-check.js");
+        const perm = await checkPermissionOrPropose({
+          userId: userId ?? "",
+          agentUserId,
+          workspaceId: workspaceId ?? null,
+          subjectType: "cell",
+          action: "define",
+          source: "api",
+          // Carry the FULL define input so the `cell/define` approve-executor
+          // materializes a real cell on approval, not a labelled shell.
+          data: {
+            name,
+            rendererSource,
+            workspaceId: workspaceId ?? null,
+            description: description ?? null,
+          },
+          reasoning,
+        });
+        if ("denied" in perm && perm.denied) {
+          return c.json({ error: perm.reason }, 403);
+        }
+        if ("proposalId" in perm) {
+          return c.json(
+            {
+              status: "proposed",
+              proposalId: perm.proposalId,
+              summary: perm.summary,
+              reasoning: perm.reasoning,
+              reviewPath: perm.reviewPath,
+              reviewUrl: perm.reviewUrl,
+              ...(perm.deduped ? { deduped: true } : {}),
+              message:
+                "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval.",
+            },
+            202
+          );
+        }
+      }
+
       const { typeKey } = await defineCell({
         name,
         rendererSource,
