@@ -75,6 +75,17 @@ export interface Context {
    */
   isHubProtocol?: boolean;
   /**
+   * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
+   * its workspace binding, threaded from api-key-auth middleware. They let the
+   * hub-protocol tRPC surface apply the SAME service-key workspace confinement
+   * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
+   * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
+   * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
+   * `hub-protocol/guard.ts`.
+   */
+  keyType?: string | null;
+  keyWorkspaceId?: string | null;
+  /**
    * The agent user ID acting on behalf of this request, when the caller is an
    * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
    * governance membrane: when present, mutations route through

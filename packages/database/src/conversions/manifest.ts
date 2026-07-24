@@ -27,7 +27,8 @@ export type ConversionOp =
   | KeepOp
   | ExtractNonEntityOp
   | DedupeProfileRowsOp
-  | ReconcileEntityScopeOp;
+  | ReconcileEntityScopeOp
+  | RemapPropertyValuesOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -215,6 +216,49 @@ export interface ReconcileEntityScopeOp extends BaseOp {
   op: "reconcileEntityScope";
   /** Restrict to one kind's entities; omit to reconcile all pod-scope kinds. */
   slug?: string;
+}
+
+/**
+ * Remap an entity property's VALUES from a legacy key onto a target key via a
+ * value map, then strip the legacy key. A DATA cutover for renaming/folding an
+ * enum property (e.g. CRM `dealStage` → `commercialStage`) WITHOUT a schema
+ * migration — the property_defs move separately; this op only moves the
+ * per-entity stored values.
+ *
+ * Per matching live entity of `slug` (deleted rows skipped):
+ *   (a) read `properties->>sourceKey`, look it up in `valueMap`;
+ *   (b) write the mapped value into `properties.targetKey` — UNLESS `targetKey`
+ *       is already set to one of `preferTargetValues` (a terminal/proposal value
+ *       we must not clobber, e.g. a deal already marked won/lost), in which case
+ *       the existing target value is KEPT;
+ *   (c) strip `sourceKey`.
+ *
+ * Only entities whose source value HAS an entry in `valueMap` are touched — an
+ * unmapped source value is left entirely alone (its source key retained) for
+ * manual follow-up, never nulled.
+ *
+ * Idempotent two ways: (1) apply strips `sourceKey`, so a re-run's `properties ?
+ * sourceKey` guard selects an empty set; (2) the ledgered `opKey` makes a second
+ * real run skip the op outright. NOT destructive-tail (it deactivates no profile
+ * rows), so `opHasDestructiveTail` is false — but it is DEFERRED: it never runs
+ * at deploy, only when an operator invokes `runConversions()` with `--apply`.
+ */
+export interface RemapPropertyValuesOp extends BaseOp {
+  op: "remapPropertyValues";
+  /** Profile slug whose entities are remapped. */
+  slug: string;
+  /** Legacy entity-property key the value is read from and then stripped. */
+  sourceKey: string;
+  /** Entity-property key the mapped value is written into. */
+  targetKey: string;
+  /** Legacy source value → canonical target value. Unmapped source values are skipped. */
+  valueMap: Record<string, string>;
+  /**
+   * Target values that, when already present in `properties.targetKey`, WIN over
+   * the mapped source value (don't clobber a good `targetKey`). Omit/empty = the
+   * mapped value always wins.
+   */
+  preferTargetValues?: string[];
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -868,6 +912,39 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         "user_observation",
       ],
     },
+
+    // ─── CRM: deal-stage unification ───────────────────────────────────────
+    //
+    // DEFERRED data cutover — NOT run at deploy, NOT auto-run. The operator
+    // applies it explicitly with `run-conversions.ts --apply` (pnpm --filter
+    // @synap/database conversions --apply) after the property-def cutover lands.
+    // Dry-run by default (counts only); ledgered under
+    // `crm.deal-stage.commercial-fold` so a second real run skips it.
+    //
+    // Existing deals stored their stage in the legacy `dealStage` property; we
+    // standardize on `commercialStage`. Fold each legacy value onto the
+    // canonical enum, then strip `dealStage`. A `commercialStage` already set to
+    // a terminal/proposal value (proposed/negotiating/won/lost) WINS — the
+    // coarser folded dealStage never clobbers a good commercialStage. Deals with
+    // a dealStage value outside this map are left untouched (source key kept).
+    {
+      op: "remapPropertyValues",
+      opKey: "crm.deal-stage.commercial-fold",
+      slug: "deal",
+      sourceKey: "dealStage",
+      targetKey: "commercialStage",
+      valueMap: {
+        lead: "draft",
+        contacted: "draft",
+        qualifying: "draft",
+        proposal: "proposed",
+        negotiating: "negotiating",
+        won: "won",
+        lost: "lost",
+        inactive: "lost",
+      },
+      preferTargetValues: ["proposed", "negotiating", "won", "lost"],
+    },
   ],
 };
 
@@ -884,6 +961,7 @@ export const CONVERSION_OP_TYPES = [
   "extractNonEntity",
   "dedupeProfileRows",
   "reconcileEntityScope",
+  "remapPropertyValues",
 ] as const;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -906,6 +984,22 @@ export function buildPropertyMappingJson(
     .filter(([src, tgt]) => src.length > 0 && tgt.length > 0)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify(pairs);
+}
+
+/**
+ * Serialise a remapPropertyValues `valueMap` into the JSON OBJECT the engine
+ * casts to jsonb: `mapObj -> (props->>sourceKey)` supplies the mapped value and
+ * `mapObj ? (props->>sourceKey)` gates the UPDATE to mapped-only rows. Empty
+ * keys/values dropped; keys sorted for deterministic output. Pure — unit-tested.
+ */
+export function buildValueMapJson(
+  valueMap: Record<string, string> | undefined
+): string {
+  if (!valueMap) return "{}";
+  const entries = Object.entries(valueMap)
+    .filter(([src, tgt]) => src.length > 0 && tgt.length > 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(Object.fromEntries(entries));
 }
 
 /**
@@ -1028,6 +1122,25 @@ export function validateManifest(manifest: ConversionManifest): void {
         // slug is OPTIONAL (omitted = all pod-scope kinds); when present it
         // must be non-empty.
         if (op.slug !== undefined) requireSlug(op.opKey, op.slug);
+        break;
+      case "remapPropertyValues":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.sourceKey, "sourceKey");
+        requireSlug(op.opKey, op.targetKey, "targetKey");
+        if (op.sourceKey === op.targetKey) {
+          throw new Error(
+            `Conversion manifest: remapPropertyValues '${op.opKey}' sourceKey and targetKey must differ (both '${op.sourceKey}')`
+          );
+        }
+        if (
+          !op.valueMap ||
+          typeof op.valueMap !== "object" ||
+          Object.keys(op.valueMap).length === 0
+        ) {
+          throw new Error(
+            `Conversion manifest: remapPropertyValues '${op.opKey}' needs a non-empty valueMap`
+          );
+        }
         break;
     }
   }

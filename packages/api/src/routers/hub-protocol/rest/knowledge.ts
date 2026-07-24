@@ -24,7 +24,9 @@ import {
   db,
   entities,
   inArray,
+  and,
 } from "@synap/database";
+import { accessScopeWhere } from "../../../utils/project-scope.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -575,7 +577,24 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       ];
       const rows = nodeIds.length
         ? await db.query.entities.findMany({
-            where: inArray(entities.id, nodeIds),
+            // SECURITY — floor the hydration by the caller's visibility. The
+            // traversal is seeded from accessible workspaces, but a graph walk
+            // can cross workspace boundaries via relation edges, so a node id
+            // may belong to an entity the caller can't see. An invisible node
+            // simply degrades to a bare id (no title/type) rather than leaking.
+            where: and(
+              inArray(entities.id, nodeIds),
+              // `entities` is ownerPrivate — floor on the entity READ scope so a
+              // graph walk can't hydrate (leak the NAME of) a NULL-workspace
+              // entity owned by another user. Mirrors entities.list.
+              accessScopeWhere({
+                workspaceIdColumn: entities.workspaceId,
+                entityIdColumn: entities.id,
+                ownerColumn: entities.userId,
+                userId,
+                facetLens: true,
+              })
+            ),
             columns: { id: true, title: true, type: true },
           })
         : [];

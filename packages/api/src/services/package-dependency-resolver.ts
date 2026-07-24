@@ -76,6 +76,11 @@ import {
   applyPackagePostWorkspace,
   type PackagePostWorkspaceBody,
 } from "./package-apply-post-workspace.js";
+import {
+  createCapabilityFromDefinition,
+  loadCapabilityTemplate,
+} from "./capabilities/create-from-definition.js";
+import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "package-dependency-resolver" });
@@ -193,10 +198,7 @@ const WRITE_ROLES = new Set(["owner", "admin", "editor"]);
  * own overlay outcome; this `composed` action captures a DEPENDENCY's.)
  */
 export type PackageDependencyAction =
-  | "found"
-  | "installed"
-  | "composed"
-  | "required-absent";
+  "found" | "installed" | "composed" | "required-absent";
 
 export interface ResolvedPackageDependency {
   slug: string;
@@ -360,6 +362,102 @@ function assertSingleComposeDep(
 }
 
 /**
+ * Ensure a `kind:'capability'` dependency is present on the pod for `userId`.
+ *
+ * A capability dependency is a SIBLING artifact (not a workspace overlay): a
+ * suite/package that `require`s a capability wants that capability provisioned,
+ * not merely flagged absent. We resolve the capability's template from the pod's
+ * CP-synced catalog cache (`loadCapabilityTemplate`, the SAME loader the working
+ * embedded-`integrations[]` path uses in `applyPackagePostWorkspace`) and install
+ * it through the canonical GOVERNED applier `createCapabilityFromDefinition` — no
+ * capability installer is reinvented here.
+ *
+ * Scope: pod-wide by construction. `createCapabilityFromDefinition` self-scopes
+ * (a pod-scoped capability's vault/tools/skills get `workspace_id = null`), and a
+ * bare dependency has no host workspace to attach to, so the caller context is
+ * built with `workspaceId = null`. The applier is idempotent by key, so a
+ * capability two suite members both require installs exactly once (diamond-dedup
+ * via the shared `resolved` map records it once; even without dedup the applier
+ * is a safe add-only no-op on re-apply).
+ *
+ * NON-FATAL: a template missing from cache, or any applier failure, degrades to
+ * `required-absent` for THIS dep with a clear message — it never throws, so one
+ * unsynced/broken capability can't abort the whole suite install. A governed
+ * defer (`proposed`) is normal and still counts as installed.
+ */
+async function ensureCapabilityDependencyPresent(
+  slug: string,
+  userId: string,
+  resolved: Map<string, ResolveResult>,
+  installed: ResolvedPackageDependency[],
+  agentUserId: string | undefined
+): Promise<ResolveResult> {
+  // Namespaced cache key so a capability slug never collides with a workspace
+  // subtype slug in the SHARED `resolved` map (diamond dedup across members).
+  const cacheKey = `capability:${slug}`;
+  const cached = resolved.get(cacheKey);
+  if (cached) return cached;
+
+  const record = (res: ResolveResult): ResolveResult => {
+    resolved.set(cacheKey, res);
+    installed.push({
+      slug,
+      kind: "capability",
+      relation: "require",
+      action: res.action,
+      message: res.message,
+    });
+    return res;
+  };
+
+  // Resolve the capability template from the CP-synced catalog cache. Missing
+  // from cache THROWS in `loadCapabilityTemplate` — catch it and degrade so the
+  // suite install proceeds.
+  let definition;
+  try {
+    definition = await loadCapabilityTemplate(slug);
+  } catch (err) {
+    return record({
+      action: "required-absent",
+      message: `Capability template "${slug}" could not be resolved from the Control Plane catalog cache — install it once the CP is reachable + seeded. ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+
+  // Install through the canonical GOVERNED applier. `workspaceId = null` → the
+  // applier self-scopes; `agentUserId` (when set) routes writes through the
+  // governance membrane (propose instead of auto-apply), same as every other
+  // dependency door. A failure here is non-fatal — surface, never throw.
+  try {
+    const ctx = await createHubProtocolCallerContext(
+      userId,
+      [],
+      null,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    const r = await createCapabilityFromDefinition(
+      definition as Parameters<typeof createCapabilityFromDefinition>[0],
+      {},
+      ctx
+    );
+    return record({
+      action: "installed",
+      message: `Capability "${slug}" installed (key: ${r.capabilityKey}).`,
+    });
+  } catch (err) {
+    return record({
+      action: "required-absent",
+      message: `Capability "${slug}" could not be installed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+}
+
+/**
  * Ensure a `kind:'workspace'` dependency is present on the pod for `userId`.
  * Recurses into the template's OWN dependencies first (topological, deps-first)
  * under a slug-keyed ancestor-path cycle guard, then either COMPOSES it onto its
@@ -443,7 +541,20 @@ async function ensureWorkspaceDependencyPresent(
   path.add(slug);
   try {
     for (const nested of baseDeps) {
-      if ((nested.kind ?? "workspace") !== "workspace") continue;
+      const nestedKind = nested.kind ?? "workspace";
+      // A capability a base template itself requires installs too (recursive):
+      // resolve + install it through the same canonical door, idempotent + non-fatal.
+      if (nestedKind === "capability") {
+        await ensureCapabilityDependencyPresent(
+          nested.slug,
+          userId,
+          resolved,
+          installed,
+          agentUserId
+        );
+        continue;
+      }
+      if (nestedKind !== "workspace") continue;
       const nestedRes = await ensureWorkspaceDependencyPresent(
         { slug: nested.slug, relation: nested.relation ?? "require" },
         userId,
@@ -584,9 +695,25 @@ export async function resolvePackageDependencies(
     const kind: PackageDependencyKind = dep.kind ?? "workspace";
     const relation: PackageDependencyRelation = dep.relation ?? "require";
 
+    if (kind === "capability") {
+      // Capability deps are require-only siblings — resolve + install through
+      // the canonical governed applier (idempotent by key, non-fatal on miss).
+      await ensureCapabilityDependencyPresent(
+        dep.slug,
+        userId,
+        resolved,
+        installed,
+        input.agentUserId
+      );
+      continue;
+    }
+
     if (kind !== "workspace") {
-      // capability/automation deps are require-only; V1 has no built-in install
-      // path for them here — surface as required-but-absent, never fatal.
+      // `automation` deps stay require-only surfaced: unlike a capability there is
+      // no standalone catalog loader for a bare automation, and an automation is a
+      // workspace-scoped WHEN→THEN flow seeded onto a HOST workspace (the package's
+      // post-workspace `automations` layer) — a bare dependency has no host to
+      // attach to. So there is no symmetric install door; surface, never fatal.
       installed.push({
         slug: dep.slug,
         kind,

@@ -16,6 +16,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 import { config } from "@synap-core/core";
 import { db, eq, and, desc, isNull, sqlTemplate as sql } from "@synap/database";
 import {
@@ -511,6 +512,7 @@ export const signalsRouter = router({
         checkHubRateLimit(ctx.apiKeyId, "signals.capture");
 
         const { workspaceId, userId } = input.capture;
+        assertMayActAs(ctx, userId);
 
         const callerContext = await createHubProtocolCallerContext(
           userId,
@@ -801,9 +803,11 @@ export const signalsRouter = router({
           useMemory,
           useSubscriptions,
           useContext,
-          userId,
           workspaceId,
         } = input;
+        // SECURITY — the caller's OWN identity, never a body-supplied userId
+        // (which let any hub key read another user's subscriptions/context).
+        const userId = ctx.userId!;
 
         const signalEntities = await db
           .select()
@@ -1000,6 +1004,7 @@ export const signalsRouter = router({
     .query(
       async ({
         input,
+        ctx,
       }): Promise<{
         success: boolean;
         context: {
@@ -1088,7 +1093,9 @@ export const signalsRouter = router({
         error?: string;
       }> => {
         const startTime = Date.now();
-        const { workspaceId, userId } = input;
+        const { workspaceId } = input;
+        // SECURITY — the caller's OWN identity, never a body-supplied userId.
+        const userId = ctx.userId!;
 
         const subscriptions = input.includeSubscriptions
           ? await db
@@ -1263,6 +1270,12 @@ export const signalsRouter = router({
       }> => {
         checkHubRateLimit(ctx.apiKeyId, "signals.subscriptions");
 
+        // SECURITY — mutate ONLY the caller's own subscriptions. Identity comes
+        // from the authenticated key owner, never a body-supplied userId, and
+        // every update/delete/toggle is floored by an owner predicate so a bare
+        // subscriptionId can't reach across users.
+        const actingUserId = ctx.userId!;
+
         const results = [];
         let successfulCount = 0;
 
@@ -1272,7 +1285,7 @@ export const signalsRouter = router({
               const id = randomUUID();
               await db.insert(signalSubscriptions).values({
                 id,
-                userId: input.userId,
+                userId: actingUserId,
                 workspaceId: input.workspaceId,
                 topic: op.subscription!.topic,
                 sourcePlatform: op.subscription!.sourcePlatform,
@@ -1322,13 +1335,21 @@ export const signalsRouter = router({
                 await db
                   .update(signalSubscriptions)
                   .set(updates)
-                  .where(eq(signalSubscriptions.id, op.subscriptionId!));
+                  .where(
+                    and(
+                      eq(signalSubscriptions.id, op.subscriptionId!),
+                      eq(signalSubscriptions.userId, actingUserId)
+                    )
+                  );
 
                 successfulCount++;
               }
 
               const updated = await db.query.signalSubscriptions.findFirst({
-                where: eq(signalSubscriptions.id, op.subscriptionId!),
+                where: and(
+                  eq(signalSubscriptions.id, op.subscriptionId!),
+                  eq(signalSubscriptions.userId, actingUserId)
+                ),
               });
 
               if (updated) {
@@ -1352,7 +1373,12 @@ export const signalsRouter = router({
             } else if (op.operation === "delete") {
               await db
                 .delete(signalSubscriptions)
-                .where(eq(signalSubscriptions.id, op.subscriptionId!));
+                .where(
+                  and(
+                    eq(signalSubscriptions.id, op.subscriptionId!),
+                    eq(signalSubscriptions.userId, actingUserId)
+                  )
+                );
 
               successfulCount++;
               results.push({
@@ -1364,12 +1390,20 @@ export const signalsRouter = router({
               await db
                 .update(signalSubscriptions)
                 .set({ isActive: op.isActive })
-                .where(eq(signalSubscriptions.id, op.subscriptionId!));
+                .where(
+                  and(
+                    eq(signalSubscriptions.id, op.subscriptionId!),
+                    eq(signalSubscriptions.userId, actingUserId)
+                  )
+                );
 
               successfulCount++;
 
               const toggled = await db.query.signalSubscriptions.findFirst({
-                where: eq(signalSubscriptions.id, op.subscriptionId!),
+                where: and(
+                  eq(signalSubscriptions.id, op.subscriptionId!),
+                  eq(signalSubscriptions.userId, actingUserId)
+                ),
               });
 
               if (toggled) {
@@ -1463,6 +1497,13 @@ export const signalsRouter = router({
         };
         error?: string;
       }> => {
+        // Authorize the acting identity ONCE, up front: `input.userId` is
+        // forwarded into the fetch/classify/capture sub-callers, so a body-
+        // supplied foreign userId must be rejected before any op runs (capture
+        // re-guards, but fetch/classify would silently act) — the same W0.5
+        // impersonation floor the individual mutations carry.
+        assertMayActAs(ctx, input.userId);
+
         const startTime = Date.now();
         const maxConcurrency = input.options?.maxConcurrency ?? 3;
         const stopOnError = input.options?.stopOnError ?? false;

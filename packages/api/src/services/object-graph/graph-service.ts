@@ -56,6 +56,7 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { EntityConnection } from "./entity-connections.js";
 
@@ -264,7 +265,22 @@ export async function hydrateNodes(
                     eq((t as typeof agents).ownerType, "system"),
                     eq((t as typeof agents).userId, userId)
                   )
-                : workspaceLensWhere(t.workspaceId, userId, workspaceId)
+                : kind === "entity"
+                  ? // `entities` is ownerPrivate — a bare `workspaceLensWhere`
+                    // floors on `userVisibleWhere`, which admits pod-wide NULL
+                    // rows to ALL users and leaks another tenant's entity NAME.
+                    // Floor on the canonical entity READ scope (owner-gated NULL +
+                    // membership + exposure + role-lens) and thread the workspace
+                    // lens through it. Mirrors resolveByName below + entities.list.
+                    accessScopeWhere({
+                      workspaceIdColumn: entities.workspaceId,
+                      entityIdColumn: entities.id,
+                      ownerColumn: entities.userId,
+                      userId,
+                      workspaceLens: workspaceId,
+                      facetLens: true,
+                    })
+                  : workspaceLensWhere(t.workspaceId, userId, workspaceId)
           )
         );
 
@@ -739,6 +755,8 @@ export async function getObjectGraph(
  *
  * `subtype` narrows further (entity profileSlug, view type, tool/skill kind).
  * Case-insensitive exact match on the name column. Stub kinds (no table) → [].
+ * The `entity` kind is ownerPrivate, so it floors on the entity READ scope
+ * (`accessScopeWhere`) — config kinds stay on the pod-wide `userVisibleWhere`.
  */
 export async function resolveByName(
   userId: string,
@@ -753,7 +771,21 @@ export async function resolveByName(
   const db = await getDb();
 
   const conds = [
-    userVisibleWhere(t.workspaceId, userId),
+    // `entities` is ownerPrivate — a bare `userVisibleWhere` here admits pod-wide
+    // NULL-workspace rows to ALL users, leaking another tenant's entity NAME by a
+    // name guess. Floor the entity kind on the canonical entity READ scope
+    // (owner-gated NULL + membership + exposure + role-lens), like entities.list.
+    // Config kinds (tools/playbooks/relationDefs…) stay podGlobalConfig, so their
+    // NULL rows correctly remain pod-wide visible via `userVisibleWhere`.
+    kind === "entity"
+      ? accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        })
+      : userVisibleWhere(t.workspaceId, userId),
     ilike(t[spec.name], name),
   ];
   if (subtype && spec.subtype) conds.push(eq(t[spec.subtype], subtype));

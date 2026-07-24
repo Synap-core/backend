@@ -16,6 +16,21 @@ import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import type { AccessContext } from "./context.js";
 
 /**
+ * What a `workspace_id IS NULL` row MEANS for a table — the one axis the rule
+ * `kind` alone leaves implicit. DECLARED per-registration (not consumed by
+ * `visibilityPredicate` — the kind already encodes the behaviour) so each
+ * table's NULL semantics is a stated property a reader/auditor can see at the
+ * registration site instead of inferring from which helper the rule reaches for:
+ *   - `podGlobalConfig` — NULL = pod-wide config every workspace needs (builtin
+ *      widgets, base relation-defs, automations, playbooks, tools…). Visible to
+ *      all is CORRECT; owner-gating it would hide shared substrate.
+ *   - `ownerPrivate` — NULL = personal/unfiled data (entities, documents,
+ *      relations, facets, channels…). Visible to all is a LEAK; the rule floors
+ *      such rows to their owner.
+ */
+export type NullWorkspaceMeans = "podGlobalConfig" | "ownerPrivate";
+
+/**
  * How a table's rows map to who may see them. Add a variant when a real table
  * needs a shape these don't cover — not before (a rule with no registered
  * consumer is dead abstraction).
@@ -39,6 +54,8 @@ export type VisibilityRule =
        * view globals are always visible regardless.
        */
       includeGlobalsInLens?: boolean;
+      /** Declared NULL-workspace semantics — see {@link NullWorkspaceMeans}. */
+      nullWorkspaceMeans?: NullWorkspaceMeans;
     }
   /**
    * PRIVATE workspace data: the workspace lens AND the row is owned by the user.
@@ -54,6 +71,8 @@ export type VisibilityRule =
       workspaceColumn: AnyPgColumn;
       userColumn: AnyPgColumn;
       includeGlobalsInLens?: boolean;
+      /** Declared NULL-workspace semantics — see {@link NullWorkspaceMeans}. */
+      nullWorkspaceMeans?: NullWorkspaceMeans;
     }
   /** Visible only to the owning user. */
   | { kind: "user"; userColumn: AnyPgColumn }
@@ -72,6 +91,8 @@ export type VisibilityRule =
   | {
       kind: "custom";
       predicate: (access: AccessContext) => SQL | undefined;
+      /** Declared NULL-workspace semantics — see {@link NullWorkspaceMeans}. */
+      nullWorkspaceMeans?: NullWorkspaceMeans;
     };
 
 /**

@@ -87,6 +87,7 @@ import {
   resolveRunChannel,
 } from "../utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
+import { entityQueryVisibilityWhere } from "./entity-query-scope.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -1680,23 +1681,21 @@ async function executeQueryStep(
 
   if (!profileSlug) throw new Error("query node: profileSlug is required");
 
-  // scope "pod" = the EXPLICIT opt-in to enumerate POD-WIDE entities
-  // (`workspaceId IS NULL`), owner-gated — mirrors the entity.query verb's
-  // `null` lens (accessScopeWhere's pod-personal branch). This is what lets a
-  // workspace-lensed automation fan out over pod-wide clients/companies.
-  // Default (unset / "workspace") is byte-for-byte the prior workspace-only read.
-  const podScope = data.scope === "pod";
-  const conditions = [eq(entities.type, profileSlug)];
-  if (podScope) {
-    // Owner-gate the pod-wide rows so this never returns another user's private
-    // pod-wide entities. Fail closed when the owner is unknown.
-    if (!ownerId) {
-      throw new Error("query node: scope 'pod' requires an owner");
-    }
-    conditions.push(isNull(entities.workspaceId), eq(entities.userId, ownerId));
-  } else {
-    conditions.push(eq(entities.workspaceId, workspaceId));
-  }
+  // Visibility lens = this workspace's rows ∪ pod-wide rows (owner-floored).
+  // Pod-scoped kinds (company/person/bookmark…) live at `workspace_id IS NULL`,
+  // so a plain `workspace_id = X` read missed them ALL — the bug that made every
+  // per-client daily loop fan out over ZERO rows. `entityQueryVisibilityWhere`
+  // is the @synap/jobs-local mirror of the canonical `accessScopeWhere` door
+  // (packages/api/src/utils/project-scope.ts); see that file for the SSOT.
+  // scope "pod" narrows to ONLY pod-wide rows.
+  const conditions = [
+    eq(entities.type, profileSlug),
+    entityQueryVisibilityWhere({
+      workspaceId,
+      ownerId,
+      podOnly: data.scope === "pod",
+    }),
+  ];
 
   // Apply optional filter: { propertyKey: value } pairs as JSONB equality conditions
   const resolvedFilter = resolveTemplate(data.filter ?? "", context);

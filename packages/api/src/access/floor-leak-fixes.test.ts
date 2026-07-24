@@ -156,6 +156,38 @@ describe("H2 — structured knowledge floor no longer leaks pod-wide entities", 
   });
 });
 
+// ── W2 — raw bare-userVisibleWhere entity readers routed to the READ floor ───
+// Three service readers returned entity title/type floored on bare
+// `userVisibleWhere(entities.workspaceId, …)` — whose NULL clause admits pod-wide
+// (owner-PRIVATE) entities to EVERY user. Now each floors on `entitiesReadFloor`
+// (accessScopeWhere +facetLens), identical to entities.list:
+//   services/runs/index.ts       (RunProducedEntity title fetch)
+//   services/object-graph/graph-service.ts resolveByName (entity kind)
+//   services/entity-resolution.ts resolveEntityByName weak candidate userScope
+describe("W2 — bare-userVisibleWhere entity readers now owner-gate NULL rows", () => {
+  it("the OLD bare floor admitted NULL-workspace entities to EVERYONE (regression it closes)", () => {
+    const leak = userVisibleWhere(entities.workspaceId, B);
+    const q = compile(leak);
+    // Leading `("entities"."workspace_id" is null or …` — NOT owner-gated: for
+    // `entities` a NULL workspace is owner-private, so this leaked every user's
+    // pod-wide rows to any caller.
+    expect(q.sql).toContain('"entities"."workspace_id" is null or');
+    expect(q.sql).not.toContain("entities.user_id");
+  });
+
+  it("the FIXED reader floor owner-gates NULL + requires membership + is caller-bound", () => {
+    const q = compile(entitiesReadFloor(B));
+    expect(q.sql).toContain(
+      '("entities"."workspace_id" is null and "entities"."user_id" = $1)'
+    );
+    expect(q.sql).toContain("workspace_members");
+    // role-as-lens honored on these READ paths (facet⋈membership).
+    expect(q.sql).toContain("entity_facets");
+    expect(q.params).toContain(B);
+    expect(q.params).not.toContain(A);
+  });
+});
+
 // ── resolve.ts — GET /resolve/:id probes ─────────────────────────────────────
 describe("resolve.ts — each by-id probe now ANDs the caller's visibility floor", () => {
   it("entities probe: id lookup survives + floor binds the caller (facet-aware read)", () => {

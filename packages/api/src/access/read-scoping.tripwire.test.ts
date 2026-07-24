@@ -43,7 +43,20 @@ const WORKSPACE_GATED_BUILDERS = [
 ];
 
 // Builders that do NOT gate workspace access — the body must self-scope.
-const SELF_SCOPE_BUILDERS = ["protectedProcedure", "podProcedure"];
+// `scopedProcedure` is the builder for ALL 23 hub-protocol tRPC files
+// (middleware/api-key-auth.ts:220 — `apiKeyProcedure.use(createScopedProcedure(...))`).
+// It checks auth + required scopes only, NO workspace-membership check, so it is
+// functionally identical to protectedProcedure/podProcedure — but its literal
+// name never matched the extraction regex, leaving the whole Hub Protocol tRPC
+// surface invisible to every check below. Recognizing it here (it appears as
+// `name: scopedProcedure([...])`, still `name: builder`) brings those 23 files
+// under the workspaceId-filter, by-id-read, listAll, and attacker-keyed checks
+// with no new scanning logic.
+const SELF_SCOPE_BUILDERS = [
+  "protectedProcedure",
+  "podProcedure",
+  "scopedProcedure",
+];
 
 const ALL_BUILDERS = [
   ...WORKSPACE_GATED_BUILDERS,
@@ -68,6 +81,7 @@ const SCOPING_HELPERS = [
   "getWorkspaceRole",
   "requireAdminRole",
   "getUserWorkspaceIds",
+  "getUserMemberWorkspaceIds",
   "getUserAccessibleWorkspaceIds",
   "getWorkspaceMembership",
   "assertWorkspaceMember",
@@ -85,6 +99,14 @@ const SCOPING_HELPERS = [
   // collapsed one-door procedures aren't false-flagged.
   "resolveScope",
   "ScopeFilterShape",
+  // Domain floor helpers that wrap a canonical predicate — recognized so the
+  // reads that route through them aren't false-flagged (each is a sound owner/
+  // visibility floor, verified at its definition):
+  //   graphEntityFloor  (graph.ts) → delegates to accessScopeWhere on entities;
+  //   visibleSkillsWhere (services/skills/visibility.ts) → user+workspace skill
+  //     visibility SQL, the floor skills.list/get already apply.
+  "graphEntityFloor",
+  "visibleSkillsWhere",
 ];
 
 // Per-user scoping: the row's userId pinned to the caller — `eq(t.userId,
@@ -128,6 +150,110 @@ const BY_ID_SCOPED_TABLES: string[] = Array.from(
   new Set([...USER_DATA_TABLES, ...REGISTERED_SCOPED_TABLES])
 );
 
+// An unfloored by-id read of a scoped table, in EITHER of two shapes:
+//   - `db.query.<t>.findFirst({ where: eq(<t>.id, …) })` — a point lookup, or
+//   - `db.query.<t>.findMany({ where: … inArray(<t>.id, …) })` — id-list
+//     hydration (the getThreadContext-style linked-entity/document fetch).
+// Both leak a scoped row when the id/id-list comes from the caller with no floor.
+// A read that filters by the table's OWN `userId` column is already owner-floored
+// and cleared here; every other clear (helper / owner-compare / membership) is
+// applied by the caller. Returns the matched table name, or undefined.
+function matchedScopedByIdRead(body: string): string | undefined {
+  for (const t of BY_ID_SCOPED_TABLES) {
+    const byIdFindFirst =
+      new RegExp(`db\\.query\\.${t}\\.findFirst\\(`).test(body) &&
+      new RegExp(`\\b${t}\\.id\\b`).test(body);
+    const byIdInArray =
+      new RegExp(`db\\.query\\.${t}\\.findMany\\(`).test(body) &&
+      new RegExp(`inArray\\(\\s*${t}\\.id\\b`).test(body);
+    if (!byIdFindFirst && !byIdInArray) continue;
+    // Floored by its own owner column — safe by construction.
+    if (new RegExp(`\\b${t}\\.userId\\b`).test(body)) continue;
+    return t;
+  }
+  return undefined;
+}
+
+// ── Hono handler surface (hub-protocol/rest/*.ts + any other Hono router) ──
+// The Hono REST family registers handlers via `app.get/post/patch/delete(…)`
+// and `app.openapi(createRoute({…}), handler)` — NO `name: builder` marker, so
+// extractProcedures() returns zero for these ~90 files, leaving the entire REST
+// half of the Hub Protocol invisible. This parallel extractor keys on route
+// registrations instead, mirroring extractProcedures' "slice to the next mark"
+// heuristic (same decoy-string tradeoff the tRPC scanner already accepts).
+interface HonoHandler {
+  file: string;
+  id: string; // "<method> <path>" — stable + human-readable for the allowlist
+  method: string; // get | post | patch | delete | put
+  body: string;
+}
+
+function extractHonoHandlers(file: string, src: string): HonoHandler[] {
+  // Pre-pass: resolve `app.openapi(<routeConst>, handler)` methods. The consts
+  // are `const <name> = createRoute({ method: "…", path: "…" })` in the same
+  // file; method/path sit at the TOP of the literal (before the nested
+  // `responses: {…}` braces), so a fixed-width window read is robust against the
+  // nesting a balanced-brace parse would need.
+  const routeConst = new Map<string, { method: string; path: string }>();
+  const constRe = /(?:const|let)\s+(\w+)\s*=\s*createRoute\(\{/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = constRe.exec(src))) {
+    const win = src.slice(cm.index, cm.index + 400);
+    const method = win.match(/method:\s*["'](\w+)["']/)?.[1];
+    const path = win.match(/path:\s*["'`]([^"'`]+)["'`]/)?.[1];
+    if (method) routeConst.set(cm[1]!, { method, path: path ?? "" });
+  }
+
+  const markRe = /app\.(get|post|patch|delete|put|openapi)\(/g;
+  const marks: { index: number; verb: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = markRe.exec(src))) marks.push({ index: m.index, verb: m[1]! });
+
+  return marks.map((mark, i) => {
+    const body = src.slice(mark.index, marks[i + 1]?.index ?? src.length);
+    let method = mark.verb;
+    let path = "";
+    if (mark.verb === "openapi") {
+      const constMatch = body.match(/^app\.openapi\(\s*([A-Za-z_]\w*)\s*,/);
+      if (constMatch) {
+        // Route-const form — resolve method/path from the pre-pass map. Unknown
+        // (imported/unresolved) defaults to "get" so it is SCANNED as a read
+        // rather than silently skipped (over-inclusion → allowlist, not a gap).
+        const resolved = routeConst.get(constMatch[1]!);
+        method = resolved?.method ?? "get";
+        path = resolved?.path || `openapi:${constMatch[1]!}`;
+      } else {
+        // Inline `createRoute({ method, path })` — first occurrences in the slice
+        // are the route literal's (it precedes the handler body textually).
+        method = body.match(/method:\s*["'](\w+)["']/)?.[1] ?? "get";
+        path = body.match(/path:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? "";
+      }
+    } else {
+      path = body.match(/^app\.\w+\(\s*["'`]([^"'`]+)["'`]/)?.[1] ?? "";
+    }
+    return { file, id: `${method} ${path}`.trim(), method, body };
+  });
+}
+
+// Hono-specific scoping clears, on top of SCOPING_HELPERS. Several floored Hono
+// routes hand-roll the membership check inline (workspaces.ts governance/home/
+// eve-routing) or reach for helpers the tRPC surface doesn't use.
+const HONO_CLEARS = [
+  ...SCOPING_HELPERS,
+  "verifyWorkspaceReadAccess",
+  "getConfinedWorkspace",
+  // A getCaller(c) delegate hands off to a now-scanned scopedProcedure (this is
+  // only safe BECAUSE the scopedProcedure recognition above ships in the same
+  // change — otherwise it would false-clear a delegate to an unscanned builder).
+  "getCaller(c",
+];
+
+// An inline membership floor: `workspaceMembers.findFirst` co-occurring with an
+// `eq(<x>.userId, <caller-id>)` — the hand-rolled form several Hono routes use
+// instead of a named helper.
+const INLINE_MEMBERSHIP =
+  /workspaceMembers\.findFirst[\s\S]*?\.userId,\s*(userId|ctx\.userId|authUserId)\b|\.userId,\s*(userId|ctx\.userId|authUserId)\b[\s\S]*?workspaceMembers\.findFirst/;
+
 // Procedures the static scan can't see are safe (the scoping lives in a
 // repository/helper call, not an inline WHERE). Justify each; may only shrink.
 const ALLOWLIST = new Set<string>([
@@ -154,6 +280,13 @@ const ALLOWLIST = new Set<string>([
   // own rows rather than crossing a boundary. The scan misses the floor only
   // because the userId is bound to a local before the eq(), not written inline.
   "agent-configs.ts::get",
+  // W1: surfaced by bringing scopedProcedure hub files under this check. Reads
+  // widgetDefinitions where `isNull(workspaceId) OR eq(workspaceId,
+  // input.workspaceId)` with NO membership check on input.workspaceId — any hub
+  // caller can pass another workspace's id and read its widget-def schema (UI
+  // schema, not user data — low severity, but a genuine cross-workspace read).
+  // Tracked debt for the floor-consolidation wave; floor via a membership check.
+  "hub-protocol/widget-definitions.ts::listWidgetDefs",
 ]);
 
 function collectRouterFiles(dir: string): string[] {
@@ -288,17 +421,9 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
         if (!SELF_SCOPE_BUILDERS.includes(proc.builder)) continue;
         if (!/\.query\(/.test(proc.body)) continue;
 
-        // A by-id point lookup on a scoped table that does NOT filter by that
-        // table's own userId column (the read itself is unfloored).
-        let table: string | undefined;
-        for (const t of BY_ID_SCOPED_TABLES) {
-          if (!new RegExp(`db\\.query\\.${t}\\.findFirst\\(`).test(proc.body))
-            continue;
-          if (!new RegExp(`\\b${t}\\.id\\b`).test(proc.body)) continue;
-          if (new RegExp(`\\b${t}\\.userId\\b`).test(proc.body)) continue;
-          table = t;
-          break;
-        }
+        // A by-id point lookup OR an inArray id-list hydration on a scoped table
+        // that does NOT filter by that table's own userId column (unfloored).
+        const table = matchedScopedByIdRead(proc.body);
         if (!table) continue;
 
         // Cleared if ownership is enforced by ANY recognized signal (same
@@ -387,4 +512,237 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
         )}`
     ).toEqual([]);
   });
+
+  // ── HONO REST SURFACE: by-id / inArray reads of a scoped table ──
+  // The by-id read leak class (getThreadContext-style) also lives in the Hono
+  // handlers, which extractProcedures can't see. This mirrors the tRPC by-id
+  // check above — same BY_ID_SCOPED_TABLES, same clears — but over GET handler
+  // bodies (reads only, the analogue of the tRPC scan's `.query`-only filter).
+  // db.select().from(<t>).where(eq(<t>.id,…)) is NOT covered (the tRPC check
+  // doesn't cover it either) — acknowledged non-coverage, not a silent gap.
+  const HONO_BYID_ALLOWLIST = new Set<string>([
+    // KNOWN LEAK (discovery §2c/2d). GET /messaging/conversations entity-mode
+    // reads channels by contextObjectId with no visibility floor; linked-unread
+    // reads ALL entity-linked channels pod-wide. Bounded metadata leak
+    // (participantName/provider/preview). Fix: channelVisibilityWhere(userId) on
+    // the channels.findMany, same as sibling GET /messaging/channels already does.
+    "messaging.ts::get /messaging/conversations",
+    "messaging.ts::get /messaging/linked-unread",
+    // KNOWN, BOUNDED. GET /setup/agent/pending/:keyId reads an apiKeys row by
+    // the path :keyId with no owner floor and returns ONLY its status
+    // (active/pending/rejected). Reachable during the `synap connect` handshake
+    // before the key is active (so the usual owner floor can't apply yet); any
+    // authenticated caller can poll another key's status by guessing its UUID.
+    // Status-enum only, no secret/scope material. Tracked debt; floor by binding
+    // the poll to the authenticated key's own id once the handshake allows it.
+    "hub-protocol/rest/setup.ts::get /setup/agent/pending/:keyId",
+  ]);
+
+  it("every Hono GET handler by-id/inArray read of a registered scoped table applies a scope floor", () => {
+    const violations: string[] = [];
+    for (const file of FILES) {
+      const src = readFileSync(file, "utf8");
+      for (const h of extractHonoHandlers(file, src)) {
+        if (h.method !== "get") continue; // reads only, mirrors the tRPC .query filter
+        const table = matchedScopedByIdRead(h.body);
+        if (!table) continue;
+
+        const hasHelper = HONO_CLEARS.some((c) => h.body.includes(c));
+        const hasUserScope = USER_SCOPE_PATTERN.test(h.body);
+        const hasOwnerCompare = OWNER_COMPARE_PATTERN.test(h.body);
+        const hasMembership = INLINE_MEMBERSHIP.test(h.body);
+        if (hasHelper || hasUserScope || hasOwnerCompare || hasMembership)
+          continue;
+
+        const id = `${file.split("/routers/")[1]}::${h.id}`;
+        if (!HONO_BYID_ALLOWLIST.has(id)) violations.push(`${id} [${table}]`);
+      }
+    }
+    expect(
+      violations,
+      `Unfloored by-id/inArray read(s) of a registered scoped table in a Hono GET ` +
+        `handler — floor with channelVisibilityWhere / verifyWorkspaceReadAccess / ` +
+        `a membership check, mirroring GET /messaging/channels:\n  ${violations.join(
+          "\n  "
+        )}`
+    ).toEqual([]);
+  });
+
+  // ── CALLER-SUPPLIED IDENTITY AS THE ACTING IDENTITY (the W0 critical shape) ──
+  // A procedure/handler that builds a caller/access context AS a caller-supplied
+  // identity — `createHubProtocolCallerContext(input.userId, …)` /
+  // `.createCaller(input.userId)` / a `c.req.param/query(...)` value — rather than
+  // as the authenticated caller (ctx.userId / c.get("userId")). This is exactly
+  // getUserContext's cross-user leak: any hub-protocol.read key could pass any
+  // userId and be impersonated. Neither the workspaceId-filter nor the by-id-read
+  // check catches it (no input.workspaceId WHERE; the identity is re-derived, not
+  // read by id). CLEARED when an identity guard (`=== / !== ctx.userId` /
+  // `authUserId`, or a membership lookup) appears in the body — the same
+  // any-signal-in-body heuristic the other checks use. The W0-fixed getUserContext
+  // (`if (input.userId !== ctx.userId) throw`) is cleared by that guard and is NOT
+  // allowlisted — a positive test that this check doesn't false-flag a guarded
+  // call; getThreadContext passes it too (its first arg is the derived local
+  // `threadUserId`, not `input.threadId`). This allowlist may only SHRINK.
+  const IMPERSONATION =
+    /createHubProtocolCallerContext\(\s*(?:input\??\.[A-Za-z0-9_]+|c\.req\.(?:param|query)\([^)]*\))|\.createCaller\(\s*(?:input\??\.[A-Za-z0-9_]+|c\.req\.(?:param|query)\([^)]*\))/;
+  const IDENTITY_GUARD =
+    /(?:===|!==)\s*(?:ctx\.userId|authUserId)\b|\b(?:ctx\.userId|authUserId)\s*(?:===|!==)|assertMayActAs\(|getWorkspaceMembership\b|assertWorkspaceMember\b|workspaceMembers\.findFirst/;
+
+  // EMPTIED by W0.5 (hub-protocol delegation impersonation fix). Every
+  // hub-protocol tRPC procedure that builds a caller context from a
+  // caller-supplied identity now calls `assertMayActAs(ctx, <identity>)`
+  // (hub-protocol/guard.ts) — strict `identity === ctx.userId`, NO service
+  // exception (a `service` key is self-mintable on this pod via /setup/service
+  // Path 4, so keyType grants no impersonation right). IDENTITY_GUARD recognizes
+  // that call, so all former entries clear without an allowlist. Shrink-only: a
+  // NEW unguarded impersonation fails CI. Add an entry ONLY if a site genuinely
+  // cannot use the helper, with a justification — aim for zero.
+  const IMPERSONATION_ALLOWLIST = new Set<string>([]);
+
+  it("no unguarded caller-supplied identity is used as the acting identity", () => {
+    const violations: string[] = [];
+    const units: { id: string; body: string }[] = [];
+    for (const file of FILES) {
+      const src = readFileSync(file, "utf8");
+      const rel = file.split("/routers/")[1];
+      for (const proc of extractProcedures(file, src)) {
+        units.push({ id: `${rel}::${proc.name}`, body: proc.body });
+      }
+      for (const h of extractHonoHandlers(file, src)) {
+        units.push({ id: `${rel}::${h.id}`, body: h.body });
+      }
+    }
+    for (const u of units) {
+      if (!IMPERSONATION.test(u.body)) continue;
+      if (IDENTITY_GUARD.test(u.body)) continue;
+      if (!IMPERSONATION_ALLOWLIST.has(u.id)) violations.push(u.id);
+    }
+    expect(
+      violations,
+      `Caller-supplied identity used as the acting identity with no guard — ` +
+        `require input.userId === ctx.userId, or gate impersonation on an ` +
+        `explicit operator/service credential:\n  ${violations.join("\n  ")}`
+    ).toEqual([]);
+  });
+
+  it("check (d) positive control: the W0-guarded getUserContext/getThreadContext pass without allowlisting", () => {
+    const contextFile = FILES.find((f) =>
+      f.endsWith("hub-protocol/context.ts")
+    );
+    expect(contextFile, "context.ts must be scanned").toBeTruthy();
+    const procs = extractProcedures(
+      contextFile!,
+      readFileSync(contextFile!, "utf8")
+    );
+    const getUserContext = procs.find((p) => p.name === "getUserContext");
+    const getThreadContext = procs.find((p) => p.name === "getThreadContext");
+    // scopedProcedure recognition (check a) must make these visible at all.
+    expect(getUserContext, "getUserContext extracted").toBeTruthy();
+    expect(getThreadContext, "getThreadContext extracted").toBeTruthy();
+
+    // getUserContext DOES pass a caller-supplied `input.userId` as the acting
+    // identity — the impersonation pattern MUST match it (the check sees the
+    // shape) — and its `input.userId !== ctx.userId` throw MUST clear it. If a
+    // future edit drops that guard, IMPERSONATION stays true / IDENTITY_GUARD
+    // goes false and the check flags it (it is not allowlisted).
+    expect(IMPERSONATION.test(getUserContext!.body)).toBe(true);
+    expect(IDENTITY_GUARD.test(getUserContext!.body)).toBe(true);
+    expect(
+      IMPERSONATION_ALLOWLIST.has("hub-protocol/context.ts::getUserContext")
+    ).toBe(false);
+    expect(
+      IMPERSONATION_ALLOWLIST.has("hub-protocol/context.ts::getThreadContext")
+    ).toBe(false);
+
+    // getThreadContext's acting identity is the derived local `threadUserId`
+    // (from a channelVisibilityWhere-floored lookup), never a raw input value —
+    // the impersonation pattern doesn't match it, so it is clean by construction.
+    const threadClean =
+      !IMPERSONATION.test(getThreadContext!.body) ||
+      IDENTITY_GUARD.test(getThreadContext!.body);
+    expect(threadClean).toBe(true);
+  });
+
+  // ── THE 2ND IMPERSONATION DOOR (W0.6) ──
+  // The IMPERSONATION check above only sees the delegation door
+  // (`createHubProtocolCallerContext(input.…)` / `.createCaller(input.…)`). But a
+  // caller-supplied identity re-derives the ACTING identity through THREE other
+  // sinks the same way: `checkPermissionOrPropose({ userId: input.… })` (the
+  // permission owner + proposal owner), `AccessContext.agent({ userId: input.… })`
+  // (the read floor identity), and direct service writes keyed on input.userId
+  // (`resolveOrCreateChannel` / `setProfileRenderer` / `createAndLinkPropertyDef`
+  // / the `triggerAutoRespond` message-turn). On the hub-protocol (BYOA) surface
+  // `ctx.userId` is the key owner and any user can self-mint a `hub-protocol.*`
+  // PAT, so an unguarded `userId: input.…` into any of these = cross-tenant
+  // read/write. Every such site MUST carry a preceding `assertMayActAs(ctx, …)`
+  // (recognized by IDENTITY_GUARD). Same any-signal-in-body heuristic as the
+  // checks above (it can't prove the guard dominates the sink — pair with review).
+  // Cross-file delegation (bindChannel → proposeChannelBind, a util) is NOT
+  // visible here — acknowledged non-coverage; those procedures are guarded at the
+  // door. Allowlist seeded EMPTY: every in-file site is guarded. Shrink-only.
+  const SECOND_DOOR_IDENTITY = /\buserId:\s*input\??\.[A-Za-z0-9_]+/;
+  const SECOND_DOOR_SINK =
+    /checkPermissionOrPropose\(|AccessContext\.agent\(|resolveOrCreateChannel\(|setProfileRenderer\(|createAndLinkPropertyDef\(|triggerAutoRespond\(/;
+  const SECOND_DOOR_ALLOWLIST = new Set<string>([]);
+
+  it("no unguarded input.userId reaches a governance/write acting-identity sink (the W0.6 2nd door)", () => {
+    const violations: string[] = [];
+    for (const file of FILES) {
+      // The external-agent (BYOA) door — ctx.userId is the key owner and
+      // input.userId is caller-supplied. (REST siblings under hub-protocol/rest
+      // act via c.get("userId"), never input.userId, so they never match.)
+      if (!file.includes("/hub-protocol/")) continue;
+      const src = readFileSync(file, "utf8");
+      const rel = file.split("/routers/")[1];
+      for (const proc of extractProcedures(file, src)) {
+        if (!SECOND_DOOR_IDENTITY.test(proc.body)) continue;
+        if (!SECOND_DOOR_SINK.test(proc.body)) continue;
+        if (IDENTITY_GUARD.test(proc.body)) continue;
+        const id = `${rel}::${proc.name}`;
+        if (!SECOND_DOOR_ALLOWLIST.has(id)) violations.push(id);
+      }
+    }
+    expect(
+      violations,
+      `input.userId reaches an acting-identity sink (checkPermissionOrPropose / ` +
+        `AccessContext.agent / a service write) with no preceding ` +
+        `assertMayActAs(ctx, input.userId):\n  ${violations.join("\n  ")}`
+    ).toEqual([]);
+  });
+
+  it("2nd-door positive control: a guarded governance sink matches the shape yet clears via assertMayActAs", () => {
+    const channelsFile = FILES.find((f) =>
+      f.endsWith("hub-protocol/channels.ts")
+    );
+    expect(channelsFile, "channels.ts must be scanned").toBeTruthy();
+    const procs = extractProcedures(
+      channelsFile!,
+      readFileSync(channelsFile!, "utf8")
+    );
+    const createExternal = procs.find(
+      (p) => p.name === "createExternalChannel"
+    );
+    expect(createExternal, "createExternalChannel extracted").toBeTruthy();
+    // It DOES pass `userId: input.userId` into checkPermissionOrPropose (the shape
+    // MUST match) and its `assertMayActAs(ctx, input.userId)` MUST clear it. Drop
+    // that guard and the check flags it (not allowlisted).
+    expect(SECOND_DOOR_IDENTITY.test(createExternal!.body)).toBe(true);
+    expect(SECOND_DOOR_SINK.test(createExternal!.body)).toBe(true);
+    expect(IDENTITY_GUARD.test(createExternal!.body)).toBe(true);
+    expect(
+      SECOND_DOOR_ALLOWLIST.has(
+        "hub-protocol/channels.ts::createExternalChannel"
+      )
+    ).toBe(false);
+  });
+
+  // NON-COVERAGE (semantic, not structural — acknowledged, not promised):
+  //  - provider-STRING-as-authorization (messaging linked-unread/conversations
+  //    match `accountByProvider.get(provider)` as a stand-in for real ownership);
+  //  - caller-supplied external id → connector call (GET
+  //    /messaging/conversations/{threadId}/messages passes an unvalidated
+  //    accountId straight to connector.getMessages — an IDOR-via-proxy class);
+  //  - the pod-wide `channels.findMany` with NO id/workspace filter at all
+  //    (linked-unread) — not a by-id read, so the by-id scan can't grab it.
+  // All three need a code-review pass; no grep catches them.
 });

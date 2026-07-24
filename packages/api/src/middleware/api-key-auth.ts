@@ -158,6 +158,11 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
       scopes: keyRecord.scope,
       apiKeyId: keyRecord.id,
       apiKeyName: keyRecord.keyName,
+      // The key's type + workspace binding — consumed by the hub-protocol
+      // service-key workspace confinement (resolveConfinedWorkspace). NOT an
+      // impersonation grant: identity is always floored to keyRecord.userId.
+      keyType: keyRecord.keyType,
+      keyWorkspaceId: keyRecord.workspaceId,
       authenticated: true as const,
       // Architecturally enforce: hub-protocol keys are always AI-sourced.
       ...(isHubProtocolKey

@@ -12,6 +12,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 import { db, workspaceMembers, workspaces, eq, desc } from "@synap/database";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
@@ -60,6 +61,7 @@ export const entitiesRouter = router({
         ((ctx as Record<string, unknown>).workspaceId as string | null) ??
         null;
       // Use input.userId (the real user) not ctx.userId (the API key owner "system")
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -204,6 +206,7 @@ export const entitiesRouter = router({
         ambientWorkspaceId = rows[0]?.workspaceId;
       }
 
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -350,6 +353,7 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       // Use the real user (input.userId), not ctx.userId (API key owner)
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -419,6 +423,7 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       // Use the real user (input.userId), not ctx.userId (API key owner).
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -497,6 +502,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -563,6 +569,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -620,6 +627,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],

@@ -114,6 +114,10 @@ export const templatesRouter = router({
         const workspaceTemplate = await db.query.entityTemplates.findFirst({
           where: and(
             eq(entityTemplates.workspaceId, input.workspaceId),
+            // Membership-gate the workspace branch — same predicate `list`/
+            // `duplicate` use. Without it any user could read another
+            // workspace's default-template config by passing its id.
+            userVisibleWhere(entityTemplates.workspaceId, ctx.userId),
             eq(entityTemplates.targetType, input.targetType as string),
             input.entityType
               ? eq(entityTemplates.entityType, input.entityType)

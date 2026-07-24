@@ -28,8 +28,13 @@ import type {
   DeclareKindOp,
   DedupeProfileRowsOp,
   ReconcileEntityScopeOp,
+  RemapPropertyValuesOp,
 } from "./manifest.js";
-import { validateManifest, buildPropertyMappingJson } from "./manifest.js";
+import {
+  validateManifest,
+  buildPropertyMappingJson,
+  buildValueMapJson,
+} from "./manifest.js";
 
 /** Per-op tally. Every field optional — an op reports only what it touched. */
 export interface OpCounts {
@@ -48,6 +53,8 @@ export interface OpCounts {
   viewsRewritten?: number;
   propertyDefsRepointed?: number;
   profilePropertiesRepointed?: number;
+  /** remapPropertyValues: entities whose source value was folded onto the target key. */
+  entitiesRemapped?: number;
 }
 
 export type OpStatus =
@@ -285,6 +292,8 @@ async function applyOp(
       return applyDedupeProfileRows(tx, op, options.destructiveTail);
     case "reconcileEntityScope":
       return applyReconcileEntityScope(tx, op);
+    case "remapPropertyValues":
+      return applyRemapPropertyValues(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -820,6 +829,51 @@ async function applyReconcileEntityScope(
   return n > 0 ? { entitiesRescoped: n } : {};
 }
 
+/**
+ * Remap a legacy property's VALUES onto a target key, then strip the legacy key.
+ * See RemapPropertyValuesOp for the contract. One transaction (runConversions
+ * wraps applyOp in `sql.begin`); idempotent (the `sourceKey` strip AND the
+ * ledgered opKey each guard a re-run); non-destructive.
+ *
+ * The valueMap round-trips through a jsonb OBJECT (buildValueMapJson): the text
+ * param + a server-side `::jsonb` cast decodes exactly once — NEVER sql.json()
+ * (banned in this module; see recordLedger header). `mapObj ? value` gates the
+ * UPDATE to source values that HAVE a mapping (unmapped rows are left alone);
+ * `mapObj -> value` supplies the mapped result. The "prefer existing target"
+ * rule keeps a terminal/proposal `targetKey` rather than clobbering it with the
+ * coarser folded value.
+ */
+export async function applyRemapPropertyValues(
+  tx: Sql,
+  op: RemapPropertyValuesOp
+): Promise<OpCounts> {
+  const mapJson = buildValueMapJson(op.valueMap);
+  const preferValues = op.preferTargetValues ?? [];
+
+  const res = await tx`
+    UPDATE entities e
+    SET properties =
+          (COALESCE(e.properties, '{}'::jsonb) - ${op.sourceKey})
+          || jsonb_build_object(
+               ${op.targetKey},
+               CASE
+                 WHEN e.properties ? ${op.targetKey}
+                   AND (e.properties->>${op.targetKey}) = ANY(${preferValues}::text[])
+                 THEN e.properties -> ${op.targetKey}
+                 ELSE ${mapJson}::jsonb -> (e.properties->>${op.sourceKey})
+               END
+             ),
+        updated_at = now()
+    FROM profiles p
+    WHERE e.profile_id = p.id AND p.slug = ${op.slug}
+      AND e.deleted_at IS NULL
+      AND e.properties ? ${op.sourceKey}
+      AND ${mapJson}::jsonb ? (e.properties->>${op.sourceKey})
+  `;
+  const n = res.count ?? 0;
+  return n > 0 ? { entitiesRemapped: n } : {};
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 async function computeCounts(
@@ -901,6 +955,21 @@ async function computeCounts(
           `;
       const n = r[0]?.n ?? 0;
       return n > 0 ? { entitiesRescoped: n } : {};
+    }
+    case "remapPropertyValues": {
+      // Count rows the apply WOULD touch: this slug's live entities that still
+      // carry `sourceKey` AND whose source value has a mapping. "Prefer existing
+      // target" rows are counted too — they are still touched (source stripped).
+      const mapJson = buildValueMapJson(op.valueMap);
+      const r = await sql<Array<{ n: number }>>`
+        SELECT COUNT(*)::int AS n FROM entities e
+        JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+        WHERE e.deleted_at IS NULL
+          AND e.properties ? ${op.sourceKey}
+          AND ${mapJson}::jsonb ? (e.properties->>${op.sourceKey})
+      `;
+      const n = r[0]?.n ?? 0;
+      return n > 0 ? { entitiesRemapped: n } : {};
     }
     case "keep":
     case "extractNonEntity":

@@ -12,8 +12,9 @@
  *     an identity fallback: a person's `email` / `discord-handle` (indexed) or
  *     an `aliases[]` entry can also carry the name being resolved, so handles
  *     and nicknames resolve to the existing person instead of a duplicate.
- *   - Same user-visible scope as every other read — reuses `userVisibleWhere`
- *     so resolution can never surface an entity the caller couldn't already see.
+ *   - Same visibility as every other entity read — floors on the entity READ
+ *     scope (`accessScopeWhere` +facetLens) so resolution can never surface an
+ *     entity the caller couldn't already see.
  *   - Partitioned into:
  *       sameProfile   = the SAME profile + SAME name → likely a duplicate; the
  *                       agent should consider UPDATING instead of re-creating.
@@ -27,7 +28,7 @@
 
 import { db, resolveIdentity } from "@synap/database";
 import { entities } from "@synap/database/schema";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 
 /** Minimal entity shape the resolver returns (ids + names + profile). */
 export interface ResolvedEntity {
@@ -95,7 +96,7 @@ export function partitionResolutionMatches(
  *
  * @param name            The entity name to match (=== title). Empty/blank → no match.
  * @param targetProfileSlug The profile the new entity belongs to (for partitioning).
- * @param userId          The acting user — scopes the read via `userVisibleWhere`.
+ * @param userId          The acting user — scopes the read via the entity READ floor.
  * @param excludeId       Optional id to exclude (the just-created entity itself).
  *
  * Throwing is the caller's signal to omit resolution; callers wrap in try/catch.
@@ -119,7 +120,18 @@ export async function resolveEntityByName(params: {
   const { candidates } = await resolveIdentity(db, {
     userId: params.userId,
     name,
-    userScope: userVisibleWhere(entities.workspaceId, params.userId),
+    // The weak candidate search returns entity title/type to the caller for
+    // facet auto-connect and is NOT re-gated downstream — so it must floor on
+    // the entity READ visibility (owner-gated NULL + membership + exposure +
+    // role-lens), NOT bare `userVisibleWhere` which admits pod-wide NULL rows to
+    // ALL users. Matches entities.list.
+    userScope: accessScopeWhere({
+      workspaceIdColumn: entities.workspaceId,
+      entityIdColumn: entities.id,
+      ownerColumn: entities.userId,
+      userId: params.userId,
+      facetLens: true,
+    }),
     limit: params.limit ?? 25,
   });
 

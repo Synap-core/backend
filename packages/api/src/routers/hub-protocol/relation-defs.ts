@@ -9,6 +9,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { relationDefsRouter } from "../relation-defs.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubRelationDefsRouter = router({
   list: scopedProcedure(["hub-protocol.read"])
@@ -19,6 +20,7 @@ export const hubRelationDefsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         (ctx as any).scopes ?? ["hub-protocol.read"],
@@ -41,6 +43,7 @@ export const hubRelationDefsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         (ctx as any).scopes ?? ["hub-protocol.write"],

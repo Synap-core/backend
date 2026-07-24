@@ -50,27 +50,47 @@ import { workspaceLensWhere } from "../utils/user-visible-where.js";
 registerVisibility({
   table: automations,
   query: () => db.query.automations,
-  rule: { kind: "workspace", workspaceColumn: automations.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: automations.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: automationRuns,
   query: () => db.query.automationRuns,
-  rule: { kind: "workspace", workspaceColumn: automationRuns.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: automationRuns.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: mcpServers,
   query: () => db.query.mcpServers,
-  rule: { kind: "workspace", workspaceColumn: mcpServers.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: mcpServers.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: cellInstances,
   query: () => db.query.cellInstances,
-  rule: { kind: "workspace", workspaceColumn: cellInstances.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: cellInstances.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: roles,
   query: () => db.query.roles,
-  rule: { kind: "workspace", workspaceColumn: roles.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: roles.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: channels,
@@ -84,12 +104,19 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) => channelVisibilityWhere(access.userId),
+    // A NULL-workspace personal channel is owner-private (channelVisibilityWhere
+    // owner-gates it); only shared-TYPE NULL channels go pod-wide.
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
   table: artifacts,
   query: () => db.query.artifacts,
-  rule: { kind: "workspace", workspaceColumn: artifacts.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: artifacts.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 
 // Playbooks & Capability Substrate — all three carry a nullable workspaceId
@@ -97,22 +124,38 @@ registerVisibility({
 registerVisibility({
   table: tools,
   query: () => db.query.tools,
-  rule: { kind: "workspace", workspaceColumn: tools.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: tools.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: playbooks,
   query: () => db.query.playbooks,
-  rule: { kind: "workspace", workspaceColumn: playbooks.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: playbooks.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: links,
   query: () => db.query.links,
-  rule: { kind: "workspace", workspaceColumn: links.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: links.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: playbookRuns,
   query: () => db.query.playbookRuns,
-  rule: { kind: "workspace", workspaceColumn: playbookRuns.workspaceId },
+  rule: {
+    kind: "workspace",
+    workspaceColumn: playbookRuns.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 
 // SUBSTRATE config — NULL workspace = pod-wide builtin/base config that EVERY
@@ -126,6 +169,7 @@ registerVisibility({
     kind: "workspace",
     workspaceColumn: relationDefs.workspaceId,
     includeGlobalsInLens: true,
+    nullWorkspaceMeans: "podGlobalConfig",
   },
 });
 registerVisibility({
@@ -135,6 +179,7 @@ registerVisibility({
     kind: "workspace",
     workspaceColumn: widgetDefinitions.workspaceId,
     includeGlobalsInLens: true,
+    nullWorkspaceMeans: "podGlobalConfig",
   },
 });
 
@@ -165,6 +210,10 @@ registerVisibility({
           eq(intelligenceCommands.createdBy, access.userId)
         )
       ),
+    // Operational config: a `sharedScope='workspace'` NULL-workspace command is
+    // pod-wide (visible to members); the `sharedScope='user'` branch owner-gates
+    // the private ones. Config-dominant → podGlobalConfig.
+    nullWorkspaceMeans: "podGlobalConfig",
   },
 });
 
@@ -203,6 +252,7 @@ registerVisibility({
         // facets, so their rule below stays owner/workspace-floored).
         facetLens: true,
       }),
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
@@ -220,6 +270,7 @@ registerVisibility({
         projectLens: access.projectLens,
         exposureRelationTypes: access.exposureRelationTypes,
       }),
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
@@ -243,12 +294,20 @@ registerVisibility({
         ),
         and(isNull(relations.workspaceId), eq(relations.userId, access.userId))
       ),
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
   table: proposals,
   query: () => db.query.proposals,
-  rule: { kind: "workspace", workspaceColumn: proposals.workspaceId },
+  // NO human-owner column yet (createdBy = AGENT id for AI proposals), so a
+  // NULL-workspace proposal is pod-wide TODAY — flagged podGlobalConfig to state
+  // the current behaviour; a subjectUserId column (D7) is the real owner floor.
+  rule: {
+    kind: "workspace",
+    workspaceColumn: proposals.workspaceId,
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
 });
 registerVisibility({
   table: entityFacets,
@@ -278,6 +337,7 @@ registerVisibility({
           eq(entityFacets.userId, access.userId)
         )
       ),
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 
@@ -345,6 +405,7 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: feeds.workspaceId,
     userColumn: feeds.userId,
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
@@ -354,6 +415,7 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: sourceConfigs.workspaceId,
     userColumn: sourceConfigs.userId,
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
@@ -363,6 +425,7 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: sourceSubscriptions.workspaceId,
     userColumn: sourceSubscriptions.userId,
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 registerVisibility({
@@ -375,6 +438,7 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: agentConfigs.workspaceId,
     userColumn: agentConfigs.userId,
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 

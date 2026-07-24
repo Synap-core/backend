@@ -24,6 +24,7 @@ import {
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 
 /**
  * Module-scoped pino logger.
@@ -321,25 +322,16 @@ export async function resolveActorId(
 /**
  * Get all workspace IDs the user can read: explicit memberships plus
  * pod-visible/pod-joinable source workspaces.
+ *
+ * Thin re-export of `@synap/api`'s `utils/workspace-membership.ts`
+ * `getUserWorkspaceIds` (same package, no import-cycle) — the ONE
+ * member-∪-pod-visible implementation. Was a third hand-rolled copy of that
+ * union; delegating removes the undeclared duplicate.
  */
 export async function getUserAccessibleWorkspaceIds(
   userId: string
 ): Promise<string[]> {
-  const rows = await db
-    .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
-  const ids = new Set(rows.map((r) => r.workspaceId));
-
-  const podReadable = await db
-    .select({ workspaceId: workspaces.id })
-    .from(workspaces)
-    .where(
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
-    );
-  for (const row of podReadable) ids.add(row.workspaceId);
-
-  return Array.from(ids);
+  return getUserWorkspaceIds(userId);
 }
 
 /**
@@ -348,8 +340,15 @@ export async function getUserAccessibleWorkspaceIds(
  * fallback by the MCP adapter (recall catalog, relations, linking, capture).
  * Kept distinct from {@link getUserAccessibleWorkspaceIds} so those callers
  * preserve their membership-only semantics.
+ *
+ * NOTE the name: this is the MEMBER-ONLY variant. `@synap/api`'s
+ * `utils/workspace-membership.ts` exports a DIFFERENT `getUserWorkspaceIds`
+ * (member ∪ pod-visible). Named `getUserMemberWorkspaceIds` here so an import
+ * typo can never silently swap the two semantics.
  */
-export async function getUserWorkspaceIds(userId: string): Promise<string[]> {
+export async function getUserMemberWorkspaceIds(
+  userId: string
+): Promise<string[]> {
   const rows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)

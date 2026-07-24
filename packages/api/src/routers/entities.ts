@@ -5,7 +5,10 @@
  *   .requested → permission check → inline materialization → .completed
  * Proposal path (AI requiring review) defers to the materializer worker.
  *
- * Supports global entities (workspaceId = null) visible across all workspaces.
+ * Supports unfiled entities (workspaceId = null). A NULL-workspace entity is
+ * OWNER-private by default (accessScopeWhere floors it to its creator), NOT
+ * pod-wide — it becomes visible to a workspace's members only once it carries a
+ * facet there (role-as-lens) or an exposure edge.
  */
 
 import { z } from "zod";
@@ -702,8 +705,10 @@ export const entitiesRouter = router({
   /**
    * Create entity with profile-based type system
    *
-   * When `global: true`, the entity is created without a workspaceId
-   * and will be visible across all workspaces.
+   * When `global: true`, the entity is created without a workspaceId. Such a
+   * NULL-workspace entity is OWNER-private by default (owner-floored by
+   * accessScopeWhere), NOT visible across all workspaces — it surfaces to a
+   * workspace's members only via a facet there (role-as-lens) or an exposure edge.
    */
   create: podProcedure
     .input(

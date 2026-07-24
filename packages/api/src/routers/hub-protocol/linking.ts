@@ -23,6 +23,7 @@ import {
   ChannelContextConflictStatus,
 } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { assertMayActAs } from "./guard.js";
 
 const relationshipTypeEnum = z.enum([
   "used_as_context",
@@ -54,6 +55,10 @@ export const linkingRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity fed to
+      // checkPermissionOrPropose (and stamped as the context-item owner) — a hub
+      // PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),
@@ -149,6 +154,9 @@ export const linkingRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Identity floor: see linkEntity — `input.userId` is the acting identity
+      // and the context-item owner, so it must equal the key owner.
+      assertMayActAs(ctx, input.userId);
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),

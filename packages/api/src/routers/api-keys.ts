@@ -25,11 +25,16 @@ import {
   ApiKeyRepository,
   sql,
 } from "@synap/database";
-import { apiKeys, workspaceMembers } from "@synap/database/schema";
+import {
+  apiKeys,
+  workspaceMembers,
+  mcpConnectCodes,
+  users,
+} from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
 import {
   INTEGRATION_HUB_SCOPES,
   integrationHubId,
@@ -813,6 +818,74 @@ export const apiKeysRouter = router({
         strategy: input.strategy,
         registration: registrationTrace,
       };
+    }),
+
+  /**
+   * beginMcpConnect — mint a one-time CONSENT CODE for the CP-MCP pod-accept gate.
+   *
+   * MCP-OAUTH-AND-CONNECT-PLAN §2-3. Session-authed: the caller is the human who
+   * clicked "Allow" on pod-admin `/connect`. This does NOT mint the agent key —
+   * it only records consent as a short-lived, single-use code (stored as a
+   * sha256 hash, like api_keys.key_lookup_hash) and returns the RAW code once.
+   * pod-admin then top-level-navigates to the CP callback with `?code=<code>`
+   * (only the code, never a key). The CP later redeems it server-to-server at
+   * POST /api/hub/mcp/redeem, where the pod mints the `claude-web` agent key.
+   * Minting on redeem (not here) means no plaintext key touches the browser.
+   */
+  beginMcpConnect: protectedProcedure
+    .input(
+      z.object({
+        agentType: z.literal("claude-web"),
+        // CP-grammar scopes (e.g. ["mcp:read","mcp:write"]); mapped to pod grammar
+        // at redeem. Stored verbatim so the redeem side owns the translation.
+        scopes: z.array(z.string()).max(32).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Validate the caller is a real human — a consent code binds the acting
+      // human to the CP grant; an agent user must never author its own consent.
+      const caller = await db.query.users.findFirst({
+        where: eq(users.id, ctx.userId),
+        columns: { id: true, userType: true },
+      });
+      if (!caller || caller.userType !== "human") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a human pod user can authorize an MCP connection.",
+        });
+      }
+
+      // High-entropy one-time code — returned raw ONCE, only its hash is stored.
+      const code = randomBytes(32).toString("base64url");
+      const codeHash = createHash("sha256").update(code).digest("hex");
+
+      // ~10 minute TTL — long enough for the CP callback round-trip, short enough
+      // to bound replay exposure.
+      const MCP_CONNECT_CODE_TTL_MS = 10 * 60 * 1000;
+      const expiresAt = new Date(Date.now() + MCP_CONNECT_CODE_TTL_MS);
+
+      await db.insert(mcpConnectCodes).values({
+        codeHash,
+        podUserId: ctx.userId,
+        scopes: input.scopes ?? [],
+        agentType: input.agentType,
+        expiresAt,
+      });
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: codeHash.slice(0, 12),
+        userId: ctx.userId,
+        data: {
+          kind: "mcp_connect_code",
+          agentType: input.agentType,
+          scopes: input.scopes ?? [],
+        },
+      });
+
+      return { code, expiresAt: expiresAt.toISOString() };
     }),
 
   /**

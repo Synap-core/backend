@@ -22,7 +22,15 @@
  * grandfathered because `events` has no `workspace_id` column to lens on.
  */
 
-import { and, eq, inArray, isNull, or, drizzleSql } from "@synap/database";
+import {
+  and,
+  eq,
+  inArray,
+  isNull,
+  isNotNull,
+  or,
+  drizzleSql,
+} from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
@@ -112,6 +120,33 @@ export function userVisibleWhere(
  */
 export function podMemberWhere(userId: string): SQL {
   return drizzleSql`EXISTS (SELECT 1 FROM ${podMembers} WHERE ${podMembers.userId} = ${userId})`;
+}
+
+/**
+ * OWNER-PRIVATE floor for tables that have BOTH a `workspace_id` and a per-user
+ * owner column, where a NULL workspace means "personal to the owner" — the
+ * `ownerPrivate` shape in the access registry (focus_sessions, entities,
+ * documents, …). Plain `userVisibleWhere` admits EVERY NULL-workspace row to ALL
+ * users (its `isNull(workspaceId)` branch is owner-blind), so on such a table it
+ * leaks another user's private sessions/rows. This gates the NULL branch by
+ * owner and keeps the workspace-scoped branch on the shared user floor.
+ *
+ * For the entity graph prefer `accessScopeWhere` (it also carries exposure +
+ * role-lens); this is the minimal owner-gate for hand-built join queries over
+ * ownerPrivate tables that are NOT part of the entity-facet substrate.
+ */
+export function ownerPrivateVisibleWhere(
+  workspaceIdColumn: AnyPgColumn,
+  ownerColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return or(
+    and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
+    and(
+      isNotNull(workspaceIdColumn),
+      userVisibleWhere(workspaceIdColumn, userId)
+    )
+  )!;
 }
 
 /**

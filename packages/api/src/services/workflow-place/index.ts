@@ -42,6 +42,7 @@ import type { SQL } from "drizzle-orm";
 import {
   userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { listRuns } from "../runs/index.js";
 import type {
@@ -94,7 +95,13 @@ function sessionScopeWhere(
   userId: string
 ): SQL {
   return and(
-    userVisibleWhere(focusSessions.workspaceId, userId),
+    // focus_sessions is ownerPrivate — owner-gate the NULL-workspace branch so a
+    // caller can't enumerate another user's private standalone sessions.
+    ownerPrivateVisibleWhere(
+      focusSessions.workspaceId,
+      focusSessions.userId,
+      userId
+    ),
     kind === "playbook"
       ? eq(focusSessions.playbookId, id)
       : drizzleSql`${focusSessions.metadata}->>'automationId' = ${id}`

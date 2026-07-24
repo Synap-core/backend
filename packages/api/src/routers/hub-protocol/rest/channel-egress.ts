@@ -21,10 +21,12 @@ import {
   or,
   lt,
   asc,
+  isNull,
   drizzleSql,
 } from "@synap/database";
 
 import { hasScope, logger, type HubHono } from "./_shared.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // A `failed` row is RETRIABLE until it has been attempted this many times, then it
 // is dead-lettered (stays `failed`, no longer served). Without this, a single
@@ -65,6 +67,14 @@ export function registerChannelEgressRoutes(app: HubHono): void {
     }
     const { externalSource, limit } = parsed.data;
 
+    // SERVICE-KEY CONFINEMENT — a workspace-bound `service` key drains only its
+    // own workspace's egress (plus pod-wide NULL-workspace rows, which are
+    // genuine globals). Unbound / non-service keys pass through unchanged
+    // (`getConfinedWorkspace(_, undefined)` → undefined), so the common
+    // (unbound bridge) case is unaffected. A bound key targeting the wrong ws
+    // throws 403 upstream — here `requested` is undefined so it only positive-pins.
+    const confinedWorkspaceId = getConfinedWorkspace(c, undefined);
+
     try {
       const rows = await db
         .select({
@@ -86,7 +96,15 @@ export function registerChannelEgressRoutes(app: HubHono): void {
                 eq(channelEgress.status, "failed"),
                 lt(channelEgress.attempts, MAX_EGRESS_ATTEMPTS)
               )
-            )
+            ),
+            // Only applied for a bound service key (else `confinedWorkspaceId`
+            // is undefined → no filter). Pod-wide (NULL) rows stay visible.
+            confinedWorkspaceId
+              ? or(
+                  eq(channelEgress.workspaceId, confinedWorkspaceId),
+                  isNull(channelEgress.workspaceId)
+                )
+              : undefined
           )
         )
         .orderBy(asc(channelEgress.createdAt))

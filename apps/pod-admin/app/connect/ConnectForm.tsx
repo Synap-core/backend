@@ -24,6 +24,7 @@ import {
   buildFlowTraceUrl,
   extractFlowId,
   isAllowedConnectRedirectUri,
+  DEFAULT_CONNECT_REDIRECT_PREFIXES,
   type IntegrationKind,
 } from "@synap-core/external-connect-client";
 import { trpc } from "../../lib/trpc";
@@ -65,17 +66,40 @@ interface ConnectFormProps {
   integration: IntegrationKind;
   redirectUri: string;
   issuerAssertion: string;
+  /** Agent signal. "claude-web" → CP-MCP consent-code path (no plaintext key). */
+  agentType?: string | null;
+  /** Extra https redirect prefixes the pod owner allowlisted (CP origin, etc.). */
+  extraRedirectPrefixes?: string[];
 }
 
 export function ConnectForm({
   integration,
   redirectUri,
   issuerAssertion,
+  agentType = null,
+  extraRedirectPrefixes = [],
 }: ConnectFormProps) {
+  // CP-MCP consent-code path: claude.ai → CP → this page. We record consent as a
+  // one-time code and hand ONLY the code to the CP callback — the claude-web agent
+  // key is minted server-to-server at redeem, never delivered through the browser.
+  const isMcpConnect = agentType === "claude-web";
+
   const info = INTEGRATION_INFO[integration];
+  const connectLabel = isMcpConnect ? "Claude" : info.label;
+  const connectDescription = isMcpConnect
+    ? "Let Claude (claude.ai) reach this pod's tools over MCP"
+    : info.description;
+
   const hasRedirect = redirectUri.length > 0;
+  // The claude-web callback is an https origin; extend the default allowlist with
+  // the pod-owner-controlled https origins passed from the server (never mutate
+  // the shared DEFAULT_CONNECT_REDIRECT_PREFIXES fork).
+  const allowedPrefixes = [
+    ...DEFAULT_CONNECT_REDIRECT_PREFIXES,
+    ...extraRedirectPrefixes,
+  ];
   const redirectIsAllowed =
-    !hasRedirect || isAllowedConnectRedirectUri(redirectUri);
+    !hasRedirect || isAllowedConnectRedirectUri(redirectUri, allowedPrefixes);
 
   const [step, setStep] = useState<Step>({ kind: "idle" });
   const [strategy, setStrategy] = useState<"create_new" | "replace_existing">(
@@ -186,10 +210,68 @@ export function ConnectForm({
     },
   });
 
+  // CP-MCP consent-code mint: records consent, returns a one-time code, and we
+  // top-level-navigate to the CP callback with ONLY the code (never a key).
+  const beginMcpConnectMutation = trpc.apiKeys.beginMcpConnect.useMutation({
+    onSuccess: (data) => {
+      if (!hasRedirect || !redirectIsAllowed) {
+        setStep({
+          kind: "error",
+          message:
+            "This MCP connection has no valid callback URL to return to. " +
+            "Make sure the control plane is in the pod's CONNECT_ALLOWED_HTTPS_ORIGINS.",
+          flowId: null,
+        });
+        return;
+      }
+      let target: string;
+      try {
+        const u = new URL(redirectUri);
+        u.searchParams.set("code", data.code);
+        target = u.toString();
+      } catch {
+        setStep({
+          kind: "error",
+          message: "Invalid redirect_uri.",
+          flowId: null,
+        });
+        return;
+      }
+      setStep({ kind: "redirecting", apiKey: "" });
+      window.setTimeout(() => {
+        window.location.href = target;
+      }, 500);
+    },
+    onError: (err) => {
+      setStep({
+        kind: "error",
+        message: err.message,
+        flowId: extractFlowId(err.message),
+      });
+      addToast({
+        title: "Couldn't authorize MCP connection",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
   const handleGenerate = useCallback(() => {
     setStep({ kind: "generating" });
+    if (isMcpConnect) {
+      // Scopes are omitted — the redeem side defaults to the functional
+      // claude-web MCP scope set (hub-protocol + mcp read/write).
+      beginMcpConnectMutation.mutate({ agentType: "claude-web" });
+      return;
+    }
     connectMutation.mutate({ integration, strategy });
-  }, [connectMutation, integration, strategy]);
+  }, [
+    connectMutation,
+    beginMcpConnectMutation,
+    isMcpConnect,
+    integration,
+    strategy,
+  ]);
 
   const handleCopy = useCallback(async () => {
     if (step.kind !== "done") return;
@@ -231,10 +313,10 @@ export function ConnectForm({
               Data pod
             </p>
             <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-              Connect {info.label}
+              Connect {connectLabel}
             </h1>
             <p className="text-[13px] leading-relaxed text-foreground/65">
-              {info.description}
+              {connectDescription}
             </p>
           </div>
         </CardHeader>
@@ -243,9 +325,12 @@ export function ConnectForm({
           {step.kind === "idle" && (
             <IdleStep
               integration={integration}
+              label={connectLabel}
+              description={connectDescription}
+              isMcpConnect={isMcpConnect}
               redirectUri={hasRedirect ? redirectUri : null}
               redirectIsAllowed={redirectIsAllowed}
-              existingCount={existingForIntegration.length}
+              existingCount={isMcpConnect ? 0 : existingForIntegration.length}
               strategy={strategy}
               onStrategy={setStrategy}
               onGenerate={handleGenerate}
@@ -285,7 +370,7 @@ export function ConnectForm({
                   Key created
                 </p>
                 <p className="text-[12.5px] text-foreground/65">
-                  Opening {info.label}…
+                  Opening {connectLabel}…
                 </p>
               </div>
             </div>
@@ -331,6 +416,9 @@ export function ConnectForm({
 
 interface IdleStepProps {
   integration: IntegrationKind;
+  label: string;
+  description: string;
+  isMcpConnect: boolean;
   redirectUri: string | null;
   redirectIsAllowed: boolean;
   existingCount: number;
@@ -342,7 +430,8 @@ interface IdleStepProps {
 }
 
 function IdleStep({
-  integration,
+  label,
+  isMcpConnect,
   redirectUri,
   redirectIsAllowed,
   existingCount,
@@ -352,7 +441,6 @@ function IdleStep({
   disabled,
   bootstrapping,
 }: IdleStepProps) {
-  const info = INTEGRATION_INFO[integration];
   return (
     <div className="flex flex-col gap-4">
       {bootstrapping && (
@@ -364,18 +452,29 @@ function IdleStep({
       )}
 
       <p className="text-[13px] leading-relaxed text-foreground/65">
-        This mints a Hub Protocol API key scoped for{" "}
-        <span className="font-medium text-foreground">{info.label}</span> and{" "}
-        {redirectUri && redirectIsAllowed
-          ? "delivers it directly to the integration — no copy-paste."
-          : "shows it once here for you to copy."}
+        {isMcpConnect ? (
+          <>
+            This authorizes{" "}
+            <span className="font-medium text-foreground">{label}</span> to
+            reach this pod over MCP. No key is shown or copied — it is delivered
+            securely to the control plane.
+          </>
+        ) : (
+          <>
+            This mints a Hub Protocol API key scoped for{" "}
+            <span className="font-medium text-foreground">{label}</span> and{" "}
+            {redirectUri && redirectIsAllowed
+              ? "delivers it directly to the integration — no copy-paste."
+              : "shows it once here for you to copy."}
+          </>
+        )}
       </p>
 
       {existingCount > 0 && (
         <InlineNotice
           tone="warning"
           icon={<KeyRound className="h-3.5 w-3.5" />}
-          message={`You already have ${existingCount} active ${info.label} key${existingCount > 1 ? "s" : ""}. Pick a strategy below.`}
+          message={`You already have ${existingCount} active ${label} key${existingCount > 1 ? "s" : ""}. Pick a strategy below.`}
         />
       )}
 
@@ -433,7 +532,7 @@ function IdleStep({
         startContent={<KeyRound className="h-3.5 w-3.5" />}
         className="font-medium"
       >
-        Generate &amp; connect
+        {isMcpConnect ? "Allow" : "Generate & connect"}
       </Button>
     </div>
   );

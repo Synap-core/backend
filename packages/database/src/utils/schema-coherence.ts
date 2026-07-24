@@ -648,6 +648,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0205_pod_members.sql",
   },
 
+  // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
+  // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem
+  // would reference a missing table.
+  {
+    table: "mcp_connect_codes",
+    column: "code_hash",
+    addedBy: "0206_mcp_connect_codes.sql",
+  },
+  {
+    table: "mcp_connect_codes",
+    column: "pod_user_id",
+    addedBy: "0206_mcp_connect_codes.sql",
+  },
+
   // workspaces — soft-archive support (0020)
   {
     table: "workspaces",

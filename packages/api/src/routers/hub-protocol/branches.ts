@@ -17,6 +17,7 @@ import { TRPCError } from "@trpc/server";
 import { db, eq } from "@synap/database";
 import { channels } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { assertMayActAs } from "./guard.js";
 
 export const branchesRouter = router({
   /**
@@ -50,6 +51,9 @@ export const branchesRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Prefer explicit agentUserId from request; API key owner is a system account.
       const agentUserId = input.agentUserId ?? input.userId;
+      // Identity floor: the acting identity (agentUserId) must be the
+      // authenticated key owner — a hub PAT may act only as itself.
+      assertMayActAs(ctx, agentUserId);
 
       // Resolve workspaceId from the parent thread
       const parentChannel = await db.query.channels.findFirst({
@@ -152,6 +156,9 @@ export const branchesRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Prefer explicit agentUserId from request; API key owner is a system account.
       const agentUserId = input.agentUserId ?? input.userId;
+      // Identity floor: the acting identity (agentUserId) must be the
+      // authenticated key owner — a hub PAT may act only as itself.
+      assertMayActAs(ctx, agentUserId);
 
       // Resolve workspaceId from the branch channel
       const branchChannel = await db.query.channels.findFirst({

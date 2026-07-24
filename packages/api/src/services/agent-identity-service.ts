@@ -14,16 +14,24 @@ import {
   db,
   eq,
   and,
+  isNull,
   sql,
+  apiKeys,
   EventRepository,
   ApiKeyRepository,
+  type ApiKeyScope,
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
 import { randomUUID } from "crypto";
-import { createAndVerifyHubInboundKey } from "./external-registration.js";
+import {
+  createAndVerifyHubInboundKey,
+  type RegistrationResult,
+} from "./external-registration.js";
 import {
   AGENT_KEY_TTL_DAYS,
   AGENT_KEY_ROTATION_LEAD_DAYS,
+  SETUP_AGENT_HUB_SCOPES,
+  revokeActiveHubInboundKeysForUser,
 } from "./hub-integration-registration.js";
 
 type AgentRow = typeof agents.$inferSelect;
@@ -260,4 +268,248 @@ export async function createNamedAgent(opts: {
   }
 
   return { agentUserId, email, apiKey: registration.plainKey };
+}
+
+/** Minimal logging surface so callers can thread their own logger through. */
+interface ProvisionLogger {
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+}
+
+export interface ProvisionSurfaceAgentKeyOpts {
+  /** Agent kind — pod-wide-singleton key. A row is reused across calls. */
+  agentType: string;
+  /** Human the agent user is attributed to (createdByUserId on the user row). */
+  createdByUserId: string | null;
+  /** Human the KEY acts for (key.linkedUserId → auth-middleware agent remap). */
+  linkedUserId: string | null;
+  /** Per-runtime instance label; scopes the sibling-revoke + idempotency check. */
+  instanceId?: string | null;
+  /** Hub scopes to grant (default: SETUP_AGENT_HUB_SCOPES). */
+  scopes?: readonly ApiKeyScope[];
+  /** Display name for the agent user + key (default: capitalized agentType). */
+  agentLabel?: string;
+  /** Optional integration hub id for the key (issuer-managed flows). */
+  hubId?: string;
+  /** Key TTL in days (default: AGENT_KEY_TTL_DAYS). */
+  ttlDays?: number;
+  /** Rotation lead in days before expiry (default: AGENT_KEY_ROTATION_LEAD_DAYS). */
+  rotationLeadDays?: number;
+  /** Also provision an `agents` registry row (local CLI adjunct). Default false. */
+  ensureRegistryRow?: boolean;
+  /** agentMetadata.description on the agent user row. */
+  agentDescription?: string;
+  /** description column on the minted key. */
+  keyDescription?: string;
+  /** Key display name (default: `${agentLabel} Hub Key`). */
+  keyName?: string;
+  /**
+   * Idempotency: when true, if a live (non-revoked) hub_inbound key already exists
+   * for this agent-user (scoped to instanceId when set), skip revoke+mint and
+   * return `{ alreadyValid: true }`.
+   */
+  idempotent?: boolean;
+  /**
+   * Hook invoked once the agent-user is resolved/created and (optionally) its
+   * registry row ensured, BEFORE the idempotency check and revoke+mint. The
+   * setup/agent endpoint uses it to grant workspace membership at the exact point
+   * it did inline.
+   */
+  onAgentUserResolved?: (agentUserId: string) => Promise<void>;
+  logger?: ProvisionLogger;
+}
+
+export type ProvisionSurfaceAgentKeyResult =
+  | { agentUserId: string; alreadyValid: true; registration?: undefined }
+  | {
+      agentUserId: string;
+      alreadyValid?: false;
+      registration: RegistrationResult;
+      apiKey: RegistrationResult["apiKey"];
+      plainKey: string;
+      keyId: string;
+    };
+
+/**
+ * Provision a SURFACE AGENT Hub key — the ONE door for minting an agent-user-owned
+ * `hub_inbound` key that is a pod-wide singleton per `agentType`, whose
+ * `linkedUserId` is the human it acts for.
+ *
+ * Extracted verbatim (in effect) from the inline body of POST /api/hub/setup/agent
+ * so other flows (e.g. the CP-MCP pod-accept gate) mint the SAME way. Sequence:
+ *   1. find-or-create the agent user — deterministic OLDEST-wins dedup, with the
+ *      provisioning-race catch on the `0037_users_agent_singleton_unique` index
+ *      (a concurrent insert is caught and the existing row reused, never thrown).
+ *   2. optionally ensure the `agents` registry row (local CLI adjunct).
+ *   3. `onAgentUserResolved` hook (caller-specific side effects — e.g. workspace
+ *      membership) BEFORE the idempotency check and revoke+mint.
+ *   4. idempotent short-circuit (when opts.idempotent) — a live key exists → return.
+ *   5. instance-aware sibling revoke, then mint+verify via the canonical primitive.
+ */
+export async function provisionSurfaceAgentKey(
+  opts: ProvisionSurfaceAgentKeyOpts
+): Promise<ProvisionSurfaceAgentKeyResult> {
+  const {
+    agentType,
+    createdByUserId,
+    linkedUserId,
+    instanceId,
+    onAgentUserResolved,
+    logger,
+  } = opts;
+  const agentLabel =
+    opts.agentLabel ?? agentType.charAt(0).toUpperCase() + agentType.slice(1);
+  const scopes = opts.scopes ?? SETUP_AGENT_HUB_SCOPES;
+  const ttlDays = opts.ttlDays ?? AGENT_KEY_TTL_DAYS;
+  const rotationLeadDays =
+    opts.rotationLeadDays ?? AGENT_KEY_ROTATION_LEAD_DAYS;
+
+  // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
+  // Deterministic: if a provisioning race ever produced more than one row for
+  // this agentType, always reuse the OLDEST so the singleton is stable and the
+  // dedup never flip-flops between rows across calls.
+  const existingAgent = await db.query.users.findFirst({
+    where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
+    orderBy: (u, { asc }) => [asc(u.createdAt)],
+    columns: { id: true },
+  });
+
+  let agentUserId: string;
+
+  if (existingAgent) {
+    agentUserId = existingAgent.id;
+    logger?.info(
+      { agentUserId, agentType },
+      "provisionSurfaceAgentKey: reusing existing agent user"
+    );
+  } else {
+    agentUserId = randomUUID();
+    const shortId = agentUserId.slice(0, 8);
+    try {
+      await db.insert(users).values({
+        id: agentUserId,
+        email: `agent-${agentType}-${shortId}@synap.agent`,
+        name: agentLabel,
+        emailVerified: true,
+        userType: "agent",
+        kratosIdentityId: null,
+        agentType,
+        isPersonalAgent: false,
+        createdByUserId: createdByUserId ?? null,
+        agentMetadata: {
+          agentType,
+          description:
+            opts.agentDescription ?? `${agentLabel} — external agent`,
+          createdByUserId: createdByUserId ?? agentUserId,
+          isPersonalAgent: false,
+          writesRequireProposal: true,
+          capabilities: [],
+        },
+        timezone: "UTC",
+        locale: "en",
+      });
+      logger?.info(
+        { agentUserId, agentType },
+        "provisionSurfaceAgentKey: created agent user"
+      );
+    } catch (err) {
+      // DB firewall: a partial unique index on (agentType) for service agents
+      // rejects a concurrent insert. Re-resolve the winning singleton and reuse
+      // it. If nothing matches, the error wasn't a dedup race — re-throw.
+      const raced = await db.query.users.findFirst({
+        where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
+        orderBy: (u, { asc }) => [asc(u.createdAt)],
+        columns: { id: true },
+      });
+      if (!raced) throw err;
+      agentUserId = raced.id;
+      logger?.info(
+        { agentUserId, agentType },
+        "provisionSurfaceAgentKey: lost provision race — reusing existing agent user"
+      );
+    }
+  }
+
+  // ── 2. Managed registry row for LOCAL surface agents (observability) ────
+  if (opts.ensureRegistryRow) {
+    await ensureLocalAdjunctRegistryRow({
+      agentUserId,
+      name: agentLabel,
+      agentType,
+    });
+  }
+
+  // ── 3. Caller-specific side effects at the same point they ran inline ───
+  if (onAgentUserResolved) {
+    await onAgentUserResolved(agentUserId);
+  }
+
+  // ── 4. Idempotent short-circuit ─────────────────────────────────────────
+  // When requested, skip revoke+mint if a valid (non-revoked) key already
+  // exists — scoped to THIS instance when instanceId is set.
+  if (opts.idempotent === true) {
+    const existingKey = await db.query.apiKeys.findFirst({
+      where: and(
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.keyType, "hub_inbound"),
+        isNull(apiKeys.revokedAt),
+        instanceId ? eq(apiKeys.instanceId, instanceId) : undefined
+      ),
+      columns: { id: true },
+    });
+    if (existingKey) {
+      logger?.info(
+        { agentUserId, agentType, keyId: existingKey.id },
+        "provisionSurfaceAgentKey: idempotent — valid key exists, skipping revoke+mint"
+      );
+      return { agentUserId, alreadyValid: true };
+    }
+  }
+
+  // ── 5. Revoke siblings, then mint+verify ────────────────────────────────
+  await revokeActiveHubInboundKeysForUser(db, {
+    userId: agentUserId,
+    revokedBy: agentUserId,
+    revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+    // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
+    // revokes all siblings so exactly one key stays live.
+    instanceId: instanceId ?? undefined,
+  });
+
+  // Agent hub keys carry a bounded lifetime; rotationScheduledAt flags the key
+  // for the rotation-check cron a fixed lead before it expires. Only NEW mints
+  // get an expiry.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const eventRepo = new EventRepository(sql);
+  const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+  const registration = await createAndVerifyHubInboundKey(
+    apiKeyRepo,
+    {
+      keyName: opts.keyName ?? `${agentLabel} Hub Key`,
+      hubId: opts.hubId,
+      scope: [...scopes],
+      userId: agentUserId,
+      keyType: "hub_inbound",
+      description:
+        opts.keyDescription ??
+        `Hub Protocol auth token for ${agentLabel} agent`,
+      linkedUserId: linkedUserId ?? null,
+      instanceId: instanceId ?? null,
+      expiresAt: new Date(nowMs + ttlDays * DAY_MS),
+      rotationScheduledAt: new Date(
+        nowMs + (ttlDays - rotationLeadDays) * DAY_MS
+      ),
+    },
+    agentUserId,
+    agentUserId
+  );
+
+  return {
+    agentUserId,
+    registration,
+    apiKey: registration.apiKey,
+    plainKey: registration.plainKey,
+    keyId: registration.apiKey.id,
+  };
 }

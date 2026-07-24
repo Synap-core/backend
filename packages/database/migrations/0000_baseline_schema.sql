@@ -155,6 +155,29 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
+-- mcp_connect_codes — one-time consent codes for the CP-MCP pod-accept gate
+-- (mirrors 0206_mcp_connect_codes.sql). Only a sha256 HASH of the code is stored;
+-- single-use (consumed_at) + short TTL (expires_at). The claude-web agent key is
+-- minted at REDEEM time, so no plaintext key touches a browser-facing channel.
+CREATE TABLE IF NOT EXISTS "mcp_connect_codes" (
+  "code_hash"   text PRIMARY KEY,
+  "pod_user_id" text NOT NULL,
+  "scopes"      text[] NOT NULL DEFAULT '{}',
+  "agent_type"  text NOT NULL,
+  "created_at"  timestamp with time zone NOT NULL DEFAULT now(),
+  "expires_at"  timestamp with time zone NOT NULL,
+  "consumed_at" timestamp with time zone
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "pod_user_id" text;
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "scopes"      text[] DEFAULT '{}';
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "agent_type"  text;
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "created_at"  timestamp with time zone DEFAULT now();
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "expires_at"  timestamp with time zone;
+ALTER TABLE "mcp_connect_codes" ADD COLUMN IF NOT EXISTS "consumed_at" timestamp with time zone;
+CREATE INDEX IF NOT EXISTS "mcp_connect_codes_expires_at_idx"
+  ON "mcp_connect_codes" ("expires_at");
+
 -- ─── 3. events ───────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "events" (

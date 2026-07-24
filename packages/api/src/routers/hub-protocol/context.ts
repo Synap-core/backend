@@ -12,6 +12,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { channelsRouter } from "../channels.js";
 import { entitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 import { db } from "@synap/database";
 import {
   entities,
@@ -19,7 +20,9 @@ import {
   workspaceMembers,
   channels,
 } from "@synap/database/schema";
-import { inArray, eq } from "@synap/database";
+import { inArray, eq, and } from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   renderProposalForPrompt,
   type ProposalPromptContext,
@@ -40,7 +43,14 @@ export const contextRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Look up the thread's userId, workspaceId, contextSummary and metadata
+      // SECURITY — floor the channel lookup by the CALLER's read visibility
+      // BEFORE any owner-impersonation below. Without this, any holder of a
+      // hub-protocol.read key could pass an arbitrary threadId and receive its
+      // 50 messages + linked entities/docs/proposal (the handler rebuilds the
+      // caller context AS the thread's owner). `channelVisibilityWhere` is the
+      // same predicate `GET /messaging/channels` uses — it already admits
+      // shared-type + NULL-workspace pod-wide channels, so this does not narrow
+      // legitimately-visible channels to membership-only.
       const thread = await db
         .select({
           userId: channels.userId,
@@ -51,9 +61,17 @@ export const contextRouter = router({
           contextObjectId: channels.contextObjectId,
         })
         .from(channels)
-        .where(eq(channels.id, input.threadId))
+        .where(
+          and(
+            eq(channels.id, input.threadId),
+            channelVisibilityWhere(ctx.userId!)
+          )
+        )
         .limit(1)
         .then((r) => r[0]);
+      if (!thread) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      }
       const workspaceId =
         thread?.workspaceId ??
         ((ctx as Record<string, unknown>).workspaceId as string | null) ??
@@ -186,6 +204,11 @@ export const contextRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // SECURITY — a hub-protocol.read key must not read ANOTHER user's context
+      // by supplying an arbitrary `input.userId`. The requested identity must
+      // equal the authenticated key owner (assertMayActAs — the ONE identity
+      // floor shared by every hub-protocol delegation procedure).
+      assertMayActAs(ctx, input.userId);
       // Look up user's primary workspace (by input.userId — the real user, not the API key owner)
       const membership = await db
         .select({ workspaceId: workspaceMembers.workspaceId })

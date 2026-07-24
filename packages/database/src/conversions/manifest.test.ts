@@ -10,6 +10,7 @@ import {
   validateManifest,
   collectOpKeys,
   buildPropertyMappingJson,
+  buildValueMapJson,
   type ConversionManifest,
 } from "./manifest.js";
 
@@ -269,6 +270,44 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
   });
 });
 
+describe("CONVERSION_MANIFEST — CRM deal-stage unification", () => {
+  it("folds the legacy dealStage onto commercialStage via remapPropertyValues", () => {
+    const op = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "crm.deal-stage.commercial-fold"
+    );
+    expect(op).toBeDefined();
+    expect(op?.op).toBe("remapPropertyValues");
+    if (op?.op === "remapPropertyValues") {
+      expect(op.slug).toBe("deal");
+      expect(op.sourceKey).toBe("dealStage");
+      expect(op.targetKey).toBe("commercialStage");
+      expect(op.valueMap).toEqual({
+        lead: "draft",
+        contacted: "draft",
+        qualifying: "draft",
+        proposal: "proposed",
+        negotiating: "negotiating",
+        won: "won",
+        lost: "lost",
+        inactive: "lost",
+      });
+      // terminal/proposal target values that must never be clobbered.
+      expect(op.preferTargetValues).toEqual([
+        "proposed",
+        "negotiating",
+        "won",
+        "lost",
+      ]);
+    }
+  });
+
+  it("keeps the grown manifest structurally valid with globally unique op keys", () => {
+    expect(() => validateManifest(CONVERSION_MANIFEST)).not.toThrow();
+    const keys = collectOpKeys(CONVERSION_MANIFEST);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
 describe("validateManifest", () => {
   it("rejects duplicate op keys", () => {
     const m: ConversionManifest = {
@@ -384,6 +423,40 @@ describe("validateManifest", () => {
     expect(() => validateManifest(m)).toThrow(/at least one fromSlug/);
   });
 
+  it("rejects remapPropertyValues with an empty valueMap", () => {
+    const m: ConversionManifest = {
+      version: 1,
+      ops: [
+        {
+          op: "remapPropertyValues",
+          opKey: "x",
+          slug: "deal",
+          sourceKey: "dealStage",
+          targetKey: "commercialStage",
+          valueMap: {},
+        },
+      ],
+    };
+    expect(() => validateManifest(m)).toThrow(/non-empty valueMap/);
+  });
+
+  it("rejects remapPropertyValues whose sourceKey equals targetKey", () => {
+    const m: ConversionManifest = {
+      version: 1,
+      ops: [
+        {
+          op: "remapPropertyValues",
+          opKey: "x",
+          slug: "deal",
+          sourceKey: "stage",
+          targetKey: "stage",
+          valueMap: { a: "b" },
+        },
+      ],
+    };
+    expect(() => validateManifest(m)).toThrow(/must differ/);
+  });
+
   it("accepts a well-formed mixed manifest", () => {
     const m: ConversionManifest = {
       version: 2,
@@ -434,5 +507,23 @@ describe("buildPropertyMappingJson", () => {
   it("drops pairs with empty keys or values", () => {
     const json = buildPropertyMappingJson({ good: "g", "": "x", bad: "" });
     expect(JSON.parse(json)).toEqual([["good", "g"]]);
+  });
+});
+
+describe("buildValueMapJson", () => {
+  it("returns an empty object for undefined mapping", () => {
+    expect(buildValueMapJson(undefined)).toBe("{}");
+  });
+
+  it("serialises a value map as a JSON object with keys sorted", () => {
+    const json = buildValueMapJson({ won: "won", lead: "draft" });
+    // Deterministic key order — object entries sorted by source key.
+    expect(json).toBe('{"lead":"draft","won":"won"}');
+    expect(JSON.parse(json)).toEqual({ lead: "draft", won: "won" });
+  });
+
+  it("drops entries with empty keys or values", () => {
+    const json = buildValueMapJson({ good: "g", "": "x", bad: "" });
+    expect(JSON.parse(json)).toEqual({ good: "g" });
   });
 });

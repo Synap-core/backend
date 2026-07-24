@@ -24,6 +24,9 @@ const {
   mockCreateWorkspace,
   mockComposeOntoBase,
   mockApplyPostWorkspace,
+  mockLoadCapabilityTemplate,
+  mockCreateCapabilityFromDefinition,
+  mockCreateHubCtx,
 } = vi.hoisted(() => ({
   mockDb: {
     select: vi.fn(),
@@ -35,6 +38,9 @@ const {
   mockCreateWorkspace: vi.fn(),
   mockComposeOntoBase: vi.fn(),
   mockApplyPostWorkspace: vi.fn(),
+  mockLoadCapabilityTemplate: vi.fn(),
+  mockCreateCapabilityFromDefinition: vi.fn(),
+  mockCreateHubCtx: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -68,6 +74,18 @@ vi.mock("./compose-overlay.js", () => ({
 
 vi.mock("./package-apply-post-workspace.js", () => ({
   applyPackagePostWorkspace: mockApplyPostWorkspace,
+}));
+
+// Capability-dependency install door — the SAME canonical applier the embedded
+// `integrations[]` path uses. Mocked so these tests never hit the CP catalog
+// cache or the governed capability applier.
+vi.mock("./capabilities/create-from-definition.js", () => ({
+  loadCapabilityTemplate: mockLoadCapabilityTemplate,
+  createCapabilityFromDefinition: mockCreateCapabilityFromDefinition,
+}));
+
+vi.mock("../routers/hub-protocol/utils.js", () => ({
+  createHubProtocolCallerContext: mockCreateHubCtx,
 }));
 
 import { resolvePackageDependencies } from "./package-dependency-resolver.js";
@@ -122,6 +140,13 @@ describe("resolvePackageDependencies", () => {
       playbooks: [],
     });
     mockApplyPostWorkspace.mockResolvedValue({});
+    // Capability install door: template resolves + applier succeeds by default.
+    mockCreateHubCtx.mockResolvedValue({ userId: USER, workspaceId: null });
+    mockLoadCapabilityTemplate.mockResolvedValue({ key: "cap", name: "Cap" });
+    mockCreateCapabilityFromDefinition.mockResolvedValue({
+      capabilityKey: "cap",
+      created: {},
+    });
     mockCreateWorkspace.mockResolvedValue({
       workspaceId: "ws-installed",
       created: true,
@@ -767,6 +792,187 @@ describe("resolvePackageDependencies", () => {
         }),
       ]);
       expect(result.installed[0].workspaceId).not.toBe("ws-DUPLICATE");
+    });
+  });
+
+  // ── kind:"capability" deps are first-class: resolved + installed ─────────
+  // Before the fix, any dep with kind !== "workspace" was pushed as
+  // required-absent and NEVER installed. A suite that requires a capability now
+  // provisions it through the canonical governed applier.
+  describe("kind:'capability' dependency install", () => {
+    it("C1. a required capability is resolved + installed through the applier", async () => {
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "gmail-cap", kind: "capability", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(mockLoadCapabilityTemplate).toHaveBeenCalledWith("gmail-cap");
+      expect(mockCreateCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "gmail-cap",
+          kind: "capability",
+          action: "installed",
+        }),
+      ]);
+      // No workspace side-effects for a bare capability dep.
+      expect(mockCreateWorkspace).not.toHaveBeenCalled();
+    });
+
+    it("C2. kind:'workspace' behaviour is unchanged when a capability dep is also present", async () => {
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+      mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+      selectRows = []; // subtype miss → install
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "ops-workspace", kind: "workspace", relation: "require" },
+            { slug: "gmail-cap", kind: "capability", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      // Workspace branch: still installs via the idempotent create path.
+      expect(mockCreateWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ proposalId: "ops-workspace" })
+      );
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "ops-workspace",
+          kind: "workspace",
+          action: "installed",
+          workspaceId: "ws-installed",
+        }),
+        expect.objectContaining({
+          slug: "gmail-cap",
+          kind: "capability",
+          action: "installed",
+        }),
+      ]);
+    });
+
+    it("C3. a capability template missing from cache degrades to required-absent, no throw", async () => {
+      mockLoadCapabilityTemplate.mockRejectedValue(
+        new Error(
+          'Capability template "ghost-cap" not found in the Control Plane catalog'
+        )
+      );
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "ghost-cap", kind: "capability", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(mockCreateCapabilityFromDefinition).not.toHaveBeenCalled();
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "ghost-cap",
+          kind: "capability",
+          action: "required-absent",
+        }),
+      ]);
+    });
+
+    it("C4. a capability required by TWO members installs once (diamond dedup)", async () => {
+      // Two workspace members, each declaring the SAME capability dependency.
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "ws-a" || slug === "ws-b") {
+          return {
+            dependencies: [
+              { slug: "shared-cap", kind: "capability", relation: "require" },
+            ],
+          };
+        }
+        return undefined;
+      });
+      mockToWorkspaceDefinition.mockImplementation((slug: string) => ({
+        definition: { slug },
+      }));
+      mockCreateWorkspace.mockImplementation(
+        async (input: { templateId: string }) => ({
+          workspaceId: `ws-${input.templateId}`,
+          created: true,
+        })
+      );
+      selectRows = [];
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "ws-a", kind: "workspace", relation: "require" },
+            { slug: "ws-b", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      // Applier ran exactly once despite two members requiring it.
+      expect(mockCreateCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+      const capEntries = result.installed.filter(
+        (d) => d.kind === "capability"
+      );
+      expect(capEntries).toHaveLength(1);
+      expect(capEntries[0]).toEqual(
+        expect.objectContaining({ slug: "shared-cap", action: "installed" })
+      );
+    });
+
+    it("C5. a failing capability applier degrades to required-absent, never aborts the suite", async () => {
+      mockCreateCapabilityFromDefinition.mockRejectedValue(
+        new Error("vault write failed")
+      );
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "broken-cap", kind: "capability", relation: "require" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "broken-cap",
+          kind: "capability",
+          action: "required-absent",
+          message: expect.stringContaining("vault write failed"),
+        }),
+      ]);
+    });
+
+    it("C6. an automation dep is still surfaced as required-absent (no symmetric door)", async () => {
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            {
+              slug: "some-automation",
+              kind: "automation",
+              relation: "require",
+            },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(mockCreateCapabilityFromDefinition).not.toHaveBeenCalled();
+      expect(result.installed).toEqual([
+        expect.objectContaining({
+          slug: "some-automation",
+          kind: "automation",
+          action: "required-absent",
+        }),
+      ]);
     });
   });
 });

@@ -15,7 +15,6 @@ import {
   eq,
   and,
   inArray,
-  isNull,
   count,
   apiKeys,
   apiKeyExternalUsers,
@@ -43,19 +42,12 @@ import {
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
+import { integrationHubIdFromIssuerUrl } from "../../../services/hub-integration-registration.js";
 import {
-  AGENT_KEY_ROTATION_LEAD_DAYS,
-  AGENT_KEY_TTL_DAYS,
-  integrationHubIdFromIssuerUrl,
-  revokeActiveHubInboundKeysForUser,
-  SETUP_AGENT_HUB_SCOPES,
-} from "../../../services/hub-integration-registration.js";
-import {
-  createAndVerifyHubInboundKey,
   createAndVerifyServiceKey,
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
-import { ensureLocalAdjunctRegistryRow } from "../../../services/agent-identity-service.js";
+import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { API_KEY_SCOPES, isValidScope } from "@synap/database/schema";
 
 import { kratosAdmin } from "@synap/auth";
@@ -679,187 +671,77 @@ export function registerSetupRoutes(app: HubHono): void {
         }
       }
 
-      // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
-      // Deterministic: if a provisioning race ever produced more than one row for
-      // this agentType, always reuse the OLDEST so the singleton is stable and the
-      // dedup never flip-flops between rows across calls.
-      const existingAgent = await db.query.users.findFirst({
-        where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
-        orderBy: (u, { asc }) => [asc(u.createdAt)],
-        columns: { id: true },
-      });
-
-      let agentUserId: string;
-
-      if (existingAgent) {
-        agentUserId = existingAgent.id;
-        logger.info(
-          { agentUserId, agentType },
-          "setup/agent: reusing existing agent user"
-        );
-      } else {
-        agentUserId = randomUUID();
-        const shortId = agentUserId.slice(0, 8);
-        try {
-          await db.insert(users).values({
-            id: agentUserId,
-            email: `agent-${agentType}-${shortId}@synap.agent`,
-            name: agentLabel,
-            emailVerified: true,
-            userType: "agent",
-            kratosIdentityId: null,
-            agentType,
-            isPersonalAgent: false,
-            createdByUserId: ownerUserId ?? null,
-            agentMetadata: {
-              agentType,
-              description: `${agentLabel} — external agent (${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup)`,
-              createdByUserId: ownerUserId ?? agentUserId,
-              isPersonalAgent: false,
-              writesRequireProposal: true,
-              capabilities: [],
-            },
-            timezone: "UTC",
-            locale: "en",
-          });
-          logger.info(
-            { agentUserId, agentType },
-            "setup/agent: created agent user"
-          );
-        } catch (err) {
-          // DB firewall: a partial unique index on (agentType) for service agents
-          // rejects a concurrent insert. Re-resolve the winning singleton and reuse
-          // it. If nothing matches, the error wasn't a dedup race — re-throw.
-          const raced = await db.query.users.findFirst({
-            where: and(
-              eq(users.userType, "agent"),
-              eq(users.agentType, agentType)
-            ),
-            orderBy: (u, { asc }) => [asc(u.createdAt)],
-            columns: { id: true },
-          });
-          if (!raced) throw err;
-          agentUserId = raced.id;
-          logger.info(
-            { agentUserId, agentType },
-            "setup/agent: lost provision race — reusing existing agent user"
-          );
-        }
-      }
-
-      // ── 1b. Managed registry row for LOCAL surface agents (observability) ────
-      // Only the surface-key path provisions a genuine local CLI adjunct
-      // (claude-code / codex / cursor — the agentType is validated as a surface
-      // type above). Give it an `agents` registry row (kind:'local' + agentCommand)
-      // so it appears as a first-class, selectable adjunct in the management/picker
-      // UI and a turn can be terminal-routed to it. NEVER do this for jwt/issuer
-      // (cloud) agents: an `agentCommand` on the row makes the renderer try to
-      // launch a local terminal, which is wrong for a remote agent. Idempotent by
-      // agents.userId, so re-provisions are safe.
-      if (authMethod === "api_key_surface") {
-        await ensureLocalAdjunctRegistryRow({
-          agentUserId,
-          name: agentLabel,
-          agentType,
-        });
-      }
-
-      // ── 2. Grant workspace membership (opportunistic — skipped if no workspace) ─
-      if (ws) {
-        const existingMembership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.userId, agentUserId),
-            eq(workspaceMembers.workspaceId, ws.id)
-          ),
-          columns: { id: true },
-        });
-
-        if (!existingMembership) {
-          await db.insert(workspaceMembers).values({
-            id: randomUUID(),
-            workspaceId: ws.id,
-            userId: agentUserId,
-            role: "editor",
-            invitedBy: ownerUserId ?? undefined,
-          });
-          logger.info(
-            { agentUserId, workspaceId: ws.id },
-            "setup/agent: workspace membership granted"
-          );
-        }
-      }
-
-      // ── 3. Create Hub Protocol API key ──────────────────────────────────────
-      // Idempotent path: when the caller passes `idempotent: true`, skip
-      // revocation and re-mint if a valid (non-revoked) key already exists.
-      // This is used by Eve's workspace-membership repair so it can add the
-      // agent to the workspace without rotating a healthy key on every update.
-      if (body.idempotent === true) {
-        const existingKey = await db.query.apiKeys.findFirst({
-          where: and(
-            eq(apiKeys.userId, agentUserId),
-            eq(apiKeys.keyType, "hub_inbound"),
-            isNull(apiKeys.revokedAt),
-            // Instance mode: a healthy key for THIS instance is what makes the
-            // call a no-op; another instance's key must not satisfy it.
-            instanceId ? eq(apiKeys.instanceId, instanceId) : undefined
-          ),
-          columns: { id: true },
-        });
-        if (existingKey) {
-          logger.info(
-            { agentUserId, agentType, keyId: existingKey.id },
-            "setup/agent: idempotent — valid key exists, skipping revoke+mint"
-          );
-          return c.json({
-            agentUserId,
-            workspaceId: ws?.id ?? null,
-            alreadyValid: true,
-          });
-        }
-      }
-
-      await revokeActiveHubInboundKeysForUser(db, {
-        userId: agentUserId,
-        revokedBy: agentUserId,
-        revokedReason: "Re-provisioning — replaced by new key via setup/agent",
-        // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
-        // revokes all siblings so exactly one key stays live.
+      // ── Provision the surface agent Hub key via the ONE door ────────────────
+      // provisionSurfaceAgentKey does: find-or-create agent user (pod-wide
+      // singleton per agentType, with the provisioning-race catch) → optional
+      // local-adjunct registry row → onAgentUserResolved hook (our workspace
+      // membership grant) → idempotent short-circuit → instance-aware sibling
+      // revoke → mint+verify. Same call the CP-MCP pod-accept gate uses.
+      const provisioned = await provisionSurfaceAgentKey({
+        agentType,
+        // createdBy/owner and linkedUserId are resolved above so they can't
+        // diverge onto different humans on a multi-user pod.
+        createdByUserId: ownerUserId ?? null,
+        linkedUserId: resolvedLinkedUserId ?? null,
         instanceId,
+        agentLabel,
+        // Only the surface-key path provisions a genuine local CLI adjunct
+        // (claude-code / codex / cursor). NEVER for jwt/issuer (cloud) agents:
+        // an agentCommand on the row makes the renderer try to launch a local
+        // terminal, which is wrong for a remote agent.
+        ensureRegistryRow: authMethod === "api_key_surface",
+        agentDescription: `${agentLabel} — external agent (${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup)`,
+        keyName: `${agentLabel} Hub Key`,
+        keyDescription: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup`,
+        hubId: jwtIssuerUrl
+          ? integrationHubIdFromIssuerUrl(jwtIssuerUrl)
+          : undefined,
+        // Idempotent path (Eve's workspace-membership repair): skip revoke+mint
+        // if a valid (non-revoked) key already exists for THIS instance.
+        idempotent: body.idempotent === true,
+        logger,
+        // Grant workspace membership at the SAME point it ran inline — after the
+        // agent user is resolved, before the idempotent short-circuit.
+        onAgentUserResolved: async (agentUserId) => {
+          if (ws) {
+            const existingMembership =
+              await db.query.workspaceMembers.findFirst({
+                where: and(
+                  eq(workspaceMembers.userId, agentUserId),
+                  eq(workspaceMembers.workspaceId, ws.id)
+                ),
+                columns: { id: true },
+              });
+
+            if (!existingMembership) {
+              await db.insert(workspaceMembers).values({
+                id: randomUUID(),
+                workspaceId: ws.id,
+                userId: agentUserId,
+                role: "editor",
+                invitedBy: ownerUserId ?? undefined,
+              });
+              logger.info(
+                { agentUserId, workspaceId: ws.id },
+                "setup/agent: workspace membership granted"
+              );
+            }
+          }
+        },
       });
 
-      // Agent hub keys now carry a bounded lifetime (SAFE 90d default — see
-      // AGENT_KEY_TTL_DAYS). rotationScheduledAt flags the key for the
-      // rotation-check cron a fixed lead before it expires; the inbound auth
-      // middleware also emits near-expiry warning headers so the caller can
-      // re-provision before the hard 401. Only NEW mints get an expiry.
-      const DAY_MS = 24 * 60 * 60 * 1000;
-      const nowMs = Date.now();
-      const eventRepo = new EventRepository(sql);
-      const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-      const registration = await createAndVerifyHubInboundKey(
-        apiKeyRepo,
-        {
-          keyName: `${agentLabel} Hub Key`,
-          hubId: jwtIssuerUrl
-            ? integrationHubIdFromIssuerUrl(jwtIssuerUrl)
-            : undefined,
-          scope: [...SETUP_AGENT_HUB_SCOPES],
-          userId: agentUserId,
-          keyType: "hub_inbound",
-          description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "issuer-managed" : "Pod-local"} setup`,
-          linkedUserId: resolvedLinkedUserId ?? null,
-          instanceId: instanceId ?? null,
-          expiresAt: new Date(nowMs + AGENT_KEY_TTL_DAYS * DAY_MS),
-          rotationScheduledAt: new Date(
-            nowMs + (AGENT_KEY_TTL_DAYS - AGENT_KEY_ROTATION_LEAD_DAYS) * DAY_MS
-          ),
-        },
-        agentUserId,
-        agentUserId
-      );
+      const agentUserId = provisioned.agentUserId;
+
+      if (provisioned.alreadyValid) {
+        return c.json({
+          agentUserId,
+          workspaceId: ws?.id ?? null,
+          alreadyValid: true,
+        });
+      }
+
+      const { registration, apiKey, plainKey } = provisioned;
       const registrationTrace = toRegistrationTrace(flowId, registration);
-      const { apiKey, plainKey } = registration;
       if (registration.outcome !== "CONNECTED_VERIFIED") {
         logger.error(
           {

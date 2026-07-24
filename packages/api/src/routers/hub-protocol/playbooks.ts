@@ -16,6 +16,7 @@ import {
   updateInputSchema,
 } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubPlaybooksRouter = router({
   /**
@@ -38,6 +39,7 @@ export const hubPlaybooksRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -70,6 +72,7 @@ export const hubPlaybooksRouter = router({
     .input(updateInputSchema.extend({ userId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const { userId, ...rest } = input;
+      assertMayActAs(ctx, userId);
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],

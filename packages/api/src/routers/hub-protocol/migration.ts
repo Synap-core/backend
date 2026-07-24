@@ -22,6 +22,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
@@ -112,6 +113,7 @@ export const migrationRouter = router({
     .input(MigrateInputSchema)
     .mutation(async ({ input, ctx }) => {
       const { userId, workspaceId } = input;
+      assertMayActAs(ctx, userId);
 
       logger.info(
         {

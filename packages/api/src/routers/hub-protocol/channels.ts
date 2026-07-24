@@ -47,6 +47,7 @@ import { EventNames } from "@synap-core/types/events";
 import type { OpenClawPlatform } from "@synap-core/types/events";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import { assertMayActAs } from "./guard.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -157,7 +158,10 @@ export const channelsRouter = router({
         branchPurpose: z.string().max(500).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` becomes the channel owner — a hub PAT may
+      // act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       const channel = await resolveOrCreateChannel({
         userId: input.userId,
         workspaceId: input.workspaceId,
@@ -214,7 +218,10 @@ export const channelsRouter = router({
         reasoning: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity and proposal owner
+      // fed to checkPermissionOrPropose — a hub PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       const proposalId = randomUUID();
 
       const perm = await checkPermissionOrPropose({
@@ -313,7 +320,12 @@ export const channelsRouter = router({
     )
     // Delegates to the shared proposeChannelBind helper — the SSOT for the
     // proposal data shape, reused by the REST POST /channels/:channelId/bind door.
-    .mutation(async ({ input }) => proposeChannelBind(input)),
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity and proposal owner
+      // fed to checkPermissionOrPropose — a hub PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
+      return proposeChannelBind(input);
+    }),
 
   /**
    * Send a message to an existing external-import channel (hot path).
@@ -793,7 +805,10 @@ export const channelsRouter = router({
         agentId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` becomes the personal channel owner — a hub
+      // PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       let resolvedAgentId = input.agentId;
       if (!resolvedAgentId) {
         const [agent] = await db
@@ -841,7 +856,11 @@ export const channelsRouter = router({
         entityId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity — it stamps the
+      // injected message and drives the AI turn (triggerAutoRespond sourceUserId).
+      // A hub PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       // Verify channel exists
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.channelId),

@@ -10,6 +10,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { automationsRouter as regularAutomationsRouter } from "../automations.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubAutomationsRouter = router({
   /**
@@ -37,6 +38,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -74,6 +76,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -101,6 +104,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -140,6 +144,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -173,6 +178,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -198,6 +204,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -223,6 +230,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -249,6 +257,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -276,6 +285,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -302,6 +312,7 @@ export const hubAutomationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],

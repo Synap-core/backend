@@ -19,6 +19,7 @@ import { widgetDefinitions } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { TRPCError } from "@trpc/server";
 import { compileWidgetSource } from "../../utils/widget-compiler.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubWidgetDefinitionsRouter = router({
   /**
@@ -86,6 +87,9 @@ export const hubWidgetDefinitionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity fed to
+      // checkPermissionOrPropose — a hub PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       // Governance check — widget.register is NOT auto-approved
       const perm = await checkPermissionOrPropose({
         userId: input.userId,

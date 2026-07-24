@@ -36,7 +36,9 @@ import {
 import {
   userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import type {
   FlowType,
@@ -108,11 +110,7 @@ function sessionStatus(s: string): RunStatus {
 // EMPTY array means the ledger can never produce that status (skip the query).
 
 type AutomationRunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "skipped";
+  "running" | "completed" | "failed" | "cancelled" | "skipped";
 type PlaybookRunStatusValue = "running" | "completed" | "failed" | "proposed";
 type FocusSessionStatus =
   | "active"
@@ -436,7 +434,14 @@ async function listSessionRuns(
     .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
     .where(
       and(
-        userVisibleWhere(focusSessions.workspaceId, userId),
+        // focus_sessions is ownerPrivate — a NULL workspace is personal to
+        // `userId`, so owner-gate that branch (bare userVisibleWhere would leak
+        // every user's private standalone sessions to all callers).
+        ownerPrivateVisibleWhere(
+          focusSessions.workspaceId,
+          focusSessions.userId,
+          userId
+        ),
         // No run row references this session → it is not double-counted by the
         // playbook ledger, so surface it here (see block comment above).
         isNull(playbookRuns.id),
@@ -584,9 +589,7 @@ async function groupAutomationRuns(
     .where(
       and(
         userVisibleWhere(automationRuns.workspaceId, userId),
-        workspaceId
-          ? eq(automationRuns.workspaceId, workspaceId)
-          : undefined
+        workspaceId ? eq(automationRuns.workspaceId, workspaceId) : undefined
       )
     )
     .groupBy(automationRuns.automationId, automations.name)
@@ -850,7 +853,13 @@ async function loadPlaybookRunDetail(
     .where(
       and(
         eq(playbookRuns.id, runId),
-        userVisibleWhere(focusSessions.workspaceId, userId)
+        // focus_sessions is ownerPrivate — owner-gate the NULL-workspace branch
+        // (defense in depth; the run row is already floored).
+        ownerPrivateVisibleWhere(
+          focusSessions.workspaceId,
+          focusSessions.userId,
+          userId
+        )
       )
     )
     .limit(1);
@@ -917,7 +926,17 @@ async function loadRunProduced(
       and(
         inArray(entities.id, entityIds),
         isNull(entities.deletedAt),
-        userVisibleWhere(entities.workspaceId, userId)
+        // `entities` is ownerPrivate — bare `userVisibleWhere` admits pod-wide
+        // NULL-workspace rows to ALL users. Use the canonical entity READ floor
+        // (owner-gated NULL + membership + exposure + role-lens), identical to
+        // entities.list, so a produced-entity title never leaks cross-tenant.
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        })
       )
     );
   const byId = new Map(rows.map((r) => [r.id, r]));

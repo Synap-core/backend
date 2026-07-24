@@ -59,7 +59,7 @@ import {
   type ProviderVerbSpec,
 } from "@synap/database";
 import {
-  getUserWorkspaceIds,
+  getUserMemberWorkspaceIds,
   logger,
   verifyWorkspaceAccess,
 } from "../hub-protocol/rest/_shared.js";
@@ -697,7 +697,7 @@ export async function executeMCPToolViaHubProtocol(
       // pinned. Recall itself keeps the caller's lens (undefined = pod-wide).
       let catalogWs = workspaceId;
       if (!catalogWs) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         catalogWs = wsIds[0];
       }
       let catalog: ProfileCatalogEntry[] = [];
@@ -1246,7 +1246,7 @@ export async function executeMCPToolViaHubProtocol(
           (profiles as Array<Record<string, unknown>>).map((p) => toDigest(p))
         );
       }
-      const wsIds = await getUserWorkspaceIds(userId);
+      const wsIds = await getUserMemberWorkspaceIds(userId);
       if (wsIds.length === 0) return ok([]);
       const perWs = await Promise.all(
         wsIds.map((id) =>
@@ -1282,7 +1282,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.read", toolName);
       let relWsId = args.workspaceId as string | undefined;
       if (!relWsId) {
-        const ids = await getUserWorkspaceIds(userId);
+        const ids = await getUserMemberWorkspaceIds(userId);
         relWsId = ids[0];
       }
       if (!relWsId) return ok({ error: "No accessible workspace found" });
@@ -1380,7 +1380,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       // Placement + governance workspace are DERIVED from the two endpoints (rung
       // 4 — relational gravity) inside relations.create. We no longer fabricate an
-      // arbitrary `getUserWorkspaceIds()[0]` (the latent wrong-placement bug —
+      // arbitrary `getUserMemberWorkspaceIds()[0]` (the latent wrong-placement bug —
       // that filed the edge into a random workspace the user happened to be first
       // in). The confined lens (requestedWorkspaceId — the service-key clamp) is
       // passed ONLY when present so a bound key stays pinned; absent → the door
@@ -1848,7 +1848,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.read", toolName);
       let playbookWsId = args.workspaceId as string | undefined;
       if (!playbookWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         playbookWsId = wsIds[0];
       }
       if (!playbookWsId) return ok({ error: "No accessible workspace found" });
@@ -1872,7 +1872,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.read", toolName);
       let matchWsId = args.workspaceId as string | undefined;
       if (!matchWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         matchWsId = wsIds[0];
       }
       if (!matchWsId) return ok({ error: "No accessible workspace found" });
@@ -2266,7 +2266,7 @@ export async function executeMCPToolViaHubProtocol(
       // write and the captureCtx below, so a bound key never writes elsewhere.
       let captureWsId = requestedWorkspaceId;
       if (!captureWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         captureWsId = wsIds[0];
       }
       if (!captureWsId) {
@@ -2689,7 +2689,7 @@ export async function executeMCPToolViaHubProtocol(
       // synap_capture uses).
       let projectWsId = requestedWorkspaceId;
       if (!projectWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         projectWsId = wsIds[0];
       }
       if (!projectWsId) {
@@ -2732,7 +2732,7 @@ export async function executeMCPToolViaHubProtocol(
       // Confined workspace (service-key clamp) before the first-ws fallback.
       let pbWsId = requestedWorkspaceId;
       if (!pbWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         pbWsId = wsIds[0];
       }
       if (!pbWsId) {
@@ -3105,7 +3105,7 @@ export async function executeMCPToolViaHubProtocol(
       // value, else the user's first workspace) exactly like synap_list_playbooks.
       let runWsId = requestedWorkspaceId;
       if (!runWsId) {
-        const wsIds = await getUserWorkspaceIds(userId);
+        const wsIds = await getUserMemberWorkspaceIds(userId);
         runWsId = wsIds[0];
       }
       if (!runWsId) return ok({ error: "No accessible workspace found" });

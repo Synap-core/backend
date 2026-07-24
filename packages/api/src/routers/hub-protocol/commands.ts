@@ -10,6 +10,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { intelligenceCommands, eq, desc } from "@synap/database";
 import { AccessContext, scopedDb } from "../../access/index.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubCommandsRouter = router({
   /**
@@ -24,7 +25,10 @@ export const hubCommandsRouter = router({
         limit: z.number().min(1).max(100).optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` becomes the AccessContext.agent read
+      // identity below, so a hub PAT may only act as its own owner.
+      assertMayActAs(ctx, input.userId);
       // Floor on the ACTING user (input.userId, resolved by the IS) via the
       // sharedScope-aware rule: workspace-shared commands for members of the
       // lensed workspace; sharedScope='user' commands ONLY to their creator.
@@ -76,7 +80,10 @@ export const hubCommandsRouter = router({
         id: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Identity floor: the AccessContext.agent read identity must be the
+      // authenticated key owner.
+      assertMayActAs(ctx, input.userId);
       // Same sharedScope floor on the acting user: a non-visible id (another
       // user's private command, or a command outside the lensed workspace)
       // resolves to undefined → not found.

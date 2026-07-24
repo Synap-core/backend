@@ -23,6 +23,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
@@ -140,6 +141,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -269,7 +271,11 @@ export const hubProfilesRouter = router({
         reasoning: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity fed to
+      // checkPermissionOrPropose and the setProfileRenderer write — a hub PAT may
+      // act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       const scope = input.scope ?? "workspace";
       const workspaceId = input.workspaceId ?? null;
       const definition = await db.query.widgetDefinitions.findFirst({
@@ -378,7 +384,12 @@ export const hubProfilesRouter = router({
         displayOrder: z.number().int().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor: `input.userId` is the acting identity fed to
+      // checkPermissionOrPropose and the createAndLinkPropertyDef write
+      // (auto-approved → a live schema write into the target workspace) — a hub
+      // PAT may act only as its own owner.
+      assertMayActAs(ctx, input.userId);
       const overlay = input.overlay === true;
       const valueType = input.valueType as
         | "string"

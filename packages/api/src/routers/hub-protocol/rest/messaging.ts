@@ -20,8 +20,10 @@ import {
   db,
   eq,
   and,
+  isNull,
   messagingAccounts,
   channels,
+  entities,
   ChannelType,
   ensureExternalChannel,
 } from "@synap/database";
@@ -35,6 +37,7 @@ import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
+import { accessScopeWhere } from "../../../utils/project-scope.js";
 
 // ── Shared response schemas ────────────────────────────────────────────────
 
@@ -175,9 +178,7 @@ export function registerMessagingRoutes(app: HubHono): void {
               provider: row.provider,
               displayName: live?.displayName ?? row.displayName,
               status: (live?.status ?? row.status) as
-                | "connected"
-                | "reconnection_required"
-                | "disconnected",
+                "connected" | "reconnection_required" | "disconnected",
             };
           })
           .filter((row) => row.status !== "disconnected");
@@ -673,6 +674,31 @@ export function registerMessagingRoutes(app: HubHono): void {
       try {
         // ── Entity mode: return conversations linked via EXTERNAL channels ──
         if (resolvedEntityId) {
+          // SECURITY — floor the resolved entity by the caller's read
+          // visibility before using it as a channel filter. Without this, a
+          // caller could pass any entityId and enumerate the conversations
+          // linked to another user's entity. Invisible entity → no match.
+          const visibleEntity = await db.query.entities.findFirst({
+            where: and(
+              eq(entities.id, resolvedEntityId),
+              isNull(entities.deletedAt),
+              // `entities` is ownerPrivate — floor on the entity READ scope so a
+              // caller can't pass a NULL-workspace entity id owned by another
+              // user and enumerate its linked conversations. Mirrors entities.list.
+              accessScopeWhere({
+                workspaceIdColumn: entities.workspaceId,
+                entityIdColumn: entities.id,
+                ownerColumn: entities.userId,
+                userId,
+                facetLens: true,
+              })
+            ),
+            columns: { id: true },
+          });
+          if (!visibleEntity) {
+            return c.json({ conversations: [] }, 200);
+          }
+
           const entityChannels = await db.query.channels.findMany({
             where: and(
               eq(channels.channelType, ChannelType.EXTERNAL),
@@ -1111,7 +1137,10 @@ export function registerMessagingRoutes(app: HubHono): void {
         const allLinked = await db.query.channels.findMany({
           where: and(
             eq(channels.channelType, ChannelType.EXTERNAL),
-            eq(channels.contextObjectType, "entity")
+            eq(channels.contextObjectType, "entity"),
+            // SECURITY — scope the scan to channels the caller can see instead
+            // of a pod-wide read of every user's linked channels.
+            channelVisibilityWhere(userId)
           ),
         });
         if (allLinked.length === 0) return c.json({ items: [] }, 200);
@@ -1122,25 +1151,25 @@ export function registerMessagingRoutes(app: HubHono): void {
             eq(messagingAccounts.status, "connected")
           ),
         });
-        const accountByProvider = new Map(
-          userAccounts.map((a) => [a.provider, a])
-        );
+        // The caller's OWN provider account ids — authorize each channel by an
+        // exact `meta.accountId` ↔ own-`externalId` match, NOT a provider-string
+        // match (which admitted any channel that merely carried an accountId,
+        // including other users' linked channels).
+        const ownExternalIds = new Set(userAccounts.map((a) => a.externalId));
 
         type ChEntry = {
           ch: (typeof allLinked)[0];
           meta: ChannelMetadata;
-          effectiveAccountId: string;
         };
         const entries: ChEntry[] = allLinked
-          .map((ch) => {
-            const meta = (ch.metadata ?? {}) as ChannelMetadata;
-            const provider = ch.externalSource ?? "";
-            const ownAccount = accountByProvider.get(provider);
-            const effectiveAccountId =
-              ownAccount?.externalId ?? meta.accountId ?? "";
-            return { ch, meta, effectiveAccountId };
-          })
-          .filter((e) => e.effectiveAccountId !== "");
+          .map((ch) => ({
+            ch,
+            meta: (ch.metadata ?? {}) as ChannelMetadata,
+          }))
+          .filter((e) => {
+            const accountId = e.meta.accountId ?? "";
+            return accountId !== "" && ownExternalIds.has(accountId);
+          });
 
         // Use channel metadata cache (populated by webhook handler on every inbound message).
         // No Unipile calls needed — O(1) DB query instead of O(N accounts) API calls.
@@ -1186,6 +1215,10 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Messages",
           content: { "application/json": { schema: z.array(MessageSchema) } },
         },
+        404: {
+          description: "Account not found",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         500: {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
@@ -1200,8 +1233,22 @@ export function registerMessagingRoutes(app: HubHono): void {
       const connector = await getMessagingConnector();
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
+      const userId = c.get("userId") as string;
       const { threadId } = c.req.valid("param");
       const { accountId } = c.req.valid("query");
+      // SECURITY — verify the requested provider account belongs to the caller
+      // before streaming its live messages. Without this, any caller could read
+      // another user's conversation by passing that account's id (IDOR).
+      const ownAccount = await db.query.messagingAccounts.findFirst({
+        where: and(
+          eq(messagingAccounts.userId, userId),
+          eq(messagingAccounts.externalId, accountId)
+        ),
+        columns: { id: true },
+      });
+      if (!ownAccount) {
+        return c.json({ error: "Account not found" }, 404);
+      }
       try {
         const messages = await connector.getMessages(accountId, threadId);
         return c.json(messages, 200);

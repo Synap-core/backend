@@ -68,11 +68,19 @@ export class ApiKeyRepository extends BaseRepository<
         keyName: data.keyName,
         keyPrefix: data.keyPrefix,
         keyHash,
+        // sha256 of the plaintext key — the O(1) indexed verification path.
+        // Set on mint (exactly as apiKeyService does) so the key's first auth
+        // never falls to the slow O(N) bcrypt loop pending lazy backfill.
+        // Formula MUST match apiKeyService.verificationCacheKey.
+        keyLookupHash: createHash("sha256").update(data.key).digest("hex"),
         hubId: data.hubId,
         scope: data.scope,
         expiresAt: data.expiresAt,
         rotationScheduledAt: data.rotationScheduledAt ?? null,
         userId: data.userId,
+        // `createdBy` is the ACTING human (the `userId` param), distinct from
+        // `data.userId` which is the key's OWNER.
+        createdBy: userId,
         isActive: true,
         usageCount: 0,
         keyType: data.keyType ?? "hub_inbound",

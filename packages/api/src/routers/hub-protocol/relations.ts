@@ -15,6 +15,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { relationsRouter as regularRelationsRouter } from "../relations.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { assertMayActAs } from "./guard.js";
 
 export const hubRelationsRouter = router({
   /**
@@ -32,6 +33,7 @@ export const hubRelationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -81,6 +83,7 @@ export const hubRelationsRouter = router({
       // NULL workspace lens → the regular `list` applies the user floor (every
       // workspace the caller belongs to + pod-wide globals) through the access
       // seam; `getRelated` is userId-scoped, so it is pod-wide by construction.
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -128,6 +131,7 @@ export const hubRelationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -172,6 +176,7 @@ export const hubRelationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],

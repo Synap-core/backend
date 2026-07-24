@@ -66,6 +66,7 @@ import {
   registerSessionsRoutes,
   registerPlaybooksRoutes,
   registerSetupRoutes,
+  registerMcpRedeemRoutes,
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
@@ -581,6 +582,7 @@ registerProactiveRoutes(app); // /proactive/post
 registerNotificationsRoutes(app); // /notifications
 registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
+registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn

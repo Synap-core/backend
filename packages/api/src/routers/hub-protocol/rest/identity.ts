@@ -8,9 +8,11 @@
  * match returns advisory candidates; no match means create is safe.
  *
  * Thin wrapper over the ONE identity matcher (IdentityResolutionService.
- * resolveIdentity) with `userVisibleWhere` scoping on the weak path — the same
- * predicate capture.execute builds, so a pre-check sees exactly what a real
- * capture would resolve against.
+ * resolveIdentity) with `accessScopeWhere` scoping on the weak path — the entity
+ * READ floor (owner-gated NULL + membership + exposure + role-lens), the same
+ * predicate `entities.list` / `resolveEntityByName` build, so a pre-check sees
+ * exactly what a real capture would resolve against and can't leak a NULL-ws
+ * entity by name.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -24,7 +26,7 @@ import {
   type IdentitySignal,
 } from "@synap/database";
 
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { buildIdentityResolveResponse } from "../../../utils/identity-resolve-response.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -169,7 +171,13 @@ export function registerIdentityRoutes(app: HubHono): void {
         kindSlug: body.kindSlug,
         name: body.title,
         signals,
-        userScope: userVisibleWhere(entities.workspaceId, userId),
+        userScope: accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        }),
         limit: 10,
       });
 

@@ -124,3 +124,49 @@ describe("ApiKeyRepository.rotate — identity-preserving rotation", () => {
     expect(values.isActive).toBe(true);
   });
 });
+
+const CREATE_KEY = "synap_user_freshly-minted-plaintext-key";
+const ACTOR_ID = "acting-human-42";
+const OWNER_ID = "key-owner-7";
+
+async function create(overrides: Record<string, unknown> = {}) {
+  // `create()` inserts a fresh row; the mocked db just captures its `.values()`.
+  const { repository, insertedValues } = createRepository(
+    oldKeyRow() as ReturnType<typeof oldKeyRow>
+  );
+  await repository.create(
+    {
+      keyName: "New PAT",
+      keyPrefix: "synap_user_",
+      key: CREATE_KEY,
+      scope: ["hub-protocol.read"],
+      userId: OWNER_ID,
+      ...overrides,
+    },
+    ACTOR_ID
+  );
+  return insertedValues.mock.calls[0]?.[0] as Record<string, unknown>;
+}
+
+describe("ApiKeyRepository.create — mint-time governance columns", () => {
+  it("sets keyLookupHash to sha256(data.key), matching the api-keys service", async () => {
+    const values = await create();
+
+    // Without this the key's first auth skips the O(1) indexed lookup and
+    // falls to the slow O(N) bcrypt loop until lazy backfill. Same formula as
+    // apiKeyService.verificationCacheKey — the full plaintext key, prefix included.
+    expect(values.keyLookupHash).toBe(
+      createHash("sha256").update(CREATE_KEY).digest("hex")
+    );
+  });
+
+  it("records createdBy as the ACTOR, not the key's owner", async () => {
+    const values = await create();
+
+    // `data.userId` is the owner; the `userId` param is the acting human.
+    // The governance column must capture the actor, and they are distinct here.
+    expect(values.createdBy).toBe(ACTOR_ID);
+    expect(values.createdBy).not.toBe(values.userId);
+    expect(values.userId).toBe(OWNER_ID);
+  });
+});
