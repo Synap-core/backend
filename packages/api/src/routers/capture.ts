@@ -1819,6 +1819,39 @@ export const captureRouter = router({
               message: `Anchor entity not found: ${input.anchorEntityId}`,
             });
           }
+
+          // Anchor binding (M2). `capture.structure` seeds the anchor into
+          // structuring as tempId "anchor" (see the structure branch) and tells
+          // the IS to emit the anchor's property patches / role attaches on THAT
+          // sentinel — NOT to set a link-field value. So the op carrying the
+          // anchor's facts arrives with `tempId:"anchor"` and (usually) an EMPTY
+          // `existingEntityId`. Bind it here, server-side, deterministically:
+          // set `existingEntityId = input.anchorEntityId` so
+          // fileAnchoredCaptureProposals routes the anchor's properties → an
+          // `entity.update` proposal on the real anchor and its roles →
+          // `facet.attach` on the anchor — instead of a DUPLICATE `entity.create`.
+          // This does not depend on what the frontend/IS produced.
+          const anchorOp = input.entities.find((e) => e.tempId === "anchor");
+          if (anchorOp) {
+            // Idempotent: if the IS already bound it to the real anchor id, this
+            // is a no-op; if empty (the seeded default), this sets it.
+            anchorOp.existingEntityId = input.anchorEntityId;
+          } else {
+            // No `tempId:"anchor"` op — the IS produced a fresh op for the
+            // anchor's facts instead of using the sentinel. Only treat this as
+            // bound if some op is ALREADY pointed at the real anchor id; the
+            // tempId match is the sole reliable signal, so never guess which
+            // fresh op is the anchor — leave routing as-is and log.
+            const alreadyBound = input.entities.some(
+              (e) => e.existingEntityId === input.anchorEntityId
+            );
+            if (!alreadyBound) {
+              logger.warn(
+                { anchorEntityId: input.anchorEntityId },
+                'capture.execute propose: no tempId:"anchor" op and no op bound to the anchor — anchor facts may route to a create proposal; frontend should map entities from structure.proposals'
+              );
+            }
+          }
         }
         const { proposalIds } = await fileAnchoredCaptureProposals({
           userId,

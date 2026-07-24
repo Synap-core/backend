@@ -63,7 +63,11 @@ import {
   logger,
   verifyWorkspaceAccess,
 } from "../hub-protocol/rest/_shared.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  ownerPrivateVisibleWhere,
+} from "../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../hub-protocol/rest/_capture-graph-dedup.js";
 import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -1316,8 +1320,16 @@ export async function executeMCPToolViaHubProtocol(
         name: args.title as string | undefined,
         signals,
         // Identity is global (a subject exists once pod-wide) → scope the weak
-        // path to the user's visible rows, not a single workspace.
-        userScope: userVisibleWhere(entities.workspaceId, userId),
+        // path to the caller's READ floor (owner-gated NULL + facet-lens), never
+        // bare userVisibleWhere (which admits pod-wide NULL-ws entities to all →
+        // weak candidates would leak another tenant's private entity title).
+        userScope: accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        }),
         limit: 10,
       });
 
@@ -2119,7 +2131,14 @@ export async function executeMCPToolViaHubProtocol(
                     where: and(
                       eq(entities.id, known.entity.id),
                       isNull(entities.deletedAt),
-                      userVisibleWhere(entities.workspaceId, userId)
+                      // Owner-gate NULL-ws (mirrors the shared response builder)
+                      // — a global strong signal must not leak a pod-wide
+                      // owner-private dup's title/kind/id cross-tenant.
+                      ownerPrivateVisibleWhere(
+                        entities.workspaceId,
+                        entities.userId,
+                        userId
+                      )
                     ),
                   });
                   if (!visible) {
@@ -2166,7 +2185,15 @@ export async function executeMCPToolViaHubProtocol(
           reason: string;
         }> = [];
         if (graphEntities.length <= CAPTURE_CROSSKIND_PRECHECK_MAX) {
-          const visibleScope = userVisibleWhere(entities.workspaceId, userId);
+          // Owner-gated READ floor (not bare userVisibleWhere) so weak
+          // cross-kind fuzzy matches never surface another tenant's NULL-ws row.
+          const visibleScope = accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId,
+            facetLens: true,
+          });
           for (const e of graphEntities) {
             if (e.existingEntityId) continue;
             const candidateTitle = normalizeCaptureText(e.title);

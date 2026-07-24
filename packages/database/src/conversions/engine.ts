@@ -857,7 +857,7 @@ export async function applyRemapPropertyValues(
           || jsonb_build_object(
                ${op.targetKey},
                CASE
-                 WHEN e.properties ? ${op.targetKey}
+                 WHEN e.properties ? ${op.targetKey}::text
                    AND (e.properties->>${op.targetKey}) = ANY(${preferValues}::text[])
                  THEN e.properties -> ${op.targetKey}
                  ELSE ${mapJson}::jsonb -> (e.properties->>${op.sourceKey})
@@ -867,7 +867,7 @@ export async function applyRemapPropertyValues(
     FROM profiles p
     WHERE e.profile_id = p.id AND p.slug = ${op.slug}
       AND e.deleted_at IS NULL
-      AND e.properties ? ${op.sourceKey}
+      AND e.properties ? ${op.sourceKey}::text
       AND ${mapJson}::jsonb ? (e.properties->>${op.sourceKey})
   `;
   const n = res.count ?? 0;
@@ -965,7 +965,7 @@ async function computeCounts(
         SELECT COUNT(*)::int AS n FROM entities e
         JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
         WHERE e.deleted_at IS NULL
-          AND e.properties ? ${op.sourceKey}
+          AND e.properties ? ${op.sourceKey}::text
           AND ${mapJson}::jsonb ? (e.properties->>${op.sourceKey})
       `;
       const n = r[0]?.n ?? 0;

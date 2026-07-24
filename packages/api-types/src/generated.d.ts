@@ -6104,6 +6104,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 				}[] | undefined;
 				instructions?: string | undefined;
+				anchorEntityId?: string | undefined;
 				dedupMode?: "title" | "semantic" | "both" | undefined;
 			};
 			output: {
@@ -6381,8 +6382,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
 				sessionId?: string | undefined;
+				propose?: boolean | undefined;
+				anchorEntityId?: string | undefined;
 			};
 			output: {
+				status: "proposed";
+				message: string;
+				created: never[];
+				relations: never[];
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				correlationId: `${string}-${string}-${string}-${string}-${string}`;
+				proposalIds: string[];
+				proposalId?: undefined;
+				proposalType?: undefined;
+				summary?: undefined;
+				reasoning?: undefined;
+				reviewPath?: undefined;
+				reviewUrl?: undefined;
+			} | {
 				status: "proposed";
 				message: string;
 				created: never[];
@@ -6394,6 +6411,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning: string;
 				reviewPath: string;
 				reviewUrl: string;
+				correlationId?: undefined;
+				proposalIds?: undefined;
 			} | {
 				project: {
 					projectId: string;
@@ -6429,6 +6448,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				status?: undefined;
 				message?: undefined;
+				correlationId?: undefined;
+				proposalIds?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				summary?: undefined;
@@ -6470,6 +6491,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				status?: undefined;
 				message?: undefined;
+				correlationId?: undefined;
+				proposalIds?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				summary?: undefined;
@@ -6511,6 +6534,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				status?: undefined;
 				message?: undefined;
+				correlationId?: undefined;
+				proposalIds?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				summary?: undefined;
@@ -6546,6 +6571,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				status?: undefined;
 				message?: undefined;
+				correlationId?: undefined;
+				proposalIds?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				summary?: undefined;
