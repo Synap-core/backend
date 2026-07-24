@@ -143,6 +143,16 @@ export function ConnectForm({
         if (cancelled) return;
         if (!res.ok) {
           const text = await res.text().catch(() => "");
+          // ASSERTION_REPLAYED (409): the one-shot assertion was already
+          // consumed (page reloaded, or it was exchanged before). This page
+          // only renders behind a valid pod session (middleware), so a replay
+          // is NON-FATAL — proceed and let the authenticated steps below surface
+          // a real 401 if the session is actually gone. Hard-failing here just
+          // strands a signed-in user on a stale link.
+          if (res.status === 409 && text.includes("ASSERTION_REPLAYED")) {
+            setSessionReady(true);
+            return;
+          }
           throw new Error(
             text || `Issuer assertion exchange failed (${res.status})`
           );
@@ -162,7 +172,12 @@ export function ConnectForm({
     return () => {
       cancelled = true;
     };
-  }, [issuerAssertion, sessionReady, bootstrapping]);
+    // `bootstrapping` is intentionally NOT a dependency: including it made
+    // setBootstrapping(true) re-run this effect, whose cleanup set cancelled=true
+    // and orphaned the in-flight exchange — freezing the UI on "Verifying pod
+    // session…" forever. The synchronous guard above still prevents a double-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issuerAssertion, sessionReady]);
 
   const existingActive = trpc.apiKeys.list.useQuery(undefined, {
     enabled: sessionReady,
