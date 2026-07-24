@@ -52,6 +52,7 @@ import {
   resolveRolePayload,
   resolveWorkspacePlacement,
   resolveProjectPlacement,
+  loadFacetSlugsBatch,
   type ResolutionRung,
 } from "@synap/database";
 import {
@@ -93,6 +94,7 @@ import {
 } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { fileAnchoredCaptureProposals } from "../utils/capture-propose.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -756,6 +758,16 @@ export const captureRouter = router({
         // Threaded verbatim into the IS structuring call. Absent → unchanged.
         instructions: z.string().max(2000).optional(),
         /**
+         * Anchor an extraction to an EXISTING entity ("Capture updates on this
+         * entity"). When set, the anchor's identity + current shape are fed to
+         * the structuring pass (via the existing `previousEntities` + `instructions`
+         * channels, tempId "anchor") so the model emits property patches / role
+         * attaches / links on IT rather than minting a duplicate — proposing a
+         * NEW related entity only when the text clearly describes a distinct
+         * thing. Absent → unchanged (unanchored extraction).
+         */
+        anchorEntityId: z.string().uuid().optional(),
+        /**
          * Dedup strategy for `dedupCandidates`: "title" = existing Typesense
          * title-similarity search (unchanged); "semantic" = pgvector cosine
          * search over entity embeddings (see semanticDedupCandidates);
@@ -793,6 +805,72 @@ export const captureRouter = router({
       const availableProfiles = buildAvailableProfiles(
         accessibleProfiles as unknown as AccessibleProfileLike[]
       );
+
+      // 1b. Anchor context ("Capture updates on this entity"). When the caller
+      // anchors the capture to an existing entity, load its identity + current
+      // shape and feed it to the structuring pass so the model emits property
+      // patches / role attaches / links on THAT entity (referenced as tempId
+      // "anchor") instead of a duplicate. Wired through the EXISTING
+      // `previousEntities` + `instructions` channels — no new IS contract.
+      // Best-effort: a missing/invisible anchor is ignored (capture proceeds
+      // unanchored).
+      let anchorInstruction: string | undefined;
+      let anchorPreviousEntity:
+        | {
+            tempId: string;
+            profileSlug: string;
+            title: string;
+            properties?: Record<string, unknown>;
+          }
+        | undefined;
+      if (input.anchorEntityId) {
+        const [anchor] = await database
+          .select({
+            id: entitiesTable.id,
+            title: entitiesTable.title,
+            type: entitiesTable.type,
+            properties: entitiesTable.properties,
+          })
+          .from(entitiesTable)
+          .where(
+            and(
+              eq(entitiesTable.id, input.anchorEntityId),
+              isNull(entitiesTable.deletedAt),
+              userVisibleWhere(entitiesTable.workspaceId, userId)
+            )
+          )
+          .limit(1);
+        if (anchor) {
+          let facetSlugs: string[] = [];
+          try {
+            const map = await loadFacetSlugsBatch(database, [anchor.id], {
+              userId,
+              workspaceId: workspaceId ?? undefined,
+            });
+            facetSlugs = map.get(anchor.id) ?? [];
+          } catch (err) {
+            logger.debug(
+              { err, anchorId: anchor.id },
+              "anchor facet load failed (structure proceeds without roles)"
+            );
+          }
+          const anchorKind = anchor.type ?? DEFAULT_CAPTURE_PROFILE;
+          anchorPreviousEntity = {
+            tempId: "anchor",
+            profileSlug: anchorKind,
+            title: anchor.title ?? "",
+            properties: (anchor.properties as Record<string, unknown>) ?? {},
+          };
+          anchorInstruction =
+            `These facts describe the anchor entity "${anchor.title ?? "Untitled"}" ` +
+            `(id ${anchor.id}, kind ${anchorKind}` +
+            (facetSlugs.length ? `, roles: ${facetSlugs.join(", ")}` : "") +
+            `). Emit property patches, role attaches, and links on IT — reference ` +
+            `it as tempId "anchor" and do NOT create a second entity for it. Only ` +
+            `propose a NEW related entity (e.g. a deal, company, contact) when the ` +
+            `text clearly describes a distinct thing, and link it back to "anchor".`;
+        }
+      }
 
       // 2. Fetch user's workspaces for routing hints (most-recently-updated
       // first, up to 30). The old `.limit(5)` had NO orderBy, so Postgres
@@ -893,7 +971,9 @@ export const captureRouter = router({
       // Team roster — merge known teammates into existingEntityNames + inject
       // an OUR TEAM instruction so structure prefers link-not-create for
       // internal people. Best-effort: never fail capture on roster errors.
-      let structureInstructions = input.instructions;
+      let structureInstructions =
+        [input.instructions, anchorInstruction].filter(Boolean).join("\n\n") ||
+        undefined;
       if (workspaceId) {
         try {
           const roster = await loadTeamRosterForCapture(database, {
@@ -904,8 +984,10 @@ export const captureRouter = router({
             new Set([...existingEntityNames, ...roster.names])
           );
           if (roster.instructionBlock) {
+            // Base off the running value so the anchor instruction (folded in
+            // above) is preserved alongside the roster block.
             structureInstructions = [
-              input.instructions,
+              structureInstructions,
               roster.instructionBlock,
             ]
               .filter(Boolean)
@@ -958,7 +1040,9 @@ export const captureRouter = router({
           availableWorkspaces,
           availableProjects,
           existingEntityNames,
-          previousEntities: input.previousEntities,
+          previousEntities: anchorPreviousEntity
+            ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
+            : input.previousEntities,
           routingMemory,
         },
         timeoutMs: STRUCTURE_TIMEOUT_MS,
@@ -1537,6 +1621,24 @@ export const captureRouter = router({
          * captures to an event in "event mode". Optional / back-compat.
          */
         sessionId: z.string().uuid().optional(),
+        /**
+         * Propose mode ("Capture updates on this entity"). When truthy, the
+         * extracted changes are filed as reviewable, user-owned PROPOSALS through
+         * the governed forcePropose door instead of written directly — an entity
+         * op that targets an existing entity (its `existingEntityId`, e.g. the
+         * anchor) becomes an `entity.update` + `facet.attach` proposal on that
+         * entity, new entities + their relations become a composite `entity.create`
+         * proposal, and both-existing relations become `relation.create` proposals.
+         * All share one `correlationId`. Default (absent/false) = today's direct
+         * write, byte-identical for every existing caller.
+         */
+        propose: z.boolean().optional(),
+        /**
+         * The existing entity this capture updates (the anchor). Validated for a
+         * clear error in propose mode; routing keys off each entity op's
+         * `existingEntityId` (the caller links the anchor op to this id).
+         */
+        anchorEntityId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1685,6 +1787,63 @@ export const captureRouter = router({
             );
           }
         }
+      }
+
+      // ── Propose mode ("Capture updates on this entity") ──────────────────
+      // Opt-in: file the extracted changes as reviewable, user-owned proposals
+      // targeted at the anchor/existing entities, instead of writing directly.
+      // NOTHING is written on this path — it returns before the identity-enrich
+      // write + the materialize call below, so it is strictly XOR with the
+      // direct-write path. Default (propose absent/false) → the exact current
+      // code path, unchanged for every existing caller. Placed AFTER the
+      // read-only role→facet rewrite (so role slugs are normalized to
+      // kind+facet) and BEFORE any write.
+      if (input.propose) {
+        // Validate the declared anchor is real + visible so the caller gets a
+        // clear error instead of proposals pointing at a phantom entity.
+        if (input.anchorEntityId) {
+          const [anchor] = await database
+            .select({ id: entitiesTable.id })
+            .from(entitiesTable)
+            .where(
+              and(
+                eq(entitiesTable.id, input.anchorEntityId),
+                isNull(entitiesTable.deletedAt),
+                userVisibleWhere(entitiesTable.workspaceId, userId)
+              )
+            )
+            .limit(1);
+          if (!anchor) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: `Anchor entity not found: ${input.anchorEntityId}`,
+            });
+          }
+        }
+        const { proposalIds } = await fileAnchoredCaptureProposals({
+          userId,
+          workspaceId,
+          correlationId: captureId,
+          projectId: input.projectId ?? undefined,
+          sessionId: input.sessionId ?? ctx.sessionId ?? undefined,
+          entities: input.entities,
+          relations: input.relations,
+          resolveRelationType: (type) =>
+            validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
+        });
+        return {
+          status: "proposed" as const,
+          message:
+            "Capture filed as proposals for review — each change materializes on approval.",
+          // Empty arrays keep the shape a superset of the granted response so
+          // consumers that read `created`/`relations` don't mistake a proposal
+          // for materialized rows.
+          created: [] as never[],
+          relations: [] as never[],
+          captureId,
+          correlationId: captureId,
+          proposalIds,
+        };
       }
 
       // ── Project placement (deterministic door) ───────────────────────────
