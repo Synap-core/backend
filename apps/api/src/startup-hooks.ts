@@ -340,7 +340,16 @@ const REQUIRED_SECRETS_LOCAL_MODE: string[] = [
 
 const RECOMMENDED_SECRETS: string[] = ["KRATOS_SECRETS_CIPHER"];
 
-function validateCriticalSecrets(): void {
+/**
+ * Validate required secrets — FAIL-FAST, exits the process if any are missing.
+ *
+ * MUST run BEFORE `serve()` (from the pre-listen config block in index.ts), not
+ * inside the post-listen startup hooks: `process.exit(1)` after the health port
+ * is already open makes the orchestrator see a healthy-then-crash flap. Exported
+ * so index.ts can call it in the same pre-serve fatal-config gate as the other
+ * `validateConfig(...)` checks.
+ */
+export function validateCriticalSecrets(): void {
   // CI smoke tests set this to skip secret validation — they only verify the image starts.
   if (process.env.SKIP_SECRET_VALIDATION === "true") {
     logger.warn(
@@ -547,8 +556,10 @@ async function ensureLocalUser(): Promise<void> {
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
-  // Validate critical secrets first — exits the process if any are missing
-  validateCriticalSecrets();
+  // NOTE: required-secret validation now runs PRE-`serve()` in index.ts's config
+  // block (a missing secret must fail BEFORE the health port opens, so the
+  // orchestrator never sees a healthy-then-crash flap). Do NOT re-add
+  // validateCriticalSecrets() here — that would double-run it post-listen.
 
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod

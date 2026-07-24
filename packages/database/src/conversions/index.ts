@@ -35,4 +35,7 @@ export {
   runConversions,
   ensureConversionsLedger,
   opHasDestructiveTail,
+  computeCounts,
+  conversionBootSeverity,
+  CONVERSION_BOOT_SEVERITY,
 } from "./engine.js";

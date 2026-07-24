@@ -33,6 +33,20 @@ export type ConversionOp =
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
   opKey: string;
+  /**
+   * When true, this op is DEFERRED at automatic pod boot: `runConversions` with
+   * `skipDeferred:true` (the boot caller) SKIPS it entirely (status "deferred",
+   * NOT ledgered), so a later deliberate operator run (`run-conversions.ts
+   * --apply`, which does NOT set `skipDeferred`) still applies it.
+   *
+   * This is the TYPED, ENFORCED form of "deferred, not auto-run" — use it for a
+   * data cutover that must never be silently applied at deploy (the incident:
+   * `crm.deal-stage.commercial-fold` was documented as deferred in prose but
+   * boot's `runConversions(dryRun:false)` was actually APPLYING it). Orthogonal
+   * to `opHasDestructiveTail` (which defers only the profile-deactivation tail
+   * of mergeInto/dedupe under `deferDestructive`).
+   */
+  deferAtBoot?: boolean;
 }
 
 /**
@@ -930,6 +944,11 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     {
       op: "remapPropertyValues",
       opKey: "crm.deal-stage.commercial-fold",
+      // TYPED deferral: boot (runConversions with skipDeferred:true) NEVER
+      // applies this — it is a data cutover an operator runs deliberately with
+      // `run-conversions.ts --apply` after the property-def cutover lands. This
+      // replaces the prose-only "deferred" promise the boot path silently broke.
+      deferAtBoot: true,
       slug: "deal",
       sourceKey: "dealStage",
       targetKey: "commercialStage",

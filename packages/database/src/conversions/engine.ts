@@ -67,6 +67,12 @@ export interface OpResult {
   status: OpStatus;
   counts: OpCounts;
   error?: string;
+  /**
+   * Boot severity — set on `status:"error"` results so the boot caller can
+   * decide fatal-vs-advisory without re-deriving it. See
+   * `CONVERSION_BOOT_SEVERITY`.
+   */
+  severity?: "fatal" | "advisory";
 }
 
 export interface RunOptions {
@@ -87,6 +93,54 @@ export interface RunOptions {
    * so those ops are deferred whole. Mutually exclusive with `destructiveTail`.
    */
   deferDestructive?: boolean;
+  /**
+   * When true, ops flagged `deferAtBoot` in the manifest are SKIPPED entirely
+   * with status "deferred" — neither applied nor recorded in the ledger — so a
+   * later deliberate operator run (which leaves `skipDeferred` unset) still
+   * applies them. The automatic pod-boot caller (index.ts) sets this; the CLI
+   * (`run-conversions.ts --apply`) does NOT, so an operator can run the deferred
+   * cutover on purpose. Orthogonal to `deferDestructive` (which defers only the
+   * destructive TAIL of mergeInto/dedupe): an op may be deferred by EITHER axis.
+   */
+  skipDeferred?: boolean;
+}
+
+/**
+ * BOOT severity of a conversion op — how the AUTOMATIC pod-boot caller
+ * (index.ts) should treat an APPLY failure of this op:
+ *
+ *   - "fatal": a half-applied failure leaves the ontology in a state that is
+ *     unsafe to serve → boot exits non-zero (the pod refuses to start).
+ *   - "advisory": a value-remap / scope-alignment whose data stays
+ *     dual-readable → boot WARNs, records a degraded signal, and CONTINUES
+ *     serving (a running-but-un-migrated pod, visible on /status/release).
+ *
+ * This is the ONE adjustable mapping keyed by op `type`. Flip an entry here to
+ * change how boot treats that op's failure — nothing else reads severity. It
+ * is a BOOT-only notion: the CLI runner always halts+exits non-zero on any
+ * failure (canary posture) regardless of severity.
+ */
+export const CONVERSION_BOOT_SEVERITY: Record<
+  ConversionOp["op"],
+  "fatal" | "advisory"
+> = {
+  // FATAL — structural identity ops; a partial apply corrupts kind/facet state.
+  declareKind: "fatal",
+  seedKindProfile: "fatal",
+  convertToFacet: "fatal",
+  convertToKind: "fatal",
+  mergeInto: "fatal",
+  dedupeProfileRows: "fatal",
+  // ADVISORY — per-entity value/scope remaps; data stays dual-readable.
+  remapPropertyValues: "advisory",
+  reconcileEntityScope: "advisory",
+  keep: "advisory",
+  extractNonEntity: "advisory",
+};
+
+/** Boot severity for an op (see CONVERSION_BOOT_SEVERITY). */
+export function conversionBootSeverity(op: ConversionOp): "fatal" | "advisory" {
+  return CONVERSION_BOOT_SEVERITY[op.op];
 }
 
 /**
@@ -193,6 +247,21 @@ export async function runConversions(
       continue;
     }
 
+    // Manifest-flagged `deferAtBoot` op, and the caller asked to skip deferred
+    // ops (the automatic pod-boot caller): leave it for a deliberate operator
+    // run — same shape as the destructive-tail defer above (neither apply nor
+    // ledger it), so `--apply` without `skipDeferred` still runs it.
+    if (options.skipDeferred && op.deferAtBoot) {
+      results.push({
+        opKey: op.opKey,
+        op: op.op,
+        slug,
+        status: "deferred",
+        counts: {},
+      });
+      continue;
+    }
+
     try {
       if (options.dryRun) {
         const counts = await computeCounts(sql, op, options);
@@ -236,6 +305,7 @@ export async function runConversions(
         status: "error",
         counts: {},
         error: message,
+        severity: conversionBootSeverity(op),
       });
       break; // Halt at the first failure (canary posture).
     }
@@ -876,7 +946,7 @@ export async function applyRemapPropertyValues(
 
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
-async function computeCounts(
+export async function computeCounts(
   sql: Sql,
   op: ConversionOp,
   options: RunOptions

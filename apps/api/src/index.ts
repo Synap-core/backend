@@ -189,6 +189,11 @@ try {
   } else {
     apiLogger.info("Ory Stack configuration validated");
   }
+  // Required-secret validation — pre-`serve()` so a missing secret fails BEFORE
+  // the health port opens (moved out of the post-listen startup hooks, which
+  // exited AFTER listening → orchestrator saw a healthy-then-crash flap). Exits
+  // non-zero on any missing secret, alongside the other fatal config checks.
+  validateCriticalSecrets();
 } catch (error) {
   apiLogger.error({ err: error }, "Configuration validation failed");
   apiLogger.error(
@@ -462,6 +467,21 @@ app.get("/metrics", async (c) => {
   });
 });
 
+// Ontology-conversions boot state — set by the conversion boot gate below.
+// `degraded` = an ADVISORY conversion op failed to apply at boot but the pod
+// was allowed to keep serving (fatal ops still exit(1)). Surfaced on
+// /status/release so a running-but-un-migrated pod is VISIBLE, not invisible.
+let conversionsBootState: {
+  degraded: boolean;
+  failures: Array<{
+    opKey: string;
+    op: string;
+    severity: string;
+    error: string;
+  }>;
+  checkedAt: number;
+} = { degraded: false, failures: [], checkedAt: 0 };
+
 // ── Deploy verification (public, no auth) ──────────────────────────────────
 // GET /status/release answers "is the latest actually deployed, and did the
 // migration apply?" in one call. Every lookup is wrapped so a missing table or
@@ -547,6 +567,17 @@ app.get("/status/release", async (c) => {
     migrations,
     schemaCoherence,
     buildStamp,
+    // conversions — degraded=true when an ADVISORY conversion op failed to
+    // apply at boot yet the pod kept serving (fatal ops exit(1) instead, so a
+    // fatal failure never reaches this route). Lets ops alert on a
+    // running-but-un-migrated pod.
+    conversions: {
+      degraded: conversionsBootState.degraded,
+      failures: conversionsBootState.failures,
+      checkedAt: conversionsBootState.checkedAt
+        ? new Date(conversionsBootState.checkedAt).toISOString()
+        : null,
+    },
   });
 });
 
@@ -1562,12 +1593,51 @@ await (async () => {
       dryRun: false,
       destructiveTail: false,
       deferDestructive: true,
+      // Manifest ops flagged `deferAtBoot` (e.g. crm.deal-stage.commercial-fold)
+      // are SKIPPED here — a data cutover must never auto-apply at deploy. An
+      // operator runs them deliberately with `run-conversions.ts --apply`.
+      skipDeferred: true,
     });
 
-    if (summary.hadError) {
-      const failed = summary.results.find((r) => r.status === "error");
+    // Severity axis: a FATAL op's apply-failure is unsafe to serve → exit(1).
+    // An ADVISORY op's failure (value-remap / scope; data stays dual-readable)
+    // → WARN + CONTINUE, recording a structured degraded signal (never silently
+    // swallowed). The engine stamps `severity` on each error result and halts
+    // at the first failure (canary posture), so there is at most one here.
+    const failures = summary.results.filter((r) => r.status === "error");
+    const fatal = failures.filter((r) => (r.severity ?? "fatal") === "fatal");
+    const advisory = failures.filter((r) => r.severity === "advisory");
+
+    if (fatal.length > 0) {
+      const f = fatal[0];
       throw new Error(
-        `Conversion op '${failed?.opKey}' failed: ${failed?.error ?? "unknown error"}`
+        `Conversion op '${f.opKey}' (${f.op}) failed: ${f.error ?? "unknown error"}`
+      );
+    }
+
+    if (advisory.length > 0) {
+      conversionsBootState = {
+        degraded: true,
+        failures: advisory.map((r) => ({
+          opKey: r.opKey,
+          op: r.op,
+          severity: r.severity ?? "advisory",
+          error: r.error ?? "unknown error",
+        })),
+        checkedAt: Date.now(),
+      };
+      apiLogger.warn(
+        {
+          event: "boot.conversions.degraded",
+          ops: advisory.map((r) => ({
+            opKey: r.opKey,
+            op: r.op,
+            error: r.error,
+          })),
+        },
+        "Ontology conversions DEGRADED — advisory op(s) failed to apply; the pod " +
+          "is serving with UN-MIGRATED data for those ops. Surfaced on " +
+          "/status/release (conversions.degraded). Fix the cause and reboot to retry."
       );
     }
 
@@ -1580,17 +1650,22 @@ await (async () => {
     const deferred = summary.results.filter((r) => r.status === "deferred");
 
     apiLogger.info(
-      { applied, skipped, deferred: deferred.length },
+      {
+        applied,
+        skipped,
+        deferred: deferred.length,
+        degraded: advisory.length > 0,
+      },
       `Ontology conversions: applied ${applied}, skipped ${skipped} (ledger), ` +
-        `deferred ${deferred.length} (destructive-tail)`
+        `deferred ${deferred.length} (destructive-tail / deferAtBoot)`
     );
 
     if (deferred.length > 0) {
       apiLogger.warn(
         { ops: deferred.map((r) => r.opKey) },
-        "Ontology conversions: destructive-tail ops PENDING operator action — " +
-          "run `tsx src/scripts/run-conversions.ts --apply --destructive-tail` " +
-          "in @synap/database to retire the merged-away / duplicate profiles"
+        "Ontology conversions: deferred op(s) PENDING operator action — run " +
+          "`tsx src/scripts/run-conversions.ts --apply` in @synap/database " +
+          "(add --destructive-tail to also retire merged-away / duplicate profiles)"
       );
     }
   } catch (err) {
@@ -1850,8 +1925,10 @@ try {
   process.exit(1);
 }
 
-// Run startup hooks after server is listening
-import { runStartupHooks } from "./startup-hooks.js";
+// Run startup hooks after server is listening. `validateCriticalSecrets` is
+// imported here too but CALLED earlier (pre-serve config block above) — ES
+// imports are hoisted, so the binding is available when that block evaluates.
+import { runStartupHooks, validateCriticalSecrets } from "./startup-hooks.js";
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
