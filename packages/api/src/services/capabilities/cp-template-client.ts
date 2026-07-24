@@ -19,7 +19,7 @@
  */
 
 import { db, eq, drizzleSql } from "@synap/database";
-import { capabilityTemplateCache } from "@synap/database/schema";
+import { capabilityTemplateCache, workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 export interface CPCapabilityTemplate {
@@ -69,20 +69,88 @@ export async function fetchCPCapabilityTemplatesFromCP(): Promise<
   }
 }
 
+/** This pod's CP identity (workspace settings `controlPlane.podId`), mirroring
+ *  @synap/jobs `cp-project-sync`'s resolveCpPodId. Null when the pod has no CP
+ *  identity (self-hosted) — the owner door is then skipped. Never throws. */
+async function resolveCpPodId(): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({
+        podId: drizzleSql<
+          string | null
+        >`${workspaces.settings} -> 'controlPlane' ->> 'podId'`,
+      })
+      .from(workspaces)
+      .where(
+        drizzleSql`${workspaces.settings} -> 'controlPlane' ->> 'podId' IS NOT NULL`
+      )
+      .limit(1);
+    return rows[0]?.podId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * OWNER-SCOPED by-key fetch — the private-capability door. Calls the CP internal
+ * endpoint (GET /internal/capabilities/:key?podId=…) authenticated with the pod
+ * ↔ CP shared secret (X-Internal-Key), the same trust `cp-project-sync` uses. The
+ * CP resolves this pod's OWNER and applies the author hatch (isPublic OR
+ * authorId=owner), so a PRIVATE capability owned by the pod's owner resolves here
+ * where the anonymous public door 404s. Returns null (→ caller falls back to the
+ * public door) whenever the pod isn't CP-connected (no CONTROL_PLANE_URL /
+ * SYNAP_POD_INTERNAL_KEY / podId) or on any failure. Never throws.
+ */
+async function fetchCPCapabilityTemplateByKeyAsOwner(
+  key: string
+): Promise<CPCapabilityTemplate | null> {
+  const base = cpUrl();
+  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
+  if (!base || !internalKey) return null;
+
+  const podId = await resolveCpPodId();
+  if (!podId) return null;
+
+  try {
+    const res = await fetch(
+      `${base}/internal/capabilities/${encodeURIComponent(
+        key
+      )}?podId=${encodeURIComponent(podId)}`,
+      {
+        headers: { "X-Internal-Key": internalKey },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as CPCapabilityTemplate | { error: string };
+    if ("error" in data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Direct CP fetch of ONE template by key or display name — the "still
- * installable if you know it" door for a capability that's marketplace-listed
- * (isPublic=true) but excluded from the default every-pod sync
- * (syncByDefault=false, e.g. a paid third-party connector like Unipile).
- * Deliberately NOT upserted into `capabilityTemplateCache` by the caller —
- * that cache mirrors the syncByDefault=true list; writing a non-default item
- * into it would leak it back into every pod's default catalog browse, the
- * exact thing syncByDefault exists to prevent. Resilient like the list fetch:
- * returns `null` on ANY failure (404, no CP configured, timeout), never throws.
+ * installable if you know it" door for a capability excluded from the default
+ * every-pod sync (syncByDefault=false, e.g. a paid third-party connector like
+ * Unipile). Tries the OWNER-scoped internal door FIRST (resolves PRIVATE caps
+ * owned by this pod's owner — isPublic=false, e.g. arch-backend), then falls
+ * back to the anonymous public door (isPublic=true only). Deliberately NOT
+ * upserted into `capabilityTemplateCache` by the caller — that cache mirrors the
+ * syncByDefault=true list; writing a non-default item into it would leak it back
+ * into every pod's default catalog browse, the exact thing syncByDefault exists
+ * to prevent. Resilient: returns `null` on ANY failure (404, no CP configured,
+ * timeout), never throws.
  */
 export async function fetchCPCapabilityTemplateByKey(
   key: string
 ): Promise<CPCapabilityTemplate | null> {
+  // Owner-scoped first: the only door that can see a private (isPublic:false)
+  // capability. On a self-hosted / non-CP pod this no-ops and we fall through.
+  const owned = await fetchCPCapabilityTemplateByKeyAsOwner(key);
+  if (owned) return owned;
+
   const base = cpUrl();
   if (!base) return null;
 
