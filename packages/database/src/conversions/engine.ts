@@ -925,7 +925,10 @@ export async function applyRemapPropertyValues(
     SET properties =
           (COALESCE(e.properties, '{}'::jsonb) - ${op.sourceKey})
           || jsonb_build_object(
-               ${op.targetKey},
+               -- key is a variadic any-typed arg; a bare string bind is untyped
+               -- at plan time (could not determine data type of parameter $N) —
+               -- cast it, like the file's other jsonb_build_object calls.
+               ${op.targetKey}::text,
                CASE
                  WHEN e.properties ? ${op.targetKey}::text
                    AND (e.properties->>${op.targetKey}) = ANY(${preferValues}::text[])

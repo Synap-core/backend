@@ -118,7 +118,10 @@ export function ConnectForm({
       setStep({
         kind: "error",
         message:
-          "Invalid redirect_uri — must be a whitelisted integration deeplink (raycast://, synap://, or 127.0.0.1 loopback).",
+          `Invalid redirect_uri (${redirectUri}) — not in this pod's allowlist. ` +
+          `Allowed prefixes: ${allowedPrefixes.join(", ")}. ` +
+          `For a control-plane (CP-MCP) callback, set CONNECT_ALLOWED_HTTPS_ORIGINS ` +
+          `on the pod-admin deployment to the CP origin and restart.`,
         flowId: null,
       });
     }
