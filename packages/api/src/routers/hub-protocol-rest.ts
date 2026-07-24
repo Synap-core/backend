@@ -246,6 +246,11 @@ app.use("/*", async (c, next) => {
     // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
     // key, exactly like /auth/exchange. The handler runs its own verification.
     "/federation/oidc-config",
+    // CP-MCP consent-code redeem — CP authenticates with a trusted-issuer JWT
+    // (verifyTrustedIssuerJwt), NOT a hub API key: the CP-held pod credential is
+    // a bootstrap secret, not a `synap_*` key, so it can't pass the key-format
+    // middleware. The handler verifies the CP assertion + the one-time code.
+    "/mcp/redeem",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the

@@ -23,6 +23,7 @@ import { db, mcpConnectCodes, and, eq, isNull, gt } from "@synap/database";
 import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
 
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
 import { logger, type HubHono } from "./_shared.js";
 
 /**
@@ -74,9 +75,49 @@ export function mapCpScopesToPodScopes(
 
 export function registerMcpRedeemRoutes(app: HubHono): void {
   app.post("/mcp/redeem", async (c) => {
-    // Bearer already validated by the hub-protocol auth middleware — a valid,
-    // active pod key (the CP-held master key) is required to reach here. The
-    // consent code is the SECOND required credential, verified below.
+    // ── Auth: a CP TRUSTED-ISSUER assertion (NOT a hub API key) ──────────────
+    // This route is in `skipAuthPaths`, so the key-format middleware does NOT
+    // run. CP authenticates with a short-lived JWT it signs (`signCpJwt`), which
+    // the pod verifies against its `trusted_issuers` registry — the SAME trust
+    // primitive `/auth/exchange` uses. (The CP-held pod credential is a random
+    // bootstrap secret, not a `synap_*` key, so a key Bearer could never work.)
+    // The one-time `code` below is the SECOND required credential.
+    const authToken = c.req
+      .header("authorization")
+      ?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const audience = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+    if (!audience) {
+      logger.error(
+        "mcp/redeem: PUBLIC_URL not configured — cannot verify CP assertion"
+      );
+      return c.json({ error: "Pod misconfigured (PUBLIC_URL)" }, 500);
+    }
+    if (!authToken) {
+      return c.json(
+        { error: "unauthorized", reason: "missing_assertion" },
+        401
+      );
+    }
+    const cpClaims = await verifyTrustedIssuerJwt<{ mcp_redeem?: unknown }>(
+      authToken,
+      { audience }
+    );
+    if (!cpClaims) {
+      logger.warn(
+        "mcp/redeem: CP assertion failed trusted-issuer verification"
+      );
+      return c.json(
+        { error: "unauthorized", reason: "invalid_assertion" },
+        401
+      );
+    }
+    // Defense in depth: the assertion must have been minted FOR redeem, so a CP
+    // JWT signed for another purpose can't be replayed here.
+    if (cpClaims.mcp_redeem !== true) {
+      logger.warn("mcp/redeem: CP assertion not scoped to mcp_redeem");
+      return c.json({ error: "unauthorized", reason: "wrong_purpose" }, 401);
+    }
+
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== "object") {
       return c.json({ error: "Invalid request body" }, 400);

@@ -62,6 +62,17 @@ vi.mock("./_shared.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// Redeem now authenticates via a CP trusted-issuer JWT (not a hub key). Mock the
+// verifier: default = a valid CP assertion; a test can override to null to assert
+// the 401 auth path.
+const verifyCpSpy = vi.fn(
+  async (_token?: string, _opts?: unknown) => ({ mcp_redeem: true }) as unknown
+);
+vi.mock("../../../utils/jwks-client.js", () => ({
+  verifyTrustedIssuerJwt: (token: string, opts: unknown) =>
+    verifyCpSpy(token, opts),
+}));
+
 // Import AFTER mocks are registered.
 import {
   registerMcpRedeemRoutes,
@@ -77,7 +88,11 @@ function buildApp() {
 async function postRedeem(app: Hono, body: unknown) {
   return app.request("/mcp/redeem", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      // A CP trusted-issuer assertion (mock verifier accepts it by default).
+      authorization: "Bearer test-cp-assertion",
+    },
     body: JSON.stringify(body),
   });
 }
@@ -86,6 +101,10 @@ beforeEach(() => {
   claim.rows = [];
   setSpy.mockClear();
   provisionSpy.mockReset();
+  // The redeem handler reads PUBLIC_URL as the assertion audience.
+  process.env.PUBLIC_URL = "https://pod.test.synap.live";
+  verifyCpSpy.mockReset();
+  verifyCpSpy.mockResolvedValue({ mcp_redeem: true });
 });
 
 // ─── (d) scope-grammar mapping ────────────────────────────────────────────────
@@ -135,6 +154,30 @@ describe("mapCpScopesToPodScopes", () => {
 // ─── (b) reject invalid codes ─────────────────────────────────────────────────
 
 describe("POST /mcp/redeem — rejection", () => {
+  it("401 when the CP trusted-issuer assertion is invalid (auth gate)", async () => {
+    verifyCpSpy.mockResolvedValueOnce(null); // assertion fails verification
+    const res = await postRedeem(buildApp(), { code: "whatever" });
+    expect(res.status).toBe(401);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("401 when the assertion is a valid CP JWT but not minted for redeem", async () => {
+    verifyCpSpy.mockResolvedValueOnce({}); // trusted issuer, but no mcp_redeem
+    const res = await postRedeem(buildApp(), { code: "whatever" });
+    expect(res.status).toBe(401);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("401 when the Authorization header is missing", async () => {
+    const res = await buildApp().request("/mcp/redeem", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "whatever" }),
+    });
+    expect(res.status).toBe(401);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
   it("400 when code is missing", async () => {
     const res = await postRedeem(buildApp(), {});
     expect(res.status).toBe(400);
