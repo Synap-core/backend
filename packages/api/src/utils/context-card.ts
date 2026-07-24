@@ -76,7 +76,9 @@ export function pickGrantSubmissionStage(
     const e = conn.entity;
     if (!e || e.type !== "grant_submission") continue;
     const props = propsOf(e);
-    const stage = props.stage ?? props.dealStage;
+    // A grant_submission carries `stage`; it never has `dealStage` (that's a
+    // deal field) — no cross-kind fallback.
+    const stage = props.stage;
     if (typeof stage === "string" && stage) return stage;
   }
   return null;

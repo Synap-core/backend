@@ -1183,6 +1183,9 @@ export function registerChannelsRoutes(app: HubHono): void {
           )
           .where(
             and(
+              // Same caller floor the rest of this handler applies (the IDOR
+              // guard) — never MAX over a channel the caller can't see.
+              channelVisibilityWhere(userId),
               eq(channelsTable.contextObjectType, "entity"),
               eq(channelsTable.contextObjectId, companyEntity.id)
             )
