@@ -1,9 +1,13 @@
 /**
  * Agent-setup + health primitives (the API-key bootstrap).
  *
- * Canonical home for `setupAgent` / `checkPodHealth` — previously duplicated in
- * `@synap/hub-rest-client` and the CLI. The REST client re-exports these, so its
- * public API (`import { setupAgent } from "@synap/hub-rest-client"`) is unchanged.
+ * Canonical home for `setupAgent` / `checkPodHealth`.
+ *
+ * ⚠️ `@synap/hub-rest-client` does NOT import from this package — it keeps its
+ * own copy of `setupAgent`/`checkPodHealth` and of the `assertValidPodUrl` SSRF
+ * guard (`hub-rest-client/src/setup.ts`), because that package is deliberately
+ * zero-dependency. The two copies must be kept in sync — change one, change the
+ * other. (Wave 2 of SDK-AND-BASE-APP-PLAN.md collapses them into one.)
  *
  * Native `fetch` only; zero runtime dependencies.
  */

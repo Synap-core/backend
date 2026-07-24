@@ -1,6 +1,7 @@
 {
   "name": "@synap/realtime",
   "version": "1.0.0",
+  "private": true,
   "description": "Real-time collaboration with WebSocket and Yjs",
   "type": "module",
   "main": "./dist/index.js",

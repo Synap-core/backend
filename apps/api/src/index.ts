@@ -889,59 +889,6 @@ app.all("/self-service/*", async (c) => {
   return proxyKratosRequest(c, kratosPath);
 });
 
-// Token Exchange endpoint (for websites with external providers)
-app.post("/api/auth/token-exchange", async (c) => {
-  try {
-    const body = await c.req.json();
-
-    // Validate request body
-    if (!body.subject_token) {
-      return c.json({ error: "subject_token is required" }, 400);
-    }
-
-    const { exchangeToken } = await import("@synap/auth");
-
-    const result = await exchangeToken({
-      subject_token: body.subject_token,
-      subject_token_type:
-        body.subject_token_type ||
-        "urn:ietf:params:oauth:token-type:access_token",
-      client_id: body.client_id,
-      client_secret: body.client_secret,
-      requested_token_type:
-        body.requested_token_type ||
-        "urn:ietf:params:oauth:token-type:access_token",
-      scope: body.scope,
-    });
-
-    if (!result) {
-      return c.json({ error: "Token exchange failed" }, 400);
-    }
-
-    return c.json(result);
-  } catch (error) {
-    apiLogger.error({ err: error }, "Error in token exchange");
-    return c.json({ error: "Token exchange failed" }, 500);
-  }
-});
-
-/**
- * This product-specific endpoint intentionally has no compatibility path.
- * The generic trusted-issuer protocol lives at `/api/federation/exchange`.
- * Refusing legacy payloads prevents the Pod from regaining external product
- * assumptions through a deprecated route.
- */
-app.use("/api/handshake", handshakeRateLimitMiddleware);
-app.post("/api/handshake", (c) =>
-  c.json(
-    {
-      error: "This endpoint has been retired. Use /api/federation/exchange.",
-      code: "FEDERATION_HANDSHAKE_RETIRED",
-    },
-    410
-  )
-);
-
 // The canonical router receives the same rate limit before it is mounted
 // farther below at `/api/federation`.
 app.use("/api/federation/exchange", handshakeRateLimitMiddleware);
@@ -1016,9 +963,8 @@ if (config.server.localMode) {
     "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
   );
 }
-apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
 apiLogger.info(
-  "Federated issuer exchange endpoint enabled at /api/federation/exchange; legacy /api/handshake returns 410"
+  "Federated issuer exchange endpoint enabled at /api/federation/exchange"
 );
 
 // SSE endpoint for real-time event streaming (admin dashboard)

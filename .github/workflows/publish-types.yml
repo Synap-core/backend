@@ -1,12 +1,20 @@
 name: Publish Type Packages
 
 on:
+  # Manual publish door. Hand-publishing from a laptop is the proven root cause
+  # of the broken releases (an artifact was published from node 22.22.3 while
+  # this workflow pins node 20) — so there must be a CI button to press instead.
+  workflow_dispatch:
   push:
     branches: [main]
+    # Repo-root-relative. These were once prefixed `synap-backend/` from a
+    # monorepo layout that no longer exists — with that prefix the filter could
+    # never match and this workflow never fired, which is how publishing ended
+    # up being done by hand.
     paths:
-      - "synap-backend/packages/types/src/**"
-      - "synap-backend/packages/api/src/routers/**"
-      - "synap-backend/packages/api/src/root.ts"
+      - "packages/types/src/**"
+      - "packages/api/src/routers/**"
+      - "packages/api/src/root.ts"
 
 jobs:
   publish:
@@ -16,7 +24,10 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # Must match the repo's `packageManager: pnpm@10.28.0`. On 9 the
+          # workspace-protocol rewrite behaviour is not the one this pipeline
+          # is verified against.
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -24,16 +35,16 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install backend dependencies
-        run: cd synap-backend && pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build types package
-        run: cd synap-backend/packages/types && pnpm build
+        run: cd packages/types && pnpm build
 
       - name: Build API package
-        run: cd synap-backend/packages/api && pnpm build
+        run: cd packages/api && pnpm build
 
       - name: Auto-bump @synap-core/types (patch)
-        run: cd synap-backend/packages/types && npm version patch --no-git-tag-version
+        run: cd packages/types && npm version patch --no-git-tag-version
 
       # ONE bump authority for @synap-core/api-types (was: this workflow's own
       # blind `npm version patch`, uncoordinated with
@@ -50,7 +61,7 @@ jobs:
       - name: Drift-aware bump @synap-core/api-types (check-and-bump.mjs)
         id: bump-api-types
         run: |
-          cd synap-backend/packages/api-types
+          cd packages/api-types
           BEFORE=$(node -p "require('./package.json').version")
           node scripts/check-and-bump.mjs
           AFTER=$(node -p "require('./package.json').version")
@@ -61,18 +72,31 @@ jobs:
           fi
 
       - name: Build api-types package
-        run: cd synap-backend/packages/api-types && pnpm build
+        run: cd packages/api-types && pnpm build
 
       - name: Publish @synap-core/types
-        run: cd synap-backend/packages/types && pnpm publish --no-git-checks
+        run: cd packages/types && pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @synap-core/api-types
         if: steps.bump-api-types.outputs.bumped == 'true'
-        run: cd synap-backend/packages/api-types && pnpm publish --no-git-checks
+        run: cd packages/api-types && pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Backstop for the whole failure class: re-download what the registry now
+      # serves and fail if any dependency range is `workspace:`/`file:` (i.e.
+      # EUNSUPPORTEDPROTOCOL for every consumer). Inspects the ARTIFACT, never
+      # the source manifest — see the script header for why this can never be a
+      # prepublishOnly/prepack hook.
+      - name: Verify published artifacts are installable
+        run: |
+          if [ "${{ steps.bump-api-types.outputs.bumped }}" = "true" ]; then
+            node scripts/verify-publishable.mjs packages/types packages/api-types
+          else
+            node scripts/verify-publishable.mjs packages/types
+          fi
 
       # TODO (B1, deferred): once published, open a PR bumping synap-app's
       # @synap-core/api-types pin to the new version (see
@@ -84,10 +108,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add synap-backend/packages/types/package.json \
-                  synap-backend/packages/api-types/package.json \
-                  synap-backend/packages/api-types/src/version.ts \
-                  synap-backend/packages/api-types/src/generated.d.ts \
-                  synap-backend/apps/api/src/index.ts
+          git add packages/types/package.json \
+                  packages/api-types/package.json \
+                  packages/api-types/src/version.ts \
+                  packages/api-types/src/generated.d.ts \
+                  apps/api/src/index.ts
           git commit -m "chore: auto-publish type packages [skip ci]" || true
           git push

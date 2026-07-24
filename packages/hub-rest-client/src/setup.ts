@@ -4,6 +4,11 @@
  * These functions are the canonical implementations shared between
  * the Synap CLI and the Raycast extension. They use the native fetch API
  * and have zero Node.js-specific dependencies.
+ *
+ * ⚠️ `assertValidPodUrl` below is a DUPLICATE of the guard in
+ * `@synap-core/auth-bootstrap` (`src/url.ts`). It is copied, not imported,
+ * because this package is deliberately zero-dependency. The two copies must
+ * be kept in sync — change one, change the other.
  */
 
 import { HubApiError } from "./errors.js";
@@ -11,6 +16,52 @@ import type { AgentSetupResult, PodStatus } from "./types.js";
 
 function normalizeUrl(url: string): string {
   return url.replace(/\/$/, "");
+}
+
+/** Shared per-request knobs for the credential-bearing bootstrap calls. */
+export interface BootstrapRequestOptions {
+  /** Allow `http://` pod URLs (localhost / local-mode dev only). */
+  allowHttp?: boolean;
+}
+
+/**
+ * Throws `HubApiError(status:0)` if `url` is not a valid http(s) pod origin:
+ * must parse, be `https:` (or `http:` when `allowHttp`), and carry no embedded
+ * credentials.
+ *
+ * `podUrl` is attacker-influenceable in multi-tenant / portal contexts, and the
+ * bootstrap helpers POST bearer tokens to it — so every credential-bearing call
+ * validates the URL first. Without this a caller could be coaxed into sending an
+ * issuer assertion or provisioning token to an arbitrary host.
+ *
+ * Kept in sync with `@synap-core/auth-bootstrap`'s `assertValidPodUrl`.
+ */
+function assertValidPodUrl(
+  url: string,
+  opts: BootstrapRequestOptions = {}
+): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new HubApiError(`Invalid pod URL: ${url}`, 0, {
+      code: "INVALID_POD_URL",
+    });
+  }
+  if (parsed.username || parsed.password) {
+    throw new HubApiError("Pod URL must not contain embedded credentials", 0, {
+      code: "INVALID_POD_URL",
+    });
+  }
+  const isHttps = parsed.protocol === "https:";
+  const isHttp = parsed.protocol === "http:";
+  if (!isHttps && !(isHttp && opts.allowHttp)) {
+    throw new HubApiError(
+      `Pod URL must use https:// (got ${parsed.protocol}//)`,
+      0,
+      { code: "INSECURE_POD_URL" }
+    );
+  }
 }
 
 /**
@@ -50,8 +101,10 @@ export async function checkPodHealth(podUrl: string): Promise<PodStatus> {
 export async function setupAgent(
   podUrl: string,
   provisioningToken: string,
-  agentType = "openclaw"
+  agentType = "openclaw",
+  opts: BootstrapRequestOptions = {}
 ): Promise<AgentSetupResult> {
+  assertValidPodUrl(podUrl, { allowHttp: opts.allowHttp });
   const url = normalizeUrl(podUrl);
 
   const res = await fetch(`${url}/api/hub/setup/agent`, {
