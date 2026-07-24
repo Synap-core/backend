@@ -52,11 +52,51 @@ export const dynamic = "force-dynamic";
  * DEFAULT_CONNECT_REDIRECT_PREFIXES (a published, cross-repo package) — this is a
  * pod-owner-controlled env, no package bump.
  */
+/** Normalize an https origin to a SAFE prefix: `https://host/` (trailing slash).
+ * Without the slash, `startsWith("https://api.synap.live")` would also match
+ * `https://api.synap.live.evil.com` — a prefix-confusion hole. The slash pins it
+ * to paths UNDER that exact origin. */
+function toOriginPrefix(raw: string): string | null {
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "https:") return null;
+    return `${u.origin}/`;
+  } catch {
+    return null;
+  }
+}
+
 function readAllowedHttpsOrigins(): string[] {
   return (process.env.CONNECT_ALLOWED_HTTPS_ORIGINS ?? "")
     .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.startsWith("https://"));
+    .map(toOriginPrefix)
+    .filter((s): s is string => s !== null);
+}
+
+/**
+ * The redirect the flow is allowed to deliver to is, by default, the origin of
+ * the TRUSTED ISSUER that signed this connect assertion — NOT a hand-set env.
+ * The assertion's `iss` is the control-plane issuer; the Pod cryptographically
+ * verifies it against its `trusted_issuers` registry at `/api/federation/exchange`
+ * before any code/key is minted, so a redirect back to that same issuer's origin
+ * is safe by the trust already established. (A forged `iss` passes this origin
+ * check but fails the exchange → nothing is minted; a real assertion can only
+ * deliver to its own issuer's origin.) This is why the CP-MCP callback needs no
+ * per-pod env: the trust is the assertion. We decode `iss` here (no verify — the
+ * exchange is the gate) purely to pick which origin to allow.
+ */
+function trustedIssuerRedirectPrefix(issuerAssertion: string): string | null {
+  if (!issuerAssertion) return null;
+  try {
+    const payload = issuerAssertion.split(".")[1];
+    if (!payload) return null;
+    const claims = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8")
+    ) as { iss?: unknown };
+    return typeof claims.iss === "string" ? toOriginPrefix(claims.iss) : null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function ConnectPage({ searchParams }: ConnectPageProps) {
@@ -66,13 +106,22 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   const redirectUri = sp.redirect_uri ?? "";
   const issuerAssertion = sp.issuer_assertion ?? "";
 
+  // Allowed https redirect prefixes: the trusted issuer that signed THIS
+  // assertion (zero-config, the canonical path) PLUS any origins the pod owner
+  // pre-allowlisted via env (optional, for flows without an assertion).
+  const trustedPrefix = trustedIssuerRedirectPrefix(issuerAssertion);
+  const extraRedirectPrefixes = [
+    ...(trustedPrefix ? [trustedPrefix] : []),
+    ...readAllowedHttpsOrigins(),
+  ];
+
   return (
     <ConnectForm
       integration={integration}
       agentType={agentType}
       redirectUri={redirectUri}
       issuerAssertion={issuerAssertion}
-      extraRedirectPrefixes={readAllowedHttpsOrigins()}
+      extraRedirectPrefixes={extraRedirectPrefixes}
     />
   );
 }
