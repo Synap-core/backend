@@ -20,12 +20,14 @@ const { findFirstMock } = vi.hoisted(() => ({ findFirstMock: vi.fn() }));
 
 vi.mock("@synap/database", () => ({
   db: { query: { entities: { findFirst: findFirstMock } } },
-  entities: { id: {}, deletedAt: {}, workspaceId: {} },
+  entities: { id: {}, deletedAt: {}, workspaceId: {}, userId: {} },
 }));
-// userVisibleWhere only builds the (stubbed-away) `where` predicate — no-op it
-// so this unit test doesn't pull in the workspace-membership query chain.
+// ownerPrivateVisibleWhere only builds the (stubbed-away) `where` predicate —
+// no-op it so this unit test doesn't pull in the workspace-membership query
+// chain. The load-bearing logic under test is the findFirst-result → strip/keep
+// branch, not the SQL the floor emits.
 vi.mock("./user-visible-where.js", () => ({
-  userVisibleWhere: vi.fn(() => ({})),
+  ownerPrivateVisibleWhere: vi.fn(() => ({})),
 }));
 
 import { buildIdentityResolveResponse } from "./identity-resolve-response.js";
@@ -35,7 +37,11 @@ type Resolution = Parameters<typeof buildIdentityResolveResponse>[0];
 const strongResolution = (): Resolution =>
   ({
     match: "strong",
-    entity: { id: "entity-1", title: "Alice's Private Contact", type: "person" },
+    entity: {
+      id: "entity-1",
+      title: "Alice's Private Contact",
+      type: "person",
+    },
     candidates: [],
   }) as unknown as Resolution;
 

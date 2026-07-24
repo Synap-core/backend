@@ -8,6 +8,8 @@ import {
   agents,
   channels as channelsTable,
   entities as entitiesTable,
+  messages as messagesTable,
+  entityIdentitySignals,
   focusSessions,
   automations as automationsTable,
   playbooks as playbooksTable,
@@ -15,12 +17,25 @@ import {
   and,
   desc,
   isNull,
+  inArray,
+  max,
   drizzleSql,
   enqueueChannelEgress,
   setChannelBranchPurpose,
+  getEffectiveFacets,
   ChannelFirewallImmutableError,
 } from "@synap/database";
 import { openLink } from "../../../utils/deep-links.js";
+import { relationsRouter } from "../../relations.js";
+import { createHubProtocolCallerContext } from "../utils.js";
+import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
+import {
+  composeKnownUrls,
+  pickClientStatus,
+  pickGrantSubmissionStage,
+  projectDealsFromConnections,
+  type ConnectionLike,
+} from "../../../utils/context-card.js";
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
@@ -998,21 +1013,35 @@ export function registerChannelsRoutes(app: HubHono): void {
         title: string | null;
         openUrl: string;
       } | null = null;
+      // Keep the full company row around for the company-only card fields below.
+      let companyEntity: {
+        id: string;
+        properties: Record<string, unknown>;
+      } | null = null;
       if (channel.contextObjectId && channel.contextObjectType === "entity") {
         const e = await db.query.entities.findFirst({
           where: and(
             eq(entitiesTable.id, channel.contextObjectId),
             isNull(entitiesTable.deletedAt)
           ),
-          columns: { id: true, type: true, title: true },
         });
-        if (e)
+        if (e) {
           linkedEntity = {
             id: e.id,
             type: e.type,
             title: e.title,
             openUrl: openLink(e.id),
           };
+          if (e.type === "company") {
+            companyEntity = {
+              id: e.id,
+              properties:
+                e.properties && typeof e.properties === "object"
+                  ? (e.properties as Record<string, unknown>)
+                  : {},
+            };
+          }
+        }
       }
 
       // 2. Automations wired to this channel (trigger config's channelId).
@@ -1083,6 +1112,107 @@ export function registerChannelsRoutes(app: HubHono): void {
         )
         .limit(25);
 
+      // 5. Company-only client fields (contract for the bridge renderer). Every
+      // field is null/empty-safe: a hollow company yields empty arrays / null,
+      // never a throw. Computed only when the linked entity IS a company.
+      let companyFields:
+        | {
+            status: string | null;
+            knownUrls: string[];
+            deals: Array<{
+              id: string;
+              title: string | null;
+              stage: string | null;
+              openUrl: string;
+            }>;
+            lastActivityAt: string | null;
+            contextSummary: string | null;
+          }
+        | undefined;
+      if (companyEntity) {
+        // Neighbours via the canonical cross-workspace door: null lens = full
+        // user floor, unions 5 sources, filters deletedAt (so soft-deleted
+        // deals never appear). NOT getRelated — that returns soft-deleted rows.
+        const relCtx = await createHubProtocolCallerContext(
+          userId,
+          c.get("scopes") as string[],
+          undefined
+        );
+        const relCaller = relationsRouter.createCaller(
+          relCtx as Parameters<typeof relationsRouter.createCaller>[0]
+        );
+        const connResult = await relCaller.getConnections({
+          entityId: companyEntity.id,
+          workspaceId: null,
+        });
+        const connections = connResult.connections as ConnectionLike[];
+
+        // Identity signals: url / handle / linkedin_url / website (the
+        // "known urls" for the company). Composed with company.website.
+        const signals = await db
+          .select({ signalValue: entityIdentitySignals.signalValue })
+          .from(entityIdentitySignals)
+          .where(
+            and(
+              eq(entityIdentitySignals.entityId, companyEntity.id),
+              inArray(entityIdentitySignals.signalType, [
+                "url",
+                "handle",
+                "linkedin_url",
+                "website",
+              ])
+            )
+          );
+
+        // Client lifecycle facet status (full user floor).
+        const facetScope = await resolveFacetVisibilityScope(userId, null);
+        const effectiveFacets = await getEffectiveFacets(
+          db,
+          companyEntity.id,
+          facetScope
+        );
+
+        // Last activity: MAX(messages.timestamp) over channels bound to this
+        // entity (contextObjectId). NOT channels.metadata.lastMessageAt (fake).
+        const [activityRow] = await db
+          .select({ last: max(messagesTable.timestamp) })
+          .from(messagesTable)
+          .innerJoin(
+            channelsTable,
+            eq(messagesTable.channelId, channelsTable.id)
+          )
+          .where(
+            and(
+              eq(channelsTable.contextObjectType, "entity"),
+              eq(channelsTable.contextObjectId, companyEntity.id)
+            )
+          );
+        const lastActivityAt = activityRow?.last
+          ? new Date(activityRow.last).toISOString()
+          : null;
+
+        companyFields = {
+          status: pickClientStatus({
+            grantSubmissionStage: pickGrantSubmissionStage(connections),
+            facetStatuses: effectiveFacets.map((f) => ({
+              slug: f.profile.slug,
+              status: f.facet.status ?? null,
+            })),
+            companyStatus: companyEntity.properties.status,
+          }),
+          knownUrls: composeKnownUrls(
+            companyEntity.properties.website,
+            signals.map((s) => s.signalValue)
+          ),
+          deals: projectDealsFromConnections(connections, openLink),
+          lastActivityAt,
+          contextSummary:
+            typeof companyEntity.properties.contextSummary === "string"
+              ? (companyEntity.properties.contextSummary as string)
+              : null,
+        };
+      }
+
       return c.json({
         channel: {
           id: channel.id,
@@ -1097,6 +1227,7 @@ export function registerChannelsRoutes(app: HubHono): void {
         sessions,
         playbooks: pbRows.map((p) => ({ id: p.id, name: p.name })),
         openBase: openLink("").replace(/\/+$/, ""),
+        ...(companyFields ?? {}),
       });
     } catch (err) {
       logger.error(

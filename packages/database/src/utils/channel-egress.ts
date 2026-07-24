@@ -20,7 +20,11 @@ export type ChannelEgressKind =
   | "post_message"
   | "rename_channel"
   | "pin_message"
-  | "scheduled_event";
+  | "scheduled_event"
+  // Ask the external adapter (Discord bridge) to re-fetch this channel's
+  // context-card and re-render its pinned card. Payload: { channelId } — the
+  // provider's external channel id. Enqueued by the context-card-refresh cron.
+  | "refresh_context_card";
 
 export interface EnqueueChannelEgressInput {
   /** Which external system the target belongs to (e.g. a chat platform). */

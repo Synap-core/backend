@@ -44,6 +44,7 @@ import {
   workspaceLensWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { listRuns } from "../runs/index.js";
 import type {
   WorkflowKind,
@@ -353,7 +354,16 @@ async function loadResults(
       and(
         inArray(entities.id, entityIds),
         isNull(entities.deletedAt),
-        userVisibleWhere(entities.workspaceId, userId)
+        // Owner-gate NULL-workspace entities + honor facet-lens sharing — a
+        // workflow graph edge must not surface another tenant's pod-wide
+        // (owner-private) entity's title. Matches the entity READ floor.
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        })
       )
     );
   const byId = new Map(rows.map((r) => [r.id, r]));

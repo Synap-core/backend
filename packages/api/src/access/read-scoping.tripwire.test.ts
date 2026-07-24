@@ -680,9 +680,13 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
   // Cross-file delegation (bindChannel → proposeChannelBind, a util) is NOT
   // visible here — acknowledged non-coverage; those procedures are guarded at the
   // door. Allowlist seeded EMPTY: every in-file site is guarded. Shrink-only.
+  // SINK list is STRUCTURAL, not just a 6-name allowlist: besides the known
+  // service writes it also matches ANY `AccessContext.<method>(` (a new floor
+  // constructor) and any raw `.values(`/`.set(` DB write — so a future write
+  // helper keyed on `userId: input.…` is caught without editing this list.
   const SECOND_DOOR_IDENTITY = /\buserId:\s*input\??\.[A-Za-z0-9_]+/;
   const SECOND_DOOR_SINK =
-    /checkPermissionOrPropose\(|AccessContext\.agent\(|resolveOrCreateChannel\(|setProfileRenderer\(|createAndLinkPropertyDef\(|triggerAutoRespond\(/;
+    /checkPermissionOrPropose\(|AccessContext\.\w+\(|resolveOrCreateChannel\(|setProfileRenderer\(|createAndLinkPropertyDef\(|triggerAutoRespond\(|\.values\(|\.set\(/;
   const SECOND_DOOR_ALLOWLIST = new Set<string>([]);
 
   it("no unguarded input.userId reaches a governance/write acting-identity sink (the W0.6 2nd door)", () => {

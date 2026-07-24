@@ -141,6 +141,10 @@ import {
   handlePackageVersionBackfill,
   PACKAGE_VERSION_BACKFILL_QUEUE,
 } from "./package-version-backfill.js";
+import {
+  handleContextCardRefresh,
+  CONTEXT_CARD_REFRESH_QUEUE,
+} from "./context-card-refresh.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -208,6 +212,7 @@ const ALL_QUEUES = [
   POD_HYGIENE_NEAR_DUP_QUEUE,
   LIBRARIAN_ARCHIVER_QUEUE,
   PACKAGE_VERSION_BACKFILL_QUEUE,
+  CONTEXT_CARD_REFRESH_QUEUE,
 ];
 
 /**
@@ -606,6 +611,14 @@ export async function registerAllWorkers(): Promise<void> {
     handlePackageVersionBackfill()
   );
   logger.info("Registered worker: package-version-backfill");
+
+  // Context-card refresh (cron: daily 06:10 UTC — enqueues one
+  // refresh_context_card egress per Discord client TEAM thread so the bridge
+  // re-renders the pinned card with fresh status/deals/activity).
+  await boss.work(CONTEXT_CARD_REFRESH_QUEUE, async () =>
+    handleContextCardRefresh()
+  );
+  logger.info("Registered worker: context-card-refresh");
 
   logger.info("All workers registered");
 }

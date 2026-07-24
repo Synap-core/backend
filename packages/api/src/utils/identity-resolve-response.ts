@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db, entities, type resolveIdentity } from "@synap/database";
-import { userVisibleWhere } from "./user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "./user-visible-where.js";
 
 type IdentityResolution = Awaited<ReturnType<typeof resolveIdentity>>;
 
@@ -47,7 +47,11 @@ export async function buildIdentityResolveResponse(
       where: and(
         eq(entities.id, resolution.entity.id),
         isNull(entities.deletedAt),
-        userVisibleWhere(entities.workspaceId, userId)
+        // The STRONG-match recheck is the load-bearing floor for strong matches
+        // (userScope is injected only on the weak path). A global strong signal
+        // (email/phone) can match a NULL-workspace owner-private entity, so
+        // owner-gate the NULL branch here — never leak its title/kind cross-tenant.
+        ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId)
       ),
     });
     strongVisible = Boolean(visible);

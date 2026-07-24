@@ -41,6 +41,10 @@ import {
 } from "./workers/automation-run-reaper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
+import {
+  CONTEXT_CARD_REFRESH_QUEUE,
+  CONTEXT_CARD_REFRESH_CRON,
+} from "./workers/context-card-refresh.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -287,6 +291,16 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: package-version-backfill (every 30min)");
   await sendSafe(boss, PACKAGE_VERSION_BACKFILL_QUEUE, {});
   logger.info("Enqueued startup run: package-version-backfill");
+
+  // Context-card refresh (daily 06:10 UTC — enqueues a refresh_context_card
+  // egress per Discord client TEAM thread so the bridge re-pins a fresh card).
+  await scheduleSafe(
+    boss,
+    CONTEXT_CARD_REFRESH_QUEUE,
+    CONTEXT_CARD_REFRESH_CRON,
+    {}
+  );
+  logger.info("Registered cron: context-card-refresh (daily at 06:10 UTC)");
 
   logger.info("All cron schedules registered");
 }
