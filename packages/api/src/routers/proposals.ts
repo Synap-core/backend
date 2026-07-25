@@ -17,6 +17,7 @@ import {
   documents,
   eq,
   and,
+  ne,
   or,
   desc,
   inArray,
@@ -2023,6 +2024,9 @@ async function applyProposalApproval(args: {
       deps: approveDeps,
     },
     async (proposalId, errorMessage) => {
+      // Guard against a concurrent winner: if another approval attempt already
+      // flipped this proposal to APPROVED (a confirmed external dispatch), do NOT
+      // clobber it back to APPROVAL_FAILED. Only non-approved rows record failure.
       await db
         .update(proposals)
         .set({
@@ -2032,7 +2036,12 @@ async function applyProposalApproval(args: {
           reviewedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(proposals.id, proposalId));
+        .where(
+          and(
+            eq(proposals.id, proposalId),
+            ne(proposals.status, ProposalStatus.APPROVED)
+          )
+        );
     }
   );
 }

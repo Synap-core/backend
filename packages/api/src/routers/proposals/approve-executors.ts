@@ -105,6 +105,66 @@ function reportApproved(
 }
 
 /**
+ * At-most-once external dispatch with the ratified HYBRID failure policy — the
+ * ONE door for the four irreversible external executors (messaging.external.send,
+ * capability.run, provider.action, capability/run). Wraps the side effect so it
+ * fires at most once and, critically, so the proposal NEVER flips to APPROVED
+ * unless the side effect is confirmed delivered:
+ *
+ *  - CAS-claims `external_dispatched_at` before running. Claim LOST (a prior
+ *    attempt that failed-and-kept its claim, or a concurrent approval owns it):
+ *    throw CONFLICT — the caller must NOT mark APPROVED; we didn't send and can't
+ *    confirm the other attempt did. Surfaces as APPROVAL_FAILED (actionable),
+ *    never a silent false-success (the bug the prior unconditional fall-through
+ *    to APPROVED introduced).
+ *  - `send()` returns `{ delivered: false }` — a DEFINITE not-sent (connector
+ *    refused, skill not_found/deny, provider !executed): RELEASE the claim so a
+ *    Retry re-dispatches cleanly, then throw.
+ *  - `send()` THROWS — ambiguous (the call may have reached the far side): KEEP
+ *    the claim (at-most-once: never risk a double-send on retry) and rethrow.
+ *    Lands APPROVAL_FAILED — honestly "uncertain", not falsely sent.
+ *  - `send()` returns `{ delivered: true }`: return normally; caller marks
+ *    APPROVED exactly once.
+ *
+ * The `send` closure OWNS its own logging of the specific failure reason (this
+ * helper only knows delivered-or-not) and captures any result into caller-scoped
+ * variables for the materialized payload.
+ */
+export async function dispatchExternalOnce(
+  proposalId: string,
+  send: () => Promise<{ delivered: boolean }>,
+  executor: Pick<typeof db, "update"> = db
+): Promise<void> {
+  const [claim] = await executor
+    .update(proposals)
+    .set({ externalDispatchedAt: new Date() })
+    .where(
+      and(eq(proposals.id, proposalId), isNull(proposals.externalDispatchedAt))
+    )
+    .returning({ id: proposals.id });
+
+  if (!claim) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "This action is already being dispatched — nothing was re-sent.",
+    });
+  }
+
+  const { delivered } = await send(); // ambiguous throw → claim kept, propagates
+
+  if (!delivered) {
+    await executor
+      .update(proposals)
+      .set({ externalDispatchedAt: null })
+      .where(eq(proposals.id, proposalId));
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Couldn't apply — the external action was not dispatched.",
+    });
+  }
+}
+
+/**
  * Register every approve executor exactly once (idempotent — safe to call from
  * multiple import sites). Called at module load by proposals.ts.
  */
@@ -2459,10 +2519,16 @@ export function registerApproveExecutors(): void {
           });
         } catch (e) {
           // Workspace already exists — surface post-layer failure rather than
-          // leaving APPROVED with a silent partial package.
+          // leaving APPROVED with a silent partial package. Scrub the raw cause
+          // (it can carry DB/connector internals) to the operator log; the client
+          // gets a fixed message, not the interpolated exception text (E1).
+          logger.warn(
+            { proposalId: input.proposalId, err: (e as Error).message },
+            "workspace create: package layers failed post-workspace"
+          );
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: `Workspace created but package layers failed: ${(e as Error).message}`,
+            message: "Workspace created, but applying its package layers failed.",
           });
         }
       }
@@ -2836,9 +2902,15 @@ export function registerApproveExecutors(): void {
           scopes: [],
         });
       } catch (e) {
+        // Scrub the raw cause to the operator log; the client gets a fixed
+        // message, not interpolated exception text (E1).
+        logger.warn(
+          { proposalId: input.proposalId, err: (e as Error).message },
+          "workspace update: package layers failed post-workspace"
+        );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Workspace updated but package layers failed: ${(e as Error).message}`,
+          message: "Workspace updated, but applying its package layers failed.",
         });
       }
 
@@ -3017,24 +3089,10 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      // At-most-once dispatch claim: atomically stamp external_dispatched_at
-      // BEFORE the irreversible send. A returned row means we won the claim and
-      // must fire exactly once; no row means a prior attempt already dispatched
-      // (Retry re-ran) so we SKIP the send and just close the proposal. The
-      // claim is never un-stamped — a rare lost send on crash is the accepted
-      // tradeoff over a double-send (founder-ratified).
-      const [dispatchClaim] = await db
-        .update(proposals)
-        .set({ externalDispatchedAt: new Date() })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            isNull(proposals.externalDispatchedAt)
-          )
-        )
-        .returning({ id: proposals.id });
-
-      if (dispatchClaim) {
+      // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+      // Only a confirmed-delivered send reaches the APPROVED flip below; a lost
+      // claim / not-sent / ambiguous failure throws → APPROVAL_FAILED.
+      await dispatchExternalOnce(input.proposalId, async () => {
         // BYPASS the capability gate: this send is already past governance (the
         // proposal was approved). `alreadyApproved` makes sendExternalMessage
         // dispatch directly, exactly once — no double-gate on re-entry.
@@ -3045,15 +3103,14 @@ export function registerApproveExecutors(): void {
           userId,
           alreadyApproved: true,
         });
-
         if (!sent) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Failed to send external message — messaging connector not configured",
-          });
+          logger.warn(
+            { proposalId: input.proposalId, threadId, platform },
+            "messaging.external.send: connector reported not-sent"
+          );
         }
-      }
+        return { delivered: sent };
+      });
 
       const materializedPayload = {
         ...payload,
@@ -3133,23 +3190,12 @@ export function registerApproveExecutors(): void {
         });
       }
 
-      // At-most-once dispatch claim (see messaging.external.send). Won claim →
-      // run the backing skill exactly once (the run may be an irreversible
-      // external write); no row → a prior attempt already ran it → skip the run
-      // and just close the proposal.
-      const [dispatchClaim] = await db
-        .update(proposals)
-        .set({ externalDispatchedAt: new Date() })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            isNull(proposals.externalDispatchedAt)
-          )
-        )
-        .returning({ id: proposals.id });
-
+      // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+      // not_found / deny are DEFINITE not-run → { delivered: false } releases the
+      // claim so Retry re-runs; a throw from runResolvedSkill is ambiguous → the
+      // claim is kept (no resend).
       let runResult: unknown;
-      if (dispatchClaim) {
+      await dispatchExternalOnce(input.proposalId, async () => {
         const runOutcome = await runResolvedSkill(skillRow, parameters, {
           userId,
           workspaceId: proposal.workspaceId ?? null,
@@ -3161,23 +3207,18 @@ export function registerApproveExecutors(): void {
             { proposalId: input.proposalId, skillId, reason: runOutcome.message },
             "capability.run executor: skill not found"
           );
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Couldn't apply — the capability could not be run.",
-          });
+          return { delivered: false };
         }
         if (runOutcome.kind === "deny") {
           logger.warn(
             { proposalId: input.proposalId, skillId, reason: runOutcome.reason },
             "capability.run executor: run denied"
           );
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Couldn't apply — the capability could not be run.",
-          });
+          return { delivered: false };
         }
         runResult = runOutcome.result;
-      }
+        return { delivered: true };
+      });
 
       const materializedPayload = {
         ...payload,
@@ -3379,23 +3420,10 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      // At-most-once dispatch claim (see messaging.external.send). Won claim →
-      // fire the irreversible proxy call exactly once; no row → a prior attempt
-      // already dispatched → skip the call and just close the proposal.
-      const [dispatchClaim] = await db
-        .update(proposals)
-        .set({ externalDispatchedAt: new Date() })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            isNull(proposals.externalDispatchedAt)
-          )
-        )
-        .returning({ id: proposals.id });
-
+      // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
       let providerBody: unknown;
       let providerStatus: unknown;
-      if (dispatchClaim) {
+      await dispatchExternalOnce(input.proposalId, async () => {
         const {
           success: executed,
           body,
@@ -3416,21 +3444,17 @@ export function registerApproveExecutors(): void {
           alreadyApproved: true,
           sourceProposalId: input.proposalId,
         });
-
         if (!executed) {
           logger.warn(
             { proposalId: input.proposalId, provider, method, path, providerError },
             "provider.action executor failed"
           );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Couldn't apply — the provider action could not be completed.",
-          });
+          return { delivered: false };
         }
         providerBody = body;
         providerStatus = status;
-      }
+        return { delivered: true };
+      });
 
       const materializedPayload = {
         ...payload,
@@ -3523,21 +3547,8 @@ export function registerApproveExecutors(): void {
         const method = (data.method as string | undefined) ?? "POST";
         const path = (data.path as string | undefined) ?? "/";
 
-        // At-most-once dispatch claim (see messaging.external.send). Won claim →
-        // fire the irreversible proxy call exactly once; no row → a prior attempt
-        // already dispatched → skip the call and fall through to the APPROVED flip.
-        const [dispatchClaim] = await db
-          .update(proposals)
-          .set({ externalDispatchedAt: new Date() })
-          .where(
-            and(
-              eq(proposals.id, input.proposalId),
-              isNull(proposals.externalDispatchedAt)
-            )
-          )
-          .returning({ id: proposals.id });
-
-        if (dispatchClaim) {
+        // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+        await dispatchExternalOnce(input.proposalId, async () => {
           const { success: executed, error: providerError } =
             await triggerProviderAction({
               userId,
@@ -3568,13 +3579,10 @@ export function registerApproveExecutors(): void {
               { proposalId: input.proposalId, provider, method, path, providerError },
               "capability/run executor failed"
             );
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
-              message:
-                "Couldn't apply — the capability could not be completed.",
-            });
+            return { delivered: false };
           }
-        }
+          return { delivered: true };
+        });
       }
       // skill / command dispatch is wired by Wave 3b (skill-execute door); the
       // approval + status flip below still apply so the proposal closes cleanly.
