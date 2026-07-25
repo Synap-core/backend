@@ -48,8 +48,12 @@ import { join, resolve } from "node:path";
  */
 const DEFAULT_PACKAGE_DIRS = ["packages/types", "packages/api-types"];
 
-/** Dependency ranges that cannot survive a publish. */
-const FORBIDDEN_PROTOCOLS = ["workspace:", "file:"];
+/**
+ * Dependency ranges that cannot survive a publish.
+ * KEEP IN SYNC with synap-app/scripts/verify-publishable.mjs (BAD_PROTOCOLS).
+ * `link:`/`portal:` are not rewritten by pnpm either, so they leak the same way.
+ */
+const FORBIDDEN_PROTOCOLS = ["workspace:", "file:", "link:", "portal:"];
 
 /** Registry propagation is not instantaneous after `pnpm publish`. */
 const FETCH_ATTEMPTS = 5;
