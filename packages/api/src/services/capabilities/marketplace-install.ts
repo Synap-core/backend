@@ -51,6 +51,7 @@ import { assertPackageTierAccess } from "../../utils/tier-check.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
+import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../workspace-creation-service.js";
 import { defineCell } from "../cells/define-cell.js";
 
@@ -153,6 +154,55 @@ export async function applyMarketInstall(
   input: ApplyMarketInstallInput
 ): Promise<Record<string, unknown>> {
   const entry = await lookupCatalogEntry(input.kind, input.slug);
+
+  // A CAPABILITY is resolvable WITHOUT a cache row. Opt-in capabilities
+  // (syncByDefault:false, e.g. unipile-linkedin, arch-backend) never enter
+  // cp_catalog_cache, but the CP serves them by key — the exact door `cap add`
+  // uses (fetchCPCapabilityTemplate: pod cache → CP default-list → CP by-key).
+  // Requiring a cache row here is why `market.install` NOT_FOUND/500s on every
+  // opt-in cap while `cap add` installs it fine — two doors, divergent results.
+  // Every other kind still requires the cache row (cell needs its inline source;
+  // automation/template fetch by slug but need the row's `source`).
+  // Capability is handled BEFORE the cache-row requirement because it resolves
+  // by key, cache-row or not.
+  if (input.kind === "capability") {
+    const definition = (entry
+      ? await resolveDefinition(entry, input.version)
+      : await fetchCPCapabilityTemplate(
+          input.slug
+        )) as unknown as CapabilityDefinition | null;
+    if (!definition) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Capability "${input.slug}" isn't in the Control Plane catalog — check the slug, or reseed the CP if it was just authored.`,
+      });
+    }
+    const workspaceRole = input.workspaceId
+      ? (await getWorkspaceMembership(db, input.workspaceId, input.userId))
+          ?.role
+      : "owner";
+    const ctx = {
+      db,
+      authenticated: true as const,
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      workspaceRole,
+    } as unknown as Context;
+    const result = await createCapabilityFromDefinition(
+      definition,
+      input.params ?? {},
+      ctx
+    );
+    return {
+      kind: "capability",
+      key: result.capabilityKey,
+      created: result.created,
+    };
+  }
+
+  // Every other kind REQUIRES a cache row (cell needs its inline source;
+  // automation/template fetch by slug but need the row's `source`). Asserting it
+  // here narrows `entry` to non-null for all the switch cases below.
   if (!entry) {
     throw new TRPCError({
       code: "NOT_FOUND",
@@ -161,34 +211,6 @@ export async function applyMarketInstall(
   }
 
   switch (input.kind) {
-    case "capability": {
-      const definition = (await resolveDefinition(
-        entry,
-        input.version
-      )) as unknown as CapabilityDefinition;
-      const workspaceRole = input.workspaceId
-        ? (await getWorkspaceMembership(db, input.workspaceId, input.userId))
-            ?.role
-        : "owner";
-      const ctx = {
-        db,
-        authenticated: true as const,
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        workspaceRole,
-      } as unknown as Context;
-      const result = await createCapabilityFromDefinition(
-        definition,
-        input.params ?? {},
-        ctx
-      );
-      return {
-        kind: "capability",
-        key: result.capabilityKey,
-        created: result.created,
-      };
-    }
-
     case "cell": {
       const def = entry.definition as {
         key?: string;
@@ -363,7 +385,12 @@ export async function runMarketInstall(
   input: RunMarketInstallInput
 ): Promise<MarketInstallOutcome> {
   const entry = await lookupCatalogEntry(input.kind, input.slug);
-  if (!entry) {
+  // Capability resolves by key even without a cache row — opt-in caps
+  // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them
+  // by key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). This
+  // is THE fix for `market install <opt-in-cap>` 500ing where `cap add` works.
+  // Every other kind still requires the row.
+  if (!entry && input.kind !== "capability") {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `Marketplace entry "${input.slug}" (${input.kind}) not found in the catalog cache. Search first with market.search({query, kind:"${input.kind}"}).`,
@@ -384,11 +411,14 @@ export async function runMarketInstall(
       data: {
         slug: input.slug,
         kind: input.kind,
-        version: input.version ?? entry.version ?? null,
-        source: entry.source,
+        // `entry` is null only for an opt-in capability resolved by key; the
+        // approve-executor re-resolves the definition via applyMarketInstall, so
+        // source/version here are informational and safely fall back to the slug.
+        version: input.version ?? entry?.version ?? null,
+        source: entry?.source ?? null,
         params: input.params ?? {},
       },
-      notificationDescription: `Install "${entry.name}" (${input.kind}) v${entry.version ?? "latest"} from the marketplace`,
+      notificationDescription: `Install "${entry?.name ?? input.slug}" (${input.kind}) v${entry?.version ?? "latest"} from the marketplace`,
     });
     return {
       status: "proposed",
