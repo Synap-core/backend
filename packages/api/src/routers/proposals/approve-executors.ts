@@ -36,10 +36,12 @@ import {
   relations,
   projectMembers,
   and,
+  isNull,
   drizzleSql,
   type LinkEndpointType,
   type LinkType,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   isEntityMergeProposalData,
@@ -75,6 +77,8 @@ import {
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
 // the value paths below avoid via dynamic `import("../skills.js")`.
 import type { InsertSkillGovernedInput } from "../skills.js";
+
+const logger = createLogger({ module: "proposal-approve-executors" });
 
 let registered = false;
 
@@ -1963,9 +1967,16 @@ export function registerApproveExecutors(): void {
           userId: ownerUserId,
         });
       } catch (err) {
+        logger.warn(
+          {
+            proposalId: input.proposalId,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "entity/merge executor failed"
+        );
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: err instanceof Error ? err.message : "Entity merge failed",
+          message: "Couldn't apply — the merge could not be completed.",
         });
       }
 
@@ -3006,23 +3017,42 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      // BYPASS the capability gate: this send is already past governance (the
-      // proposal was approved). `alreadyApproved` makes sendExternalMessage
-      // dispatch directly, exactly once — no double-gate on re-entry.
-      const { success: sent } = await sendExternalMessage({
-        threadId,
-        accountId,
-        body,
-        userId,
-        alreadyApproved: true,
-      });
+      // At-most-once dispatch claim: atomically stamp external_dispatched_at
+      // BEFORE the irreversible send. A returned row means we won the claim and
+      // must fire exactly once; no row means a prior attempt already dispatched
+      // (Retry re-ran) so we SKIP the send and just close the proposal. The
+      // claim is never un-stamped — a rare lost send on crash is the accepted
+      // tradeoff over a double-send (founder-ratified).
+      const [dispatchClaim] = await db
+        .update(proposals)
+        .set({ externalDispatchedAt: new Date() })
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            isNull(proposals.externalDispatchedAt)
+          )
+        )
+        .returning({ id: proposals.id });
 
-      if (!sent) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Failed to send external message — messaging connector not configured",
+      if (dispatchClaim) {
+        // BYPASS the capability gate: this send is already past governance (the
+        // proposal was approved). `alreadyApproved` makes sendExternalMessage
+        // dispatch directly, exactly once — no double-gate on re-entry.
+        const { success: sent } = await sendExternalMessage({
+          threadId,
+          accountId,
+          body,
+          userId,
+          alreadyApproved: true,
         });
+
+        if (!sent) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Failed to send external message — messaging connector not configured",
+          });
+        }
       }
 
       const materializedPayload = {
@@ -3102,25 +3132,52 @@ export function registerApproveExecutors(): void {
           message: `capability.run skill "${skillId}" not found`,
         });
       }
-      const runOutcome = await runResolvedSkill(skillRow, parameters, {
-        userId,
-        workspaceId: proposal.workspaceId ?? null,
-        connectionSelector:
-          (data.connectionSelector as ConnectionSelector | null) ?? null,
-      });
-      if (runOutcome.kind === "not_found") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: runOutcome.message,
+
+      // At-most-once dispatch claim (see messaging.external.send). Won claim →
+      // run the backing skill exactly once (the run may be an irreversible
+      // external write); no row → a prior attempt already ran it → skip the run
+      // and just close the proposal.
+      const [dispatchClaim] = await db
+        .update(proposals)
+        .set({ externalDispatchedAt: new Date() })
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            isNull(proposals.externalDispatchedAt)
+          )
+        )
+        .returning({ id: proposals.id });
+
+      let runResult: unknown;
+      if (dispatchClaim) {
+        const runOutcome = await runResolvedSkill(skillRow, parameters, {
+          userId,
+          workspaceId: proposal.workspaceId ?? null,
+          connectionSelector:
+            (data.connectionSelector as ConnectionSelector | null) ?? null,
         });
+        if (runOutcome.kind === "not_found") {
+          logger.warn(
+            { proposalId: input.proposalId, skillId, reason: runOutcome.message },
+            "capability.run executor: skill not found"
+          );
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Couldn't apply — the capability could not be run.",
+          });
+        }
+        if (runOutcome.kind === "deny") {
+          logger.warn(
+            { proposalId: input.proposalId, skillId, reason: runOutcome.reason },
+            "capability.run executor: run denied"
+          );
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Couldn't apply — the capability could not be run.",
+          });
+        }
+        runResult = runOutcome.result;
       }
-      if (runOutcome.kind === "deny") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: runOutcome.reason,
-        });
-      }
-      const runResult = runOutcome.result;
 
       const materializedPayload = {
         ...payload,
@@ -3322,34 +3379,57 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const {
-        success: executed,
-        body: providerBody,
-        status: providerStatus,
-        error: providerError,
-      } = await triggerProviderAction({
-        userId,
-        provider,
-        method,
-        path,
-        body: data.body as Record<string, unknown> | undefined,
-        accountHint: data.accountHint as string | undefined,
-        baseUrlOverride:
-          (data.baseUrlOverride as string | undefined) ?? undefined,
-        workspaceId: (data.workspaceId as string | undefined) ?? undefined,
-        // Governed Door-2 re-entry: a human already approved this proposal, so
-        // bypass the capability-execution gate (no re-propose) — exactly once.
-        alreadyApproved: true,
-        sourceProposalId: input.proposalId,
-      });
+      // At-most-once dispatch claim (see messaging.external.send). Won claim →
+      // fire the irreversible proxy call exactly once; no row → a prior attempt
+      // already dispatched → skip the call and just close the proposal.
+      const [dispatchClaim] = await db
+        .update(proposals)
+        .set({ externalDispatchedAt: new Date() })
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            isNull(proposals.externalDispatchedAt)
+          )
+        )
+        .returning({ id: proposals.id });
 
-      if (!executed) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            providerError ??
-            "Failed to execute provider action — connector not configured or no connection",
+      let providerBody: unknown;
+      let providerStatus: unknown;
+      if (dispatchClaim) {
+        const {
+          success: executed,
+          body,
+          status,
+          error: providerError,
+        } = await triggerProviderAction({
+          userId,
+          provider,
+          method,
+          path,
+          body: data.body as Record<string, unknown> | undefined,
+          accountHint: data.accountHint as string | undefined,
+          baseUrlOverride:
+            (data.baseUrlOverride as string | undefined) ?? undefined,
+          workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+          // Governed Door-2 re-entry: a human already approved this proposal, so
+          // bypass the capability-execution gate (no re-propose) — exactly once.
+          alreadyApproved: true,
+          sourceProposalId: input.proposalId,
         });
+
+        if (!executed) {
+          logger.warn(
+            { proposalId: input.proposalId, provider, method, path, providerError },
+            "provider.action executor failed"
+          );
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Couldn't apply — the provider action could not be completed.",
+          });
+        }
+        providerBody = body;
+        providerStatus = status;
       }
 
       const materializedPayload = {
@@ -3442,38 +3522,58 @@ export function registerApproveExecutors(): void {
         const provider = (data.provider as string | undefined) ?? capabilityId;
         const method = (data.method as string | undefined) ?? "POST";
         const path = (data.path as string | undefined) ?? "/";
-        const { success: executed, error: providerError } =
-          await triggerProviderAction({
-            userId,
-            provider,
-            method,
-            path,
-            body: data.body as Record<string, unknown> | undefined,
-            accountHint: data.accountHint as string | undefined,
-            baseUrlOverride:
-              (data.baseUrlOverride as string | undefined) ?? undefined,
-            workspaceId: (data.workspaceId as string | undefined) ?? undefined,
-            // Replay the caller's run-time connection pick so the approved run
-            // uses the SAME credential that was selected at propose time (not the
-            // capability's default). Persisted into proposal.data at propose time.
-            connectionSelector:
-              (data.connectionSelector as
-                | { connectionId?: string; contextObjectId?: string }
-                | null
-                | undefined) ?? undefined,
-            // BYPASS the capability-execution gate: a human already approved THIS
-            // proposal, so this is the governed Door-2 re-entry — dispatch directly,
-            // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
-            alreadyApproved: true,
-            sourceProposalId: input.proposalId,
-          });
-        if (!executed) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              providerError ??
-              "Failed to execute granted capability — connector not configured or no connection",
-          });
+
+        // At-most-once dispatch claim (see messaging.external.send). Won claim →
+        // fire the irreversible proxy call exactly once; no row → a prior attempt
+        // already dispatched → skip the call and fall through to the APPROVED flip.
+        const [dispatchClaim] = await db
+          .update(proposals)
+          .set({ externalDispatchedAt: new Date() })
+          .where(
+            and(
+              eq(proposals.id, input.proposalId),
+              isNull(proposals.externalDispatchedAt)
+            )
+          )
+          .returning({ id: proposals.id });
+
+        if (dispatchClaim) {
+          const { success: executed, error: providerError } =
+            await triggerProviderAction({
+              userId,
+              provider,
+              method,
+              path,
+              body: data.body as Record<string, unknown> | undefined,
+              accountHint: data.accountHint as string | undefined,
+              baseUrlOverride:
+                (data.baseUrlOverride as string | undefined) ?? undefined,
+              workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+              // Replay the caller's run-time connection pick so the approved run
+              // uses the SAME credential that was selected at propose time (not the
+              // capability's default). Persisted into proposal.data at propose time.
+              connectionSelector:
+                (data.connectionSelector as
+                  | { connectionId?: string; contextObjectId?: string }
+                  | null
+                  | undefined) ?? undefined,
+              // BYPASS the capability-execution gate: a human already approved THIS
+              // proposal, so this is the governed Door-2 re-entry — dispatch directly,
+              // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
+              alreadyApproved: true,
+              sourceProposalId: input.proposalId,
+            });
+          if (!executed) {
+            logger.warn(
+              { proposalId: input.proposalId, provider, method, path, providerError },
+              "capability/run executor failed"
+            );
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "Couldn't apply — the capability could not be completed.",
+            });
+          }
         }
       }
       // skill / command dispatch is wired by Wave 3b (skill-execute door); the

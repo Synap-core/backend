@@ -240,7 +240,11 @@ export async function dispatchProposalApproval(
       },
       "proposal approval failed"
     );
-    await onApprovalFailed(args.input.proposalId, errorMessage);
+    const safe =
+      err instanceof TRPCError
+        ? err.message
+        : "Couldn't apply — an internal error occurred.";
+    await onApprovalFailed(args.input.proposalId, safe);
     throw err;
   }
 }

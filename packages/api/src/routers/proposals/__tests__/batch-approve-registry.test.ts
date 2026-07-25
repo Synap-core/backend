@@ -36,6 +36,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { TRPCError } from "@trpc/server";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -370,11 +371,16 @@ describe("(c/d) partial failure is isolated and visible", () => {
     const failed: Array<{ proposalId: string; reason: string }> = [];
     const results = await runBatch(["p1", "p2", "p3"], failed);
 
-    // Visible in the DB write the dispatch performs…
+    // Visible in the DB write the dispatch performs… E1 error-scrub: the
+    // PERSISTED reason (passed to onApprovalFailed → rejectionReason) is
+    // scrubbed to a generic message for a non-TRPCError, so raw pg/provider text
+    // never lands in the stored proposal.
     expect(failed).toEqual([
-      { proposalId: "p3", reason: "automation was deleted" },
+      { proposalId: "p3", reason: "Couldn't apply — an internal error occurred." },
     ]);
-    // …and in the payload the client renders.
+    // …and in the payload the client renders. The error is RE-THROWN unchanged
+    // (dispatchProposalApproval does `throw err`), so the per-item batch error
+    // still carries the original throw — only the persisted reason is scrubbed.
     expect(results[2]).toEqual({
       proposalId: "p3",
       success: false,
@@ -486,12 +492,45 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
 
     // The DB write proposals.ts's onApprovalFailed performs (status flip to
     // APPROVAL_FAILED + rejectionReason) is driven by exactly these args.
+    // E1 error-scrub: a NON-TRPCError throw is a raw internal error that may
+    // carry pg-constraint text / provider payloads / PII, so the persisted
+    // rejectionReason is scrubbed to a fixed generic message. The raw error is
+    // still logged server-side and re-thrown to the caller unchanged (asserted
+    // by the rejects.toThrow above).
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
-      "automation was deleted"
+      "Couldn't apply — an internal error occurred."
     );
     expect(reportProposalOutcome).not.toHaveBeenCalled();
+  });
+
+  it("a TRPCError throw is authored + safe, so its message survives the scrub verbatim", async () => {
+    proposalExecRegistry.register({
+      key: "automation/execute",
+      async execute() {
+        // Hand-thrown TRPCErrors are the executor's OWN safe, user-facing copy
+        // ("target no longer exists") — the allowlist preserves them so the
+        // review UI still shows the actionable reason.
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Couldn't apply — target no longer exists",
+        });
+      },
+    });
+
+    const a = args(proposalRow("p1", "automation", "execute"));
+    const onApprovalFailed = vi.fn(async () => {});
+
+    await expect(
+      dispatchProposalApproval(a, onApprovalFailed)
+    ).rejects.toThrow("Couldn't apply — target no longer exists");
+
+    expect(onApprovalFailed).toHaveBeenCalledTimes(1);
+    expect(onApprovalFailed).toHaveBeenCalledWith(
+      "p1",
+      "Couldn't apply — target no longer exists"
+    );
   });
 });
 
