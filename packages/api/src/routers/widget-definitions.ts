@@ -130,6 +130,54 @@ export const widgetDefinitionsRouter = router({
   }),
 
   /**
+   * Lightweight metadata projection of {@link list}.
+   *
+   * Same scoping EXACTLY (the registered `workspace` VisibilityRule applied by
+   * scopedDb, same `where`/`orderBy`) but selects ONLY the columns the browser's
+   * "Made for you" lane reads — the provenance signals `aiOriginForCell` inspects
+   * (`isActive`, `rendererType`, `typeKey`, `category`, `workspaceId`) plus the
+   * display fields (`name`, `description`, `createdAt`, `updatedAt`). It DROPS the
+   * heavy `rendererSource`/`bundleSource` blobs, so the lane's badge/count can be
+   * derived without shipping compiled cell source. Studio still uses `list`.
+   */
+  listMeta: podProcedure.query(async ({ ctx }) => {
+    const rows = await scopedDb(accessFor(ctx)).findMany<
+      Pick<
+        typeof widgetDefinitions.$inferSelect,
+        | "typeKey"
+        | "isActive"
+        | "rendererType"
+        | "category"
+        | "workspaceId"
+        | "name"
+        | "description"
+        | "createdAt"
+        | "updatedAt"
+      >
+    >(widgetDefinitions, {
+      columns: {
+        typeKey: true,
+        isActive: true,
+        rendererType: true,
+        category: true,
+        workspaceId: true,
+        name: true,
+        description: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      where: eq(widgetDefinitions.isActive, true),
+      orderBy: [
+        // Builtins first (workspaceId null sorts before UUIDs)
+        asc(widgetDefinitions.workspaceId),
+        asc(widgetDefinitions.category),
+        asc(widgetDefinitions.name),
+      ],
+    });
+    return rows;
+  }),
+
+  /**
    * Get a single widget definition by typeKey.
    * Looks up system-wide first, then workspace-specific.
    */

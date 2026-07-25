@@ -3659,6 +3659,33 @@ export interface BackfillTeamPersonBridgeResult {
 }
 export type PackageDependencyKind = "workspace" | "capability" | "automation";
 export type PackageDependencyRelation = "compose" | "require";
+/** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
+export type PropertyTargetUnresolvedReason = 
+/** The owning profile never entered `profileMap` (kind conflict → skipped). */
+"owner-profile-unresolved"
+/** The target slug resolves to no profile visible in this workspace's lens. */
+ | "target-profile-unresolved"
+/** No property-def with this slug exists on the owning profile. */
+ | "property-def-not-found"
+/** The live def is not an `entity_id` — a target would be meaningless. */
+ | "property-not-entity-id"
+/** Reading the live def failed (transient) — retried on the next reconcile. */
+ | "read-failed"
+/** The def resolved but the UPDATE failed — retried on the next reconcile. */
+ | "write-failed";
+export interface PropertyTargetEntry {
+	profile: string;
+	slug: string;
+	targetProfileSlug: string;
+}
+export interface PropertyTargetResolutionReport {
+	/** Defs whose NULL `target_profile_id` was filled in by this pass. */
+	set: PropertyTargetEntry[];
+	/** Declared targets left NULL — non-fatal, surfaced rather than swallowed. */
+	unresolved: Array<PropertyTargetEntry & {
+		reason: PropertyTargetUnresolvedReason;
+	}>;
+}
 export interface ReconcileReport {
 	workspaceId: string;
 	dryRun: boolean;
@@ -3726,6 +3753,15 @@ export interface ReconcileReport {
 			liveType: string;
 			templateType: string;
 		}>;
+		/**
+		 * `entity_id` properties whose declared `targetProfileSlug` was resolved to
+		 * a live profile and written to `property_defs.target_profile_id` — the key
+		 * the entity picker constrains on. `set` covers defs this run created AND
+		 * pre-existing defs that were still NULL (the backfill); `unresolved` is
+		 * non-fatal, mirroring `entityLinks.unresolved`. See
+		 * `resolve-property-target-profiles.ts`.
+		 */
+		targets: PropertyTargetResolutionReport;
 	};
 	views: {
 		added: string[];
@@ -17609,6 +17645,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		listMeta: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Pick<{
+				name: string;
+				workspaceId: string | null;
+				source: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				role: WidgetRole;
+				version: string | null;
+				isActive: boolean;
+				description: string | null;
+				icon: string | null;
+				category: string | null;
+				typeKey: string;
+				rendererType: WidgetRendererType;
+				rendererSource: string | null;
+				bundleSource: string | null;
+				configSchema: Record<string, unknown>;
+				defaultConfig: Record<string, unknown> | null;
+				defaultSize: {
+					w: number;
+					h: number;
+				};
+				minSize: {
+					w: number;
+					h: number;
+				} | null;
+				deps: Record<string, string> | null;
+				trustLevel: WidgetTrustLevel;
+				contentKind: ContentKind;
+			}, "name" | "workspaceId" | "updatedAt" | "createdAt" | "isActive" | "description" | "category" | "typeKey" | "rendererType">[];
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				typeKey: string;
@@ -19760,10 +19831,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				subjectEntityId?: string | undefined;
 				payload?: Record<string, unknown> | undefined;
+				agentUserId?: string | undefined;
+				reasoning?: string | undefined;
 			};
 			output: {
-				status: string;
-				runId: string;
+				status: "proposed";
+				runId: string | null;
+				proposalId: string | null;
+				message: string;
+			} | {
+				status: "triggered";
+				runId: string | null;
+				proposalId: string | null;
+				message?: undefined;
 			};
 			meta: object;
 		}>;

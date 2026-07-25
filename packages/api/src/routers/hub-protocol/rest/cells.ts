@@ -302,7 +302,13 @@ export function registerCellsRoutes(app: HubHono): void {
           workspaceId: workspaceId ?? null,
           subjectType: "cell",
           action: "define",
-          source: "api",
+          // Agent-authored AI-generated renderer source — brand the provenance
+          // "intelligence" for consistent attribution/telemetry, matching the
+          // automation execute door (automations.ts). Reached only on the agent
+          // path (`if (agentUserId)`); on the not-agent defence-in-depth
+          // fall-through in checkPermissionOrPropose this now routes to a
+          // proposal instead of a direct grant — the safer direction.
+          source: "intelligence",
           // Carry the FULL define input so the `cell/define` approve-executor
           // materializes a real cell on approval, not a labelled shell.
           data: {

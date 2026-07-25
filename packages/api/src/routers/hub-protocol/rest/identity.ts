@@ -98,6 +98,24 @@ const ResolveIdentityResponseSchema = z
       .describe(
         'Same-title entities of a DIFFERENT kind. ADVISORY: `match` stays "none" because a title alone never auto-merges — but do NOT treat "none" as "safe to create" when this is non-empty. Prefer proposing a link to one of these over minting a duplicate.'
       ),
+    pendingCandidates: z
+      .array(
+        z.object({
+          proposalId: z.string(),
+          proposalType: z.string(),
+          summary: z.string().optional(),
+          entityRef: z.string().optional(),
+          entityTitle: z.string().optional(),
+          profileSlug: z.string().optional(),
+          matchedSignals: z.array(
+            z.object({ type: z.string(), value: z.string() })
+          ),
+        })
+      )
+      .optional()
+      .describe(
+        'Strong-signal matches in YOUR OWN pending capture proposals — a duplicate already in-flight but not yet committed (so `match` is still "none"). ADVISORY: carries a proposalId, NEVER an entityId — do NOT link to it (it can still be rejected). Wait for review or revise, rather than filing a second copy.'
+      ),
   })
   .openapi("ResolveIdentityResponse");
 
@@ -183,7 +201,10 @@ export function registerIdentityRoutes(app: HubHono): void {
 
       // Cross-user content scoping lives in the shared response builder (the
       // one door for both this route and the MCP synap_resolve_identity tool).
-      return c.json(await buildIdentityResolveResponse(resolution, userId));
+      // Pass `signals` so it also surfaces pending in-flight duplicates.
+      return c.json(
+        await buildIdentityResolveResponse(resolution, userId, signals)
+      );
     } catch (err) {
       logger.error({ err, userId }, "POST /identity/resolve failed");
       return c.json(

@@ -1,6 +1,15 @@
 import { and, eq, isNull } from "drizzle-orm";
-import { db, entities, type resolveIdentity } from "@synap/database";
+import {
+  db,
+  entities,
+  type resolveIdentity,
+  type IdentitySignal,
+} from "@synap/database";
 import { ownerPrivateVisibleWhere } from "./user-visible-where.js";
+import {
+  findPendingSignalMatches,
+  type PendingSignalMatch,
+} from "./pending-capture-dedup.js";
 
 type IdentityResolution = Awaited<ReturnType<typeof resolveIdentity>>;
 
@@ -19,7 +28,14 @@ type IdentityResolution = Awaited<ReturnType<typeof resolveIdentity>>;
  */
 export async function buildIdentityResolveResponse(
   resolution: IdentityResolution,
-  userId: string
+  userId: string,
+  /**
+   * The strong signals this lookup was built from. When supplied, the response
+   * also carries `pendingCandidates` — matches in the caller's OWN pending
+   * queue (see below). Optional so callers that don't have the signals handy
+   * simply omit the pending scan.
+   */
+  signals?: IdentitySignal[]
 ): Promise<{
   match: "strong" | "weak" | "none";
   entityId?: string;
@@ -39,6 +55,16 @@ export async function buildIdentityResolveResponse(
     title: string | null;
     kind: string;
   }>;
+  /**
+   * Strong-signal matches in the caller's OWN pending capture/import proposals
+   * — a duplicate already IN-FLIGHT but not yet committed (so `resolveIdentity`,
+   * which only sees committed entities, returns "none"). ADVISORY ONLY and
+   * carries a `proposalId`, never an `entityId`: the pending proposal can still
+   * be rejected, so a caller must NOT link to it — it should wait for review or
+   * revise, not file a second copy. Owner-floored; present only when signals
+   * were supplied and something collided.
+   */
+  pendingCandidates?: PendingSignalMatch[];
 }> {
   let strongVisible = true;
   if (resolution.match === "strong" && resolution.entity) {
@@ -71,5 +97,16 @@ export async function buildIdentityResolveResponse(
       title: cand.title,
       kind: cand.type,
     })),
+    // Owner-floored pending scan — only when the caller passed the signals and a
+    // committed match wasn't the whole story. Additive: never alters `match`.
+    ...(signals && signals.length > 0
+      ? await (async () => {
+          const pending = await findPendingSignalMatches(db, {
+            userId,
+            signals,
+          });
+          return pending.length > 0 ? { pendingCandidates: pending } : {};
+        })()
+      : {}),
   };
 }

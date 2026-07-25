@@ -32,6 +32,13 @@ export interface CreatePropertyDefInput {
    * workspace that uses the profile.
    */
   workspaceId?: string | null;
+  /**
+   * For `valueType: "entity_id"` defs — which profile the picker may point at.
+   * `ProfileResolutionService.resolveLinkTargets()` turns this into
+   * `uiHints.linkedProfileSlug`, which is the ONLY key the entity picker reads;
+   * a def with a NULL `target_profile_id` renders an unconstrained picker.
+   */
+  targetProfileId?: string | null;
 }
 
 export class PropertyDefRepository {
@@ -64,6 +71,7 @@ export class PropertyDefRepository {
         uiHints: input.uiHints || {},
         profileId: input.profileId ?? null,
         workspaceId,
+        targetProfileId: input.targetProfileId ?? null,
       } as NewPropertyDef)
       .returning();
 
@@ -228,6 +236,8 @@ export class PropertyDefRepository {
     if (input.constraints !== undefined)
       updateData.constraints = input.constraints;
     if (input.uiHints !== undefined) updateData.uiHints = input.uiHints;
+    if (input.targetProfileId !== undefined)
+      updateData.targetProfileId = input.targetProfileId;
 
     updateData.updatedAt = new Date();
 

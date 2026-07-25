@@ -41,8 +41,6 @@ const A = "a0000000-0000-0000-0000-000000000061";
 const B = "b0000000-0000-0000-0000-000000000062";
 const WS_A = "a0000000-0000-0000-0000-0000000000f6"; // A's private workspace; B is NOT a member.
 
-let dbAvailable = false;
-
 async function checkDb(): Promise<boolean> {
   try {
     await db
@@ -55,91 +53,111 @@ async function checkDb(): Promise<boolean> {
   }
 }
 
-describe("W0.6 2nd-door impersonation [live PG] — B with a hub PAT cannot act as A", () => {
-  beforeAll(async () => {
-    dbAvailable = await checkDb();
-    if (!dbAvailable) return;
-    for (const id of [A, B]) {
-      await db
-        .insert(users)
-        .values({ id, email: `${id}@test.synap`, userType: "human" })
-        .onConflictDoNothing();
-    }
-    await db
-      .insert(workspaces)
-      .values({ id: WS_A, name: "A private (w0.6)", ownerId: A })
-      .onConflictDoNothing();
-    await db
-      .insert(workspaceMembers)
-      .values({ id: randomUUID(), workspaceId: WS_A, userId: A, role: "owner" })
-      .onConflictDoNothing();
-  });
+// Probe ONCE at module load (top-level await, before collection) so the gate
+// is known when `describe.skipIf` is evaluated. Without this the suite used
+// `if (!dbAvailable) return` INSIDE each `it`, which vitest scores as ✓ passed
+// with no database — a security suite that proved nothing while reporting green.
+const dbAvailable = await checkDb();
 
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, WS_A));
-    await db.delete(workspaces).where(eq(workspaces.id, WS_A));
-    await db.delete(users).where(eq(users.id, A));
-    await db.delete(users).where(eq(users.id, B));
-  });
-
-  // checkPermissionOrPropose sink (auto-approved live schema write into A's ws).
-  it("profiles.createPropertyDef as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, [
-      "hub-protocol.write",
-    ]);
-    const caller = hubProfilesRouter.createCaller(ctxB as never);
-    await expect(
-      caller.createPropertyDef({
-        userId: A,
-        workspaceId: WS_A,
-        slug: "leak-probe",
-        valueType: "string",
-      })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  // Direct service-write sink (resolveOrCreateChannel owns the channel as userId).
-  it("channels.resolveOrCreateChannel as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, [
-      "hub-protocol.write",
-    ]);
-    const caller = channelsRouter.createCaller(ctxB as never);
-    await expect(
-      caller.resolveOrCreateChannel({
-        userId: A,
-        workspaceId: WS_A,
-        channelType: ChannelType.PERSONAL,
-      })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  // AccessContext.agent read-floor sink (would read A's private commands).
-  it("commands.listCommands as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = hubCommandsRouter.createCaller(ctxB as never);
-    await expect(
-      caller.listCommands({ userId: A, workspaceId: WS_A })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  it("commands.listCommands as B acting as ITSELF is NOT rejected for impersonation", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = hubCommandsRouter.createCaller(ctxB as never);
-    // Acting as itself passes the identity floor (may resolve empty) — the point
-    // is it never throws FORBIDDEN on identity.
-    let err: { code?: string } | undefined;
-    try {
-      await caller.listCommands({ userId: B, workspaceId: WS_A });
-    } catch (e) {
-      err = e as { code?: string };
-    }
-    expect(err?.code).not.toBe("FORBIDDEN");
+// Anti-skip sanity — NEVER gated. A silently-broken probe would make the suite
+// below skip (look green) forever; this stays visible and asserts the probe ran.
+// When PG is down the suite below is reported SKIPPED, never PASSED.
+describe("W0.6 live-PG gate", () => {
+  it("probed the database (skips below are honest, not vacuous)", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
 });
+
+describe.skipIf(!dbAvailable)(
+  "W0.6 2nd-door impersonation [live PG] — B with a hub PAT cannot act as A",
+  () => {
+    beforeAll(async () => {
+      for (const id of [A, B]) {
+        await db
+          .insert(users)
+          .values({ id, email: `${id}@test.synap`, userType: "human" })
+          .onConflictDoNothing();
+      }
+      await db
+        .insert(workspaces)
+        .values({ id: WS_A, name: "A private (w0.6)", ownerId: A })
+        .onConflictDoNothing();
+      await db
+        .insert(workspaceMembers)
+        .values({
+          id: randomUUID(),
+          workspaceId: WS_A,
+          userId: A,
+          role: "owner",
+        })
+        .onConflictDoNothing();
+    });
+
+    afterAll(async () => {
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, WS_A));
+      await db.delete(workspaces).where(eq(workspaces.id, WS_A));
+      await db.delete(users).where(eq(users.id, A));
+      await db.delete(users).where(eq(users.id, B));
+    });
+
+    // checkPermissionOrPropose sink (auto-approved live schema write into A's ws).
+    it("profiles.createPropertyDef as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.write",
+      ]);
+      const caller = hubProfilesRouter.createCaller(ctxB as never);
+      await expect(
+        caller.createPropertyDef({
+          userId: A,
+          workspaceId: WS_A,
+          slug: "leak-probe",
+          valueType: "string",
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    // Direct service-write sink (resolveOrCreateChannel owns the channel as userId).
+    it("channels.resolveOrCreateChannel as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.write",
+      ]);
+      const caller = channelsRouter.createCaller(ctxB as never);
+      await expect(
+        caller.resolveOrCreateChannel({
+          userId: A,
+          workspaceId: WS_A,
+          channelType: ChannelType.PERSONAL,
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    // AccessContext.agent read-floor sink (would read A's private commands).
+    it("commands.listCommands as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = hubCommandsRouter.createCaller(ctxB as never);
+      await expect(
+        caller.listCommands({ userId: A, workspaceId: WS_A })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("commands.listCommands as B acting as ITSELF is NOT rejected for impersonation", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = hubCommandsRouter.createCaller(ctxB as never);
+      // Acting as itself passes the identity floor (may resolve empty) — the point
+      // is it never throws FORBIDDEN on identity.
+      let err: { code?: string } | undefined;
+      try {
+        await caller.listCommands({ userId: B, workspaceId: WS_A });
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err?.code).not.toBe("FORBIDDEN");
+    });
+  }
+);

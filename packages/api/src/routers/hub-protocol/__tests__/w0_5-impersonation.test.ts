@@ -73,8 +73,6 @@ describe("W0.5 assertMayActAs — strict identity floor", () => {
 // ── LIVE-PG END-TO-END PROOFS ────────────────────────────────────────────────
 // REQUIRES LIVE PG (localhost:5432/synap_test) — self-skips when unreachable.
 
-let dbAvailable = false;
-
 async function checkDb(): Promise<boolean> {
   try {
     await db
@@ -87,66 +85,87 @@ async function checkDb(): Promise<boolean> {
   }
 }
 
-describe("W0.5 impersonation [live PG] — B with a hub PAT cannot act as A", () => {
-  beforeAll(async () => {
-    dbAvailable = await checkDb();
-    if (!dbAvailable) return;
-    for (const id of [A, B]) {
-      await db
-        .insert(users)
-        .values({ id, email: `${id}@test.synap`, userType: "human" })
-        .onConflictDoNothing();
-    }
-    await db
-      .insert(workspaces)
-      .values({ id: WS_A, name: "A private (w0.5)", ownerId: A })
-      .onConflictDoNothing();
-    await db
-      .insert(workspaceMembers)
-      .values({ id: randomUUID(), workspaceId: WS_A, userId: A, role: "owner" })
-      .onConflictDoNothing();
-  });
+// Probe ONCE at module load so the gate is known when `describe.skipIf` is
+// evaluated. The old `if (!dbAvailable) return` inside each `it` scored as ✓
+// passed with no database. (The UNIT describe above is DB-free and always runs.)
+const dbAvailable = await checkDb();
 
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, WS_A));
-    await db.delete(workspaces).where(eq(workspaces.id, WS_A));
-    await db.delete(users).where(eq(users.id, A));
-    await db.delete(users).where(eq(users.id, B));
-  });
-
-  it("entities.getEntities as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = entitiesRouter.createCaller(ctxB as never);
-    await expect(caller.getEntities({ userId: A })).rejects.toMatchObject({
-      code: "FORBIDDEN",
-    });
-  });
-
-  it("relations.listRelations as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = hubRelationsRouter.createCaller(ctxB as never);
-    await expect(
-      caller.listRelations({ userId: A, workspaceId: WS_A })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  it("entities.getEntities as B acting as ITSELF is NOT rejected for impersonation", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = entitiesRouter.createCaller(ctxB as never);
-    // Acting as itself passes the identity floor. It may still resolve to an
-    // empty result — the point is it never throws FORBIDDEN on identity.
-    let err: { code?: string } | undefined;
-    try {
-      await caller.getEntities({ userId: B });
-    } catch (e) {
-      err = e as { code?: string };
-    }
-    expect(err?.code).not.toBe("FORBIDDEN");
+// Anti-skip sanity — NEVER gated. When PG is down the live suite below is
+// reported SKIPPED, never PASSED.
+describe("W0.5 live-PG gate", () => {
+  it("probed the database (skips below are honest, not vacuous)", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
 });
+
+describe.skipIf(!dbAvailable)(
+  "W0.5 impersonation [live PG] — B with a hub PAT cannot act as A",
+  () => {
+    beforeAll(async () => {
+      for (const id of [A, B]) {
+        await db
+          .insert(users)
+          .values({ id, email: `${id}@test.synap`, userType: "human" })
+          .onConflictDoNothing();
+      }
+      await db
+        .insert(workspaces)
+        .values({ id: WS_A, name: "A private (w0.5)", ownerId: A })
+        .onConflictDoNothing();
+      await db
+        .insert(workspaceMembers)
+        .values({
+          id: randomUUID(),
+          workspaceId: WS_A,
+          userId: A,
+          role: "owner",
+        })
+        .onConflictDoNothing();
+    });
+
+    afterAll(async () => {
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, WS_A));
+      await db.delete(workspaces).where(eq(workspaces.id, WS_A));
+      await db.delete(users).where(eq(users.id, A));
+      await db.delete(users).where(eq(users.id, B));
+    });
+
+    it("entities.getEntities as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = entitiesRouter.createCaller(ctxB as never);
+      await expect(caller.getEntities({ userId: A })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("relations.listRelations as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = hubRelationsRouter.createCaller(ctxB as never);
+      await expect(
+        caller.listRelations({ userId: A, workspaceId: WS_A })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("entities.getEntities as B acting as ITSELF is NOT rejected for impersonation", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = entitiesRouter.createCaller(ctxB as never);
+      // Acting as itself passes the identity floor. It may still resolve to an
+      // empty result — the point is it never throws FORBIDDEN on identity.
+      let err: { code?: string } | undefined;
+      try {
+        await caller.getEntities({ userId: B });
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err?.code).not.toBe("FORBIDDEN");
+    });
+  }
+);

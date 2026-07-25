@@ -102,7 +102,7 @@ export function ConsentForm({ params }: { params: ConsentParams }) {
             <Plug className="h-5 w-5" strokeWidth={2} />
           </span>
           <div className="flex flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/60">
               Connection request
             </p>
             <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
@@ -127,6 +127,7 @@ export function ConsentForm({ params }: { params: ConsentParams }) {
             <Problem
               title="This authorization request isn't valid"
               message={context.error.message}
+              hint="Close this tab and start the connection again from Claude — a fresh request will carry valid details."
             />
           )}
 
@@ -135,21 +136,33 @@ export function ConsentForm({ params }: { params: ConsentParams }) {
               <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
                 <Row label="Application" value={context.data.clientName} />
                 {/* The host the authorization code is actually delivered to —
-                    the single most useful signal for spotting a bad request. */}
-                <Row
-                  label="Sends you back to"
-                  value={context.data.redirectHost}
-                  mono
-                />
+                    the single most useful signal for spotting a bad request,
+                    and the one field a user must read IN FULL. NOT rendered
+                    through `Row`: `Row` truncates the end, so `claude.ai.evil.com`
+                    would read as `claude.ai.evi…`, hiding the real registrable
+                    domain — the exact string phishing relies on. Full-width,
+                    wrapping, at elevated weight: the redirect host, not the
+                    attacker-choosable Application name, is this screen's trust
+                    anchor. */}
+                <div className="flex flex-col gap-1 pt-0.5">
+                  <span className="text-[13px] text-foreground/60">
+                    Sends you back to
+                  </span>
+                  <span className="break-all font-mono text-[13px] text-foreground/90">
+                    {context.data.redirectHost}
+                  </span>
+                </div>
                 <div className="pt-1.5">
-                  <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
-                    <ShieldCheck className="h-3 w-3" /> It will be able to
+                  <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                    <ShieldCheck className="h-3 w-3" aria-hidden /> It will be
+                    able to
                   </p>
                   <ul className="flex flex-col gap-2">
                     {context.data.scopes.map((s) => (
                       <li key={s} className="flex items-start gap-2">
                         <Check
                           className="mt-[3px] h-3 w-3 shrink-0 text-primary"
+                          aria-hidden
                           strokeWidth={2.4}
                         />
                         <span className="text-[12.5px] leading-relaxed text-foreground/75">
@@ -186,7 +199,7 @@ export function ConsentForm({ params }: { params: ConsentParams }) {
                 </Button>
               </div>
 
-              <p className="text-center text-[11.5px] leading-relaxed text-foreground/45">
+              <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
                 You can revoke this connection at any time from{" "}
                 <a
                   href="/my-connections"
@@ -241,7 +254,16 @@ export function ConsentForm({ params }: { params: ConsentParams }) {
   );
 }
 
-function Problem({ title, message }: { title: string; message: string }) {
+function Problem({
+  title,
+  message,
+  hint,
+}: {
+  title: string;
+  message: string;
+  /** A recovery step. A permanent error with no way forward strands the user. */
+  hint?: string;
+}) {
   return (
     <div className="flex items-start gap-2.5 rounded-lg bg-danger/10 px-3.5 py-3 ring-1 ring-inset ring-danger/30">
       <X
@@ -253,28 +275,19 @@ function Problem({ title, message }: { title: string; message: string }) {
         <p className="mt-0.5 break-words text-[12.5px] text-foreground/65">
           {message}
         </p>
+        {hint && (
+          <p className="mt-1.5 text-[12.5px] text-foreground/60">{hint}</p>
+        )}
       </div>
     </div>
   );
 }
 
-function Row({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 text-[13px]">
-      <span className="shrink-0 text-foreground/45">{label}</span>
-      <span
-        className={`min-w-0 truncate text-foreground/85 ${mono ? "font-mono text-[12px]" : ""}`}
-      >
-        {value}
-      </span>
+      <span className="shrink-0 text-foreground/60">{label}</span>
+      <span className="min-w-0 truncate text-foreground/85">{value}</span>
     </div>
   );
 }

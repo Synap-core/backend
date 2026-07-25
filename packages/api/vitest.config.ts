@@ -9,7 +9,11 @@ export default defineConfig(({ mode }) => {
     test: {
       globals: true,
       environment: "node",
-      exclude: ["**/node_modules/**", "**/dist/**"],
+      // `.claude/worktrees/**` — never run stale agent-worktree copies of the
+      // suite (they inflate/forge the count). The backend worktree lives above
+      // this package's root so it's usually out of scope already; exclude it
+      // explicitly so the invariant holds no matter where vitest is invoked.
+      exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/worktrees/**"],
       env: {
         DATABASE_URL: (
           process.env.DATABASE_URL ||

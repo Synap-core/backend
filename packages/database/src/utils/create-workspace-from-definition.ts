@@ -17,6 +17,7 @@ import { WorkspaceMemberRepository } from "../repositories/workspace-member-repo
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { resolvePropertyTargetProfiles } from "./resolve-property-target-profiles.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
@@ -1258,6 +1259,31 @@ export async function createWorkspaceFromDefinition(
     }
     completedSteps.push("profiles");
     onProgress?.("profiles", 25, "Profiles ready");
+  }
+
+  // 4b. entity_id property targets — SECOND pass, after the whole profile loop.
+  // `targetProfileSlug` is merged into the def's `constraints` above, but the
+  // entity picker constrains on `uiHints.linkedProfileSlug`, which is derived
+  // ONLY from `property_defs.target_profile_id` — so without this every
+  // template-provisioned `entity_id` field renders an unconstrained picker.
+  // Deliberately OUTSIDE the `stepDone("profiles")` branch: it must also run on
+  // the resume path (where `profileMap` is rebuilt from the DB), and it is
+  // idempotent — it only ever fills a NULL. Non-fatal: an unresolvable target
+  // (sibling template not installed, or a `shared` profile with no grant for
+  // this workspace) is logged and left NULL, exactly today's behaviour.
+  // See `resolve-property-target-profiles.ts`.
+  const propertyTargets = await resolvePropertyTargetProfiles({
+    definition,
+    workspaceId,
+    profileMap,
+    profileRepo,
+    propDefRepo,
+  });
+  if (propertyTargets.unresolved.length > 0) {
+    logger.warn(
+      { workspaceId, unresolved: propertyTargets.unresolved },
+      "entity_id property targets left unresolved — those pickers stay unconstrained"
+    );
   }
 
   // 5. Create relation definitions and profile relations from entityLinks

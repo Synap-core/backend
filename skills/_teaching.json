@@ -137,6 +137,23 @@
       "capability": null
     }
   },
+  "synap/content-os": {
+    "teachesTools": [
+      "propose_entity_graph",
+      "create_entity",
+      "update_entity",
+      "list_entities",
+      "list_profiles"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Editorial model (pillar/post/platform/newsletter + journey-stage/series/offer), the two optional axes, the degradation rule (no offer domain → never invent commerce), and gap analysis for proposing the next piece.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/digesting-a-channel": {
     "teachesTools": [
       "search_unified",

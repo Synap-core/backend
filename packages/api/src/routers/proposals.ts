@@ -349,6 +349,49 @@ function canReviewProposal(args: {
 }
 
 /**
+ * "May this user APPROVE this proposal?" — the shared, byte-identical
+ * authorization COMPUTATION that `approve` and `batchApprove` used to inline
+ * verbatim (settings → policy → membership → `canReviewProposal`). Returns a
+ * boolean; each caller keeps its OWN failure behavior — `approve` throws
+ * FORBIDDEN, `batchApprove` records `{success:false}` and continues the batch —
+ * so this only removes the duplicated computation and changes NO observable
+ * denial behavior. Pod-wide proposals (no workspaceId) are decided by the
+ * caller, so this returns `true` (mirrors the inline `if (proposal.workspaceId)`
+ * guard skipping the check entirely). NOT the same as `assertCanReviewProposal`
+ * below, which serves the reject/reopen path and throws with a different verb.
+ */
+async function computeCanReviewApproval(args: {
+  proposal: { workspaceId: string | null; data: unknown };
+  userId: string;
+}): Promise<boolean> {
+  const { proposal, userId } = args;
+  if (!proposal.workspaceId) return true;
+
+  const [ws] = await db
+    .select({ settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, proposal.workspaceId))
+    .limit(1);
+
+  const settings = ws?.settings as WorkspaceSettings | undefined;
+  const policy =
+    settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
+
+  const membership = await getWorkspaceMembership(
+    db,
+    proposal.workspaceId,
+    userId
+  );
+  const proposalData = proposal.data as Record<string, unknown> | null;
+
+  return canReviewProposal({
+    policy: policy as ProposalApprovalPolicy,
+    memberRole: membership?.role,
+    isOwner: proposalData?.sourceId === userId,
+  });
+}
+
+/**
  * Authority gate shared by `reject` / `reopen` / `batchReject` — the SAME
  * `canReviewProposal` ladder (and identical DB reads) that `approve` and
  * `revert` enforce inline. Throws FORBIDDEN when the caller may not review this
@@ -2372,37 +2415,14 @@ export const proposalsRouter = router({
         });
       }
 
-      // Ownership check: who can approve this proposal?
-      if (proposal.workspaceId) {
-        const [ws] = await db
-          .select({ settings: workspaces.settings })
-          .from(workspaces)
-          .where(eq(workspaces.id, proposal.workspaceId))
-          .limit(1);
-
-        const settings = ws?.settings as WorkspaceSettings | undefined;
-        const policy =
-          settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
-
-        const membership = await getWorkspaceMembership(
-          db,
-          proposal.workspaceId,
-          userId
-        );
-        const proposalData = proposal.data as Record<string, unknown> | null;
-
-        const canApprove = canReviewProposal({
-          policy: policy as ProposalApprovalPolicy,
-          memberRole: membership?.role,
-          isOwner: proposalData?.sourceId === userId,
+      // Ownership check: who can approve this proposal? (Shared computation;
+      // this door's failure behavior — throw FORBIDDEN — is unchanged.)
+      const canApprove = await computeCanReviewApproval({ proposal, userId });
+      if (!canApprove) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Not authorized to approve this proposal",
         });
-
-        if (!canApprove) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Not authorized to approve this proposal",
-          });
-        }
       }
 
       // Composite, document-content and registry dispatch all live in the ONE
@@ -3225,43 +3245,19 @@ export const proposalsRouter = router({
             continue;
           }
 
-          // Ownership check
-          if (proposal.workspaceId) {
-            const [ws] = await db
-              .select({ settings: workspaces.settings })
-              .from(workspaces)
-              .where(eq(workspaces.id, proposal.workspaceId))
-              .limit(1);
-
-            const settings = ws?.settings as WorkspaceSettings | undefined;
-            const policy =
-              settings?.aiGovernance?.proposalApprovalPolicy ??
-              "owner_and_admins";
-
-            const membership = await getWorkspaceMembership(
-              db,
-              proposal.workspaceId,
-              userId
-            );
-            const proposalData = proposal.data as Record<
-              string,
-              unknown
-            > | null;
-
-            const canApprove = canReviewProposal({
-              policy: policy as ProposalApprovalPolicy,
-              memberRole: membership?.role,
-              isOwner: proposalData?.sourceId === userId,
+          // Ownership check — SAME computation as single `approve`; this door's
+          // failure behavior (record the item + continue the batch) is unchanged.
+          const canApprove = await computeCanReviewApproval({
+            proposal,
+            userId,
+          });
+          if (!canApprove) {
+            results.push({
+              proposalId,
+              success: false,
+              error: "Not authorized",
             });
-
-            if (!canApprove) {
-              results.push({
-                proposalId,
-                success: false,
-                error: "Not authorized",
-              });
-              continue;
-            }
+            continue;
           }
 
           // ONE door — the SAME `applyProposalApproval` single approve runs.

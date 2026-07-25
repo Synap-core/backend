@@ -69,12 +69,36 @@ import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
   type StoredProposalData,
+  type ProposalExecutorDeps,
+  type ProposalRow,
 } from "./execution-registry.js";
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
 // the value paths below avoid via dynamic `import("../skills.js")`.
 import type { InsertSkillGovernedInput } from "../skills.js";
 
 let registered = false;
+
+/**
+ * Fire the "approved" IS-telemetry outcome (fire-and-forget — never blocks).
+ * Extracted verbatim from the ~38 byte-identical call sites across the approve
+ * executors below; the argument construction is unchanged.
+ */
+function reportApproved(
+  deps: ProposalExecutorDeps,
+  proposal: ProposalRow,
+  proposalId: string
+): void {
+  deps.reportProposalOutcome({
+    proposalId,
+    outcome: "approved",
+    sourceMessageId: proposal.sourceMessageId,
+    agentUserId: proposal.agentUserId,
+    targetType: proposal.targetType,
+    proposalType: proposal.proposalType,
+    source: (proposal.data as Record<string, unknown> | null)?.source as
+      string | undefined,
+  });
+}
 
 /**
  * Register every approve executor exactly once (idempotent — safe to call from
@@ -140,16 +164,7 @@ export function registerApproveExecutors(): void {
           .where(eq(proposals.id, input.proposalId));
 
         // Report to IS telemetry (fire-and-forget — never blocks)
-        deps.reportProposalOutcome({
-          proposalId: input.proposalId,
-          outcome: "approved",
-          sourceMessageId: proposal.sourceMessageId,
-          agentUserId: proposal.agentUserId,
-          targetType: proposal.targetType,
-          proposalType: proposal.proposalType,
-          source: (proposal.data as Record<string, unknown> | null)?.source as
-            string | undefined,
-        });
+        reportApproved(deps, proposal, input.proposalId);
 
         deps.emitProposalReviewed(
           input.proposalId,
@@ -216,16 +231,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -290,16 +296,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -361,16 +358,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -436,16 +424,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -539,16 +518,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -707,16 +677,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -796,16 +757,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -904,16 +856,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1006,16 +949,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1137,16 +1071,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1262,16 +1187,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1352,16 +1268,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1442,16 +1349,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1553,16 +1451,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1671,16 +1560,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1752,16 +1632,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1825,16 +1696,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1904,16 +1766,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1974,16 +1827,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2043,16 +1887,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2249,16 +2084,7 @@ export function registerApproveExecutors(): void {
       });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2330,16 +2156,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2404,16 +2221,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2471,16 +2279,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2654,16 +2453,7 @@ export function registerApproveExecutors(): void {
       }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2722,16 +2512,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2816,16 +2597,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -2906,16 +2678,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3065,16 +2828,7 @@ export function registerApproveExecutors(): void {
       }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3188,16 +2942,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3293,16 +3038,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3399,16 +3135,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3475,16 +3202,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3552,16 +3270,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3663,16 +3372,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3786,16 +3486,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,
@@ -3911,16 +3602,7 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
-      deps.reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          string | undefined,
-      });
+      reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
         input.proposalId,

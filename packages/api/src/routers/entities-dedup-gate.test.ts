@@ -81,8 +81,6 @@ async function visibleMatchFor(userId: string, entityId: string) {
   });
 }
 
-let dbAvailable = false;
-
 async function checkDb(): Promise<boolean> {
   try {
     await db
@@ -95,108 +93,117 @@ async function checkDb(): Promise<boolean> {
   }
 }
 
-describe("entities.create dedup gate — never merges onto an invisible entity", () => {
-  beforeAll(async () => {
-    dbAvailable = await checkDb();
-    if (!dbAvailable) return;
+// Probe ONCE at module load so the gate is known when `describe.skipIf` is
+// evaluated. The old `if (!dbAvailable) return` inside each `it` scored as ✓
+// passed with no database — the dedup gate proved nothing while reporting green.
+const dbAvailable = await checkDb();
 
-    // Clean leftovers (FK-ordered).
-    await db
-      .delete(entityIdentitySignals)
-      .where(eq(entityIdentitySignals.entityId, ALICE_PERSON));
-    await db.delete(entities).where(eq(entities.id, ALICE_PERSON));
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, ALICE_PRIVATE_WS));
-    await db.delete(workspaces).where(eq(workspaces.id, ALICE_PRIVATE_WS));
-    for (const id of Object.values(USERS)) {
-      await db.delete(users).where(eq(users.id, id));
-    }
-
-    // Users.
-    for (const [key, id] of Object.entries(USERS)) {
-      await db
-        .insert(users)
-        .values({
-          id,
-          email: `${key.toLowerCase()}@test.synap`,
-          userType: "human",
-        })
-        .onConflictDoNothing();
-    }
-
-    // Alice's PRIVATE workspace — Bob is not a member.
-    await db.insert(workspaces).values({
-      id: ALICE_PRIVATE_WS,
-      name: "Alice Private WS",
-      ownerId: USERS.ALICE,
-    });
-    await db.insert(workspaceMembers).values({
-      id: randomUUID(),
-      workspaceId: ALICE_PRIVATE_WS,
-      userId: USERS.ALICE,
-      role: "owner",
-    });
-
-    // Alice's person entity in that private workspace + its strong email signal
-    // (mirrors what EntityRepository.create registers on a real create).
-    await db.insert(entities).values({
-      id: ALICE_PERSON,
-      userId: USERS.ALICE,
-      workspaceId: ALICE_PRIVATE_WS,
-      type: "person",
-      title: "Alice's Private Contact",
-      properties: { email: SHARED_EMAIL },
-    });
-    await registerIdentitySignals(
-      db,
-      ALICE_PERSON,
-      [{ type: "email", value: SHARED_EMAIL }],
-      "test"
-    );
-  });
-
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await db
-      .delete(entityIdentitySignals)
-      .where(eq(entityIdentitySignals.entityId, ALICE_PERSON));
-    await db.delete(entities).where(eq(entities.id, ALICE_PERSON));
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, ALICE_PRIVATE_WS));
-    await db.delete(workspaces).where(eq(workspaces.id, ALICE_PRIVATE_WS));
-    for (const id of Object.values(USERS)) {
-      await db.delete(users).where(eq(users.id, id));
-    }
-  });
-
-  it("the strong index resolves GLOBALLY — Bob's lookup finds Alice's private entity", async () => {
-    if (!dbAvailable) return;
-    const resolution = await resolveIdentity(db, {
-      userId: USERS.BOB,
-      kindSlug: "person",
-      name: "Some Bob Contact",
-      signals: [{ type: "email", value: SHARED_EMAIL }],
-      // Weak-path scope (Bob's floor) — must NOT constrain the strong path.
-      userScope: userVisibleWhere(entities.workspaceId, USERS.BOB),
-    });
-    expect(resolution.match).toBe("strong");
-    expect(resolution.entity?.id).toBe(ALICE_PERSON);
-  });
-
-  it("the visibility gate BLOCKS the merge for Bob → falls through to a new create, no leak", async () => {
-    if (!dbAvailable) return;
-    // Production: `visibleMatch` is undefined here → the create does NOT
-    // deduplicate; it creates a fresh entity and returns no Alice content.
-    const visibleMatch = await visibleMatchFor(USERS.BOB, ALICE_PERSON);
-    expect(visibleMatch).toBeUndefined();
-  });
-
-  it("the same gate ALLOWS a legitimate self-dedup for the owner (Alice)", async () => {
-    if (!dbAvailable) return;
-    const visibleMatch = await visibleMatchFor(USERS.ALICE, ALICE_PERSON);
-    expect(visibleMatch?.id).toBe(ALICE_PERSON);
-    expect(visibleMatch?.title).toBe("Alice's Private Contact");
+// Anti-skip sanity — NEVER gated. When PG is down the suite below is reported
+// SKIPPED, never PASSED.
+describe("entities dedup gate — live-PG gate", () => {
+  it("probed the database (skips below are honest, not vacuous)", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
 });
+
+describe.skipIf(!dbAvailable)(
+  "entities.create dedup gate — never merges onto an invisible entity",
+  () => {
+    beforeAll(async () => {
+      // Clean leftovers (FK-ordered).
+      await db
+        .delete(entityIdentitySignals)
+        .where(eq(entityIdentitySignals.entityId, ALICE_PERSON));
+      await db.delete(entities).where(eq(entities.id, ALICE_PERSON));
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, ALICE_PRIVATE_WS));
+      await db.delete(workspaces).where(eq(workspaces.id, ALICE_PRIVATE_WS));
+      for (const id of Object.values(USERS)) {
+        await db.delete(users).where(eq(users.id, id));
+      }
+
+      // Users.
+      for (const [key, id] of Object.entries(USERS)) {
+        await db
+          .insert(users)
+          .values({
+            id,
+            email: `${key.toLowerCase()}@test.synap`,
+            userType: "human",
+          })
+          .onConflictDoNothing();
+      }
+
+      // Alice's PRIVATE workspace — Bob is not a member.
+      await db.insert(workspaces).values({
+        id: ALICE_PRIVATE_WS,
+        name: "Alice Private WS",
+        ownerId: USERS.ALICE,
+      });
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: ALICE_PRIVATE_WS,
+        userId: USERS.ALICE,
+        role: "owner",
+      });
+
+      // Alice's person entity in that private workspace + its strong email signal
+      // (mirrors what EntityRepository.create registers on a real create).
+      await db.insert(entities).values({
+        id: ALICE_PERSON,
+        userId: USERS.ALICE,
+        workspaceId: ALICE_PRIVATE_WS,
+        type: "person",
+        title: "Alice's Private Contact",
+        properties: { email: SHARED_EMAIL },
+      });
+      await registerIdentitySignals(
+        db,
+        ALICE_PERSON,
+        [{ type: "email", value: SHARED_EMAIL }],
+        "test"
+      );
+    });
+
+    afterAll(async () => {
+      await db
+        .delete(entityIdentitySignals)
+        .where(eq(entityIdentitySignals.entityId, ALICE_PERSON));
+      await db.delete(entities).where(eq(entities.id, ALICE_PERSON));
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, ALICE_PRIVATE_WS));
+      await db.delete(workspaces).where(eq(workspaces.id, ALICE_PRIVATE_WS));
+      for (const id of Object.values(USERS)) {
+        await db.delete(users).where(eq(users.id, id));
+      }
+    });
+
+    it("the strong index resolves GLOBALLY — Bob's lookup finds Alice's private entity", async () => {
+      const resolution = await resolveIdentity(db, {
+        userId: USERS.BOB,
+        kindSlug: "person",
+        name: "Some Bob Contact",
+        signals: [{ type: "email", value: SHARED_EMAIL }],
+        // Weak-path scope (Bob's floor) — must NOT constrain the strong path.
+        userScope: userVisibleWhere(entities.workspaceId, USERS.BOB),
+      });
+      expect(resolution.match).toBe("strong");
+      expect(resolution.entity?.id).toBe(ALICE_PERSON);
+    });
+
+    it("the visibility gate BLOCKS the merge for Bob → falls through to a new create, no leak", async () => {
+      // Production: `visibleMatch` is undefined here → the create does NOT
+      // deduplicate; it creates a fresh entity and returns no Alice content.
+      const visibleMatch = await visibleMatchFor(USERS.BOB, ALICE_PERSON);
+      expect(visibleMatch).toBeUndefined();
+    });
+
+    it("the same gate ALLOWS a legitimate self-dedup for the owner (Alice)", async () => {
+      const visibleMatch = await visibleMatchFor(USERS.ALICE, ALICE_PERSON);
+      expect(visibleMatch?.id).toBe(ALICE_PERSON);
+      expect(visibleMatch?.title).toBe("Alice's Private Contact");
+    });
+  }
+);

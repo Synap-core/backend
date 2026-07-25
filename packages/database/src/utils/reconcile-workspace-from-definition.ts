@@ -50,6 +50,10 @@ import type {
   WorkspaceLayoutConfig,
 } from "../schema/workspaces.js";
 import type { WorkspaceDefinitionInput } from "./create-workspace-from-definition.js";
+import {
+  resolvePropertyTargetProfiles,
+  type PropertyTargetResolutionReport,
+} from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "reconcile-workspace-from-definition" });
@@ -126,6 +130,15 @@ export interface ReconcileReport {
       liveType: string;
       templateType: string;
     }>;
+    /**
+     * `entity_id` properties whose declared `targetProfileSlug` was resolved to
+     * a live profile and written to `property_defs.target_profile_id` — the key
+     * the entity picker constrains on. `set` covers defs this run created AND
+     * pre-existing defs that were still NULL (the backfill); `unresolved` is
+     * non-fatal, mirroring `entityLinks.unresolved`. See
+     * `resolve-property-target-profiles.ts`.
+     */
+    targets: PropertyTargetResolutionReport;
   };
   views: { added: string[]; skipped: string[]; deferred: string[] };
   /**
@@ -192,7 +205,13 @@ export async function reconcileWorkspaceFromDefinition(
       conflicts: [],
       scopeConflicts: [],
     },
-    properties: { added: [], skipped: [], enumsUpdated: [], conflicts: [] },
+    properties: {
+      added: [],
+      skipped: [],
+      enumsUpdated: [],
+      conflicts: [],
+      targets: { set: [], unresolved: [] },
+    },
     views: { added: [], skipped: [], deferred: [] },
     entityLinks: { added: [], skipped: [], unresolved: [] },
     home: { created: false, blocksAdded: [], skipped: true },
@@ -431,6 +450,24 @@ export async function reconcileWorkspaceFromDefinition(
       }
     }
   }
+
+  // ── 2b. entity_id property targets — SECOND pass, after every profile above ─
+  // A property may target a profile declared later in `definition.profiles`, and
+  // an already-present property `continue`s out of the loop above before it can
+  // be touched. Both are why this runs once, at the end, looking defs up by slug:
+  // it fills newly-created AND pre-existing defs whose `target_profile_id` is
+  // still NULL, so a live pod converges at boot instead of needing a migration.
+  // Non-fatal + idempotent — see `resolve-property-target-profiles.ts`.
+  // Under `dryRun` a profile this run WOULD create is absent from `profileMap`,
+  // so its targets preview as `owner-profile-unresolved` rather than `set`.
+  report.properties.targets = await resolvePropertyTargetProfiles({
+    definition,
+    workspaceId,
+    profileMap,
+    profileRepo,
+    propDefRepo,
+    dryRun,
+  });
 
   // ── 3. Views — find-or-create by name (bento/flow deferred) ─────────────────
   const normalizedViews = (definition.views ?? [])

@@ -112,7 +112,6 @@ describe("W0 channel-egress — /pending service-key confinement (no requested w
 
 const WS_A = "a0000000-0000-0000-0000-0000000000a1"; // A's private workspace; B is NOT a member.
 const ACCOUNT_A = "acct-A-external-id";
-let dbAvailable = false;
 
 async function checkDb(): Promise<boolean> {
   try {
@@ -126,119 +125,133 @@ async function checkDb(): Promise<boolean> {
   }
 }
 
-describe("W0 leak fixes [live PG] — B cannot reach A's data", () => {
-  let subA: string;
+// Probe ONCE at module load so the gate is known when `describe.skipIf` is
+// evaluated. The old `if (!dbAvailable) return` inside each `it` scored as ✓
+// passed with no database — a security suite that proved nothing while green.
+const dbAvailable = await checkDb();
 
-  beforeAll(async () => {
-    dbAvailable = await checkDb();
-    if (!dbAvailable) return;
-
-    for (const id of [A, B]) {
-      await db
-        .insert(users)
-        .values({ id, email: `${id}@test.synap`, userType: "human" })
-        .onConflictDoNothing();
-    }
-    await db
-      .insert(workspaces)
-      .values({ id: WS_A, name: "A private", ownerId: A })
-      .onConflictDoNothing();
-    await db
-      .insert(workspaceMembers)
-      .values({ id: randomUUID(), workspaceId: WS_A, userId: A, role: "owner" })
-      .onConflictDoNothing();
-
-    // A's connected messaging account (site 3 / site 4).
-    await db
-      .insert(messagingAccounts)
-      .values({
-        id: randomUUID(),
-        userId: A,
-        provider: "linkedin",
-        externalId: ACCOUNT_A,
-        status: "connected",
-      })
-      .onConflictDoNothing();
-
-    // A's signal subscription in A's workspace (site 6).
-    subA = randomUUID();
-    await db
-      .insert(signalSubscriptions)
-      .values({ id: subA, userId: A, workspaceId: WS_A, topic: "a-secret" })
-      .onConflictDoNothing();
-  });
-
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await db
-      .delete(signalSubscriptions)
-      .where(eq(signalSubscriptions.userId, A));
-    await db.delete(messagingAccounts).where(eq(messagingAccounts.userId, A));
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, WS_A));
-    await db.delete(workspaces).where(eq(workspaces.id, WS_A));
-    await db.delete(users).where(eq(users.id, A));
-    await db.delete(users).where(eq(users.id, B));
-  });
-
-  it("site 2 — getUserContext as B with input.userId=A is FORBIDDEN", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(B, ["hub-protocol.read"]);
-    const caller = contextRouter.createCaller(ctxB as never);
-    await expect(caller.getUserContext({ userId: A })).rejects.toMatchObject({
-      code: "FORBIDDEN",
-    });
-  });
-
-  it("site 3 — A's messaging account is not resolvable under B's floor", async () => {
-    if (!dbAvailable) return;
-    const own = await db.query.messagingAccounts.findFirst({
-      where: and(
-        eq(messagingAccounts.userId, B),
-        eq(messagingAccounts.externalId, ACCOUNT_A)
-      ),
-      columns: { id: true },
-    });
-    expect(own).toBeUndefined();
-  });
-
-  it("site 4 — B's own external account ids exclude A's account", async () => {
-    if (!dbAvailable) return;
-    const bAccounts = await db.query.messagingAccounts.findMany({
-      where: eq(messagingAccounts.userId, B),
-      columns: { externalId: true },
-    });
-    const ownExternalIds = new Set(bAccounts.map((a) => a.externalId));
-    expect(ownExternalIds.has(ACCOUNT_A)).toBe(false);
-  });
-
-  it("site 6 — B cannot delete A's subscription; A's row survives", async () => {
-    if (!dbAvailable) return;
-    const ctxB = await createHubProtocolCallerContext(
-      B,
-      ["hub-protocol.write"],
-      WS_A
-    );
-    const caller = signalsRouter.createCaller(ctxB as never);
-    await caller.subscriptions({
-      workspaceId: WS_A,
-      userId: B,
-      operations: [{ operation: "delete", subscriptionId: subA }],
-    });
-    const stillThere = await db.query.signalSubscriptions.findFirst({
-      where: eq(signalSubscriptions.id, subA),
-      columns: { id: true, userId: true },
-    });
-    expect(stillThere?.userId).toBe(A);
-  });
-
-  it("site 6 — B's subscription feed floor excludes A's subscription", async () => {
-    if (!dbAvailable) return;
-    const bSubs = await db.query.signalSubscriptions.findMany({
-      where: eq(signalSubscriptions.userId, B),
-      columns: { id: true },
-    });
-    expect(bSubs.map((s) => s.id)).not.toContain(subA);
+// Anti-skip sanity — NEVER gated. Keeps the skip visible; when PG is down the
+// live suite below is reported SKIPPED, never PASSED.
+describe("W0 leak-fixes live-PG gate", () => {
+  it("probed the database (skips below are honest, not vacuous)", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
 });
+
+describe.skipIf(!dbAvailable)(
+  "W0 leak fixes [live PG] — B cannot reach A's data",
+  () => {
+    let subA: string;
+
+    beforeAll(async () => {
+      for (const id of [A, B]) {
+        await db
+          .insert(users)
+          .values({ id, email: `${id}@test.synap`, userType: "human" })
+          .onConflictDoNothing();
+      }
+      await db
+        .insert(workspaces)
+        .values({ id: WS_A, name: "A private", ownerId: A })
+        .onConflictDoNothing();
+      await db
+        .insert(workspaceMembers)
+        .values({
+          id: randomUUID(),
+          workspaceId: WS_A,
+          userId: A,
+          role: "owner",
+        })
+        .onConflictDoNothing();
+
+      // A's connected messaging account (site 3 / site 4).
+      await db
+        .insert(messagingAccounts)
+        .values({
+          id: randomUUID(),
+          userId: A,
+          provider: "linkedin",
+          externalId: ACCOUNT_A,
+          status: "connected",
+        })
+        .onConflictDoNothing();
+
+      // A's signal subscription in A's workspace (site 6).
+      subA = randomUUID();
+      await db
+        .insert(signalSubscriptions)
+        .values({ id: subA, userId: A, workspaceId: WS_A, topic: "a-secret" })
+        .onConflictDoNothing();
+    });
+
+    afterAll(async () => {
+      await db
+        .delete(signalSubscriptions)
+        .where(eq(signalSubscriptions.userId, A));
+      await db.delete(messagingAccounts).where(eq(messagingAccounts.userId, A));
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, WS_A));
+      await db.delete(workspaces).where(eq(workspaces.id, WS_A));
+      await db.delete(users).where(eq(users.id, A));
+      await db.delete(users).where(eq(users.id, B));
+    });
+
+    it("site 2 — getUserContext as B with input.userId=A is FORBIDDEN", async () => {
+      const ctxB = await createHubProtocolCallerContext(B, [
+        "hub-protocol.read",
+      ]);
+      const caller = contextRouter.createCaller(ctxB as never);
+      await expect(caller.getUserContext({ userId: A })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("site 3 — A's messaging account is not resolvable under B's floor", async () => {
+      const own = await db.query.messagingAccounts.findFirst({
+        where: and(
+          eq(messagingAccounts.userId, B),
+          eq(messagingAccounts.externalId, ACCOUNT_A)
+        ),
+        columns: { id: true },
+      });
+      expect(own).toBeUndefined();
+    });
+
+    it("site 4 — B's own external account ids exclude A's account", async () => {
+      const bAccounts = await db.query.messagingAccounts.findMany({
+        where: eq(messagingAccounts.userId, B),
+        columns: { externalId: true },
+      });
+      const ownExternalIds = new Set(bAccounts.map((a) => a.externalId));
+      expect(ownExternalIds.has(ACCOUNT_A)).toBe(false);
+    });
+
+    it("site 6 — B cannot delete A's subscription; A's row survives", async () => {
+      const ctxB = await createHubProtocolCallerContext(
+        B,
+        ["hub-protocol.write"],
+        WS_A
+      );
+      const caller = signalsRouter.createCaller(ctxB as never);
+      await caller.subscriptions({
+        workspaceId: WS_A,
+        userId: B,
+        operations: [{ operation: "delete", subscriptionId: subA }],
+      });
+      const stillThere = await db.query.signalSubscriptions.findFirst({
+        where: eq(signalSubscriptions.id, subA),
+        columns: { id: true, userId: true },
+      });
+      expect(stillThere?.userId).toBe(A);
+    });
+
+    it("site 6 — B's subscription feed floor excludes A's subscription", async () => {
+      const bSubs = await db.query.signalSubscriptions.findMany({
+        where: eq(signalSubscriptions.userId, B),
+        columns: { id: true },
+      });
+      expect(bSubs.map((s) => s.id)).not.toContain(subA);
+    });
+  }
+);

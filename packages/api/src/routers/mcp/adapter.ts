@@ -776,7 +776,27 @@ export async function executeMCPToolViaHubProtocol(
         ...(args.facetSlug ? { facetSlug: args.facetSlug as string } : {}),
         limit: (args.limit as number) || 50,
       });
-      return ok(result);
+      // HONEST EMPTY: a bare [] reads as "none exist" — but this call is LENSED
+      // (profileSlug/workspace/project/facet). An agent that concludes "the user
+      // has no X" from a scoped-empty is the ExaSearch "not accessible" mistake
+      // one layer down. When empty AND a lens was applied, echo the lens and say
+      // the emptiness is scoped, not absolute. (Shape normalized to an object,
+      // matching get_graph/list_capabilities; ok() forwards it verbatim.)
+      const lens = [
+        profileSlug ? `profileSlug=${profileSlug}` : null,
+        args.workspaceId ? `workspaceId=${String(args.workspaceId)}` : null,
+        args.projectId ? `projectId=${String(args.projectId)}` : null,
+        args.facetSlug ? `facetSlug=${String(args.facetSlug)}` : null,
+      ].filter(Boolean);
+      const note =
+        result.length === 0 && lens.length > 0
+          ? `No entities matched under this lens (${lens.join(", ")}). This is a SCOPED empty, not proof the user has none — broaden the scope (drop a filter, omit workspaceId for pod-wide) or call synap_ask before concluding anything is absent.`
+          : undefined;
+      return ok({
+        entities: result,
+        count: result.length,
+        ...(note ? { note } : {}),
+      });
     }
 
     case "synap_get_document": {
@@ -1285,9 +1305,18 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_get_relations": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       let relWsId = args.workspaceId as string | undefined;
+      // HONEST FALLBACK: relations are workspace-scoped, but when the caller
+      // gives no workspaceId we pick ids[0] — an ARBITRARY workspace. A "no
+      // relations" answer from an arbitrary lens must NOT read as "this entity
+      // has none": its relations may live in another workspace entirely. Track
+      // that we auto-picked, and among how many, so the note can say so.
+      let autoPicked = false;
+      let memberCount = 0;
       if (!relWsId) {
         const ids = await getUserMemberWorkspaceIds(userId);
+        memberCount = ids.length;
         relWsId = ids[0];
+        autoPicked = true;
       }
       if (!relWsId) return ok({ error: "No accessible workspace found" });
       const result = await caller.relations.listRelations({
@@ -1295,6 +1324,23 @@ export async function executeMCPToolViaHubProtocol(
         workspaceId: relWsId,
         entityId: args.entityId as string,
       });
+      // Only reshape in the AMBIGUOUS case (we auto-picked among several
+      // workspaces); the explicit-workspaceId common case stays byte-identical,
+      // so no consumer that expects the raw shape can break. `getRelated` may
+      // return an array or an object, so attach the honesty note without
+      // clobbering either shape.
+      if (autoPicked && memberCount > 1) {
+        const note = `No workspaceId was given, so relations were read from ONE workspace (${relWsId}) of your ${memberCount}. If this looks empty or incomplete, the entity's relations may live in another workspace — pass an explicit workspaceId to scope deliberately.`;
+        return ok(
+          Array.isArray(result)
+            ? { relations: result, scopedWorkspaceId: relWsId, note }
+            : {
+                ...(result as Record<string, unknown>),
+                scopedWorkspaceId: relWsId,
+                note,
+              }
+        );
+      }
       return ok(result);
     }
 
@@ -1335,7 +1381,12 @@ export async function executeMCPToolViaHubProtocol(
 
       // Cross-user content scoping lives in the shared response builder (the
       // one door for both this tool and the Hub REST /identity/resolve route).
-      return ok(await buildIdentityResolveResponse(resolution, userId));
+      // Pass `signals` so it also surfaces pending in-flight duplicates —
+      // resolve_identity is the pre-create check, exactly where a caller must
+      // learn "you already have this in your pending queue" before minting one.
+      return ok(
+        await buildIdentityResolveResponse(resolution, userId, signals)
+      );
     }
 
     case "synap_get_graph": {

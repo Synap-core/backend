@@ -49,6 +49,12 @@ import {
   createAutoApprovedProposal,
 } from "../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import {
+  computeCaptureGraphIdempotencyKey,
+  findPriorCaptureGraphProposal,
+  findPendingSignalMatches,
+  type PendingSignalMatch,
+} from "../../utils/pending-capture-dedup.js";
 import { openLink } from "../../utils/deep-links.js";
 import { captureGraphEventKeys } from "./capture-graph-policy.js";
 import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
@@ -166,6 +172,20 @@ export interface SubmitCaptureGraphResult {
   /** True when the graph was materialized immediately (agent-mode auto-apply). */
   applied: boolean;
   /**
+   * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
+   * signal (email/phone/url/handle) collides with a create_entity op in the
+   * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
+   * proposal can still be rejected, so linking to it would stale-suppress a real
+   * write. Surfaced so the caller/agent can wait for review instead of filing a
+   * second copy. Omitted when nothing collides.
+   */
+  pendingDuplicateCandidates?: Array<{
+    /** The incoming graph entity ref that collided. */
+    ref: string;
+    title: string;
+    matches: PendingSignalMatch[];
+  }>;
+  /**
    * A `projectName` that matched no project of the caller (piece D). Advisory
    * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
    */
@@ -281,6 +301,95 @@ export async function submitCaptureGraph(
   const relations = collapsed.relations;
   const bindings = collapsed.bindings;
 
+  const bindingNote = bindings.length
+    ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
+    : "";
+  const summary =
+    input.summary ??
+    `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
+  const source = input.source ?? "intelligence";
+
+  // ── RE-SUBMIT IDEMPOTENCY (piece 1a) ──────────────────────────────────────
+  // A masked failure (MCP timeout, an agent misreading a governed "proposed" as
+  // "no approval") drives a RETRY of the exact same graph. Without a stable key,
+  // entities lacking a strong signal aren't deduped → a DUPLICATE proposal. The
+  // key is an explicit caller-supplied id when present (the declared rawSource.
+  // idempotencyKey hook), else a CONTENT hash — so NO caller has to change and
+  // two genuinely-different captures can't collide (every content field folds
+  // in). A prior proposal under the same key (still pending, or already
+  // auto-applied) is RETURNED as-is instead of filing a second row. Best-effort:
+  // a lookup hiccup must never block a real capture (it falls through to file).
+  //
+  // SCOPE (honest limit): this catches SEQUENTIAL retries — the actual failure
+  // mode (an agent re-emitting after a masked "no approval") is sequential, so
+  // it's covered. It does NOT catch two TRULY-CONCURRENT submits racing between
+  // this lookup and the insert; closing that needs a partial unique index on
+  // (created_by, data->>'idempotencyKey'), a later hardening. Advisory v1.
+  const idempotencyKey =
+    input.rawSource?.idempotencyKey ??
+    computeCaptureGraphIdempotencyKey({
+      workspaceId,
+      projectId: resolvedProjectId,
+      entities: graphEntities,
+      relations,
+      bindings,
+    });
+  try {
+    const prior = await findPriorCaptureGraphProposal(db, {
+      userId,
+      idempotencyKey,
+    });
+    if (prior) {
+      const priorData = prior.data as {
+        operations?: CompositeProposalOperation[];
+      };
+      const priorOps = Array.isArray(priorData?.operations)
+        ? priorData.operations
+        : [];
+      const priorEntityCount = priorOps.filter(
+        (o) => o.op === "create_entity"
+      ).length;
+      const priorRelationCount = priorOps.filter(
+        (o) => o.op === "create_relation"
+      ).length;
+      const priorApplied = prior.status === "auto_approved";
+      const priorReviewUrl = priorApplied ? undefined : openLink(prior.id);
+      return {
+        proposalId: prior.id,
+        entityCount: priorEntityCount,
+        relationCount: priorRelationCount,
+        bindingCount: bindings.length,
+        reviewUrl: priorReviewUrl,
+        summary,
+        applied: priorApplied,
+        ...(projectCandidate ? { projectCandidate } : {}),
+        ...(projectOutcome ? { project: projectOutcome } : {}),
+        writeReceipt: {
+          state: priorApplied ? "applied" : "pending",
+          proposalId: prior.id,
+          ...(priorReviewUrl ? { reviewUrl: priorReviewUrl } : {}),
+          effectiveWorkspaceId: workspaceId,
+          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+          ...(projectOutcome ? { project: projectOutcome } : {}),
+          source,
+        },
+      };
+    }
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "capture/graph: prior-proposal idempotency lookup failed (filing fresh)"
+    );
+  }
+
+  // ADVISORY pending-duplicate candidates: incoming entities whose strong signal
+  // collides with a create_entity op in the caller's OWN pending queue (below).
+  const pendingDuplicateCandidates: Array<{
+    ref: string;
+    title: string;
+    matches: PendingSignalMatch[];
+  }> = [];
+
   // IDEMPOTENCY: dedup against existing entities via the ONE identity resolver.
   // Strong signals (email/phone/url) auto-resolve globally; weak name/handle
   // matches are scoped to this workspace's visible rows + pod-wide globals.
@@ -291,15 +400,34 @@ export async function submitCaptureGraph(
       : isNull(entities.workspaceId);
     for (const e of toResolve) {
       try {
+        const signals = extractIdentitySignals(e.properties);
         const res = await resolveIdentity(db, {
           userId,
           kindSlug: e.profileSlug,
           name: e.title ?? e.ref,
-          signals: extractIdentitySignals(e.properties),
+          signals,
           userScope: weakScope,
         });
         if (res.match && res.entity) {
           e.existingEntityId = res.entity.id; // link, don't create
+        } else if (signals.length > 0) {
+          // No COMMITTED match — consult the caller's OWN pending queue. A
+          // pending capture materializes NOTHING yet, so resolveIdentity can't
+          // see it; a strong-signal collision means a duplicate is already
+          // in-flight. ADVISORY ONLY: we NEVER set `existingEntityId` from this
+          // (the pending proposal can be rejected, which would then stale-
+          // suppress this real write) — we flag it and still file the write.
+          const pending = await findPendingSignalMatches(db, {
+            userId,
+            signals,
+          });
+          if (pending.length > 0) {
+            pendingDuplicateCandidates.push({
+              ref: e.ref,
+              title: e.title ?? e.ref,
+              matches: pending,
+            });
+          }
         }
       } catch (err) {
         // Dedup is best-effort — never block the proposal on a lookup failure.
@@ -382,14 +510,8 @@ export async function submitCaptureGraph(
     throw new CaptureGraphValidationError(invalidEntities);
   }
 
-  const bindingNote = bindings.length
-    ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
-    : "";
-  const summary =
-    input.summary ??
-    `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
-
-  const source = input.source ?? "intelligence";
+  // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the
+  // re-submit idempotency lookup, which needs them); not re-declared here.
 
   // Reusable proposal-provenance block (rawSource is bounded, proposal-data-only).
   const proposalProvenance = input.rawSource
@@ -535,6 +657,9 @@ export async function submitCaptureGraph(
               source,
               graphSource: "capture",
               materialized: { entityIds: materializedEntityIds },
+              // Stored so a re-submit of the same graph resolves to THIS record
+              // via findPriorCaptureGraphProposal (queries data->>'idempotencyKey').
+              idempotencyKey,
               ...proposalProvenance,
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
@@ -555,6 +680,9 @@ export async function submitCaptureGraph(
           reviewUrl: undefined,
           summary,
           applied: true,
+          ...(pendingDuplicateCandidates.length > 0
+            ? { pendingDuplicateCandidates }
+            : {}),
           ...(projectCandidate ? { projectCandidate } : {}),
           ...(projectOutcome ? { project: projectOutcome } : {}),
           writeReceipt: {
@@ -597,6 +725,10 @@ export async function submitCaptureGraph(
       source,
       graphSource: "capture",
       bindings,
+      // Stored so a re-submit of the same graph resolves to THIS proposal via
+      // findPriorCaptureGraphProposal (queries data->>'idempotencyKey') instead
+      // of filing a second row — the core of the anti-duplicate fix.
+      idempotencyKey,
       ...proposalProvenance,
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },
@@ -613,6 +745,9 @@ export async function submitCaptureGraph(
     reviewUrl,
     summary,
     applied: false,
+    ...(pendingDuplicateCandidates.length > 0
+      ? { pendingDuplicateCandidates }
+      : {}),
     ...(projectCandidate ? { projectCandidate } : {}),
     ...(projectOutcome ? { project: projectOutcome } : {}),
     writeReceipt: {

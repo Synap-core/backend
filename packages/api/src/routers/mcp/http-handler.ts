@@ -247,6 +247,25 @@ function jsonRpcError(id: unknown, code: number, message: string) {
   );
 }
 
+/**
+ * A NON-auth JSON-RPC error — HTTP 429, NO `WWW-Authenticate`.
+ *
+ * The auth `jsonRpcError` above emits the RFC 9728 discovery hop, which
+ * claude.ai reads as "your token is bad, re-authenticate". Rate limiting is NOT
+ * an auth failure, so it must NOT carry that header: a rate-limited client
+ * should BACK OFF, not bounce into OAuth. This also breaks a live cascade — the
+ * CP proxy treats ANY pod 401 on a proxied call as a stale key and REVOKES the
+ * grant (connect-mcp), so a rate-limit-as-401 would silently disconnect a
+ * healthy connection and force re-authorization. A 429 is passed through, not
+ * mistaken for a dead key.
+ */
+function jsonRpcRateLimited(id: unknown, message: string) {
+  return Response.json(
+    { jsonrpc: "2.0", id, error: { code: -32000, message } },
+    { status: 429 }
+  );
+}
+
 // ── Hono app ──────────────────────────────────────────────────────────────────
 
 const mcpHttpApp = new Hono();
@@ -335,7 +354,7 @@ mcpHttpApp.post("/", async (c) => {
   try {
     checkHubRateLimit(keyRecord.id, "mcp");
   } catch {
-    return jsonRpcError(null, -32000, "Rate limit exceeded. Please slow down.");
+    return jsonRpcRateLimited(null, "Rate limit exceeded. Please slow down.");
   }
 
   // ── 2. Hand off to the SDK transport ─────────────────────────────────────
@@ -369,17 +388,9 @@ mcpHttpApp.post("/", async (c) => {
   // `?sessionId=` — a `focus_sessions` row id used as an out-of-band SCOPE
   // HINT. It is NOT transport session state (this handler is stateless and
   // sets no `Mcp-Session-Id`), and downstream governance still authorizes
-  // independently of it.
-  //
-  // CORRECTION (2026-07-23): an earlier version of this comment cited SEP-2567
-  // "Sessionless MCP via Explicit State Handles" as the basis for this design.
-  // That citation was wrong and has been removed. A SEP-2567 state handle is an
-  // ordinary string returned in `structuredContent` and passed back as a normal,
-  // model-visible TOOL ARGUMENT. This parameter is the opposite: it rides the
-  // URL and is deliberately never advertised on a tool schema. The mechanism
-  // here is fine on its own terms — it simply is not an instance of that SEP.
-  // (SEP-2567/2575 and the 2026-07-28 revision are real; the installed SDK
-  // 1.29.0 implements none of it and still requires the initialize handshake.)
+  // independently of it. (Do NOT re-label this a SEP-2567 state handle — that
+  // is a model-visible tool ARGUMENT; this rides the URL and is never
+  // advertised on a schema. The two are unrelated.)
   const defaultSessionId = c.req.query("sessionId") ?? undefined;
   // Live grounding is only consumed by the client at the `initialize` handshake
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a

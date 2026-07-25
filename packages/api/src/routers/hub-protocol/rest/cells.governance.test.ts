@@ -155,6 +155,9 @@ describe("POST /cells/define — agent caller is governed", () => {
       action: "define",
       agentUserId: AGENT,
       workspaceId: WS,
+      // Agent-authored AI work is branded "intelligence" (matches automation
+      // doors), not "api" — consistent provenance for the governed write.
+      source: "intelligence",
     });
     // The full define input rides in `data` so the `cell/define` approve-executor
     // can materialize a real cell on approval.

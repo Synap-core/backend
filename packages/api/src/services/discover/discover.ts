@@ -18,6 +18,7 @@ import {
   db,
   entities,
   projects,
+  proposals,
   workspaces,
   eq,
   and,
@@ -192,6 +193,12 @@ interface DiscoverResult {
   workspaceCount: number;
   /** Representative profile sample from the pinned / first workspace. */
   profiles: ProfileSample[];
+  /**
+   * Pending-review backlog, omitted when empty. Surfaced here because the queue
+   * is invisible to recall AND to dedup: unreviewed work reads as missing and
+   * gets duplicated, and a pending template update keeps its capabilities off.
+   */
+  pendingReview?: { count: number; oldestDays: number };
   note: string;
   /**
    * Internal team for the pinned / sample workspace. Omitted when empty.
@@ -233,8 +240,36 @@ function trimProfiles(res: unknown): ProfileSample[] {
  * The lens-map guidance note. Dynamic (counts) + action-oriented; the lens
  * model itself is taught once in the agent prompt, not re-taught per call.
  */
-function buildNote(projectCount: number, workspaceCount: number): string {
+function buildNote(
+  projectCount: number,
+  workspaceCount: number,
+  pending?: { count: number; oldestDays: number }
+): string {
+  // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
+  // Live dogfood (2026-07-24) proved the review queue is a uniform BLIND SPOT:
+  // `ask` does not recall pending proposals, capture's dedup does not see them,
+  // and `resolve_identity` answered match:"none" for a company sitting in TWO
+  // pending proposals. So an unreviewed queue makes the pod amnesiac about its
+  // own recent work AND mechanically drives the next agent to duplicate it.
+  //
+  // Worse, the queue gates the PLATFORM: a workspace-template update carrying
+  // the user's `exa` capability sat unreviewed for days, so an agent correctly
+  // reported the capability as unavailable — it was, pending one click.
+  //
+  // Indexing pending proposals into recall/dedup is the real fix. This is the
+  // cheap half: `orient` is the mandated first call of every session, so naming
+  // the backlog here turns every session start into a review nudge.
+  const queue =
+    pending && pending.count > 0
+      ? `⚠ ${pending.count} proposal(s) awaiting your review` +
+        (pending.oldestDays >= 1 ? `, oldest ${pending.oldestDays}d old` : "") +
+        `. Pending proposals are NOT yet in the graph: recall will not find them and dedup cannot see them, ` +
+        `so unreviewed work looks missing and gets duplicated — and a pending workspace/template update ` +
+        `keeps its capabilities switched off. Surface this to the user early: call synap_list_proposals ` +
+        `and offer to walk the queue before doing more work. `
+      : "";
   return (
+    queue +
     `Lens map: ${projectCount} project(s), ${workspaceCount} workspace(s). ` +
     (workspaceCount > 1
       ? `Reads auto-scope across all your workspaces; pass workspaceId to narrow to one domain, projectId to one project. `
@@ -426,6 +461,44 @@ export async function discover(
     }));
   }
 
+  // Pending-review backlog. Best-effort: orient must never fail because the
+  // proposals read hiccuped — a missing nudge is far better than a broken map.
+  //
+  // MUST match what `synap_list_proposals` returns (the tool the nudge tells the
+  // user to call), or the count and the tool disagree. The canonical queue floors
+  // by OWNER — `eq(proposals.createdBy, userId)` (proposals-service.ts) — with a
+  // workspaceId only NARROWING. An earlier version floored by workspace
+  // MEMBERSHIP instead, which on a multi-user pod counted a teammate's pending
+  // proposals for this user (both a wrong count and a small disclosure of their
+  // backlog). Floor by createdBy, user-wide, exactly like the tool's default.
+  let pendingSummary: { count: number; oldestDays: number } | undefined;
+  try {
+    // COUNT + MIN in one aggregate row — never load the rows themselves. On a
+    // busy pod the pending queue can be large, and orient runs on every session
+    // start; a full-row fetch just to count would tax the mandated first call.
+    const [agg] = await db
+      .select({
+        count: drizzleSql<number>`count(*)::int`,
+        oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+      })
+      .from(proposals)
+      .where(
+        and(eq(proposals.status, "pending"), eq(proposals.createdBy, userId))
+      );
+    if (agg && agg.count > 0) {
+      pendingSummary = {
+        count: agg.count,
+        oldestDays: agg.oldest
+          ? Math.floor(
+              (Date.now() - new Date(agg.oldest).getTime()) / 86_400_000
+            )
+          : 0,
+      };
+    }
+  } catch {
+    pendingSummary = undefined;
+  }
+
   const result: DiscoverResult = {
     me: { userId, scopes: authScopes },
     detail,
@@ -434,7 +507,8 @@ export async function discover(
     workspaces: workspacesOut,
     workspaceCount: workspacesOut.length,
     profiles: profileSample,
-    note: buildNote(projectsOut.length, workspacesOut.length),
+    ...(pendingSummary ? { pendingReview: pendingSummary } : {}),
+    note: buildNote(projectsOut.length, workspacesOut.length, pendingSummary),
   };
 
   // Team roster — same loader capture uses for structure. One workspace only

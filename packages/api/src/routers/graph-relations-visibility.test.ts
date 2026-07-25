@@ -77,8 +77,6 @@ async function fetchVisibleRelations(userId: string, ids: string[]) {
   });
 }
 
-let dbAvailable = false;
-
 async function checkDb(): Promise<boolean> {
   try {
     await db
@@ -91,124 +89,136 @@ async function checkDb(): Promise<boolean> {
   }
 }
 
-describe("graph.getFull relations floor — membership-gated, not owner-only", () => {
-  beforeAll(async () => {
-    dbAvailable = await checkDb();
-    if (!dbAvailable) return;
+// Probe ONCE at module load so the gate is known when `describe.skipIf` is
+// evaluated. The old `if (!dbAvailable) return` inside each `it` scored as ✓
+// passed with no database — the relations-floor proof proved nothing while green.
+const dbAvailable = await checkDb();
 
-    await db.delete(relations).where(eq(relations.id, WS_RELATION));
-    await db.delete(relations).where(eq(relations.id, POD_RELATION));
-    await db.delete(entities).where(eq(entities.id, ENTITY_A));
-    await db.delete(entities).where(eq(entities.id, ENTITY_B));
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, WS));
-    await db.delete(workspaces).where(eq(workspaces.id, WS));
-    for (const id of Object.values(USERS)) {
-      await db.delete(users).where(eq(users.id, id));
-    }
-
-    for (const [key, id] of Object.entries(USERS)) {
-      await db
-        .insert(users)
-        .values({
-          id,
-          email: `${key.toLowerCase()}@test.synap`,
-          userType: "human",
-        })
-        .onConflictDoNothing();
-    }
-
-    await db.insert(workspaces).values({
-      id: WS,
-      name: "Shared WS",
-      ownerId: USERS.OWNER,
-    });
-    // Teammate is a MEMBER, not the owner/author of anything below.
-    await db.insert(workspaceMembers).values({
-      id: randomUUID(),
-      workspaceId: WS,
-      userId: USERS.TEAMMATE,
-      role: "editor",
-    });
-
-    await db.insert(entities).values([
-      {
-        id: ENTITY_A,
-        userId: USERS.OWNER,
-        workspaceId: WS,
-        type: "person",
-        title: "Entity A",
-      },
-      {
-        id: ENTITY_B,
-        userId: USERS.OWNER,
-        workspaceId: WS,
-        type: "person",
-        title: "Entity B",
-      },
-    ]);
-
-    // Workspace relation authored by the OWNER — teammate must see it.
-    await db.insert(relations).values({
-      id: WS_RELATION,
-      userId: USERS.OWNER,
-      workspaceId: WS,
-      sourceEntityId: ENTITY_A,
-      targetEntityId: ENTITY_B,
-      type: "related_to",
-    });
-
-    // Pod-wide (no workspace) relation authored by the OWNER — teammate must
-    // NOT see it; pod-wide edges have no collaborative boundary, owner floor.
-    await db.insert(relations).values({
-      id: POD_RELATION,
-      userId: USERS.OWNER,
-      workspaceId: null,
-      sourceEntityId: ENTITY_A,
-      targetEntityId: ENTITY_B,
-      type: "related_to",
-    });
-  });
-
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await db.delete(relations).where(eq(relations.id, WS_RELATION));
-    await db.delete(relations).where(eq(relations.id, POD_RELATION));
-    await db.delete(entities).where(eq(entities.id, ENTITY_A));
-    await db.delete(entities).where(eq(entities.id, ENTITY_B));
-    await db
-      .delete(workspaceMembers)
-      .where(eq(workspaceMembers.workspaceId, WS));
-    await db.delete(workspaces).where(eq(workspaces.id, WS));
-    for (const id of Object.values(USERS)) {
-      await db.delete(users).where(eq(users.id, id));
-    }
-  });
-
-  it("a teammate SEES a workspace relation authored by the owner (the fix)", async () => {
-    if (!dbAvailable) return;
-    const rows = await fetchVisibleRelations(USERS.TEAMMATE, [
-      ENTITY_A,
-      ENTITY_B,
-    ]);
-    expect(rows.map((r) => r.id)).toContain(WS_RELATION);
-  });
-
-  it("a teammate does NOT see a pod-wide relation authored by the owner (floor preserved)", async () => {
-    if (!dbAvailable) return;
-    const rows = await fetchVisibleRelations(USERS.TEAMMATE, [
-      ENTITY_A,
-      ENTITY_B,
-    ]);
-    expect(rows.map((r) => r.id)).not.toContain(POD_RELATION);
-  });
-
-  it("the OWNER still sees both relations", async () => {
-    if (!dbAvailable) return;
-    const rows = await fetchVisibleRelations(USERS.OWNER, [ENTITY_A, ENTITY_B]);
-    const ids = rows.map((r) => r.id);
-    expect(ids).toContain(WS_RELATION);
-    expect(ids).toContain(POD_RELATION);
+// Anti-skip sanity — NEVER gated. When PG is down the suite below is reported
+// SKIPPED, never PASSED.
+describe("graph relations floor — live-PG gate", () => {
+  it("probed the database (skips below are honest, not vacuous)", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
 });
+
+describe.skipIf(!dbAvailable)(
+  "graph.getFull relations floor — membership-gated, not owner-only",
+  () => {
+    beforeAll(async () => {
+      await db.delete(relations).where(eq(relations.id, WS_RELATION));
+      await db.delete(relations).where(eq(relations.id, POD_RELATION));
+      await db.delete(entities).where(eq(entities.id, ENTITY_A));
+      await db.delete(entities).where(eq(entities.id, ENTITY_B));
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, WS));
+      await db.delete(workspaces).where(eq(workspaces.id, WS));
+      for (const id of Object.values(USERS)) {
+        await db.delete(users).where(eq(users.id, id));
+      }
+
+      for (const [key, id] of Object.entries(USERS)) {
+        await db
+          .insert(users)
+          .values({
+            id,
+            email: `${key.toLowerCase()}@test.synap`,
+            userType: "human",
+          })
+          .onConflictDoNothing();
+      }
+
+      await db.insert(workspaces).values({
+        id: WS,
+        name: "Shared WS",
+        ownerId: USERS.OWNER,
+      });
+      // Teammate is a MEMBER, not the owner/author of anything below.
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: WS,
+        userId: USERS.TEAMMATE,
+        role: "editor",
+      });
+
+      await db.insert(entities).values([
+        {
+          id: ENTITY_A,
+          userId: USERS.OWNER,
+          workspaceId: WS,
+          type: "person",
+          title: "Entity A",
+        },
+        {
+          id: ENTITY_B,
+          userId: USERS.OWNER,
+          workspaceId: WS,
+          type: "person",
+          title: "Entity B",
+        },
+      ]);
+
+      // Workspace relation authored by the OWNER — teammate must see it.
+      await db.insert(relations).values({
+        id: WS_RELATION,
+        userId: USERS.OWNER,
+        workspaceId: WS,
+        sourceEntityId: ENTITY_A,
+        targetEntityId: ENTITY_B,
+        type: "related_to",
+      });
+
+      // Pod-wide (no workspace) relation authored by the OWNER — teammate must
+      // NOT see it; pod-wide edges have no collaborative boundary, owner floor.
+      await db.insert(relations).values({
+        id: POD_RELATION,
+        userId: USERS.OWNER,
+        workspaceId: null,
+        sourceEntityId: ENTITY_A,
+        targetEntityId: ENTITY_B,
+        type: "related_to",
+      });
+    });
+
+    afterAll(async () => {
+      await db.delete(relations).where(eq(relations.id, WS_RELATION));
+      await db.delete(relations).where(eq(relations.id, POD_RELATION));
+      await db.delete(entities).where(eq(entities.id, ENTITY_A));
+      await db.delete(entities).where(eq(entities.id, ENTITY_B));
+      await db
+        .delete(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, WS));
+      await db.delete(workspaces).where(eq(workspaces.id, WS));
+      for (const id of Object.values(USERS)) {
+        await db.delete(users).where(eq(users.id, id));
+      }
+    });
+
+    it("a teammate SEES a workspace relation authored by the owner (the fix)", async () => {
+      const rows = await fetchVisibleRelations(USERS.TEAMMATE, [
+        ENTITY_A,
+        ENTITY_B,
+      ]);
+      expect(rows.map((r) => r.id)).toContain(WS_RELATION);
+    });
+
+    it("a teammate does NOT see a pod-wide relation authored by the owner (floor preserved)", async () => {
+      const rows = await fetchVisibleRelations(USERS.TEAMMATE, [
+        ENTITY_A,
+        ENTITY_B,
+      ]);
+      expect(rows.map((r) => r.id)).not.toContain(POD_RELATION);
+    });
+
+    it("the OWNER still sees both relations", async () => {
+      const rows = await fetchVisibleRelations(USERS.OWNER, [
+        ENTITY_A,
+        ENTITY_B,
+      ]);
+      const ids = rows.map((r) => r.id);
+      expect(ids).toContain(WS_RELATION);
+      expect(ids).toContain(POD_RELATION);
+    });
+  }
+);
