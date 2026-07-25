@@ -98,6 +98,54 @@ describe("computeCaptureGraphIdempotencyKey", () => {
       })
     ).not.toBe(key);
   });
+
+  it("is entity-ORDER independent WITH relations (LLM re-emits same graph, refs shift)", () => {
+    // Same semantic graph — "Ada knows Grace" — but the two entities land in a
+    // different order across attempts, so the LLM assigns them opposite refs.
+    // Before content-addressing the relation endpoints, the raw-ref relation
+    // ("t1 t2" vs "t2 t1") made the key differ → a duplicate slipped through.
+    const g1 = {
+      workspaceId: "ws-1" as string | null,
+      projectId: null as string | null,
+      bindings: [],
+      entities: [
+        { ref: "t1", profileSlug: "person", title: "Ada", properties: {} },
+        { ref: "t2", profileSlug: "person", title: "Grace", properties: {} },
+      ],
+      relations: [{ sourceRef: "t1", targetRef: "t2", type: "knows" }], // Ada→Grace
+    };
+    const g2 = {
+      ...g1,
+      entities: [
+        { ref: "t1", profileSlug: "person", title: "Grace", properties: {} },
+        { ref: "t2", profileSlug: "person", title: "Ada", properties: {} },
+      ],
+      relations: [{ sourceRef: "t2", targetRef: "t1", type: "knows" }], // still Ada→Grace
+    };
+    expect(computeCaptureGraphIdempotencyKey(g1)).toBe(
+      computeCaptureGraphIdempotencyKey(g2)
+    );
+  });
+
+  it("still DIFFERS when the relation DIRECTION flips (Ada→Grace ≠ Grace→Ada)", () => {
+    const g1 = {
+      workspaceId: "ws-1" as string | null,
+      projectId: null as string | null,
+      bindings: [],
+      entities: [
+        { ref: "t1", profileSlug: "person", title: "Ada", properties: {} },
+        { ref: "t2", profileSlug: "person", title: "Grace", properties: {} },
+      ],
+      relations: [{ sourceRef: "t1", targetRef: "t2", type: "knows" }],
+    };
+    const flipped = {
+      ...g1,
+      relations: [{ sourceRef: "t2", targetRef: "t1", type: "knows" }], // Grace→Ada
+    };
+    expect(computeCaptureGraphIdempotencyKey(g1)).not.toBe(
+      computeCaptureGraphIdempotencyKey(flipped)
+    );
+  });
 });
 
 /** Minimal chainable stub matching `db.select().from().where().orderBy().limit()`. */

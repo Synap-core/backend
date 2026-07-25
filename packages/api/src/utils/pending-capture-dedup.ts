@@ -381,6 +381,7 @@ export function computeCaptureGraphIdempotencyKey(input: {
   workspaceId: string | null;
   projectId: string | null;
   entities: Array<{
+    ref?: string;
     profileSlug: string;
     title?: string;
     description?: string;
@@ -390,20 +391,35 @@ export function computeCaptureGraphIdempotencyKey(input: {
   relations?: Array<{ sourceRef: string; targetRef: string; type: string }>;
   bindings?: unknown[];
 }): string {
-  const canonicalEntities = input.entities
-    .map((e) => ({
+  // Per-entity canonical CONTENT key — deliberately excludes `ref`, an
+  // LLM-assigned positional label (t1/t2, e1/e2 by array index) that shifts when
+  // the same graph is re-emitted in a different order.
+  const entityContentKey = (e: (typeof input.entities)[number]) =>
+    JSON.stringify({
       profileSlug: e.profileSlug,
       title: e.title ?? "",
       description: e.description ?? "",
       content: e.content ?? "",
       // Sort property keys so key order never changes the hash.
       properties: canonicalize(e.properties ?? {}),
-    }))
-    .map((e) => JSON.stringify(e))
-    .sort();
+    });
+
+  const canonicalEntities = input.entities.map(entityContentKey).sort();
+
+  // Resolve each relation endpoint to its entity's CONTENT identity, NOT its raw
+  // ref, so a re-emitted graph whose entities landed in a different order (and so
+  // got different ref labels) still produces the same relation component — the
+  // fix for the semantic-same/textual-different graph-lane duplicates. An
+  // endpoint whose ref isn't a graph entity (e.g. a pre-existing entity referenced
+  // by id) falls back to the raw ref.
+  const contentKeyByRef = new Map<string, string>();
+  for (const e of input.entities) {
+    if (e.ref) contentKeyByRef.set(e.ref, entityContentKey(e));
+  }
+  const endpoint = (ref: string) => contentKeyByRef.get(ref) ?? ref;
 
   const canonicalRelations = (input.relations ?? [])
-    .map((r) => `${r.sourceRef} ${r.targetRef} ${r.type}`)
+    .map((r) => `${endpoint(r.sourceRef)} ${endpoint(r.targetRef)} ${r.type}`)
     .sort();
 
   const payload = JSON.stringify({
