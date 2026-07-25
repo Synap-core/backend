@@ -1,5 +1,5 @@
 {
   "$comment": "Single source of truth for skill-package delivery. Consumers: synap-backend GET /skills/system, synap-cli skills-installer.ts, scripts/sync-skills.sh, and the IS baseline sync. 'baseline' = core packages safe for every installed agent context; 'workflow' = intent-triggered packages (for example onboarding or company setup). The CLI installs baseline by default; callers explicitly opt into workflow packages. The IS baseline sync consumes baseline only. Adding a package requires one line here and a deliberate delivery choice.",
   "baseline": ["synap", "synap-schema", "synap-ui"],
-  "workflow": ["onboard", "agent-os"]
+  "workflow": ["onboard", "agent-os", "synap-app"]
 }
