@@ -1763,6 +1763,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "expires_at"        timestamp with time zone,
   "reviewed_by"       text,
   "reviewed_at"       timestamp with time zone,
+  "external_dispatched_at" timestamp with time zone,
   "rejection_reason"  text,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
@@ -1789,9 +1790,11 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "project_id" uuid;  -- 0138 (pr
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "step_run_id" uuid;  -- 0198 (workflow attribution: soft ref → automation_step_runs)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "node_id" text;  -- 0198 (workflow attribution: producing flow node)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "revision_history" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0198 (edit before/after history)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "dedup_hash" text;  -- 0208 (agent-proposal exact-match dedup hash)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "external_dispatched_at" timestamp with time zone;  -- 0209 (at-most-once external dispatch claim)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -1830,6 +1833,11 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_agent_user_id"
 
 CREATE INDEX IF NOT EXISTS "proposals_correlation_id_idx"
   ON "proposals" ("correlation_id");
+
+-- 0208: at-most-one PENDING agent proposal per normalized change (dedup hash).
+CREATE UNIQUE INDEX IF NOT EXISTS "proposals_agent_dedup_uq"
+  ON "proposals" ("dedup_hash")
+  WHERE status = 'pending' AND agent_user_id IS NOT NULL AND dedup_hash IS NOT NULL;
 
 -- (idx_proposals_session_id moved next to the proposals.session_id ALTER
 --  after the focus_sessions section below.)

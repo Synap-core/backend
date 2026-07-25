@@ -21,6 +21,7 @@ import {
   entities,
   ProfileResolutionService,
   insertPendingProposal,
+  findExistingPendingDuplicate,
   type InsertPendingProposalResult,
 } from "@synap/database";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
@@ -1317,6 +1318,81 @@ async function createProposal(opts: {
     data
   );
 
+  // Build the stored proposal payload ONCE, up front. `requestedEventId` is the
+  // only field that must wait for the TX (it comes from the `.requested` event
+  // stamped there) — it is a VOLATILE dedup key (stripped from the hash), so
+  // injecting it inside the TX does NOT change the dedup identity computed here.
+  const proposalData: RequestShapedProposalData = {
+    requestId: randomUUID(),
+    source: (source || "intelligence") as RequestShapedProposalData["source"],
+    sourceId: userId,
+    workspaceId: workspaceId ?? null,
+    targetType: singularType as RequestShapedProposalData["targetType"],
+    targetId,
+    ...(targetName ? { targetName } : {}),
+    changeType: action as RequestShapedProposalData["changeType"],
+    data,
+    reasoning: reasoning || `${action} ${singularType} requires your approval`,
+    summary,
+    correlationId: resolvedCorrelationId,
+    ...(previousData ? { previousData } : {}),
+  };
+
+  // COMPOSITE PASS-THROUGH: when the gate `data` IS a composite operations graph
+  // (N create_entity + M create_relation — what the capture door proposes),
+  // hoist `operations` to the TOP LEVEL of the stored payload. The approve flow
+  // branches on `isCompositeProposalData(proposal.data)` BEFORE the single-op
+  // executors, and that guard reads a top-level `operations` — nested under the
+  // request-shaped `data` it is invisible, so the reviewer would get an
+  // `entity/create` executor that throws "missing profileSlug" and the proposal
+  // could never be approved. The request-shaped envelope is PRESERVED alongside
+  // it. INERT for every existing caller — none passes `operations` in gate data.
+  const compositeOperations = isCompositeProposalData(
+    data as unknown as Parameters<typeof isCompositeProposalData>[0]
+  )
+    ? (data as unknown as { operations: unknown[] }).operations
+    : undefined;
+
+  const storedData: Record<string, unknown> = {
+    ...(proposalData as unknown as Record<string, unknown>),
+    ...(authorshipMode ? { authorshipMode } : {}),
+    ...(compositeOperations ? { operations: compositeOperations } : {}),
+  };
+
+  // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an
+  // existing PENDING proposal, dedup is a NO-OP — return the existing proposal
+  // WITHOUT stamping a second `.requested` event or inserting a duplicate row.
+  // (Stamping-then-deduping left a spurious `.requested` event dangling on every
+  // agent retry.) Uses the SAME hash the SSOT insert stores, so peek and insert
+  // agree. Human-authored proposals (no attribution agent) are never deduped.
+  if (attributionAgentUserId) {
+    const existing = await findExistingPendingDuplicate({
+      workspaceId: workspaceId ?? null,
+      targetType: singularType,
+      targetId,
+      proposalType: action,
+      data: storedData,
+      agentUserId: attributionAgentUserId,
+    });
+    if (existing) {
+      logger.info(
+        { proposalId: existing.id, deduped: true },
+        "proposal deduped (peek — skipped .requested event + insert)"
+      );
+      return {
+        granted: false,
+        proposalId: existing.id,
+        proposalType: `${subjectType}.${action}`,
+        summary,
+        reasoning:
+          reasoning || `${action} ${singularType} requires your approval`,
+        reviewPath: openPath(existing.id),
+        reviewUrl: openLink(existing.id),
+        deduped: true,
+      };
+    }
+  }
+
   // TX-1: append the `.requested` event AND insert the proposal atomically, so a
   // proposal can never exist without its originating spine event (and the
   // correlation linkage is always consistent). BEHAVIOR CHANGE (intentional): a
@@ -1341,44 +1417,6 @@ async function createProposal(opts: {
         );
       }
 
-      const proposalData: RequestShapedProposalData = {
-        requestId: randomUUID(),
-        source: (source ||
-          "intelligence") as RequestShapedProposalData["source"],
-        sourceId: userId,
-        workspaceId: workspaceId ?? null,
-        targetType: singularType as RequestShapedProposalData["targetType"],
-        targetId,
-        ...(targetName ? { targetName } : {}),
-        changeType: action as RequestShapedProposalData["changeType"],
-        data,
-        reasoning:
-          reasoning || `${action} ${singularType} requires your approval`,
-        summary,
-        correlationId: resolvedCorrelationId,
-        ...(reqEventId ? { requestedEventId: reqEventId } : {}),
-        ...(previousData ? { previousData } : {}),
-      };
-
-      // COMPOSITE PASS-THROUGH: when the gate `data` IS a composite operations
-      // graph (N create_entity + M create_relation — what the capture door
-      // proposes), hoist `operations` to the TOP LEVEL of the stored payload.
-      // The approve flow branches on `isCompositeProposalData(proposal.data)`
-      // BEFORE the single-op executors, and that guard reads a top-level
-      // `operations` — nested under the request-shaped `data` it is invisible, so
-      // the reviewer would get an `entity/create` executor that throws
-      // "missing profileSlug" and the proposal could never be approved.
-      // The request-shaped envelope is PRESERVED alongside it (both guards pass;
-      // the composite branch wins on approve, and the review UI renders the
-      // graph). INERT for every existing caller — none passes `operations` in
-      // gate data, so `isCompositeProposalData` is false and the payload is
-      // byte-identical to before.
-      const compositeOperations = isCompositeProposalData(
-        data as unknown as Parameters<typeof isCompositeProposalData>[0]
-      )
-        ? (data as unknown as { operations: unknown[] }).operations
-        : undefined;
-
       const pendingInput: CreatePendingProposalInput = {
         userId,
         workspaceId: workspaceId ?? null,
@@ -1386,9 +1424,8 @@ async function createProposal(opts: {
         targetId,
         proposalType: action,
         data: {
-          ...(proposalData as unknown as Record<string, unknown>),
-          ...(authorshipMode ? { authorshipMode } : {}),
-          ...(compositeOperations ? { operations: compositeOperations } : {}),
+          ...storedData,
+          ...(reqEventId ? { requestedEventId: reqEventId } : {}),
         },
         agentUserId: attributionAgentUserId ?? undefined,
         createdBy: userId,

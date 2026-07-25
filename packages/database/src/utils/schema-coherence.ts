@@ -113,6 +113,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "session_id",
     addedBy: "0119_add_session_id_to_proposals.sql",
   },
+  // proposals — agent-proposal dedup hash (0208). Its partial unique index is
+  // the DB-level backstop against duplicate PENDING agent proposals; if the
+  // column is missing the agent write path throws on every insert.
+  {
+    table: "proposals",
+    column: "dedup_hash",
+    addedBy: "0208_proposals_dedup_hash.sql",
+  },
 
   // property_defs — audit flagged these (0057 / 0064 / 0065)
   {
@@ -379,6 +387,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "proposals",
     column: "proposed_by_user_id",
     addedBy: "0181_proposals_proposed_by_user_id.sql",
+  },
+  {
+    table: "proposals",
+    column: "external_dispatched_at",
+    addedBy: "0209_proposals_external_dispatched.sql",
   },
 
   // users

@@ -5,7 +5,9 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { users } from "./users.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { channels } from "./channels.js";
@@ -126,12 +128,26 @@ export const proposals = pgTable(
     // producing session's projectId). Nullable — most proposals have no project.
     projectId: uuid("project_id"),
 
+    // Agent-proposal exact-match dedup hash (G3): sha256 of the normalized
+    // proposed change (see computeProposalDedupHash). Stored only for
+    // agent/automation-authored rows; NULL for human-authored proposals. The
+    // partial unique index below makes a duplicate PENDING agent proposal a
+    // DB-level impossibility — the read-then-insert peek closes the common
+    // case, this column + index closes the concurrent-insert race.
+    dedupHash: text("dedup_hash"),
+
     // Expiry: proposals older than this are treated as expired
     expiresAt: timestamp("expires_at", { withTimezone: true }),
 
     // Review Metadata
     reviewedBy: text("reviewed_by"),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    // Executor-safety E2 (0209): at-most-once dispatch claim for the four
+    // external executors. Atomically stamped BEFORE an irreversible external
+    // send; a re-run that finds it already set skips the send. Never un-stamped.
+    externalDispatchedAt: timestamp("external_dispatched_at", {
+      withTimezone: true,
+    }),
     rejectionReason: text("rejection_reason"),
     comments: jsonb("comments").default("[]"),
     // Revision history (D3b): append-only before/after snapshots of every
@@ -185,6 +201,15 @@ export const proposals = pgTable(
     sessionIdIdx: index("proposals_session_id_idx").on(table.sessionId),
     projectIdIdx: index("proposals_project_id_idx").on(table.projectId),
     stepRunIdIdx: index("idx_proposals_step_run_id").on(table.stepRunId),
+    // G3: at-most-one PENDING agent proposal per normalized change. Partial —
+    // only pending, agent-authored, hash-bearing rows are constrained; human
+    // and non-pending rows stay unconstrained. Pairs with the SQL in
+    // 0208_proposals_dedup_hash.sql.
+    agentDedupUnique: uniqueIndex("proposals_agent_dedup_uq")
+      .on(table.dedupHash)
+      .where(
+        sql`${table.status} = 'pending' AND ${table.agentUserId} IS NOT NULL AND ${table.dedupHash} IS NOT NULL`
+      ),
   })
 );
 
@@ -211,6 +236,8 @@ export interface Proposal {
   expiresAt: Date | null;
   reviewedBy: string | null;
   reviewedAt: Date | null;
+  externalDispatchedAt: Date | null;
+  dedupHash: string | null;
   rejectionReason: string | null;
   comments: unknown;
   revisionHistory: ProposalRevision[];

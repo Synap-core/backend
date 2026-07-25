@@ -79,6 +79,41 @@ describe("computeProposalDedupHash", () => {
     expect(a).toBe(b);
   });
 
+  it("strips a top-level `id` — two creates with identical content but different pre-generated ids hash equal (G2)", () => {
+    // The create door mints `data.id = randomUUID()` per attempt and stores it
+    // (the materializer reads it on approval). If `id` entered the hash, every
+    // create attempt would hash uniquely and create-dedup could never fire.
+    const a = computeProposalDedupHash({
+      ...base,
+      proposalType: "create",
+      targetId: "t-A",
+      data: { id: "id-A", profileSlug: "task", title: "Ship the thing" },
+    });
+    const b = computeProposalDedupHash({
+      ...base,
+      proposalType: "create",
+      targetId: "t-B",
+      data: { id: "id-B", profileSlug: "task", title: "Ship the thing" },
+    });
+    expect(a).toBe(b);
+  });
+
+  it("still distinguishes creates whose non-id content differs (id strip is not over-broad)", () => {
+    const a = computeProposalDedupHash({
+      ...base,
+      proposalType: "create",
+      targetId: "t-A",
+      data: { id: "id-A", profileSlug: "task", title: "One" },
+    });
+    const b = computeProposalDedupHash({
+      ...base,
+      proposalType: "create",
+      targetId: "t-B",
+      data: { id: "id-B", profileSlug: "task", title: "Two" },
+    });
+    expect(a).not.toBe(b);
+  });
+
   it("is key-order independent (stable stringify)", () => {
     const a = computeProposalDedupHash({
       ...base,

@@ -83,6 +83,10 @@ vi.mock("@synap/database", async () => {
       proposal: { id: randomUUID() },
       deduped: false,
     })),
+    // G1 peek-before-event: createProposal calls this BEFORE stamping the
+    // `.requested` event. Default: no existing duplicate → the normal insert
+    // path runs (what these tests assert on).
+    findExistingPendingDuplicate: vi.fn().mockResolvedValue(null),
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },

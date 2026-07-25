@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { db, proposals } from "@synap/database";
+import { db, proposals, findExistingPendingDuplicate } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
 import { auditLog } from "./audit-log.js";
@@ -72,6 +72,31 @@ async function buildRequestedEventAndData(
 export async function createEventBackedProposal(
   input: CreateEventBackedProposalInput
 ) {
+  // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an
+  // existing PENDING proposal, dedup is a NO-OP — return the existing proposal
+  // WITHOUT stamping a spurious `.requested` audit event (buildRequestedEventAnd
+  // Data below appends one; deduping AFTER that left it dangling on every agent
+  // retry). The only fields buildRequestedEventAndData folds into `data`
+  // (summary / correlationId / requestedEventId) are all VOLATILE dedup keys, so
+  // the hash over `input.data` here matches what the SSOT insert stores.
+  if (input.agentUserId) {
+    const existing = await findExistingPendingDuplicate({
+      workspaceId: input.workspaceId ?? null,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      agentUserId: input.agentUserId,
+    });
+    if (existing) {
+      const correlationId =
+        typeof input.data.correlationId === "string"
+          ? input.data.correlationId
+          : (existing.correlationId ?? randomUUID());
+      return { proposal: existing, requestedEvent: null, correlationId };
+    }
+  }
+
   const { correlationId, requestedEvent, data } =
     await buildRequestedEventAndData(input);
 

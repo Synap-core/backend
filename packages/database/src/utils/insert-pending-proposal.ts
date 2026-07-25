@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
@@ -81,6 +81,19 @@ export interface InsertPendingProposalResult {
  * them; otherwise every retry would hash differently and dedup could never fire.
  */
 const VOLATILE_DEDUP_KEYS = new Set([
+  // A create's pre-generated primary id — `data.id ?? randomUUID()` mints a
+  // fresh one per attempt (permission-check / capture door), which otherwise
+  // poisons every create hash and makes create-dedup permanently inert. The id
+  // is still STORED (the materializer reads it on approval); only the hash
+  // ignores it, so two identical creates with different ids now hash equal.
+  "id",
+  // The chat/createProposal envelope ALSO folds a top-level `targetId` into the
+  // stored payload (permission-check.ts: `data.id ?? randomUUID()` for creates),
+  // a SECOND per-attempt poison. Strip it too — this is what actually revives
+  // create-dedup for the chat path (the commonest case). SAFE for non-creates:
+  // computeProposalDedupHash re-adds the real `targetId` ARG for update/delete/
+  // attach and excludes it for creates, so identity is preserved either way.
+  "targetId",
   "requestId",
   "correlationId",
   "requestedEventId",
@@ -128,6 +141,53 @@ export function computeProposalDedupHash(p: {
   return createHash("sha256").update(stableStringify(canonical)).digest("hex");
 }
 
+/** The subset of an insert input the dedup probe reads (hash + agent scope). */
+export type PendingDuplicateProbe = Pick<
+  InsertPendingProposalInput,
+  "workspaceId" | "targetType" | "targetId" | "proposalType" | "data"
+> & { agentUserId?: string | null };
+
+/**
+ * Peek for an existing PENDING agent/automation proposal that exactly matches
+ * the proposed change — the ONE dedup lookup both the door (permission-check /
+ * event-backed-proposal, BEFORE stamping a `.requested` event) and the SSOT
+ * insert below share. Returns the matching row, or `null` when none exists /
+ * the write is human-authored (no `agentUserId` — a person may deliberately
+ * file the same change twice, so human writes are never deduped).
+ *
+ * G3: an index probe on the stored `dedup_hash` (not a scan-then-rehash), so
+ * the candidate set is bounded by the partial unique index regardless of how
+ * many pending proposals the agent has open.
+ */
+export async function findExistingPendingDuplicate(
+  input: PendingDuplicateProbe,
+  executor: typeof db | DbTx = db
+): Promise<typeof proposals.$inferSelect | null> {
+  if (!input.agentUserId) return null;
+
+  const dedupHash = computeProposalDedupHash({
+    workspaceId: input.workspaceId,
+    proposalType: input.proposalType,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    data: input.data,
+  });
+
+  const [existing] = await executor
+    .select()
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        eq(proposals.agentUserId, input.agentUserId),
+        eq(proposals.dedupHash, dedupHash)
+      )
+    )
+    .limit(1);
+
+  return existing ?? null;
+}
+
 /**
  * Insert a single PENDING `proposals` row, or — for an agent/automation-authored
  * proposal that exactly matches an existing PENDING one — return that existing
@@ -144,91 +204,79 @@ export async function insertPendingProposal(
   // DEDUP GUARD (agent/automation-authored only): prevent a duplicate pending
   // proposal at the door instead of creating-then-rejecting. When an identical
   // PENDING proposal already exists (same workspace + type + target + normalized
-  // payload, authored by the same agent, within the proposal TTL), return it
-  // rather than inserting a second row. Human-authored proposals (no
-  // agentUserId) are NEVER deduped — a person may deliberately file the same
-  // change twice. Exact-match by hash; hashed at read (no stored column / index
-  // this wave — a stored hash + unique index is the future optimization once
-  // candidate sets grow, and would also close the concurrent-insert race that
-  // read-then-insert leaves open for simultaneous duplicates).
+  // payload, authored by the same agent), return it rather than inserting a
+  // second row. Human-authored proposals (no agentUserId) are NEVER deduped.
+  // Defense-in-depth: the callers already peek before stamping their
+  // `.requested` event; this repeats the peek so the SSOT insert is safe for
+  // every caller, and the 23505 catch below closes the concurrent-insert race
+  // the read-then-insert peek can't (both racers peek empty, both insert, the
+  // partial unique index rejects the loser).
   if (input.agentUserId) {
-    const isCreate = input.proposalType === "create";
-    const ttlFloor = new Date(
-      Date.now() - PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000
-    );
-    const candidates = await executor
-      .select()
-      .from(proposals)
-      .where(
-        and(
-          eq(proposals.status, ProposalStatus.PENDING),
-          input.workspaceId == null
-            ? isNull(proposals.workspaceId)
-            : eq(proposals.workspaceId, input.workspaceId),
-          eq(proposals.proposalType, input.proposalType),
-          eq(proposals.targetType, input.targetType),
-          eq(proposals.agentUserId, input.agentUserId),
-          // A create's targetId is a fresh randomUUID per attempt, so filtering by
-          // it would never match a prior attempt — narrow by it only for real
-          // targets (update/delete/attach/…).
-          ...(isCreate ? [] : [eq(proposals.targetId, input.targetId)]),
-          gt(proposals.createdAt, ttlFloor)
-        )
-      );
-
-    const incomingHash = computeProposalDedupHash({
-      workspaceId: input.workspaceId,
-      proposalType: input.proposalType,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      data: input.data,
-    });
-    for (const candidate of candidates) {
-      const candidateHash = computeProposalDedupHash({
-        workspaceId: candidate.workspaceId,
-        proposalType: candidate.proposalType,
-        targetType: candidate.targetType,
-        targetId: candidate.targetId,
-        data: (candidate.data ?? {}) as Record<string, unknown>,
-      });
-      if (candidateHash === incomingHash) {
-        return { proposal: candidate, deduped: true };
-      }
-    }
+    const existing = await findExistingPendingDuplicate(input, executor);
+    if (existing) return { proposal: existing, deduped: true };
   }
 
-  const [proposal] = await executor
-    .insert(proposals)
-    .values({
-      workspaceId: input.workspaceId,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      proposalType: input.proposalType,
-      data: input.data,
-      status: ProposalStatus.PENDING,
-      createdBy: input.createdBy,
-      expiresAt:
-        input.expiresAt ??
-        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
-      ...(input.proposedByUserId
-        ? { proposedByUserId: input.proposedByUserId }
-        : {}),
-      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-      ...(input.requestedEventId
-        ? { requestedEventId: input.requestedEventId }
-        : {}),
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      ...(input.stepRunId ? { stepRunId: input.stepRunId } : {}),
-      ...(input.nodeId ? { nodeId: input.nodeId } : {}),
-    })
-    .returning();
+  // G3: persist the dedup hash for agent rows so the partial unique index can
+  // enforce at-most-one PENDING agent proposal per normalized change. NULL for
+  // human-authored proposals (never deduped, never constrained).
+  const dedupHash = input.agentUserId
+    ? computeProposalDedupHash({
+        workspaceId: input.workspaceId,
+        proposalType: input.proposalType,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        data: input.data,
+      })
+    : null;
 
-  return { proposal, deduped: false };
+  try {
+    const [proposal] = await executor
+      .insert(proposals)
+      .values({
+        workspaceId: input.workspaceId,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        proposalType: input.proposalType,
+        data: input.data,
+        status: ProposalStatus.PENDING,
+        createdBy: input.createdBy,
+        expiresAt:
+          input.expiresAt ??
+          new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+        ...(dedupHash ? { dedupHash } : {}),
+        ...(input.proposedByUserId
+          ? { proposedByUserId: input.proposedByUserId }
+          : {}),
+        ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
+        ...(input.sourceMessageId
+          ? { sourceMessageId: input.sourceMessageId }
+          : {}),
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        ...(input.requestedEventId
+          ? { requestedEventId: input.requestedEventId }
+          : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.stepRunId ? { stepRunId: input.stepRunId } : {}),
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+      })
+      .returning();
+
+    return { proposal, deduped: false };
+  } catch (err) {
+    // G3 race enforcement: a concurrent identical agent write won the partial
+    // unique index first (Postgres unique-violation, SQLSTATE 23505). Re-run
+    // the peek and return the winner instead of surfacing the constraint error.
+    // (Cross-agent identical writes collide on the same hash and are NOT
+    // recovered here — findExistingPendingDuplicate filters by agentUserId — a
+    // ratified, accepted rough edge.)
+    const code = (err as { code?: string } | null)?.code;
+    if (input.agentUserId && code === "23505") {
+      const existing = await findExistingPendingDuplicate(input, executor);
+      if (existing) return { proposal: existing, deduped: true };
+    }
+    throw err;
+  }
 }
