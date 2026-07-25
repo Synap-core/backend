@@ -14,8 +14,12 @@
 -- deliberately file the same change twice, so they are never deduped and never
 -- constrained.
 --
--- Cross-agent identical writes hash equal and so collide on this index — an
--- accepted, ratified rough edge (the hash intentionally excludes agentUserId).
+-- GLOBAL dedup (ratified): the index is on dedup_hash ALONE (the hash excludes
+-- agentUserId), so a different agent proposing the identical change dedups onto
+-- the first pending proposal rather than filing a duplicate. findExistingPending
+-- Duplicate peeks with the same global scope; a concurrent race that slips past
+-- the peek and hits this index (23505) is recovered by a global re-peek, never
+-- surfaced as an error.
 --
 -- Additive, idempotent. Also added to 0000_baseline_schema.sql + schema-coherence.ts.
 

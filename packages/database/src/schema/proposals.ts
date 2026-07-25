@@ -201,10 +201,13 @@ export const proposals = pgTable(
     sessionIdIdx: index("proposals_session_id_idx").on(table.sessionId),
     projectIdIdx: index("proposals_project_id_idx").on(table.projectId),
     stepRunIdIdx: index("idx_proposals_step_run_id").on(table.stepRunId),
-    // G3: at-most-one PENDING agent proposal per normalized change. Partial —
-    // only pending, agent-authored, hash-bearing rows are constrained; human
-    // and non-pending rows stay unconstrained. Pairs with the SQL in
-    // 0208_proposals_dedup_hash.sql.
+    // At-most-one PENDING proposal per normalized change, GLOBAL across agents
+    // (indexed on dedup_hash alone — deliberately NOT on agent_user_id, so a
+    // different agent proposing the identical change dedups onto the first
+    // rather than colliding). findExistingPendingDuplicate peeks with the SAME
+    // global scope; keep the two in sync. Partial — only pending, agent-authored,
+    // hash-bearing rows are constrained; human and non-pending rows stay
+    // unconstrained. Pairs with the SQL in 0208_proposals_dedup_hash.sql.
     agentDedupUnique: uniqueIndex("proposals_agent_dedup_uq")
       .on(table.dedupHash)
       .where(

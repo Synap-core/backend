@@ -125,7 +125,15 @@ export function computeProposalDedupHash(p: {
   targetId: string;
   data: Record<string, unknown>;
 }): string {
-  const isCreate = p.proposalType === "create";
+  // Normalize dotted proposalTypes ("entity.create", "note.create") to their
+  // bare action verb before the create check. The generic Hub door
+  // (POST /api/hub/proposals) passes the raw dotted `proposalType`, so keying
+  // `isCreate` off the literal string "create" alone left create-dedup inert
+  // there — the fresh per-attempt targetId leaked back into the hash.
+  const action = p.proposalType.includes(".")
+    ? p.proposalType.slice(p.proposalType.lastIndexOf(".") + 1)
+    : p.proposalType;
+  const isCreate = action === "create";
   const payload: Record<string, unknown> = {};
   for (const key of Object.keys(p.data)) {
     if (VOLATILE_DEDUP_KEYS.has(key)) continue;
@@ -148,16 +156,27 @@ export type PendingDuplicateProbe = Pick<
 > & { agentUserId?: string | null };
 
 /**
- * Peek for an existing PENDING agent/automation proposal that exactly matches
- * the proposed change — the ONE dedup lookup both the door (permission-check /
+ * Peek for an existing PENDING proposal that exactly matches the proposed
+ * change — the ONE dedup lookup both the door (permission-check /
  * event-backed-proposal, BEFORE stamping a `.requested` event) and the SSOT
- * insert below share. Returns the matching row, or `null` when none exists /
- * the write is human-authored (no `agentUserId` — a person may deliberately
- * file the same change twice, so human writes are never deduped).
+ * insert below share.
  *
- * G3: an index probe on the stored `dedup_hash` (not a scan-then-rehash), so
- * the candidate set is bounded by the partial unique index regardless of how
- * many pending proposals the agent has open.
+ * GLOBAL dedup (founder-ratified): the match is scoped by dedup_hash alone, NOT
+ * by `agentUserId` — one pending proposal per normalized change across ALL
+ * agents/automations. So if two different agents independently propose the
+ * identical change, the second is deduped onto the first (returned here) rather
+ * than colliding on the partial unique index and failing. This is what makes the
+ * DB index (unique on `dedup_hash` where agent_user_id IS NOT NULL) and this peek
+ * agree: the index is global, so the peek must be global too.
+ *
+ * Returns the matching row, or `null` when none exists / the write is
+ * human-authored (no `agentUserId` — a person may deliberately file the same
+ * change twice, and human rows carry NULL dedup_hash, are absent from the index,
+ * and are never deduped).
+ *
+ * An index probe on the stored `dedup_hash` (not a scan-then-rehash), so the
+ * candidate set is bounded by the partial unique index regardless of how many
+ * pending proposals are open.
  */
 export async function findExistingPendingDuplicate(
   input: PendingDuplicateProbe,
@@ -179,7 +198,6 @@ export async function findExistingPendingDuplicate(
     .where(
       and(
         eq(proposals.status, ProposalStatus.PENDING),
-        eq(proposals.agentUserId, input.agentUserId),
         eq(proposals.dedupHash, dedupHash)
       )
     )
@@ -266,12 +284,12 @@ export async function insertPendingProposal(
 
     return { proposal, deduped: false };
   } catch (err) {
-    // G3 race enforcement: a concurrent identical agent write won the partial
-    // unique index first (Postgres unique-violation, SQLSTATE 23505). Re-run
-    // the peek and return the winner instead of surfacing the constraint error.
-    // (Cross-agent identical writes collide on the same hash and are NOT
-    // recovered here — findExistingPendingDuplicate filters by agentUserId — a
-    // ratified, accepted rough edge.)
+    // Race enforcement: a concurrent identical write won the partial unique
+    // index first (Postgres unique-violation, SQLSTATE 23505). Re-run the peek
+    // and return the winner instead of surfacing the raw constraint error. The
+    // peek is GLOBAL (dedup_hash only), so this recovers BOTH a same-agent race
+    // and a different-agent identical write — whichever committed first is
+    // returned as the dedup hit, never leaked as a 500 / false denial.
     const code = (err as { code?: string } | null)?.code;
     if (input.agentUserId && code === "23505") {
       const existing = await findExistingPendingDuplicate(input, executor);
