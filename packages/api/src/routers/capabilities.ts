@@ -37,6 +37,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
+import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
 import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
@@ -231,6 +232,24 @@ export const capabilitiesRouter = router({
     .input(z.object({ workspaceId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return buildCapabilityCatalog({
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
+   * Automation CATALOG for a workspace — the automation SIBLING of `catalog`.
+   *
+   * Automations are a SEPARATE marketplace kind (they USE capabilities, they are
+   * not merged INTO the "capability" kind), so this is an additive, distinct door
+   * rather than a change to `catalog`'s return shape. Delegates to
+   * `buildAutomationCatalog` (installed workspace automations + available
+   * automation packages from the catalog cache).
+   */
+  automationCatalog: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return buildAutomationCatalog({
         workspaceId: input.workspaceId,
         userId: ctx.userId,
       });

@@ -20,7 +20,15 @@
  *
  * See team/platform/unified-knowledge-access.mdx.
  */
-import { knowledgeRepository, knowledgeKeysRepository } from "@synap/database";
+import {
+  db,
+  knowledgeRepository,
+  knowledgeKeysRepository,
+} from "@synap/database";
+import {
+  findPendingTextMatches,
+  type PendingTextMatch,
+} from "../../utils/pending-capture-dedup.js";
 import {
   retrieve,
   type RetrieveResult,
@@ -80,6 +88,23 @@ export interface AskAnswer {
   status: "ok" | "error";
 }
 
+/**
+ * The PENDING block (Wave 3, recall half of loop-closure) — kept RIGOROUSLY
+ * apart from `answers`. The caller's own pending capture proposals are NOT in
+ * any substrate yet: recall would report them missing, and an agent then
+ * re-captures to "confirm", inflating the review queue. Surfacing them closes
+ * that amnesia loop — but ONLY as a distinct, labeled block a model can never
+ * read as fact. `notice` carries the label + the anti-re-capture instruction;
+ * `matches` are advisory (each can still be rejected). Present only when the
+ * scan found something; a scan hiccup omits the block, never fails `ask`.
+ */
+export interface AskPendingBlock {
+  /** Human/agent-facing label: these are NOT facts; do not re-capture. */
+  notice: string;
+  /** The caller's OWN pending capture proposals that text-match the query. */
+  matches: PendingTextMatch[];
+}
+
 export interface AskResult {
   query: string;
   /** Substrates queried (semantic always present). */
@@ -107,7 +132,25 @@ export interface AskResult {
   verdict: RetrievalVerdict;
   /** A/B ranker comparison — present only when `compare` was requested. */
   comparison?: RankComparison;
+  /**
+   * Pending-review block — the caller's OWN pending captures that text-match the
+   * query. SEPARATE from `answers` by construction (never merged into a factual
+   * substrate). Omitted when empty. See AskPendingBlock.
+   */
+  pending?: AskPendingBlock;
 }
+
+/**
+ * The pending block's label — states plainly that these are NOT facts and must
+ * not be re-captured. Without the anti-re-capture wording, surfacing pending
+ * could push an agent to re-file "to confirm" → MORE pending (the inverted
+ * amnesia→duplicate loop this whole lane exists to break).
+ */
+const PENDING_NOTICE =
+  "⚠ PENDING YOUR REVIEW — NOT yet in the graph. These items were already " +
+  "captured and are awaiting your approval; they are NOT established facts and " +
+  "must not be presented as such. Do NOT re-capture them (that only files " +
+  "duplicates) — open each reviewUrl to approve or reject and make it real.";
 
 type Settled = { status: "ok" | "error"; items: Record<string, unknown>[] };
 
@@ -193,6 +236,19 @@ export async function ask(params: AskParams): Promise<AskResult> {
     ? settle(knowledgeRepository.searchFacts({ userId, query, limit }))
     : Promise.resolve(null);
 
+  // PENDING lane — always runs (the review queue is invisible to every
+  // substrate, so no substrate cue could route to it). Best-effort: a scan
+  // hiccup degrades to "no pending block", NEVER fails recall — mirrors the
+  // orient pending-nudge's try/catch in services/discover/discover.ts.
+  const pendingP: Promise<PendingTextMatch[]> = findPendingTextMatches(db, {
+    userId,
+    query,
+    limit: 5,
+  }).catch((err) => {
+    console.error("[ask] pending scan failed (degrading to no block):", err);
+    return [];
+  });
+
   // Semantic is the backbone — a failure must surface cleanly (never HTTP 500).
   // We await it separately so the caller gets a degraded answer with status:error
   // instead of a crash. Procedural / episodic are already settle()-wrapped.
@@ -241,7 +297,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
       : { status: "ok", items: [] };
   }
 
-  const [procedural, episodic] = await Promise.all([proceduralP, episodicP]);
+  const [procedural, episodic, pendingMatches] = await Promise.all([
+    proceduralP,
+    episodicP,
+    pendingP,
+  ]);
 
   const answers: AskAnswer[] = [
     { substrate: "semantic", items: semantic.entities, status: semanticStatus },
@@ -310,5 +370,10 @@ export async function ask(params: AskParams): Promise<AskResult> {
     understanding: semantic.understanding,
     verdict: semantic.verdict,
     ...(semantic.comparison ? { comparison: semantic.comparison } : {}),
+    // Distinct, labeled block — NEVER folded into `answers`. Present only when
+    // the caller has matching pending captures of their own.
+    ...(pendingMatches.length
+      ? { pending: { notice: PENDING_NOTICE, matches: pendingMatches } }
+      : {}),
   };
 }

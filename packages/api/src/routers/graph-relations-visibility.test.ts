@@ -49,10 +49,13 @@ const USERS = {
 } as const;
 
 const WS = "e0000000-0000-0000-0000-0000000000f1";
+const WS2 = "e0000000-0000-0000-0000-0000000000f2"; // OWNER-only; TEAMMATE is NOT a member.
 const ENTITY_A = "e0000000-0000-0000-0000-00000000e001";
 const ENTITY_B = "e0000000-0000-0000-0000-00000000e002";
+const ENTITY_HIDDEN = "e0000000-0000-0000-0000-00000000e003"; // in WS2 → invisible to TEAMMATE.
 const WS_RELATION = "e0000000-0000-0000-0000-00000000d001";
 const POD_RELATION = "e0000000-0000-0000-0000-00000000d002";
+const DANGLING_RELATION = "e0000000-0000-0000-0000-00000000d003"; // A → HIDDEN, ws-scoped in WS.
 
 /** Exact predicate graph.ts `getFull` now uses for the relations fetch. */
 function relationsVisibleWhere(userId: string) {
@@ -65,11 +68,14 @@ function relationsVisibleWhere(userId: string) {
   );
 }
 
+// `ids` = the VISIBLE node set getFull computed. Both endpoints must be in it:
+// a link is not a permission, so an edge to an entity that failed the node
+// floor is dropped (no dangling edge / leaked id). Mirrors graph.ts getFull.
 async function fetchVisibleRelations(userId: string, ids: string[]) {
   return db.query.relations.findMany({
     where: and(
       relationsVisibleWhere(userId),
-      or(
+      and(
         inArray(relations.sourceEntityId, ids),
         inArray(relations.targetEntityId, ids)
       )
@@ -142,6 +148,14 @@ describe.skipIf(!dbAvailable)(
         role: "editor",
       });
 
+      // WS2: OWNER-only, TEAMMATE is NOT a member. ENTITY_HIDDEN lives here, so
+      // it never enters the teammate's visible NODE set — the "other workspace".
+      await db.insert(workspaces).values({
+        id: WS2,
+        name: "Owner-only WS2",
+        ownerId: USERS.OWNER,
+      });
+
       await db.insert(entities).values([
         {
           id: ENTITY_A,
@@ -156,6 +170,13 @@ describe.skipIf(!dbAvailable)(
           workspaceId: WS,
           type: "person",
           title: "Entity B",
+        },
+        {
+          id: ENTITY_HIDDEN,
+          userId: USERS.OWNER,
+          workspaceId: WS2,
+          type: "person",
+          title: "Hidden Entity (other workspace)",
         },
       ]);
 
@@ -179,17 +200,33 @@ describe.skipIf(!dbAvailable)(
         targetEntityId: ENTITY_B,
         type: "related_to",
       });
+
+      // A WS-scoped edge from a VISIBLE entity (A) to an INVISIBLE one (HIDDEN,
+      // in WS2). The relation itself PASSES the teammate's relation floor (it is
+      // in WS, and the teammate is a member) — so only the both-endpoints-visible
+      // rule can drop it. It must NOT surface as a dangling edge leaking HIDDEN.
+      await db.insert(relations).values({
+        id: DANGLING_RELATION,
+        userId: USERS.OWNER,
+        workspaceId: WS,
+        sourceEntityId: ENTITY_A,
+        targetEntityId: ENTITY_HIDDEN,
+        type: "related_to",
+      });
     });
 
     afterAll(async () => {
       await db.delete(relations).where(eq(relations.id, WS_RELATION));
       await db.delete(relations).where(eq(relations.id, POD_RELATION));
+      await db.delete(relations).where(eq(relations.id, DANGLING_RELATION));
       await db.delete(entities).where(eq(entities.id, ENTITY_A));
       await db.delete(entities).where(eq(entities.id, ENTITY_B));
+      await db.delete(entities).where(eq(entities.id, ENTITY_HIDDEN));
       await db
         .delete(workspaceMembers)
         .where(eq(workspaceMembers.workspaceId, WS));
       await db.delete(workspaces).where(eq(workspaces.id, WS));
+      await db.delete(workspaces).where(eq(workspaces.id, WS2));
       for (const id of Object.values(USERS)) {
         await db.delete(users).where(eq(users.id, id));
       }
@@ -219,6 +256,29 @@ describe.skipIf(!dbAvailable)(
       const ids = rows.map((r) => r.id);
       expect(ids).toContain(WS_RELATION);
       expect(ids).toContain(POD_RELATION);
+    });
+
+    it("an edge to an entity OUTSIDE the visible node set is NOT rendered (a link is not a permission)", async () => {
+      // The teammate's visible node set is {A, B} — HIDDEN (WS2) is excluded.
+      // The A→HIDDEN edge passes the RELATION floor (WS-scoped, teammate is a
+      // member) yet must be dropped: rendering it would leak HIDDEN's id + the
+      // relation type as a dangling edge to a node the graph never returns.
+      const rows = await fetchVisibleRelations(USERS.TEAMMATE, [
+        ENTITY_A,
+        ENTITY_B,
+      ]);
+      expect(rows.map((r) => r.id)).not.toContain(DANGLING_RELATION);
+    });
+
+    it("the OWNER (who CAN see HIDDEN) sees the A→HIDDEN edge when HIDDEN is in the node set", async () => {
+      // Proves the drop is the node-set intersection, not an over-broad filter:
+      // include HIDDEN in the owner's node set and the edge returns.
+      const rows = await fetchVisibleRelations(USERS.OWNER, [
+        ENTITY_A,
+        ENTITY_B,
+        ENTITY_HIDDEN,
+      ]);
+      expect(rows.map((r) => r.id)).toContain(DANGLING_RELATION);
     });
   }
 );

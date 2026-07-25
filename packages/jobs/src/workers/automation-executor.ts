@@ -48,8 +48,6 @@ import {
   channels,
   notifications,
   focusSessions,
-  playbooks,
-  playbookRuns,
   playbookEnrollments,
   drizzleSql,
   EntityRepository,
@@ -58,13 +56,7 @@ import {
   insertChannelMessage,
   openRunSession,
 } from "@synap/database";
-import {
-  ChannelType,
-  ChannelScope,
-  ChannelStatus,
-  MessageRole,
-  MessageAuthorType,
-} from "@synap/database/schema";
+import { ChannelType } from "@synap/database/schema";
 import { ChannelRepository } from "@synap/database";
 import type {
   FlowDefinition,
@@ -91,16 +83,10 @@ import { entityQueryVisibilityWhere } from "./entity-query-scope.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
-  resolveIntelligenceService,
   getDefaultActiveService,
   requestTaskExecute,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
-import {
-  A2AI_TRIGGER_QUEUE,
-  A2AI_TRIGGER_JOB_OPTIONS,
-  type A2AIResponseTriggerData,
-} from "./a2ai-response-trigger.js";
 
 const logger = createLogger({ module: "automation-executor" });
 
@@ -385,6 +371,55 @@ let capabilityExecutor: CapabilityExecutor | null = null;
 
 export function registerCapabilityExecutor(fn: CapabilityExecutor): void {
   capabilityExecutor = fn;
+}
+
+/**
+ * IoC slot for the ONE playbook-run spine (`runPlaybook`, @synap/api). @synap/jobs
+ * cannot statically import @synap/api (circular dep), so apps/api fills this slot
+ * at boot via `registerPlaybookRunner()` — the SAME pattern as
+ * `registerCapabilityExecutor`. `executePlaybookRun` below is a thin shim that
+ * resolves the automation StepContext (goal/params) and delegates here, so
+ * scheduled runs go through the executor spine (is-agent | external-agent |
+ * hybrid) and the triggerAutoRespond ONE door — never a forked is-agent flow.
+ *
+ * Types mirror api's RunPlaybookInput/RunPlaybookResult structurally (not
+ * imported — circular dep); the boot wiring `(input) => runPlaybook(input)`
+ * type-checks against both.
+ */
+export interface PlaybookRunnerChainContext {
+  automationRunId: string;
+  automationId: string;
+  chainDepth: number;
+  rootRunId: string;
+  chainAutomationIds: string[];
+}
+
+export interface PlaybookRunnerInput {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+  userId: string;
+  params?: Record<string, unknown>;
+  subjectId?: string;
+  idempotentBySubject?: boolean;
+  goalResolver?: (goalTemplate: string) => string;
+  chainContext?: PlaybookRunnerChainContext;
+}
+
+export interface PlaybookRunnerResult {
+  run: { id: string; status: string } | null;
+  session: { id: string; channelId: string | null };
+  reused?: boolean;
+}
+
+type PlaybookRunner = (
+  input: PlaybookRunnerInput
+) => Promise<PlaybookRunnerResult>;
+
+let playbookRunner: PlaybookRunner | null = null;
+
+export function registerPlaybookRunner(fn: PlaybookRunner): void {
+  playbookRunner = fn;
 }
 
 /**
@@ -738,7 +773,7 @@ async function executeCapabilityNode(
 /**
  * Execute an output step action.
  */
-async function executeOutputStep(
+export async function executeOutputStep(
   data: {
     outputType: string;
     config: Record<string, unknown>;
@@ -1052,17 +1087,70 @@ async function executeOutputStep(
     }
 
     case "channel_message": {
-      // Accepts explicit channelId OR channelType:
-      //   'personal_thread' → user's personal thread (channelType=PERSONAL)
-      //   'proactive'       → user's feed channel (channelType='feed', feedScope='user') — automation outputs
-      //   'subjectEntity'   → THIS run's subject's own channel (per-client recap
-      //                       spine) — resolved from the run's subjectEntityId
+      // The output channel is CONTEXT-DERIVED, resolved in this precedence:
+      //   (a) explicit `config.channelId` → use it.
+      //   (b) `config.channelEntityRef` (a template expr deep-resolved above to an
+      //       ENTITY ID) → the find-or-create INTERNAL channel bound to that entity
+      //       (ensureEntityChannel EXCLUDES the external client-comms surface —
+      //       "the internal team channel for this entity", never the client↔us one).
+      //   (c) `config.channelType`:
+      //         'personal_thread' → user's personal thread (channelType=PERSONAL)
+      //         'proactive'       → user's feed channel (channelType='feed', feedScope='user')
+      //         'subjectEntity'   → THIS run's subject's own channel (== channelEntityRef
+      //                             of the run's subjectEntityId; per-client recap spine)
+      //   (d) DEFAULT (none of the above) → the automation's own run/session channel
+      //       (ensureAutomationRunChannel) — a targetless channel_message NEVER errors.
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
       const metadata = (config.metadata ?? {}) as Record<string, unknown>;
 
       if (!content) {
         throw new Error("channel_message requires content");
+      }
+
+      // (b) CONTEXT-DERIVED override: an entity ref (deep-resolved above to a
+      // native id — so an exact `{{...}}` placeholder resolved to an entity id
+      // works) routes into that entity's INTERNAL channel. Same resolver the
+      // 'subjectEntity' channelType uses below — reuse-first, THREAD-on-create,
+      // never client-comms.
+      if (!channelId && config.channelEntityRef != null) {
+        const entityId =
+          typeof config.channelEntityRef === "string"
+            ? config.channelEntityRef.trim()
+            : "";
+        // A channelEntityRef that did NOT resolve to a real entity id — empty, an
+        // unresolved `{{...}}` placeholder, or a stale/wrong id — must not dangle a
+        // channel bound to a nonexistent entity, nor throw the whole run. It falls
+        // through to the DEFAULT run channel (d) below, consistent with the
+        // "targetless channel_message never errors" contract. We route to the
+        // entity's channel ONLY when the entity actually exists in this scope.
+        if (entityId) {
+          const [entityRow] = await db
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(
+                eq(entities.id, entityId),
+                or(
+                  eq(entities.workspaceId, workspaceId),
+                  isNull(entities.workspaceId)
+                ),
+                isNull(entities.deletedAt)
+              )
+            )
+            .limit(1);
+          if (entityRow) {
+            channelId = (
+              await new ChannelRepository(db).ensureEntityChannel(
+                entityId,
+                ownerId,
+                workspaceId
+              )
+            ).id;
+          }
+          // else: unknown/unresolved ref → leave channelId unset so the default
+          // run channel (d) receives the message rather than a dangling void.
+        }
       }
 
       // Resolve personal thread / proactive feed via the canonical race-safe
@@ -1098,9 +1186,25 @@ async function executeOutputStep(
         ).id;
       }
 
+      // (d) DEFAULT — no explicit target resolved: post to the automation's own
+      // run/session channel (the auto-given per-automation feed — the SAME channel
+      // post-run-summary routes to via ensureAutomationRunChannel). A targetless
+      // channel_message lands here rather than throwing.
       if (!channelId) {
+        channelId = (
+          await new ChannelRepository(db).ensureAutomationRunChannel(
+            automationContext.automationId,
+            ownerId,
+            workspaceId
+          )
+        ).id;
+      }
+
+      if (!channelId) {
+        // Unreachable for a real run — ensureAutomationRunChannel always resolves
+        // or creates. Keep a clear error rather than posting to nowhere.
         throw new Error(
-          "channel_message requires channelId or channelType:'personal_thread'|'proactive'|'subjectEntity'"
+          "channel_message could not resolve a target channel (no channelId/channelEntityRef/channelType, and no automation run channel)"
         );
       }
 
@@ -1431,7 +1535,7 @@ async function executeOutputStep(
 /**
  * Execute a transform step.
  * Supports pipe-style expressions: "{{nodeId.output.field}} | uppercase"
- * Scalar pipes: uppercase, lowercase, json, trim, url_extract
+ * Scalar pipes: uppercase, lowercase, json, trim, url_extract, to_ms (date→epoch-ms)
  * Array-aware pipes (input must be an array; non-array → treated as []):
  *   filter:<predicate>  keep items where the predicate is true (each item is
  *                       exposed as `item`, e.g. "filter:item.score > 5")
@@ -1439,7 +1543,7 @@ async function executeOutputStep(
  *   unique              dedupe by JSON identity
  *   slice:<n>           keep the first n items
  */
-function executeTransformStep(
+export function executeTransformStep(
   data: { expression: string },
   context: StepContext
 ): Record<string, unknown> {
@@ -1573,6 +1677,21 @@ function executeTransformStep(
         current = (text.match(/https?:\/\/[^\s>]+/g) ?? []).map((u) =>
           u.replace(/[.,!?;:'")\]}>]+$/, "")
         );
+        break;
+      }
+      case "date_ms":
+      case "to_ms": {
+        // Parse a date STRING (ISO-8601 or RFC-2822 — the shape gmail_search
+        // returns in the `date` header) to epoch milliseconds, so a watermark
+        // filter can compare it numerically (e.g. `item.dateMs > automation.
+        // state.lastProcessedMs`). Date.parse handles BOTH grammars natively.
+        const text =
+          typeof current === "string" ? current : String(current ?? "");
+        const ms = Date.parse(text.trim());
+        // Unparseable → 0 sentinel (a stable, comparable value) rather than NaN
+        // (which would make every numeric compare silently false) or a throw
+        // (which would fail the whole flow on one bad date header).
+        current = Number.isNaN(ms) ? 0 : ms;
         break;
       }
       default:
@@ -2199,11 +2318,26 @@ async function executeMessagesQueryStep(
 }
 
 /**
- * Execute a playbook_run step: instantiate a playbook, create a channel + session,
- * dispatch the goal to the Intelligence Hub, and return the run/session IDs.
+ * Execute a playbook_run step — a THIN SHIM over the ONE playbook-run spine
+ * (`runPlaybook`, @synap/api) reached through the `registerPlaybookRunner` IoC
+ * slot (@synap/jobs can't statically import @synap/api — circular dep).
  *
- * Follows the same lifecycle as runPlaybook (@synap/api) but implemented locally
- * to avoid the jobs → api circular dependency.
+ * What STAYS here (needs the automation StepContext, which @synap/api can't see):
+ *   - params: `resolveInputMapping(paramsMapping, context)`.
+ *   - subject resolution + workspace-visibility IDOR guard (reads the trigger
+ *     payload; the column has no FK).
+ *   - goal: passed as a `goalResolver` closing over `context`, so the spine
+ *     resolves `playbook.goalTemplate` against the StepContext AFTER it loads the
+ *     playbook — preserving the old `resolveTemplate(goalTemplate, context) || raw`.
+ *
+ * Everything else the old local implementation did — id/name resolution, the
+ * cross-workspace guard, session/channel/run creation, the governance +
+ * chain-context session stamps, definitionSnapshot, enrollment, idempotency-by-
+ * subject, and the is-agent kickoff — now lives in runPlaybook. Crucially the
+ * kickoff there goes through `triggerAutoRespond` (the ONE door) via the executor
+ * spine, so a scheduled `external-agent` / `hybrid` playbook now dispatches
+ * correctly instead of being silently forced through the is-agent flow. This
+ * shim NO LONGER inlines the A2AI enqueue.
  */
 async function executePlaybookRun(
   data: {
@@ -2214,60 +2348,20 @@ async function executePlaybookRun(
   context: StepContext,
   workspaceId: string,
   ownerId: string,
-  // F2 safety floor: the chain context of the automation run that is spawning
-  // this playbook's agent. Stamped onto the session so the agent's downstream
-  // Hub writes (which carry the session but no automationContext) re-derive
-  // their true chain depth in the trigger matcher — closing the depth-guard
-  // hole across the agent boundary.
+  // F2 safety floor: the chain context of the automation run spawning this
+  // playbook's agent — forwarded to the spine, which stamps it onto the session.
   automationContext?: ExecutionPayload["automationContext"]
 ): Promise<Record<string, unknown>> {
-  // 1. Resolve the playbook — by id, else by NAME within this workspace (then a
-  // pod-wide NULL-workspace playbook). By-name is the template-friendly form: a
-  // capability seeds a playbook + an automation together, and the automation
-  // references the playbook by its stable name rather than a runtime id it can't
-  // know at author time (mirrors entity resolution by profileSlug).
-  let playbook = data.playbookId
-    ? await db.query.playbooks.findFirst({
-        where: eq(playbooks.id, data.playbookId),
-      })
-    : undefined;
-  if (!playbook && data.playbookName) {
-    playbook =
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, data.playbookName),
-          eq(playbooks.workspaceId, workspaceId)
-        ),
-      })) ??
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, data.playbookName),
-          isNull(playbooks.workspaceId)
-        ),
-      }));
-  }
-  if (!playbook) {
+  if (!playbookRunner) {
     throw new Error(
-      `Playbook not found (${data.playbookId ?? data.playbookName ?? "no id/name given"})`
-    );
-  }
-  // Cross-workspace guard: a flow may only run a playbook from its own workspace
-  // or a pod-wide (NULL) one. Mirrors the subject IDOR guard below — the flow's
-  // playbookId is editor-authored config, but defend in depth (no FK).
-  if (playbook.workspaceId && playbook.workspaceId !== workspaceId) {
-    throw new Error(
-      `playbook_run: playbook ${playbook.id} not visible in workspace ${workspaceId}`
+      "Playbook runner not registered — apps/api must call registerPlaybookRunner() at boot"
     );
   }
 
-  // 2. Resolve params from the automation context (prior step outputs, trigger payload)
+  // Params resolved from prior step outputs / trigger payload (StepContext).
   const resolvedParams = data.paramsMapping
     ? resolveInputMapping(data.paramsMapping, context)
     : {};
-
-  // 3. Resolve the goal template against automation context
-  const goal =
-    resolveTemplate(playbook.goalTemplate, context) || playbook.goalTemplate;
 
   // Resolve subject entity id from params or trigger payload (canonical source).
   // entityId is the loop-context alias for the iterated entity; subjectId is the
@@ -2278,11 +2372,11 @@ async function executePlaybookRun(
     (context.trigger.payload.subjectId as string | undefined) ??
     null;
 
-  // Bind the subject ONLY if it's an entity the run can legitimately see —
-  // its own workspace OR a pod-wide (workspaceId NULL) entity. A crafted
+  // Bind the subject ONLY if it's an entity the run can legitimately see — its
+  // own workspace OR a pod-wide (workspaceId NULL) entity. A crafted
   // paramsMapping / trigger payload must not bind a session to an entity in
   // another workspace (write-side IDOR guard; the column has no FK).
-  let resolvedSubjectId: string | null = null;
+  let resolvedSubjectId: string | undefined;
   if (candidateSubjectId) {
     const subj = await db.query.entities.findFirst({
       columns: { id: true, workspaceId: true },
@@ -2301,222 +2395,46 @@ async function executePlaybookRun(
     }
   }
 
-  // 3b. Idempotency by subject — if an active session for this playbook +
-  // subject already exists, REUSE it rather than starting a duplicate. This
-  // makes a playbook_run node safe on a schedule (e.g. a daily client-sync that
-  // ensures every client has a session): start-if-missing, no-op-if-present.
-  if (resolvedSubjectId) {
-    const existing = await db.query.focusSessions.findFirst({
-      where: and(
-        eq(focusSessions.playbookId, playbook.id),
-        eq(focusSessions.subjectEntityId, resolvedSubjectId),
-        eq(focusSessions.status, "active")
-      ),
-      orderBy: [desc(focusSessions.startedAt)],
-    });
-    if (existing) {
-      return {
-        sessionId: existing.id,
-        channelId: existing.channelId ?? null,
-        status: "reused",
-        reused: true,
-      };
-    }
-  }
-
-  // Seed the first stage so the session starts stage-aware (the initial IS
-  // dispatch gets the stage hint/grant), matching the tRPC/Hub creation path.
-  // Reused below (7b) so a fresh enrollment's stepState agrees with the
-  // session's currentStage — otherwise an entity at stage 1 never shows up
-  // in the funnel (the session_update mirror only writes stepState.currentStep
-  // on a stage CHANGE, not at creation).
-  const playbookStages = playbook.stages as { key?: string }[] | null;
-  const firstStageKey = playbookStages?.[0]?.key ?? null;
-
-  // Propose-only governance: a maintenance playbook (e.g. CRM hygiene) declares
-  // `metadata.governance.forceProposeWrites: true`. Stamp it onto the session so
-  // the write-side gate (checkPermissionOrPropose → deriveSessionForceProposeGovernance)
-  // routes EVERY agent write in this session to a reviewable proposal — the agent
-  // runs unattended on a schedule, so nothing it does should auto-apply. Keyed on
-  // the session (X-Session-Id) exactly like the chain-depth floor.
-  const playbookGovernance = (
-    playbook.metadata as Record<string, unknown> | null | undefined
-  )?.governance as { forceProposeWrites?: unknown } | undefined;
-  const forceProposeWrites = playbookGovernance?.forceProposeWrites === true;
-
-  // 4. Create a focus session for this playbook run.
-  // Stamp the spawning run's chain context into `metadata.automationChainContext`
-  // when this playbook was launched from within an automation chain. The trigger
-  // matcher reads it back (keyed by the agent's X-Session-Id) so events the agent
-  // produces inside this session inherit the chain depth — the F2 depth floor.
-  const [session] = await db
-    .insert(focusSessions)
-    .values({
-      workspaceId,
-      userId: ownerId,
-      goal,
-      playbookId: playbook.id,
-      status: "active",
-      currentStage: firstStageKey,
-      expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
-      agentIds: [],
-      subjectEntityId: resolvedSubjectId,
-      metadata: {
-        ...(automationContext
-          ? {
-              automationChainContext: {
-                automationRunId: automationContext.automationRunId,
-                automationId: automationContext.automationId,
-                chainDepth: automationContext.chainDepth ?? 0,
-                rootRunId:
-                  automationContext.rootRunId ??
-                  automationContext.automationRunId,
-                chainAutomationIds: automationContext.chainAutomationIds ?? [],
-              },
-            }
-          : {}),
-        ...(forceProposeWrites
-          ? { governance: { forceProposeWrites: true } }
-          : {}),
-      },
-    })
-    .returning();
-
-  // 5. Create a THREAD channel as the run's room
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId: ownerId,
-      workspaceId,
-      channelType: ChannelType.THREAD,
-      scope: ChannelScope.WORKSPACE,
-      status: ChannelStatus.ACTIVE,
-      title: playbook.name,
-      contextObjectType: "playbook",
-      contextObjectId: playbook.id,
-      metadata: {
-        origin: "automation-playbook-run",
-        playbookId: playbook.id,
-      },
-    })
-    .returning();
-
-  // 6. Wire session.channelId
-  await db
-    .update(focusSessions)
-    .set({ channelId: channel.id })
-    .where(eq(focusSessions.id, session.id));
-
-  // 7. Insert a playbook_runs ledger row
-  const [run] = await db
-    .insert(playbookRuns)
-    .values({
-      workspaceId,
-      playbookId: playbook.id,
-      sessionId: session.id,
-      executor: (playbook.executor ?? "is-agent") as any,
-      status: "running",
-      input: resolvedParams,
-      createdBy: ownerId,
-      // D3c: snapshot the definition this run executed so it survives later
-      // edits to the playbook config and can be diffed against the current row.
-      definitionSnapshot: {
-        version: playbook.version,
-        goalTemplate: playbook.goalTemplate,
-        stages: playbook.stages,
-        params: playbook.params,
-        expectedOutputs: playbook.expectedOutputs,
-      },
-    })
-    .returning();
-
-  // 7b. Enroll the subject entity in the playbook so running a playbook FOR an
-  // entity also populates its funnel/cohort. Only when the playbook actually
-  // has a funnel (stages) — an operational playbook (scheduled sync, etc.)
-  // with no stages must not create enrollment rows. Idempotent by
-  // unique(playbookId, entityId); re-enroll after unenroll (soft-cancel)
-  // reactivates rather than silently no-op'ing. Best-effort side-write — an
-  // enrollment failure must never fail the run (mirrors the executor's other
-  // non-fatal side-writes).
-  if (resolvedSubjectId && (playbookStages?.length ?? 0) > 0) {
-    try {
-      await db
-        .insert(playbookEnrollments)
-        .values({
-          playbookId: playbook.id,
-          entityId: resolvedSubjectId,
-          status: "active",
-          stepState: firstStageKey ? { currentStep: firstStageKey } : {},
-        })
-        .onConflictDoUpdate({
-          target: [
-            playbookEnrollments.playbookId,
-            playbookEnrollments.entityId,
-          ],
-          set: { status: "active", updatedAt: new Date() },
-        });
-    } catch (err) {
-      logger.warn(
-        { err, playbookId: playbook.id, entityId: resolvedSubjectId },
-        "playbook_run: enrollment upsert failed (non-fatal)"
-      );
-    }
-  }
-
-  // 8. Insert a USER kickoff message into the channel through the ONE door
-  // (Wave 4.R) — it owns the canonical tamper-hash (computeMessageHash) and the
-  // external mirror. This is a HUMAN-authored user message on the run's freshly
-  // created THREAD channel (never external-bound), so the mirror no-ops; passing
-  // the explicit id keeps it available for the A2AI trigger below.
-  const messageId = randomUUID();
-  await insertChannelMessage({
-    id: messageId,
-    channelId: channel.id,
-    content: goal,
-    role: MessageRole.USER,
-    authorType: MessageAuthorType.HUMAN,
+  // Delegate to the ONE spine. `idempotentBySubject` makes a scheduled run
+  // start-if-missing/no-op-if-present. `goalResolver` resolves the playbook's
+  // goalTemplate against the automation StepContext — the spine invokes it after
+  // it loads the playbook — preserving the old `... || raw template` fallback.
+  const result = await playbookRunner({
+    playbookId: data.playbookId,
+    playbookName: data.playbookName,
+    workspaceId,
     userId: ownerId,
+    params: resolvedParams,
+    subjectId: resolvedSubjectId,
+    idempotentBySubject: true,
+    goalResolver: (goalTemplate) =>
+      resolveTemplate(goalTemplate, context) || goalTemplate,
+    chainContext: automationContext
+      ? {
+          automationRunId: automationContext.automationRunId,
+          automationId: automationContext.automationId,
+          chainDepth: automationContext.chainDepth ?? 0,
+          rootRunId:
+            automationContext.rootRunId ?? automationContext.automationRunId,
+          chainAutomationIds: automationContext.chainAutomationIds ?? [],
+        }
+      : undefined,
   });
 
-  // 9. Trigger the Intelligence Hub via A2AI_TRIGGER job so it picks up the
-  //    kickoff message and starts processing in the session channel.
-  try {
-    const resolvedService = await resolveIntelligenceService({
-      userId: ownerId,
-      workspaceId,
-      capability: "chat",
-    });
-
-    const boss = getBoss();
-    await boss.send(
-      A2AI_TRIGGER_QUEUE,
-      {
-        channelId: channel.id,
-        userMessageId: messageId,
-        content: goal,
-        userId: ownerId,
-        workspaceId,
-        agentType: "meta",
-        sourceAgentUserId: ownerId,
-        focusSessionId: session.id,
-        serviceUrl: resolvedService.endpoint,
-        serviceApiKey: resolvedService.serviceApiKey,
-        serviceId: resolvedService.serviceId,
-        agentUserId: resolvedService.agentUserId ?? undefined,
-      } satisfies A2AIResponseTriggerData,
-      A2AI_TRIGGER_JOB_OPTIONS
-    );
-  } catch (err) {
-    logger.warn(
-      { err, playbookId: playbook.id },
-      "Failed to trigger IS for playbook run — run created but agent not dispatched"
-    );
+  // Preserve the step-output contract downstream nodes read
+  // (steps.<id>.output.{runId|sessionId|status}, or the reuse shape).
+  if (result.reused) {
+    return {
+      sessionId: result.session.id,
+      channelId: result.session.channelId,
+      status: "reused",
+      reused: true,
+    };
   }
-
   return {
-    runId: run.id,
-    sessionId: session.id,
-    status: "running",
+    runId: result.run?.id,
+    sessionId: result.session.id,
+    status: result.run?.status ?? "running",
   };
 }
 
@@ -3867,12 +3785,81 @@ export async function handleAutomationExecute(job: {
  * treat a missing/empty operand as NaN (→ false), NOT Number("")===0 which let a
  * missing value silently satisfy `< N`.
  */
+/**
+ * Coerce a condition operand into a string list for the membership operators
+ * (`in` / `not-in` / `contains` / `contains-any`). Three operand shapes are
+ * accepted, all resolved to `string[]`:
+ *   - a bare context path (trigger./steps./automation./loop./item.) → resolved:
+ *     an array becomes each element String()-ed, a scalar becomes a one-element
+ *     list, a missing/null value becomes the empty list.
+ *   - an inline comma-separated literal (`'a@x.com','b@y.com'` or `a,b,c`) →
+ *     split on commas, each token trimmed + unquoted.
+ *   - a single literal (`'active'`) → a one-element list (quotes stripped).
+ * String-based throughout — the sender allow/deny fields these serve are strings.
+ */
+function resolveOperandList(raw: string, context: StepContext): string[] {
+  const trimmed = raw.trim();
+  const unquote = (s: string): string => {
+    const t = s.trim();
+    if (
+      (t.startsWith("'") && t.endsWith("'")) ||
+      (t.startsWith('"') && t.endsWith('"'))
+    ) {
+      return t.slice(1, -1);
+    }
+    return t;
+  };
+
+  // Bare context path → resolve to its native value.
+  if (/^(trigger|steps|automation|loop|item)\./.test(trimmed)) {
+    const value = resolveContextPath(trimmed, context);
+    if (value == null) return [];
+    if (Array.isArray(value))
+      return value.filter((v) => v != null).map((v) => String(v));
+    return [String(value)];
+  }
+
+  // Inline comma-separated literal list.
+  if (trimmed.includes(",")) {
+    return trimmed
+      .split(",")
+      .map(unquote)
+      .filter((s) => s !== "");
+  }
+
+  // Single literal.
+  const single = unquote(trimmed);
+  return single === "" ? [] : [single];
+}
+
 export function evaluateCondition(
   expression: string,
   context: StepContext
 ): boolean {
   // Parse simple comparison: left op right
   const match = expression.match(/^(.+?)\s*(===|!==|==|!=|>=|<=|>|<)\s*(.+)$/);
+
+  // Membership operators (list-based) — `in` / `not-in` / `contains` /
+  // `contains-any`. Both operands are coerced to string lists (a scalar → a
+  // one-element list) and the check is a NON-EMPTY INTERSECTION, so `in`,
+  // `contains` and `contains-any` are ergonomic aliases that read naturally by
+  // position (value ∈ list / list ∋ value / either side a list) — they compute
+  // the SAME thing. `not-in` is the negation (a deny-list keep-gate:
+  // `trigger.payload.from not-in trigger.payload.denylist`).
+  const memberMatch = expression.match(
+    /^(.+?)\s+(contains-any|contains|not-in|in)\s+(.+)$/
+  );
+  // Disambiguate when BOTH parse (e.g. `k === 'fell in love'` — a `===` compare
+  // whose literal contains " in "): the operator that appears LEFTMOST wins
+  // (the shorter left operand = the earlier operator).
+  if (memberMatch && (!match || memberMatch[1].length < match[1].length)) {
+    const [, leftRaw, memberOp, rightRaw] = memberMatch;
+    const leftList = resolveOperandList(leftRaw, context);
+    const rightSet = new Set(resolveOperandList(rightRaw, context));
+    const intersects = leftList.some((v) => rightSet.has(v));
+    return memberOp === "not-in" ? !intersects : intersects;
+  }
+
   if (!match) {
     throw new Error(
       `Automation condition could not be parsed (fail-closed): "${expression}"`

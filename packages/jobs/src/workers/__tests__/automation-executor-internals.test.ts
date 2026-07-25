@@ -4,6 +4,7 @@ import {
   resolveTemplate,
   deepResolveTemplates,
   evaluateCondition,
+  executeTransformStep,
   topoSort,
   markDescendantsSkipped,
   seedResumeState,
@@ -252,6 +253,153 @@ describe("evaluateCondition", () => {
     expect(() => evaluateCondition("this has no operator", ctx())).toThrow(
       /fail-closed/
     );
+  });
+
+  // ── Membership operators (list-based): in / not-in / contains / contains-any ──
+  describe("membership operators", () => {
+    const withFrom = (from: string, extra: Record<string, unknown> = {}) =>
+      ctx({ trigger: { payload: { from, ...extra } } });
+
+    it("`in` — value ∈ inline literal allow-list (member / non-member)", () => {
+      expect(
+        evaluateCondition(
+          "trigger.payload.from in 'a@x.com','b@y.com'",
+          withFrom("a@x.com")
+        )
+      ).toBe(true);
+      expect(
+        evaluateCondition(
+          "trigger.payload.from in 'a@x.com','b@y.com'",
+          withFrom("c@z.com")
+        )
+      ).toBe(false);
+    });
+
+    it("`in` — value ∈ a context-path list (resolved array)", () => {
+      const c = withFrom("b@y.com", { allow: ["a@x.com", "b@y.com"] });
+      expect(
+        evaluateCondition("trigger.payload.from in trigger.payload.allow", c)
+      ).toBe(true);
+    });
+
+    it("`contains` — list ∋ value (list on the LEFT)", () => {
+      const c = withFrom("a@x.com", { allow: ["a@x.com", "b@y.com"] });
+      expect(
+        evaluateCondition(
+          "trigger.payload.allow contains trigger.payload.from",
+          c
+        )
+      ).toBe(true);
+      expect(
+        evaluateCondition("trigger.payload.allow contains 'c@z.com'", c)
+      ).toBe(false);
+    });
+
+    it("`contains-any` — non-empty intersection (either side a list)", () => {
+      const c = ctx({
+        trigger: { payload: { tags: ["urgent", "sales"] } },
+      });
+      expect(
+        evaluateCondition("trigger.payload.tags contains-any 'sales','ops'", c)
+      ).toBe(true);
+      expect(
+        evaluateCondition("trigger.payload.tags contains-any 'ops','hr'", c)
+      ).toBe(false);
+    });
+
+    it("`not-in` — deny-list keep-gate (deny-wins: matched sender is dropped)", () => {
+      const denied = withFrom("spam@bad.com", {
+        deny: ["spam@bad.com", "noise@bad.com"],
+      });
+      // keep-gate: a denied sender → false (don't keep)
+      expect(
+        evaluateCondition(
+          "trigger.payload.from not-in trigger.payload.deny",
+          denied
+        )
+      ).toBe(false);
+      // a clean sender → true (keep)
+      const clean = withFrom("ok@good.com", { deny: ["spam@bad.com"] });
+      expect(
+        evaluateCondition(
+          "trigger.payload.from not-in trigger.payload.deny",
+          clean
+        )
+      ).toBe(true);
+    });
+
+    it("empty list → `in` false, `not-in` true (missing path resolves to [])", () => {
+      const c = withFrom("a@x.com"); // no `allow` key at all
+      expect(
+        evaluateCondition("trigger.payload.from in trigger.payload.allow", c)
+      ).toBe(false);
+      expect(
+        evaluateCondition(
+          "trigger.payload.from not-in trigger.payload.allow",
+          c
+        )
+      ).toBe(true);
+    });
+
+    it("does NOT hijack a `===` compare whose literal contains ' in ' (leftmost wins)", () => {
+      // The `===` operator appears LEFTMOST, so this stays a scalar comparison
+      // and the membership `in` inside the literal is ignored.
+      expect(
+        evaluateCondition(
+          "steps.s.output.k === 'fell in love'",
+          withSteps({ k: "fell in love" })
+        )
+      ).toBe(true);
+      expect(
+        evaluateCondition(
+          "steps.s.output.k === 'fell in love'",
+          withSteps({ k: "other" })
+        )
+      ).toBe(false);
+    });
+  });
+});
+
+describe("executeTransformStep — to_ms date pipe", () => {
+  it("parses an ISO-8601 string to epoch ms", () => {
+    const out = executeTransformStep(
+      { expression: "2026-07-23T10:30:00.000Z | to_ms" },
+      ctx()
+    );
+    expect(out.result).toBe(Date.parse("2026-07-23T10:30:00.000Z"));
+  });
+
+  it("parses an RFC-2822 email date header to epoch ms", () => {
+    const rfc = "Wed, 23 Jul 2026 10:30:00 +0000";
+    const out = executeTransformStep({ expression: `${rfc} | to_ms` }, ctx());
+    expect(out.result).toBe(Date.parse(rfc));
+  });
+
+  it("returns the 0 sentinel on unparseable input (not NaN / not a throw)", () => {
+    const out = executeTransformStep(
+      { expression: "not a date at all | to_ms" },
+      ctx()
+    );
+    expect(out.result).toBe(0);
+  });
+
+  it("resolves a template date then converts (watermark pipeline shape)", () => {
+    const c = ctx({
+      steps: { gmail: { output: { date: "2026-07-23T10:30:00.000Z" } } },
+    });
+    const out = executeTransformStep(
+      { expression: "{{steps.gmail.output.date}} | to_ms" },
+      c
+    );
+    expect(out.result).toBe(Date.parse("2026-07-23T10:30:00.000Z"));
+  });
+
+  it("`date_ms` is an accepted alias", () => {
+    const out = executeTransformStep(
+      { expression: "2026-01-01T00:00:00.000Z | date_ms" },
+      ctx()
+    );
+    expect(out.result).toBe(Date.parse("2026-01-01T00:00:00.000Z"));
   });
 });
 

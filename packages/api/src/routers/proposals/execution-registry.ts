@@ -20,11 +20,14 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
 import type {
   StoredProposalData,
   ProposalMaterializedRecord,
 } from "@synap-core/types";
+
+const logger = createLogger({ module: "proposal-execution-registry" });
 
 type ProposalRow = {
   id: string;
@@ -228,6 +231,15 @@ export async function dispatchProposalApproval(
     return await executor.execute(args);
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      {
+        proposalId: args.input.proposalId,
+        targetType: args.proposal.targetType,
+        proposalType: args.proposal.proposalType,
+        err: errorMessage,
+      },
+      "proposal approval failed"
+    );
     await onApprovalFailed(args.input.proposalId, errorMessage);
     throw err;
   }

@@ -35,14 +35,10 @@
 
 import { createLogger } from "@synap-core/core";
 import { db, eq, and, inArray } from "@synap/database";
-import {
-  capabilities,
-  skills,
-  links,
-  capabilityTemplateCache,
-} from "@synap/database/schema";
+import { capabilities, skills, links } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
+import { queryCatalogCache } from "./catalog-cache-query.js";
 import {
   loadCapabilityTemplate,
   createCapabilityFromDefinition,
@@ -154,17 +150,14 @@ export async function reconcileCapabilitiesToTemplates(
           .from(capabilities)
           .where(inArray(capabilities.id, opts.containerIds))
       : await db.select().from(capabilities);
-  const cacheRows = await db
-    .select({
-      key: capabilityTemplateCache.key,
-      name: capabilityTemplateCache.name,
-    })
-    .from(capabilityTemplateCache);
   // Legacy-install backfill index: match an installed container's NAME against a
   // cached template's name when `metadata.templateKey` is absent (a container
-  // seeded before this reconcile existed).
+  // seeded before this reconcile existed). Reads the capability catalog from
+  // `cp_catalog_cache` (kind="capability"), where a row's `slug` IS the template
+  // key — the same cache the cache-first resolver serves from.
+  const cacheRows = await queryCatalogCache({ kind: "capability" });
   const cacheKeyByName = new Map(
-    cacheRows.map((r) => [r.name.toLowerCase(), r.key])
+    cacheRows.map((r) => [r.name.toLowerCase(), r.slug])
   );
 
   for (const container of containers) {

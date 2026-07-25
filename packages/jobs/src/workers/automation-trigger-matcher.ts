@@ -501,7 +501,44 @@ export async function handleAutomationTriggerMatch(job: {
     seenAutomationIds.add(automation.id);
     allAutomations.push(automation);
   }
-  if (allAutomations.length === 0) return;
+
+  // ── Webhook-triggered automations ──────────────────────────────────────
+  // An inbound webhook arrives here as `external_webhook.received.completed`,
+  // emitted by the AUTHENTICATED ingress (routers/webhooks-inbound.ts
+  // `/api/webhooks/inbound/:subscriptionId`), which has already HMAC-verified
+  // the caller against the subscription's per-subscription secret. The event
+  // carries `data = { subscriptionId, payload }`. It fires automations with
+  // triggerType="webhook" whose triggerConfig.webhookSubscriptionId equals the
+  // delivering subscription. There is no event-pattern/filter grammar for
+  // webhooks — the binding IS the subscription id — so these are selected
+  // separately, but fired through the SAME run-creation door as event/cron/
+  // manual runs (see `fireAutomation` below). Scoped by `workspaceMatch`
+  // (identical to the event set) so a subscription can only fire automations in
+  // its own workspace lens.
+  const webhookSubscriptionId =
+    eventType === "external_webhook.received.completed"
+      ? (data?.subscriptionId as string | undefined)
+      : undefined;
+  let webhookAutomations: typeof activeAutomations = [];
+  if (webhookSubscriptionId) {
+    webhookAutomations = await db
+      .select({
+        id: automations.id,
+        triggerConfig: automations.triggerConfig,
+        workspaceId: automations.workspaceId,
+      })
+      .from(automations)
+      .where(
+        and(
+          workspaceMatch,
+          eq(automations.status, "active"),
+          eq(automations.triggerType, "webhook"),
+          drizzleSql`${automations.triggerConfig}->>'webhookSubscriptionId' = ${webhookSubscriptionId}`
+        )
+      );
+  }
+
+  if (allAutomations.length === 0 && webhookAutomations.length === 0) return;
 
   // The entity this EVENT is about — the durable per-run lens `resolveRunChannel`
   // reads for `resultRouting: "per_entity"`. A property of the event, not of the
@@ -515,6 +552,64 @@ export async function handleAutomationTriggerMatch(job: {
   });
 
   const boss = getBoss();
+
+  const rootRunId =
+    effectiveContext?.rootRunId ?? effectiveContext?.automationRunId;
+
+  // ── THE run-creation door ──────────────────────────────────────────────
+  // Insert the automation_run row, enqueue automation-execute, bump stats.
+  // Shared by BOTH the event-matched loop and the webhook-matched loop below,
+  // so a webhook-triggered run is byte-identical to an event/cron/manual run:
+  // same executor, same governance, run-as-owner via `triggeredBy` (the
+  // subscription owner's userId for an inbound webhook, since it carries no
+  // effectiveContext). Do NOT hand-roll a second insertion path.
+  async function fireAutomation(
+    automationId: string,
+    automationWorkspaceId: string | null,
+    triggerPayload: Record<string, unknown>,
+    runSubjectEntityId: string | undefined
+  ): Promise<void> {
+    // Pod-wide events (null event workspace) run each matched automation IN ITS
+    // OWN workspace; for the non-null path this equals `workspaceId`, unchanged.
+    const runWorkspaceId = workspaceId ?? automationWorkspaceId;
+
+    const [run] = await db
+      .insert(automationRuns)
+      .values({
+        automationId,
+        workspaceId: runWorkspaceId,
+        subjectEntityId: runSubjectEntityId,
+        triggeredBy: effectiveContext ? "system" : userId,
+        triggerPayload,
+        status: "running",
+      })
+      .returning({ id: automationRuns.id });
+
+    // ── Enqueue execution ──────────────────────────────────────────────
+    await boss.send("automation-execute", {
+      runId: run.id,
+      automationId,
+      workspaceId: runWorkspaceId,
+      // Pass chain context so the executor can tag output events
+      automationContext: {
+        automationRunId: run.id,
+        automationId,
+        chainDepth: currentDepth + 1,
+        rootRunId: rootRunId ?? run.id,
+        chainAutomationIds: [...chainIds, automationId],
+      },
+    });
+
+    // Update automation stats
+    await db
+      .update(automations)
+      .set({
+        lastRunAt: new Date(),
+        runCount: drizzleSql`${automations.runCount} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(automations.id, automationId));
+  }
 
   for (const automation of allAutomations) {
     // ── Cycle detection ────────────────────────────────────────────────
@@ -543,55 +638,49 @@ export async function handleAutomationTriggerMatch(job: {
       "Event matched automation trigger — creating run"
     );
 
-    // Pod-wide events (null event workspace) run each matched automation IN ITS
-    // OWN workspace; the eq() filter above guarantees this equals `workspaceId`
-    // for the non-null path, so that path is unchanged.
-    const runWorkspaceId = workspaceId ?? automation.workspaceId;
-
-    const rootRunId =
-      effectiveContext?.rootRunId ?? effectiveContext?.automationRunId;
-
-    const [run] = await db
-      .insert(automationRuns)
-      .values({
-        automationId: automation.id,
-        workspaceId: runWorkspaceId,
-        subjectEntityId,
-        triggeredBy: effectiveContext ? "system" : userId,
-        triggerPayload: {
-          eventType,
-          subjectId,
-          data: data ?? {},
-          userId,
-          timestamp: new Date().toISOString(),
-        },
-        status: "running",
-      })
-      .returning({ id: automationRuns.id });
-
-    // ── Enqueue execution ──────────────────────────────────────────────
-    await boss.send("automation-execute", {
-      runId: run.id,
-      automationId: automation.id,
-      workspaceId: runWorkspaceId,
-      // Pass chain context so the executor can tag output events
-      automationContext: {
-        automationRunId: run.id,
-        automationId: automation.id,
-        chainDepth: currentDepth + 1,
-        rootRunId: rootRunId ?? run.id,
-        chainAutomationIds: [...chainIds, automation.id],
+    await fireAutomation(
+      automation.id,
+      automation.workspaceId,
+      {
+        eventType,
+        subjectId,
+        data: data ?? {},
+        userId,
+        timestamp: new Date().toISOString(),
       },
-    });
+      subjectEntityId
+    );
+  }
 
-    // Update automation stats
-    await db
-      .update(automations)
-      .set({
-        lastRunAt: new Date(),
-        runCount: automations.runCount,
-        updatedAt: new Date(),
-      })
-      .where(eq(automations.id, automation.id));
+  // ── Fire webhook-matched automations ───────────────────────────────────
+  // These matched by subscription id in the DB query above, so there is no
+  // per-automation pattern/filter gate — only the cycle guard (a no-op for a
+  // genuine inbound webhook, which carries an empty chain). The inbound body is
+  // exposed to the flow as `trigger.payload.body` — DATA, never a URL the engine
+  // fetches. No entity subject exists for an external webhook, so the run
+  // degrades to its per-type feed (the intended `per_entity` fallback).
+  for (const automation of webhookAutomations) {
+    if (chainIds.has(automation.id)) continue;
+
+    logger.info(
+      {
+        automationId: automation.id,
+        webhookSubscriptionId,
+        chainDepth: currentDepth + 1,
+      },
+      "Inbound webhook matched automation trigger — creating run"
+    );
+
+    await fireAutomation(
+      automation.id,
+      automation.workspaceId,
+      {
+        type: "webhook",
+        webhookSubscriptionId,
+        body: (data?.payload as unknown) ?? {},
+        timestamp: new Date().toISOString(),
+      },
+      undefined
+    );
   }
 }

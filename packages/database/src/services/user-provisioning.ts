@@ -20,6 +20,21 @@ import {
 
 const logger = createLogger({ module: "user-provisioning" });
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
+/**
+ * Membership role privilege, most-privileged first. A federated invite must
+ * never DOWNGRADE a member who already has broader access (e.g. re-inviting an
+ * existing `admin` as `editor` must keep them `admin`), and must be idempotent
+ * for an equal or lower re-invite. `owner` can appear on an existing row but is
+ * never a grantable invite role, so it always outranks an invite.
+ */
+const ROLE_RANK: Record<string, number> = {
+  owner: 3,
+  admin: 2,
+  editor: 1,
+  viewer: 0,
+};
+const roleRank = (role: string): number => ROLE_RANK[role] ?? -1;
 const hashNonce = (nonce: string) =>
   createHash("sha256").update(nonce).digest("hex");
 
@@ -624,6 +639,13 @@ export async function activateFederatedMember(
           columns: { id: true, role: true },
         });
     const membershipCreated = !existingMembership;
+    // The role actually held after this grant. For a NEW membership it is the
+    // invited role; for an EXISTING one it is whichever is more privileged, so
+    // the invite is idempotent and never downgrades a member who already has
+    // broader access (the previous code threw here, turning "you already have
+    // access" into a hard redemption failure — the exact scenario a returning
+    // Pod-wide member hits).
+    let effectiveRole = input.role;
     if (!existingMembership) {
       if (workspaceId) {
         await tx.insert(workspaceMembers).values({
@@ -638,10 +660,27 @@ export async function activateFederatedMember(
           role: input.role,
         });
       }
-    } else if (existingMembership.role !== input.role) {
-      throw new Error("activateFederatedMember: existing Pod role differs");
+    } else if (roleRank(input.role) > roleRank(existingMembership.role)) {
+      // Upgrade only — an invite may raise access, never lower it.
+      if (workspaceId) {
+        await tx
+          .update(workspaceMembers)
+          .set({ role: input.role })
+          .where(eq(workspaceMembers.id, existingMembership.id));
+      } else {
+        await tx
+          .update(projectMembers)
+          .set({ role: input.role })
+          .where(eq(projectMembers.id, existingMembership.id));
+      }
+    } else {
+      // Equal or lower invited role → keep what they already have.
+      effectiveRole = existingMembership.role as typeof input.role;
     }
 
+    // The receipt records the COMMAND (its requested role), not the resulting
+    // membership — it must stay `input.role` so a replay of the same commandId
+    // still matches the idempotency guard above.
     await tx.insert(federatedAccessReceipts).values({
       issuerId,
       commandId,
@@ -657,7 +696,9 @@ export async function activateFederatedMember(
       scopeKind: input.scopeKind,
       workspaceId,
       projectId,
-      role: input.role,
+      // The role actually held after this grant (may exceed the invited role
+      // when the member already had broader access).
+      role: effectiveRole,
       alreadyActivated: false,
       membershipCreated,
     } as const;

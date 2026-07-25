@@ -293,6 +293,7 @@ export async function assertPodAdmin(userId: string): Promise<void> {
 export { t };
 export const router = t.router as typeof t.router;
 export const middleware = t.middleware as typeof t.middleware;
+export const mergeRouters = t.mergeRouters as typeof t.mergeRouters;
 
 /**
  * Workspace mutation procedure (workspace-scoped + trial guard)

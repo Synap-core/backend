@@ -49,6 +49,7 @@ import {
   createAutoApprovedProposal,
 } from "../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import { makeExternalLinkIdempotency } from "../../utils/entity-link-idempotency.js";
 import {
   computeCaptureGraphIdempotencyKey,
   findPriorCaptureGraphProposal,
@@ -623,6 +624,19 @@ export async function submitCaptureGraph(
             // The composite ctx's `attachFacet` door — same governance context,
             // so a policy-approved graph attaches facets directly.
             facetCaller: entityCaller,
+            // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
+            // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
+            // the SAME graph is auto-applied twice (a retry that races the
+            // auto_approved record write, so the early proposal lookup missed
+            // it), the second materialize LINKS the already-created entities
+            // instead of duplicating them. userId-prefixed so a client-supplied
+            // key can't collide with another tenant on the global links index —
+            // exactly the pattern the tRPC capture door uses.
+            idempotency: makeExternalLinkIdempotency(db, {
+              namespace: `${userId}:${idempotencyKey}`,
+              provider: "capture",
+              userId,
+            }),
           }
         );
         const materializedEntityIds = materialized.entities

@@ -10,12 +10,20 @@ vi.mock("../retrieval/retrieve.js", () => ({
   retrieve: (...args: unknown[]) => retrieveMock(...args),
 }));
 vi.mock("@synap/database", () => ({
+  // `db` handle — only forwarded to the pending scan (mocked below); a bare
+  // stub is enough for these router tests, which never touch a real store.
+  db: {},
   knowledgeRepository: {
     searchFacts: (...args: unknown[]) => searchFactsMock(...args),
   },
   knowledgeKeysRepository: {
     searchFullText: (...args: unknown[]) => searchFullTextMock(...args),
   },
+}));
+// The Wave-3 pending lane is covered by pending-text-match.test.ts; here it is a
+// no-op so these tests stay focused on classify → route → fuse.
+vi.mock("../../utils/pending-capture-dedup.js", () => ({
+  findPendingTextMatches: vi.fn().mockResolvedValue([]),
 }));
 
 const { ask } = await import("./ask.js");

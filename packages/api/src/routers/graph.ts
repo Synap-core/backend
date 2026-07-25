@@ -375,7 +375,15 @@ export const graphRouter = router({
             ),
             and(isNull(relations.workspaceId), eq(relations.userId, ctx.userId))
           ),
-          or(
+          // BOTH endpoints must be in the visible node set — a link is NOT a
+          // permission. With `or(...)` an edge whose OTHER endpoint failed the
+          // floor was still returned, leaking that hidden entity's id + the
+          // relation type as a dangling edge to a node the payload never
+          // includes. Harmless for a broad-floor teammate (the other end is
+          // usually visible too), a real leak for an exposure-only guest.
+          // `and(...)` renders only edges between two entities the viewer can
+          // already see — "showcase only the entities that belong".
+          and(
             inArray(relations.sourceEntityId, ids),
             inArray(relations.targetEntityId, ids)
           )

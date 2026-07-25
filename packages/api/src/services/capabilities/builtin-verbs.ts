@@ -35,6 +35,7 @@ import {
   messages,
   documents,
   capabilities,
+  tools,
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
@@ -1641,6 +1642,96 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * connector.health_check — probe a connector for a provider and, if its OAuth
+ * connection is dead (refresh token expired / never connected), emit the operator
+ * reconnect nudge — so a CONFIG feed nudges instead of going SILENTLY dead on an
+ * expired token (the gap: run-mail-feed.ts had this inline, a config feed had no
+ * verb for it).
+ *
+ * It mirrors exactly what run-mail-feed.ts does: run a cheap probe verb, inspect
+ * the result with `capErrorMessage` + `isConnectionAuthError`, and on a real
+ * auth error call the SHARED `notifyConnectorUnhealthy` helper (in-app notice +
+ * firewall-safe Discord nudge, deduped per cooldown). The nudge is NOT
+ * reimplemented here. A healthy connector is a no-op.
+ *
+ * The dedup watermark + notice channel live on the pod's `discord` tool (the same
+ * row run-mail-feed uses), so repeated cron ticks nudge once per cooldown, not
+ * every tick.
+ */
+const connectorHealthCheckParams = z.object({
+  /** Stable connector key for dedup + display, e.g. "google". */
+  provider: z.string().min(1).max(100),
+  /** Human display name, e.g. "Google Workspace". */
+  connectorName: z.string().min(1).max(200),
+  /** One-line action for the operator (how to reconnect). */
+  reconnectHint: z.string().min(1).max(1000),
+  /** A cheap capability verb to probe with, e.g. "gmail_search". */
+  probeVerbId: z.string().min(1).max(200),
+  /** Optional params for the probe verb (default {}). */
+  probeParameters: z.record(z.string(), z.unknown()).optional(),
+  /** Optional 1-of-N connection id to pin the probe to. */
+  connectionId: z.string().max(200).optional(),
+});
+
+const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = connectorHealthCheckParams.parse(params);
+
+  // Lazy import to avoid the top-level cycle (execute-capability.ts imports
+  // BUILTIN_VERBS from THIS module — the same reason marketInstall lazy-imports).
+  const { executeCapability } = await import("./execute-capability.js");
+  const {
+    notifyConnectorUnhealthy,
+    isConnectionAuthError,
+    capErrorMessage,
+    resolveNoticeChannelId,
+  } = await import("../connection-health/notify-connector-unhealthy.js");
+
+  // 1. Probe. A dead connection surfaces as an error envelope inside a
+  //    kind:"run" result (post masking-fix) — capErrorMessage extracts it.
+  const cap = await executeCapability({
+    verbId: input.probeVerbId,
+    parameters: input.probeParameters ?? {},
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    connectionSelector: input.connectionId
+      ? { connectionId: input.connectionId }
+      : undefined,
+  });
+
+  const capErr = capErrorMessage(cap);
+  // Healthy (or a non-auth transient) → no-op.
+  if (!capErr || !isConnectionAuthError(capErr)) {
+    return { unhealthy: false, nudged: false };
+  }
+
+  // 2. Unhealthy → nudge via the shared helper. The watermark + notice channel
+  //    live on the pod's discord tool (same row run-mail-feed uses).
+  const discordTool = await db.query.tools.findFirst({
+    where: eq(tools.name, "discord"),
+    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
+  });
+  if (!discordTool) {
+    // No watermark holder → can't dedup; report unhealthy without nudging.
+    return { unhealthy: true, nudged: false, error: capErr };
+  }
+
+  const metadata = (discordTool.metadata ?? {}) as Record<string, unknown>;
+  const nudged = await notifyConnectorUnhealthy({
+    connectorKey: input.provider,
+    connectorName: input.connectorName,
+    reconnectHint: input.reconnectHint,
+    userId: discordTool.createdBy,
+    workspaceId: discordTool.workspaceId ?? null,
+    watermarkToolId: discordTool.id,
+    watermarkMetadata: metadata,
+    discordTeamChannelId: resolveNoticeChannelId(metadata, undefined),
+    errorMessage: capErr,
+  });
+
+  return { unhealthy: true, nudged, error: capErr };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -1676,6 +1767,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Connection health — probe a connector + nudge the operator if it's dead, so
+  // a config feed doesn't go silently dead on an expired token.
+  "connector.health_check": connectorHealthCheckHandler,
 };
 
 /**
@@ -1716,6 +1810,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "connector.health_check": connectorHealthCheckParams,
 };
 
 /**
@@ -1746,4 +1841,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // intentionally ABSENT: it always mutates (a proposal at minimum), so it
   // flows through the full gate like every other WRITE builtin.
   "market.search",
+  // connector.health_check — auto-run so a CRON feed can call it unattended (a
+  // propose verdict would stall the flow). It mutates NO graph data: it only
+  // probes a connector and, when dead, emits a deduped operator-facing reconnect
+  // NOTICE (in-app + Discord nudge) via the shared best-effort helper. Same
+  // "no mutation → auto-run" rationale as ai.generate.
+  "connector.health_check",
 ]);

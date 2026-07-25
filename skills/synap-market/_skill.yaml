@@ -1,0 +1,24 @@
+name: synap-market
+description: >
+  Use this skill when the user (or an agent driving the CLI/MCP/HTTP) wants to
+  DISCOVER, INSTALL, or AUTHOR/PUBLISH marketplace & template data on Synap —
+  workspace templates, capabilities, automations, and cells. Triggers: "find a
+  template for X", "is there a marketplace package for Y", "install this
+  template/capability", "create a new template", "publish this as a
+  workspace/capability", "scaffold a template", "share my workspace as a
+  template", "make this private/public". NOT the `synap` skill (capture/recall
+  data INSIDE a workspace) nor `synap-schema` (extending the data model of an
+  existing workspace) nor `synap-ui` (building views/dashboards) — this skill is
+  about the PACKAGE layer: finding, installing, and publishing reusable
+  templates/capabilities/automations/cells to/from the Control Plane catalog.
+metadata:
+  openclaw:
+    requires:
+      env: []
+    optional_env: [SYNAP_POD_URL, SYNAP_WORKSPACE_ID, SYNAP_HUB_API_KEY]
+    primaryEnv: null
+    homepage: https://synap.live
+    capabilities:
+      [market-search, market-install, template-author, template-publish]
+    os: [macos, linux, windows]
+    userInvocable: true

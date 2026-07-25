@@ -512,13 +512,11 @@ async function applyPackagePostWorkspaceInner(
         });
       }
     }
-    const failed = autos.find(
-      (entry) => (entry as { status?: string }).status === "error"
-    );
-    if (failed)
-      throw new Error(
-        `Failed to apply an automation: ${(failed as { message?: string }).message ?? "unknown error"}`
-      );
+    // Per-item isolation: an automation that fails to apply is reported as
+    // {status:"error"} in `autos` and does NOT abort the package's independent
+    // downstream steps (playbooks/loops/links below). Removing the previous
+    // throw here converges this door onto the partial-install-with-warnings
+    // pattern used by createCapabilityFromDefinition and market.install.
     result.automations = autos;
   }
 

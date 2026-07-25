@@ -35,7 +35,7 @@
  *   (f) the client return contract is unchanged
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -449,6 +449,49 @@ describe("(e) idempotency per item", () => {
       alreadyApproved: true,
     });
     expect(runs).toBe(1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// (g) APPROVAL_FAILED: the terminal-failure path is recorded, surfaced, and
+//     never mistaken for a successful approve by the outcome telemetry.
+// ───────────────────────────────────────────────────────────────────────────
+describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as approved", () => {
+  it("onApprovalFailed gets (proposalId, message), the error is re-thrown, and reportProposalOutcome/emitAiCorrection never fire", async () => {
+    proposalExecRegistry.register({
+      key: "automation/execute",
+      async execute() {
+        // Real executors call deps.reportProposalOutcome (approve-executors.ts's
+        // reportApproved helper) ONLY after the risky work succeeds — never
+        // before. A throw here must leave it uncalled, exactly like this fake.
+        throw new Error("automation was deleted");
+      },
+    });
+
+    const reportProposalOutcome = vi.fn();
+    // emitAiCorrection is not part of the registry-dispatch deps bag at all
+    // (it's only invoked from applyProposalApproval's composite-proposal
+    // branch in proposals.ts, which returns before ever reaching
+    // dispatchProposalApproval) — so the registry path can't fire it by
+    // construction. reportProposalOutcome IS deps-injected here, so it's the
+    // one worth asserting directly.
+    const a = args(proposalRow("p1", "automation", "execute"));
+    a.deps = { ...a.deps, reportProposalOutcome } as typeof a.deps;
+
+    const onApprovalFailed = vi.fn(async () => {});
+
+    await expect(
+      dispatchProposalApproval(a, onApprovalFailed)
+    ).rejects.toThrow("automation was deleted");
+
+    // The DB write proposals.ts's onApprovalFailed performs (status flip to
+    // APPROVAL_FAILED + rejectionReason) is driven by exactly these args.
+    expect(onApprovalFailed).toHaveBeenCalledTimes(1);
+    expect(onApprovalFailed).toHaveBeenCalledWith(
+      "p1",
+      "automation was deleted"
+    );
+    expect(reportProposalOutcome).not.toHaveBeenCalled();
   });
 });
 

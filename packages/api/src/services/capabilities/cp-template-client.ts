@@ -6,21 +6,26 @@
  * fallback, NOT a live request-path dependency: a blocking CP fetch on the catalog
  * request path hangs ~8s (or returns empty) whenever the CP is slow or down.
  *
- * So the pod keeps a persisted CACHE (`capability_template_cache`), refreshed in
- * the background (packages/jobs `capability-template-sync` — every 10 min + on
- * startup). Reads here serve from that cache (fast DB read, no network —
- * STALE-WHILE-REVALIDATE). Only on a COLD first boot (cache empty before the job
- * has run) do we do ONE inline CP fetch to populate it, keeping the 8s timeout and
- * never throwing. This restores pod sovereignty: a slow/down CP degrades the
- * catalog to "what we last knew", never an 8s hang.
+ * So the pod keeps a persisted CACHE (`cp_catalog_cache`, kind="capability"),
+ * refreshed in the background by packages/jobs `cp-catalog-sync` (every 10 min +
+ * on startup). Reads here serve from that cache (fast DB read, no network —
+ * STALE-WHILE-REVALIDATE) via the shared `queryCatalogCache` helper. Only on a
+ * COLD first boot (cache empty before the sync job has run) do we do ONE inline CP
+ * fetch, keeping the 8s timeout and never throwing. This restores pod sovereignty:
+ * a slow/down CP degrades the catalog to "what we last knew", never an 8s hang.
+ *
+ * (Historical: this cache used to be the pod-local `capability_template_cache`
+ * filled by `capability-template-sync`; that duplicate was retired in favor of the
+ * source-dimensioned `cp_catalog_cache` — P2.4-B cutover.)
  *
  * Source: GET {CP}/api/marketplace/capabilities → { capabilities: [...] }
  * (public read; see synap-control-plane-api/src/routes/marketplace-apps.ts).
  */
 
-import { db, eq, drizzleSql } from "@synap/database";
-import { capabilityTemplateCache, workspaces } from "@synap/database/schema";
+import { db, drizzleSql } from "@synap/database";
+import { workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
+import { queryCatalogCache } from "./catalog-cache-query.js";
 
 export interface CPCapabilityTemplate {
   key: string;
@@ -136,12 +141,12 @@ async function fetchCPCapabilityTemplateByKeyAsOwner(
  * every-pod sync (syncByDefault=false, e.g. a paid third-party connector like
  * Unipile). Tries the OWNER-scoped internal door FIRST (resolves PRIVATE caps
  * owned by this pod's owner — isPublic=false, e.g. arch-backend), then falls
- * back to the anonymous public door (isPublic=true only). Deliberately NOT
- * upserted into `capabilityTemplateCache` by the caller — that cache mirrors the
- * syncByDefault=true list; writing a non-default item into it would leak it back
- * into every pod's default catalog browse, the exact thing syncByDefault exists
- * to prevent. Resilient: returns `null` on ANY failure (404, no CP configured,
- * timeout), never throws.
+ * back to the anonymous public door (isPublic=true only). Deliberately NOT written
+ * into the catalog cache by the caller — that cache (cp_catalog_cache, owned by
+ * cp-catalog-sync) mirrors the syncByDefault=true public list; writing a non-default
+ * item into it would leak it back into every pod's default catalog browse, the exact
+ * thing syncByDefault exists to prevent. Resilient: returns `null` on ANY failure
+ * (404, no CP configured, timeout), never throws.
  */
 export async function fetchCPCapabilityTemplateByKey(
   key: string
@@ -169,129 +174,79 @@ export async function fetchCPCapabilityTemplateByKey(
 }
 
 /**
- * UPSERT the given templates into the pod-local cache (one row per key). Used by
- * the cold-boot inline fetch below (the background sync job in @synap/jobs owns
- * its own upsert — it cannot import @synap/api, circular dep). Never throws.
+ * Map a cp_catalog_cache capability entry → the CP template shape the catalog
+ * consumes. Capability rows carry the full `definition` inline (cp-catalog-sync
+ * `fetchCapabilities`, from the same `/api/marketplace/capabilities` endpoint), so
+ * a row missing a definition is treated as a cache MISS (returns null) rather than
+ * mapped to an empty def — the caller then falls through to the CP fetch.
  */
-export async function upsertCapabilityTemplateCache(
-  items: CPCapabilityTemplate[]
-): Promise<void> {
-  if (items.length === 0) return;
-  const now = new Date();
-  const rows = items.map((item) => ({
-    key: item.key,
-    name: item.name,
-    description: item.description ?? null,
-    definition: item.definition as unknown as Record<string, unknown>,
-    syncedAt: now,
-  }));
-  try {
-    await db
-      .insert(capabilityTemplateCache)
-      .values(rows)
-      .onConflictDoUpdate({
-        target: capabilityTemplateCache.key,
-        set: {
-          name: sqlExcluded("name"),
-          description: sqlExcluded("description"),
-          definition: sqlExcluded("definition"),
-          syncedAt: now,
-        },
-      });
-  } catch {
-    // Cache write is best-effort; a failure here must never break a read.
-  }
-}
-
-// Reference the conflicting row's incoming value (the standard `EXCLUDED.<col>`)
-// in onConflictDoUpdate. Column names are the DB (snake_case) names.
-function sqlExcluded(column: string) {
-  return drizzleSql.raw(`excluded.${column}`);
-}
-
-/** Map a cache row → the CP template shape the catalog consumes. */
-function rowToTemplate(row: {
-  key: string;
+function entryToTemplate(entry: {
+  slug: string;
   name: string;
   description: string | null;
-  definition: Record<string, unknown>;
-}): CPCapabilityTemplate {
+  definition: Record<string, unknown> | null;
+}): CPCapabilityTemplate | null {
+  if (!entry.definition) return null;
   return {
-    key: row.key,
-    name: row.name,
-    description: row.description,
-    definition: row.definition as unknown as CapabilityDefinition,
+    key: entry.slug,
+    name: entry.name,
+    description: entry.description,
+    definition: entry.definition as unknown as CapabilityDefinition,
   };
 }
 
 /**
  * Resolve the capability-template catalog — POD-LOCAL CACHE first (fast DB read,
- * no network). STALE-WHILE-REVALIDATE: whatever is in the cache is served
- * immediately. Only if the cache is EMPTY (cold first boot before the background
- * sync ran) do we do ONE inline CP fetch to populate it. Never throws — returns []
- * if even the cold-boot fetch fails. Never blocks on the CP when the cache has data.
+ * no network) from `cp_catalog_cache` (kind="capability"), owned/refreshed by
+ * @synap/jobs `cp-catalog-sync`. STALE-WHILE-REVALIDATE: whatever is cached is
+ * served immediately. Only if the cache is EMPTY (cold first boot before the sync
+ * ran) do we do ONE inline CP fetch. The cache itself is populated by
+ * cp-catalog-sync (its own startup run), never written from this read path. Never
+ * throws — returns [] if even the cold-boot fetch fails. Never blocks on the CP
+ * when the cache has data.
  */
 export async function fetchCPCapabilityTemplates(): Promise<
   CPCapabilityTemplate[]
 > {
   // 1. Serve from the pod-local cache (fast, no network).
-  let rows: Array<{
-    key: string;
-    name: string;
-    description: string | null;
-    definition: Record<string, unknown>;
-  }> = [];
   try {
-    rows = await db
-      .select({
-        key: capabilityTemplateCache.key,
-        name: capabilityTemplateCache.name,
-        description: capabilityTemplateCache.description,
-        definition: capabilityTemplateCache.definition,
-      })
-      .from(capabilityTemplateCache);
+    const entries = await queryCatalogCache({ kind: "capability" });
+    const mapped = entries
+      .map(entryToTemplate)
+      .filter((t): t is CPCapabilityTemplate => t !== null);
+    if (mapped.length > 0) return mapped;
   } catch {
-    rows = [];
+    // Fall through to the cold-boot CP fetch.
   }
-  if (rows.length > 0) return rows.map(rowToTemplate);
 
-  // 2. Cold boot: cache empty → ONE inline CP fetch, populate, return.
+  // 2. Cold boot: cache empty → ONE inline CP fetch, return.
   const items = await fetchCPCapabilityTemplatesFromCP();
-  if (items && items.length > 0) {
-    await upsertCapabilityTemplateCache(items);
-    return items;
-  }
-  return [];
+  return items && items.length > 0 ? items : [];
 }
 
 /** Resolve ONE capability definition by key — cache first, CP fallback on miss. */
 export async function fetchCPCapabilityTemplate(
   key: string
 ): Promise<CapabilityDefinition | null> {
-  // 1. Cache hit (fast).
+  // 1. Cache hit (fast) — a cp_catalog_cache capability row whose slug IS the key.
   try {
-    const [row] = await db
-      .select({ definition: capabilityTemplateCache.definition })
-      .from(capabilityTemplateCache)
-      .where(eq(capabilityTemplateCache.key, key))
-      .limit(1);
-    if (row) return row.definition as unknown as CapabilityDefinition;
+    const entries = await queryCatalogCache({ kind: "capability" });
+    const entry = entries.find((e) => e.slug === key);
+    if (entry?.definition) {
+      return entry.definition as unknown as CapabilityDefinition;
+    }
   } catch {
     // Fall through to the CP fallback.
   }
 
-  // 2. Cache miss → try the default-sync list first (covers the common case
-  //    and opportunistically warms the cache for next time).
+  // 2. Cache miss → try the default-sync list first (covers the common case).
   const items = await fetchCPCapabilityTemplatesFromCP();
   const fromList = items?.find((c) => c.key === key);
-  if (fromList) {
-    if (items && items.length > 0) await upsertCapabilityTemplateCache(items);
-    return fromList.definition;
-  }
+  if (fromList) return fromList.definition;
 
   // 3. Not in the default-sync list → it may still be a real, installable
-  //    template that's just excluded from default sync (syncByDefault=false).
-  //    Direct by-key lookup, deliberately not cached (see fn doc).
+  //    template excluded from default sync (syncByDefault=false), or a PRIVATE
+  //    (isPublic=false) capability owned by this pod's owner. Direct by-key lookup.
   const byKey = await fetchCPCapabilityTemplateByKey(key);
   return byKey?.definition ?? null;
 }

@@ -24,8 +24,9 @@
  * (automation→workflow, template→workspace); the cache still STORES
  * kind=automation|template, unchanged, so nothing downstream is orphaned.
  *
- * Runs on a schedule (every 10 minutes) AND once on startup, same as
- * capability-template-sync. Resilience contract:
+ * Runs on a schedule (every 10 minutes) AND once on startup — it is now the
+ * SOLE cron catalog sync, having superseded the (retired-from-cron)
+ * capability-template-sync (P2.4-B). Resilience contract:
  *   - 5xx / network error / timeout (8s) → transient: log at warn + leave that
  *     source's existing cache rows INTACT (never wipe).
  *   - 4xx → misconfiguration: the request itself is wrong (e.g. a retired

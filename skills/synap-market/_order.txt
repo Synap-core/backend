@@ -1,0 +1,5 @@
+overview.md
+discover-and-fetch.md
+install.md
+author-and-publish.md
+governance-and-catalog.md

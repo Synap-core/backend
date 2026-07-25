@@ -802,6 +802,12 @@ export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
+export {
+  runPlaybook,
+  type RunPlaybookInput,
+  type RunPlaybookResult,
+  type RunChainContext,
+} from "./services/playbooks/run-playbook.js";
 export type { ConnectionSelector } from "./connectors/external-dispatch.js";
 // Nango's API shape (connection_id ≠ end_user.id) belongs in the connector, not
 // in routes — apps/api's Nango webhook needs it to attribute a sync correctly.

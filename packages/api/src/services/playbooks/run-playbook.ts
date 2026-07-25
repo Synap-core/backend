@@ -23,11 +23,15 @@
 import {
   getDb,
   eq,
+  and,
+  desc,
+  isNull,
   channels,
   entities,
   focusSessions,
   playbooks,
   playbookRuns,
+  playbookEnrollments,
 } from "@synap/database";
 import type {
   FocusSession,
@@ -54,8 +58,32 @@ import { resolveExecutor } from "./executors/registry.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "run-playbook" });
+
+/**
+ * The chain context of the automation run that spawned this playbook (F2 depth
+ * floor). Stamped onto the session so the agent's downstream Hub writes — which
+ * carry the session but no automationContext — re-derive their true chain depth
+ * in the trigger matcher, closing the depth-guard hole across the agent boundary.
+ * Only the scheduled (automation) path supplies it.
+ */
+export interface RunChainContext {
+  automationRunId: string;
+  automationId: string;
+  chainDepth: number;
+  rootRunId: string;
+  chainAutomationIds: string[];
+}
+
 export interface RunPlaybookInput {
-  playbookId: string;
+  /** Resolve the playbook by id; when absent, `playbookName` is used. */
+  playbookId?: string;
+  /**
+   * Resolve the playbook by NAME within this workspace, then a pod-wide (NULL
+   * workspace) playbook. The template-friendly form: a capability seeds a
+   * playbook + an automation together, and the automation references the playbook
+   * by its stable name rather than a runtime id it can't know at author time.
+   */
+  playbookName?: string;
   workspaceId: string;
   /** The acting principal — used for session.userId, run.createdBy, channel.userId. */
   userId: string;
@@ -64,6 +92,22 @@ export interface RunPlaybookInput {
   agentIds?: string[];
   /** AI attribution — when set, the run is owned by the agent-user. */
   agentUserId?: string;
+  /**
+   * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
+   * active session for this playbook+subject instead of starting a new run. Makes
+   * a scheduled playbook_run safe (start-if-missing, no-op-if-present). Manual
+   * runs leave this false so each click starts a fresh run.
+   */
+  idempotentBySubject?: boolean;
+  /**
+   * Resolve the goal from the playbook's goalTemplate. The scheduled path passes
+   * a resolver closing over the automation StepContext (so `{{trigger.payload.*}}`
+   * / `{{steps.*}}` interpolate). Absent ⇒ the template is substituted against
+   * `params` (the manual-run behavior) inside instantiateSession.
+   */
+  goalResolver?: (goalTemplate: string) => string;
+  /** Automation chain context — stamped onto the session (F2 depth floor). */
+  chainContext?: RunChainContext;
   /** The entity this run is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
   subjectId?: string;
@@ -81,8 +125,76 @@ export interface RunPlaybookInput {
 }
 
 export interface RunPlaybookResult {
-  run: PlaybookRun;
+  /** The ledger row for this run — NULL when an existing session was reused
+   *  (idempotency-by-subject): a reuse starts no new run. */
+  run: PlaybookRun | null;
   session: FocusSession;
+  /** True when idempotency-by-subject reused an existing active session. */
+  reused?: boolean;
+}
+
+/**
+ * Derive the propose-only governance flag from a playbook's metadata. A
+ * maintenance playbook (e.g. CRM hygiene) declares
+ * `metadata.governance.forceProposeWrites: true`, which the run stamps onto the
+ * session so the write-side gate routes EVERY agent write to a reviewable
+ * proposal — the agent runs unattended, so nothing it does should auto-apply.
+ * Pure so it is unit-testable. Applies to EVERY run of the playbook (manual or
+ * scheduled) — the flag is a property of the playbook, not the trigger.
+ */
+export function deriveForceProposeWrites(metadata: unknown): boolean {
+  const governance = (metadata as Record<string, unknown> | null | undefined)
+    ?.governance as { forceProposeWrites?: unknown } | undefined;
+  return governance?.forceProposeWrites === true;
+}
+
+/**
+ * Build the session metadata stamped at creation: the automation chain context
+ * (F2 depth floor, keyed by the agent's X-Session-Id in the trigger matcher) and
+ * the propose-only governance flag. Empty object when neither applies (session
+ * metadata column default). Pure so it is unit-testable.
+ */
+export function buildRunSessionMetadata(opts: {
+  chainContext?: RunChainContext;
+  forceProposeWrites: boolean;
+}): Record<string, unknown> {
+  return {
+    ...(opts.chainContext
+      ? {
+          automationChainContext: {
+            automationRunId: opts.chainContext.automationRunId,
+            automationId: opts.chainContext.automationId,
+            chainDepth: opts.chainContext.chainDepth ?? 0,
+            rootRunId:
+              opts.chainContext.rootRunId ?? opts.chainContext.automationRunId,
+            chainAutomationIds: opts.chainContext.chainAutomationIds ?? [],
+          },
+        }
+      : {}),
+    ...(opts.forceProposeWrites
+      ? { governance: { forceProposeWrites: true } }
+      : {}),
+  };
+}
+
+/**
+ * Snapshot the resolved playbook definition onto the run row (D3c) so "what ran"
+ * survives later edits to the playbook config and can be diffed. Pure.
+ */
+export function buildDefinitionSnapshot(playbook: Playbook): {
+  version: number;
+  goalTemplate: string;
+  stages: unknown;
+  params: unknown;
+  expectedOutputs: unknown;
+} {
+  return {
+    version: playbook.version,
+    goalTemplate: playbook.goalTemplate,
+    stages: playbook.stages,
+    params: playbook.params,
+    expectedOutputs: playbook.expectedOutputs,
+  };
 }
 
 /** Max runs a single `query`/`rotating` fan-out may spawn (safety bound). */
@@ -202,11 +314,45 @@ export async function runPlaybook(
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
 
-  const playbook = (await db.query.playbooks.findFirst({
-    where: eq(playbooks.id, input.playbookId),
-  })) as Playbook | undefined;
+  // Resolve the playbook — by id, else by NAME within this workspace (then a
+  // pod-wide NULL-workspace playbook). By-name is the template-friendly form: a
+  // capability seeds a playbook + an automation together, and the automation
+  // references the playbook by its stable name rather than a runtime id it can't
+  // know at author time (mirrors entity resolution by profileSlug).
+  let playbook = input.playbookId
+    ? ((await db.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      })) as Playbook | undefined)
+    : undefined;
+  if (!playbook && input.playbookName) {
+    playbook = ((await db.query.playbooks.findFirst({
+      where: and(
+        eq(playbooks.name, input.playbookName),
+        eq(playbooks.workspaceId, input.workspaceId)
+      ),
+    })) ??
+      (await db.query.playbooks.findFirst({
+        where: and(
+          eq(playbooks.name, input.playbookName),
+          isNull(playbooks.workspaceId)
+        ),
+      }))) as Playbook | undefined;
+  }
   if (!playbook) {
-    throw new Error(`Playbook ${input.playbookId} not found`);
+    throw new Error(
+      `Playbook not found (${
+        input.playbookId ?? input.playbookName ?? "no id/name given"
+      })`
+    );
+  }
+
+  // Cross-workspace guard: a run may only target a playbook from its own
+  // workspace or a pod-wide (NULL) one. The scheduled path's playbookId is
+  // editor-authored config, so defend in depth (the column has no FK).
+  if (playbook.workspaceId && playbook.workspaceId !== input.workspaceId) {
+    throw new Error(
+      `runPlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
+    );
   }
 
   // S9: resolve the input strategy into per-run param payloads. The first item
@@ -249,14 +395,49 @@ async function executeSingleRun(
   // The owning principal: agent-user when an AI runs it, else the human.
   const actorId = input.agentUserId ?? input.userId;
 
-  // 1. Instantiate the runtime session (no channel yet — wired below).
+  // 0. Idempotency by subject — if an active session for this playbook + subject
+  // already exists, REUSE it rather than starting a duplicate. This makes a
+  // playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
+  // client has a session): start-if-missing, no-op-if-present. Opt-in; manual
+  // runs leave `idempotentBySubject` false so each click starts fresh.
+  if (input.idempotentBySubject && input.subjectId) {
+    const existing = await db.query.focusSessions.findFirst({
+      where: and(
+        eq(focusSessions.playbookId, playbook.id),
+        eq(focusSessions.subjectEntityId, input.subjectId),
+        eq(focusSessions.status, "active")
+      ),
+      orderBy: [desc(focusSessions.startedAt)],
+    });
+    if (existing) {
+      return { run: null, session: existing as FocusSession, reused: true };
+    }
+  }
+
+  // Propose-only governance (derived from the playbook) + the automation chain
+  // context are stamped onto the session at creation. The write-side gate reads
+  // governance.forceProposeWrites (→ every agent write becomes a proposal); the
+  // trigger matcher reads automationChainContext (F2 depth floor).
+  const forceProposeWrites = deriveForceProposeWrites(playbook.metadata);
+  const sessionMetadata = buildRunSessionMetadata({
+    chainContext: input.chainContext,
+    forceProposeWrites,
+  });
+
+  // 1. Instantiate the runtime session (no channel yet — wired below). The goal
+  // is resolved by the caller's resolver when provided (scheduled path resolves
+  // against the automation StepContext), else substituted against `params`.
   const session = await instantiateSession({
-    playbookId: input.playbookId,
+    playbookId: playbook.id,
     workspaceId: input.workspaceId,
     userId: actorId,
     params,
     agentIds: input.agentIds,
     subjectId: input.subjectId ?? null,
+    goalOverride: input.goalResolver
+      ? input.goalResolver(playbook.goalTemplate)
+      : undefined,
+    metadata: sessionMetadata,
   });
 
   // 2. Create the run channel per channelSpec, OR reuse an existing channel when
@@ -289,8 +470,8 @@ async function executeSingleRun(
         status: ChannelStatus.ACTIVE,
         title: playbook.name,
         contextObjectType: "playbook",
-        contextObjectId: input.playbookId,
-        metadata: { origin: "playbook-run", playbookId: input.playbookId },
+        contextObjectId: playbook.id,
+        metadata: { origin: "playbook-run", playbookId: playbook.id },
       })
       .returning();
     channel = created;
@@ -302,27 +483,58 @@ async function executeSingleRun(
     .set({ channelId: channel.id })
     .where(eq(focusSessions.id, session.id));
 
-  // 4. Insert the run ledger row (status "running").
+  // 4. Insert the run ledger row (status "running"). Snapshot the resolved
+  // definition (D3c) so "what ran" survives later edits to the playbook config.
   const [run] = await db
     .insert(playbookRuns)
     .values({
       workspaceId: input.workspaceId,
-      playbookId: input.playbookId,
+      playbookId: playbook.id,
       sessionId: session.id,
       executor: playbook.executor,
       status: "running",
       input: params,
       createdBy: actorId,
+      definitionSnapshot: buildDefinitionSnapshot(playbook),
     })
     .returning();
 
+  // 4b. Enroll the subject entity in the playbook so running a playbook FOR an
+  // entity also populates its funnel/cohort. Only when the playbook actually has
+  // a funnel (stages) — an operational playbook (scheduled sync, etc.) with no
+  // stages must not create enrollment rows. Idempotent by unique(playbookId,
+  // entityId); re-enroll after unenroll reactivates. Best-effort side-write — an
+  // enrollment failure must never fail the run.
+  const stages = (playbook.stages as PlaybookStage[]) ?? [];
+  const firstStageKey = stages[0]?.key ?? null;
+  if (input.subjectId && stages.length > 0) {
+    try {
+      await db
+        .insert(playbookEnrollments)
+        .values({
+          playbookId: playbook.id,
+          entityId: input.subjectId,
+          status: "active",
+          stepState: firstStageKey ? { currentStep: firstStageKey } : {},
+        })
+        .onConflictDoUpdate({
+          target: [
+            playbookEnrollments.playbookId,
+            playbookEnrollments.entityId,
+          ],
+          set: { status: "active", updatedAt: new Date() },
+        });
+    } catch (err) {
+      logger.warn(
+        { err, playbookId: playbook.id, entityId: input.subjectId },
+        "playbook run: enrollment upsert failed (non-fatal)"
+      );
+    }
+  }
+
   // 5. Resolve the playbook's granted capabilities (its `grants` links) into
   //    CapabilityRef[] and dispatch to the executor.
-  const playbookLinks = await getLinksFor(
-    actorId,
-    "playbook",
-    input.playbookId
-  );
+  const playbookLinks = await getLinksFor(actorId, "playbook", playbook.id);
   const capabilities = await resolveGrantedCapabilities(playbookLinks, {
     linkType: "grants",
     fromType: "playbook",

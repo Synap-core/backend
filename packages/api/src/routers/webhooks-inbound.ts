@@ -30,9 +30,26 @@ export const webhooksInboundRouter = new Hono();
 
 // Generic inbound webhook — external backend → Synap
 // Static route must appear before /:id dynamic routes (Hono ordering rule)
+// Inbound webhook bodies are small trigger payloads, not bulk uploads — cap
+// hard to blunt a memory-DoS via `c.req.text()`. (The app-wide rate limiter,
+// `app.use("*", rateLimitMiddleware)` = 500 req/15min per IP, already throttles.)
+const MAX_INBOUND_WEBHOOK_BODY = 1 * 1024 * 1024; // 1 MB
+
 webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
   const subscriptionId = c.req.param("subscriptionId");
+
+  const contentLength = c.req.header("content-length");
+  if (
+    contentLength &&
+    Number.parseInt(contentLength, 10) > MAX_INBOUND_WEBHOOK_BODY
+  ) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+
   const rawBody = await c.req.text();
+  if (rawBody.length > MAX_INBOUND_WEBHOOK_BODY) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
 
   const subscription = await db.query.webhookSubscriptions.findFirst({
     where: and(
@@ -41,21 +58,26 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
     ),
   });
 
-  if (!subscription) {
-    return c.json({ error: "Not found" }, 404);
-  }
-
-  // Verify HMAC-SHA256 signature — timingSafeEqual requires equal-length buffers
+  // Uniform auth failure: an unknown/inactive subscription and a bad signature
+  // return the SAME 401 body, so a caller cannot enumerate which subscription
+  // ids exist. Verify HMAC-SHA256 — timingSafeEqual needs equal-length buffers.
   const signature = c.req.header("x-synap-signature") ?? "";
-  const expected = `sha256=${createHmac("sha256", subscription.secret).update(rawBody).digest("hex")}`;
+  const expected = subscription
+    ? `sha256=${createHmac("sha256", subscription.secret).update(rawBody).digest("hex")}`
+    : "";
   const sigBuf = Buffer.from(signature);
   const expBuf = Buffer.from(expected);
   const sigValid =
-    sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
+    subscription != null &&
+    sigBuf.length === expBuf.length &&
+    timingSafeEqual(sigBuf, expBuf);
 
-  if (!sigValid) {
-    logger.warn({ subscriptionId }, "Invalid signature on inbound webhook");
-    return c.json({ error: "Invalid signature" }, 401);
+  if (!sigValid || !subscription) {
+    logger.warn(
+      { subscriptionId, known: subscription != null },
+      "Rejected inbound webhook (unknown subscription or invalid signature)"
+    );
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
   let payload: unknown;

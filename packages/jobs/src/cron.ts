@@ -8,10 +8,6 @@
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
-  CAPABILITY_TEMPLATE_SYNC_QUEUE,
-  CAPABILITY_TEMPLATE_SYNC_CRON,
-} from "./workers/capability-template-sync.js";
-import {
   CP_CATALOG_SYNC_QUEUE,
   CP_CATALOG_SYNC_CRON,
 } from "./workers/cp-catalog-sync.js";
@@ -231,23 +227,11 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "memory-decay", "30 3 * * *", {});
   logger.info("Registered cron: memory-decay (daily at 03:30 UTC)");
 
-  // Capability template sync — refresh the pod-local capability_template_cache
-  // from the Control Plane every 10 minutes, AND once now (on startup) so a cold
-  // pod populates its cache without waiting for the first cron tick. The catalog
-  // read path serves from this cache, so it never blocks on a slow/down CP.
-  await scheduleSafe(
-    boss,
-    CAPABILITY_TEMPLATE_SYNC_QUEUE,
-    CAPABILITY_TEMPLATE_SYNC_CRON,
-    {}
-  );
-  logger.info("Registered cron: capability-template-sync (every 10min)");
-  await sendSafe(boss, CAPABILITY_TEMPLATE_SYNC_QUEUE, {});
-  logger.info("Enqueued startup run: capability-template-sync");
-
   // CP catalog sync — refresh the pod-local cp_catalog_cache (all four
-  // marketplace kinds) every 10 minutes, AND once now on startup. Additive to
-  // capability-template-sync above (P2.4-B) — both run until a later cutover.
+  // marketplace kinds) every 10 minutes, AND once now on startup. This is the
+  // sole catalog-cache sync: the older capability-template-sync (which filled the
+  // now-retired capability_template_cache) was cut over to this (P2.4-B). The
+  // catalog read path serves from this cache, so it never blocks on a slow/down CP.
   await scheduleSafe(boss, CP_CATALOG_SYNC_QUEUE, CP_CATALOG_SYNC_CRON, {});
   logger.info("Registered cron: cp-catalog-sync (every 10min)");
   await sendSafe(boss, CP_CATALOG_SYNC_QUEUE, {});

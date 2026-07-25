@@ -1414,7 +1414,12 @@ async function createProposal(opts: {
   // Post-commit notifications (broadcast / side-effects / notification center).
   // A dedup hit returned a pre-existing proposal — it already notified when
   // first created, so don't re-notify (avoids a double toast for the reviewer).
-  if (!deduped) {
+  if (deduped) {
+    logger.info(
+      { proposalId: proposal.id, deduped: true },
+      "proposal deduped (returned existing)"
+    );
+  } else {
     await notifyProposalCreated(proposal, pendingInput);
   }
 

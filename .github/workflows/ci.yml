@@ -150,6 +150,16 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
+      # Catches migration drift in the PR, not at pod boot: validateSchemaCoherence()
+      # (packages/database/src/utils/schema-coherence.ts) previously only ran when the
+      # API server started up. It queries the live DB (information_schema.columns +
+      # pg_trigger) against the ~190-column tripwire list, so it needs the Postgres
+      # service above with migrations already applied (step immediately before this one).
+      - name: Schema coherence check
+        run: pnpm --filter @synap/database schema:check
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+
       - name: Test
         # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
         # Other package tests should still run

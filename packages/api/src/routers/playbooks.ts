@@ -66,6 +66,7 @@ import {
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
+import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -1778,6 +1779,15 @@ export const playbooksRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: existing.workspaceId,
       });
+
+      // 2b. Node-contract validation — same gate as automations.create/update.
+      // saveFlow is the playbook-canvas author-time door that writes an
+      // automation's flowDefinition (update in-place or first-save insert), so a
+      // malformed flow must be rejected here too, not only via automations.*.
+      const flowError = flowValidationErrorMessage(input.flowDefinition);
+      if (flowError) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
+      }
 
       // 3. Governance membrane — same verb as update.
       const perm = await checkPermissionOrPropose({

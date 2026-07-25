@@ -70,6 +70,19 @@ export interface InstantiateInput {
    * through from the playbook run input.
    */
   subjectId?: string | null;
+  /**
+   * Pre-resolved goal. When set, it OVERRIDES the goalTemplate substitution —
+   * used by the scheduled path, which resolves the goal against the automation
+   * StepContext (trigger payload + prior step outputs) before this runs. Absent
+   * ⇒ the goalTemplate is substituted against `params` as before.
+   */
+  goalOverride?: string;
+  /**
+   * Extra session metadata to stamp at creation (merged into focus_sessions.metadata).
+   * Carries the automation chain context (F2 depth floor) and the propose-only
+   * governance stamp for scheduled/maintenance runs. Absent ⇒ the column default ({}).
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -86,10 +99,12 @@ export async function instantiateSession(
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
 
-  const goal = resolveGoal(
-    playbook.goalTemplate,
-    (input.params ?? {}) as Record<string, unknown>
-  );
+  const goal =
+    input.goalOverride ??
+    resolveGoal(
+      playbook.goalTemplate,
+      (input.params ?? {}) as Record<string, unknown>
+    );
   const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
   // Seed the active stage from the playbook's first stage (null when stageless,
   // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
@@ -110,6 +125,9 @@ export async function instantiateSession(
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
       status: "active",
+      ...(input.metadata && Object.keys(input.metadata).length > 0
+        ? { metadata: input.metadata }
+        : {}),
     })
     .returning();
 
@@ -213,16 +231,14 @@ export async function promoteSessionToPlaybook(
       toId: playbook.id,
       linkType: "promoted_to",
     },
-    ...grantedCaps.map(
-      (cap): LinkInput => ({
-        workspaceId: session.workspaceId,
-        fromType: "playbook",
-        fromId: playbook.id,
-        toType: cap.kind,
-        toId: cap.id,
-        linkType: "grants",
-      })
-    ),
+    ...grantedCaps.map((cap): LinkInput => ({
+      workspaceId: session.workspaceId,
+      fromType: "playbook",
+      fromId: playbook.id,
+      toType: cap.kind,
+      toId: cap.id,
+      linkType: "grants",
+    })),
   ];
   await createLinks(edges);
 

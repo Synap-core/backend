@@ -476,6 +476,25 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "connector.health_check",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Probe a connector for a provider and, if its OAuth connection is dead (refresh token expired / never connected), emit the operator reconnect nudge (in-app + Discord, deduped per cooldown). A healthy connector is a no-op. Lets a config feed nudge instead of going silently dead on an expired token. Read-only w.r.t. graph data (emits only operator notices): auto-runs inside a cron automation. Returns { unhealthy, nudged, error? }.",
+      parameters: {
+        type: "object",
+        required: ["provider", "connectorName", "reconnectHint", "probeVerbId"],
+        properties: {
+          provider: { type: "string" },
+          connectorName: { type: "string" },
+          reconnectHint: { type: "string" },
+          probeVerbId: { type: "string" },
+          probeParameters: { type: "object" },
+          connectionId: { type: "string" },
+        },
+      },
+    },
   ],
 };
 

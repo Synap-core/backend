@@ -1,4 +1,4 @@
-import { router } from "./trpc.js";
+import { router, mergeRouters } from "./trpc.js";
 import { setupRouter } from "./routers/setup.js";
 import { eventsRouter } from "./routers/events.js";
 import { captureRouter } from "./routers/capture.js";
@@ -20,7 +20,10 @@ import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
-import { workspacesRouter } from "./routers/workspaces.js";
+import {
+  workspacesRouter,
+  workspaceCatalogRouter,
+} from "./routers/workspaces.js";
 import { viewsRouter } from "./routers/views.js";
 import { preferencesRouter } from "./routers/preferences.js";
 import { rolesRouter } from "./routers/roles.js";
@@ -99,7 +102,10 @@ export const coreRouter = router({
   capabilities: capabilitiesRouter,
   relations: relationsRouter,
   graph: graphRouter,
-  workspaces: workspacesRouter,
+  // Merge the workspace CATALOG procedures (browse + slug-install the
+  // marketplace) into the `workspaces` namespace. Separate router only to break
+  // a TS self-reference cycle (see workspaces.ts); same namespace to the client.
+  workspaces: mergeRouters(workspacesRouter, workspaceCatalogRouter),
   views: viewsRouter,
   preferences: preferencesRouter,
   roles: rolesRouter,

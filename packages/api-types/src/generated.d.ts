@@ -4799,6 +4799,20 @@ export interface ExecutionStats {
 	toolCallCount?: number;
 	[key: string]: unknown;
 }
+/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
+export interface PendingTextMatch {
+	proposalId: string;
+	proposalType: string;
+	/** The proposal's human summary (what the reviewer sees), when present. */
+	summary?: string;
+	/** The best-matching create_entity op's title (the representative entity). */
+	entityTitle?: string;
+	profileSlug?: string;
+	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
+	reviewUrl: string;
+	/** Distinct query terms matched — the rank score (higher = closer). */
+	score: number;
+}
 export interface PropertyHint {
 	/** Token(s) to match against an entity's serialized properties. */
 	value: string;
@@ -4893,6 +4907,22 @@ export interface AskAnswer {
 	/** `ok` = the store answered (possibly with 0 items); `error` = it failed and items is NOT authoritative. */
 	status: "ok" | "error";
 }
+/**
+ * The PENDING block (Wave 3, recall half of loop-closure) — kept RIGOROUSLY
+ * apart from `answers`. The caller's own pending capture proposals are NOT in
+ * any substrate yet: recall would report them missing, and an agent then
+ * re-captures to "confirm", inflating the review queue. Surfacing them closes
+ * that amnesia loop — but ONLY as a distinct, labeled block a model can never
+ * read as fact. `notice` carries the label + the anti-re-capture instruction;
+ * `matches` are advisory (each can still be rejected). Present only when the
+ * scan found something; a scan hiccup omits the block, never fails `ask`.
+ */
+export interface AskPendingBlock {
+	/** Human/agent-facing label: these are NOT facts; do not re-capture. */
+	notice: string;
+	/** The caller's OWN pending capture proposals that text-match the query. */
+	matches: PendingTextMatch[];
+}
 export interface AskResult {
 	query: string;
 	/** Substrates queried (semantic always present). */
@@ -4920,6 +4950,12 @@ export interface AskResult {
 	verdict: RetrievalVerdict;
 	/** A/B ranker comparison — present only when `compare` was requested. */
 	comparison?: RankComparison;
+	/**
+	 * Pending-review block — the caller's OWN pending captures that text-match the
+	 * query. SEPARATE from `answers` by construction (never merged into a factual
+	 * substrate). Omitted when empty. See AskPendingBlock.
+	 */
+	pending?: AskPendingBlock;
 }
 /**
  * Capability-connection service — the SINGLE source of truth for CRUD over a
@@ -5069,6 +5105,27 @@ export interface CapabilityCard {
 	installParams: CapabilityCardInstallParam[];
 	nextAction: {
 		kind: "add" | "connect" | "enable" | "run" | "none";
+		hint: string;
+	};
+}
+export type AutomationCardStatus = "available" | "installed";
+export interface AutomationCard {
+	/** Discriminator — this is an AUTOMATION card, never a capability. */
+	kind: "automation";
+	/** Installed automation row id; null for an available-only package. */
+	id: string | null;
+	/** Stable identity: catalog slug (available) or the automation id (installed). */
+	key: string;
+	name: string;
+	description?: string | null;
+	source: "installed" | "available";
+	status: AutomationCardStatus;
+	/** Installed only — the automation's lifecycle status. */
+	lifecycle?: "draft" | "active" | "paused" | "error";
+	/** Installed only — the automation's trigger type. */
+	triggerType?: "event" | "cron" | "webhook" | "manual";
+	nextAction: {
+		kind: "add" | "run" | "none";
 		hint: string;
 	};
 }
@@ -12399,6 +12456,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: CapabilityCard[];
 			meta: object;
 		}>;
+		automationCatalog: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: AutomationCard[];
+			meta: object;
+		}>;
 		setToolEnabled: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				skillId: string;
@@ -13068,6 +13132,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		listInstallableTemplates: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query?: string | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				templates: {
+					slug: string;
+					name: string;
+					description: string | null;
+					version: string | null;
+					tier: string | null;
+					vendor: string | null;
+					tags: string[] | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		installFromCatalog: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				slug: string;
+				workspaceId?: string | undefined;
+				proposalId?: string | undefined;
+			};
+			output: {
+				status: "created";
+				outcome: "created";
+				workspaceId: string;
+				profileIds: string[];
+				viewIds: string[];
+				entityIds?: undefined;
+				reconciled?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
+			} | {
+				workspaceId: string;
+				entityIds: never[];
+				reconciled: ReconcileReport | undefined;
+				outcome: "reconciled" | "unchanged";
+				status?: undefined;
+				profileIds?: undefined;
+				viewIds?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
+			} | {
+				status: "created" | "pending";
+				workspaceId: string;
+				reconciled: ReconcileReport | undefined;
+				outcome: "reconciled" | "unchanged";
+				profileIds?: undefined;
+				viewIds?: undefined;
+				entityIds?: undefined;
+				composed?: undefined;
+				dependencies?: undefined;
+			} | {
+				status: "composed";
+				workspaceId: string;
+				composed: true;
+				dependencies: ResolvedPackageDependency[];
+				outcome?: undefined;
+				profileIds?: undefined;
+				viewIds?: undefined;
+				entityIds?: undefined;
+				reconciled?: undefined;
+			} | {
+				status: "created";
+				outcome: "created";
+				workspaceId: string;
+				profileIds: string[];
+				viewIds: string[];
+				entityIds: string[];
+				dependencies: ResolvedPackageDependency[];
+				reconciled?: undefined;
+				composed?: undefined;
+			};
+			meta: object;
+		}>;
+	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
@@ -18646,7 +18788,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					enabled?: boolean | undefined;
 					frequencyDays?: number | undefined;
 				} | undefined;
-				nudgeDensity?: "minimal" | "balanced" | "proactive" | undefined;
+				nudgeDensity?: "proactive" | "minimal" | "balanced" | undefined;
 				triggers?: {
 					captureCluster?: boolean | undefined;
 					taskCompleted?: boolean | undefined;
@@ -21142,6 +21284,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stages?: Record<string, unknown>[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
+				metadata?: Record<string, unknown> | undefined;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "paused" | "archived" | "draft" | undefined;
 				contextSkill?: {
@@ -21335,7 +21478,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string;
 					executor: PlaybookRunExecutorRef;
 					summary: string | null;
-				};
+				} | null;
 				session: {
 					userId: string;
 					workspaceId: string | null;

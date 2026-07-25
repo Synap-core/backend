@@ -31,7 +31,12 @@
  * "can be large" — see cp-catalog-sync.ts). For those two kinds, this module
  * fetches the full definition at install time from `GET
  * {source}/api/packages/:slug[/:version]` (8s timeout) — failure returns a
- * retryable error, never a half-install.
+ * retryable error, never a half-install. When the cache row itself is MISSING
+ * for automation/template (an opt-in / just-authored package the sync never
+ * saw), the same by-slug endpoint is used with the configured CP base URL
+ * (`resolveDefinitionByKey`) — the uniform analog of the capability by-key
+ * fallback — so a cache miss re-resolves instead of dead-ending in NOT_FOUND.
+ * Only `cell` still requires a cache row (its renderer source is inline-only).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -54,6 +59,9 @@ import { createCapabilityFromDefinition } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../workspace-creation-service.js";
 import { defineCell } from "../cells/define-cell.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "marketplace-install" });
 
 export interface CatalogCacheRowFull {
   id: string;
@@ -136,6 +144,44 @@ async function resolveDefinition(
   return fetchFullPackageDefinition(entry.source, entry.slug, version);
 }
 
+/**
+ * Resolve the CP base URL — the by-key re-resolve source used when there is NO
+ * cp_catalog_cache row. Mirrors cp-template-client's `cpUrl()`. Null when the
+ * pod has no Control Plane configured (self-hosted).
+ */
+function cpBaseUrl(): string | null {
+  const url = (
+    process.env.CONTROL_PLANE_URL ??
+    process.env.CP_URL ??
+    ""
+  ).replace(/\/$/, "");
+  return url || null;
+}
+
+/**
+ * BY-KEY re-resolve for automation/template when the cp_catalog_cache row is
+ * MISSING — the uniform analog of the capability by-key fallback
+ * (fetchCPCapabilityTemplate). An opt-in (syncByDefault:false) or just-authored
+ * package never enters the cache, but the CP still serves it by slug at
+ * `GET {CP}/api/packages/:slug` — so a cache miss RE-RESOLVES from the CP instead
+ * of dead-ending in NOT_FOUND (the gap this wave closes). Throws a clear NOT_FOUND
+ * only when no CP is configured to resolve from; a reachable-but-failing CP
+ * surfaces `fetchFullPackageDefinition`'s retryable INTERNAL_SERVER_ERROR.
+ */
+async function resolveDefinitionByKey(
+  slug: string,
+  version?: string | null
+): Promise<Record<string, unknown>> {
+  const source = cpBaseUrl();
+  if (!source) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Marketplace entry "${slug}" isn't in the catalog cache and no Control Plane is configured to re-resolve it — search first with market.search.`,
+    });
+  }
+  return fetchFullPackageDefinition(source, slug, version);
+}
+
 export interface ApplyMarketInstallInput {
   kind: CatalogKind;
   slug: string;
@@ -200,19 +246,24 @@ export async function applyMarketInstall(
     };
   }
 
-  // Every other kind REQUIRES a cache row (cell needs its inline source;
-  // automation/template fetch by slug but need the row's `source`). Asserting it
-  // here narrows `entry` to non-null for all the switch cases below.
-  if (!entry) {
+  // CELL is the only remaining kind that REQUIRES a cache row: its renderer
+  // source lives ONLY in the inline `definition` (the by-slug packages endpoint
+  // doesn't serve cells). automation/template re-resolve by key below when the
+  // row is missing — mirroring the capability by-key fallback above — so an
+  // opt-in / just-authored package that never entered cp_catalog_cache installs
+  // instead of dead-ending in NOT_FOUND.
+  if (!entry && input.kind === "cell") {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: `Marketplace entry "${input.slug}" (${input.kind}) is no longer in the catalog cache — search again with market.search({query, kind:"${input.kind}"}).`,
+      message: `Marketplace entry "${input.slug}" (cell) is no longer in the catalog cache — search again with market.search({query, kind:"cell"}).`,
     });
   }
 
   switch (input.kind) {
     case "cell": {
-      const def = entry.definition as {
+      // Narrowed non-null by the cell-specific guard above.
+      const cellEntry = entry!;
+      const def = cellEntry.definition as {
         key?: string;
         code?: string;
         deps?: Record<string, string>;
@@ -229,7 +280,7 @@ export async function applyMarketInstall(
         ? input.slug.split("/")
         : [def.packageSlug ?? "unknown", def.key ?? input.slug];
       const result = await defineCell({
-        name: entry.name,
+        name: cellEntry.name,
         rendererSource: def.code,
         workspaceId: input.workspaceId,
         typeKey: `cell:${slugPackage}:${slugCellKey}`,
@@ -245,10 +296,16 @@ export async function applyMarketInstall(
     }
 
     case "template": {
-      const definition = (await resolveDefinition(
-        entry,
-        input.version
-      )) as unknown as WorkspaceDefinitionInput & { workspaceName?: string };
+      // Cache row present → resolve inline/by-slug from the row; row MISSING →
+      // by-key re-resolve from the CP (opt-in / just-authored template).
+      const definition = (entry
+        ? await resolveDefinition(entry, input.version)
+        : await resolveDefinitionByKey(
+            input.slug,
+            input.version
+          )) as unknown as WorkspaceDefinitionInput & {
+        workspaceName?: string;
+      };
       // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
       // re-install by the same user converges to the existing workspace
       // (createWorkspaceFromDefinitionIdempotent's own key, not re-derived here).
@@ -257,10 +314,10 @@ export async function applyMarketInstall(
         userId: input.userId,
         proposalId: input.slug,
         packageSlug: input.slug,
-        packageVersion: entry.version ?? input.version ?? undefined,
+        packageVersion: entry?.version ?? input.version ?? undefined,
         workspaceName: definition.workspaceName,
         templateId: input.slug,
-        templateName: entry.name,
+        templateName: entry?.name ?? input.slug,
       });
       return {
         kind: "template",
@@ -290,7 +347,13 @@ export async function applyMarketInstall(
           message: "No access to the acting workspace.",
         });
       }
-      const definition = (await resolveDefinition(entry, input.version)) as {
+      // Cache row present → resolve inline/by-slug; row MISSING → by-key
+      // re-resolve from the CP (opt-in / just-authored automation package).
+      const definition = (
+        entry
+          ? await resolveDefinition(entry, input.version)
+          : await resolveDefinitionByKey(input.slug, input.version)
+      ) as {
         automations?: Array<{
           name: string;
           description?: string;
@@ -322,37 +385,51 @@ export async function applyMarketInstall(
 
       const results: unknown[] = [];
       for (const a of autos) {
-        // Idempotent reuse keyed on name+workspace — mirrors /packages/apply's
-        // own automations step (out of this wave's write scope to import).
-        const [existing] = await db
-          .select({ id: automationsTable.id })
-          .from(automationsTable)
-          .where(
-            and(
-              eq(automationsTable.name, a.name),
-              eq(automationsTable.workspaceId, input.workspaceId)
+        // Per-item isolation: one automation that fails to create must NOT abort
+        // the rest of the market.install — the failed one is reported as
+        // {status:"error"} in `results` and downstream automations still run.
+        // Mirrors the per-item try/catch in createCapabilityFromDefinition and
+        // applyPackagePostWorkspace (the reference partial-install pattern).
+        try {
+          // Idempotent reuse keyed on name+workspace — mirrors /packages/apply's
+          // own automations step (out of this wave's write scope to import).
+          const [existing] = await db
+            .select({ id: automationsTable.id })
+            .from(automationsTable)
+            .where(
+              and(
+                eq(automationsTable.name, a.name),
+                eq(automationsTable.workspaceId, input.workspaceId)
+              )
             )
-          )
-          .limit(1);
-        if (existing) {
-          results.push({ name: a.name, status: "reused", id: existing.id });
-          continue;
+            .limit(1);
+          if (existing) {
+            results.push({ name: a.name, status: "reused", id: existing.id });
+            continue;
+          }
+          const r = await caller.create({
+            workspaceId: input.workspaceId,
+            name: a.name,
+            description: a.description,
+            triggerType: a.triggerType,
+            triggerConfig: a.triggerConfig ?? {},
+            flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
+            status: a.status ?? "active",
+            source: "intelligence",
+          });
+          results.push({
+            name: a.name,
+            status: "created",
+            id: (r as { id?: string }).id,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            { err, slug: input.slug, automation: a.name },
+            "market.install automation create failed (isolated — install continues)"
+          );
+          results.push({ name: a.name, status: "error", message });
         }
-        const r = await caller.create({
-          workspaceId: input.workspaceId,
-          name: a.name,
-          description: a.description,
-          triggerType: a.triggerType,
-          triggerConfig: a.triggerConfig ?? {},
-          flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
-          status: a.status ?? "active",
-          source: "intelligence",
-        });
-        results.push({
-          name: a.name,
-          status: "created",
-          id: (r as { id?: string }).id,
-        });
       }
       return { kind: "automation", automations: results };
     }
@@ -386,14 +463,17 @@ export async function runMarketInstall(
 ): Promise<MarketInstallOutcome> {
   const entry = await lookupCatalogEntry(input.kind, input.slug);
   // Capability resolves by key even without a cache row — opt-in caps
-  // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them
-  // by key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). This
-  // is THE fix for `market install <opt-in-cap>` 500ing where `cap add` works.
-  // Every other kind still requires the row.
-  if (!entry && input.kind !== "capability") {
+  // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
+  // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same
+  // now holds for automation/template: an opt-in / just-authored package the
+  // cache never saw re-resolves by slug from the CP (resolveDefinitionByKey)
+  // instead of dead-ending here. Only `cell` still REQUIRES the row (its renderer
+  // source is inline-only). Requiring a row for automation/template was the
+  // cache-miss dead-end this wave removes.
+  if (!entry && input.kind === "cell") {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: `Marketplace entry "${input.slug}" (${input.kind}) not found in the catalog cache. Search first with market.search({query, kind:"${input.kind}"}).`,
+      message: `Marketplace entry "${input.slug}" (cell) not found in the catalog cache. Search first with market.search({query, kind:"cell"}).`,
     });
   }
 
@@ -411,9 +491,10 @@ export async function runMarketInstall(
       data: {
         slug: input.slug,
         kind: input.kind,
-        // `entry` is null only for an opt-in capability resolved by key; the
-        // approve-executor re-resolves the definition via applyMarketInstall, so
-        // source/version here are informational and safely fall back to the slug.
+        // `entry` is null for any by-key re-resolve (opt-in capability, or an
+        // automation/template with no cache row); the approve-executor re-resolves
+        // the definition via applyMarketInstall, so source/version here are
+        // informational and safely fall back to the slug.
         version: input.version ?? entry?.version ?? null,
         source: entry?.source ?? null,
         params: input.params ?? {},

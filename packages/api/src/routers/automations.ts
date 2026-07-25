@@ -16,6 +16,7 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
+import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import {
   getDb,
   eq,
@@ -29,6 +30,7 @@ import {
   automationRuns,
   automationStepRuns,
   channels,
+  skills,
   ChannelRepository,
 } from "@synap/database";
 import type { AutomationTriggerConfig, FlowDefinition } from "@synap/database";
@@ -41,6 +43,51 @@ import {
 } from "@synap/jobs/utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { TRPCError } from "@trpc/server";
+
+/**
+ * Resolve `skillName` → `skillId` on `skill` flow nodes that carry a name but no
+ * id (the template-friendly authoring form: a capability seeds a skill + an
+ * automation that references it by its stable name, since the runtime id isn't
+ * known at author time — mirrors `playbook_run`'s id-OR-name). Mutates the flow
+ * in place BEFORE it is persisted (and before it is carried into an AI proposal),
+ * so the runtime always sees a concrete `skillId`. Workspace-scoped with a
+ * pod-wide (NULL workspace) fallback. Unresolved names are left as-is — the
+ * validator already accepts `skillName` and the runtime surfaces "skill not found".
+ */
+async function injectSkillIdsFromNames(
+  database: Awaited<ReturnType<typeof getDb>>,
+  flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
+  workspaceId: string | null | undefined
+): Promise<void> {
+  for (const node of flow.nodes) {
+    if (node?.type !== "skill") continue;
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const skillName =
+      typeof data.skillName === "string" ? data.skillName.trim() : "";
+    const hasId =
+      typeof data.skillId === "string" && data.skillId.trim().length > 0;
+    if (hasId || !skillName) continue;
+    const [match] = await database
+      .select({ id: skills.id })
+      .from(skills)
+      .where(
+        and(
+          eq(skills.name, skillName),
+          workspaceId
+            ? or(
+                eq(skills.workspaceId, workspaceId),
+                isNull(skills.workspaceId)
+              )
+            : isNull(skills.workspaceId)
+        )
+      )
+      .limit(1);
+    if (match) {
+      data.skillId = match.id;
+      node.data = data;
+    }
+  }
+}
 
 /**
  * Compute next cron run time by forward-scanning from a base date.
@@ -454,6 +501,26 @@ export const automationsRouter = router({
         }
       }
 
+      // Node-contract validation. Reject a semantically-broken flow (targetless
+      // channel_message, capability with no verbId, dangling edge, cycle, unknown
+      // node.type, bad outputType) at AUTHOR time rather than letting it persist
+      // and fail mid-run in the executor. Structural + contract checks only —
+      // catalog-existence (verbId/skillId/playbook) is resolver-gated and not
+      // wired here (would require async catalog loads at the door).
+      const createFlowError = flowValidationErrorMessage(input.flowDefinition);
+      if (createFlowError) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: createFlowError });
+      }
+
+      // Resolve any `skill` node authored with `skillName` (no `skillId`) into a
+      // concrete id before this flow is persisted OR carried into an AI proposal,
+      // so the runtime always dispatches by id. Mutates input.flowDefinition.
+      await injectSkillIdsFromNames(
+        database,
+        input.flowDefinition,
+        input.workspaceId
+      );
+
       // Governance membrane. AI agents (agentUserId set) route through
       // checkPermissionOrPropose; on "proposed" no row is written and the
       // proposal id is surfaced. Operator-initiated creates (no agentUserId) are
@@ -637,6 +704,22 @@ export const automationsRouter = router({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: (err as Error).message,
+          });
+        }
+      }
+
+      // Node-contract validation — only the NEW flow being submitted is checked
+      // (a no-op update that omits flowDefinition is untouched, so this never
+      // retroactively rejects an already-persisted automation). Same gate as
+      // `create`.
+      if (input.flowDefinition !== undefined) {
+        const updateFlowError = flowValidationErrorMessage(
+          input.flowDefinition
+        );
+        if (updateFlowError) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: updateFlowError,
           });
         }
       }

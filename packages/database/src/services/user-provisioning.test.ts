@@ -120,7 +120,10 @@ describe("activateFederatedMember", () => {
     );
   });
 
-  it("rejects a role change instead of overwriting Pod truth", async () => {
+  it("never downgrades a member who already has broader access", async () => {
+    // Existing editor; re-invited as viewer. Must keep editor and succeed
+    // idempotently — the previous behaviour threw here, turning a returning
+    // member's re-invite into a hard redemption failure.
     mocks.projectFind.mockResolvedValue({
       id: "project-1",
       workspaceId: null,
@@ -131,13 +134,45 @@ describe("activateFederatedMember", () => {
       role: "editor",
     });
 
-    await expect(
-      activateFederatedMember({
-        ...baseInput,
-        scopeKind: "project",
-        projectId: "project-1",
-      })
-    ).rejects.toThrow("existing Pod role differs");
+    const result = await activateFederatedMember({
+      ...baseInput,
+      role: "viewer",
+      scopeKind: "project",
+      projectId: "project-1",
+    });
+
+    expect(result).toMatchObject({
+      role: "editor", // preserved, not downgraded to the invited "viewer"
+      membershipCreated: false,
+    });
+    // No membership UPDATE — an update here would be a downgrade. (A new
+    // membership insert is impossible: the code only inserts when none exists.)
+    expect(mocks.tx.update).not.toHaveBeenCalled();
+  });
+
+  it("upgrades an existing member when the invited role is higher", async () => {
+    mocks.projectFind.mockResolvedValue({
+      id: "project-1",
+      workspaceId: null,
+      status: "active",
+    });
+    mocks.projectMemberFind.mockResolvedValue({
+      id: "member-1",
+      role: "viewer",
+    });
+
+    const result = await activateFederatedMember({
+      ...baseInput,
+      role: "admin",
+      scopeKind: "project",
+      projectId: "project-1",
+    });
+
+    expect(result).toMatchObject({
+      role: "admin",
+      membershipCreated: false,
+    });
+    expect(mocks.tx.update).toHaveBeenCalled();
   });
 
   it("rejects system workspaces before writing membership", async () => {

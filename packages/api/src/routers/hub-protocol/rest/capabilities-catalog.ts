@@ -21,6 +21,7 @@
 import { z } from "@hono/zod-openapi";
 
 import { buildCapabilityCatalog } from "../../../services/capabilities/capability-catalog.js";
+import { buildAutomationCatalog } from "../../../services/capabilities/automation-catalog.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -73,8 +74,28 @@ const CapabilityCardSchema = z.object({
   }),
 });
 
+// Automations are a SEPARATE marketplace kind (they USE capabilities, they are
+// not merged INTO the "capability" kind) — surfaced as a distinct array with its
+// own card shape, NOT folded into `capabilities`.
+const AutomationCardSchema = z.object({
+  kind: z.literal("automation"),
+  id: z.string().nullable(),
+  key: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  source: z.enum(["installed", "available"]),
+  status: z.enum(["available", "installed"]),
+  lifecycle: z.enum(["draft", "active", "paused", "error"]).optional(),
+  triggerType: z.enum(["event", "cron", "webhook", "manual"]).optional(),
+  nextAction: z.object({
+    kind: z.enum(["add", "run", "none"]),
+    hint: z.string(),
+  }),
+});
+
 const CatalogResponseSchema = z.object({
   capabilities: z.array(CapabilityCardSchema),
+  automations: z.array(AutomationCardSchema),
 });
 
 // ── Register function ──────────────────────────────────────────────────────
@@ -137,14 +158,20 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       // default-sync list (syncByDefault=false) — the CLI's fallback when a
       // name search comes up empty, before it gives up.
       const extraKey = c.req.query("extraKey");
-      const capabilities = await buildCapabilityCatalog({
+      const catalogCtx = {
         // workspaceId is a required, validated query param here (wsCheck above),
         // so the membership branch of resolveActingContext returns it non-null.
         workspaceId: wsCheck.data,
         userId: acting.userId,
         ...(extraKey ? { extraKey } : {}),
-      });
-      return c.json({ capabilities }, 200);
+      };
+      // Capability read path is untouched; automations are surfaced additively
+      // as a separate kind via a sibling builder.
+      const [capabilities, automations] = await Promise.all([
+        buildCapabilityCatalog(catalogCtx),
+        buildAutomationCatalog(catalogCtx),
+      ]);
+      return c.json({ capabilities, automations }, 200);
     } catch (err) {
       logger.error({ err }, "capabilities catalog failed");
       return c.json(

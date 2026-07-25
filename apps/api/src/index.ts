@@ -1868,7 +1868,7 @@ try {
           // the former /internal/* HTTP loopback + BRIDGE_SECRET: everything is a
           // direct in-process call now.
           {
-            const { registerCapabilityExecutor } =
+            const { registerCapabilityExecutor, registerPlaybookRunner } =
               await import("@synap/jobs/workers/automation-executor.js");
             const { registerMailFeedRunner } =
               await import("@synap/jobs/workers/mail-feed-cron.js");
@@ -1884,6 +1884,10 @@ try {
               await import("@synap/jobs/utils/proactive-post.js");
             const api = await import("@synap/api");
             registerCapabilityExecutor((input) => api.executeCapability(input));
+            // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
+            // to api's runPlaybook via this slot, so is-agent | external-agent |
+            // hybrid all dispatch through the executor spine + triggerAutoRespond.
+            registerPlaybookRunner((input) => api.runPlaybook(input));
             registerMailFeedRunner(() => api.runMailFeed());
             registerCalBackfillRunner(() => api.runCalBackfill());
             // ONE schedule, correct ordering: import Google Calendar → Synap

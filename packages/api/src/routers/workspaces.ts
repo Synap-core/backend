@@ -52,6 +52,8 @@ import type {
   WorkspaceSettings,
   McpServerConfig,
 } from "@synap/database/schema";
+import { cpCatalogCache } from "@synap/database/schema";
+import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 // import { WorkspaceMemberEvents } from "../lib/event-helpers.js"; // unused — reserved for future member event hooks
@@ -4135,8 +4137,77 @@ export const workspacesRouter = router({
 
       // Generic path: use definition from control plane registry
       if (input.definition) {
+        const definition = input.definition as WorkspaceDefinitionInput;
+
+        // Resolve template-composition dependencies + compose overlays through
+        // the SAME shared core the in-app `createFromDefinition` door drives, so
+        // a COMPOSED template (`dependencies[]` — e.g. openclaw's "the Arch"
+        // enterprise overlays) provisioned via this M2M door resolves its deps
+        // instead of materializing a rogue standalone. `deferCreate:true` keeps
+        // THIS door's own create + workspace-init enqueue for the no-compose
+        // case (the shared core never enqueues under `deferCreate`, so there is
+        // NO double-enqueue). Only runs when deps are declared — a plain plugin
+        // template skips it and behaves byte-for-byte as before.
+        if ((definition as { dependencies?: unknown[] }).dependencies?.length) {
+          let core: MaterializeCoreResult;
+          try {
+            core = await materializeWorkspaceCore({
+              definition,
+              userId: systemUserId,
+              // The package's own identity for the cycle guard.
+              selfSlug: input.pluginId,
+              deferCreate: true,
+            });
+          } catch (err) {
+            // A compose was requested but its base could not be resolved — do
+            // NOT fall through to creating a rogue standalone overlay.
+            if (err instanceof ComposeBaseUnavailableError) {
+              const unresolved = err.dependencies.find(
+                (d) => d.relation === "compose"
+              );
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message:
+                  unresolved?.message ??
+                  "compose base not available — the base template must be installed on the pod first",
+              });
+            }
+            if (err instanceof DependencyResolutionError) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Dependency resolution failed: ${err.message}`,
+              });
+            }
+            if (err instanceof ComposeBaseNotFoundError) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "compose base workspace not found",
+              });
+            }
+            throw err;
+          }
+          if (core.status === "composed") {
+            // A compose overlay layered onto its existing base — no new
+            // workspace, so no workspace-init enqueue (the base already has its
+            // defaults). Return the base's id.
+            logger.info(
+              {
+                workspaceId: core.composeTargetWorkspaceId,
+                pluginId: input.pluginId,
+              },
+              "Plugin workspace composed onto base (provisioning)"
+            );
+            return {
+              status: "created" as const,
+              workspaceId: core.composeTargetWorkspaceId,
+            };
+          }
+          // status "resolved" — deps installed, no compose base. Fall through to
+          // this door's own create + enqueue below.
+        }
+
         const result = await createWorkspaceFromDefinition({
-          definition: input.definition as WorkspaceDefinitionInput,
+          definition,
           userId: systemUserId,
           packageSlug: input.pluginId,
           createdBy: "provisioning",
@@ -5051,41 +5122,148 @@ export const workspacesRouter = router({
         };
       }
 
-      // ── CREATE mode: delegate to createWorkspaceFromDefinition directly ─
-      const createResult = await createWorkspaceFromDefinition({
-        definition: input.definition as WorkspaceDefinitionInput,
-        userId: ctx.userId,
-        workspaceName: input.definition.workspaceName,
-        createdBy: "user",
-        workspaceType: "personal",
-        onProgress: () => {},
-      });
-
-      // After workspace is created, apply entities and relations
-      const workspaceId = createResult.workspaceId;
+      // ── CREATE mode ─────────────────────────────────────────────────────
       const database = await getDb();
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
       const eventRepo = eventRepository;
+
+      // Resolve template-composition dependencies + compose overlays through the
+      // SAME shared core the in-app `createFromDefinition` door drives, so a
+      // COMPOSED template (`dependencies[]`) applied via this devplane door
+      // resolves its deps instead of skipping composition. `deferCreate:true`
+      // keeps this door's own create for the no-compose case (whose entity tail
+      // below reads `createResult.entityIds`). Only runs when deps are declared —
+      // a plain definition skips it and creates byte-for-byte as before.
+      let composedTarget: string | null = null;
+      if (
+        (input.definition as { dependencies?: unknown[] }).dependencies?.length
+      ) {
+        let core: MaterializeCoreResult;
+        try {
+          core = await materializeWorkspaceCore({
+            definition: input.definition as unknown as WorkspaceDefinitionInput,
+            userId: ctx.userId,
+            deferCreate: true,
+          });
+        } catch (err) {
+          if (err instanceof ComposeBaseUnavailableError) {
+            const unresolved = err.dependencies.find(
+              (d) => d.relation === "compose"
+            );
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                unresolved?.message ??
+                "compose base not available — the base template must be installed on the pod first",
+            });
+          }
+          if (err instanceof DependencyResolutionError) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Dependency resolution failed: ${err.message}`,
+            });
+          }
+          if (err instanceof ComposeBaseNotFoundError) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "compose base workspace not found",
+            });
+          }
+          throw err;
+        }
+        if (core.status === "composed") {
+          composedTarget = core.composeTargetWorkspaceId;
+        }
+      }
+
+      let workspaceId: string;
+      let createResult: Awaited<
+        ReturnType<typeof createWorkspaceFromDefinition>
+      > | null = null;
+      if (composedTarget) {
+        // Overlay layered onto its existing base — no new workspace.
+        workspaceId = composedTarget;
+      } else {
+        createResult = await createWorkspaceFromDefinition({
+          definition: input.definition as WorkspaceDefinitionInput,
+          userId: ctx.userId,
+          workspaceName: input.definition.workspaceName,
+          createdBy: "user",
+          workspaceType: "personal",
+          onProgress: () => {},
+        });
+        workspaceId = createResult.workspaceId;
+      }
+
+      // After workspace is created/composed, apply entities and relations
       const relationRepo = new RelationRepository(database, eventRepo);
       const relDefRepo = new RelationDefRepository(database);
 
-      // Entity IDs from createFromDefinition (suggestedEntities)
+      // Entity IDs. On the create path they come back positionally from
+      // createFromDefinition. On the compose path the shared reconcile is
+      // schema-only (never seeds entity INSTANCES), so seed the definition's
+      // entities onto the base workspace here via the canonical EntityRepository.
       const entityIds: Record<string, string> = {};
       const allEntities =
         input.definition.suggestedEntities ??
         input.definition.seedEntities ??
         [];
-      const createEntityIds = (createResult as any).entityIds ?? [];
-      for (
-        let i = 0;
-        i < allEntities.length && i < createEntityIds.length;
-        i++
-      ) {
-        const e = allEntities[i];
-        const refKey = e.refKey ?? `${e.profileSlug}:${e.title}`;
-        entityIds[refKey] = createEntityIds[i];
+      if (composedTarget) {
+        const { ProfileRepository } = await import("@synap/database");
+        const profileRepo = new ProfileRepository(database);
+        const entityRepo = new EntityRepository(database, eventRepo);
+        const existingProfiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          workspaceId
+        );
+        const profileCache = new Map<string, string>(
+          existingProfiles.map((p) => [p.slug, p.id])
+        );
+        for (const e of allEntities) {
+          const refKey = e.refKey ?? `${e.profileSlug}:${e.title}`;
+          const profileId = profileCache.get(e.profileSlug);
+          if (!profileId) {
+            errors.push({
+              stage: "entities",
+              refKey,
+              error: `Profile ${e.profileSlug} not found on compose base`,
+            });
+            continue;
+          }
+          try {
+            const created = await entityRepo.create(
+              {
+                profileId,
+                title: e.title,
+                properties: e.properties,
+                workspaceId,
+                userId: ctx.userId,
+                skipValidation: true,
+              },
+              ctx.userId
+            );
+            entityIds[refKey] = created.id;
+          } catch (err) {
+            errors.push({
+              stage: "entities",
+              refKey,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      } else {
+        const createEntityIds = (createResult as any)?.entityIds ?? [];
+        for (
+          let i = 0;
+          i < allEntities.length && i < createEntityIds.length;
+          i++
+        ) {
+          const e = allEntities[i];
+          const refKey = e.refKey ?? `${e.profileSlug}:${e.title}`;
+          entityIds[refKey] = createEntityIds[i];
+        }
       }
 
       // Create relation definitions
@@ -5178,5 +5356,111 @@ export const workspacesRouter = router({
         .returning({ id: entities.id });
 
       return { deletedCount: deleted.length };
+    }),
+});
+
+/**
+ * Workspace CATALOG router — browse + slug-install the ONE marketplace catalog
+ * of WORKSPACE templates, for pod-connected SDK / embedded apps that hold a
+ * catalog slug rather than a hand-built definition.
+ *
+ * Kept a SEPARATE router (merged into the `workspaces` namespace in `root.ts`)
+ * purely so `installFromCatalog` can delegate to `workspacesRouter`'s own
+ * `createFromDefinition` via `createCaller` — a reference to `workspacesRouter`
+ * from INSIDE its own initializer would make TypeScript infer the whole router
+ * as `any`. Splitting the caller-side procedure into this after-defined router
+ * breaks that self-reference cycle while keeping the install on the ONE shared
+ * create engine (no forked provisioning path).
+ */
+export const workspaceCatalogRouter = router({
+  /**
+   * Browse the pod's installable WORKSPACE templates — read from the pod-local
+   * `cp_catalog_cache` (kind='template'), the SAME stale-while-revalidate store
+   * `resolveWorkspaceTemplate` resolves an install from (synced every ~10 min by
+   * the `cp-catalog-sync` job) — NOT a second catalog store. Metadata only: the
+   * CP list route omits the (large) definition body by design, so the full body
+   * is resolved cache-first at install time by `installFromCatalog`.
+   */
+  listInstallableTemplates: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Case-insensitive substring match over slug / name / description. */
+          query: z.string().optional(),
+          limit: z.number().int().min(1).max(200).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      const rows = await db
+        .select({
+          slug: cpCatalogCache.slug,
+          name: cpCatalogCache.name,
+          description: cpCatalogCache.description,
+          version: cpCatalogCache.version,
+          tier: cpCatalogCache.tier,
+          vendor: cpCatalogCache.vendor,
+          tags: cpCatalogCache.tags,
+        })
+        .from(cpCatalogCache)
+        .where(eq(cpCatalogCache.kind, "template"))
+        .orderBy(desc(cpCatalogCache.syncedAt));
+
+      const q = input?.query?.trim().toLowerCase();
+      const filtered = q
+        ? rows.filter(
+            (r) =>
+              r.slug.toLowerCase().includes(q) ||
+              r.name.toLowerCase().includes(q) ||
+              (r.description ?? "").toLowerCase().includes(q)
+          )
+        : rows;
+
+      return {
+        templates: input?.limit ? filtered.slice(0, input.limit) : filtered,
+      };
+    }),
+
+  /**
+   * Install a WORKSPACE template BY SLUG — the slug-based counterpart to
+   * `createFromDefinition` for callers (the SDK / an embedded app) that hold a
+   * catalog slug, not a hand-built definition. Resolves the FRESHEST definition
+   * cache-first via `resolveWorkspaceTemplate` (the SAME resolver the Hub adopt /
+   * approve paths use), then installs through the EXISTING shared engine by
+   * delegating to `createFromDefinition` — no forked provisioning path, same
+   * tier-gating, idempotency, post-workspace (capabilities/playbooks) layers and
+   * governance semantics as the in-app door.
+   */
+  installFromCatalog: protectedProcedure
+    .input(
+      z.object({
+        slug: z.string().min(1),
+        /** Install ONTO an existing workspace instead of creating a new one. */
+        workspaceId: z.string().uuid().optional(),
+        /** Stable idempotency key, forwarded verbatim to the shared engine. */
+        proposalId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const resolved = await resolveWorkspaceTemplate(input.slug);
+      if (!resolved) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Unknown workspace template: ${input.slug}`,
+        });
+      }
+      // Delegate to the ONE shared create engine — never a second provisioning
+      // path. `createFromDefinition` re-runs the protected middleware + tier gate
+      // against this same ctx, so an SDK caller gets identical governance.
+      const caller = workspacesRouter.createCaller(ctx);
+      return caller.createFromDefinition({
+        definition: resolved.packageDefinition as unknown as Parameters<
+          typeof caller.createFromDefinition
+        >[0]["definition"],
+        packageSlug: input.slug,
+        packageVersion: resolved.version,
+        workspaceId: input.workspaceId,
+        proposalId: input.proposalId,
+      });
     }),
 });

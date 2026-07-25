@@ -104,6 +104,9 @@ describe("W6 read/resolve verbs — registry", () => {
       // ai.generate is pure compute (no mutation) → auto-runs like the reads.
       "ai.generate",
       "channel.resolve",
+      // connector.health_check mutates NO graph data — it only emits deduped
+      // operator reconnect notices — so it auto-runs unattended in a cron feed.
+      "connector.health_check",
       "document.read",
       "entity.query",
       "entity_facet.list",

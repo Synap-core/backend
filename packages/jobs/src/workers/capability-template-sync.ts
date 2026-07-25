@@ -4,11 +4,16 @@
  * Background refresher for the pod-local `capability_template_cache` — the
  * stale-while-revalidate mirror of the Control-Plane capability-template catalog.
  *
- * Runs on a schedule (every 10 minutes) AND once on startup. Fetches the CP
- * catalog (GET {CP}/api/marketplace/capabilities) and UPSERTs each template into
- * the cache. This is what lets the catalog read path (cp-template-client.ts in
- * @synap/api) serve from a fast DB read instead of a blocking CP fetch — restoring
- * pod sovereignty: the catalog NEVER hangs on a slow/down CP.
+ * RETIRED FROM CRON (P2.4-B cutover, done): this worker is no longer
+ * cron-scheduled or enqueued on startup — `cron.ts` schedules only
+ * `cp-catalog-sync`, the sole catalog-cache sync, which now fills the catalog
+ * (across all four marketplace kinds). The handler is still REGISTERED
+ * (`boss.work` in workers/index.ts) so a manually/legacy-enqueued job still
+ * runs, but nothing schedules it. Fetches the CP catalog (GET
+ * {CP}/api/marketplace/capabilities) and UPSERTs each template into the cache.
+ * This is what lets the catalog read path (cp-template-client.ts in @synap/api)
+ * serve from a fast DB read instead of a blocking CP fetch — restoring pod
+ * sovereignty: the catalog NEVER hangs on a slow/down CP.
  *
  * Resilience contract:
  *   - CP unreachable / non-2xx / timeout → log + leave the existing cache INTACT
@@ -32,7 +37,11 @@ import { createLogger } from "@synap-core/core";
 const logger = createLogger({ module: "capability-template-sync" });
 
 export const CAPABILITY_TEMPLATE_SYNC_QUEUE = "capability-template-sync";
-/** Cron schedule for this worker (every 10 minutes). */
+/**
+ * Legacy cron expression, kept for the export contract. NO LONGER USED to
+ * schedule this worker — the cron was cut over to `cp-catalog-sync` (P2.4-B);
+ * `cron.ts` no longer references this constant.
+ */
 export const CAPABILITY_TEMPLATE_SYNC_CRON = "*/10 * * * *";
 
 interface CPCapabilityTemplate {
@@ -74,8 +83,10 @@ async function fetchFromCP(): Promise<CPCapabilityTemplate[] | null> {
 }
 
 /**
- * Called by the cron scheduler (every 10 min) and once on startup. Refreshes the
- * pod-local cache from the CP. On CP failure: leaves the existing cache intact.
+ * Handler for a `capability-template-sync` job. No longer cron-scheduled (the
+ * cron was cut over to `cp-catalog-sync`, P2.4-B) — only runs if a job is
+ * manually/legacy-enqueued. Refreshes the pod-local cache from the CP. On CP
+ * failure: leaves the existing cache intact.
  */
 export async function handleCapabilityTemplateSync(): Promise<void> {
   // Staleness stamp key: this legacy worker mirrors a DIFFERENT cache

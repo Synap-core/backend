@@ -546,17 +546,17 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work(MEMORY_DECAY_QUEUE, async () => handleMemoryDecay());
   logger.info("Registered worker: memory-decay");
 
-  // Capability template sync (cron: every 10min + on startup — refreshes the
-  // pod-local capability_template_cache from the Control Plane so the catalog
-  // never blocks on the CP).
+  // Capability template sync — handler still registered so a manually/legacy-
+  // enqueued job runs, but NO LONGER cron-scheduled or startup-enqueued: the
+  // cron was cut over to cp-catalog-sync below (P2.4-B). See the worker's header.
   await boss.work(CAPABILITY_TEMPLATE_SYNC_QUEUE, async () =>
     handleCapabilityTemplateSync()
   );
   logger.info("Registered worker: capability-template-sync");
 
   // CP catalog sync (cron: every 10min + on startup — refreshes the pod-local
-  // cp_catalog_cache across all four marketplace kinds; capability_template_cache
-  // above keeps running unchanged, this is additive per P2.4-B).
+  // cp_catalog_cache across all four marketplace kinds). This is now the SOLE
+  // cron catalog sync — it superseded capability-template-sync above (P2.4-B).
   await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
   logger.info("Registered worker: cp-catalog-sync");
 
