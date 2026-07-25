@@ -20,17 +20,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted ensures these refs exist before the vi.mock factory is hoisted
 // to the top of the file (vitest hoists vi.mock calls at transform time, which
 // runs before const declarations in module scope).
-const { mockVerifyPermission, mockDbSelect, mockDbInsert, mockResolveProfile } =
-  vi.hoisted(() => ({
-    mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
-    mockDbSelect: vi.fn(),
-    mockDbInsert: vi.fn(),
-    // Default: profile resolves (existing profile). Individual tests override
-    // to null to exercise the missing-profile guardrail.
-    mockResolveProfile: vi
-      .fn()
-      .mockResolvedValue({ id: "profile-1", slug: "task" }),
-  }));
+const {
+  mockVerifyPermission,
+  mockDbSelect,
+  mockDbInsert,
+  mockResolveProfile,
+  mockFocusSessionFindFirst,
+} = vi.hoisted(() => ({
+  mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
+  mockDbSelect: vi.fn(),
+  mockDbInsert: vi.fn(),
+  // Default: profile resolves (existing profile). Individual tests override
+  // to null to exercise the missing-profile guardrail.
+  mockResolveProfile: vi
+    .fn()
+    .mockResolvedValue({ id: "profile-1", slug: "task" }),
+  // Session lookup for deriveSessionForceProposeGovernance. Default: no session
+  // (undefined) → no forced proposal, so every existing test is unaffected. The
+  // session-force-propose test overrides it with a stamped session.
+  mockFocusSessionFindFirst: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("@synap/database", async () => {
   const { randomUUID } = await import("crypto");
@@ -39,11 +48,20 @@ vi.mock("@synap/database", async () => {
     returning: vi.fn().mockResolvedValue([{ id: randomUUID() }]),
     catch: vi.fn().mockReturnThis(),
   }));
-  mockDbSelect.mockImplementation(() => ({
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockResolvedValue([]),
-  }));
+  mockDbSelect.mockImplementation(() => {
+    // Chainable AND thenable: `.where(...)` awaited directly (the agent daily
+    // proposal-budget count query) resolves to [] → count 0; `.limit(...)` still
+    // resolves []. `.orderBy(...)` supports the personal-agent attribution lookup.
+    const b: Record<string, unknown> = {
+      from: vi.fn(() => b),
+      where: vi.fn(() => b),
+      orderBy: vi.fn(() => b),
+      limit: vi.fn().mockResolvedValue([]),
+      then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        Promise.resolve([]).then(res, rej),
+    };
+    return b;
+  });
   return {
     db: {
       insert: mockDbInsert,
@@ -51,17 +69,20 @@ vi.mock("@synap/database", async () => {
       // Run the callback with a tx that proxies insert (mirrors TX-1's atomic
       // proposal+.requested path); return whatever the callback returns.
       transaction: vi.fn(async (cb) => cb({ insert: mockDbInsert })),
+      // Drizzle query API — only focusSessions.findFirst is used by the gate
+      // (deriveSessionForceProposeGovernance re-reads the run session's stamp).
+      query: {
+        focusSessions: { findFirst: mockFocusSessionFindFirst },
+      },
     },
     // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the proposal
     // row shape createPendingProposal now delegates to. Returns
     // `{ proposal, deduped }` (the new dedup-aware contract), with a row id just
     // like the mocked `db.insert(...).returning()` above.
-    insertPendingProposal: vi
-      .fn()
-      .mockImplementation(async () => ({
-        proposal: { id: randomUUID() },
-        deduped: false,
-      })),
+    insertPendingProposal: vi.fn().mockImplementation(async () => ({
+      proposal: { id: randomUUID() },
+      deduped: false,
+    })),
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
@@ -69,6 +90,9 @@ vi.mock("@synap/database", async () => {
     eq: vi.fn((a, b) => ({ field: a, value: b })),
     and: vi.fn((...conds) => ({ and: conds })),
     inArray: vi.fn((col, arr) => ({ inArray: [col, arr] })),
+    gte: vi.fn((a, b) => ({ gte: [a, b] })),
+    isNotNull: vi.fn((a) => ({ isNotNull: a })),
+    drizzleSql: vi.fn(() => ({})),
     verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
     ProfileResolutionService: class {
@@ -136,22 +160,28 @@ function setupAgentSelectSequence(
   workspaceSettings: Record<string, unknown> = {}
 ) {
   let callCount = 0;
+  // Each builder is chainable + thenable: `.limit(...)` resolves the configured
+  // row (agent row / workspace settings), while awaiting the builder directly
+  // (the agent daily-budget count query — `.select().from().where()` with no
+  // `.limit`) resolves to [] → count 0. `.orderBy(...)` supports the
+  // personal-agent attribution lookup.
+  const builder = (limitResult: unknown[]) => {
+    const b: Record<string, unknown> = {
+      from: vi.fn(() => b),
+      where: vi.fn(() => b),
+      orderBy: vi.fn(() => b),
+      limit: vi.fn().mockResolvedValue(limitResult),
+      then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        Promise.resolve([]).then(res, rej),
+    };
+    return b;
+  };
   mockDbSelect.mockImplementation(() => {
     callCount++;
     if (callCount === 1) {
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([{ userType: "agent", agentMetadata }]),
-      } as any;
+      return builder([{ userType: "agent", agentMetadata }]) as any;
     }
-    return {
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([{ settings: workspaceSettings }]),
-    } as any;
+    return builder([{ settings: workspaceSettings }]) as any;
   });
 }
 
@@ -629,6 +659,74 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: session-scoped force-propose (CRM hygiene maintenance agent)
+//
+// PROOF that a propose-only maintenance session flips an otherwise-auto-approved
+// agent write into a reviewable proposal. The ONLY difference between the two
+// tests is whether the run's focus session carries
+// `metadata.governance.forceProposeWrites` — same agent, same write, same empty
+// governance metadata (so entity.update lands on DEFAULT_AUTO_APPROVE, rung 8).
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — session force-propose governance", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    // Clear call history too — this file has no global clearAllMocks, so the
+    // short-circuit assertion below would otherwise see calls from sibling tests.
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("baseline: agent entity.update auto-approves (no session stamp)", async () => {
+    setupAgentSelectSequence({}, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-maintenance-1",
+      subjectType: "entity",
+      action: "update",
+      sessionId: "sess-plain",
+    });
+
+    // entity.update ∈ DEFAULT_AUTO_APPROVE → granted, NOT a proposal.
+    expect(result).toEqual({ granted: true });
+  });
+
+  it("stamped session forces the SAME write to a proposal", async () => {
+    setupAgentSelectSequence({}, {});
+    mockFocusSessionFindFirst.mockResolvedValue({
+      metadata: { governance: { forceProposeWrites: true } },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-maintenance-1",
+      subjectType: "entity",
+      action: "update",
+      sessionId: "sess-maintenance",
+    });
+
+    // Force-propose (rung 2.1) wins over DEFAULT_AUTO_APPROVE → proposal.
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("explicit forcePropose:true short-circuits the session lookup", async () => {
+    setupAgentSelectSequence({}, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-maintenance-1",
+      subjectType: "entity",
+      action: "update",
+      forcePropose: true,
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect(mockFocusSessionFindFirst).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: ADMIN_ACTIONS always-propose gate
 // ---------------------------------------------------------------------------
 
@@ -710,17 +808,97 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
 // Tests: entity-create profile-existence guardrail (fail-fast)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tests: F2 safety floor — per-user daily AGENT proposal cap
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+  });
+
+  /**
+   * Mock the agent-row + workspace-settings selects (via `.limit`) AND the
+   * agent daily-budget count query (the only select awaited directly, via
+   * `.then`) so it resolves to `todayCount` proposals already filed today.
+   * `writesRequireProposal` forces the governance decision to "propose".
+   */
+  function setupAgentBudget(
+    todayCount: number,
+    agentMetadata: Record<string, unknown> = { writesRequireProposal: true }
+  ) {
+    let callCount = 0;
+    mockDbSelect.mockImplementation(() => {
+      callCount++;
+      const limitResult =
+        callCount === 1
+          ? [{ userType: "agent", agentMetadata }]
+          : [{ settings: {} }];
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(limitResult),
+        // The count query awaits the builder directly.
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([{ count: todayCount }]).then(res, rej),
+      };
+      return b;
+    });
+  }
+
+  it("refuses the 11th agent proposal in a day (10 already filed → denied)", async () => {
+    setupAgentBudget(10);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-runaway-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+    expect((result as { reason: string }).reason).toContain(
+      "Daily agent proposal limit"
+    );
+  });
+
+  it("still proposes when under the cap (9 filed → 10th is allowed to propose)", async () => {
+    setupAgentBudget(9);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-ok-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+});
+
 describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)", () => {
   beforeEach(() => {
     mockVerifyPermission.mockResolvedValue({ allowed: true });
   });
 
   function setupWorkspaceSettings(settings: Record<string, unknown>) {
-    mockDbSelect.mockImplementation(() => ({
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([{ settings }]),
-    }));
+    // Chainable + thenable so the personal-agent attribution lookup
+    // (`.orderBy().limit()`) and the agent daily-budget count query
+    // (`.select().from().where()` awaited directly → []) both work on the
+    // legacy AI-sourced propose path.
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue([{ settings }]),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([]).then(res, rej),
+      };
+      return b;
+    });
   }
 
   it("auto-approves an AI-sourced context.link when the workspace autoApproveFor whitelists context.*", async () => {

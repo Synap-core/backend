@@ -1534,6 +1534,10 @@ export function registerApproveExecutors(): void {
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
+        // Propose-only governance marker (maintenance playbooks) — read back so
+        // an AI-proposed playbook keeps `metadata.governance.forceProposeWrites`
+        // when a human approves it.
+        metadata: innerData.metadata as Record<string, unknown> | undefined,
         executor: innerData.executor,
         status: innerData.status,
         // The propose gate stores the Layer-2 context skill in `data`; without

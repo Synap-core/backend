@@ -20,8 +20,7 @@ import {
 import { roles } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/events";
+import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { randomUUID } from "crypto";
 
 export const rolesRouter = router({
@@ -118,24 +117,14 @@ export const rolesRouter = router({
         ctx.userId
       );
 
-      // 3. Audit log
-      auditLog({
-        subjectType: "role",
-        action: "create",
-        phase: "completed",
-        subjectId: role.id,
-        userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        data: { name: input.name },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
+      // 3. Log + side-effects — ONE door (recordDomainMutation).
+      void recordDomainMutation({
         subjectType: "role",
         action: "create",
         subjectId: role.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        logData: { name: input.name },
       });
 
       return {
@@ -207,24 +196,14 @@ export const rolesRouter = router({
         ctx.userId
       );
 
-      // 3. Audit log
-      auditLog({
-        subjectType: "role",
-        action: "update",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        data: { name: input.name },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
+      // 3. Log + side-effects — ONE door (recordDomainMutation).
+      void recordDomainMutation({
         subjectType: "role",
         action: "update",
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        logData: { name: input.name },
       });
 
       return {
@@ -281,24 +260,14 @@ export const rolesRouter = router({
 
       await roleRepo.delete(input.id, ctx.userId);
 
-      // 3. Audit log
-      auditLog({
-        subjectType: "role",
-        action: "delete",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        data: { id: input.id },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
+      // 3. Log + side-effects — ONE door (recordDomainMutation).
+      void recordDomainMutation({
         subjectType: "role",
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        logData: { id: input.id },
       });
 
       return {

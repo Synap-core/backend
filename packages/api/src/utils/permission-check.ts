@@ -15,6 +15,9 @@ import {
   proposals,
   eq,
   and,
+  gte,
+  isNotNull,
+  drizzleSql,
   entities,
   ProfileResolutionService,
   insertPendingProposal,
@@ -25,6 +28,7 @@ import {
   users,
   workspaces,
   channelMembers,
+  focusSessions,
   ChannelMemberKind,
   ProposalStatus,
 } from "@synap/database/schema";
@@ -65,6 +69,44 @@ export type { ChannelCapabilityGrant };
 export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "permission-check" });
+
+/**
+ * Session-scoped force-propose governance. A focus session opened for an
+ * unattended, propose-only playbook (e.g. the CRM hygiene maintenance agent) is
+ * stamped with `metadata.governance.forceProposeWrites: true` by
+ * `executePlaybookRun`. Every Hub write the agent makes during that session
+ * carries the session id (X-Session-Id → ctx.sessionId → this gate), so re-read
+ * the stamp here and force the write to a PROPOSAL (decideAgentPolicy rung 2.1)
+ * even when the action would otherwise auto-approve.
+ *
+ * Mirrors the F2 depth-floor's `deriveSessionChainContext` (automation-trigger-
+ * matcher.ts): a session-keyed governance property the write-side gate re-derives
+ * from the session because the agent's Hub call cannot carry it explicitly.
+ *
+ * Best-effort: a lookup failure degrades to `false` (no forced proposal) rather
+ * than blocking the write — the caller's own `forcePropose` and the rest of the
+ * ladder are unaffected.
+ */
+async function deriveSessionForceProposeGovernance(
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const session = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, sessionId),
+      columns: { metadata: true },
+    });
+    const governance = (
+      session?.metadata as Record<string, unknown> | undefined
+    )?.governance as { forceProposeWrites?: unknown } | undefined;
+    return governance?.forceProposeWrites === true;
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "Failed to derive session force-propose governance — proceeding without it"
+    );
+    return false;
+  }
+}
 
 /**
  * Map a proposal's (targetType, proposalType) to the canonical
@@ -202,11 +244,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
 
 /** The kind of authenticated principal that issued a request. */
 export type IssuerKind =
-  | "operator"
-  | "agent"
-  | "connector"
-  | "view"
-  | "unknown";
+  "operator" | "agent" | "connector" | "view" | "unknown";
 
 /**
  * The authenticated principal that issued this request, established at the AUTH
@@ -677,6 +715,23 @@ export async function checkPermissionOrPropose(
       }
     }
 
+    // Session-scoped force-propose: an unattended propose-only playbook's session
+    // (e.g. CRM hygiene) stamps `metadata.governance.forceProposeWrites` so every
+    // AI write it makes surfaces as a reviewable proposal, even when
+    // DEFAULT_AUTO_APPROVE would otherwise auto-execute it. Derived ONCE here and
+    // honored by BOTH the agent-user path and the legacy AI-source path below (a
+    // maintenance write may be attributed via agentUserId OR only source:
+    // "intelligence"). Only queried for AI writes with a session that hasn't
+    // already forced a proposal (the short-circuit avoids the lookup otherwise).
+    const isAiWrite =
+      Boolean(agentUserId) || source === "ai" || source === "intelligence";
+    const effectiveForcePropose =
+      opts.forcePropose === true
+        ? true
+        : isAiWrite && sessionId
+          ? await deriveSessionForceProposeGovernance(sessionId)
+          : false;
+
     // 5. AI policy check
     //
     // Agent user path: agentUserId is the canonical signal that this is an AI action.
@@ -715,7 +770,7 @@ export async function checkPermissionOrPropose(
         channelCapabilities,
         subjectProfileSlug,
         subjectUoValidated,
-        forcePropose: opts.forcePropose,
+        forcePropose: effectiveForcePropose,
         preferAgentMetadataAutoApproveFor: true,
       });
 
@@ -820,7 +875,7 @@ export async function checkPermissionOrPropose(
       const whitelisted =
         !isDestructive && isAutoApproved(eventKey, effectiveAutoApproveFor);
 
-      if (whitelisted && !opts.forcePropose) {
+      if (whitelisted && !effectiveForcePropose) {
         return { granted: true };
       }
 
@@ -831,10 +886,10 @@ export async function checkPermissionOrPropose(
         (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
         false;
 
-      // Note: reaching here with whitelisted === true means opts.forcePropose is
-      // true (the whitelisted-and-not-forced case already returned above), so
+      // Note: reaching here with whitelisted === true means effectiveForcePropose
+      // is true (the whitelisted-and-not-forced case already returned above), so
       // this unconditionally still proposes for that case.
-      if (!aiAutoApprove || opts.forcePropose) {
+      if (!aiAutoApprove || effectiveForcePropose) {
         return createProposal({
           userId,
           agentUserId,
@@ -876,8 +931,7 @@ export function buildProposalSummary(
 ): string {
   const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
   const label = (data.targetName || data.title || data.name || data.slug) as
-    | string
-    | undefined;
+    string | undefined;
   if (label) return `${actionVerb} ${subjectType} "${label}"`;
   if (action === "delete" && data.id) return `${actionVerb} ${subjectType}`;
   return `${actionVerb} ${subjectType}`;
@@ -1085,6 +1139,43 @@ async function createPendingProposalRow(
 /**
  * Create a proposal for an AI-sourced action that requires review.
  */
+/**
+ * Hard per-user daily budget for AGENT-created proposals (UTC day). A scheduled
+ * or chained agent that keeps proposing must not be able to flood a user's
+ * review queue: past this count, the agent write is REFUSED (neither executed
+ * nor proposed) for the rest of the day. Product-confirmed hard cap; mirrors the
+ * deterministic hygiene worker's MAX_PROPOSALS_PER_USER_PER_DAY.
+ */
+export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
+
+/** UTC midnight for "today" — the same day boundary the hygiene worker uses. */
+function startOfUtcDay(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/**
+ * Count proposals attributed to an AI agent that were created for `userId` today
+ * (UTC). Agent proposals store `createdBy = userId` (the human owner) and a
+ * non-null `agentUserId`; human-member proposals carry a null agentUserId and so
+ * never count against this budget.
+ */
+async function countTodayAgentProposals(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: drizzleSql<number>`count(*)::int` })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.createdBy, userId),
+        isNotNull(proposals.agentUserId),
+        gte(proposals.createdAt, startOfUtcDay())
+      )
+    );
+  return row?.count ?? 0;
+}
+
 async function createProposal(opts: {
   userId: string;
   agentUserId?: string;
@@ -1108,16 +1199,9 @@ async function createProposal(opts: {
   sourceMessageId?: string;
   sessionId?: string;
   projectId?: string | null;
-}): Promise<{
-  granted: false;
-  proposalId: string;
-  proposalType: string;
-  summary: string;
-  reasoning: string;
-  reviewPath: string;
-  reviewUrl: string;
-  deduped?: boolean;
-}> {
+  // Returns PermissionResult — the proposed envelope on success, OR a denial
+  // when the agent's daily proposal budget is exhausted (the F2 safety floor).
+}): Promise<PermissionResult> {
   const {
     userId,
     agentUserId,
@@ -1195,6 +1279,32 @@ async function createProposal(opts: {
   }
   const authorshipMode = deriveAuthorshipMode(userId, attributionAgentUserId);
 
+  // Safety floor (F2): a runaway or scheduled agent cannot flood the review
+  // queue. Only the AGENT path is budgeted — attributionAgentUserId is set for
+  // both an explicit agent write and a legacy AI-source write whose personal
+  // agent we just resolved. Human-member proposals (proposedByUserId, no agent
+  // attribution) are never capped. Past the daily cap the write is REFUSED
+  // (neither executed nor proposed) — the agent gets a denial it can surface.
+  if (attributionAgentUserId) {
+    const alreadyToday = await countTodayAgentProposals(userId);
+    if (alreadyToday >= AGENT_PROPOSALS_PER_USER_PER_DAY) {
+      logger.warn(
+        {
+          userId,
+          agentUserId: attributionAgentUserId,
+          alreadyToday,
+          subjectType,
+          action,
+        },
+        "Agent daily proposal budget reached — refusing further agent proposals"
+      );
+      return {
+        denied: true,
+        reason: `Daily agent proposal limit reached (${AGENT_PROPOSALS_PER_USER_PER_DAY}/day). Ask the user to review pending proposals, or try again tomorrow.`,
+      };
+    }
+  }
+
   // Capture a BEFORE-snapshot for entity UPDATE proposals so the review layer can
   // render a durable before→after field diff. Without this the diff relies on the
   // live entity still holding its pre-update state at read time, which breaks once
@@ -1213,90 +1323,93 @@ async function createProposal(opts: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
-  const { proposal, pendingInput, deduped } = await db.transaction(async (tx) => {
-    let reqEventId = requestedEventId;
-    if (!reqEventId) {
-      reqEventId = await logEvent(
+  const { proposal, pendingInput, deduped } = await db.transaction(
+    async (tx) => {
+      let reqEventId = requestedEventId;
+      if (!reqEventId) {
+        reqEventId = await logEvent(
+          userId,
+          requestedEventTypeFor(singularType, action),
+          { targetId, ...(targetName ? { targetName } : {}), summary },
+          {
+            subjectId: targetId,
+            subjectType: singularType,
+            source: source ?? "api",
+            metadata: { correlationId: resolvedCorrelationId },
+          },
+          tx
+        );
+      }
+
+      const proposalData: RequestShapedProposalData = {
+        requestId: randomUUID(),
+        source: (source ||
+          "intelligence") as RequestShapedProposalData["source"],
+        sourceId: userId,
+        workspaceId: workspaceId ?? null,
+        targetType: singularType as RequestShapedProposalData["targetType"],
+        targetId,
+        ...(targetName ? { targetName } : {}),
+        changeType: action as RequestShapedProposalData["changeType"],
+        data,
+        reasoning:
+          reasoning || `${action} ${singularType} requires your approval`,
+        summary,
+        correlationId: resolvedCorrelationId,
+        ...(reqEventId ? { requestedEventId: reqEventId } : {}),
+        ...(previousData ? { previousData } : {}),
+      };
+
+      // COMPOSITE PASS-THROUGH: when the gate `data` IS a composite operations
+      // graph (N create_entity + M create_relation — what the capture door
+      // proposes), hoist `operations` to the TOP LEVEL of the stored payload.
+      // The approve flow branches on `isCompositeProposalData(proposal.data)`
+      // BEFORE the single-op executors, and that guard reads a top-level
+      // `operations` — nested under the request-shaped `data` it is invisible, so
+      // the reviewer would get an `entity/create` executor that throws
+      // "missing profileSlug" and the proposal could never be approved.
+      // The request-shaped envelope is PRESERVED alongside it (both guards pass;
+      // the composite branch wins on approve, and the review UI renders the
+      // graph). INERT for every existing caller — none passes `operations` in
+      // gate data, so `isCompositeProposalData` is false and the payload is
+      // byte-identical to before.
+      const compositeOperations = isCompositeProposalData(
+        data as unknown as Parameters<typeof isCompositeProposalData>[0]
+      )
+        ? (data as unknown as { operations: unknown[] }).operations
+        : undefined;
+
+      const pendingInput: CreatePendingProposalInput = {
         userId,
-        requestedEventTypeFor(singularType, action),
-        { targetId, ...(targetName ? { targetName } : {}), summary },
-        {
-          subjectId: targetId,
-          subjectType: singularType,
-          source: source ?? "api",
-          metadata: { correlationId: resolvedCorrelationId },
+        workspaceId: workspaceId ?? null,
+        targetType: singularType,
+        targetId,
+        proposalType: action,
+        data: {
+          ...(proposalData as unknown as Record<string, unknown>),
+          ...(authorshipMode ? { authorshipMode } : {}),
+          ...(compositeOperations ? { operations: compositeOperations } : {}),
         },
+        agentUserId: attributionAgentUserId ?? undefined,
+        createdBy: userId,
+        proposedByUserId: proposedByUserId ?? null,
+        threadId: threadId ?? null,
+        commandRunId: commandRunId ?? null,
+        sourceMessageId: sourceMessageId ?? null,
+        sessionId: sessionId ?? null,
+        projectId: projectId ?? null,
+        correlationId: resolvedCorrelationId,
+        requestedEventId: reqEventId ?? null,
+        notificationDescription: reasoning ?? `${action} ${singularType}`,
+      };
+
+      const { proposal: created, deduped } = await createPendingProposalRow(
+        pendingInput,
         tx
       );
+      return { proposal: created, pendingInput, deduped };
     }
-
-    const proposalData: RequestShapedProposalData = {
-      requestId: randomUUID(),
-      source: (source || "intelligence") as RequestShapedProposalData["source"],
-      sourceId: userId,
-      workspaceId: workspaceId ?? null,
-      targetType: singularType as RequestShapedProposalData["targetType"],
-      targetId,
-      ...(targetName ? { targetName } : {}),
-      changeType: action as RequestShapedProposalData["changeType"],
-      data,
-      reasoning:
-        reasoning || `${action} ${singularType} requires your approval`,
-      summary,
-      correlationId: resolvedCorrelationId,
-      ...(reqEventId ? { requestedEventId: reqEventId } : {}),
-      ...(previousData ? { previousData } : {}),
-    };
-
-    // COMPOSITE PASS-THROUGH: when the gate `data` IS a composite operations
-    // graph (N create_entity + M create_relation — what the capture door
-    // proposes), hoist `operations` to the TOP LEVEL of the stored payload.
-    // The approve flow branches on `isCompositeProposalData(proposal.data)`
-    // BEFORE the single-op executors, and that guard reads a top-level
-    // `operations` — nested under the request-shaped `data` it is invisible, so
-    // the reviewer would get an `entity/create` executor that throws
-    // "missing profileSlug" and the proposal could never be approved.
-    // The request-shaped envelope is PRESERVED alongside it (both guards pass;
-    // the composite branch wins on approve, and the review UI renders the
-    // graph). INERT for every existing caller — none passes `operations` in
-    // gate data, so `isCompositeProposalData` is false and the payload is
-    // byte-identical to before.
-    const compositeOperations = isCompositeProposalData(
-      data as unknown as Parameters<typeof isCompositeProposalData>[0]
-    )
-      ? (data as unknown as { operations: unknown[] }).operations
-      : undefined;
-
-    const pendingInput: CreatePendingProposalInput = {
-      userId,
-      workspaceId: workspaceId ?? null,
-      targetType: singularType,
-      targetId,
-      proposalType: action,
-      data: {
-        ...(proposalData as unknown as Record<string, unknown>),
-        ...(authorshipMode ? { authorshipMode } : {}),
-        ...(compositeOperations ? { operations: compositeOperations } : {}),
-      },
-      agentUserId: attributionAgentUserId ?? undefined,
-      createdBy: userId,
-      proposedByUserId: proposedByUserId ?? null,
-      threadId: threadId ?? null,
-      commandRunId: commandRunId ?? null,
-      sourceMessageId: sourceMessageId ?? null,
-      sessionId: sessionId ?? null,
-      projectId: projectId ?? null,
-      correlationId: resolvedCorrelationId,
-      requestedEventId: reqEventId ?? null,
-      notificationDescription: reasoning ?? `${action} ${singularType}`,
-    };
-
-    const { proposal: created, deduped } = await createPendingProposalRow(
-      pendingInput,
-      tx
-    );
-    return { proposal: created, pendingInput, deduped };
-  });
+  );
 
   // Post-commit notifications (broadcast / side-effects / notification center).
   // A dedup hit returned a pre-existing proposal — it already notified when

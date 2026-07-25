@@ -96,6 +96,35 @@ describe("deepResolveTemplates", () => {
       deepResolveTemplates("Fee: {{steps.compute.output.amount}}", c)
     ).toBe("Fee: 42");
   });
+
+  // Regression: a capability/skill node's inputMapping whose value is an
+  // exact array placeholder must reach the verb as an ARRAY, not a JSON string.
+  // The old path (resolveInputMapping → resolveTemplate) stringified it, which
+  // made e.g. mail_triage's `emails: z.array(...)` fail "expected array,
+  // received string". Mirrors how the skill/capability nodes now resolve inputs.
+  it("preserves an exact-placeholder array through an inputMapping (capability/skill node shape)", () => {
+    const c = ctx({
+      steps: {
+        fetchEmails: {
+          output: {
+            emails: [
+              { id: "1", subject: "a" },
+              { id: "2", subject: "b" },
+            ],
+          },
+        },
+      },
+    });
+    const resolved = deepResolveTemplates(
+      { emails: "{{steps.fetchEmails.output.emails}}" },
+      c
+    ) as Record<string, unknown>;
+    expect(Array.isArray(resolved.emails)).toBe(true);
+    expect(resolved.emails).toEqual([
+      { id: "1", subject: "a" },
+      { id: "2", subject: "b" },
+    ]);
+  });
 });
 
 describe("executeSelectStep", () => {

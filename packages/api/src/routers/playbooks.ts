@@ -132,6 +132,14 @@ const createInputSchema = z.object({
   stages: z.array(jsonRecord).optional(),
   subjectProfile: jsonRecord.optional(),
   schedule: jsonValue.optional(),
+  /**
+   * Free-form playbook metadata (persisted to `playbooks.metadata`). Carries the
+   * propose-only governance marker for unattended maintenance playbooks:
+   * `{ governance: { forceProposeWrites: true } }`. `executePlaybookRun` copies
+   * this onto the run's focus session so every agent write in the session routes
+   * to a reviewable proposal (see permission-check deriveSessionForceProposeGovernance).
+   */
+  metadata: jsonRecord.optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
   /**
@@ -1077,6 +1085,7 @@ export const playbooksRouter = router({
           stages: input.stages,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
+          metadata: input.metadata,
           executor: input.executor,
           status: input.status,
           contextSkill: input.contextSkill,
@@ -1111,6 +1120,7 @@ export const playbooksRouter = router({
           stages: input.stages ?? [],
           subjectProfile: input.subjectProfile ?? null,
           schedule: input.schedule ?? null,
+          metadata: input.metadata ?? {},
           executor: input.executor,
           status: input.status,
         })

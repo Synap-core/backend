@@ -145,6 +145,8 @@ export interface CapabilityPlaybookDef {
   /** { profileSlug, filter? } — which entity type this playbook operates over (Wave 0 subject spine). */
   subjectProfile?: Record<string, unknown>;
   schedule?: unknown;
+  /** Free-form playbook metadata → `playbooks.metadata` (e.g. propose-only governance marker). */
+  metadata?: Record<string, unknown>;
   executor?: "is-agent" | "external-agent" | "hybrid";
   status?: "draft" | "active" | "paused" | "archived";
 }
@@ -786,6 +788,7 @@ export async function createCapabilityFromDefinition(
           stages: p.stages,
           subjectProfile: p.subjectProfile,
           schedule: p.schedule,
+          metadata: p.metadata,
           executor: p.executor ?? "is-agent",
           status: p.status ?? "draft",
         });

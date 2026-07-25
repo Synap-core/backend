@@ -75,6 +75,7 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
+import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import {
@@ -1536,31 +1537,23 @@ export const entitiesRouter = router({
       // resolveIdentity's strong path, not just this router. See
       // entity-repository.ts create() step 6.
 
-      // 4. Emit .completed event + side-effects
-      await auditLog({
+      // 4. Emit .completed event + side-effects — ONE door (recordDomainMutation)
+      // so the timeline append and the automation fan-out can never drift apart.
+      // Session-stamped so the matcher resolves it → playbook → `member_of`
+      // automations for entities produced in this session (e.g. import under a
+      // contact-leads playbook). Null on non-session paths → workspace-wide only.
+      // `logData` keeps `global` on the audit row (the fan-out never carried it).
+      await recordDomainMutation({
         subjectType: "entity",
         action: "create",
-        phase: "completed",
         subjectId: createdEntity.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
-        data: { profileSlug, title: input.title, global: input.global },
-      });
-
-      emitSideEffects({
-        subjectType: "entity",
-        action: "create",
-        subjectId: createdEntity.id,
-        userId: ctx.userId,
-        workspaceId: governanceWorkspaceId,
-        // Stamp the session so the automation matcher resolves it → playbook →
-        // `member_of` automations and fires them for entities produced in this
-        // session (e.g. import under a contact-leads playbook). Null on
-        // non-session paths → workspace-wide automations only (unchanged).
         sessionId: ctx.sessionId ?? null,
         data: { profileSlug, title: input.title },
+        logData: { profileSlug, title: input.title, global: input.global },
       });
 
       // Dispatch entity embedding job (non-blocking — failure never blocks creation)
@@ -2596,18 +2589,6 @@ export const entitiesRouter = router({
         }
       }
 
-      // 4. Emit .completed event + side-effects
-      await auditLog({
-        subjectType: "entity",
-        action: "update",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
-        correlationId,
-      });
-
       // Compute changed properties before emit so automation triggers can filter on them
       const changedProperties: Record<string, unknown> = {};
       if ((input.properties || input.deleteProperties?.length) && oldEntity) {
@@ -2631,14 +2612,19 @@ export const entitiesRouter = router({
         }
       }
 
-      emitSideEffects({
+      // 4. Emit .completed event + side-effects — ONE door (recordDomainMutation).
+      // Session-scope lifecycle updates (e.g. dealStage lead→client inside a
+      // session) so playbook `member_of` automations fire. Null otherwise.
+      // `logData: {}` keeps the audit row payload as it was (no changed-prop
+      // detail on the log — that shape belongs only to the automation fan-out).
+      await recordDomainMutation({
         subjectType: "entity",
         action: "update",
         subjectId: input.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
-        // Session-scope lifecycle updates (e.g. dealStage lead→client inside a
-        // session) so playbook `member_of` automations fire. Null otherwise.
+        correlationId,
         sessionId: ctx.sessionId ?? null,
         data: {
           profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
@@ -2655,6 +2641,7 @@ export const entitiesRouter = router({
               }
             : {}),
         },
+        logData: {},
       });
 
       // Dispatch webhooks for entity property updates (fire-and-forget, non-blocking)
@@ -3398,27 +3385,21 @@ export const entitiesRouter = router({
         .set({ deletedAt: new Date(), updatedAt: new Date() })
         .where(eq(entities.id, input.id));
 
-      // 4. Emit .completed event + side-effects
-      auditLog({
+      // 4. Emit .completed event + side-effects — ONE door (recordDomainMutation).
+      // Fire-and-forget (delete already committed); symmetric with create/update,
+      // session-scope deletes so playbook automations fire. `logData: {}` keeps
+      // the audit row payload unchanged (profileSlug is fan-out-only).
+      void recordDomainMutation({
         subjectType: "entity",
         action: "delete",
-        phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
-      });
-
-      emitSideEffects({
-        subjectType: "entity",
-        action: "delete",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: governanceWorkspaceId,
-        // Symmetric with create/update — session-scope deletes too. Null otherwise.
         sessionId: ctx.sessionId ?? null,
         data: { profileSlug: deletedEntityRow?.type ?? undefined },
+        logData: {},
       });
 
       // Feedback signal — a human deleted an entity the AI created (carries a

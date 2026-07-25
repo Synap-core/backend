@@ -305,6 +305,49 @@ async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
 }
 
 /**
+ * Re-derive the automation chain context stamped on a focus session at
+ * A2AI-trigger time (executePlaybookRun stores it in
+ * `focus_sessions.metadata.automationChainContext`). Returns undefined when the
+ * session carries no chain context (a user-originated session) — the caller then
+ * treats the event as depth 0, unchanged. Best-effort: a lookup failure degrades
+ * to depth 0 rather than blocking matching.
+ */
+async function deriveSessionChainContext(
+  sessionId: string
+): Promise<TriggerMatchPayload["automationContext"] | undefined> {
+  try {
+    const session = await db.query.focusSessions.findFirst({
+      where: (f, { eq }) => eq(f.id, sessionId),
+      columns: { metadata: true },
+    });
+    const stamped = (session?.metadata as Record<string, unknown> | undefined)
+      ?.automationChainContext as
+      | {
+          automationRunId?: string;
+          automationId?: string;
+          chainDepth?: number;
+          rootRunId?: string;
+          chainAutomationIds?: string[];
+        }
+      | undefined;
+    if (!stamped?.automationId || !stamped?.automationRunId) return undefined;
+    return {
+      automationRunId: stamped.automationRunId,
+      automationId: stamped.automationId,
+      chainDepth: stamped.chainDepth ?? 0,
+      rootRunId: stamped.rootRunId ?? stamped.automationRunId,
+      chainAutomationIds: stamped.chainAutomationIds ?? [],
+    };
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "Failed to derive session chain context — proceeding as depth 0"
+    );
+    return undefined;
+  }
+}
+
+/**
  * Main handler: match an event against all active automations in the workspace.
  */
 export async function handleAutomationTriggerMatch(job: {
@@ -313,22 +356,35 @@ export async function handleAutomationTriggerMatch(job: {
   const { eventType, subjectId, userId, workspaceId, data, automationContext } =
     job.data;
 
+  // ── F2 depth floor across the agent boundary ───────────────────────────
+  // An agent's Hub writes carry the focus session (sessionId) but NO
+  // automationContext, so a cron→agent→write→automation chain would reset to
+  // depth 0 and could loop unbounded — the MAX_CHAIN_DEPTH guard is blind across
+  // the agent boundary. When the event has a session and no explicit context,
+  // re-derive the chain context stamped on that session at A2AI-trigger time
+  // (executePlaybookRun) so the depth + cycle guards see the TRUE chain.
+  let effectiveContext = automationContext;
+  if (!effectiveContext && job.data.sessionId) {
+    const derived = await deriveSessionChainContext(job.data.sessionId);
+    if (derived) effectiveContext = derived;
+  }
+
   // ── Chain depth check ──────────────────────────────────────────────────
-  const currentDepth = automationContext?.chainDepth ?? 0;
+  const currentDepth = effectiveContext?.chainDepth ?? 0;
   if (currentDepth >= MAX_CHAIN_DEPTH) {
     logger.warn(
       {
         eventType,
         workspaceId,
         chainDepth: currentDepth,
-        rootRunId: automationContext?.rootRunId,
+        rootRunId: effectiveContext?.rootRunId,
       },
       "Automation chain depth limit reached — skipping trigger matching"
     );
     return;
   }
 
-  const chainIds = new Set(automationContext?.chainAutomationIds ?? []);
+  const chainIds = new Set(effectiveContext?.chainAutomationIds ?? []);
 
   // ── Find matching automations ──────────────────────────────────────────
   // Pod-wide inbound: a null event workspace (a shared / external channel with
@@ -493,7 +549,7 @@ export async function handleAutomationTriggerMatch(job: {
     const runWorkspaceId = workspaceId ?? automation.workspaceId;
 
     const rootRunId =
-      automationContext?.rootRunId ?? automationContext?.automationRunId;
+      effectiveContext?.rootRunId ?? effectiveContext?.automationRunId;
 
     const [run] = await db
       .insert(automationRuns)
@@ -501,7 +557,7 @@ export async function handleAutomationTriggerMatch(job: {
         automationId: automation.id,
         workspaceId: runWorkspaceId,
         subjectEntityId,
-        triggeredBy: automationContext ? "system" : userId,
+        triggeredBy: effectiveContext ? "system" : userId,
         triggerPayload: {
           eventType,
           subjectId,

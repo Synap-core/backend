@@ -254,6 +254,12 @@ export interface PackagePostWorkspaceBody {
     subjectProfile?: { profileSlug: string; filter?: Record<string, unknown> };
     /** tool/skill keys this playbook grants (see materialization note below). */
     grants?: string[];
+    /**
+     * Free-form playbook metadata → `playbooks.metadata`. Carries the propose-only
+     * governance marker for unattended maintenance playbooks
+     * (`{ governance: { forceProposeWrites: true } }`).
+     */
+    metadata?: Record<string, unknown>;
     status?: string;
   }>;
   loops?: Array<{
@@ -563,6 +569,8 @@ async function applyPackagePostWorkspaceInner(
           schedule: p.schedule,
           // Subject kind → `playbooks.subject_profile`; unlocks matchForEntity.
           subjectProfile: p.subjectProfile as never,
+          // Propose-only governance marker (maintenance playbooks) → playbooks.metadata.
+          metadata: p.metadata as never,
           status: p.status,
           agentUserId,
           source: "intelligence",

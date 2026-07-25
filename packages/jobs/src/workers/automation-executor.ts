@@ -585,7 +585,16 @@ async function executeSkillNode(
   if (!skillId) throw new Error("Skill node has no skillId");
 
   const inputMapping = data.inputMapping ?? {};
-  const resolvedInputs = resolveInputMapping(inputMapping, context);
+  // deepResolveTemplates (NOT resolveInputMapping) so an exact `{{step.x}}`
+  // placeholder that resolves to an array/object reaches the skill as its NATIVE
+  // shape. resolveInputMapping → resolveTemplate JSON-stringifies non-scalars,
+  // which made a skill's zod `z.array(...)` param fail with "expected array,
+  // received string". Output nodes already resolve this way; skill/capability
+  // dispatch must match. (Embedded `"text {{x}}"` still renders to a string.)
+  const resolvedInputs = deepResolveTemplates(inputMapping, context) as Record<
+    string,
+    unknown
+  >;
 
   if (opts.stepRun) {
     await db
@@ -666,7 +675,14 @@ async function executeCapabilityNode(
   if (!verbId) throw new Error("Capability node has no verbId");
 
   const capInputMapping = data.inputMapping ?? {};
-  const capResolvedInputs = resolveInputMapping(capInputMapping, context);
+  // deepResolveTemplates: preserve array/object params from an exact `{{...}}`
+  // placeholder so a capability's zod schema (e.g. mail_triage `emails:
+  // z.array(...)`) receives the native shape, not a JSON string. See the skill
+  // node above — same bug class ("expected array, received string").
+  const capResolvedInputs = deepResolveTemplates(
+    capInputMapping,
+    context
+  ) as Record<string, unknown>;
 
   if (opts.stepRun) {
     await db
@@ -2197,7 +2213,13 @@ async function executePlaybookRun(
   },
   context: StepContext,
   workspaceId: string,
-  ownerId: string
+  ownerId: string,
+  // F2 safety floor: the chain context of the automation run that is spawning
+  // this playbook's agent. Stamped onto the session so the agent's downstream
+  // Hub writes (which carry the session but no automationContext) re-derive
+  // their true chain depth in the trigger matcher — closing the depth-guard
+  // hole across the agent boundary.
+  automationContext?: ExecutionPayload["automationContext"]
 ): Promise<Record<string, unknown>> {
   // 1. Resolve the playbook — by id, else by NAME within this workspace (then a
   // pod-wide NULL-workspace playbook). By-name is the template-friendly form: a
@@ -2311,7 +2333,22 @@ async function executePlaybookRun(
   const playbookStages = playbook.stages as { key?: string }[] | null;
   const firstStageKey = playbookStages?.[0]?.key ?? null;
 
-  // 4. Create a focus session for this playbook run
+  // Propose-only governance: a maintenance playbook (e.g. CRM hygiene) declares
+  // `metadata.governance.forceProposeWrites: true`. Stamp it onto the session so
+  // the write-side gate (checkPermissionOrPropose → deriveSessionForceProposeGovernance)
+  // routes EVERY agent write in this session to a reviewable proposal — the agent
+  // runs unattended on a schedule, so nothing it does should auto-apply. Keyed on
+  // the session (X-Session-Id) exactly like the chain-depth floor.
+  const playbookGovernance = (
+    playbook.metadata as Record<string, unknown> | null | undefined
+  )?.governance as { forceProposeWrites?: unknown } | undefined;
+  const forceProposeWrites = playbookGovernance?.forceProposeWrites === true;
+
+  // 4. Create a focus session for this playbook run.
+  // Stamp the spawning run's chain context into `metadata.automationChainContext`
+  // when this playbook was launched from within an automation chain. The trigger
+  // matcher reads it back (keyed by the agent's X-Session-Id) so events the agent
+  // produces inside this session inherit the chain depth — the F2 depth floor.
   const [session] = await db
     .insert(focusSessions)
     .values({
@@ -2324,6 +2361,24 @@ async function executePlaybookRun(
       expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
       agentIds: [],
       subjectEntityId: resolvedSubjectId,
+      metadata: {
+        ...(automationContext
+          ? {
+              automationChainContext: {
+                automationRunId: automationContext.automationRunId,
+                automationId: automationContext.automationId,
+                chainDepth: automationContext.chainDepth ?? 0,
+                rootRunId:
+                  automationContext.rootRunId ??
+                  automationContext.automationRunId,
+                chainAutomationIds: automationContext.chainAutomationIds ?? [],
+              },
+            }
+          : {}),
+        ...(forceProposeWrites
+          ? { governance: { forceProposeWrites: true } }
+          : {}),
+      },
     })
     .returning();
 
@@ -3131,7 +3186,8 @@ async function executeAutomationFlow(params: {
                           },
                           context,
                           workspaceId,
-                          ownerId
+                          ownerId,
+                          automationContext
                         );
                         break;
                       case "messages_query":
@@ -3553,7 +3609,8 @@ async function executeAutomationFlow(params: {
                 },
                 context,
                 workspaceId,
-                ownerId
+                ownerId,
+                automationContext
               );
               break;
             }

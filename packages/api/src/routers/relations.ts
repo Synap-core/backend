@@ -81,8 +81,8 @@ import {
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { auditLog } from "../utils/audit-log.js";
+import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
-import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import {
@@ -935,28 +935,20 @@ export const relationsRouter = router({
         );
       });
 
-      // 3. Audit log
-      auditLog({
+      // 3. Log + side-effects — ONE door (recordDomainMutation). The log and the
+      // automation fan-out use different key names for the same edge, so both
+      // payloads are passed explicitly (logData vs data).
+      void recordDomainMutation({
         subjectType: "relation",
         action: "create",
-        phase: "completed",
         subjectId: relation.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
-        data: {
+        logData: {
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
         },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
-        subjectType: "relation",
-        action: "create",
-        subjectId: relation.id,
-        userId: ctx.userId,
-        workspaceId: effectiveWorkspaceId,
         data: {
           relationType: input.type,
           fromEntityId: input.sourceEntityId,
@@ -1383,23 +1375,14 @@ export const relationsRouter = router({
         ctx.userId
       );
 
-      // 3. Audit + side-effects
-      auditLog({
-        subjectType: "relation",
-        action: "update",
-        phase: "completed",
-        subjectId: relationId,
-        userId: ctx.userId,
-        workspaceId: effectiveWorkspaceId,
-        data: { metadata: input.metadata, type: input.type },
-      });
-
-      emitSideEffects({
+      // 3. Log + side-effects — ONE door (recordDomainMutation).
+      void recordDomainMutation({
         subjectType: "relation",
         action: "update",
         subjectId: relationId,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        logData: { metadata: input.metadata, type: input.type },
         data: {
           relationType: relation.type,
           fromEntityId: relation.sourceEntityId,
@@ -1532,24 +1515,14 @@ export const relationsRouter = router({
         });
       }
 
-      // 3. Audit log
-      auditLog({
-        subjectType: "relation",
-        action: "delete",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: effectiveWorkspaceId,
-        data: { id: input.id },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
+      // 3. Log + side-effects — ONE door (recordDomainMutation).
+      void recordDomainMutation({
         subjectType: "relation",
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        logData: { id: input.id },
         data: {
           relationType: relationToDelete?.type,
           fromEntityId: relationToDelete?.sourceEntityId,
