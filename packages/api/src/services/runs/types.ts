@@ -128,6 +128,8 @@ export interface UnifiedRunDetail {
    * automation-specific block here.
    */
   playbookDetail?: PlaybookRunDetail | null;
+  /** The flow definition this run executed (automation only); null for every other ledger. */
+  definitionSnapshot: unknown;
 }
 
 /**

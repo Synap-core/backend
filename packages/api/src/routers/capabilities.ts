@@ -19,9 +19,12 @@ import {
   intelligenceServices,
   automations,
   skills,
+  entities,
   capabilities as capabilitiesTable,
   notifications,
   NotificationStatus,
+  openRunSession,
+  closeRunSession,
   eq,
   and,
   or,
@@ -35,6 +38,8 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
 import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
@@ -86,6 +91,36 @@ async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ─── Enrichment result normalization ──────────────────────────────────────────
+
+/**
+ * Run-metadata envelope keys a verb result carries ALONGSIDE the real entity
+ * properties (`code` verbs return `{ matched, fields, url, … }` around their
+ * normalized fields; a `declarative` verb returns a pure scalar map, for which
+ * this is a no-op). This is the single copy — the CRM client calls this door
+ * rather than re-normalizing.
+ */
+const ENRICH_META_KEYS = new Set([
+  "matched",
+  "fields",
+  "success",
+  "proposed",
+  "proposalId",
+  "url",
+]);
+
+/** Strip the run-metadata envelope + empty values → writable entity properties. */
+function normalizeVerbResult(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return {};
+  const mapped: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(result as Record<string, unknown>)) {
+    if (ENRICH_META_KEYS.has(k)) continue;
+    if (v === null || v === undefined || v === "") continue;
+    mapped[k] = v;
+  }
+  return mapped;
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -468,6 +503,154 @@ export const capabilitiesRouter = router({
         userId: ctx.userId,
         connectionSelector: input.connectionSelector,
       });
+    }),
+
+  /**
+   * "Enrich this record" — the ONE light-launch door that makes an enrichment
+   * run VISIBLE.
+   *
+   * Today the CRM does this client-side in two disconnected calls
+   * (`capabilities.execute` then `entities.update`), so the run leaves no
+   * receipt and its proposal is an orphan card. This door wraps the SAME verb
+   * run in a `focus_session` and stamps that `sessionId` onto the resulting
+   * proposal, so the write groups under one reviewable run in the proposal board
+   * AND the run shows up in the RunsHome feed. It reinvents nothing: the verb
+   * goes through `executeCapability` (the shared governed core) and the write
+   * goes through `checkPermissionOrPropose` (the ONE governance door), with
+   * `forcePropose` — machine-sourced data is always reviewed, never silently
+   * written.
+   *
+   * The session opens only AFTER the verb actually ran: a `not_found` (capability
+   * not installed) must not litter the feed with an empty receipt.
+   */
+  enrichEntity: protectedProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        verbId: z.string(),
+        parameters: z.record(z.string(), z.unknown()).default({}),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      // 1. Load the target by id ALONE, then gate on the LOADED row's workspace
+      //    (never `input.workspaceId` — that is the cross-workspace write-leak
+      //    class). A pod-wide (NULL-workspace) entity is gated on its owner.
+      const entity = await db.query.entities.findFirst({
+        where: and(eq(entities.id, input.entityId), isNull(entities.deletedAt)),
+        columns: { id: true, title: true, workspaceId: true, userId: true },
+      });
+      if (!entity) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity not found: ${input.entityId}`,
+        });
+      }
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: entity.workspaceId,
+        ownerId: entity.userId,
+      });
+
+      // The ENTITY'S OWN workspace is authoritative for where the run + proposal
+      // land — never the caller-supplied `input.workspaceId`. A pod-wide entity
+      // (NULL) → a pod-wide run governed by the pod-wide queue; using
+      // `input.workspaceId` here would file the enriched data into an arbitrary
+      // workspace the caller named. Verb RESOLUTION still tolerates the active
+      // workspace (a pod-scoped enrichment verb is visible from either).
+      const runWorkspaceId = entity.workspaceId;
+
+      // 2. Run the verb through the shared governed core.
+      const res = await executeCapability({
+        verbId: input.verbId,
+        parameters: input.parameters,
+        workspaceId: runWorkspaceId ?? input.workspaceId,
+        userId,
+      });
+
+      // Nothing ran → no session, no receipt. `not_found` is the "capability
+      // isn't installed/connected here" signal the UI routes to Settings.
+      if (res.kind === "not_found") {
+        return { status: "setup_required" as const, message: res.message };
+      }
+      if (res.kind === "deny") {
+        return { status: "denied" as const, message: res.reason };
+      }
+      // The verb's OWN run was governance-queued (reachable only for a non-owner
+      // member running a pod-wide verb — the owner path bypasses to `run`). There
+      // is no enrichment result to write; surface the verb proposal in the SAME
+      // shape so the client's single `proposed` branch renders it (fieldCount 0
+      // ⇒ "queued for review", not "N changes").
+      if (res.kind === "proposed") {
+        return {
+          status: "proposed" as const,
+          sessionId: null,
+          proposalId: res.proposalId,
+          reviewUrl: res.reviewUrl,
+          fieldCount: 0,
+        };
+      }
+
+      // 3. Strip the run-metadata envelope → the properties we intend to write.
+      const mapped = normalizeVerbResult(res.result);
+
+      // 4. The receipt: one session per enrichment run. Channel-less by design —
+      //    a single-tier run needs a receipt, not a live room. It is CLOSED on
+      //    every terminal path (the `finally`): a synchronous run is done when we
+      //    return, and nothing reaps a channel-less enrichment session otherwise.
+      const { sessionId } = await openRunSession({
+        userId,
+        goal: `Enrich ${entity.title ?? "record"}`,
+        workspaceId: runWorkspaceId,
+        subjectEntityId: input.entityId,
+        source: "enrichment",
+      });
+      try {
+        if (Object.keys(mapped).length === 0) {
+          return { status: "empty" as const, sessionId, fieldCount: 0 };
+        }
+
+        // 5. The governed write — the SAME shape `entities.update` uses.
+        //    `forcePropose`: the operator clicked Enrich, but the DATA came from a
+        //    provider, so it lands as a reviewable proposal, sessionId-stamped.
+        const perm = await checkPermissionOrPropose({
+          userId,
+          workspaceId: runWorkspaceId,
+          subjectType: "entity",
+          action: "update",
+          source: "ai",
+          forcePropose: true,
+          sessionId,
+          reasoning: "Data enrichment",
+          data: { id: input.entityId, properties: mapped },
+        });
+
+        if ("denied" in perm && perm.denied) {
+          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        }
+        if ("proposalId" in perm) {
+          return {
+            status: "proposed" as const,
+            sessionId,
+            proposalId: perm.proposalId,
+            reviewUrl: perm.reviewUrl,
+            fieldCount: Object.keys(mapped).length,
+          };
+        }
+
+        // Unreachable: `forcePropose:true` on a machine-sourced write always
+        // proposes (the gate can only RAISE governance). Reaching here means the
+        // gate contract changed under us — fail loud rather than silently drop
+        // the enriched fields.
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "enrichEntity: forcePropose write was unexpectedly auto-granted",
+        });
+      } finally {
+        await closeRunSession(sessionId);
+      }
     }),
 
   /**

@@ -140,3 +140,21 @@ export async function openRunSession(
     return { sessionId: session.id, reused: false };
   }
 }
+
+/**
+ * Close a run session opened by `openRunSession`. The mirror door for a
+ * SYNCHRONOUS run (e.g. a single-tier enrichment) that is done the moment its
+ * caller returns: leaving it `status:'active'` would ghost the RunsHome feed,
+ * since the run reaper only closes sessions carrying a `metadata.automationRunId`
+ * (which a direct, channel-less run never sets). Idempotent — only an `active`
+ * row transitions, so a double close (or a caller racing the reaper) is a no-op.
+ * NEVER pass a REUSED channel session id: a successor run may still be live in it.
+ */
+export async function closeRunSession(sessionId: string): Promise<void> {
+  await db
+    .update(focusSessions)
+    .set({ status: "closed", closedAt: new Date() })
+    .where(
+      and(eq(focusSessions.id, sessionId), eq(focusSessions.status, "active"))
+    );
+}

@@ -511,7 +511,14 @@ export interface CapabilitySkillDef {
   /** Declarative provider-verb spec (kind="declarative"). */
   providerSpec?: ProviderVerbSpec;
   parameters?: Record<string, unknown>;
+  /** Functional tag (e.g. "enrichment") — persisted to `skills.category` by the
+   *  applier and surfaced on the catalog verb, so a surface can find verbs by
+   *  CONFIGURATION instead of hardcoding verb ids. */
   category?: string;
+  /** Free-form definition metadata. Read (not persisted) for the catalog's
+   *  `metadata.verbType` override so an available template's verb renders the
+   *  same `type` before and after install. */
+  metadata?: Record<string, unknown>;
   executionMode?: "sync" | "async";
   timeoutSeconds?: number;
   /**

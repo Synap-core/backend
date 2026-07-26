@@ -48,7 +48,7 @@ vi.mock("../../utils/project-scope.js", () => ({
   accessScopeWhere: vi.fn(() => ({ accessScope: true })),
 }));
 
-import { listRunGroups } from "./index.js";
+import { buildNodeLabelMap, buildNodeTypeMap, listRunGroups } from "./index.js";
 
 /** Chainable select() builder — supports the automation/playbook groupBy shape. */
 function selectChain(rows: unknown[]) {
@@ -216,5 +216,58 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
     expect(groups.map((g) => g.flowId)).toEqual(["pb-1", "auto-1"]);
     // Coerced to a real Date so every downstream Date consumer is honored.
     expect(groups[0]!.latestStartedAt).toBeInstanceOf(Date);
+  });
+});
+
+/**
+ * `getRun`'s automation branch builds each step's `detail.errorMessage` /
+ * `detail.nodeType` from `s.errorMessage` (the step row) and `buildNodeTypeMap`
+ * (the run's `definitionSnapshot`) — the fields `RunDetailPanel.handleDiagnose`
+ * (browser/) reads to build the "Explain failure" payload. `getRun` itself needs
+ * a live Postgres to exercise end-to-end (it composes `listAutomationRuns` +
+ * two more `db.select`s that the lightweight chain mock above doesn't model), so
+ * this is a PURE UNIT test over the extracted mapping helper instead — it locks
+ * the nodeId → nodeType resolution `getRun` depends on for a failed step.
+ */
+describe("buildNodeTypeMap / buildNodeLabelMap — automation step detail", () => {
+  const snapshot = {
+    flowDefinition: {
+      nodes: [
+        { id: "node-1", type: "command", data: { label: "Send email" } },
+        { id: "node-2", type: "condition" },
+      ],
+    },
+  };
+
+  it("resolves a failed step's nodeType from the run's definitionSnapshot", () => {
+    const nodeTypeById = buildNodeTypeMap(snapshot);
+    const nodeLabelById = buildNodeLabelMap(snapshot);
+
+    // Simulates the detail object getRun builds for a failed step row.
+    const step = { nodeId: "node-1", errorMessage: "SMTP timeout" };
+    const detail = {
+      nodeId: step.nodeId,
+      nodeLabel: nodeLabelById.get(step.nodeId) ?? null,
+      errorMessage: step.errorMessage ?? null,
+      nodeType: nodeTypeById.get(step.nodeId) ?? null,
+    };
+
+    expect(detail.errorMessage).toBe("SMTP timeout");
+    expect(detail.nodeType).toBe("command");
+    expect(detail.nodeLabel).toBe("Send email");
+  });
+
+  it("falls back to null nodeType for a nodeId absent from the snapshot", () => {
+    const nodeTypeById = buildNodeTypeMap(snapshot);
+    expect(nodeTypeById.get("unknown-node") ?? null).toBeNull();
+  });
+
+  it("tolerates a null/malformed snapshot without throwing", () => {
+    expect(buildNodeTypeMap(null).size).toBe(0);
+    expect(buildNodeTypeMap(undefined).size).toBe(0);
+    expect(
+      buildNodeTypeMap({ flowDefinition: { nodes: "not-an-array" } } as never)
+        .size
+    ).toBe(0);
   });
 });

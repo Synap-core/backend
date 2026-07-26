@@ -711,9 +711,11 @@ export async function getRun(
       .from(automationRuns)
       .where(eq(automationRuns.id, run.id))
       .limit(1);
-    // nodeId → human label, from the snapshot the run executed (no new query —
-    // the snapshot rides on the run row). Falls back to the nodeId per step.
+    // nodeId → human label / node type, from the snapshot the run executed (no
+    // new query — the snapshot rides on the run row). Falls back to the nodeId
+    // per step; nodeType is null where the snapshot has none.
     const nodeLabelById = buildNodeLabelMap(meta?.definitionSnapshot);
+    const nodeTypeById = buildNodeTypeMap(meta?.definitionSnapshot);
     const activity: RunActivityItem[] = steps
       .map((s) => {
         const nodeLabel = nodeLabelById.get(s.nodeId) ?? null;
@@ -735,6 +737,10 @@ export async function getRun(
             nodeId: s.nodeId,
             nodeLabel,
             commandId: s.commandId ?? null,
+            // AI diagnose payload (RunDetailPanel's "Explain failure"): the
+            // step's own error and its node type from the snapshot.
+            errorMessage: s.errorMessage ?? null,
+            nodeType: nodeTypeById.get(s.nodeId) ?? null,
           },
         };
       })
@@ -748,6 +754,8 @@ export async function getRun(
       },
       outputSummary: meta?.outputSummary ?? null,
       playbookDetail: null,
+      // The flow definition this run executed — lets the UI render the graph.
+      definitionSnapshot: meta?.definitionSnapshot ?? null,
     };
   }
 
@@ -764,6 +772,7 @@ export async function getRun(
             trigger: null,
             outputSummary: null,
             playbookDetail: null,
+            definitionSnapshot: null,
           }
         : null;
     const rows = await db
@@ -806,6 +815,7 @@ export async function getRun(
       trigger: null,
       outputSummary: null,
       playbookDetail: null,
+      definitionSnapshot: null,
     };
   }
 
@@ -835,7 +845,14 @@ export async function getRun(
     flowType === "playbook"
       ? await loadPlaybookRunDetail(userId, run.id)
       : null;
-  return { run, activity, trigger: null, outputSummary: null, playbookDetail };
+  return {
+    run,
+    activity,
+    trigger: null,
+    outputSummary: null,
+    playbookDetail,
+    definitionSnapshot: null,
+  };
 }
 
 // ── Playbook run detail (produced / proposals / agents / session card) ────────
@@ -1151,7 +1168,7 @@ function runAgentDisplayName(row: {
  * a missing/partial snapshot (returns an empty map). Prefers `data.label`, then
  * a command node's `commandTitle`, then a generic `name`.
  */
-function buildNodeLabelMap(
+export function buildNodeLabelMap(
   snapshot: { flowDefinition?: { nodes?: unknown } | null } | null | undefined
 ): Map<string, string> {
   const map = new Map<string, string>();
@@ -1168,6 +1185,27 @@ function buildNodeLabelMap(
       (typeof d.name === "string" && d.name) ||
       null;
     if (label) map.set(node.id, label);
+  }
+  return map;
+}
+
+/**
+ * nodeId → node type (e.g. "command", "condition") from an automation run's
+ * definition snapshot. Same tolerance/shape as `buildNodeLabelMap` — reads the
+ * top-level `node.type` (the `AutomationNodeBase.type` union in
+ * schema/automations.ts), not `node.data`.
+ */
+export function buildNodeTypeMap(
+  snapshot: { flowDefinition?: { nodes?: unknown } | null } | null | undefined
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const nodes = snapshot?.flowDefinition?.nodes;
+  if (!Array.isArray(nodes)) return map;
+  for (const n of nodes) {
+    if (!n || typeof n !== "object") continue;
+    const node = n as { id?: unknown; type?: unknown };
+    if (typeof node.id !== "string") continue;
+    if (typeof node.type === "string") map.set(node.id, node.type);
   }
   return map;
 }

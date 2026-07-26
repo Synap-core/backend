@@ -9350,6 +9350,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: ProposalExecutorResult;
 			meta: object;
 		}>;
+		revise: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				data: Record<string, unknown>;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 		reject: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				proposalId: string;
@@ -12657,6 +12667,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				templateKey?: string | undefined;
 				definition?: any;
+				params?: Record<string, unknown> | undefined;
 			};
 			output: CreateCapabilityResult;
 			meta: object;

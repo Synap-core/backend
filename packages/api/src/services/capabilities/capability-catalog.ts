@@ -106,6 +106,13 @@ export interface CapabilityCardVerb {
    * types, not just names. Empty when the skill declares no parameters.
    */
   paramsSchema: CapabilityCardVerbParam[];
+  /**
+   * Free-form functional tag from the backing skill (`skills.category`, e.g.
+   * "enrichment") — lets a surface find "the enrichment verbs for this entity"
+   * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
+   * its template definition) declares no category.
+   */
+  category?: string;
 }
 
 /** Extract parameter NAMES from a skill `parameters` blob (JSON-schema or flat). */
@@ -632,6 +639,7 @@ export async function buildCapabilityCatalog(
             approved: skills.approved,
             parameters: skills.parameters,
             metadata: skills.metadata,
+            category: skills.category,
           })
           .from(skills)
           .where(inArray(skills.id, memberSkillIds))
@@ -679,6 +687,15 @@ export async function buildCapabilityCatalog(
     const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
       const type = verbType(s.name, s.metadata);
       const enabled = s.approved === true;
+      // `skills.category` is the first-class column the capability applier
+      // persists from the definition; `metadata.category` is a tolerated
+      // fallback for rows tagged out-of-band.
+      const category =
+        s.category ??
+        (typeof (s.metadata as Record<string, unknown> | null)?.category ===
+        "string"
+          ? ((s.metadata as Record<string, unknown>).category as string)
+          : undefined);
       const connectionOk =
         !connection.required || connection.state === "connected";
       return {
@@ -692,6 +709,7 @@ export async function buildCapabilityCatalog(
         runnable: enabled && connectionOk,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
+        ...(category ? { category } : {}),
       };
     });
 
@@ -738,7 +756,10 @@ export async function buildCapabilityCatalog(
 
     // Verbs come from the template's skills — none enabled (not installed yet).
     const verbs: CapabilityCardVerb[] = (def.skills ?? []).map((s) => {
-      const type = verbType(s.name);
+      // Honor an explicit `metadata.verbType` override on an AVAILABLE verb too —
+      // it was previously only read for installed rows, so the same template
+      // rendered a different `type` before vs after install.
+      const type = verbType(s.name, s.metadata);
       return {
         verbId: s.name,
         skillId: null,
@@ -750,6 +771,7 @@ export async function buildCapabilityCatalog(
         runnable: false,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
+        ...(s.category ? { category: s.category } : {}),
       };
     });
 

@@ -85,8 +85,23 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * that reduce each row to `<id> · <title>`. Prompt size now scales with row
  * COUNT, not with how many properties an entity happens to carry — which is the
  * difference between "works on this workspace" and "works".
+ *
+ * v5 — the v1 flow was run again with the IS cap already raised to 24000, and
+ * `analyze`/`relate` STILL 400'd on it. That settles the argument: raw entity
+ * JSON is ~500-1500 chars/row × up to 70 rows, so no cap rescues it and the
+ * projection in v4 is the only real fix. Same run surfaced a SECOND bug, fixed
+ * here: `summarize`'s prompt was a BARE `{{steps.analyze.output}}`, and
+ * `deepResolveTemplates` passes the native value through for a whole-string
+ * reference — so a failed upstream round (whose output is `{error: ...}`) handed
+ * an OBJECT to a string field and killed this round too. Every other round
+ * already embedded its placeholders in surrounding text, which stringifies;
+ * `summarize` was the only bare one. It is now wrapped like the rest.
+ *
+ * RULE going forward: inside a flow, a placeholder that feeds a STRING field is
+ * always embedded in text. Bare `{{...}}` is reserved for the cases that must
+ * stay native — `entity_create.body`, and array inputs.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 4;
+export const REPORT_AUTOMATION_SEED_VERSION = 5;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -428,7 +443,19 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         verbKind: "read",
         inputMapping: {
           system: SUMMARIZE_SYSTEM,
-          prompt: "{{steps.analyze.output}}",
+          // The placeholder is WRAPPED in text, deliberately — never bare.
+          // `deepResolveTemplates` passes the NATIVE value through when the whole
+          // string is one `{{...}}` reference. A failed upstream round records
+          // `{error: "..."}` as its output, so a bare reference hands an OBJECT to
+          // a field zod requires to be a string, and this round dies with
+          // `expected string, received object` — a SECOND failure caused only by
+          // the first. Embedding the reference forces stringification, so a failed
+          // round arrives as readable text this round can report on.
+          // (Observed live 2026-07-26: analyze 400'd, then summarize failed this way.)
+          prompt: [
+            "Material to summarize (may be an error object if the round failed):",
+            "{{steps.analyze.output}}",
+          ].join("\n"),
           // 500, NOT the ~120 a one-line summary "needs". DOGFOODED 2026-07-26
           // against the live IS: `ai.generate` returns an EMPTY STRING at
           // maxTokens 20 and 120, a degraded answer at 300, and a correct one at
