@@ -232,7 +232,9 @@ export function registerChannelsRoutes(app: HubHono): void {
         externalSource: z.string().min(1),
         externalChannelId: z.string().min(1),
         contextObjectId: z.string().optional(),
-        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        contextObjectType: z
+          .enum(["entity", "document", "view", "proposal"])
+          .optional(),
         title: z.string().optional(),
         // Thread-as-child support: when this linked channel is a thread inside a
         // room, parentChannelId points at the room's Synap channel id and
@@ -770,7 +772,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       externalSource?: string;
       externalChannelId?: string;
       contextObjectId?: string;
-      contextObjectType?: "entity" | "document" | "view";
+      contextObjectType?: "entity" | "document" | "view" | "proposal";
       title?: string;
       parentChannelId?: string;
       branchPurpose?: string;

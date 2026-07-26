@@ -2647,7 +2647,10 @@ export const proposalsRouter = router({
       }> = [];
 
       // Provenance: automation (stamped step run) wins, else agent, else human.
-      const provenance: "automation" | "agent" | "human" = proposal.stepRunId
+      // `let` because a stamped automation whose chain has since been DELETED
+      // resolves no automation target below — we downgrade provenance afterward
+      // so it never claims "automation" with an empty/mismatched targets set.
+      let provenance: "automation" | "agent" | "human" = proposal.stepRunId
         ? "automation"
         : proposal.agentUserId
           ? "agent"
@@ -2788,6 +2791,18 @@ export const proposalsRouter = router({
             }
           }
         }
+      }
+
+      // Consistency floor: if the row was automation-stamped but the automation
+      // chain has since been deleted (no automation target resolved), downgrade
+      // provenance to match what `targets` actually contains — a "jump to
+      // source" UI trusts provenance to have a corresponding target and would
+      // otherwise render a broken/empty automation affordance.
+      if (
+        provenance === "automation" &&
+        !targets.some((t) => t.kind === "automation")
+      ) {
+        provenance = proposal.agentUserId ? "agent" : "human";
       }
 
       return { provenance, targets };

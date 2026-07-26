@@ -29,7 +29,7 @@ export const ChannelByContextRequestSchema = z
     userId: z.string(),
     workspaceId: z.string().optional(),
     contextObjectId: z.string(),
-    contextObjectType: z.enum(["entity", "document", "view"]),
+    contextObjectType: z.enum(["entity", "document", "view", "proposal"]),
   })
   .openapi("ChannelByContextRequest");
 
