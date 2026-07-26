@@ -50,8 +50,16 @@ FLOW=$(node -pe "require('/tmp/vf_flow.json').id" 2>/dev/null)
 curl -sS -o /tmp/vf_sub.json -X POST -H "Origin: $APP_ORIGIN" -H "Content-Type: application/json" \
   "$POD/.ory/kratos/public/self-service/login?flow=$FLOW" -d '{"csrf_token":"","method":"oidc","provider":"cp"}' >/dev/null
 AUTHZ=$(node -pe "(require('/tmp/vf_sub.json').error||{}).reason||''" 2>/dev/null | grep -oE 'https://[^ ]+' | head -1)
-echo "$AUTHZ" | grep -q "$(enc "$CLIENT_ID")" && ok "2. oidc submit → CP authorize URL (client_id=$CLIENT_ID)" \
-  || no "2. oidc submit did not return the expected CP authorize URL"
+case "$AUTHZ" in
+  "${CP%/}/oauth/authorize?"*) authz_on_cp=true ;;
+  *) authz_on_cp=false ;;
+esac
+if [ "$authz_on_cp" = true ] \
+  && echo "$AUTHZ" | grep -Fq "$(enc "$CLIENT_ID")"; then
+  ok "2. oidc submit → canonical CP authorize URL (client_id=$CLIENT_ID)"
+else
+  no "2. oidc submit returned the wrong authorize URL: $AUTHZ"
+fi
 
 # 3. /oauth/authorize (no session) bounces to the USER host, NOT the admin host
 LOC=$(curl -sS -o /dev/null -D - "$CP/oauth/authorize?response_type=code&client_id=$(enc "$CLIENT_ID")&redirect_uri=$(enc "$CALLBACK")&scope=openid+email+profile&state=s&code_challenge=abc&code_challenge_method=S256" \

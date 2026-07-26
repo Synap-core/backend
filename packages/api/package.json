@@ -35,6 +35,7 @@
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
     "build": "node ../../skills/build.mjs && rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
     "gen-types": "node scripts/gen-types.mjs",
+    "gen:mcp-manifest": "export $(grep -v '^#' ../../.env | xargs) && PINO_PRETTY=false tsx src/routers/mcp/tools/gen-manifest.ts",
     "gen-types:check": "node scripts/gen-types.mjs && git diff --exit-code -- ../api-types/src/generated.d.ts",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
     "gen-api-docs": "node scripts/gen-api-docs.mjs",

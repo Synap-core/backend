@@ -71,7 +71,7 @@ function loadReflexProse(): string {
 // the MCP `instructions` field, so it sits in the model's context for EVERY
 // session by construction. The reflex portion is derived from reflexes.md
 // (SSOT); the non-reflex remainder (main-capability brief pointer) lives here.
-const SYNAP_INSTRUCTIONS = `${loadReflexProse()}
+export const SYNAP_INSTRUCTIONS = `${loadReflexProse()}
 
 Main-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call \`synap_load_skill("catalog")\` to see every deeper reference available, and \`synap_load_skill(slug)\` to load one in full.`;
 

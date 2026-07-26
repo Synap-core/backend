@@ -82,7 +82,12 @@ export async function proxy(req: NextRequest) {
     path === "/my-connections" ||
     path === "/oauth/consent" ||
     path.startsWith("/approve-agent") ||
-    path.startsWith("/connection-requests/");
+    path.startsWith("/connection-requests/") ||
+    // A proposal reviewer is usually a workspace editor, not a pod admin;
+    // `proposals.get`/`.approve` re-check editor role server-side, so we only
+    // need a valid Kratos session here — requiring pod_admin would 403 every
+    // non-admin reviewer landing from an AI-sent /open/<id> link.
+    path.startsWith("/proposal/");
   if (!isSelfService) {
     const admin = await isPodAdmin(cookie);
     if (!admin) {

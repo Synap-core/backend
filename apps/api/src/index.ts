@@ -686,6 +686,18 @@ app.get("/open/:type/:id", (c) => {
   if (!ALLOWED.has(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     return c.text("Invalid deep link", 400);
   }
+  // Mirror the bare-id `/open/:id` route: a proposal renders on the web
+  // (pod-admin) with "open in app" as a sub-action, not a forced Electron
+  // bounce. No producer builds this typed form for proposals today (the
+  // canonical `deep-links.ts` emits the bare-id shape), but keep the two routes
+  // in lock-step so a future typed link can't fall into the bounce-only trap.
+  if (type === "proposal") {
+    const admin = configuredPodAdminBase();
+    if (admin.ok) {
+      const target = new URL(`/proposal/${id}`, admin.base);
+      return c.redirect(target.toString(), 302);
+    }
+  }
   return c.html(renderDeepLinkPage(`synap://open/${type}/${id}`));
 });
 
@@ -769,6 +781,19 @@ app.get("/open/:id", async (c) => {
     // Channels back post_message / get_channel links; the browser deep-link
     // handler opens `synap://open/channel/<id>` in the main panel.
     type = "channel";
+  }
+
+  // A PROPOSAL renders on the web (pod-admin) as its MAIN view — accept / reject /
+  // modify live there, with "open in the desktop app" available as a sub-action —
+  // instead of forcing the `synap://` bounce into Electron. Only `proposal` gets
+  // this: the other types have no web renderer yet, so they keep bouncing to the
+  // app. Falls through to the bounce if pod-admin isn't configured (graceful).
+  if (type === "proposal") {
+    const admin = configuredPodAdminBase();
+    if (admin.ok) {
+      const target = new URL(`/proposal/${id}`, admin.base);
+      return c.redirect(target.toString(), 302);
+    }
   }
 
   const deep = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
