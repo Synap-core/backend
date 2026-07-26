@@ -134,7 +134,8 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         report.properties.added.length +
         report.entityLinks.added.length +
         report.home.blocksAdded.length +
-        report.layout.sidebarItemsAdded.length;
+        report.layout.sidebarItemsAdded.length +
+        Number(report.layout.primarySurfaceChanged);
 
       if (changed > 0) {
         logger.info(
@@ -146,6 +147,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
             profilesAdded: report.profiles.added,
             propertiesAdded: report.properties.added.length,
             entityLinksAdded: report.entityLinks.added.length,
+            primarySurfaceChanged: report.layout.primarySurfaceChanged,
             propertyConflicts: report.properties.conflicts,
           },
           "Workspace reconciled to canonical template"

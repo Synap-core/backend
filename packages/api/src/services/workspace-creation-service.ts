@@ -153,15 +153,17 @@ export async function reconcileWorkspaceIfStale(opts: {
     });
 
     // Stamp the new version so the NEXT idempotent hit short-circuits as
-    // up to date instead of re-reconciling every time.
+    // up to date instead of re-reconciling every time. Merge atomically from
+    // the database's post-reconcile value: currentSettings is the snapshot
+    // from before reconciliation and replacing the whole JSONB document here
+    // would erase layout/settings changes the reconcile just persisted.
     try {
       await db
         .update(workspaces)
         .set({
-          settings: {
-            ...(currentSettings ?? {}),
-            packageVersion: version,
-          } satisfies WorkspaceSettings,
+          settings: drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(
+            { packageVersion: version }
+          )}::jsonb`,
         })
         .where(eq(workspaces.id, workspaceId));
     } catch (err) {
