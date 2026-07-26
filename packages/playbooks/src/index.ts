@@ -618,6 +618,21 @@ export interface LoopPlaybookDef {
    * persisted (no dedicated column — a kind playbook targets `subjectProfile`).
    */
   subjectFacet?: Record<string, unknown>;
+  /**
+   * Composition (base + overlay) — the `ref` of a base playbook declared in the
+   * enclosing `LoopDefinition.basePlaybooks`. When set, this playbook is an
+   * OVERLAY: `resolveComposedPlaybooks` flattens `composePlaybookDef(base, this)`
+   * at author/seed time, so multiple per-source overlays (cold-outreach,
+   * inbound-nurture, referral) share ONE base conversion journey instead of
+   * duplicating its full definition. The flattened result is a normal
+   * `LoopPlaybookDef` the applier materializes unchanged — composition is an
+   * authoring-time concern; the runtime never sees `extends`.
+   *
+   * Mirrors the workspace-template `compose`-relation dependency: an overlay
+   * layers ADDITIVELY onto a base (stages merge by key, grants/params/outputs
+   * union, overlay scalars win). See `composePlaybookDef`.
+   */
+  extends?: string;
 }
 
 /**
@@ -652,4 +667,184 @@ export interface LoopDefinition {
   params?: LoopParamSpec[];
   playbooks: LoopPlaybookDef[];
   triggers?: LoopTriggerDef[];
+  /**
+   * Composition (base + overlay) — ABSTRACT base playbook definitions, each
+   * addressable by its `ref`. A base is the shared skeleton (e.g. a conversion
+   * journey with common stages/grants) that per-source overlays in `playbooks`
+   * layer onto via `LoopPlaybookDef.extends`. Bases are NEVER materialized on
+   * their own — they exist only to be composed into a concrete playbook by
+   * `resolveComposedPlaybooks`. This mirrors a workspace template's SSOT base
+   * that `compose`-relation overlays layer additively onto.
+   */
+  basePlaybooks?: LoopPlaybookDef[];
+}
+
+// ── Playbook composition (base + overlay) ─────────────────────────────────────
+// Author/seed-time flattening: an overlay `LoopPlaybookDef` (`extends: baseRef`)
+// merges ADDITIVELY onto a base declared in `LoopDefinition.basePlaybooks`,
+// producing ONE flat `LoopPlaybookDef` the applier materializes unchanged. This
+// mirrors the workspace-template `compose` relation (overlay onto base), but the
+// FIELD merge here is net-new: `layerTemplateGraph` computes composition
+// TOPOLOGY (ordering + fan-in) only — the additive body merge for workspace
+// templates lives in the profile/property reconcile appliers, which are
+// entity-specific and don't generalize to a playbook definition. A playbook
+// overlay is a single-level base+overlay (not an arbitrary DAG), so a small pure
+// merge is the right tool, not the topological engine.
+//
+// Merge semantics:
+//   - scalars (name, goalTemplate, description, executor, inputStrategy,
+//     channelSpec, schedule, subjectProfile, subjectFacet): OVERLAY WINS when
+//     defined, else the base value.
+//   - stages: additive by `key` — base stages keep their order; an overlay stage
+//     whose `key` matches a base stage merges onto it (overlay stage fields win,
+//     stage `grants` union); overlay stages with new keys append after.
+//   - grants / params / expectedOutputs: UNION (grants dedup by kind+id, params
+//     by name, expectedOutputs by kind) — base first, overlay appended.
+//   - `ref` is the overlay's (the concrete playbook); `extends` is dropped.
+
+/** Dedup a CapabilityRef list by (kind,id), keeping first occurrence. */
+function unionCapabilityRefs(
+  base: CapabilityRef[] | undefined,
+  overlay: CapabilityRef[] | undefined
+): CapabilityRef[] | undefined {
+  if (!base && !overlay) return undefined;
+  const seen = new Set<string>();
+  const out: CapabilityRef[] = [];
+  for (const ref of [...(base ?? []), ...(overlay ?? [])]) {
+    const key = `${ref.kind}:${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
+/** Union two arrays of loose objects, deduping by a string field, overlay-wins on collision. */
+function unionByField(
+  base: Record<string, unknown>[] | undefined,
+  overlay: Record<string, unknown>[] | undefined,
+  field: string
+): Record<string, unknown>[] | undefined {
+  if (!base && !overlay) return undefined;
+  const byKey = new Map<string, Record<string, unknown>>();
+  const order: string[] = [];
+  const push = (item: Record<string, unknown>) => {
+    const key = String(item[field]);
+    if (!byKey.has(key)) order.push(key);
+    byKey.set(key, item);
+  };
+  for (const item of base ?? []) push(item);
+  for (const item of overlay ?? []) push(item);
+  return order.map((k) => byKey.get(k)!);
+}
+
+/** Read a loose object's `grants` as a CapabilityRef[] (or undefined). */
+function readStageGrants(
+  stage: Record<string, unknown>
+): CapabilityRef[] | undefined {
+  const g = stage.grants;
+  return Array.isArray(g) ? (g as CapabilityRef[]) : undefined;
+}
+
+/** Additive stage merge: base order preserved; overlay merges by `key`, new keys append. */
+function mergeStages(
+  base: Record<string, unknown>[] | undefined,
+  overlay: Record<string, unknown>[] | undefined
+): Record<string, unknown>[] | undefined {
+  if (!base && !overlay) return undefined;
+  const byKey = new Map<string, Record<string, unknown>>();
+  const order: string[] = [];
+  for (const stage of base ?? []) {
+    const key = String(stage.key);
+    byKey.set(key, { ...stage });
+    order.push(key);
+  }
+  for (const stage of overlay ?? []) {
+    const key = String(stage.key);
+    const existing = byKey.get(key);
+    if (existing) {
+      const grants = unionCapabilityRefs(
+        readStageGrants(existing),
+        readStageGrants(stage)
+      );
+      const merged: Record<string, unknown> = { ...existing, ...stage };
+      if (grants) merged.grants = grants;
+      byKey.set(key, merged);
+    } else {
+      byKey.set(key, { ...stage });
+      order.push(key);
+    }
+  }
+  return order.map((k) => byKey.get(k)!);
+}
+
+/** Pick the overlay value when defined, else the base value. */
+function overlayWins<T>(
+  base: T | undefined,
+  overlay: T | undefined
+): T | undefined {
+  return overlay !== undefined ? overlay : base;
+}
+
+/**
+ * Flatten a base + overlay pair into ONE concrete `LoopPlaybookDef`. Pure. The
+ * result carries no `extends` and is materialized by the applier unchanged.
+ */
+export function composePlaybookDef(
+  base: LoopPlaybookDef,
+  overlay: LoopPlaybookDef
+): LoopPlaybookDef {
+  const merged: LoopPlaybookDef = {
+    // ref/name/goalTemplate are required — overlay wins, falling back to base.
+    ref: overlay.ref,
+    name: overlay.name ?? base.name,
+    goalTemplate: overlay.goalTemplate ?? base.goalTemplate,
+    // scalars — overlay wins when defined, else base.
+    description: overlayWins(base.description, overlay.description),
+    executor: overlayWins(base.executor, overlay.executor),
+    inputStrategy: overlayWins(base.inputStrategy, overlay.inputStrategy),
+    channelSpec: overlayWins(base.channelSpec, overlay.channelSpec),
+    schedule: overlayWins(base.schedule, overlay.schedule),
+    subjectProfile: overlayWins(base.subjectProfile, overlay.subjectProfile),
+    subjectFacet: overlayWins(base.subjectFacet, overlay.subjectFacet),
+    // additive collections.
+    stages: mergeStages(base.stages, overlay.stages),
+    grants: unionCapabilityRefs(base.grants, overlay.grants),
+    params: unionByField(base.params, overlay.params, "name"),
+    expectedOutputs: unionByField(
+      base.expectedOutputs,
+      overlay.expectedOutputs,
+      "kind"
+    ),
+  };
+  // Strip keys left undefined so the flattened def matches a hand-authored one.
+  for (const key of Object.keys(merged) as (keyof LoopPlaybookDef)[]) {
+    if (merged[key] === undefined) delete merged[key];
+  }
+  return merged;
+}
+
+/**
+ * Resolve every playbook in a `LoopDefinition` to its concrete, flattened form:
+ * a playbook with `extends` is composed onto its base (from `basePlaybooks`);
+ * a plain playbook passes through unchanged. Bases themselves are NOT returned —
+ * they are abstract and never materialized. Throws when an `extends` ref names no
+ * base, so a broken composition fails loudly at author/seed time.
+ */
+export function resolveComposedPlaybooks(
+  def: LoopDefinition
+): LoopPlaybookDef[] {
+  const baseByRef = new Map<string, LoopPlaybookDef>(
+    (def.basePlaybooks ?? []).map((b) => [b.ref, b])
+  );
+  return def.playbooks.map((pb) => {
+    if (!pb.extends) return pb;
+    const base = baseByRef.get(pb.extends);
+    if (!base) {
+      throw new Error(
+        `Playbook "${pb.ref}" extends unknown base "${pb.extends}" — declare it in LoopDefinition.basePlaybooks`
+      );
+    }
+    return composePlaybookDef(base, pb);
+  });
 }

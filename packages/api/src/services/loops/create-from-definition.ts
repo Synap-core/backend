@@ -37,6 +37,7 @@ import { fileURLToPath } from "url";
 
 import type { FlowDefinition } from "@synap/database";
 import type { LoopDefinition } from "@synap/playbooks";
+import { resolveComposedPlaybooks } from "@synap/playbooks";
 
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
@@ -164,7 +165,11 @@ export async function createLoopFromDefinition(
   const playbooksCaller = playbooksRouter.createCaller(ctx as never);
   const playbookIdByRef = new Map<string, string>();
   const createdPlaybooks: CreateLoopResult["created"]["playbooks"] = [];
-  for (const pb of def.playbooks) {
+  // Composition (base + overlay): flatten any `extends` overlay onto its base
+  // (from def.basePlaybooks) BEFORE materialization. Bases are abstract and
+  // never created; the applier only ever sees flat, concrete playbook defs.
+  const concretePlaybooks = resolveComposedPlaybooks(def);
+  for (const pb of concretePlaybooks) {
     // Reuse-by-(workspaceId, name) BEFORE create — same dedup the graph-playbook
     // applier uses (package-apply-post-workspace). Without it every repeat door
     // (reconcileFromDefinition fires on each template version bump) would insert

@@ -166,6 +166,15 @@ export {
   type EnsureDefaultCommandsResult,
 } from "./utils/ensure-default-commands.js";
 
+// Export ensureReportAutomation utility (THE manually-triggered report flow)
+export {
+  ensureReportAutomation,
+  REPORT_AUTOMATION_NAME,
+  REPORT_AUTOMATION_DESCRIPTION,
+  REPORT_AUTOMATION_FLOW,
+  type EnsureReportAutomationResult,
+} from "./utils/ensure-report-automation.js";
+
 // Export ensureDefaultRelationDefs utility
 export {
   ensureDefaultRelationDefs,

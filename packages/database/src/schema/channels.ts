@@ -21,7 +21,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { isNotNull } from "drizzle-orm";
+import { isNotNull, sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { agents } from "./agents.js";
 import { projects } from "./projects.js";
@@ -309,6 +309,33 @@ export const channels = pgTable(
     externalSourceIdUnique: uniqueIndex("channels_external_source_id_unique")
       .on(table.externalSource, table.externalId)
       .where(isNotNull(table.externalId)),
+    /**
+     * Partial unique indexes cut by migration 0182 (agent-personal, workspace-
+     * group) + 0210 (feed, narrowed). Declared here so code and DB agree and
+     * schema-coherence can see them — migrations remain the SSOT that creates
+     * them (drizzle-kit is forbidden in this repo). Predicates MUST mirror the
+     * SQL in 0000_baseline_schema.sql exactly.
+     */
+    userFeedUnique: uniqueIndex("channels_user_feed_uniq")
+      .on(table.userId)
+      // Narrowed by 0210: only the context-less PROACTIVE feed is one-per-user.
+      // Automation run-recap feeds (context_object_type='automation') are also
+      // feed-typed and must NOT collide — they dedup on context_object_id in code.
+      .where(
+        sql`${table.channelType} = 'feed' AND ${table.status} = 'active' AND ${table.contextObjectType} IS NULL`
+      ),
+    userAgentPersonalUnique: uniqueIndex("channels_user_agent_personal_uniq")
+      .on(table.userId, table.assignedAgentId)
+      // Agent-INSTANCE threads share assigned_agent_id with the template DM but
+      // dedup on channel_members, so they are excluded via the metadata marker.
+      .where(
+        sql`${table.channelType} = 'personal' AND ${table.assignedAgentId} IS NOT NULL AND ${table.status} = 'active' AND (${table.metadata} ->> 'agentInstanceThread') IS NULL`
+      ),
+    userWorkspaceGroupUnique: uniqueIndex("channels_user_workspace_group_uniq")
+      .on(table.userId, table.workspaceId)
+      .where(
+        sql`${table.channelType} = 'thread' AND ${table.contextObjectType} = 'workspace' AND ${table.status} = 'active'`
+      ),
   })
 );
 

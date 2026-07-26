@@ -36,6 +36,7 @@ export async function handleWorkspaceInit(
   const {
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
+    ensureReportAutomation,
     ensureSystemProfiles,
     seedPropertyRelationMappings,
   } = await import("@synap/database");
@@ -59,6 +60,12 @@ export async function handleWorkspaceInit(
     {
       name: "relation-defs",
       promise: ensureDefaultRelationDefs(workspaceId, userId),
+    },
+    // THE report automation — manual trigger, so seeding it costs nothing until a
+    // human runs it. Idempotent + name-keyed, same contract as the two above.
+    {
+      name: "report-automation",
+      promise: ensureReportAutomation(workspaceId, userId),
     },
   ];
 

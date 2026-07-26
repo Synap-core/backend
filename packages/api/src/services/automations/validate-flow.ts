@@ -22,6 +22,21 @@
  * playbook actually exist?) require DB access, so they are RESOLVER-GATED: pass
  * an optional `FlowValidationResolvers` to enable them. With no resolver the core
  * structural + contract checks still run — those catch every bug listed above.
+ *
+ * ── TEMPORARY DUPLICATE — collapse to one SSOT after publish ──────────────────
+ * An identical PURE copy of this validator lives in
+ * `synap-app/packages/workspace-templates/src/validate-flow.ts` so `validateTemplate`
+ * (which runs in that published, backend-independent package — CLI / build gate /
+ * CP publish) can catch broken automation flows at AUTHOR time. That copy exists
+ * ONLY because backend/CP consume `@synap-core/workspace-templates` over a FROZEN
+ * published npm boundary (`^0.7.1` / `^0.9.2`), so backend cannot yet re-export
+ * from it. This file keeps the `@synap/database` COMPILE-TIME drift guard below
+ * (that package has no `@synap/database` dep, so the guard can only live here). The
+ * `validate-flow.drift.test.ts` in workspace-templates asserts the two logic bodies
+ * stay identical until the cutover. CUTOVER (collapse to ONE SSOT): publish
+ * `@synap-core/workspace-templates`, bump backend + CP deps to that version, then
+ * replace this file's body with a re-export FROM workspace-templates (keeping the
+ * `AssertExact` guard below binding its arrays to the `@synap/database` unions).
  */
 
 // `import type` — erased at compile time, so this file stays runtime pure/DB-free.

@@ -238,6 +238,13 @@ let bWorkspaceId: string;
 const bentoBase: WorkspaceDefinitionInput = {
   workspaceName: `Bento Base ${bSuf}`,
   profiles: [{ slug: bProfileSlug, displayName: "BProj" }],
+  layoutConfig: {
+    primarySurface: {
+      kind: "app",
+      appId: "dashboard",
+      rendererType: "native",
+    },
+  },
   // Base home dashboard carries ONE widget the overlay must never clobber.
   bentoLayout: [
     {
@@ -355,6 +362,11 @@ describe.skipIf(!SCHEMA_LOADS)(
       expect(sidebar.some((s) => s.url === "https://example.com/overlay")).toBe(
         true
       );
+      expect(ws.settings?.layout?.primarySurface).toEqual({
+        kind: "app",
+        appId: "dashboard",
+        rendererType: "native",
+      });
     });
 
     it("re-applying the same overlay is a no-op (idempotent, no duplicate blocks)", async () => {
@@ -377,6 +389,52 @@ describe.skipIf(!SCHEMA_LOADS)(
       expect(blocks.filter((b) => b.widgetType === "stat-card")).toHaveLength(
         1
       );
+    });
+
+    it("replaces and clears primarySurface only when explicitly directed", async () => {
+      const replacement = {
+        kind: "app" as const,
+        appId: "crm",
+        rendererType: "external" as const,
+        url: "https://crm.synap.live",
+      };
+      const replaceReport = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: {
+          workspaceName: `Bento Base ${bSuf}`,
+          layoutConfig: { primarySurface: replacement },
+        },
+      });
+      expect(replaceReport.layout.primarySurfaceChanged).toBe(true);
+
+      const [replaced] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(replaced.settings?.layout?.primarySurface).toEqual(replacement);
+
+      const clearReport = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: {
+          workspaceName: `Bento Base ${bSuf}`,
+          layoutConfig: { primarySurface: null },
+        },
+      });
+      expect(clearReport.layout.primarySurfaceChanged).toBe(true);
+
+      const [cleared] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(cleared.settings?.layout?.primarySurface).toBeNull();
+
+      const noOpReport = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: {
+          workspaceName: `Bento Base ${bSuf}`,
+          layoutConfig: { primarySurface: null },
+        },
+      });
+      expect(noOpReport.layout.primarySurfaceChanged).toBe(false);
     });
   }
 );

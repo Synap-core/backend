@@ -651,7 +651,12 @@ export async function ensureProactiveFeedChannel(
     where: and(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.FEED),
-      eq(channels.status, ChannelStatus.ACTIVE)
+      eq(channels.status, ChannelStatus.ACTIVE),
+      // The proactive feed is the CONTEXT-LESS feed. Automation run-recap
+      // channels are also feed-typed (context_object_type='automation'); mirror
+      // the narrowed channels_user_feed_uniq arbiter (migration 0210) so they
+      // are never mistaken for the proactive feed.
+      isNull(channels.contextObjectType)
     ),
     // Deterministic oldest-wins: if duplicate feed channels exist, always resolve
     // the canonical original so proactive posts don't scatter run-to-run.
@@ -660,8 +665,11 @@ export async function ensureProactiveFeedChannel(
 
   if (existing) return existing;
 
-  // Race-safe upsert against channels_user_feed_uniq (migration 0182) — one feed
-  // per user. Arbiter where matches the partial index predicate exactly.
+  // Race-safe upsert against channels_user_feed_uniq (migrations 0182 + 0210) —
+  // one PROACTIVE feed per user. The arbiter `where` MUST match the partial index
+  // predicate exactly (incl. context_object_type IS NULL), else conflict
+  // inference fails; the inserted row leaves context_object_type NULL so it
+  // satisfies the predicate.
   const [channel] = await db
     .insert(channels)
     .values({
@@ -677,7 +685,8 @@ export async function ensureProactiveFeedChannel(
       target: [channels.userId],
       where: and(
         eq(channels.channelType, ChannelType.FEED),
-        eq(channels.status, ChannelStatus.ACTIVE)
+        eq(channels.status, ChannelStatus.ACTIVE),
+        isNull(channels.contextObjectType)
       ),
     })
     .returning();
@@ -688,7 +697,8 @@ export async function ensureProactiveFeedChannel(
     where: and(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.FEED),
-      eq(channels.status, ChannelStatus.ACTIVE)
+      eq(channels.status, ChannelStatus.ACTIVE),
+      isNull(channels.contextObjectType)
     ),
     orderBy: [asc(channels.createdAt)],
   });

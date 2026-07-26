@@ -26,6 +26,43 @@ import { auditLog } from "../../../utils/audit-log.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
+const WorkspacePrimarySurfaceSchema = z.union([
+  z
+    .object({
+      kind: z.literal("app"),
+      appId: z.string().min(1),
+      rendererType: z.literal("native"),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("app"),
+      appId: z.string().min(1),
+      rendererType: z.literal("external"),
+      url: z.string().url(),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cell"),
+      cellKey: z.string().min(1),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("view"),
+      viewId: z.string().min(1),
+      title: z.string().optional(),
+    })
+    .strict(),
+]);
+
 const ParamSpecSchema = z.object({
   name: z.string(),
   type: z.enum(["text", "number", "entity", "choice", "boolean"]),
@@ -133,6 +170,18 @@ const PackageApplySchema = z.object({
    */
   targetWorkspaceId: z.string().uuid().optional(),
   /**
+   * Acting AI-agent identity for a governed install. When an IS agent authors a
+   * definition and submits it for install (the `propose_workspace_template`
+   * tool), it passes its `agentUserId` HERE in the body — exactly as the sibling
+   * governed Hub write doors accept it (cells: `parsed.data.agentUserId ??
+   * c.get("agentUserId")`; entities/automations likewise). The route reads
+   * `body.agentUserId ?? c.get("agentUserId")`, so a self-hosted IS whose
+   * "system"-owned key can't stamp a context `agentUserId` still routes through
+   * `checkPermissionOrPropose` as an AGENT write → a reviewable PROPOSAL, never
+   * a silent auto-execute. A human CLI/browser install omits it → unchanged.
+   */
+  agentUserId: z.string().optional(),
+  /**
    * Bypass ADVISORY preflight findings (e.g. the wave-2 pure `validateTemplate`
    * lint below). It MUST NOT bypass a LIVE structural failure — a profileKind
    * conflict or duplicate slug is a pod-integrity invariant, not advice — so the
@@ -201,7 +250,12 @@ const PackageApplySchema = z.object({
   profileEntityBentoTemplates: z
     .record(z.string(), z.record(z.string(), z.unknown()))
     .optional(),
-  layoutConfig: z.record(z.string(), z.unknown()).optional(),
+  layoutConfig: z
+    .object({
+      primarySurface: WorkspacePrimarySurfaceSchema.nullish(),
+    })
+    .catchall(z.unknown())
+    .optional(),
   onboarding: z.record(z.string(), z.unknown()).optional(),
   extends: z
     .array(
@@ -271,8 +325,14 @@ export function registerPackagesRoutes(app: HubHono): void {
 
   app.post("/packages/apply", async (c) => {
     const userId = c.get("userId");
-    const agentUserId = c.get("agentUserId") ?? undefined;
     const body = PackageApplySchema.parse(await c.req.json());
+    // Honor a body-supplied `agentUserId` (the IS `propose_workspace_template`
+    // seam) with the context one as fallback — the canonical governed-write
+    // pattern every sibling Hub door already uses (cells/entities/automations).
+    // Guarantees an AI-authored install is governed even on a self-hosted IS
+    // whose service key can't stamp a context agentUserId. A human install
+    // passes neither → behavior unchanged.
+    const agentUserId = body.agentUserId ?? c.get("agentUserId") ?? undefined;
     const result: Record<string, unknown> = {};
 
     // ── LIVE preflight gate ───────────────────────────────────────────────

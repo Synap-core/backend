@@ -16,6 +16,7 @@ export default defineConfig({
       "src/utils/open-run-session.test.ts",
       "src/utils/resolve-agent-governance-decision.test.ts",
       "src/utils/project-slug.test.ts",
+      "src/utils/ensure-report-automation.test.ts",
       "src/conversions/*.test.ts",
       "src/services/identity-resolution-service.test.ts",
       "src/services/entity-merge-service.test.ts",

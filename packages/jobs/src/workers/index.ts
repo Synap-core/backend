@@ -62,7 +62,6 @@ import {
   handleFederationReceiptCleanup,
 } from "./federation-receipt-cleanup.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
-import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
   handleFeedSourceExecute,
   FEED_SOURCE_EXECUTE_QUEUE,
@@ -182,7 +181,6 @@ const ALL_QUEUES = [
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   "feed-scheduler",
-  "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
@@ -224,11 +222,11 @@ const ALL_QUEUES = [
  * swallow their own errors (never retried) or benefit from retry (webhook
  * delivery, whose consumers dedupe on X-Synap-Event-Id).
  *
- * feed-proactive-execute: `postDigest` inserts a digest message with a random id
- * and no dedup, then a later non-guarded `updateFeedStatus` can still throw →
- * retry re-posts the digest. The feed reschedules itself, so a lost tick self-heals.
+ * Currently empty — the only census member (feed-proactive-execute) was removed
+ * with the dead proactive-digest worker; keep the mechanism for future
+ * retry-free recurring inserts.
  */
-const NO_RETRY_QUEUES = new Set<string>(["feed-proactive-execute"]);
+const NO_RETRY_QUEUES = new Set<string>([]);
 
 /**
  * Register all pg-boss workers.
@@ -426,14 +424,6 @@ export async function registerAllWorkers(): Promise<void> {
   // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
-
-  // Feed proactive executor (on-demand — executes proactive digest generation).
-  // Invoked as a delivery action by a loop/automation (the morning-briefing loop
-  // template), not by a parallel scheduler. Stays reachable for governed runs.
-  await boss.work("feed-proactive-execute", async ([job]: any[]) =>
-    handleFeedProactiveExecute(job)
-  );
-  logger.info("Registered worker: feed-proactive-execute");
 
   // Feed pluggable source executor (Phase 1 + 2) — fetches one subscription via
   // the provider registry. Downstream items land on FEED_SOURCE_ITEMS_QUEUE

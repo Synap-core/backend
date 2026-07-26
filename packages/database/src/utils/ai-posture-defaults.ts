@@ -28,6 +28,7 @@ export const DEFAULT_AI_POSTURES: Record<string, AiPosture> = {
   view: { openAfterCreate: true },
   cell: { openAfterCreate: true },
   playbook: { explainWhy: true, openAfterCreate: true },
+  report: { explainWhy: true, openAfterCreate: true, attachOutputs: true },
   automation: { explainWhy: true, openAfterCreate: true },
   workspace: { explainWhy: true, openAfterCreate: true },
   capability: { explainWhy: true, openAfterCreate: true },

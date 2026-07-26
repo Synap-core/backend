@@ -268,6 +268,9 @@ export interface WorkspaceDefinitionInput {
   layoutConfig?: {
     pinnedApps?: string[];
     defaultView?: string;
+    primarySurface?: WorkspaceLayoutConfig["primarySurface"];
+    /** Compatibility input only; new definitions use primarySurface. */
+    defaultApp?: string;
     theme?: string;
     sidebarItems?: Array<{
       kind: "app" | "view" | "profile" | "external" | "cell";

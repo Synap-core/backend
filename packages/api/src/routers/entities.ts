@@ -2361,6 +2361,15 @@ export const entitiesRouter = router({
           .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Caller-requested review: force this update through the proposal path
+         * even when it would otherwise auto-approve. For machine-sourced writes
+         * where a human clicked the trigger but did not author the DATA — data
+         * enrichment being the first case: the operator reviews the diff on the
+         * entity's proposal panel before it lands. Never DOWNGRADES governance;
+         * it is OR-ed with the checks that already force a proposal.
+         */
+        forcePropose: z.boolean().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
         /** Workspace used for permission, audit, overlays, and side effects. */
@@ -2459,7 +2468,8 @@ export const entitiesRouter = router({
         input.global === true && existing.workspaceId !== null;
       const changesProfileType =
         input.profileSlug !== undefined && input.profileSlug !== existing.type;
-      const forcePropose = promotesToGlobal || changesProfileType;
+      const forcePropose =
+        promotesToGlobal || changesProfileType || input.forcePropose === true;
 
       // 2. Permission check
       const perm = await checkPermissionOrPropose({

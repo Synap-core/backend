@@ -15,11 +15,9 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
 
-import { randomUUID } from "node:crypto";
 import {
   getDb,
-  messages,
-  computeMessageHash,
+  insertChannelMessage,
   skills,
   links,
   eq,
@@ -27,7 +25,7 @@ import {
   desc,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { MessageRole } from "@synap/database/schema";
+import { MessageAuthorType, MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
 
@@ -139,19 +137,31 @@ export class IsAgentExecutor implements Executor {
     const kickoff = `${contextPrefix}${base}${stageSection}`;
 
     // Post the resolved goal as a USER message — the persisted kickoff message
-    // the IS responds to. Attributed to the run's acting principal.
-    const messageId = randomUUID();
-    const hash = computeMessageHash(messageId, kickoff);
-
-    await db.insert(messages).values({
-      id: messageId,
+    // the IS responds to. Attributed to the run's acting principal, hence the
+    // explicit role/authorType/userId: `insertChannelMessage` defaults to an
+    // assistant/BOT/"system" author, which would misattribute the kickoff.
+    //
+    // No deterministic id: the runner mints a FRESH session, channel and
+    // playbook_runs row on every `executeSingleRun` (run-playbook.ts §1/§2/§4),
+    // so nothing in scope here is stable across a retry — a derived id would be
+    // idempotency theatre. A redelivered run therefore posts a new kickoff into
+    // its own new channel, which is the pre-existing behaviour.
+    const { messageId } = await insertChannelMessage({
       channelId: ctx.channelId,
-      role: MessageRole.USER,
       content: kickoff,
       userId: ctx.userId,
-      previousHash: "",
-      hash,
+      role: MessageRole.USER,
+      authorType: MessageAuthorType.HUMAN,
     });
+    // Only `undefined` when the insert hit a PK conflict (impossible with the
+    // random id above). Fail loudly rather than handing `undefined` to
+    // triggerAutoRespond, which would dispatch the IS at a message it can't load.
+    if (!messageId) {
+      return {
+        status: "failed",
+        error: "kickoff message insert conflicted — no message id to dispatch",
+      };
+    }
 
     // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
     // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel

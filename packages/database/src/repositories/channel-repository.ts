@@ -301,7 +301,12 @@ export class ChannelRepository {
         and(
           eq(channels.userId, userId),
           eq(channels.channelType, ChannelType.FEED),
-          eq(channels.status, ChannelStatus.ACTIVE)
+          eq(channels.status, ChannelStatus.ACTIVE),
+          // The proactive feed is the CONTEXT-LESS feed. Automation run-recap
+          // channels are also feed-typed (context_object_type='automation') and
+          // must not be mistaken for it — this mirrors the narrowed
+          // channels_user_feed_uniq arbiter (migration 0210).
+          isNull(channels.contextObjectType)
         )
       )
       // Deterministic oldest-wins on duplicate feed channels.
@@ -310,7 +315,7 @@ export class ChannelRepository {
 
     if (existing) return existing;
 
-    // Race-safe against channels_user_feed_uniq (migration 0182).
+    // Race-safe against channels_user_feed_uniq (migrations 0182 + 0210).
     try {
       return await this.create({
         userId,
@@ -329,7 +334,9 @@ export class ChannelRepository {
           and(
             eq(channels.userId, userId),
             eq(channels.channelType, ChannelType.FEED),
-            eq(channels.status, ChannelStatus.ACTIVE)
+            eq(channels.status, ChannelStatus.ACTIVE),
+            // Same context-less arbiter as the pre-insert read above.
+            isNull(channels.contextObjectType)
           )
         )
         .orderBy(asc(channels.createdAt))

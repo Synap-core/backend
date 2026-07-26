@@ -164,4 +164,52 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       inputStrategy: "none",
     });
   });
+
+  it("round-trips primarySurface even without sidebar items", async () => {
+    workspaceRow.ref.current = {
+      id: "ws-1",
+      name: "Hosted CRM",
+      description: "CRM workspace",
+      settings: {
+        layout: {
+          primarySurface: {
+            kind: "app",
+            appId: "crm",
+            rendererType: "external",
+            url: "https://crm.synap.live",
+          },
+        },
+      },
+    };
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.layoutConfig).toEqual({
+      primarySurface: {
+        kind: "app",
+        appId: "crm",
+        rendererType: "external",
+        url: "https://crm.synap.live",
+      },
+    });
+  });
+
+  it("retains an explicit primarySurface clear", async () => {
+    workspaceRow.ref.current = {
+      id: "ws-1",
+      name: "Home-first",
+      description: "No primary application",
+      settings: { layout: { primarySurface: null } },
+    };
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.layoutConfig).toEqual({ primarySurface: null });
+  });
 });

@@ -15,6 +15,8 @@ import {
   db,
   eq,
   and,
+  or,
+  isNull,
   inArray,
   drizzleSql,
   automations,
@@ -390,14 +392,57 @@ export async function handleAutomationTriggerMatch(job: {
   // Pod-wide inbound: a null event workspace (a shared / external channel with
   // `workspaceId = NULL`) means "match across the acting user's accessible
   // workspace floor" — `eq(workspaceId, NULL)` matches nothing. A non-null event
-  // workspace keeps the exact single-workspace scope (unchanged). An empty floor
-  // yields `inArray(..., [])` = false, i.e. no matches.
+  // workspace keeps the single-workspace scope. An empty floor yields
+  // `inArray(..., [])` = false, i.e. no workspace-scoped matches.
+  //
+  // POD-WIDE AUTOMATIONS (`automations.workspace_id IS NULL`) are selected in
+  // BOTH branches. Neither `eq(col, <id>)` nor `IN (<floor>)` can ever match a
+  // NULL column, so without the explicit `isNull` branch a pod-wide automation
+  // could never fire for any event — the same trap `userVisibleWhere`
+  // (api/src/utils/user-visible-where.ts) avoids with its leading
+  // `isNull(workspaceIdColumn)` branch, and the same rule playbooks apply in
+  // `matchForEntity` ("a pod-wide (NULL-workspace) template-seeded playbook MUST
+  // match for any workspace's entity"). A pod-wide automation is owner-implicit
+  // config (routers/automations.ts create: "Pod-wide (no workspaceId) is
+  // owner-implicit"), so its scope is the pod.
+  //
+  // Not a cross-workspace leak: `fireAutomation` runs each match in the EVENT's
+  // workspace (`workspaceId ?? automationWorkspaceId`), and the executor scopes
+  // every read to `workspaceId` ∪ pod-wide globals. A pod-wide automation firing
+  // on workspace W's event therefore sees exactly what an automation defined in
+  // W sees — it gains no access to any other workspace.
+  //
+  // The remaining case — a pod-wide EVENT matching a pod-wide AUTOMATION, where
+  // BOTH sides are NULL and `workspaceId ?? automationWorkspaceId` is itself
+  // NULL — has no workspace to run in at all. `fireAutomation` skips it with a
+  // warning rather than dispatching a NULL workspace into an executor that
+  // cannot scope one; see the guard there.
+  // OWNER BOUND on the pod-wide branch. "Owner-implicit" holds at CREATE time
+  // (routers/automations.ts) but is NOT enforced at MATCH time, and the
+  // workspace-scoped branch is bounded by membership while a bare
+  // `isNull(workspace_id)` is bounded by nothing. On a multi-member pod that
+  // would let user A's pod-wide automation fire on user B's events — A's flow
+  // executing inside B's run. Reads stay scoped to the event's workspace either
+  // way (no data leak), but cross-user EXECUTION is not something a NULL
+  // workspace should imply. Pairing the NULL check with `createdBy = userId`
+  // keeps the single-owner case (every pod-wide automation on this pod today)
+  // behaving exactly as intended, and makes the multi-member case explicit
+  // rather than accidental. Widening this to "all pod members" is a deliberate
+  // product decision, not a default.
+  const podWideMatch = and(
+    isNull(automations.workspaceId),
+    eq(automations.createdBy, userId)
+  );
+
   const workspaceMatch =
     workspaceId != null
-      ? eq(automations.workspaceId, workspaceId)
-      : inArray(
-          automations.workspaceId,
-          await getAccessibleWorkspaceFloor(userId)
+      ? or(eq(automations.workspaceId, workspaceId), podWideMatch)
+      : or(
+          inArray(
+            automations.workspaceId,
+            await getAccessibleWorkspaceFloor(userId)
+          ),
+          podWideMatch
         );
 
   const activeAutomations = await db
@@ -572,6 +617,26 @@ export async function handleAutomationTriggerMatch(job: {
     // Pod-wide events (null event workspace) run each matched automation IN ITS
     // OWN workspace; for the non-null path this equals `workspaceId`, unchanged.
     const runWorkspaceId = workspaceId ?? automationWorkspaceId;
+
+    // BOTH nulls = a pod-wide EVENT matching a pod-wide AUTOMATION. Neither side
+    // names a workspace, so there is no honest one to derive: the executor's
+    // payload is typed `workspaceId: string` and every downstream read scopes on
+    // `eq(<table>.workspaceId, workspaceId)`, so dispatching NULL would open a
+    // run that sits in `running` while executing against an empty scope —
+    // silently inert, which is worse than not firing. Skip loudly instead.
+    // (This case was unreachable while the workspace predicate used only
+    // `eq`/`inArray`; the `isNull` branch above makes it reachable. The same
+    // shape already exists on HEAD in automation-cron-scheduler.ts, which sends
+    // a nullable `automation.workspaceId`. The real fix is executor-side —
+    // `ExecutionPayload.workspaceId: string | null` with explicit pod-wide
+    // handling — and is owned by automation-executor.ts.)
+    if (runWorkspaceId == null) {
+      logger.warn(
+        { automationId, eventType, userId },
+        "Skipping pod-wide automation for pod-wide event — no workspace to run in; the executor cannot scope a NULL workspace"
+      );
+      return;
+    }
 
     const [run] = await db
       .insert(automationRuns)

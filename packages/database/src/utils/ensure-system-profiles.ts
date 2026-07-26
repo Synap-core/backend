@@ -572,6 +572,41 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Question", inputType: "entity-select" },
       },
+      // Report properties — the header of a generated narrative. The body is
+      // the linked document; nothing here duplicates it.
+      {
+        slug: "reportPeriod",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 120 },
+        uiHints: {
+          label: "Period",
+          inputType: "text",
+          helpText: "Timeframe this report covers (e.g. 2026-W30, July 2026)",
+        },
+      },
+      {
+        slug: "generatedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Generated at", inputType: "date" },
+      },
+      {
+        slug: "reportStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["generating", "ready", "failed"] },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "reportSources",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Context used",
+          inputType: "tags",
+          helpText:
+            "Entities, channels, and lenses this report was generated from",
+        },
+      },
       // Decision properties — structured architectural / product / business decisions
       {
         slug: "summary",
@@ -939,6 +974,22 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           color: "#6366F1",
           description:
             "Validated knowledge: gotchas, lessons, decisions, references",
+        },
+      },
+      // Report — a generated, read-only narrative artifact over a lens.
+      // The body lives in a linked document (markdown + directives); the
+      // properties below are only what the header needs to make sense.
+      // Workspace-scoped (NOT in POD_WIDE_SLUGS): a report is *about* the
+      // workspace/project lens it was generated over, so surfacing every
+      // workspace's reports in every lens would be noise, not reach.
+      {
+        slug: "report",
+        displayName: "Report",
+        uiHints: {
+          icon: "file-text",
+          color: "#F59E0B",
+          description:
+            "A generated narrative over a lens: what happened, what it means, what to do. Read-only — the body is an AI-assembled document, not an editable note.",
         },
       },
       // User Observation — AI-inferred observations about the user.
@@ -1341,6 +1392,24 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "tags", required: false, displayOrder: 6 },
           // description = method, scope, any context that doesn't fit conclusion
           { slug: "description", required: false, displayOrder: 7 },
+        ],
+      },
+      // Report — the header of a generated narrative. Body = linked document.
+      {
+        profileSlug: "report",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "reportPeriod", required: false, displayOrder: 1 },
+          { slug: "generatedAt", required: false, displayOrder: 2 },
+          {
+            slug: "reportStatus",
+            required: false,
+            defaultValue: "ready",
+            displayOrder: 3,
+          },
+          { slug: "summary", required: false, displayOrder: 4 },
+          { slug: "reportSources", required: false, displayOrder: 5 },
+          { slug: "tags", required: false, displayOrder: 6 },
         ],
       },
       // Knowledge — ek_* properties

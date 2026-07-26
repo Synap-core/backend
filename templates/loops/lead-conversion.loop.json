@@ -1,0 +1,172 @@
+{
+  "key": "lead-conversion",
+  "name": "Lead Conversion Journey",
+  "description": "The source → playbook funnel: ONE shared conversion arc (new → contacted → engaged → qualified → handoff) with per-source overlays that tailor the FIRST-TOUCH stages to how the lead came in. Overlays layer ADDITIVELY onto a single abstract base (`conversion-base`) via `extends`, so the shared middle/late stages live in exactly one place. Materializes four concrete session-template playbooks: a generic fallback plus cold-outreach / inbound / referral variants. The `lead-conversion-enrollment` capability automation (separate seed) routes a newly-created lead to the matching playbook by its `source` and starts a session on it (idempotent per lead). STARTER CONTENT — the stage goals and suggested tasks are sensible defaults for an agency funnel; tailor them to your own process. Applied via createLoopFromDefinition (templateKey \"lead-conversion\"); base+overlay flatten through resolveComposedPlaybooks at apply time.",
+  "params": [],
+  "basePlaybooks": [
+    {
+      "ref": "conversion-base",
+      "name": "Conversion Journey (base)",
+      "goalTemplate": "Move this lead through the conversion journey — from first touch to a signed client — and log every step.",
+      "description": "Abstract shared conversion arc. Never materialized on its own; per-source overlays extend it. STARTER — edit the stages to match your funnel.",
+      "executor": "is-agent",
+      "subjectProfile": { "profileSlug": "person" },
+      "channelSpec": {
+        "type": "AGENT_COLLAB",
+        "members": [],
+        "aiReactionMode": "when_confident"
+      },
+      "expectedOutputs": [
+        { "kind": "note", "label": "Journey notes" },
+        { "kind": "task", "label": "Follow-ups" }
+      ],
+      "stages": [
+        {
+          "key": "new",
+          "name": "New",
+          "description": "The lead just arrived.",
+          "goal": "Triage the new lead: confirm it is a real fit and decide the first move.",
+          "expectedOutputs": [{ "kind": "note", "label": "Fit assessment" }],
+          "suggestedTasks": [
+            "Review the lead's source and any captured context.",
+            "Confirm contact details and decide the first outreach channel."
+          ]
+        },
+        {
+          "key": "contacted",
+          "name": "Contacted",
+          "description": "First outreach is out.",
+          "goal": "Make first contact and earn a reply.",
+          "expectedOutputs": [{ "kind": "task", "label": "Follow-up" }],
+          "suggestedTasks": [
+            "Send the first message or make the first call.",
+            "Log the response, or set a follow-up if they are silent."
+          ]
+        },
+        {
+          "key": "engaged",
+          "name": "Engaged",
+          "description": "A two-way conversation is happening.",
+          "goal": "Understand what they need and whether we can help.",
+          "suggestedTasks": [
+            "Ask about their goals, timeline, and budget.",
+            "Capture notes on fit and any objections."
+          ]
+        },
+        {
+          "key": "qualified",
+          "name": "Qualified",
+          "description": "A real opportunity.",
+          "goal": "Confirm this is a real opportunity worth a proposal.",
+          "expectedOutputs": [{ "kind": "note", "label": "Proposal scope" }],
+          "suggestedTasks": [
+            "Confirm decision-maker, budget, and timeline.",
+            "Draft the proposal or scope of work."
+          ]
+        },
+        {
+          "key": "handoff",
+          "name": "Hand-off",
+          "description": "Won — becoming a client.",
+          "goal": "Convert to a client and hand off to delivery.",
+          "expectedOutputs": [{ "kind": "task", "label": "Kickoff" }],
+          "suggestedTasks": [
+            "Create the deal or client record.",
+            "Schedule the kickoff and introduce the delivery owner."
+          ]
+        }
+      ]
+    }
+  ],
+  "playbooks": [
+    {
+      "ref": "conversion-generic",
+      "extends": "conversion-base",
+      "name": "Conversion — Standard",
+      "goalTemplate": "Move this lead through the standard conversion journey — from first touch to a signed client.",
+      "description": "Fallback conversion journey for sources without a tailored playbook (e.g. twitter, event, other). Pure base arc."
+    },
+    {
+      "ref": "conversion-cold-outreach",
+      "extends": "conversion-base",
+      "name": "Conversion — Cold Outreach",
+      "goalTemplate": "Convert a cold lead: research, personalize, run an outreach sequence, then move them through the journey.",
+      "description": "Outbound first-touch overlay (cold-outreach / linkedin). Refines the early stages for a no-prior-relationship lead. STARTER — tailor the outreach cadence to your team.",
+      "expectedOutputs": [{ "kind": "task", "label": "Outreach sequence" }],
+      "stages": [
+        {
+          "key": "new",
+          "name": "Research & target",
+          "goal": "Research the prospect and build a real reason to reach out — this is a cold lead with no prior relationship.",
+          "suggestedTasks": [
+            "Research the prospect's company, role, and recent activity.",
+            "Write a personalized angle for the first touch — no generic templates."
+          ]
+        },
+        {
+          "key": "contacted",
+          "name": "Outreach sequence",
+          "goal": "Run a multi-touch outreach sequence until they respond.",
+          "suggestedTasks": [
+            "Send the first personalized message on the chosen channel.",
+            "Queue 2-3 spaced follow-ups; stop the moment they reply."
+          ]
+        }
+      ]
+    },
+    {
+      "ref": "conversion-inbound",
+      "extends": "conversion-base",
+      "name": "Conversion — Inbound",
+      "goalTemplate": "Convert a warm inbound lead: respond fast, qualify while intent is hot, then move them through the journey.",
+      "description": "Warm inbound overlay (landing-page / inbound-call). Speed-to-lead: acknowledge fast and qualify quickly. STARTER — set your own response-time target.",
+      "stages": [
+        {
+          "key": "new",
+          "name": "Acknowledge fast",
+          "goal": "Respond FAST — an inbound lead expects a reply within minutes, not days.",
+          "suggestedTasks": [
+            "Acknowledge the inbound within the hour.",
+            "Pull any context they submitted (form fields, call notes)."
+          ]
+        },
+        {
+          "key": "contacted",
+          "name": "Fast qualify",
+          "goal": "Qualify quickly while intent is hot.",
+          "suggestedTasks": [
+            "Confirm what they are looking for and their timeline.",
+            "Book the next call before the thread goes cold."
+          ]
+        }
+      ]
+    },
+    {
+      "ref": "conversion-referral",
+      "extends": "conversion-base",
+      "name": "Conversion — Referral",
+      "goalTemplate": "Convert a referred lead: thank the referrer, lean on the warm intro, then move them through the journey.",
+      "description": "Warm-intro overlay (referral). Uses the existing trust from the referrer. STARTER — adapt to how you handle intros.",
+      "stages": [
+        {
+          "key": "new",
+          "name": "Thank the referrer",
+          "goal": "Acknowledge the warm intro and thank whoever referred them.",
+          "suggestedTasks": [
+            "Thank the referrer and confirm you will follow up.",
+            "Reference the mutual connection in your first message to the lead."
+          ]
+        },
+        {
+          "key": "contacted",
+          "name": "Warm follow-up",
+          "goal": "Lean on the warm intro — this lead already has a reason to trust you.",
+          "suggestedTasks": [
+            "Reach out referencing the shared context.",
+            "Move quickly to a call; warm leads convert fast."
+          ]
+        }
+      ]
+    }
+  ]
+}

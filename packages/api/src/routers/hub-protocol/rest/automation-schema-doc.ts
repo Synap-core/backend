@@ -45,10 +45,10 @@ export const AUTOMATION_SCHEMA = {
         "entity.delete.completed",
         "capture.complete.completed",
         "channel_message.create.completed",
-        "proposal.approved",
-        "proposal.rejected",
         "connector_sync.complete.completed",
         "relation.create.completed",
+        "proposal.approved.completed",
+        "proposal.rejected.completed",
         "entity.create.validated (proposal-approval path only)",
         "entity.*",
         "capture.*",
@@ -133,7 +133,7 @@ export const AUTOMATION_SCHEMA = {
       description: "Evaluates an expression and routes to yes/no branches",
       fields: {
         expression:
-          "string — JS-like expression. E.g. \"trigger.payload.entity.metadata.priority === 'high'\"",
+          "string — JS-like expression over the trigger payload / prior steps. E.g. \"trigger.payload.data.profileSlug === 'note'\"",
         trueLabel: "string (optional)",
         falseLabel: "string (optional)",
       },
@@ -186,10 +186,17 @@ export const AUTOMATION_SCHEMA = {
     description:
       "All string fields in node data support {{...}} template interpolation at runtime",
     variables: {
-      "trigger.payload": "The full event payload that fired the automation",
-      "trigger.payload.entity": "For entity events: the entity object",
-      "trigger.payload.entity.title": "Entity title",
-      "trigger.payload.entity.properties": "Entity properties JSONB",
+      "trigger.payload":
+        "The full event payload that fired the automation. Shape: { eventType, subjectId, data, userId, timestamp } — there is NO `entity` key.",
+      "trigger.payload.subjectId":
+        "The id of the entity/subject the event is about (e.g. the created entity's id). This is how you reference the triggering entity — NOT `trigger.payload.entity`.",
+      "trigger.payload.data":
+        "For entity events: the event's data payload. E.g. entity.create.completed carries { profileSlug, title }; entity.update.completed carries { profileSlug, changedKeys, ...changed values }.",
+      "trigger.payload.data.title":
+        "Entity title (entity create/update events).",
+      "trigger.payload.eventType":
+        "The matched event type string, e.g. 'entity.create.completed'.",
+      "trigger.payload.timestamp": "ISO timestamp of when the event fired.",
       "steps.<nodeId>.output": "Output of a prior step by node ID",
       "loop.item": "Current item inside a loop node",
       "env.VAR_NAME":
@@ -220,12 +227,12 @@ export const AUTOMATION_SCHEMA = {
       "--action":
         "notify | entity-create:<profileSlug> | channel-message | webhook:<url> | none (for draft). E.g. --action notify",
       "--message":
-        "Message content for notify/channel-message actions (supports {{trigger.payload.entity.title}})",
+        "Message content for notify/channel-message actions (supports {{trigger.payload.data.title}})",
       "--channel": "Channel ID for channel-message action",
       "--status": "draft (default) | active — whether to activate immediately",
     },
     examples: [
-      "synap automation create --name 'Note → notify' --trigger 'event:entity.create.completed' --filter 'profileSlug=note' --action notify --message 'New note: {{trigger.payload.entity.title}}'",
+      "synap automation create --name 'Note → notify' --trigger 'event:entity.create.completed' --filter 'profileSlug=note' --action notify --message 'New note: {{trigger.payload.data.title}}'",
       "synap automation create --name 'Weekly digest' --trigger 'cron:0 9 * * MON' --action channel-message --channel '#general' --message 'Weekly digest is ready.'",
       "synap automation create --name 'Import hook' --trigger webhook --status draft",
     ],
@@ -234,6 +241,6 @@ export const AUTOMATION_SCHEMA = {
     description:
       "Full YAML format for complex flows (synap automation create --from file.yaml)",
     example:
-      "name: 'High-priority note alert'\ntrigger: event\ntriggerConfig:\n  eventPattern: entity.create.completed\n  filters:\n    profileSlug: note\nstatus: active\nflow:\n  nodes:\n    - id: trigger-1\n      type: trigger\n      position: { x: 0, y: 0 }\n      data:\n        triggerType: event\n        label: Entity created\n        config:\n          eventPattern: entity.create.completed\n    - id: output-1\n      type: output\n      position: { x: 0, y: 200 }\n      data:\n        label: Send notification\n        outputType: notification\n        config:\n          title: 'New note'\n          body: '{{trigger.payload.entity.title}}'\n  edges:\n    - id: e1\n      source: trigger-1\n      target: output-1",
+      "name: 'High-priority note alert'\ntrigger: event\ntriggerConfig:\n  eventPattern: entity.create.completed\n  filters:\n    profileSlug: note\nstatus: active\nflow:\n  nodes:\n    - id: trigger-1\n      type: trigger\n      position: { x: 0, y: 0 }\n      data:\n        triggerType: event\n        label: Entity created\n        config:\n          eventPattern: entity.create.completed\n    - id: output-1\n      type: output\n      position: { x: 0, y: 200 }\n      data:\n        label: Send notification\n        outputType: notification\n        config:\n          title: 'New note'\n          body: '{{trigger.payload.data.title}}'\n  edges:\n    - id: e1\n      source: trigger-1\n      target: output-1",
   },
 } as const;

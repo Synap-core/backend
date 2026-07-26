@@ -104,9 +104,55 @@ export interface WorkspaceSidebarSection {
   collapsed?: boolean;
 }
 
+export type WorkspaceJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | WorkspaceJsonValue[]
+  | { [key: string]: WorkspaceJsonValue };
+
+/**
+ * Persisted, JSON-safe subset of the cross-host SurfaceDescriptor vocabulary.
+ * Active workspace/project/session/lens context is injected by the host and
+ * must never be stored in this descriptor.
+ */
+export type WorkspacePrimarySurface =
+  | {
+      kind: "app";
+      appId: string;
+      rendererType: "native";
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      kind: "app";
+      appId: string;
+      rendererType: "external";
+      url: string;
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      kind: "cell";
+      cellKey: string;
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      kind: "view";
+      viewId: string;
+      title?: string;
+    };
+
 export interface WorkspaceLayoutConfig {
   pinnedApps?: string[]; // App IDs pinned to the top of the activity bar
   defaultView?: string; // Default view when entering workspace (web)
+  /**
+   * Canonical first screen. Missing = preserve during reconcile, null = clear
+   * to workspace home, descriptor = replace.
+   */
+  primarySurface?: WorkspacePrimarySurface | null;
   /**
    * Default app view to navigate to when a workspace is first opened (browser only).
    * Applied once per profile switch by useTemplateIntegration.

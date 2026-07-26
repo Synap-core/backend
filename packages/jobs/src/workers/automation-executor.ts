@@ -51,6 +51,7 @@ import {
   playbookEnrollments,
   drizzleSql,
   EntityRepository,
+  EntityBodyService,
   materializeEntity,
   eventRepository,
   insertChannelMessage,
@@ -822,6 +823,15 @@ export async function executeOutputStep(
       const profileSlug = (config.profileSlug as string) ?? "note";
       const title = config.title as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
+      // Optional long-form BODY (markdown), e.g. `body: "{{steps.assemble.output}}"`.
+      // When present it is materialized through the canonical body door
+      // (EntityBodyService) into a `documents` row linked via
+      // `entities.documentId` — or folded into `properties.content` when the
+      // heuristic says it is too short to be worth a document. Absent (or
+      // whitespace-only) → EVERY line below behaves exactly as before.
+      const rawBody = config.body;
+      const bodyText =
+        typeof rawBody === "string" && rawBody.trim() ? rawBody : undefined;
 
       // Idempotency + empty-guard. When the node declares `dedupeBy` (a property
       // key, e.g. "url" for bookmarks) we (1) SKIP when that value is empty — so a
@@ -872,7 +882,32 @@ export async function executeOutputStep(
         workspaceId,
         subjectType: "entity",
         action: "create",
-        data: { profileSlug, title, properties },
+        // The body travels WITH the proposal under `content` — the key the
+        // approve path reads (`materializeEntity`'s `data.content`, and
+        // approve-executors "entity/create"), so it is carried alongside
+        // profileSlug/title/properties rather than being dropped at propose time.
+        // Materializing at propose time instead would orphan a document + storage
+        // object whenever the proposal is rejected.
+        //
+        // ⚠️ KNOWN PRE-EXISTING BUG, NOT INTRODUCED HERE, and it gates this
+        // branch end-to-end: `proposeAutomationWrite` persists `data` FLAT
+        // (jobs/src/utils/automation-governance.ts), while the entity/create
+        // approve executor reads a NESTED envelope (`proposal.data?.data`,
+        // approve-executors.ts) — the nesting the canonical chat door
+        // (`checkPermissionOrPropose`) produces and the automation path bypasses.
+        // Verified against live pod proposals, which are nested. So approving ANY
+        // automation entity_create proposal currently throws "missing profileSlug",
+        // body or not. Not reached on the default path because `entity.create` IS
+        // in DEFAULT_AUTO_APPROVE (automations execute entity writes directly);
+        // it bites `forceProposeWrites` sessions and tightened workspaces.
+        // When the shape is fixed, `content` must land at `data.data.content` —
+        // it sits alongside the other keys here, so a nesting fix carries it.
+        data: {
+          profileSlug,
+          title,
+          properties,
+          ...(bodyText ? { content: bodyText } : {}),
+        },
         reasoning: "Automation proposed creating an entity.",
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
@@ -885,8 +920,16 @@ export async function executeOutputStep(
       }
       if ("proposed" in gate) {
         // SAFETY: a proposal was created — do NOT direct-write. The change
-        // awaits human review, attributed to the owning agent.
-        return { status: "proposed", proposalId: gate.proposalId };
+        // awaits human review, attributed to the owning agent. The body is NOT
+        // materialized here (there is no entity id yet, and a document written
+        // now would be an orphan if the proposal is rejected): it is carried on
+        // the proposal payload as `content` (above) and materialized by the
+        // approve path. `bodyDeferred` makes that visible in the step output.
+        return {
+          status: "proposed",
+          proposalId: gate.proposalId,
+          ...(bodyText ? { bodyDeferred: true } : {}),
+        };
       }
 
       // Attribution: this write is authored by the automation's owning
@@ -909,13 +952,59 @@ export async function executeOutputStep(
             }
           : { createdByKind: "system" as const, createdByUserId: ownerId };
 
+      // BODY (optional) — materialized through the canonical door BEFORE the
+      // entity row is inserted, with the row id pre-minted, exactly like the
+      // proposal materializer (materializer.ts:327-353). Rationale: the service
+      // only needs the id to namespace the storage object (it never reads the
+      // entity row), so pre-minting lets the entity be created ONCE already
+      // carrying `documentId` — no post-create UPDATE, no window in which the
+      // entity exists bodyless, and no second write to fail halfway.
+      // FAILURE ISOLATION: setBody's text path catches its own storage/repo
+      // failures and folds back to `{ inlineContent }` (entity-body-service.ts
+      // :246-254), so a materialization failure degrades to inline content on
+      // the entity instead of failing the step or orphaning a document. We add
+      // no second layer — doing so would only convert a degraded-but-complete
+      // write into a step failure, and pg-boss would retry it into a duplicate
+      // entity.
+      let documentId: string | undefined;
+      let entityProperties = properties;
+      // Only pre-mint (and pass) an id on the body path — the no-body path keeps
+      // its DB-minted uuid, byte-for-byte the previous behavior.
+      const preMintedEntityId = bodyText ? randomUUID() : undefined;
+
+      if (bodyText && preMintedEntityId) {
+        const body = await new EntityBodyService(db, eventRepository).setBody({
+          entityId: preMintedEntityId,
+          userId: ownerId,
+          workspaceId: workspaceId ?? null,
+          title: title || undefined,
+          text: bodyText,
+          // Provenance travels verbatim onto the `documents` row — the same
+          // agent/system attribution the entity row gets, plus the run's
+          // correlation id. Never re-labelled "human".
+          provenance: {
+            ...provenance,
+            createdByUserId: ownerId,
+            correlationId: automationContext.rootRunId,
+          },
+        });
+        if (body.documentId) {
+          documentId = body.documentId;
+        } else if (body.inlineContent !== undefined) {
+          // Short body → stays inline on the entity (no document row created).
+          entityProperties = { ...properties, content: body.inlineContent };
+        }
+      }
+
       // materializeEntity wraps EntityRepository.create: profile resolution,
       // pod-wide scoping, property indexing, event emission — plus provenance.
       const { entity } = await materializeEntity(
         {
+          ...(preMintedEntityId ? { id: preMintedEntityId } : {}),
           profileSlug,
           title,
-          properties,
+          properties: entityProperties,
+          ...(documentId ? { documentId } : {}),
           workspaceId,
           userId: ownerId,
           skipValidation: true,
@@ -927,7 +1016,12 @@ export async function executeOutputStep(
         }
       );
 
-      return { status: "created", entityId: entity.id, title: entity.title };
+      return {
+        status: "created",
+        entityId: entity.id,
+        title: entity.title,
+        ...(documentId ? { documentId } : {}),
+      };
     }
 
     case "entity_update": {

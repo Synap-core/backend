@@ -458,23 +458,34 @@ export async function workspaceToPackageDefinition(opts: {
   }
   if (capabilities.length > 0) def.capabilities = capabilities;
 
-  // ── Sidebar layout ──────────────────────────────────────────────────────
-  if (
-    settings.layout?.sidebarItems &&
-    settings.layout.sidebarItems.length > 0
-  ) {
-    def.layoutConfig = {
-      ...(settings.layout.pinnedApps
-        ? { pinnedApps: settings.layout.pinnedApps }
+  // ── Workspace layout ────────────────────────────────────────────────────
+  // Serialize every persisted layout field, not only workspaces that happen to
+  // have sidebar items. In particular, retain an explicit
+  // `primarySurface: null`: that is a meaningful "return to workspace home"
+  // instruction when this package is later reconciled.
+  if (settings.layout) {
+    const liveLayout = settings.layout;
+    const layoutConfig: NonNullable<PackageDefinition["layoutConfig"]> = {
+      ...(liveLayout.pinnedApps ? { pinnedApps: liveLayout.pinnedApps } : {}),
+      ...(liveLayout.defaultView
+        ? { defaultView: liveLayout.defaultView }
         : {}),
-      ...(settings.layout.defaultView
-        ? { defaultView: settings.layout.defaultView }
+      ...(Object.prototype.hasOwnProperty.call(liveLayout, "primarySurface")
+        ? { primarySurface: liveLayout.primarySurface }
         : {}),
-      ...(settings.layout.theme ? { theme: settings.layout.theme } : {}),
-      sidebarItems: settings.layout.sidebarItems as NonNullable<
-        PackageDefinition["layoutConfig"]
-      >["sidebarItems"],
+      ...(liveLayout.defaultApp ? { defaultApp: liveLayout.defaultApp } : {}),
+      ...(liveLayout.theme ? { theme: liveLayout.theme } : {}),
+      ...(liveLayout.sidebarItems
+        ? {
+            sidebarItems: liveLayout.sidebarItems as NonNullable<
+              PackageDefinition["layoutConfig"]
+            >["sidebarItems"],
+          }
+        : {}),
     };
+    if (Object.keys(layoutConfig).length > 0) {
+      def.layoutConfig = layoutConfig;
+    }
   }
 
   // ── Action placements (settings) — re-name playbook/automation refs ─────

@@ -614,6 +614,11 @@ export class EventRepository {
       subjectType?: subjectType;
       subjectTypes?: string[];
       subjectId?: string;
+      /**
+       * Filter to events whose subject is in a SET (e.g. a campaign's member
+       * entities). Unioned with `subjectId` — see the WHERE-clause build below.
+       */
+      subjectIds?: string[];
       correlationId?: string;
       workspaceId?: string;
       fromDate?: Date;
@@ -661,10 +666,24 @@ export class EventRepository {
       params.push(...filters.subjectTypes);
     }
 
-    if (filters.subjectId) {
+    // Subject filter: singular `subjectId` and set `subjectIds` are UNIONED
+    // into one membership predicate (ANDing them separately would intersect,
+    // which is a footgun). This is ANDed with the user_id / workspace clamp
+    // above, so it narrows visibility and never widens it.
+    const subjectIdSet = new Set<string>();
+    if (filters.subjectId) subjectIdSet.add(filters.subjectId);
+    if (filters.subjectIds) {
+      for (const s of filters.subjectIds) subjectIdSet.add(s);
+    }
+    if (subjectIdSet.size === 1) {
       query += ` AND subject_id = $${paramIndex}`;
-      params.push(filters.subjectId);
+      params.push([...subjectIdSet][0]);
       paramIndex++;
+    } else if (subjectIdSet.size > 1) {
+      const ids = [...subjectIdSet];
+      const placeholders = ids.map(() => `$${paramIndex++}`).join(", ");
+      query += ` AND subject_id IN (${placeholders})`;
+      params.push(...ids);
     }
 
     if (filters.correlationId) {

@@ -96,6 +96,43 @@ import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
 
 const logger = createLogger({ module: "workspaces" });
 
+const workspacePrimarySurfaceSchema = z.union([
+  z
+    .object({
+      kind: z.literal("app"),
+      appId: z.string().min(1),
+      rendererType: z.literal("native"),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("app"),
+      appId: z.string().min(1),
+      rendererType: z.literal("external"),
+      url: z.string().url(),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cell"),
+      cellKey: z.string().min(1),
+      title: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("view"),
+      viewId: z.string().min(1),
+      title: z.string().optional(),
+    })
+    .strict(),
+]);
+
 /**
  * The `definition` fields the post-workspace body-builder reads. A structural
  * slice of `createFromDefinition`'s zod input — the two disagreed silently
@@ -673,8 +710,11 @@ export const workspacesRouter = router({
       // `views.resolveScopedSurface` ({ type: 'whiteboard' }, no scope) on first
       // open. Per-workspace auto-created boards produced a graveyard of empty
       // `isMain` boards the canonical door never reached.
-      const { ensureDefaultCommands, ensureDefaultRelationDefs } =
-        await import("@synap/database");
+      const {
+        ensureDefaultCommands,
+        ensureDefaultRelationDefs,
+        ensureReportAutomation,
+      } = await import("@synap/database");
 
       const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);
       console.log(
@@ -704,6 +744,26 @@ export const workspacesRouter = router({
           `[workspaces.get] Failed to ensure default relation defs:`,
           relDefsResult.message,
           relDefsResult.error
+        );
+      }
+
+      // THE report automation. Seeded here too (not only in workspace-init) so
+      // workspaces created BEFORE it existed get it — same backfill contract as
+      // the two ensure* calls above. Manual trigger, so it never runs unasked.
+      const reportAutomationResult = await ensureReportAutomation(
+        input.id,
+        ctx.userId
+      );
+      console.log(
+        `[workspaces.get] ensureReportAutomation:`,
+        reportAutomationResult.status,
+        reportAutomationResult.message
+      );
+      if (reportAutomationResult.status === "error") {
+        console.error(
+          `[workspaces.get] Failed to ensure report automation:`,
+          reportAutomationResult.message,
+          reportAutomationResult.error
         );
       }
 
@@ -2640,6 +2700,7 @@ export const workspacesRouter = router({
             layoutConfig: z
               .object({
                 pinnedApps: z.array(z.string()).optional(),
+                primarySurface: workspacePrimarySurfaceSchema.nullish(),
                 /** Browser: which app to open by default (e.g. 'intelligence' for chat-first).
                  *  Accept `null` (templates like crm.yaml/marketing.yaml set these to null to
                  *  mean "no default") but normalize to undefined so the output type stays
@@ -4803,7 +4864,12 @@ export const workspacesRouter = router({
             displayTemplates: z
               .array(z.record(z.string(), z.unknown()))
               .optional(),
-            layoutConfig: z.record(z.string(), z.unknown()).optional(),
+            layoutConfig: z
+              .object({
+                primarySurface: workspacePrimarySurfaceSchema.nullish(),
+              })
+              .catchall(z.unknown())
+              .optional(),
             profileEntityBentoTemplates: z
               .record(z.string(), z.unknown())
               .optional(),

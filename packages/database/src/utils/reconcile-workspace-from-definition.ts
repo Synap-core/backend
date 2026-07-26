@@ -165,8 +165,11 @@ export interface ReconcileReport {
    * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
    * kept, overlay items appended, deduped by a stable per-kind key. `added` =
    * the dedup keys of overlay items appended to the workspace's sidebar.
+   *
+   * `primarySurfaceChanged` follows the replacement contract: absent preserves
+   * the live value, null clears to workspace home, and a descriptor replaces it.
    */
-  layout: { sidebarItemsAdded: string[] };
+  layout: { sidebarItemsAdded: string[]; primarySurfaceChanged: boolean };
 }
 
 export async function reconcileWorkspaceFromDefinition(
@@ -215,7 +218,7 @@ export async function reconcileWorkspaceFromDefinition(
     views: { added: [], skipped: [], deferred: [] },
     entityLinks: { added: [], skipped: [], unresolved: [] },
     home: { created: false, blocksAdded: [], skipped: true },
-    layout: { sidebarItemsAdded: [] },
+    layout: { sidebarItemsAdded: [], primarySurfaceChanged: false },
   };
 
   // ── 1. Settings merge (capabilities / subtype / visibility) ────────────────
@@ -768,18 +771,43 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
-  // ── 6. Sidebar layout — ADDITIVE union (base first, overlay appended) ───────
-  // An overlay's `layoutConfig.sidebarItems` are unioned onto the workspace's
-  // live sidebar, deduped by a stable per-kind key (profileSlug / viewId /
-  // viewName / appId / url / cellKey), so a re-applied overlay never duplicates
-  // a tab. `viewName` references are resolved to `viewId` (create-path parity).
+  // ── 6. Layout — primary replacement + additive sidebar union ───────────────
+  // `primarySurface` has intentional three-state semantics:
+  //   absent     → preserve the live value
+  //   null       → explicitly return to workspace home
+  //   descriptor → replace the live value
+  //
+  // Sidebar items remain additive: base first, overlay appended and deduped by
+  // a stable per-kind key. Both changes are persisted in ONE merge so a sidebar
+  // reconcile cannot accidentally restore the pre-reconcile primary surface.
   {
-    const overlaySidebar =
-      (definition.layoutConfig as WorkspaceLayoutConfig | undefined)
-        ?.sidebarItems ?? [];
+    const incomingLayout = definition.layoutConfig as
+      WorkspaceLayoutConfig | undefined;
+    const hasPrimarySurfaceDirective =
+      incomingLayout !== undefined &&
+      Object.prototype.hasOwnProperty.call(incomingLayout, "primarySurface");
+    const overlaySidebar = incomingLayout?.sidebarItems ?? [];
+    const liveSettings = (ws.settings as WorkspaceSettings | null) ?? {};
+    const liveLayout = liveSettings.layout ?? {};
+    let nextLayout: WorkspaceLayoutConfig = liveLayout;
+    let shouldPersistLayout = false;
+
+    if (hasPrimarySurfaceDirective) {
+      const incomingPrimarySurface = incomingLayout.primarySurface;
+      if (
+        JSON.stringify(liveLayout.primarySurface) !==
+        JSON.stringify(incomingPrimarySurface)
+      ) {
+        nextLayout = {
+          ...nextLayout,
+          primarySurface: incomingPrimarySurface,
+        };
+        report.layout.primarySurfaceChanged = true;
+        shouldPersistLayout = true;
+      }
+    }
+
     if (overlaySidebar.length > 0) {
-      const liveSettings = (ws.settings as WorkspaceSettings | null) ?? {};
-      const liveLayout = liveSettings.layout ?? {};
       const baseItems = liveLayout.sidebarItems ?? [];
       const wsViews2 = await dbConn.query.views.findMany({
         where: eq(views.workspaceId, workspaceId),
@@ -816,18 +844,21 @@ export async function reconcileWorkspaceFromDefinition(
         appended.push(item);
         report.layout.sidebarItemsAdded.push(k);
       }
-      if (appended.length > 0 && !dryRun) {
-        await workspaceRepo.mergeSettings(
-          workspaceId,
-          {
-            layout: {
-              ...liveLayout,
-              sidebarItems: [...baseItems, ...appended],
-            },
-          },
-          userId
-        );
+      if (appended.length > 0) {
+        nextLayout = {
+          ...nextLayout,
+          sidebarItems: [...baseItems, ...appended],
+        };
+        shouldPersistLayout = true;
       }
+    }
+
+    if (shouldPersistLayout && !dryRun) {
+      await workspaceRepo.mergeSettings(
+        workspaceId,
+        { layout: nextLayout },
+        userId
+      );
     }
   }
 

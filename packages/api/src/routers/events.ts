@@ -229,6 +229,10 @@ export const eventsRouter = router({
         eventType: z.string().optional(),
         subjectType: subjectTypeSchema.optional(),
         subjectId: z.string().optional(),
+        // Multi-subject filter: union of these subjects' events (e.g. a
+        // campaign timeline showing all its members' activity). Unioned with
+        // `subjectId` if both are given. Capped at 200 to bound the IN clause.
+        subjectIds: z.array(z.string()).max(200).optional(),
         correlationId: z.string().optional(),
         fromDate: z.date().optional(),
         toDate: z.date().optional(),
@@ -282,6 +286,7 @@ export const eventsRouter = router({
         eventType: input.eventType,
         subjectType: input.subjectType,
         subjectId: input.subjectId,
+        subjectIds: input.subjectIds,
         correlationId: input.correlationId,
         fromDate: input.fromDate,
         toDate: input.toDate,

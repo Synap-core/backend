@@ -75,6 +75,8 @@ vi.mock("@synap/database", () => ({
   },
   eq: () => ({}),
   and: () => ({}),
+  or: () => ({}),
+  isNull: () => ({}),
   inArray: () => ({}),
   drizzleSql: () => ({}),
   automations: { id: "id", workspaceId: "workspace_id", runCount: 0 },

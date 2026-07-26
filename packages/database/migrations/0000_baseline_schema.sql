@@ -1205,10 +1205,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_workspace_group_uniq"
     AND "context_object_type" = 'workspace'
     AND "status" = 'active';
 
+-- Narrowed by 0210: automation run-recap channels are ALSO channel_type='feed'
+-- (context_object_type='automation'); only the context-less proactive briefing
+-- feed should be one-per-user, else automation-run creates collide (23505).
 CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_feed_uniq"
   ON "channels" ("user_id")
   WHERE "channel_type" = 'feed'
-    AND "status" = 'active';
+    AND "status" = 'active'
+    AND "context_object_type" IS NULL;
 
 -- ─── 19. channel_connections + channel_link_tokens ───────────────────────────
 

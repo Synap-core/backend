@@ -3158,8 +3158,16 @@ export async function executeMCPToolViaHubProtocol(
       // Mirror the EXISTING trigger path exactly (hubAutomationsRouter.trigger
       // Automation → automationsRouter.trigger): identified by id, gated by
       // assertWorkspaceWrite on the automation's REAL workspace, then enqueued.
-      // This is a RUN, not a content write — it returns { status: "triggered",
-      // runId }, never a proposal. The entity writes the run performs downstream
+      // A RUN is CODE EXECUTION: `automation.execute` is NOT in
+      // DEFAULT_AUTO_APPROVE, so when `agentUserId` is present (i.e. an AGENT is
+      // asking) `automations.trigger` routes through `checkPermissionOrPropose`
+      // and returns `{ status: "proposed", proposalId }` — see
+      // routers/automations.ts:1145-1172. On approval the `automation/execute`
+      // proposal executor re-triggers as the APPROVER with no agentUserId, which
+      // takes the operator branch and actually enqueues the run.
+      // (An operator-initiated call — no agentUserId — is DIRECT and returns
+      // `{ status: "triggered", runId }`.)
+      // The entity writes the run performs downstream
       // are separately governed by the automation-governance gate keyed off the
       // automation's OWNING agent (checkAutomationWriteOrPropose), so an agent
       // launching a run never launders those writes past governance.
