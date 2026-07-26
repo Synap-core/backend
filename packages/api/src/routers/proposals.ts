@@ -106,6 +106,19 @@ import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { notifications } from "@synap/database/schema";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import {
+  collapseProposalsToClusters,
+  type ClusterInputRow,
+} from "../services/proposals/fingerprint.js";
+import {
+  automationStepRuns,
+  automationRuns,
+  automations,
+  focusSessions,
+  playbooks,
+  skills,
+} from "@synap/database";
+import type { FlowDefinition } from "@synap/database";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -1287,6 +1300,26 @@ function displayNameForUser(row: {
   return row.email || undefined;
 }
 
+/**
+ * Find a flow node by id in an automation's live definition. Tolerant of a
+ * missing/partial definition or an unknown nodeId (returns null). Used by
+ * `proposals.source` to read the producing node's skill / playbook ref.
+ */
+function findFlowNode(
+  flowDefinition: FlowDefinition | null | undefined,
+  nodeId: string | undefined
+): { type: string; data?: unknown } | null {
+  if (!nodeId) return null;
+  const nodes = flowDefinition?.nodes;
+  if (!Array.isArray(nodes)) return null;
+  for (const n of nodes) {
+    if (n && typeof n === "object" && (n as { id?: unknown }).id === nodeId) {
+      return n as { type: string; data?: unknown };
+    }
+  }
+  return null;
+}
+
 function labelFromPath(path: string): string {
   return path
     .replace(/^properties\./, "")
@@ -2324,6 +2357,173 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * Pending proposals collapsed to ONE cluster card per FINGERPRINT — the
+   * redesigned inbox centerpiece. A fingerprint = proposalType × targetType × a
+   * normalized target-signature (see `computeProposalFingerprint`): identical
+   * "update entity X" repeats, or repeated "create company Y" attempts, fold
+   * into a single reviewable group with a count + sample + distinct sources.
+   *
+   * Access: reuses the EXACT scoping `list` uses — `userVisibleWhere` for the
+   * user floor + the same workspaceId three-state + optional agentUserId filter,
+   * and the same editor+ gate when a concrete workspace is named. No new access
+   * logic: a cluster never counts a proposal the caller can't already see in
+   * `list`. Grouping is defined over the PENDING actionable queue (PENDING +
+   * APPROVAL_FAILED), the same set `list`'s default `status: "pending"` returns.
+   */
+  groups: protectedProcedure
+    .input(
+      z.object({
+        /** Same three-state as `list`: string = that workspace, null = pod-wide
+         *  only, undefined = the full user floor. */
+        workspaceId: z.string().nullish(),
+        /** Only proposals authored by this agent. */
+        agentUserId: z.string().optional(),
+        /** Only agent-authored proposals (agentUserId not null). */
+        agentOnly: z.boolean().optional(),
+        /** Max clusters returned (newest-active first). */
+        limit: z.number().min(1).max(100).optional(),
+        /** Max pending proposals scanned before grouping — guards a huge inbox. */
+        scanLimit: z.number().min(1).max(2000).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const userId = requireUserId(ctx.userId);
+      const limit = input.limit ?? 50;
+      const scanLimit = input.scanLimit ?? 1000;
+
+      // ── Same access predicate `list` builds (workspaceId three-state) ──────
+      const conditions = [];
+      if (input.workspaceId === null) {
+        conditions.push(isNull(proposals.workspaceId));
+      } else if (typeof input.workspaceId === "string") {
+        conditions.push(eq(proposals.workspaceId, input.workspaceId));
+      } else {
+        conditions.push(userVisibleWhere(proposals.workspaceId, userId));
+      }
+      if (input.agentUserId) {
+        conditions.push(eq(proposals.agentUserId, input.agentUserId));
+      }
+      if (input.agentOnly) {
+        conditions.push(isNotNull(proposals.agentUserId));
+      }
+      // The actionable pending queue — identical membership to `list`'s
+      // `status: "pending"` branch (PENDING keeps a user's Approve intent
+      // visible even when execution later failed).
+      conditions.push(
+        inArray(proposals.status, [
+          ProposalStatus.PENDING,
+          ProposalStatus.APPROVAL_FAILED,
+        ])
+      );
+      // Exclude expired proposals (same guard as `list`).
+      conditions.push(
+        or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
+      );
+
+      // Same editor+ gate as `list` when a concrete workspace is named.
+      if (input.workspaceId) {
+        const { workspaceMembers } = await import("@synap/database/schema");
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (
+          !membership ||
+          !["owner", "admin", "editor"].includes(membership.role)
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Editor or higher role required to view proposals",
+          });
+        }
+      }
+
+      const rows = await db
+        .select({
+          id: proposals.id,
+          proposalType: proposals.proposalType,
+          targetType: proposals.targetType,
+          targetId: proposals.targetId,
+          data: proposals.data,
+          agentUserId: proposals.agentUserId,
+          sessionId: proposals.sessionId,
+          stepRunId: proposals.stepRunId,
+          workspaceId: proposals.workspaceId,
+          createdAt: proposals.createdAt,
+        })
+        .from(proposals)
+        .where(and(...conditions))
+        .orderBy(desc(proposals.createdAt))
+        .limit(scanLimit);
+
+      // Resolve provenance labels ONCE, batched, so the pure collapse stays
+      // DB-free: stepRunId → automationId (the workflow-attribution chain) and
+      // agentUserId → display name (same precedence the review UI uses).
+      const stepRunIds = [
+        ...new Set(
+          rows.map((r) => r.stepRunId).filter((x): x is string => Boolean(x))
+        ),
+      ];
+      const automationByStepRun = new Map<string, string>();
+      if (stepRunIds.length > 0) {
+        const arows = await db
+          .select({
+            stepRunId: automationStepRuns.id,
+            automationId: automationRuns.automationId,
+          })
+          .from(automationStepRuns)
+          .innerJoin(
+            automationRuns,
+            eq(automationRuns.id, automationStepRuns.runId)
+          )
+          .where(inArray(automationStepRuns.id, stepRunIds));
+        for (const a of arows) automationByStepRun.set(a.stepRunId, a.automationId);
+      }
+
+      const agentIds = [
+        ...new Set(
+          rows.map((r) => r.agentUserId).filter((x): x is string => Boolean(x))
+        ),
+      ];
+      const agentLabelById = new Map<string, string | undefined>();
+      if (agentIds.length > 0) {
+        const urows = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(inArray(users.id, agentIds));
+        for (const u of urows) agentLabelById.set(u.id, displayNameForUser(u));
+      }
+
+      const clusterRows: ClusterInputRow[] = rows.map((r) => ({
+        id: r.id,
+        proposalType: r.proposalType,
+        targetType: r.targetType,
+        targetId: r.targetId,
+        data: r.data,
+        createdAt: r.createdAt,
+        workspaceId: r.workspaceId ?? null,
+        agentLabel: r.agentUserId
+          ? (agentLabelById.get(r.agentUserId) ?? null)
+          : null,
+        sessionId: r.sessionId ?? null,
+        automationId: r.stepRunId
+          ? (automationByStepRun.get(r.stepRunId) ?? null)
+          : null,
+      }));
+
+      const groups = collapseProposalsToClusters(clusterRows).slice(0, limit);
+      return { groups };
+    }),
+
+  /**
    * Fetch a single proposal by ID.
    *
    * Used by the Studio's /proposals/:id detail page — the destination of the
@@ -2378,6 +2578,219 @@ export const proposalsRouter = router({
       return {
         ...(await enrichProposalsForDisplay([proposal], userId))[0],
       };
+    }),
+
+  /**
+   * Proposal → SOURCE lineage. Given a proposalId, return deeplink targets
+   * branched by PROVENANCE — "where did this proposal come from?" — for the
+   * redesign's source panel. All data is already stamped on the proposal row
+   * (no columns added): session / channel / agent are direct refs; automation
+   * provenance walks the stamped workflow chain
+   * `stepRunId → automation_step_runs → automation_runs → automations` and reads
+   * the producing flow node's skill / playbook from the run's live definition.
+   *
+   * Enforces the SAME access check as `get` (editor+ on the workspace, or the
+   * proposer for a pod-wide proposal).
+   */
+  source: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+      if (!proposal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      }
+
+      // Identical access gate to `get`.
+      if (proposal.workspaceId) {
+        const { workspaceMembers } = await import("@synap/database/schema");
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, proposal.workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (
+          !membership ||
+          !["owner", "admin", "editor"].includes(membership.role)
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Editor or higher role required to view this proposal",
+          });
+        }
+      } else {
+        const proposalData = proposal.data as Record<string, unknown> | null;
+        if (proposalData?.sourceId !== userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not authorized to view this proposal",
+          });
+        }
+      }
+
+      type SourceTargetKind =
+        | "session"
+        | "channel"
+        | "automation"
+        | "skill"
+        | "playbook"
+        | "agent";
+      const targets: Array<{
+        kind: SourceTargetKind;
+        id: string;
+        label: string;
+        nodeId?: string;
+      }> = [];
+
+      // Provenance: automation (stamped step run) wins, else agent, else human.
+      const provenance: "automation" | "agent" | "human" = proposal.stepRunId
+        ? "automation"
+        : proposal.agentUserId
+          ? "agent"
+          : "human";
+
+      // ── Direct refs on the proposal row (present-when-stamped) ─────────────
+      if (proposal.agentUserId) {
+        const [u] = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(eq(users.id, proposal.agentUserId))
+          .limit(1);
+        targets.push({
+          kind: "agent",
+          id: proposal.agentUserId,
+          label: (u && displayNameForUser(u)) || "Agent",
+        });
+      }
+
+      if (proposal.sessionId) {
+        const [s] = await db
+          .select({ goal: focusSessions.goal })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, proposal.sessionId))
+          .limit(1);
+        targets.push({
+          kind: "session",
+          id: proposal.sessionId,
+          label: s?.goal || "Session",
+        });
+      }
+
+      if (proposal.threadId) {
+        const [c] = await db
+          .select({ title: channels.title })
+          .from(channels)
+          .where(eq(channels.id, proposal.threadId))
+          .limit(1);
+        targets.push({
+          kind: "channel",
+          id: proposal.threadId,
+          label: c?.title || "Thread",
+        });
+      }
+
+      // ── Automation-made: walk the stamped workflow chain ──────────────────
+      if (proposal.stepRunId) {
+        const [chain] = await db
+          .select({
+            nodeId: automationStepRuns.nodeId,
+            automationId: automationRuns.automationId,
+            automationName: automations.name,
+            flowDefinition: automations.flowDefinition,
+          })
+          .from(automationStepRuns)
+          .innerJoin(
+            automationRuns,
+            eq(automationRuns.id, automationStepRuns.runId)
+          )
+          .innerJoin(
+            automations,
+            eq(automations.id, automationRuns.automationId)
+          )
+          .where(eq(automationStepRuns.id, proposal.stepRunId))
+          .limit(1);
+
+        if (chain) {
+          targets.push({
+            kind: "automation",
+            id: chain.automationId,
+            label: chain.automationName || "Automation",
+          });
+
+          // The producing flow node — prefer the proposal's stamped nodeId,
+          // fall back to the step-run's. Read its skill / playbook ref from the
+          // run's live flow definition (validate-flow.ts carries skillId/
+          // skillName on a skill node, playbookId/playbookName on a playbook_run).
+          const nodeId = proposal.nodeId ?? chain.nodeId ?? undefined;
+          const node = findFlowNode(chain.flowDefinition, nodeId);
+          if (node) {
+            const data = (node.data ?? {}) as Record<string, unknown>;
+            if (node.type === "skill") {
+              const skillId =
+                typeof data.skillId === "string" ? data.skillId : undefined;
+              const skillName =
+                typeof data.skillName === "string" ? data.skillName : undefined;
+              let label =
+                typeof data.skillTitle === "string" ? data.skillTitle : undefined;
+              if (skillId && !label) {
+                const [row] = await db
+                  .select({ name: skills.name })
+                  .from(skills)
+                  .where(eq(skills.id, skillId))
+                  .limit(1);
+                label = row?.name ?? undefined;
+              }
+              const id = skillId ?? skillName;
+              if (id) {
+                targets.push({
+                  kind: "skill",
+                  id,
+                  label: label || skillName || "Skill",
+                  nodeId,
+                });
+              }
+            } else if (node.type === "playbook_run") {
+              const playbookId =
+                typeof data.playbookId === "string" ? data.playbookId : undefined;
+              const playbookName =
+                typeof data.playbookName === "string"
+                  ? data.playbookName
+                  : undefined;
+              let label =
+                typeof data.label === "string" ? data.label : undefined;
+              if (playbookId && !label) {
+                const [row] = await db
+                  .select({ name: playbooks.name })
+                  .from(playbooks)
+                  .where(eq(playbooks.id, playbookId))
+                  .limit(1);
+                label = row?.name ?? undefined;
+              }
+              const id = playbookId ?? playbookName;
+              if (id) {
+                targets.push({
+                  kind: "playbook",
+                  id,
+                  label: label || playbookName || "Playbook",
+                  nodeId,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      return { provenance, targets };
     }),
 
   /**

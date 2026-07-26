@@ -165,7 +165,17 @@ export const TurnContextSchema = z
   });
 export type TurnContext = z.infer<typeof TurnContextSchema>;
 
-const CONTEXT_OBJECT_TYPE_VALUES = ["entity", "document", "view"] as const;
+// Includes "proposal" so a single-chat front door can open a thread bound to a
+// pending proposal — the canonical `resolve-or-create-channel` util already
+// accepts it, and the hub context path (hub-protocol/context.ts) hydrates a
+// `contextObjectType: "proposal"` thread into the prompt. This tRPC enum was a
+// shadow that omitted it, closing that door.
+const CONTEXT_OBJECT_TYPE_VALUES = [
+  "entity",
+  "document",
+  "view",
+  "proposal",
+] as const;
 
 /**
  * Shared wire contract for the tRPC mutation and the canonical HTTP sender
