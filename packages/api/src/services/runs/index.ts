@@ -612,7 +612,11 @@ async function groupAutomationRuns(
     runCount: r.runCount,
     latestRunId: r.latestRunId,
     latestStatus: r.latestStatus as RunStatus,
-    latestStartedAt: r.latestStartedAt,
+    // `max(startedAt)` is a RAW SQL aggregate — postgres.js returns it as a
+    // STRING, not a Date (the `drizzleSql<Date>` above is a compile-time cast
+    // only). Coerce so `latestStartedAt` really is the `Date` its type claims;
+    // without it the `.getTime()` sort in listRunGroups throws at runtime.
+    latestStartedAt: new Date(r.latestStartedAt),
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
@@ -655,7 +659,11 @@ async function groupPlaybookRuns(
     runCount: r.runCount,
     latestRunId: r.latestRunId,
     latestStatus: r.latestStatus as RunStatus,
-    latestStartedAt: r.latestStartedAt,
+    // `max(startedAt)` is a RAW SQL aggregate — postgres.js returns it as a
+    // STRING, not a Date (the `drizzleSql<Date>` above is a compile-time cast
+    // only). Coerce so `latestStartedAt` really is the `Date` its type claims;
+    // without it the `.getTime()` sort in listRunGroups throws at runtime.
+    latestStartedAt: new Date(r.latestStartedAt),
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,

@@ -37,15 +37,15 @@ import {
   computeMessageHash,
   and,
   eq,
-  gte,
   isNull,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   type WriteAckState,
   deterministicUuidFromKey,
-  idempotencyWindowStart,
+  idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 
 const logger = createLogger({ module: "post-message" });
@@ -142,10 +142,10 @@ export async function postChannelMessage(
             eq(messages.role, roleEnum),
             eq(messages.content, content),
             isNull(messages.deletedAt),
-            gte(
-              messages.timestamp,
-              idempotencyWindowStart(MESSAGE_DEDUP_WINDOW_MS)
-            )
+            // In-DB cutoff — a bound JS Date crashes postgres.js 3.4.8 on the pod
+            // image, and this lookup is best-effort so that would silently degrade
+            // to a duplicate insert. Compute the window in SQL instead.
+            drizzleSql`${messages.timestamp} >= now() - (${idempotencyWindowSeconds(MESSAGE_DEDUP_WINDOW_MS)}::int * interval '1 second')`
           )
         )
         .orderBy(desc(messages.timestamp))

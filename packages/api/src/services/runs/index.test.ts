@@ -97,7 +97,10 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
     ]);
     mockDb.select.mockReturnValue(chain);
 
-    const groups = await listRunGroups({ userId: USER, flowType: "automation" });
+    const groups = await listRunGroups({
+      userId: USER,
+      flowType: "automation",
+    });
 
     expect(groups).toEqual([
       expect.objectContaining({
@@ -138,7 +141,11 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
     const groups = await listRunGroups({ userId: USER, flowType: "playbook" });
 
     expect(groups).toEqual([
-      expect.objectContaining({ flowType: "playbook", flowId: "pb-1", runCount: 5 }),
+      expect.objectContaining({
+        flowType: "playbook",
+        flowId: "pb-1",
+        runCount: 5,
+      }),
     ]);
 
     expect(mockUserVisibleWhere).toHaveBeenCalledTimes(1);
@@ -157,8 +164,57 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
     const chain = selectChain([]);
     mockDb.select.mockReturnValue(chain);
 
-    const groups = await listRunGroups({ userId: USER, flowType: "automation" });
+    const groups = await listRunGroups({
+      userId: USER,
+      flowType: "automation",
+    });
 
     expect(groups).toEqual([]);
+  });
+
+  it("merges automation+playbook groups and sorts them when latestStartedAt arrives as a STRING (postgres.js reality)", async () => {
+    // `max(startedAt)` comes back from postgres.js as a STRING, not a Date. The
+    // merge-sort did `latestStartedAt.getTime()` on it → "getTime is not a
+    // function", which broke the diagnose door LIVE (it calls listRunGroups with
+    // no flowType, so both ledgers merge and this sort runs). Feed strings and
+    // assert: no throw, coerced to real Dates, newest-first order.
+    mockDb.select
+      .mockReturnValueOnce(
+        selectChain([
+          {
+            flowId: "auto-1",
+            flowName: "Onboard",
+            runCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            hasRunning: false,
+            latestStartedAt: "2026-01-02T00:00:00.000Z", // STRING, older
+            latestRunId: "run-a",
+            latestStatus: "completed",
+          },
+        ])
+      )
+      .mockReturnValueOnce(
+        selectChain([
+          {
+            flowId: "pb-1",
+            flowName: "Digest",
+            runCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            hasRunning: false,
+            latestStartedAt: "2026-03-05T00:00:00.000Z", // STRING, newer
+            latestRunId: "run-b",
+            latestStatus: "completed",
+          },
+        ])
+      );
+
+    const groups = await listRunGroups({ userId: USER });
+
+    // Newest-first: the playbook group (03-05) sorts before the automation (01-02).
+    expect(groups.map((g) => g.flowId)).toEqual(["pb-1", "auto-1"]);
+    // Coerced to a real Date so every downstream Date consumer is honored.
+    expect(groups[0]!.latestStartedAt).toBeInstanceOf(Date);
   });
 });

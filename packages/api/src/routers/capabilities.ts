@@ -312,6 +312,13 @@ export const capabilitiesRouter = router({
       z.object({
         templateKey: z.string().optional(),
         definition: z.any().optional(),
+        /**
+         * Install-time params — the credential(s)/config the template declares.
+         * Threaded into the applier so a template with a REQUIRED credential param
+         * installs WITH its key in one governed call (creating the vault secret),
+         * instead of throwing. Mirrors the Hub REST `apply` door (rest/capabilities).
+         */
+        params: z.record(z.string(), z.unknown()).optional(),
         workspaceId: z.string().uuid(),
       })
     )
@@ -322,14 +329,10 @@ export const capabilitiesRouter = router({
           workspaceId: input.workspaceId,
         }));
 
-      return createCapabilityFromDefinition(
-        definition,
-        {},
-        {
-          ...ctx,
-          workspaceId: input.workspaceId,
-        }
-      );
+      return createCapabilityFromDefinition(definition, input.params ?? {}, {
+        ...ctx,
+        workspaceId: input.workspaceId,
+      });
     }),
 
   /**

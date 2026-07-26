@@ -34,8 +34,10 @@ vi.mock("@synap/database", () => {
     },
     and: vi.fn(),
     eq: vi.fn(),
-    gte: vi.fn(),
     desc: vi.fn(),
+    drizzleSql: vi.fn((strings: TemplateStringsArray) => ({
+      sql: strings.join("?"),
+    })),
   };
 });
 

@@ -31,13 +31,13 @@ import {
   knowledgeFacts,
   and,
   eq,
-  gte,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   type WriteAckState,
-  idempotencyWindowStart,
+  idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 
 const logger = createLogger({ module: "remember-fact" });
@@ -188,7 +188,10 @@ export async function rememberFact(params: {
         and(
           eq(knowledgeFacts.userId, userId),
           eq(knowledgeFacts.fact, fact),
-          gte(knowledgeFacts.createdAt, idempotencyWindowStart())
+          // In-DB cutoff — NOT `gte(createdAt, <jsDate>)`: a bound JS Date
+          // crashes postgres.js 3.4.8 on the pod image, and this lookup is
+          // best-effort so a crash would silently degrade to a duplicate write.
+          drizzleSql`${knowledgeFacts.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
         )
       )
       .orderBy(desc(knowledgeFacts.createdAt))

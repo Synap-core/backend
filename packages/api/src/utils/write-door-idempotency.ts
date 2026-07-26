@@ -58,11 +58,34 @@ export type WriteAckState = "applied" | "proposed" | "duplicate-ignored";
  */
 export const WRITE_IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
-/** The Date floor for a windowed idempotency lookup. */
+/**
+ * The Date floor for a windowed idempotency lookup.
+ *
+ * ⚠ DO NOT bind the returned Date into a DB `WHERE` predicate on the pod:
+ * postgres.js 3.4.8 CRASHES on Date bind params on the pod image (the same rule
+ * the reapers document — `focus-session-reaper.ts`, `automation-run-reaper.ts`).
+ * A crashing dedup lookup degrades (best-effort) to a normal write, which
+ * silently DEFEATS idempotency. For the DB-side window predicate use
+ * `idempotencyWindowSeconds()` inside a `drizzleSql\`… now() - (N * interval …)\``
+ * fragment instead — computed in-DB, no Date param bound. This function is only
+ * for non-DB use (tests, in-memory comparisons).
+ */
 export function idempotencyWindowStart(
   windowMs: number = WRITE_IDEMPOTENCY_WINDOW_MS
 ): Date {
   return new Date(Date.now() - windowMs);
+}
+
+/**
+ * The window as a whole number of SECONDS, for building an in-DB cutoff without
+ * binding a JS Date: `drizzleSql\`${col} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')\``.
+ * See the warning on `idempotencyWindowStart` for why the Date form must not
+ * reach a pod query.
+ */
+export function idempotencyWindowSeconds(
+  windowMs: number = WRITE_IDEMPOTENCY_WINDOW_MS
+): number {
+  return Math.max(1, Math.ceil(windowMs / 1000));
 }
 
 /**

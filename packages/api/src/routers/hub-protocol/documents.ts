@@ -21,7 +21,6 @@ import {
   documents,
   and,
   eq,
-  gte,
   desc,
   drizzleSql,
   type CreateDocumentInput,
@@ -33,7 +32,7 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
   resolveWriteIdempotencyKey,
-  idempotencyWindowStart,
+  idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 
 const logger = createLogger({ module: "hub-documents" });
@@ -112,7 +111,9 @@ export const documentsRouter = router({
           .where(
             and(
               eq(documents.userId, userId),
-              gte(documents.createdAt, idempotencyWindowStart()),
+              // In-DB cutoff (no bound JS Date — postgres.js 3.4.8 crashes on the
+              // pod image; this lookup is best-effort so it would silently degrade).
+              drizzleSql`${documents.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`,
               drizzleSql`${documents.metadata} ->> 'idempotencyKey' = ${idempotencyKey}`
             )
           )

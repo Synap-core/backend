@@ -3992,7 +3992,7 @@ export interface UpdateRequest {
 	/** Unique ID for this specific request */
 	requestId: string;
 	/** Who initiated the change? */
-	source: "user" | "ai" | "system" | "intelligence" | "agent" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast";
+	source: "user" | "ai" | "system" | "intelligence" | "agent" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast";
 	sourceId: string;
 	/** Context */
 	workspaceId: string | null;

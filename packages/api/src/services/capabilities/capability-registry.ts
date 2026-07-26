@@ -503,6 +503,150 @@ export async function listCapabilities(
   return result;
 }
 
+// ── Sectioned, deduped view (agent-facing "what can I DO") ────────────────────
+/**
+ * The agent-facing projection of the flat capability list: real, distinct,
+ * runnable capabilities grouped by TYPE, with each integration's verbs nested.
+ *
+ * WHY this exists: the flat `listCapabilities` dump is a management read-model —
+ * it includes 90+ IS-native `builtin-tool`s (already exposed directly as MCP
+ * tools, `catalogOnly` so not even runnable through `run_capability`) and 100+
+ * `teaching-doc`s (prompt prose, not actions), plus duplicate rows (a provider
+ * installed twice, N backing-skill copies of one verb). Handing all of that to
+ * an agent as "your capabilities" buries the ~20 things it can actually do. This
+ * view drops the two non-actionable kinds, de-duplicates, and nests verbs under
+ * their integration so the shape reads like "a package and the verbs inside it".
+ */
+export interface SectionedCapabilities {
+  /** Integrations (Nango providers + API/MCP tools), one per name, verbs nested. */
+  integrations: Array<{
+    name: string;
+    kind: CapabilityKind;
+    description: string | null;
+    governance: "auto" | "propose" | "none";
+    connection?: { required: boolean; connected: boolean; provider: string };
+    verbs: CapabilityVerbState[];
+  }>;
+  /** Standalone runnable skills — a skill that BACKS a provider verb is shown
+   *  under that integration instead, never duplicated here. */
+  skills: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    governance: "auto" | "propose" | "none";
+  }>;
+  /** Intelligence commands. */
+  commands: Array<{ id: string; name: string; description: string | null }>;
+  /** Honest accounting of what was folded out of this actionable view. */
+  excluded: { builtinTools: number; teachingDocs: number };
+}
+
+/**
+ * Fold the flat `Capability[]` read-model into the agent-facing sectioned view.
+ * Pure — no I/O — so it is unit-testable and reusable by any door.
+ */
+export function sectionCapabilities(caps: Capability[]): SectionedCapabilities {
+  const integrations = new Map<
+    string,
+    SectionedCapabilities["integrations"][number]
+  >();
+  const providerVerbIds = new Set<string>();
+  const skillByName = new Map<
+    string,
+    SectionedCapabilities["skills"][number]
+  >();
+  const commands: SectionedCapabilities["commands"] = [];
+  let builtinTools = 0;
+  let teachingDocs = 0;
+
+  for (const c of caps) {
+    // Already MCP tools / not runnable through this door → not an "action".
+    if (c.kind === "builtin-tool") {
+      builtinTools += 1;
+      continue;
+    }
+    // Prompt prose, not a capability.
+    if (c.kind === "teaching-doc") {
+      teachingDocs += 1;
+      continue;
+    }
+
+    if (c.kind === "tool" || c.kind === "source-provider") {
+      for (const v of c.verbs ?? []) providerVerbIds.add(v.id);
+      const existing = integrations.get(c.name);
+      if (!existing) {
+        integrations.set(c.name, {
+          name: c.name,
+          kind: c.kind,
+          description: c.description ?? null,
+          governance: c.governance,
+          ...(c.connection ? { connection: c.connection } : {}),
+          verbs: [...(c.verbs ?? [])],
+        });
+      } else {
+        // Duplicate rows of the SAME integration (the pod had e.g. `discord` ×5,
+        // `google` connected+disconnected): union the verbs (prefer a granted
+        // copy), OR the connected flag up, keep the first non-empty description.
+        const vmap = new Map(existing.verbs.map((v) => [v.id, v]));
+        for (const v of c.verbs ?? []) {
+          const ev = vmap.get(v.id);
+          if (!ev || (v.granted && !ev.granted)) vmap.set(v.id, v);
+        }
+        existing.verbs = [...vmap.values()];
+        if (c.connection?.connected) {
+          existing.connection = {
+            ...(existing.connection ?? c.connection),
+            connected: true,
+          };
+        }
+        if (!existing.description && c.description) {
+          existing.description = c.description;
+        }
+      }
+      continue;
+    }
+
+    if (c.kind === "skill") {
+      // An unlaunchable skill (inactive/error) is management noise here.
+      if ((c as Capability & { runnable?: boolean }).runnable === false)
+        continue;
+      if (!skillByName.has(c.name)) {
+        skillByName.set(c.name, {
+          id: c.id,
+          name: c.name,
+          description: c.description ?? null,
+          governance: c.governance,
+        });
+      }
+      continue;
+    }
+
+    if (c.kind === "command") {
+      commands.push({
+        id: c.id,
+        name: c.name,
+        description: c.description ?? null,
+      });
+      continue;
+    }
+    // Other grantable kinds (secret, workspace…) are not agent-runnable — skip.
+  }
+
+  // A skill whose NAME is a provider verb id is the backing skill for that verb
+  // (registry contract: a verb's catalog id mirrors its requiring skill's name).
+  // It is already surfaced under the integration — don't list it a second time.
+  const skills = [...skillByName.values()].filter(
+    (s) => !providerVerbIds.has(s.name)
+  );
+
+  return {
+    integrations: [...integrations.values()],
+    skills,
+    commands,
+    excluded: { builtinTools, teachingDocs },
+  };
+}
+
 // ── Shared search matcher (D1) ────────────────────────────────────────────────
 // Simple v1 ranking — tokenized substring match, no embeddings. Pure + exported
 // so both callers of the search feature (the registry above and the capability

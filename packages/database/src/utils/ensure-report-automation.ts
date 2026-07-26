@@ -66,8 +66,27 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * IS that `ai.generate` returns an EMPTY STRING below ~200 tokens (the budget is
  * consumed before the first visible token), so a low cap yields NO answer rather
  * than a short one — and the step still reports success.
+ *
+ * v3 — dogfood fix from the FIRST real run (run 14c470bc, 2026-07-26), which
+ * failed at `assemble` with:
+ *   400 {"prompt":["String must contain at most 8000 character(s)"]}
+ * The assembler receives BOTH prior rounds' outputs, so the chain's prompt grows
+ * with each round's budget: 900 + 800 output tokens ≈ 7-8k chars before framing.
+ * Fixed on both sides — the IS `prompt` cap went 8000 → 24000 (it was sized for
+ * single-shot calls, not chained flows), AND the upstream budgets came down to
+ * 700/600 so the chain does not ride whatever the limit happens to be. A flow
+ * whose correctness depends on being just under a cap is not correct, it is lucky.
+ *
+ * v4 — the ACTUAL root cause of that same run, found by reading the failed
+ * steps rather than only the last one: `analyze` and `relate` failed with the
+ * SAME 8000-char error, so it was never about chaining. The raw `query` output
+ * is full entity JSON, and ~70 sampled rows exceed the cap before any round
+ * runs. Added four `transform` projection nodes (gather → project → analyze)
+ * that reduce each row to `<id> · <title>`. Prompt size now scales with row
+ * COUNT, not with how many properties an entity happens to carry — which is the
+ * difference between "works on this workspace" and "works".
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 2;
+export const REPORT_AUTOMATION_SEED_VERSION = 4;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -108,13 +127,38 @@ const EVIDENCE_RULE =
   "unavailable and say so; do not guess what it would have contained.";
 
 /** The gathered-data block every AI round receives, verbatim. */
+// PROJECTED, not raw. The FIRST real run (2026-07-26) failed at every AI round
+// with `400 prompt: String must contain at most 8000 character(s)` — the raw
+// `query` output is full entity JSON (id, type, all properties, timestamps,
+// provenance), so ~70 sampled rows blow any sane prompt cap on their own. This
+// is not a chaining problem and raising the cap does not fix it; a bigger
+// workspace would simply blow the bigger cap.
+// So each gather is projected through a `transform` node to one compact
+// `<id> · <title>` line per row. That keeps the ids the rounds need in order to
+// emit `[[kind:id|label]]` chips, drops everything they never read, and makes
+// prompt size scale with ROW COUNT instead of with property count.
 const GATHERED_DATA = [
-  "GATHERED DATA (a sample, not an ordered or exhaustive listing):",
-  "Tasks: {{steps.gather-tasks.output}}",
-  "Notes: {{steps.gather-notes.output}}",
-  "People: {{steps.gather-people.output}}",
-  "Companies: {{steps.gather-companies.output}}",
+  "GATHERED DATA — one line per record, formatted `<id> · <title>`.",
+  "This is a SAMPLE, not an ordered or exhaustive listing.",
+  "Tasks: {{steps.project-tasks.output.result}}",
+  "Notes: {{steps.project-notes.output.result}}",
+  "People: {{steps.project-people.output.result}}",
+  "Companies: {{steps.project-companies.output.result}}",
 ].join("\n");
+
+/** One projection node per gather — `entities[] → ["<id> · <title>", …]`. */
+function projectionNode(kind: string, x: number, y: number) {
+  return {
+    id: `project-${kind}`,
+    type: "transform" as const,
+    position: { x, y },
+    data: {
+      label: `Project ${kind}`,
+      expression: `{{steps.gather-${kind}.output.entities}} | map: {{item.id}} · {{item.title}}`,
+      errorHandling: { continueOnError: true },
+    },
+  };
+}
 
 // ── Round system prompts ──────────────────────────────────────────────────────
 
@@ -295,6 +339,14 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         errorHandling: { continueOnError: true },
       },
     },
+    // ── Projection: raw entity JSON → compact `<id> · <title>` lines ─────────
+    // Without these the AI rounds receive full entity JSON and every round 400s
+    // on the prompt cap. See the note on GATHERED_DATA.
+    projectionNode("tasks", 540, 20),
+    projectionNode("notes", 540, 140),
+    projectionNode("people", 540, 260),
+    projectionNode("companies", 540, 380),
+
     // ── Round 2: ANALYZE ──────────────────────────────────────────────────────
     {
       id: "analyze",
@@ -307,7 +359,7 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         inputMapping: {
           system: ANALYZE_SYSTEM,
           prompt: [STEER_BLOCK, "", GATHERED_DATA].join("\n"),
-          maxTokens: "900",
+          maxTokens: "700",
         },
         // A failed round must become a VISIBLE GAP in the report, not an aborted
         // run — the assembler is instructed to render it.
@@ -333,7 +385,7 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
             "ANALYST'S READ:",
             "{{steps.analyze.output}}",
           ].join("\n"),
-          maxTokens: "800",
+          maxTokens: "600",
         },
         errorHandling: { continueOnError: true },
       },
@@ -454,12 +506,26 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
     { id: "e-now-notes", source: "now", target: "gather-notes" },
     { id: "e-now-people", source: "now", target: "gather-people" },
     { id: "e-now-companies", source: "now", target: "gather-companies" },
-    { id: "e-tasks-analyze", source: "gather-tasks", target: "analyze" },
-    { id: "e-notes-analyze", source: "gather-notes", target: "analyze" },
-    { id: "e-people-analyze", source: "gather-people", target: "analyze" },
+    // gather → project → analyze. The projection nodes are what keep the prompt
+    // bounded; wiring a gather straight into `analyze` is the bug v4 fixes.
+    { id: "e-tasks-project", source: "gather-tasks", target: "project-tasks" },
+    { id: "e-notes-project", source: "gather-notes", target: "project-notes" },
+    {
+      id: "e-people-project",
+      source: "gather-people",
+      target: "project-people",
+    },
+    {
+      id: "e-companies-project",
+      source: "gather-companies",
+      target: "project-companies",
+    },
+    { id: "e-tasks-analyze", source: "project-tasks", target: "analyze" },
+    { id: "e-notes-analyze", source: "project-notes", target: "analyze" },
+    { id: "e-people-analyze", source: "project-people", target: "analyze" },
     {
       id: "e-companies-analyze",
-      source: "gather-companies",
+      source: "project-companies",
       target: "analyze",
     },
     { id: "e-analyze-relate", source: "analyze", target: "relate" },

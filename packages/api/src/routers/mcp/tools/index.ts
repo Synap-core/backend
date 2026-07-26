@@ -1728,7 +1728,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'List the runnable capabilities in a workspace — the verbs unlocked by the user\'s connected services and applied templates (e.g. gmail_send, gmail_search, calendar_list, calendar_create, drive_search). Each entry has its name (the verbId you pass to synap_run_capability), a label, the backing tool, whether it is ENABLED (approved) or still DRAFT, and its governance. Call this to discover what the user can actually DO with their connections before running anything. A DRAFT capability must be enabled by the user (Settings → Capabilities) before it will run. Pass `query` to SEARCH instead of dumping everything (e.g. query:"send email") — ranked, compact results with parameter schemas.',
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (a not-yet-granted verb must be enabled in Settings → Capabilities). Core built-in tools (already available to you directly as MCP tools) and teaching docs are omitted from this actionable view and only COUNTED under `excluded`; pass kind:"builtin-tool" to see the full catalog. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email").',
         inputSchema: {
           type: "object",
           properties: {

@@ -2957,10 +2957,8 @@ export async function executeMCPToolViaHubProtocol(
           : undefined;
       const kind = typeof args.kind === "string" ? args.kind : undefined;
       const limit = typeof args.limit === "number" ? args.limit : undefined;
-      const { listCapabilities } =
+      const { listCapabilities, sectionCapabilities } =
         await import("../../services/capabilities/capability-registry.js");
-      const { projectRunnableActions } =
-        await import("../../services/capabilities/action-projection.js");
       let capabilities = await listCapabilities(
         { workspaceId: wsId, userId },
         query || kind || limit !== undefined
@@ -3004,56 +3002,20 @@ export async function executeMCPToolViaHubProtocol(
           `If nothing fits, search the marketplace: synap_run_capability({ verbId: "market.search", parameters: { query: "..." } }).`;
       }
 
-      // MCP and Hub REST intentionally share this projection: never expose a
-      // catalog-only, draft, or disconnected action as executable on one
-      // surface while hiding it on the other.
-      const runnable = projectRunnableActions(capabilities);
-
-      // `runnable` silently EXCLUDES anything not yet approved / not connected.
-      // An agent reading `runnable` as "what I can do" would conclude a DRAFT
-      // capability doesn't exist. Name the gap instead of hiding it.
-      // `runnable` is projected per ACTION (skillId / verbId / tool), not per
-      // capability, so identify coverage by any of those handles.
-      const runnableHandles = new Set(
-        runnable.flatMap((r) =>
-          [r.skillId, r.verbId, r.tool].filter(
-            (h): h is string => typeof h === "string" && h.length > 0
-          )
-        )
-      );
-      const blocked = capabilities
-        .filter(
-          (c) =>
-            !runnableHandles.has(c.id) &&
-            !runnableHandles.has(c.name) &&
-            !(c.verbs ?? []).some((v) => runnableHandles.has(v.id))
-        )
-        .map((c) => ({
-          id: c.id,
-          name: c.name,
-          reason:
-            "listed but NOT runnable — it needs enabling (Settings → Capabilities) or its backing service connected",
-        }));
-
-      // Response size discipline: with a query, drop the full verb catalog dump
-      // (grant/govDefault noise) — the compact projection carries name/kind/
-      // description/governance + a slim verb list, `runnable` above already
-      // carries the paramsSchema for anything actually callable.
-      const responseCapabilities = query
-        ? capabilities.map((cap) => ({
-            kind: cap.kind,
-            id: cap.id,
-            name: cap.name,
-            governance: cap.governance,
-            ...(cap.connection ? { connection: cap.connection } : {}),
-            verbs: cap.verbs?.map((v) => ({ id: v.id, label: v.label })),
-          }))
-        : capabilities;
-
+      // Agent-facing view: real, distinct, runnable capabilities grouped by
+      // type with each integration's verbs nested — NOT the flat management dump
+      // (which buries the ~20 real actions under 90+ built-in MCP tools + 100+
+      // teaching docs + duplicate rows). See `sectionCapabilities`.
+      const sections = sectionCapabilities(capabilities);
       return ok({
-        capabilities: responseCapabilities,
-        runnable,
-        ...(blocked.length > 0 ? { blocked } : {}),
+        integrations: sections.integrations,
+        skills: sections.skills,
+        commands: sections.commands,
+        // Honest, not hidden: these were folded out of the actionable view.
+        excluded: {
+          ...sections.excluded,
+          note: 'Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are omitted here. Ask for kind:"builtin-tool" if you need the full catalog.',
+        },
         ...(zeroHitNote ? { note: zeroHitNote } : {}),
       });
     }

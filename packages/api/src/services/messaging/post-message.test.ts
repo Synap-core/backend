@@ -43,9 +43,11 @@ vi.mock("@synap/database", () => {
     computeMessageHash: () => "hash",
     and: vi.fn(),
     eq: vi.fn(),
-    gte: vi.fn(),
     isNull: vi.fn(),
     desc: vi.fn(),
+    drizzleSql: vi.fn((strings: TemplateStringsArray) => ({
+      sql: strings.join("?"),
+    })),
   };
 });
 
