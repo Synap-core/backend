@@ -592,6 +592,16 @@ export const capabilitiesRouter = router({
         };
       }
 
+      // Only `run` remains — not_found/deny/proposed returned above, and the door
+      // never requests a dry-run. Narrows the union (and fails loud if the
+      // executor's contract ever grows a case this door doesn't handle).
+      if (res.kind !== "run") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `enrichEntity: unexpected verb result "${res.kind}"`,
+        });
+      }
+
       // 3. Strip the run-metadata envelope → the properties we intend to write.
       const mapped = normalizeVerbResult(res.result);
 

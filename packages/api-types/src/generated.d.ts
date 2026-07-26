@@ -5149,6 +5149,13 @@ export interface CapabilityCardVerb {
 	 * types, not just names. Empty when the skill declares no parameters.
 	 */
 	paramsSchema: CapabilityCardVerbParam[];
+	/**
+	 * Free-form functional tag from the backing skill (`skills.category`, e.g.
+	 * "enrichment") — lets a surface find "the enrichment verbs for this entity"
+	 * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
+	 * its template definition) declares no category.
+	 */
+	category?: string;
 }
 /** A template's INSTALL parameter — what the caller supplies to `apply` it. */
 export interface CapabilityCardInstallParam {
@@ -5935,6 +5942,8 @@ export interface UnifiedRunDetail {
 	 * automation-specific block here.
 	 */
 	playbookDetail?: PlaybookRunDetail | null;
+	/** The flow definition this run executed (automation only); null for every other ledger. */
+	definitionSnapshot: unknown;
 }
 /**
  * A playbook run's rich footprint. Every list is user-floored and capped; the
@@ -12710,6 +12719,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 			};
 			output: ExecuteCapabilityResult;
+			meta: object;
+		}>;
+		enrichEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				verbId: string;
+				workspaceId: string;
+				parameters?: Record<string, unknown> | undefined;
+			};
+			output: {
+				status: "setup_required";
+				message: string;
+				sessionId?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+				fieldCount?: undefined;
+			} | {
+				status: "denied";
+				message: string;
+				sessionId?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+				fieldCount?: undefined;
+			} | {
+				status: "proposed";
+				sessionId: null;
+				proposalId: string;
+				reviewUrl: string;
+				fieldCount: number;
+				message?: undefined;
+			} | {
+				status: "empty";
+				sessionId: string;
+				fieldCount: number;
+				message?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+			} | {
+				status: "proposed";
+				sessionId: string;
+				proposalId: string;
+				reviewUrl: string;
+				fieldCount: number;
+				message?: undefined;
+			};
 			meta: object;
 		}>;
 		dryRun: import("@trpc/server").TRPCMutationProcedure<{
