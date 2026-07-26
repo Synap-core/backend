@@ -1086,6 +1086,61 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
     }
 
+    // Fourth pass: bind per-profile RENDERERS (idempotent, never clobbers).
+    //
+    // WHY THIS EXISTS — the naming-convention fallback cannot fire.
+    // `ProfileEntityDetailCell`'s `detailFallback` computes
+    // `entity-detail-<profileSlug>` and the browser registry has such cells, but
+    // that fallback is UNREACHABLE: `useSlotResolver` (profileSlotRenderer.tsx)
+    // takes the backend's answer whenever it returns anything —
+    //     const target = result?.[contentKind]; if (target) return target;
+    // — and `getEffectiveRenderer`'s layer 3 is a HARDCODED system fallback that
+    // always returns `{cellKey: "entity-detail"}` (see this file's sibling,
+    // profile-resolution-service.ts). So the generic default always wins and no
+    // profile can get a specific detail renderer by convention alone. Dogfooded
+    // 2026-07-26: a `report` entity rendered through the generic entity card.
+    //
+    // The fix is to use the mechanism as designed rather than lean on a
+    // convention: bind the renderer as DATA at layer 2 (`profiles.defaultRenderers`),
+    // which outranks the layer-3 default. This is the north-star path — the
+    // binding is configuration, not code.
+    //
+    // ONLY fills a key that is absent. A user who bound their own renderer via
+    // the Renderer Studio is never overwritten; this seeds the default, it does
+    // not own it.
+    const PROFILE_DEFAULT_RENDERERS: Record<
+      string,
+      Record<string, { kind: "cell"; cellKey: string; props: object }>
+    > = {
+      report: {
+        "entity-detail": {
+          kind: "cell",
+          cellKey: "entity-detail-report",
+          props: {},
+        },
+      },
+    };
+    for (const [slug, renderers] of Object.entries(PROFILE_DEFAULT_RENDERERS)) {
+      const profileId = createdProfiles.get(slug);
+      if (!profileId) continue;
+      const existing = await profileRepo.getBySlug(slug);
+      if (!existing) continue;
+      const current = (
+        existing as { defaultRenderers?: Record<string, unknown> }
+      ).defaultRenderers;
+      const merged = { ...(current ?? {}) };
+      let changed = false;
+      for (const [contentKind, ref] of Object.entries(renderers)) {
+        if (merged[contentKind] == null) {
+          merged[contentKind] = ref;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await profileRepo.update(profileId, { defaultRenderers: merged });
+      }
+    }
+
     // 4. Link properties to profiles
     const profilePropertyLinks: Array<{
       profileSlug: string;
