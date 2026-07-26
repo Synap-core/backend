@@ -29,7 +29,7 @@ import {
   workspaces,
   eq,
 } from "@synap/database";
-import type { RendererRef } from "@synap/database";
+import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -703,7 +703,37 @@ export const profilesRouter = router({
         }
       }
 
+      // POD-SCOPE RENDERER WRITE. `getEffectiveRenderer` layer 2 reads
+      // `defaultRenderers[contentKind]` FIRST and only falls back to the legacy
+      // singular column, so writing the column alone lands where the resolver
+      // never looks once the map has an entry. Mirror `setProfileRenderer`
+      // (services/profiles/set-profile-renderer.ts, scope: "pod") exactly:
+      // update BOTH the map and the deprecated column, so the two pod-scope
+      // doors stay equivalent.
+      const existingDefaultRenderers = ((
+        existing as { defaultRenderers?: Record<string, unknown> | null }
+      ).defaultRenderers ?? {}) as Record<string, RendererRef | null>;
+      const nextDefaultRenderers = { ...existingDefaultRenderers };
+      let defaultRenderersChanged = false;
+      const RENDERER_INPUT_TO_CONTENT_KIND = [
+        ["defaultListRenderer", "collection"],
+        ["defaultDetailRenderer", "entity-detail"],
+        ["defaultDashboardRenderer", "entity-profile"],
+      ] as const;
+      for (const [field, contentKind] of RENDERER_INPUT_TO_CONTENT_KIND) {
+        const ref = input[field];
+        if (ref === undefined) continue;
+        defaultRenderersChanged = true;
+        // `null` clears the binding entirely (resolver falls back to layer 3),
+        // matching the `defaultListRenderer: null` semantics documented above.
+        if (ref === null) delete nextDefaultRenderers[contentKind];
+        else nextDefaultRenderers[contentKind] = ref;
+      }
+
       const updated = await profileRepo.update(input.id, {
+        ...(defaultRenderersChanged
+          ? { defaultRenderers: nextDefaultRenderers }
+          : {}),
         displayName: input.displayName,
         parentProfileId: input.parentProfileId ?? undefined,
         uiHints: input.uiHints,
@@ -1130,6 +1160,13 @@ export const profilesRouter = router({
    * Omit `slot` to receive both slots in one round-trip — typical for
    * `<EntityRenderer>` mounting.
    *
+   * The response also carries a sibling `sources` map (`"workspace"` |
+   * `"profile"` | `"default"` per ContentKind) so callers can tell an EXPLICIT
+   * binding apart from the hardcoded system fallback — layer 3 always returns a
+   * ref, so the ref alone can't answer "is anything actually configured?".
+   * Additive key: existing consumers that read `result[contentKind]` are
+   * unaffected.
+   *
    * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
    */
   getEffectiveRenderers: podProcedure
@@ -1158,37 +1195,54 @@ export const profilesRouter = router({
         "entity-profile": null,
         collection: null,
       };
+      const baseSources: Record<
+        ProfileContentKind,
+        ProfileRendererSource | null
+      > = {
+        "entity-detail": null,
+        "entity-profile": null,
+        collection: null,
+      };
 
       if (input.contentKind) {
-        const target = await resolutionService.getEffectiveRenderer(
+        const target = await resolutionService.getEffectiveRendererWithSource(
           profileSlug,
           ctx.workspaceId,
           input.contentKind
         );
-        return { ...base, [input.contentKind]: target };
+        return {
+          ...base,
+          [input.contentKind]: target.ref,
+          sources: { ...baseSources, [input.contentKind]: target.source },
+        };
       }
 
       const [entityDetail, entityProfile, collection] = await Promise.all([
-        resolutionService.getEffectiveRenderer(
+        resolutionService.getEffectiveRendererWithSource(
           profileSlug,
           ctx.workspaceId,
           "entity-detail"
         ),
-        resolutionService.getEffectiveRenderer(
+        resolutionService.getEffectiveRendererWithSource(
           profileSlug,
           ctx.workspaceId,
           "entity-profile"
         ),
-        resolutionService.getEffectiveRenderer(
+        resolutionService.getEffectiveRendererWithSource(
           profileSlug,
           ctx.workspaceId,
           "collection"
         ),
       ]);
       return {
-        "entity-detail": entityDetail,
-        "entity-profile": entityProfile,
-        collection,
+        "entity-detail": entityDetail.ref,
+        "entity-profile": entityProfile.ref,
+        collection: collection.ref,
+        sources: {
+          "entity-detail": entityDetail.source,
+          "entity-profile": entityProfile.source,
+          collection: collection.source,
+        },
       };
     }),
 

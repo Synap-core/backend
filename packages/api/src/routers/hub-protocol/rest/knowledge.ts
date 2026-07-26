@@ -991,12 +991,15 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         catalog,
       });
 
-      // Build context + sources, then synthesize via IS.
+      // Build context + sources, then synthesize via IS. Pass the pending count
+      // so the composed NL answer can acknowledge matching pending proposals
+      // instead of a flat "no information found" contradicting them.
       const synthesis = await synthesizeAnswer(
         result.answers,
         question,
         result.routedTo,
-        workspaceId
+        workspaceId,
+        result.pending?.matches?.length ?? 0
       );
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");

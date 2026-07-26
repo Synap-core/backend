@@ -1253,6 +1253,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0201_automation_run_subject.sql",
   },
   {
+    table: "automation_runs",
+    column: "path_taken",
+    addedBy: "0214_automation_run_path_taken.sql",
+  },
+  {
     table: "automation_step_runs",
     column: "tokens_used",
     addedBy: "0198_workflow_attribution_spine.sql",

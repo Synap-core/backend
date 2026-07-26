@@ -108,3 +108,113 @@ describe("ProfileResolutionService.getEffectiveAiPosture", () => {
     expect(getBySlugForWorkspaceMock).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Layer 3 of the renderer chain ALWAYS returns a ref, so a bare ref can never
+ * answer "is anything actually bound?". These tests pin the `source` discriminator
+ * that the frontend resolver and the Renderer Studio both key off.
+ */
+describe("ProfileResolutionService.getEffectiveRendererWithSource", () => {
+  beforeEach(() => {
+    getBySlugMock.mockReset();
+    getBySlugForWorkspaceMock.mockReset();
+  });
+
+  it('layer 1 — workspace overlay reports source "workspace"', async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: {
+        "entity-detail": { kind: "cell", cellKey: "from-profile", props: {} },
+      },
+    });
+    const svc = new ProfileResolutionService(
+      makeDb({
+        profileRenderers: {
+          task: {
+            "entity-detail": { kind: "cell", cellKey: "from-ws", props: {} },
+          },
+        },
+      })
+    );
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-detail"
+    );
+
+    expect(result.source).toBe("workspace");
+    expect(result.ref).toEqual({
+      kind: "cell",
+      cellKey: "from-ws",
+      props: {},
+    });
+  });
+
+  it('layer 2 — profiles.defaultRenderers reports source "profile"', async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: {
+        "entity-detail": { kind: "cell", cellKey: "from-profile", props: {} },
+      },
+    });
+    const svc = new ProfileResolutionService(makeDb({}));
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-detail"
+    );
+
+    expect(result.source).toBe("profile");
+    expect((result.ref as { cellKey: string }).cellKey).toBe("from-profile");
+  });
+
+  it('layer 2 — the legacy singular column also reports source "profile"', async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: null,
+      defaultDetailRenderer: {
+        kind: "cell",
+        cellKey: "from-legacy-column",
+        props: {},
+      },
+    });
+    const svc = new ProfileResolutionService(makeDb({}));
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-detail"
+    );
+
+    expect(result.source).toBe("profile");
+    expect((result.ref as { cellKey: string }).cellKey).toBe(
+      "from-legacy-column"
+    );
+  });
+
+  it('layer 3 — nothing bound reports source "default" (NOT a binding)', async () => {
+    getBySlugMock.mockResolvedValue(null);
+    const svc = new ProfileResolutionService(makeDb());
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      null,
+      "entity-detail"
+    );
+
+    expect(result.source).toBe("default");
+    expect(result.ref).toEqual({
+      kind: "cell",
+      cellKey: "entity-detail",
+      props: {},
+    });
+  });
+
+  it("getEffectiveRenderer stays ref-only and keeps returning layer 3", async () => {
+    getBySlugMock.mockResolvedValue(null);
+    const svc = new ProfileResolutionService(makeDb());
+
+    const ref = await svc.getEffectiveRenderer("task", null, "collection");
+
+    expect(ref).toEqual({ kind: "cell", cellKey: "list", props: {} });
+  });
+});

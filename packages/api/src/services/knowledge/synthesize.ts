@@ -48,6 +48,22 @@ const PROPERTY_TEXT_KEYS = [
 ];
 
 /**
+ * Append an honest acknowledgment when the caller has matching pending capture
+ * proposals — WITHOUT fabricating their content as fact. Guarded by a substring
+ * check so we never double-append if the IS's own answer already surfaced them.
+ */
+function appendPendingNotice(answer: string, pendingCount: number): string {
+  if (pendingCount <= 0 || /pending/i.test(answer)) return answer;
+  const plural = pendingCount === 1 ? "" : "s";
+  const verb = pendingCount === 1 ? "matches" : "match";
+  return (
+    `${answer} (Note: ${pendingCount} pending proposal${plural} already ${verb} ` +
+    `this — not yet in the graph; review them before treating this as unknown, ` +
+    `and do NOT re-capture.)`
+  );
+}
+
+/**
  * Build context + sources from retrieved answer blocks, then call the IS
  * synthesis endpoint. Returns a SynthesisResult regardless of IS availability.
  */
@@ -55,7 +71,19 @@ export async function synthesizeAnswer(
   answers: AskAnswer[],
   question: string,
   routedTo: string[],
-  workspaceId: string | null | undefined
+  workspaceId: string | null | undefined,
+  /**
+   * Count of the caller's OWN pending capture proposals that text-matched this
+   * query (`AskResult.pending.matches.length`). The IS composes `answer` from
+   * `answers` alone — it never sees the pending lane, so a query with matching
+   * pending proposals but nothing in the graph yet came back "no information
+   * found" sitting right next to a non-empty pending block: a self-contradiction.
+   * When >0, we append one acknowledgment sentence to the synthesized answer
+   * (unless it already mentions pending) — never fabricating pending CONTENT as
+   * fact, just pointing at the block below. Optional/defaults to 0 so other
+   * callers of synthesizeAnswer are unaffected.
+   */
+  pendingCount = 0
 ): Promise<SynthesisResult> {
   const sources: SynthesisSource[] = [];
   const contextParts: string[] = [];
@@ -141,8 +169,12 @@ export async function synthesizeAnswer(
     });
     if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
     const data = (await res.json()) as { answer?: string };
+    const answer =
+      typeof data.answer === "string"
+        ? appendPendingNotice(data.answer, pendingCount)
+        : null;
     return {
-      answer: typeof data.answer === "string" ? data.answer : null,
+      answer,
       sources,
       routedTo,
     };

@@ -743,13 +743,6 @@ export async function executeMCPToolViaHubProtocol(
         });
       }
 
-      // Build context + sources, then synthesize via IS.
-      const synthesis = await synthesizeAnswer(
-        retrieved.answers,
-        args.query as string,
-        retrieved.routedTo,
-        workspaceId ?? null
-      );
       // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
       // proposals whose content matches this query — surfaced SEPARATELY from the
       // synthesized answer so recall never presents unvalidated work as fact.
@@ -760,6 +753,17 @@ export async function executeMCPToolViaHubProtocol(
       const pendingBlock = retrieved.pending
         ? { pending: retrieved.pending }
         : {};
+
+      // Build context + sources, then synthesize via IS. Pass the pending count
+      // so the composed NL answer can acknowledge matching pending proposals
+      // instead of contradicting the pendingBlock surfaced right below it.
+      const synthesis = await synthesizeAnswer(
+        retrieved.answers,
+        args.query as string,
+        retrieved.routedTo,
+        workspaceId ?? null,
+        retrieved.pending?.matches?.length ?? 0
+      );
 
       // Surface synthesis outages loudly instead of returning a null answer that
       // looks like "no results". Retrieval/sources still stand.

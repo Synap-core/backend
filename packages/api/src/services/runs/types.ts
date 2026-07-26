@@ -130,6 +130,15 @@ export interface UnifiedRunDetail {
   playbookDetail?: PlaybookRunDetail | null;
   /** The flow definition this run executed (automation only); null for every other ledger. */
   definitionSnapshot: unknown;
+  /**
+   * Which edges of `definitionSnapshot.flowDefinition` this run actually walked
+   * (automation only) — `{ traversedEdgeIds, prunedEdgeIds }`, written by the
+   * executor at the moment each branch decision was made. Null for every other
+   * ledger AND for automation runs that predate the column or never executed:
+   * null means UNKNOWN, never "nothing was pruned". An edge in neither list is
+   * undecided (its source never ran).
+   */
+  pathTaken: unknown;
 }
 
 /**

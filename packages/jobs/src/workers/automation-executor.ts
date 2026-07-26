@@ -35,6 +35,7 @@ import {
   isNotNull,
   inArray,
   desc,
+  asc,
   automations,
   automationRuns,
   automationStepRuns,
@@ -67,6 +68,7 @@ import type {
   CommandNodeDef,
   OutputNodeDef,
   GuardNodeDef,
+  RunPathTaken,
 } from "@synap/database";
 import { getBoss, emitSideEffects } from "@synap/events";
 import {
@@ -1896,16 +1898,177 @@ async function executeFetchStep(
   }
 }
 
+/** A query node's filter can carry a plain equality value or a `$gt`/`$gte`/
+ * `$lt`/`$lte`/`$ne` operator object (the shape AI-authored flows emit for
+ * numeric thresholds, e.g. `{ "properties.strengthScore": { "$gt": 30 } }`). */
+type QueryFilterOperator = "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+
+interface QueryPropertyCondition {
+  propKey: string;
+  op: QueryFilterOperator;
+  value: unknown;
+}
+
+const QUERY_FILTER_OPERATORS: Record<string, QueryFilterOperator> = {
+  $gt: "gt",
+  $gte: "gte",
+  $lt: "lt",
+  $lte: "lte",
+  $ne: "ne",
+};
+
+/** Strip a redundant leading "properties." some flow authors include on a
+ * filter/orderBy key — entity properties are the implicit namespace here. */
+function stripPropertiesPrefix(key: string): string {
+  return key.startsWith("properties.") ? key.slice("properties.".length) : key;
+}
+
+function asQueryFilterObject(
+  filter: unknown
+): Record<string, unknown> | undefined {
+  if (filter && typeof filter === "object" && !Array.isArray(filter)) {
+    return filter as Record<string, unknown>;
+  }
+  return undefined;
+}
+
 /**
- * Execute a query step: queries entities by profile slug with optional filter.
+ * Resolve the profileSlug for a query node. The node contract documents a
+ * top-level `profileSlug` field, but AI-authored flows sometimes nest it
+ * inside `filter.profileSlug` instead (e.g. `filter: { profileSlug: "person",
+ * "properties.strengthScore": { $gt: 30 } }`) — the top-level field is then
+ * `undefined`, and calling `resolveTemplate(undefined, …)` crashed with
+ * "Cannot read properties of undefined (reading 'replace')" (`String.replace`
+ * called on the missing value). Check both locations before resolving.
+ */
+export function resolveQueryProfileSlug(
+  data: { profileSlug?: unknown; filter?: unknown },
+  context: StepContext
+): string {
+  const filterObj = asQueryFilterObject(data.filter);
+  const raw =
+    (filterObj && typeof filterObj.profileSlug === "string"
+      ? filterObj.profileSlug
+      : undefined) ??
+    (typeof data.profileSlug === "string" ? data.profileSlug : undefined);
+  return raw ? resolveTemplate(raw, context) : "";
+}
+
+/**
+ * Parse a query node's `filter` into property conditions. Supports both the
+ * legacy shape — a JSON-stringified flat `{ propertyKey: value }` equality
+ * map, resolved via template first — and the object shape AI-authored flows
+ * emit directly (`{ profileSlug, "properties.<key>": value | { $gt, … } }`).
+ * `profileSlug` is resolved separately (`resolveQueryProfileSlug`) and
+ * skipped here. Never throws: an unparseable/empty filter yields `[]`.
+ */
+export function parseQueryFilterConditions(
+  filter: unknown,
+  context: StepContext
+): QueryPropertyCondition[] {
+  let filterObj = asQueryFilterObject(filter);
+  if (!filterObj && typeof filter === "string") {
+    const resolved = resolveTemplate(filter, context);
+    if (resolved) {
+      try {
+        filterObj = JSON.parse(resolved) as Record<string, unknown>;
+      } catch {
+        filterObj = undefined; // unparseable filter — ignore, return unfiltered (defensive)
+      }
+    }
+  }
+  if (!filterObj) return [];
+
+  const conditions: QueryPropertyCondition[] = [];
+  for (const [rawKey, rawValue] of Object.entries(filterObj)) {
+    if (rawKey === "profileSlug" || rawValue === undefined || rawValue === null)
+      continue;
+    const propKey = stripPropertiesPrefix(rawKey);
+    if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
+      for (const [opKey, opValue] of Object.entries(
+        rawValue as Record<string, unknown>
+      )) {
+        const op = QUERY_FILTER_OPERATORS[opKey];
+        if (!op || opValue === undefined || opValue === null) continue;
+        conditions.push({ propKey, op, value: opValue });
+      }
+    } else {
+      conditions.push({ propKey, op: "eq", value: rawValue });
+    }
+  }
+  return conditions;
+}
+
+export interface QueryOrderBy {
+  propKey: string;
+  dir: "asc" | "desc";
+}
+
+/**
+ * Parse a query node's optional `orderBy`/`orderDir` fields. This is the
+ * other half of the unresolved-path guard: a missing/non-string `orderBy`
+ * yields `undefined` (no ordering applied) rather than ever reaching a
+ * `.replace()` call on it.
+ */
+export function parseQueryOrderBy(data: {
+  orderBy?: unknown;
+  orderDir?: unknown;
+}): QueryOrderBy | undefined {
+  const raw = typeof data.orderBy === "string" ? data.orderBy.trim() : "";
+  if (!raw) return undefined;
+  const propKey = stripPropertiesPrefix(raw);
+  if (!propKey) return undefined;
+  return { propKey, dir: data.orderDir === "asc" ? "asc" : "desc" };
+}
+
+/** A JSONB property value compared/ordered numerically when it parses as a
+ * plain number (so "9" doesn't rank above "30" lexicographically); rows
+ * where it doesn't parse — a stored date/text value — fall out of numeric
+ * comparisons (NULL) and are left to the caller's text-based fallback. */
+function numericPropertyExpr(propKey: string) {
+  return drizzleSql`(CASE WHEN ${entities.properties}->>${propKey} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (${entities.properties}->>${propKey})::numeric ELSE NULL END)`;
+}
+
+function propertyConditionSql(condition: QueryPropertyCondition) {
+  const { propKey, op, value } = condition;
+  if (op === "eq") {
+    return drizzleSql`${entities.properties}->>${propKey} = ${String(value)}`;
+  }
+  if (op === "ne") {
+    return drizzleSql`${entities.properties}->>${propKey} != ${String(value)}`;
+  }
+  const numericExpr = numericPropertyExpr(propKey);
+  const numericValue = Number(value);
+  switch (op) {
+    case "gt":
+      return drizzleSql`${numericExpr} > ${numericValue}`;
+    case "gte":
+      return drizzleSql`${numericExpr} >= ${numericValue}`;
+    case "lt":
+      return drizzleSql`${numericExpr} < ${numericValue}`;
+    case "lte":
+      return drizzleSql`${numericExpr} <= ${numericValue}`;
+  }
+}
+
+/**
+ * Execute a query step: queries entities by profile slug with optional
+ * filter + orderBy.
  */
 async function executeQueryStep(
-  data: { profileSlug: string; filter: string; limit: number; scope?: string },
+  data: {
+    profileSlug?: string;
+    filter?: string | Record<string, unknown>;
+    limit: number;
+    scope?: string;
+    orderBy?: string;
+    orderDir?: string;
+  },
   context: StepContext,
   workspaceId: string,
   ownerId?: string
 ): Promise<Record<string, unknown>> {
-  const profileSlug = resolveTemplate(data.profileSlug, context);
+  const profileSlug = resolveQueryProfileSlug(data, context);
   const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
 
   if (!profileSlug) throw new Error("query node: profileSlug is required");
@@ -1926,24 +2089,11 @@ async function executeQueryStep(
     }),
   ];
 
-  // Apply optional filter: { propertyKey: value } pairs as JSONB equality conditions
-  const resolvedFilter = resolveTemplate(data.filter ?? "", context);
-  if (resolvedFilter) {
-    try {
-      const filterObj = JSON.parse(resolvedFilter) as Record<string, unknown>;
-      for (const [key, value] of Object.entries(filterObj)) {
-        if (value !== undefined && value !== null) {
-          conditions.push(
-            drizzleSql`${entities.properties}->>${key} = ${String(value)}`
-          );
-        }
-      }
-    } catch {
-      // unparseable filter — ignore, return unfiltered (defensive)
-    }
+  for (const condition of parseQueryFilterConditions(data.filter, context)) {
+    conditions.push(propertyConditionSql(condition));
   }
 
-  const results = await db
+  const baseQuery = db
     .select({
       id: entities.id,
       type: entities.type,
@@ -1954,8 +2104,21 @@ async function executeQueryStep(
       updatedAt: entities.updatedAt,
     })
     .from(entities)
-    .where(and(...conditions))
-    .limit(limit);
+    .where(and(...conditions));
+
+  const orderBy = parseQueryOrderBy(data);
+  const results = orderBy
+    ? await baseQuery
+        .orderBy(
+          orderBy.dir === "asc"
+            ? asc(numericPropertyExpr(orderBy.propKey))
+            : desc(numericPropertyExpr(orderBy.propKey)),
+          orderBy.dir === "asc"
+            ? asc(drizzleSql`${entities.properties}->>${orderBy.propKey}`)
+            : desc(drizzleSql`${entities.properties}->>${orderBy.propKey}`)
+        )
+        .limit(limit)
+    : await baseQuery.limit(limit);
 
   return { entities: results, count: results.length };
 }
@@ -2821,6 +2984,38 @@ async function executeAutomationFlow(params: {
     let stepsCompleted = 0;
     let stepsFailed = 0;
 
+    /**
+     * Persist WHICH PATH this run took (D3d) — the one write of the branch
+     * decisions the executor alone knows. Called at BOTH terminal points of the
+     * node walk (the delay suspension AND the final status update, which a
+     * fail-fast `break` also falls through to), so a run that dies midway still
+     * stores whatever was decided before it died.
+     *
+     * Union-merged onto whatever the previous invocation stored (delay resume).
+     * Non-throwing: this is a record of the run, never a reason to fail one.
+     */
+    const persistPathTaken = async (): Promise<void> => {
+      try {
+        const executedNodeIds = new Set<string>([
+          ...alreadyCompleted,
+          ...Object.keys(context.steps),
+          ...sortedNodes.filter((n) => n.type === "trigger").map((n) => n.id),
+        ]);
+        const pathTaken = computePathTaken(
+          flow.edges,
+          prunedEdges,
+          executedNodeIds,
+          loadedRun.pathTaken
+        );
+        await db
+          .update(automationRuns)
+          .set({ pathTaken })
+          .where(eq(automationRuns.id, runId));
+      } catch (err) {
+        logger.warn({ err, runId }, "Failed to persist automation run path");
+      }
+    };
+
     for (const node of sortedNodes) {
       // Skip trigger node (already fired)
       if (node.type === "trigger") continue;
@@ -3009,6 +3204,10 @@ async function executeAutomationFlow(params: {
                 .update(automationRuns)
                 .set({ stepsCompleted })
                 .where(eq(automationRuns.id, runId));
+
+              // Freeze the branch decisions made BEFORE the suspension — the
+              // resumed invocation unions its own on top.
+              await persistPathTaken();
 
               return {}; // Exit — execution resumes after delay
             }
@@ -3216,10 +3415,12 @@ async function executeAutomationFlow(params: {
                       case "query":
                         childOutput = await executeQueryStep(
                           childNode.data as {
-                            profileSlug: string;
-                            filter: string;
+                            profileSlug?: string;
+                            filter?: string | Record<string, unknown>;
                             limit: number;
                             scope?: string;
+                            orderBy?: string;
+                            orderDir?: string;
                           },
                           context,
                           workspaceId,
@@ -3319,10 +3520,12 @@ async function executeAutomationFlow(params: {
 
             case "query": {
               const data = node.data as {
-                profileSlug: string;
-                filter: string;
+                profileSlug?: string;
+                filter?: string | Record<string, unknown>;
                 limit: number;
                 scope?: string;
+                orderBy?: string;
+                orderDir?: string;
               };
               output = await executeQueryStep(
                 data,
@@ -3691,6 +3894,10 @@ async function executeAutomationFlow(params: {
       }
     }
 
+    // The node walk is over (normally, or via the fail-fast `break`) — record
+    // the path it took before writing the terminal verdict.
+    await persistPathTaken();
+
     // Build outputSummary from the last completed step with output
     const completedStepEntries = Object.entries(context.steps);
     const lastCompletedWithOutput = completedStepEntries
@@ -4039,6 +4246,50 @@ export function markDescendantsSkipped(
     prunedEdges.add(edge);
     markDescendantsSkipped(edge.target, edges, skippedNodes, prunedEdges);
   }
+}
+
+/**
+ * Freeze "which path did this run take" into a storable fact (D3d).
+ *
+ * Records ONLY what the executor actually decided:
+ *  - `prunedEdgeIds` — the exact edges `markDescendantsSkipped`/the condition +
+ *    switch cases pruned. Exact, never inferred.
+ *  - `traversedEdgeIds` — live (non-pruned) edges whose SOURCE node executed,
+ *    i.e. control was released along them.
+ *
+ * An edge whose source never ran — the run failed fast upstream, or a delay
+ * suspended it — is in NEITHER list. That absence is the honest "undecided"
+ * state and must render as unknown, not as "not taken".
+ *
+ * `previous` is the value already on the run row: a delay-resumed invocation
+ * rebuilds `prunedEdges` from scratch (nodes it skips as already-completed do
+ * not re-prune), so the two invocations are UNION-merged rather than clobbering.
+ * Pure — unit-testable without a database.
+ */
+export function computePathTaken(
+  edges: AutomationEdge[],
+  prunedEdges: Set<AutomationEdge>,
+  executedNodeIds: Set<string>,
+  previous?: RunPathTaken | null
+): RunPathTaken {
+  const pruned = new Set<string>(previous?.prunedEdgeIds ?? []);
+  const traversed = new Set<string>(previous?.traversedEdgeIds ?? []);
+
+  for (const edge of prunedEdges) {
+    if (edge.id) pruned.add(edge.id);
+  }
+  for (const edge of edges) {
+    if (!edge.id || prunedEdges.has(edge) || pruned.has(edge.id)) continue;
+    if (executedNodeIds.has(edge.source)) traversed.add(edge.id);
+  }
+  // A pruned decision always wins over a traversal claim — an edge can never be
+  // both, and the prune is the explicit decision.
+  for (const id of pruned) traversed.delete(id);
+
+  return {
+    traversedEdgeIds: [...traversed],
+    prunedEdgeIds: [...pruned],
+  };
 }
 
 // Node types a loop may dispatch per-item (mirrors the `switch (childNode.type)`

@@ -91,9 +91,13 @@ export type RendererRef =
  * kept inline so the database layer stays UI-free.
  */
 export type ProfileRendererContentKind =
-  | "entity-detail"
-  | "entity-profile"
-  | "collection";
+  "entity-detail" | "entity-profile" | "collection";
+
+/**
+ * Which layer of `getEffectiveRenderer`'s chain produced the ref.
+ * `"default"` means NOTHING is bound — layer 3's hardcoded fallback answered.
+ */
+export type ProfileRendererSource = "workspace" | "profile" | "default";
 
 /**
  * Back-compat: map a ContentKind to the legacy slot key still written into old
@@ -454,7 +458,12 @@ export class ProfileResolutionService {
    *      map), then the deprecated `default_(list|detail|dashboard)_renderer`
    *      column for un-migrated rows.
    *   3. Hardcoded system fallback — keeps the pod bootable when nothing is
-   *      configured. All keys point at existing registered cells.
+   *      configured.
+   *
+   * Returns only the ref. Callers that need to tell an EXPLICIT binding apart
+   * from the layer-3 system default (the frontend resolver, the Renderer
+   * Studio) must use `getEffectiveRendererWithSource` instead — layer 3 always
+   * returns a value, so a bare ref cannot answer "was this configured?".
    *
    * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
    */
@@ -463,6 +472,29 @@ export class ProfileResolutionService {
     workspaceId: string | null,
     contentKind: ProfileRendererContentKind
   ): Promise<RendererRef> {
+    const { ref } = await this.getEffectiveRendererWithSource(
+      profileSlug,
+      workspaceId,
+      contentKind
+    );
+    return ref;
+  }
+
+  /**
+   * Same resolution as `getEffectiveRenderer`, but reports WHICH layer answered:
+   *   - `"workspace"` — layer 1, `workspaces.settings.profileRenderers`
+   *   - `"profile"`   — layer 2, `profiles.defaultRenderers` or a legacy column
+   *   - `"default"`   — layer 3, the hardcoded system fallback (NOT configured)
+   *
+   * `source === "default"` is the signal that nothing is bound: the resolver may
+   * prefer its own local convention, and the Studio must not offer a "Reset"
+   * for a binding that doesn't exist.
+   */
+  async getEffectiveRendererWithSource(
+    profileSlug: string,
+    workspaceId: string | null,
+    contentKind: ProfileRendererContentKind
+  ): Promise<{ ref: RendererRef; source: ProfileRendererSource }> {
     const legacySlot = LEGACY_SLOT_BY_CONTENT_KIND[contentKind];
 
     // 1. Workspace overlay (new contentKind key → legacy slot key)
@@ -472,16 +504,13 @@ export class ProfileResolutionService {
         columns: { settings: true },
       });
       const settings = workspace?.settings as
-        | Record<string, unknown>
-        | null
-        | undefined;
+        Record<string, unknown> | null | undefined;
       const overlayRoot = settings?.profileRenderers as
-        | Record<string, Record<string, RendererRef | undefined>>
-        | undefined;
+        Record<string, Record<string, RendererRef | undefined>> | undefined;
       const profileOverlay = overlayRoot?.[profileSlug];
       const overlay =
         profileOverlay?.[contentKind] ?? profileOverlay?.[legacySlot];
-      if (overlay) return overlay;
+      if (overlay) return { ref: overlay, source: "workspace" };
     }
 
     // 2. Profile default (new map → deprecated column)
@@ -496,7 +525,7 @@ export class ProfileResolutionService {
         }
       ).defaultRenderers;
       const mapped = defaultRenderers?.[contentKind];
-      if (mapped) return mapped as RendererRef;
+      if (mapped) return { ref: mapped as RendererRef, source: "profile" };
 
       const legacyColumn =
         contentKind === "collection"
@@ -505,15 +534,26 @@ export class ProfileResolutionService {
             ? (profile as { defaultDashboardRenderer?: unknown })
                 .defaultDashboardRenderer
             : profile.defaultDetailRenderer;
-      if (legacyColumn) return legacyColumn as RendererRef;
+      if (legacyColumn)
+        return { ref: legacyColumn as RendererRef, source: "profile" };
     }
 
-    // 3. Hardcoded system fallback — all keys point at existing registered cells.
+    // 3. Hardcoded system fallback — NOT a binding. Reported as `"default"` so
+    //    callers can prefer their own local convention (e.g. the browser's
+    //    per-profile `entity-detail-${slug}` cells). Note that `list` is not
+    //    registered in any frontend cellRegistry today; it survives only as a
+    //    non-null sentinel that keeps the pod bootable.
     if (contentKind === "entity-profile")
-      return { kind: "cell", cellKey: "profile-dashboard", props: {} };
+      return {
+        ref: { kind: "cell", cellKey: "profile-dashboard", props: {} },
+        source: "default",
+      };
     return contentKind === "collection"
-      ? { kind: "cell", cellKey: "list", props: {} }
-      : { kind: "cell", cellKey: "entity-detail", props: {} };
+      ? { ref: { kind: "cell", cellKey: "list", props: {} }, source: "default" }
+      : {
+          ref: { kind: "cell", cellKey: "entity-detail", props: {} },
+          source: "default",
+        };
   }
 
   /**
@@ -556,12 +596,9 @@ export class ProfileResolutionService {
         columns: { settings: true },
       });
       const settings = workspace?.settings as
-        | Record<string, unknown>
-        | null
-        | undefined;
+        Record<string, unknown> | null | undefined;
       const overlayRoot = settings?.profileAiPosture as
-        | Record<string, AiPosture | undefined>
-        | undefined;
+        Record<string, AiPosture | undefined> | undefined;
       overlay = overlayRoot?.[profileSlug] ?? {};
     }
 

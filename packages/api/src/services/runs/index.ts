@@ -707,6 +707,7 @@ export async function getRun(
         triggerPayload: automationRuns.triggerPayload,
         outputSummary: automationRuns.outputSummary,
         definitionSnapshot: automationRuns.definitionSnapshot,
+        pathTaken: automationRuns.pathTaken,
       })
       .from(automationRuns)
       .where(eq(automationRuns.id, run.id))
@@ -756,6 +757,9 @@ export async function getRun(
       playbookDetail: null,
       // The flow definition this run executed — lets the UI render the graph.
       definitionSnapshot: meta?.definitionSnapshot ?? null,
+      // Which edges of that graph the run actually walked. NULL = unknown
+      // (pre-0214 run, or one that never executed a node) — not "nothing pruned".
+      pathTaken: meta?.pathTaken ?? null,
     };
   }
 
@@ -773,6 +777,7 @@ export async function getRun(
             outputSummary: null,
             playbookDetail: null,
             definitionSnapshot: null,
+            pathTaken: null,
           }
         : null;
     const rows = await db
@@ -816,6 +821,7 @@ export async function getRun(
       outputSummary: null,
       playbookDetail: null,
       definitionSnapshot: null,
+      pathTaken: null,
     };
   }
 
@@ -852,6 +858,7 @@ export async function getRun(
     outputSummary: null,
     playbookDetail,
     definitionSnapshot: null,
+    pathTaken: null,
   };
 }
 

@@ -1,0 +1,15 @@
+-- 0214: per-run path through the automation flow graph (D3d)
+--
+-- The run canvas needs to draw WHICH BRANCH a run took. Today that is only
+-- knowable inside the executor: `prunedEdges` is a function-local Set that is
+-- never written anywhere. Re-deriving it in the frontend would mean a second
+-- implementation of `markDescendantsSkipped` that must stay in sync with the
+-- executor forever. Store the decision instead — one source of truth.
+--
+-- Shape: { "traversedEdgeIds": string[], "prunedEdgeIds": string[] }, edge ids
+-- from the run's definition_snapshot.flowDefinition.edges.
+--
+-- Additive only. Existing runs keep NULL — which means "unknown", NOT
+-- "nothing was pruned". No backfill: the executor is the only honest source and
+-- it cannot be replayed for a finished run.
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "path_taken" jsonb;

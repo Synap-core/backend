@@ -1031,44 +1031,76 @@ export async function createCapabilityFromDefinition(
 // governance default can never drift from the grant the gate actually enforces.
 const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
+const VERB_WRITE_SIGNALS = [
+  "send",
+  "invite",
+  "post",
+  "create",
+  "write",
+  "update",
+  "delete",
+  "reply",
+  "message",
+  "email",
+  "publish",
+  "comment",
+  "add",
+  "remove",
+  "set",
+  "run",
+  "execute",
+];
+const VERB_READ_SIGNALS = [
+  "search",
+  "list",
+  "get",
+  "fetch",
+  "read",
+  "find",
+  "lookup",
+  "query",
+  "pull",
+];
+
+// Split on non-alphanumerics only — verb names/descriptions are snake_case or
+// prose, never camelCase, so this is enough to yield whole words.
+function tokenizeVerbText(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+  );
+}
+
+function classifyVerbTokens(tokens: Set<string>): ToolVerbKind | null {
+  if (VERB_WRITE_SIGNALS.some((w) => tokens.has(w))) return "action";
+  if (VERB_READ_SIGNALS.some((r) => tokens.has(r))) return "read";
+  return null;
+}
+
 /**
  * Infer a verb's read/push axis from the skill that backs it. A `code` skill that
  * SENDS/WRITES (its name or description signals a mutation) is an `action` (push);
  * a `read` skill is a pull. Heuristic + conservative default: anything that looks
  * like it mutates is treated as a push (`action`) so it stays behind governance.
+ *
+ * Matches whole words only (never substrings) — a naive `.includes()` scan
+ * misfires on incidental substrings inside real words (e.g. "dataset" contains
+ * "set", "thread" contains "read", "publishedDate" contains "publish"). The
+ * verb's own NAME is checked first: it's a structured `verb_object` identifier
+ * (`apify_run_actor`, `apify_list_actor_runs`), whereas the description is prose
+ * that often mentions a sibling verb or an unrelated noun ("no actor run",
+ * "past run") without describing what THIS verb does. Only when the name is
+ * inconclusive does the description get consulted.
  */
-function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
-  const haystack = `${s.name} ${s.description ?? ""}`.toLowerCase();
-  const writeSignals = [
-    "send",
-    "invite",
-    "post",
-    "create",
-    "write",
-    "update",
-    "delete",
-    "reply",
-    "message",
-    "email",
-    "publish",
-    "comment",
-    "add",
-    "remove",
-    "set",
-  ];
-  const readSignals = [
-    "search",
-    "list",
-    "get",
-    "fetch",
-    "read",
-    "find",
-    "lookup",
-    "query",
-    "pull",
-  ];
-  if (writeSignals.some((w) => haystack.includes(w))) return "action";
-  if (readSignals.some((r) => haystack.includes(r))) return "read";
+export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
+  const fromName = classifyVerbTokens(tokenizeVerbText(s.name));
+  if (fromName) return fromName;
+  const fromDescription = classifyVerbTokens(
+    tokenizeVerbText(s.description ?? "")
+  );
+  if (fromDescription) return fromDescription;
   // Unknown intent → conservative push so it stays governed.
   return "action";
 }

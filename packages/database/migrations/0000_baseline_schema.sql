@@ -2155,6 +2155,7 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp 
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;  -- 0198 (per-run executed definition)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;  -- 0198 (replay lineage; soft self-ref)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "summary_message_id" uuid;  -- 0199 (run-narration summary claim slot; soft ref to messages.id)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "path_taken" jsonb;  -- 0214 (per-run traversed/pruned edge ids; NULL = unknown)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");

@@ -7,10 +7,14 @@ import {
   executeTransformStep,
   topoSort,
   markDescendantsSkipped,
+  computePathTaken,
   seedResumeState,
   executeSelectStep,
   resolveExecutionActor,
   shouldRunFlow,
+  resolveQueryProfileSlug,
+  parseQueryFilterConditions,
+  parseQueryOrderBy,
   type StepContext,
   type LedgerStepRow,
 } from "../automation-executor.js";
@@ -538,5 +542,284 @@ describe("shouldRunFlow (Wave 4.V3 precondition early-exit)", () => {
 
   it("throws (fail-closed) on an unparseable precondition — never a silent run", () => {
     expect(() => shouldRunFlow("not a comparison", ctx())).toThrow();
+  });
+});
+
+// Regression for the "Daily Reconnection Nudges" / "Event Prep Briefing" /
+// "Generate report" query-node crash: `diagnose(runId)` forensics showed all
+// three failing with "Cannot read properties of undefined (reading
+// 'replace')" on a query node whose `filter` nests `profileSlug` and property
+// operators, and whose top-level `orderBy`/`orderDir` sort a
+// `properties.<field>` path — a shape the old executor never resolved before
+// calling `resolveTemplate` (→ `String.replace`) on the missing top-level
+// `profileSlug`.
+describe("resolveQueryProfileSlug (query node profileSlug resolution)", () => {
+  it("resolves the legacy top-level profileSlug field", () => {
+    expect(resolveQueryProfileSlug({ profileSlug: "person" }, ctx())).toBe(
+      "person"
+    );
+  });
+
+  it("resolves profileSlug nested inside an object filter (the crashing shape)", () => {
+    // Before the fix: `data.profileSlug` is undefined here, and
+    // `resolveTemplate(undefined, …)` threw on `undefined.replace(...)`.
+    expect(() =>
+      resolveQueryProfileSlug(
+        {
+          filter: {
+            profileSlug: "person",
+            "properties.strengthScore": { $gt: 30 },
+          },
+        },
+        ctx()
+      )
+    ).not.toThrow();
+    expect(
+      resolveQueryProfileSlug(
+        {
+          filter: {
+            profileSlug: "person",
+            "properties.strengthScore": { $gt: 30 },
+          },
+        },
+        ctx()
+      )
+    ).toBe("person");
+  });
+
+  it("returns '' (not a throw) when profileSlug is missing from both locations", () => {
+    expect(() => resolveQueryProfileSlug({}, ctx())).not.toThrow();
+    expect(resolveQueryProfileSlug({}, ctx())).toBe("");
+    expect(resolveQueryProfileSlug({ filter: {} }, ctx())).toBe("");
+  });
+
+  it("template-resolves a nested profileSlug reference", () => {
+    const c = ctx({ trigger: { payload: { slug: "event" } } });
+    expect(
+      resolveQueryProfileSlug(
+        { filter: { profileSlug: "{{trigger.payload.slug}}" } },
+        c
+      )
+    ).toBe("event");
+  });
+});
+
+describe("parseQueryFilterConditions (query node filter parsing)", () => {
+  it("parses an operator object ($gt) alongside profileSlug, skipping profileSlug", () => {
+    const conditions = parseQueryFilterConditions(
+      {
+        profileSlug: "person",
+        "properties.strengthScore": { $gt: 30 },
+      },
+      ctx()
+    );
+    expect(conditions).toEqual([
+      { propKey: "strengthScore", op: "gt", value: 30 },
+    ]);
+  });
+
+  it("parses a plain equality filter object", () => {
+    const conditions = parseQueryFilterConditions(
+      { profileSlug: "event", "properties.status": "active" },
+      ctx()
+    );
+    expect(conditions).toEqual([
+      { propKey: "status", op: "eq", value: "active" },
+    ]);
+  });
+
+  it("still supports the legacy JSON-stringified flat filter", () => {
+    const conditions = parseQueryFilterConditions(
+      JSON.stringify({ status: "active" }),
+      ctx()
+    );
+    expect(conditions).toEqual([
+      { propKey: "status", op: "eq", value: "active" },
+    ]);
+  });
+
+  it("returns [] (not a throw) for an unparseable/empty filter", () => {
+    expect(parseQueryFilterConditions(undefined, ctx())).toEqual([]);
+    expect(parseQueryFilterConditions("not json", ctx())).toEqual([]);
+    expect(parseQueryFilterConditions("", ctx())).toEqual([]);
+  });
+});
+
+describe("parseQueryOrderBy (query node orderBy parsing)", () => {
+  it("parses a properties.<field> orderBy path with orderDir", () => {
+    expect(
+      parseQueryOrderBy({
+        orderBy: "properties.strengthScore",
+        orderDir: "desc",
+      })
+    ).toEqual({ propKey: "strengthScore", dir: "desc" });
+  });
+
+  it("defaults orderDir to desc when omitted", () => {
+    expect(parseQueryOrderBy({ orderBy: "properties.startDate" })).toEqual({
+      propKey: "startDate",
+      dir: "desc",
+    });
+  });
+
+  it("honors an explicit asc orderDir", () => {
+    expect(
+      parseQueryOrderBy({ orderBy: "properties.startDate", orderDir: "asc" })
+    ).toEqual({ propKey: "startDate", dir: "asc" });
+  });
+
+  it("returns undefined (not a throw) when orderBy is missing/non-string", () => {
+    expect(() => parseQueryOrderBy({})).not.toThrow();
+    expect(parseQueryOrderBy({})).toBeUndefined();
+    expect(
+      parseQueryOrderBy({ orderBy: 42 as unknown as string })
+    ).toBeUndefined();
+  });
+});
+
+// ── computePathTaken (D3d: "which path did this run take", as a stored fact) ──
+//
+// PURE unit tests over the extracted decision logic — no Postgres, no pg-boss.
+// They exercise the SAME `markDescendantsSkipped` + `getOutEdges` pruning the
+// executor runs, then assert what `computePathTaken` freezes, which is exactly
+// the contract the persisted `automation_runs.path_taken` column carries.
+describe("computePathTaken", () => {
+  it("records nothing pruned and every edge traversed for a linear flow", () => {
+    // trigger → a → b, all executed
+    const edges = [edge("e1", "t", "a"), edge("e2", "a", "b")];
+    const path = computePathTaken(
+      edges,
+      new Set(),
+      new Set(["t", "a", "b"]),
+      null
+    );
+    expect(path.prunedEdgeIds).toEqual([]);
+    expect(path.traversedEdgeIds.sort()).toEqual(["e1", "e2"]);
+  });
+
+  it("records the untaken branch of a false condition as pruned", () => {
+    // t → c(condition); c --yes--> y → y2 ; c --no--> n
+    // condition evaluated FALSE ⇒ the "yes" branch is pruned.
+    const edges = [
+      edge("e_t", "t", "c"),
+      edge("e_yes", "c", "y", "yes"),
+      edge("e_y2", "y", "y2"),
+      edge("e_no", "c", "n", "no"),
+    ];
+    const skippedNodes = new Set<string>();
+    const prunedEdges = new Set<AutomationEdge>();
+    // Mirror the executor's condition case: prune the untaken handle's edges,
+    // then walk their descendants.
+    const untaken = edges.filter(
+      (e) => e.source === "c" && e.sourceHandle === "yes"
+    );
+    for (const e of untaken) prunedEdges.add(e);
+    for (const e of untaken)
+      markDescendantsSkipped(e.target, edges, skippedNodes, prunedEdges);
+
+    // Executed: trigger, the condition, and the taken-branch node.
+    const path = computePathTaken(
+      edges,
+      prunedEdges,
+      new Set(["t", "c", "n"]),
+      null
+    );
+    // Both the direct untaken edge AND the dead descendant edge are pruned.
+    expect(path.prunedEdgeIds.sort()).toEqual(["e_y2", "e_yes"]);
+    expect(path.traversedEdgeIds.sort()).toEqual(["e_no", "e_t"]);
+    expect(skippedNodes).toEqual(new Set(["y", "y2"]));
+  });
+
+  it("prunes only the non-matching switch cases, by sourceHandle", () => {
+    const edges = [
+      edge("e_a", "s", "na", "alpha"),
+      edge("e_b", "s", "nb", "beta"),
+      edge("e_g", "s", "ng", "gamma"),
+    ];
+    const skippedNodes = new Set<string>();
+    const prunedEdges = new Set<AutomationEdge>();
+    for (const handle of ["alpha", "gamma"]) {
+      const caseEdges = edges.filter((e) => e.sourceHandle === handle);
+      for (const e of caseEdges) prunedEdges.add(e);
+      for (const e of caseEdges)
+        markDescendantsSkipped(e.target, edges, skippedNodes, prunedEdges);
+    }
+    const path = computePathTaken(
+      edges,
+      prunedEdges,
+      new Set(["s", "nb"]),
+      null
+    );
+    expect(path.prunedEdgeIds.sort()).toEqual(["e_a", "e_g"]);
+    expect(path.traversedEdgeIds).toEqual(["e_b"]);
+  });
+
+  it("prunes every outgoing edge when no switch case matched", () => {
+    const edges = [
+      edge("e_a", "s", "na", "alpha"),
+      edge("e_b", "s", "nb", "beta"),
+    ];
+    const skippedNodes = new Set<string>();
+    const prunedEdges = new Set<AutomationEdge>();
+    for (const e of edges) prunedEdges.add(e);
+    for (const e of edges)
+      markDescendantsSkipped(e.target, edges, skippedNodes, prunedEdges);
+    const path = computePathTaken(edges, prunedEdges, new Set(["s"]), null);
+    expect(path.prunedEdgeIds.sort()).toEqual(["e_a", "e_b"]);
+    expect(path.traversedEdgeIds).toEqual([]);
+  });
+
+  it("keeps a diamond's join edge live — merge reachable from the taken branch", () => {
+    // c --yes--> y --> j ; c --no--> n --> j   (j is the join)
+    const edges = [
+      edge("e_yes", "c", "y", "yes"),
+      edge("e_no", "c", "n", "no"),
+      edge("e_yj", "y", "j"),
+      edge("e_nj", "n", "j"),
+    ];
+    const skippedNodes = new Set<string>();
+    const prunedEdges = new Set<AutomationEdge>();
+    const untaken = edges.filter((e) => e.sourceHandle === "yes");
+    for (const e of untaken) prunedEdges.add(e);
+    for (const e of untaken)
+      markDescendantsSkipped(e.target, edges, skippedNodes, prunedEdges);
+    const path = computePathTaken(
+      edges,
+      prunedEdges,
+      new Set(["c", "n", "j"]),
+      null
+    );
+    // The join node survives, so only the dead branch's edges are pruned.
+    expect(path.prunedEdgeIds.sort()).toEqual(["e_yes", "e_yj"]);
+    expect(path.traversedEdgeIds.sort()).toEqual(["e_nj", "e_no"]);
+    expect(skippedNodes).toEqual(new Set(["y"]));
+  });
+
+  it("leaves an edge whose source never ran UNDECIDED (in neither list)", () => {
+    // a failed fast; b never ran ⇒ e2 is not traversed and not pruned.
+    const edges = [edge("e1", "t", "a"), edge("e2", "b", "c")];
+    const path = computePathTaken(edges, new Set(), new Set(["t"]), null);
+    expect(path.traversedEdgeIds).toEqual(["e1"]);
+    expect(path.prunedEdgeIds).toEqual([]);
+  });
+
+  it("union-merges onto the previous value (delay resumption), deduped", () => {
+    const edges = [edge("e1", "t", "a"), edge("e2", "a", "b")];
+    const path = computePathTaken(edges, new Set(), new Set(["t", "a"]), {
+      traversedEdgeIds: ["e1", "e0"],
+      prunedEdgeIds: ["e9"],
+    });
+    expect(path.traversedEdgeIds.sort()).toEqual(["e0", "e1", "e2"]);
+    expect(path.prunedEdgeIds).toEqual(["e9"]);
+  });
+
+  it("lets a prune win over a previously-claimed traversal", () => {
+    const edges = [edge("e1", "t", "a")];
+    const path = computePathTaken(edges, new Set([edges[0]!]), new Set(["t"]), {
+      traversedEdgeIds: ["e1"],
+      prunedEdgeIds: [],
+    });
+    expect(path.prunedEdgeIds).toEqual(["e1"]);
+    expect(path.traversedEdgeIds).toEqual([]);
   });
 });

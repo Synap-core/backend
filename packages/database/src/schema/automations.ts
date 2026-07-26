@@ -600,6 +600,19 @@ export type NewAutomation = typeof automations.$inferInsert;
 export const insertAutomationSchema = createInsertSchema(automations);
 export const selectAutomationSchema = createSelectSchema(automations);
 
+/**
+ * Per-run record of the path through the flow graph (D3d). Edge ids are
+ * `AutomationEdge.id` values from the run's `definitionSnapshot.flowDefinition`.
+ * Both lists are sets (deduped, order-insensitive) and are UNION-MERGED across a
+ * delay resumption, so a multi-invocation run accumulates rather than overwrites.
+ */
+export interface RunPathTaken {
+  /** Live edges whose source node executed — control was released along them. */
+  traversedEdgeIds: string[];
+  /** Edges on an untaken condition/switch branch (exact executor decision). */
+  prunedEdgeIds: string[];
+}
+
 // ── Automation runs ─────────────────────────────────────────────────────────
 
 export const automationRuns = pgTable(
@@ -644,6 +657,22 @@ export const automationRuns = pgTable(
       version: number;
       flowDefinition: FlowDefinition;
     }>(),
+    /**
+     * Which edges of the flow this run actually walked (D3d). Written by the
+     * executor at the point the branch decisions are already made — NOT
+     * re-derivable client-side without a second copy of `markDescendantsSkipped`.
+     *
+     * - `prunedEdgeIds` — edges on an untaken condition/switch branch (exact:
+     *   the executor pruned them by id).
+     * - `traversedEdgeIds` — live edges whose SOURCE node executed, i.e. control
+     *   was released along them. An edge whose source never ran (the run failed
+     *   fast upstream) appears in NEITHER list — that absence is honest
+     *   "undecided", not "not taken".
+     *
+     * NULL for every run that predates this column and for runs finalized by the
+     * reaper without executing — render as "unknown", never as "nothing pruned".
+     */
+    pathTaken: jsonb("path_taken").$type<RunPathTaken>(),
     /** Soft self-reference to the run this one replays (schema support only). */
     replayOf: uuid("replay_of"),
 
