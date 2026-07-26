@@ -2863,6 +2863,82 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * Revise a pending proposal's data before approving — the USER-facing twin of
+   * the service-key hub door `hub-protocol/proposals.ts` `updateProposal`. Powers
+   * the reviewer's "Save & Approve" (correct the draft, then approve). Same
+   * reviewer-authority ladder as `approve` (`computeCanReviewApproval`). Direct DB
+   * update — does NOT re-run the event pipeline. Merge mirrors the hub door: the
+   * corrected payload overlays the existing envelope, but the identity fields
+   * (`targetType`/`changeType`/`requestId`) are pinned from the stored data so a
+   * reviewer edit can never clobber what the approve materializer keys on.
+   */
+  revise: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string(),
+        /** The corrected proposal payload (the merged draft the reviewer edited). */
+        data: z.record(z.string(), z.unknown()),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+
+      if (proposal.status !== ProposalStatus.PENDING) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Cannot revise proposal with status '${proposal.status}' — only pending proposals can be revised`,
+        });
+      }
+
+      // Authority — SAME ladder `approve` enforces (a revise is a pre-approval
+      // edit, so it requires review authority). Pod-wide proposals skip the check.
+      const canReview = await computeCanReviewApproval({ proposal, userId });
+      if (!canReview) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Not authorized to revise this proposal",
+        });
+      }
+
+      // Merge the corrected payload over the existing envelope, preserving the
+      // identity fields the approve materializer keys on (mirrors the hub door).
+      const existing = (proposal.data ?? {}) as Record<string, unknown>;
+      const merged = {
+        ...existing,
+        ...input.data,
+        targetType: existing.targetType,
+        changeType: existing.changeType,
+        requestId: existing.requestId,
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          data: merged as typeof proposals.$inferInsert.data,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        );
+
+      return { success: true };
+    }),
+
+  /**
    * Reject a proposal
    */
   reject: protectedProcedure
