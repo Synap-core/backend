@@ -1,12 +1,15 @@
 export type RegistrationOutcome =
-  | "CONNECTED_VERIFIED"
-  | "KEY_MINTED_BUT_VERIFICATION_FAILED";
+  "CONNECTED_VERIFIED" | "KEY_MINTED_BUT_VERIFICATION_FAILED";
 export interface RegistrationTrace {
   flowId: string;
   outcome: RegistrationOutcome;
   verificationError?: string;
 }
 
+// Mirrors `@synap-core/types` integrationKindSchema. Kept as a literal (not an
+// import) so this client package stays dependency-free; keep the value set in
+// sync. NB: "openclaw" is a live integration kind (not a write-source) — see the
+// note on integrationKindSchema; do not drop it in an openclaw cleanup.
 export type IntegrationKind = "raycast" | "cli" | "openclaw" | "custom";
 
 export interface DeeplinkContext {

@@ -10,7 +10,7 @@
  */
 
 import { getDb, sql } from "../client-pg.js";
-import { eq } from "drizzle-orm";
+import { eq, sql as drizzleSql } from "drizzle-orm";
 import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
@@ -24,7 +24,10 @@ import { PropertyDefRepository } from "../repositories/property-def-repository.j
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
 import { views } from "../schema/views.js";
-import { entities } from "../schema/entities.js";
+import {
+  entities,
+  ONBOARDING_SCAFFOLD_SYSTEM_DATA,
+} from "../schema/entities.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
 import { RelationRepository } from "../repositories/relation-repository.js";
 import { RelationDefRepository } from "../repositories/relation-def-repository.js";
@@ -1691,12 +1694,21 @@ export async function createWorkspaceFromDefinition(
     const existingSeed = await dbConn.query.entities.findMany({
       where: eq(entities.workspaceId, workspaceId),
     });
-    const seedByKey: Record<string, string> = {};
-    for (const e of existingSeed) seedByKey[`${e.type}:${e.title}`] = e.id;
+    const seedByKey: Record<
+      string,
+      { id: string; createdByKind: string | null }
+    > = {};
+    for (const e of existingSeed) {
+      seedByKey[`${e.type}:${e.title}`] = {
+        id: e.id,
+        createdByKind: e.createdByKind,
+      };
+    }
 
     for (const entity of definition.suggestedEntities ?? []) {
       const refKey = `${entity.profileSlug}:${entity.title}`;
-      let entityId = seedByKey[refKey];
+      const existing = seedByKey[refKey];
+      let entityId = existing?.id;
       if (!entityId) {
         let result;
         try {
@@ -1707,6 +1719,11 @@ export async function createWorkspaceFromDefinition(
               properties: entity.properties,
               workspaceId,
               userId,
+              // Template examples are scaffolding, not evidence that the user
+              // reached value. A dedicated system-data marker distinguishes
+              // them from real imports and automations that also run as system.
+              createdByKind: "system",
+              systemData: ONBOARDING_SCAFFOLD_SYSTEM_DATA,
               // Skip strict validation for template seed data — property slugs in the
               // template may differ from system profile property defs, and required
               // properties on system profiles (like 'title') are entity-level fields,
@@ -1722,7 +1739,19 @@ export async function createWorkspaceFromDefinition(
           );
         }
         entityId = result!.id;
-        seedByKey[refKey] = entityId;
+        seedByKey[refKey] = { id: entityId, createdByKind: "system" };
+      } else if (existing.createdByKind === "system") {
+        // Heal resumptions created before the dedicated scaffold marker was
+        // introduced. The exact template key plus system provenance keeps this
+        // from relabelling a user's similarly named entity.
+        await dbConn
+          .update(entities)
+          .set({
+            systemData: drizzleSql`${entities.systemData} || ${JSON.stringify(
+              ONBOARDING_SCAFFOLD_SYSTEM_DATA
+            )}::jsonb`,
+          })
+          .where(eq(entities.id, entityId));
       }
       entityIds.push(entityId);
       entityRefMap[refKey] = entityId;

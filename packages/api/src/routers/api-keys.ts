@@ -13,6 +13,7 @@ import {
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { integrationKindSchema } from "@synap-core/types";
 import { API_KEY_SCOPES } from "@synap/database/schema";
 import {
   db,
@@ -703,7 +704,7 @@ export const apiKeysRouter = router({
   connectIntegration: protectedProcedure
     .input(
       z.object({
-        integration: z.enum(["raycast", "cli", "openclaw", "custom"]),
+        integration: integrationKindSchema,
         workspaceId: z.string().uuid().optional(),
         strategy: z
           .enum(["create_new", "replace_existing"])

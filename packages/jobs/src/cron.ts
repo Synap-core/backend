@@ -35,6 +35,10 @@ import {
   AUTOMATION_RUN_REAPER_QUEUE,
   AUTOMATION_RUN_REAPER_CRON,
 } from "./workers/automation-run-reaper.js";
+import {
+  FOCUS_SESSION_REAPER_QUEUE,
+  FOCUS_SESSION_REAPER_CRON,
+} from "./workers/focus-session-reaper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 import {
@@ -128,6 +132,16 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: automation-run-reaper (every 5min)");
+
+  // Focus session reaper (every hour — marks active/paused focus_sessions with
+  // no updatedAt activity for REAPER_STALE_HOURS as 'stale'; non-destructive)
+  await scheduleSafe(
+    boss,
+    FOCUS_SESSION_REAPER_QUEUE,
+    FOCUS_SESSION_REAPER_CRON,
+    {}
+  );
+  logger.info("Registered cron: focus-session-reaper (every hour)");
 
   // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});

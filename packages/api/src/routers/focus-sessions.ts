@@ -54,6 +54,7 @@ const statusFilterSchema = z
     "scheduled",
     "failed",
     "cancelled",
+    "stale",
     "all",
   ])
   .default("all");

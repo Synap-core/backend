@@ -47,6 +47,10 @@ import {
   handleAutomationRunReaper,
   AUTOMATION_RUN_REAPER_QUEUE,
 } from "./automation-run-reaper.js";
+import {
+  handleFocusSessionReaper,
+  FOCUS_SESSION_REAPER_QUEUE,
+} from "./focus-session-reaper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleVaultGrantExpiry,
@@ -175,6 +179,7 @@ const ALL_QUEUES = [
   "automation-execute",
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
+  FOCUS_SESSION_REAPER_QUEUE,
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
@@ -390,6 +395,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleAutomationRunReaper()
   );
   logger.info("Registered worker: automation-run-reaper");
+
+  // Focus session reaper (cron: every hour — marks stale active/paused sessions)
+  await boss.work(FOCUS_SESSION_REAPER_QUEUE, async () =>
+    handleFocusSessionReaper()
+  );
+  logger.info("Registered worker: focus-session-reaper");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

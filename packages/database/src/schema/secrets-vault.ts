@@ -156,6 +156,14 @@ export const secrets = pgTable(
     contextId: text("context_id"),
     isDefault: boolean("is_default").notNull().default(false),
 
+    // ── Pod-wide connection tier (0211) ──
+    // When true, this capability connection is a SHARED vault key any pod member
+    // can USE for the capability without holding a per-user vault grant (the run
+    // still passes the capability-execution gate). VAULT ONLY — never set on a
+    // Nango/provider-delegated connection. Precedence: a member's OWN connection
+    // wins over the pod-wide default. Write RBAC (service layer): pod-admin only.
+    isPodWide: boolean("is_pod_wide").notNull().default(false),
+
     // Soft delete
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: text("deleted_by"),

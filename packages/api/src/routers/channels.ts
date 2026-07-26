@@ -15,6 +15,7 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getPodCallback } from "../utils/pod-callback.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
@@ -61,6 +62,8 @@ import {
   users,
   workspaceMembers,
   workspaces,
+  projects,
+  projectMembers,
   mcpServers,
   sessions,
   SessionStatus,
@@ -121,6 +124,7 @@ import {
   activateChatTurn,
   completeActiveChatTurn,
 } from "../services/chat-turns/chat-turn-runtime.js";
+import { withTurnStreamSignal } from "../utils/channel-turn-transport.js";
 
 const logger = createLogger({ module: "channels" });
 
@@ -189,6 +193,8 @@ export const channelSendMessageInputSchema = z.object({
   channelId: z.string().uuid().optional(),
   content: z.string().min(1).max(50_000),
   workspaceId: z.string().uuid().optional(),
+  /** Active project lens. Authorized independently before any IS request. */
+  projectId: z.string().uuid().optional(),
   /** UUID of the agent to use — validated against agents table */
   agentId: z.string().uuid().optional(),
   /** @mention handle, e.g. "cto" or "ai" — resolved to agent slug for this call only */
@@ -215,6 +221,11 @@ export const channelSendMessageInputSchema = z.object({
   ephemeral: z.boolean().optional(),
   /** Compact, generic per-turn context; intentionally flat and bounded. */
   turnContext: TurnContextSchema.optional(),
+  /**
+   * First-party contextual workflow. Keep this an allowlist: Browser callers
+   * must never be able to force-load an arbitrary Pod skill.
+   */
+  onboardingSkill: z.enum(["onboard", "agent-os"]).optional(),
 });
 
 /** Redact credential-like entry keys before persisting or forwarding context. */
@@ -226,6 +237,25 @@ export function redactTurnContext(turnContext: TurnContext): TurnContext {
         : entry
     ),
   };
+}
+
+/**
+ * Canonical visibility floor for a project-scoped AI turn:
+ * owner-private projects, workspace-visible projects, or an explicit project
+ * membership. The project lens may narrow agent recall, but it never grants
+ * access by itself.
+ */
+export function projectTurnAccessWhere(userId: string) {
+  return or(
+    ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId),
+    inArray(
+      projects.id,
+      db
+        .select({ id: projectMembers.projectId })
+        .from(projectMembers)
+        .where(eq(projectMembers.userId, userId))
+    )
+  )!;
 }
 
 /** Channel kinds whose user turns receive the internal memory-session boundary. */
@@ -1542,10 +1572,27 @@ export const channelsRouter = router({
       let channelId = input.channelId;
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      const projectId = input.projectId;
       const requestedAgentId: string | undefined = input.agentId;
       const turnContext = input.turnContext
         ? redactTurnContext(input.turnContext)
         : undefined;
+
+      if (projectId) {
+        const authorizedProject = await db.query.projects.findFirst({
+          where: and(
+            eq(projects.id, projectId),
+            projectTurnAccessWhere(userId)
+          ),
+          columns: { id: true },
+        });
+        if (!authorizedProject) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Project not found or inaccessible",
+          });
+        }
+      }
 
       // A clientRequestId names one user intent, including Home's first turn
       // before it has a channel id. Check it before resolving/creating a
@@ -2380,51 +2427,43 @@ export const channelsRouter = router({
       let turnCancelled = false;
       let terminalTurnFailure:
         { status: "failed" | "cancelled"; error: string } | undefined;
+      const intelligenceRequest = {
+        query: content,
+        threadId: channelId,
+        userId,
+        agentId: resolvedAgentId,
+        agentType: effectiveAgentType,
+        agentConfig:
+          Object.keys(effectiveAgentConfig).length > 0
+            ? effectiveAgentConfig
+            : undefined,
+        projectId,
+        workspaceId,
+        sourceMessageId: userMessageId,
+        agentUserId: agentUserId ?? resolvedService.agentUserId,
+        mcpServers: mcpServersList,
+        deepAnalysis: input.deepAnalysis,
+        workspaceSettings: workspaceSettingsForIS,
+        contextObjectType: channel.contextObjectType ?? undefined,
+        contextObjectId: channel.contextObjectId ?? undefined,
+        ...getPodCallback(),
+        channelKind,
+        focusSessionId: activeFocusSessionId,
+        ...(turnContext ? { turnContext } : {}),
+        ...(input.onboardingSkill
+          ? { forcedSkillName: input.onboardingSkill }
+          : {}),
+      };
       try {
         // Both the durable Stop action and the hard deadline must interrupt
         // the actual Pod -> IS fetch, not merely stop consuming its iterator.
         const streamSignal = turnAbortController
           ? AbortSignal.any([turnAbortController.signal, streamDeadline.signal])
           : streamDeadline.signal;
-        const streamRequest = {
-          query: content,
-          threadId: channelId,
-          userId: userId,
-          agentId: resolvedAgentId,
-          agentType: effectiveAgentType,
-          // Personality overlay: channel config merged with workspace-level agentPersonality
-          agentConfig:
-            Object.keys(effectiveAgentConfig).length > 0
-              ? effectiveAgentConfig
-              : undefined,
-          workspaceId,
-          // Link proposals created during this response to the triggering user message
-          sourceMessageId: userMessageId,
-          // Per-human AI agent user — enables full attribution for hub-protocol tool calls
-          agentUserId: agentUserId ?? resolvedService.agentUserId,
-          // MCP servers configured for this workspace
-          mcpServers: mcpServersList,
-          // Deep Analysis: user opted into COMPLEX tier for this message
-          deepAnalysis: input.deepAnalysis,
-          // Workspace model preferences — IS reads agentModelPreferences
-          workspaceSettings: workspaceSettingsForIS,
-          // Entity context: when channel is scoped to an entity, forward for prompt injection
-          contextObjectType: channel.contextObjectType ?? undefined,
-          contextObjectId: channel.contextObjectId ?? undefined,
-          // Pod credentials — IS uses these to call back into this pod via Hub Protocol
-          ...getPodCallback(),
-          // Billing channel: Browser chat is included in subscription
-          // Channel kind: signals to IS whether this is a private or shared channel
-          channelKind,
-          // Active focus session — when set, IS tags all hub calls with X-Session-Id
-          // so proposals link to this user-visible, goal-bound session.
-          focusSessionId: activeFocusSessionId,
-          // Flat, redacted per-turn context. The IntelligenceHubClient forwards
-          // this as its wire contract evolves; keeping it optional preserves all
-          // existing Browser, Relay, API, and MCP callers.
-          ...(turnContext ? { turnContext } : {}),
-          signal: streamSignal,
-        };
+        const streamRequest = withTurnStreamSignal(
+          intelligenceRequest,
+          streamSignal
+        );
         const stream = resolvedService.client.sendMessageStream(streamRequest);
 
         for await (const chunk of stream) {
@@ -2768,20 +2807,8 @@ export const channelsRouter = router({
           });
 
           try {
-            hubResponse = await resolvedService.client.sendMessage({
-              query: content,
-              threadId: channelId,
-              userId: userId,
-              agentId: resolvedAgentId,
-              agentType: effectiveAgentType,
-              workspaceId,
-              sourceMessageId: userMessageId,
-              agentUserId: agentUserId ?? resolvedService.agentUserId,
-              mcpServers: mcpServersList,
-              ...getPodCallback(),
-              channelKind,
-              focusSessionId: activeFocusSessionId,
-            });
+            hubResponse =
+              await resolvedService.client.sendMessage(intelligenceRequest);
           } catch (fallbackError) {
             // Both stream and non-streaming fallback failed — Intelligence Hub is down
             const errorDetail =

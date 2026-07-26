@@ -2403,6 +2403,7 @@ CREATE TABLE IF NOT EXISTS "secrets" (
   "context_type"           text,
   "context_id"             text,
   "is_default"             boolean NOT NULL DEFAULT false,
+  "is_pod_wide"            boolean NOT NULL DEFAULT false,
   "deleted_at"             timestamp with time zone,
   "deleted_by"             text,
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
@@ -2459,7 +2460,11 @@ ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "account_hint"  text;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "context_type"  text;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "context_id"    text;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_default"    boolean NOT NULL DEFAULT false;
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_secrets_capability_default" ON "secrets" ("capability_id") WHERE "is_default" AND "capability_id" IS NOT NULL;
+-- Pod-wide connection tier (0211): a shared vault key usable by any member without
+-- a per-user grant. Default slot is keyed on (capability_id, is_pod_wide) so a
+-- per-user default and a pod-wide default coexist without colliding.
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_pod_wide"   boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_secrets_capability_default" ON "secrets" ("capability_id", "is_pod_wide") WHERE "is_default" AND "capability_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_secrets_capability" ON "secrets" ("capability_id") WHERE "capability_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_secrets_context" ON "secrets" ("context_type", "context_id");
 

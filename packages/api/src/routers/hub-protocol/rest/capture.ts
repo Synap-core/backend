@@ -84,7 +84,6 @@ const GRAPH_WRITE_SOURCES = new Set([
   "intelligence",
   "agent",
   "openwebui-pipeline",
-  "openclaw",
   "extension",
   "cli",
   "n8n",

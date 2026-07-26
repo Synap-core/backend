@@ -140,6 +140,15 @@ export type WorkspacePrimarySurface =
       props?: Record<string, WorkspaceJsonValue>;
     }
   | {
+      /**
+       * Ordinary website. It has no trusted application identity and must be
+       * rendered by hosts as an unprivileged URL surface.
+       */
+      kind: "url";
+      url: string;
+      title?: string;
+    }
+  | {
       kind: "view";
       viewId: string;
       title?: string;

@@ -689,6 +689,13 @@ registerRouter("artifacts", artifactsRouter, {
   description: "Run artifacts",
 });
 
+import { onboardingRouter } from "./routers/onboarding.js";
+registerRouter("onboarding", onboardingRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Lens-aware contextual onboarding state and readiness",
+});
+
 export {
   resolveProviderCredential,
   resolveProviderCredentialsBatch,

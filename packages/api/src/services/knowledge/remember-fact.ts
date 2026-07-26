@@ -25,8 +25,20 @@
  * search still works) rather than failing the write.
  */
 
-import { knowledgeRepository } from "@synap/database";
+import {
+  knowledgeRepository,
+  db,
+  knowledgeFacts,
+  and,
+  eq,
+  gte,
+  desc,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import {
+  type WriteAckState,
+  idempotencyWindowStart,
+} from "../../utils/write-door-idempotency.js";
 
 const logger = createLogger({ module: "remember-fact" });
 
@@ -97,6 +109,12 @@ export interface RememberFactResult {
   confidence: number;
   /** The transitional episodic-recall row (see module doc). */
   recallIndex: { factId: string | null; indexed: boolean };
+  /**
+   * applied = the fact was recorded now (or its governed write proposed);
+   * proposed = queued for review; duplicate-ignored = an idempotent replay of a
+   * prior identical fact — no second entity + no second recall row were written.
+   */
+  ackState: WriteAckState;
 }
 
 /** Entities need a title; the full text always lives in `uo_observation`. */
@@ -121,12 +139,76 @@ export async function rememberFact(params: {
   userStated?: boolean;
   /** The authoring agent — makes governance treat the write as an AI action. */
   agentUserId?: string;
+  /**
+   * Optional caller-supplied idempotency key. Advisory for facts — the content
+   * dedup below keys on the fact TEXT itself (the fact's identity), so a retry of
+   * the same fact is caught whether or not a key is supplied. Accepted for
+   * contract uniformity with the other write doors.
+   */
+  idempotencyKey?: string;
 }): Promise<RememberFactResult> {
   const { caller, userId, fact } = params;
 
   const confidence = params.confidence ?? 0.8;
   const category = params.category ?? "preferences";
   const validated = params.userStated === true;
+
+  // 0. ACK INTEGRITY — a retry of the SAME fact must not write a second
+  //    user_observation + a second recall row. The recall row (`knowledge_facts`)
+  //    has no proposal to hash-dedup against, AND `user_observation` carries no
+  //    identity signal (uo_* props), so the entity-layer dedup in `createEntity`
+  //    (which only fires when `extractIdentitySignals` is non-empty) NEVER catches
+  //    a duplicate for THIS profile. This window guard is therefore the ONLY thing
+  //    standing between a client-perceived-failure retry and a duplicate fact.
+  //    Key on the fact TEXT (its identity) within the idempotency window; on a
+  //    hit, return the prior record without re-writing. Best-effort: a lookup
+  //    hiccup degrades to a normal governed write.
+  //
+  //    The prior row's `sourceEntityId` is the discriminator — it distinguishes a
+  //    MATERIALIZED fact (auto-approved → entity exists → non-null) from a still-
+  //    PENDING one (AI-inferred proposal → no entity yet → null):
+  //    - AI-INFERRED (`!validated`): a duplicate of ANY prior of the same text —
+  //      a pending proposal counts, so a retried inference does not queue a SECOND
+  //      proposal.
+  //    - USER-STATED (`validated`, the auto-approve path): a duplicate ONLY of an
+  //      already-MATERIALIZED prior (non-null sourceEntityId). A user-stated fact
+  //      MUST be able to ESCALATE a still-pending AI-inferred row of the same text
+  //      — auto-approving it is the entire point of userStated — so a null-
+  //      sourceEntityId prior must NOT suppress it. But a retry of an ALREADY-
+  //      materialized user-stated fact must still be caught (that is scenario B,
+  //      the common double-write this guard closes).
+  try {
+    const [prior] = await db
+      .select({
+        id: knowledgeFacts.id,
+        sourceEntityId: knowledgeFacts.sourceEntityId,
+      })
+      .from(knowledgeFacts)
+      .where(
+        and(
+          eq(knowledgeFacts.userId, userId),
+          eq(knowledgeFacts.fact, fact),
+          gte(knowledgeFacts.createdAt, idempotencyWindowStart())
+        )
+      )
+      .orderBy(desc(knowledgeFacts.createdAt))
+      .limit(1);
+    if (prior && (!validated || prior.sourceEntityId != null)) {
+      return {
+        success: true,
+        status: "duplicate-ignored",
+        entityId: prior.sourceEntityId ?? null,
+        message: "Fact already recorded — idempotent replay ignored",
+        validated,
+        category,
+        confidence,
+        recallIndex: { factId: prior.id, indexed: true },
+        ackState: "duplicate-ignored",
+      };
+    }
+  } catch (err) {
+    logger.warn({ err, userId }, "fact dedup lookup failed — writing normally");
+  }
 
   // 1. Governed write — the policy rung decides execute vs propose from
   //    `uo_validated`, never from a caller flag or from which door was used.
@@ -208,5 +290,8 @@ export async function rememberFact(params: {
     category,
     confidence,
     recallIndex: { factId, indexed: factId !== null },
+    // proposed → the governed write is queued; created (or any success) →
+    // applied. A refused/failed verdict still reports applied=false via `success`.
+    ackState: created.status === "proposed" ? "proposed" : "applied",
   };
 }

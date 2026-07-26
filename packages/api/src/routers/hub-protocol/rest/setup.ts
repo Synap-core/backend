@@ -531,8 +531,25 @@ export function registerSetupRoutes(app: HubHono): void {
       return c.json({ error: "Invalid request body" }, 400);
     }
 
-    const agentType: string =
-      typeof body.agentType === "string" ? body.agentType : "openclaw";
+    // REQUIRED — no server-side default. This endpoint is the real enforcement
+    // point behind the TS wrappers (`auth-bootstrap/setup.ts`, `hub-rest-client/
+    // setup.ts`), which now demand `agentType` at compile time. A silent
+    // `"openclaw"` default here would re-open the "stale/foreign singleton"
+    // hazard for any caller NOT going through those wrappers (curl, a foreign
+    // SDK) — so a missing/blank `agentType` is a 400, never a guessed default.
+    const agentType: string | null =
+      typeof body.agentType === "string" && body.agentType.trim()
+        ? body.agentType.trim()
+        : null;
+    if (!agentType) {
+      return c.json(
+        {
+          error:
+            "Missing required field `agentType`. Every agent-user must declare its type explicitly — it is no longer defaulted.",
+        },
+        400
+      );
+    }
     const requestedWorkspaceId: string | undefined =
       typeof body.workspaceId === "string" ? body.workspaceId : undefined;
     const linkedUserId: string | undefined =

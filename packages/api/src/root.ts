@@ -74,6 +74,7 @@ import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
+import { onboardingRouter } from "./routers/onboarding.js";
 
 /**
  * Core API Router
@@ -155,6 +156,7 @@ export const coreRouter = router({
   workflows: workflowsRouter,
   artifacts: artifactsRouter,
   projects: projectsRouter,
+  onboarding: onboardingRouter,
 });
 
 export type AppRouter = typeof coreRouter;

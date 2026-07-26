@@ -48,9 +48,6 @@
 // Constants — the policy values (formerly duplicated in both gates)
 // ---------------------------------------------------------------------------
 
-/** Proposals auto-expire after this many days if not reviewed. */
-export const PROPOSAL_TTL_DAYS = 30;
-
 /**
  * Default whitelist: agent actions that bypass proposal review.
  * Workspaces override via `settings.aiGovernance.autoApproveFor`.

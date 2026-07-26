@@ -254,6 +254,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "scheduled",
       "failed",
       "cancelled",
+      "stale",
       "all",
     ] as const;
     const status = validStatuses.includes(

@@ -119,6 +119,7 @@ export const capabilitiesRouter = router({
           contextId: z.string().nullable().optional(),
           accountHint: z.string().nullable().optional(),
           isDefault: z.boolean().optional(),
+          isPodWide: z.boolean().optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -137,6 +138,7 @@ export const capabilitiesRouter = router({
           contextId: z.string().nullable().optional(),
           accountHint: z.string().nullable().optional(),
           isDefault: z.boolean().optional(),
+          isPodWide: z.boolean().optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {

@@ -18,12 +18,10 @@ import {
   eq,
   and,
   ne,
-  or,
   desc,
   inArray,
   isNull,
   isNotNull,
-  gt,
   lt,
   entities,
   channels,
@@ -2125,8 +2123,6 @@ export const proposalsRouter = router({
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
         agentOnly: z.boolean().optional(),
-        /** When true, include expired proposals (expiresAt in the past) */
-        includeExpired: z.boolean().optional(),
         status: z
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
@@ -2210,12 +2206,10 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
       }
 
-      // Exclude expired proposals unless caller explicitly requests them
-      if (!input.includeExpired) {
-        conditions.push(
-          or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
-        );
-      }
+      // NOTE: proposals no longer carry a functional expiry (C2 lifecycle-hygiene
+      // fix) — `expiresAt` is never set on new rows and is not filtered on here,
+      // so a proposal never silently vanishes from this list while still being
+      // counted elsewhere (e.g. `synap_orient`'s pending-review summary).
 
       // Verify user has editor+ access to the workspace
       if (input.workspaceId) {
@@ -2415,10 +2409,7 @@ export const proposalsRouter = router({
           ProposalStatus.APPROVAL_FAILED,
         ])
       );
-      // Exclude expired proposals (same guard as `list`).
-      conditions.push(
-        or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
-      );
+      // NOTE: no expiry filter — see the matching note in `list` (C2 fix).
 
       // Same editor+ gate as `list` when a concrete workspace is named.
       if (input.workspaceId) {
@@ -2479,7 +2470,8 @@ export const proposalsRouter = router({
             eq(automationRuns.id, automationStepRuns.runId)
           )
           .where(inArray(automationStepRuns.id, stepRunIds));
-        for (const a of arows) automationByStepRun.set(a.stepRunId, a.automationId);
+        for (const a of arows)
+          automationByStepRun.set(a.stepRunId, a.automationId);
       }
 
       const agentIds = [
@@ -2601,7 +2593,10 @@ export const proposalsRouter = router({
         where: eq(proposals.id, input.proposalId),
       });
       if (!proposal) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
       }
 
       // Identical access gate to `get`.
@@ -2633,12 +2628,7 @@ export const proposalsRouter = router({
       }
 
       type SourceTargetKind =
-        | "session"
-        | "channel"
-        | "automation"
-        | "skill"
-        | "playbook"
-        | "agent";
+        "session" | "channel" | "automation" | "skill" | "playbook" | "agent";
       const targets: Array<{
         kind: SourceTargetKind;
         id: string;
@@ -2744,7 +2734,9 @@ export const proposalsRouter = router({
               const skillName =
                 typeof data.skillName === "string" ? data.skillName : undefined;
               let label =
-                typeof data.skillTitle === "string" ? data.skillTitle : undefined;
+                typeof data.skillTitle === "string"
+                  ? data.skillTitle
+                  : undefined;
               if (skillId && !label) {
                 const [row] = await db
                   .select({ name: skills.name })
@@ -2764,7 +2756,9 @@ export const proposalsRouter = router({
               }
             } else if (node.type === "playbook_run") {
               const playbookId =
-                typeof data.playbookId === "string" ? data.playbookId : undefined;
+                typeof data.playbookId === "string"
+                  ? data.playbookId
+                  : undefined;
               const playbookName =
                 typeof data.playbookName === "string"
                   ? data.playbookName

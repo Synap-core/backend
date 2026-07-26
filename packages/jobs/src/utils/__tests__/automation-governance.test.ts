@@ -72,7 +72,6 @@ vi.mock("@synap/governance-policy", () => ({
   decideAgentPolicy: decideAgentPolicyMock,
   requiredPermissionFor: vi.fn(() => "write"),
   getWorkspaceGovernanceMode: vi.fn(() => "standard"),
-  PROPOSAL_TTL_DAYS: 30,
 }));
 
 import { checkAutomationWriteOrPropose } from "../automation-governance.js";

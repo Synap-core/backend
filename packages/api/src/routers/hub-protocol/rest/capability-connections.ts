@@ -40,6 +40,7 @@ const ConnectionSchema = z.object({
   isDefault: z.boolean(),
   accountHint: z.string().nullable(),
   kind: z.enum(["nango", "vault"]),
+  isPodWide: z.boolean(),
 });
 
 const ListConnectionsResponseSchema = z.object({
@@ -53,6 +54,7 @@ const AddConnectionRequestSchema = z.object({
   contextId: z.string().nullable().optional(),
   accountHint: z.string().nullable().optional(),
   isDefault: z.boolean().optional(),
+  isPodWide: z.boolean().optional(),
 });
 
 const UpdateConnectionRequestSchema = z.object({
@@ -62,10 +64,11 @@ const UpdateConnectionRequestSchema = z.object({
   contextId: z.string().nullable().optional(),
   accountHint: z.string().nullable().optional(),
   isDefault: z.boolean().optional(),
+  isPodWide: z.boolean().optional(),
 });
 
 /** Map a service error to an HTTP status (owner gate → 403, not found → 404). */
-function statusForError(msg: string): 403 | 404 | 500 {
+function statusForError(msg: string): 400 | 403 | 404 | 500 {
   const lower = msg.toLowerCase();
   if (lower.includes("not found")) return 404;
   if (
@@ -75,6 +78,8 @@ function statusForError(msg: string): 403 | 404 | 500 {
   ) {
     return 403;
   }
+  // Vault-only validation (a Nango/account connection can't be pod-wide).
+  if (lower.includes("must be a vault key")) return 400;
   return 500;
 }
 
@@ -174,6 +179,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         contextId: parsed.data.contextId,
         accountHint: parsed.data.accountHint,
         isDefault: parsed.data.isDefault,
+        isPodWide: parsed.data.isPodWide,
       });
       return c.json(connection, 200);
     } catch (err) {
@@ -241,6 +247,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         contextId: parsed.data.contextId,
         accountHint: parsed.data.accountHint,
         isDefault: parsed.data.isDefault,
+        isPodWide: parsed.data.isPodWide,
       });
       return c.json(connection, 200);
     } catch (err) {

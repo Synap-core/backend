@@ -15,6 +15,12 @@ export const registrationTraceSchema = z.object({
 
 export type RegistrationTrace = z.infer<typeof registrationTraceSchema>;
 
+// The KIND of an external integration a Hub API key is minted for. This is NOT
+// the proposal write-source enum (`proposals.source`) — do not "clean up"
+// `"openclaw"` here as part of a write-source cleanup. It is a live integration
+// kind: `synap init` and the pod-admin connect flow mint keys with
+// `integration:"openclaw"`, and the value becomes part of the key's hubId, so
+// removing it both rejects those requests at the door AND orphans existing keys.
 export const integrationKindSchema = z.enum([
   "raycast",
   "cli",

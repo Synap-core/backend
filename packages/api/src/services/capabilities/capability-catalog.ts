@@ -488,12 +488,13 @@ async function loadConnState(
         .where(
           and(
             inArray(secrets.id, vaultSecretIds),
-            // Scope to the caller's own secrets — matching by id ALONE let a
-            // secret the caller can't actually resolve read as "connected"
-            // (the false-positive that hid the workspace-scope bug and made the
-            // CLI skip the key prompt). A connection is only real if the caller
-            // owns the backing secret.
-            eq(secrets.userId, userId),
+            // A connection reads "connected" when the caller can actually resolve
+            // it: their OWN secret, OR a POD-WIDE (0211) shared vault key they may
+            // use without a per-user grant. Matching by id ALONE would let a secret
+            // the caller can't resolve read as "connected" (the false-positive that
+            // hid the workspace-scope bug and made the CLI skip the key prompt);
+            // scoping to own-or-pod-wide keeps the signal truthful for members.
+            or(eq(secrets.userId, userId), eq(secrets.isPodWide, true)),
             isNull(secrets.deletedAt)
           )
         );

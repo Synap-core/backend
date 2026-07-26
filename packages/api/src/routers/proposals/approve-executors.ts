@@ -77,6 +77,7 @@ import {
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
 // the value paths below avoid via dynamic `import("../skills.js")`.
 import type { InsertSkillGovernedInput } from "../skills.js";
+import { workspaceRuntimePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
 
 const logger = createLogger({ module: "proposal-approve-executors" });
 
@@ -2528,7 +2529,8 @@ export function registerApproveExecutors(): void {
           );
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: "Workspace created, but applying its package layers failed.",
+            message:
+              "Workspace created, but applying its package layers failed.",
           });
         }
       }
@@ -2807,6 +2809,47 @@ export function registerApproveExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
+      }
+
+      if (inner.operation === "set_primary_surface") {
+        const parsedSurface = workspaceRuntimePrimarySurfaceSchema
+          .nullable()
+          .safeParse(inner.primarySurface);
+        if (!parsedSurface.success) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Workspace start proposal has an invalid primary surface",
+          });
+        }
+
+        const { getDb, eventRepository, WorkspaceRepository } =
+          await import("@synap/database");
+        const dbConn = await getDb();
+        const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
+        await workspaceRepo.setPrimarySurface(
+          targetWorkspaceId,
+          parsedSurface.data,
+          userId
+        );
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: targetWorkspaceId };
       }
 
       const {
@@ -3204,14 +3247,22 @@ export function registerApproveExecutors(): void {
         });
         if (runOutcome.kind === "not_found") {
           logger.warn(
-            { proposalId: input.proposalId, skillId, reason: runOutcome.message },
+            {
+              proposalId: input.proposalId,
+              skillId,
+              reason: runOutcome.message,
+            },
             "capability.run executor: skill not found"
           );
           return { delivered: false };
         }
         if (runOutcome.kind === "deny") {
           logger.warn(
-            { proposalId: input.proposalId, skillId, reason: runOutcome.reason },
+            {
+              proposalId: input.proposalId,
+              skillId,
+              reason: runOutcome.reason,
+            },
             "capability.run executor: run denied"
           );
           return { delivered: false };
@@ -3446,7 +3497,13 @@ export function registerApproveExecutors(): void {
         });
         if (!executed) {
           logger.warn(
-            { proposalId: input.proposalId, provider, method, path, providerError },
+            {
+              proposalId: input.proposalId,
+              provider,
+              method,
+              path,
+              providerError,
+            },
             "provider.action executor failed"
           );
           return { delivered: false };
@@ -3559,7 +3616,8 @@ export function registerApproveExecutors(): void {
               accountHint: data.accountHint as string | undefined,
               baseUrlOverride:
                 (data.baseUrlOverride as string | undefined) ?? undefined,
-              workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+              workspaceId:
+                (data.workspaceId as string | undefined) ?? undefined,
               // Replay the caller's run-time connection pick so the approved run
               // uses the SAME credential that was selected at propose time (not the
               // capability's default). Persisted into proposal.data at propose time.
@@ -3576,7 +3634,13 @@ export function registerApproveExecutors(): void {
             });
           if (!executed) {
             logger.warn(
-              { proposalId: input.proposalId, provider, method, path, providerError },
+              {
+                proposalId: input.proposalId,
+                provider,
+                method,
+                path,
+                providerError,
+              },
               "capability/run executor failed"
             );
             return { delivered: false };

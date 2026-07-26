@@ -21,6 +21,16 @@ import type { ProvenanceKind } from "./provenance.js";
 
 // EntityType enum removed - use profile slugs (strings) instead
 
+/**
+ * System-data flag for template example rows that exist only to demonstrate a
+ * workspace shape. Unlike `createdByKind`, this does not exclude real imports,
+ * extraction results, or automations that legitimately run as the system.
+ */
+export const ONBOARDING_SCAFFOLD_SYSTEM_DATA_KEY = "onboardingScaffold";
+export const ONBOARDING_SCAFFOLD_SYSTEM_DATA = {
+  [ONBOARDING_SCAFFOLD_SYSTEM_DATA_KEY]: true,
+} as const;
+
 export const entities = pgTable(
   "entities",
   {

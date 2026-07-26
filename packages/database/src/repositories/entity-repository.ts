@@ -118,6 +118,8 @@ export interface CreateEntityInput {
 
   // Properties (validated against profile)
   properties?: Record<string, unknown>;
+  /** System-managed metadata. Never rendered as user-editable properties. */
+  systemData?: Record<string, unknown>;
 
   workspaceId?: string | null; // null for pod-wide entities
   userId: string;
@@ -493,6 +495,7 @@ export class EntityRepository extends BaseRepository<
       preview: data.preview,
       documentId: data.documentId,
       properties: validatedProperties,
+      systemData: data.systemData ?? {},
       // Provenance (Wave B3)
       createdByKind: provenance.createdByKind,
       createdByUserId: provenance.createdByUserId,

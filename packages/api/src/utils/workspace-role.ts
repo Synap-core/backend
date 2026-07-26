@@ -42,16 +42,26 @@ export function requireAdminRole(role: string | undefined | null) {
  * mirrors `podAdminProcedure` in trpc.ts. Throws FORBIDDEN otherwise.
  */
 export async function requirePodAdmin(userId: string) {
+  if (!(await isPodAdmin(userId))) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only pod administrators can manage pod-wide capabilities.",
+    });
+  }
+}
+
+/**
+ * Non-throwing pod-admin check — the boolean sibling of `requirePodAdmin`. Used
+ * where a caller must BRANCH on admin-ness rather than fail (e.g. reveal foreign
+ * per-user connections to an admin, but simply hide them from a non-admin instead
+ * of erroring). Returns false when the pod-admin workspace is missing.
+ */
+export async function isPodAdmin(userId: string): Promise<boolean> {
   const podAdminWorkspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.systemSlug, "pod-admin"),
     columns: { id: true },
   });
-  if (!podAdminWorkspace) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Pod administration workspace not found.",
-    });
-  }
+  if (!podAdminWorkspace) return false;
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
@@ -60,10 +70,5 @@ export async function requirePodAdmin(userId: string) {
     ),
     columns: { role: true },
   });
-  if (!membership) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Only pod administrators can manage pod-wide capabilities.",
-    });
-  }
+  return !!membership;
 }

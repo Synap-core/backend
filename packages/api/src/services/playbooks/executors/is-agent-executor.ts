@@ -23,6 +23,7 @@ import {
   eq,
   and,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { MessageAuthorType, MessageRole } from "@synap/database/schema";
@@ -98,7 +99,12 @@ export class IsAgentExecutor implements Executor {
         const [ctxSkill] = await db
           .select({ body: skills.body })
           .from(links)
-          .innerJoin(skills, eq(skills.id, links.toId))
+          // Same uuid=text mismatch as capability-registry.ts: `skills.id` is
+          // uuid, `links.toId` is text → SQLSTATE 42883. This throw was swallowed
+          // by the surrounding "non-fatal" try/catch, so the playbook context-
+          // skill prefix silently never injected on any pod with real data. Cast
+          // the uuid side to text.
+          .innerJoin(skills, eq(drizzleSql`${skills.id}::text`, links.toId))
           .where(
             and(
               eq(links.fromType, "playbook"),

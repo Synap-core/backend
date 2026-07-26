@@ -27,7 +27,7 @@
  */
 
 import { randomUUID } from "crypto";
-import type { EventRecord } from "@synap/database";
+import { projectWorkspaceSettings, type EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
 
@@ -209,8 +209,11 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
   }
 
   const url = `${getRealtimeUrl()}/bridge/emit`;
+  const eventData = event.eventType.startsWith("workspaces.")
+    ? projectWorkspaceRealtimeData(event.data)
+    : event.data;
   const payloadData = {
-    ...event.data,
+    ...eventData,
     subjectId: event.subjectId,
     subjectType: event.subjectType,
     userId: event.userId,
@@ -257,4 +260,23 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
       "Domain event bridge: failed to emit to realtime"
     );
   });
+}
+
+/**
+ * Normalize both legacy flat workspace events and the current wrapped event
+ * shape, then apply the client-safe settings projection again at the network
+ * boundary. The second projection is deliberate defense-in-depth for
+ * historical events and non-repository producers.
+ */
+function projectWorkspaceRealtimeData(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const nested = data.workspace;
+  const workspace =
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? (nested as Record<string, unknown>)
+      : data;
+  return {
+    workspace: projectWorkspaceSettings(workspace),
+  };
 }

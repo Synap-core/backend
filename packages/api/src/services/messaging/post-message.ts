@@ -6,10 +6,57 @@
  * from the MCP adapter so the tool handler does ZERO direct DB work. (The Hub
  * REST `POST /threads/:id/messages` path uses a different hash input + pg-boss
  * autoRespond trigger, so it is intentionally NOT unified here.)
+ *
+ * ACKNOWLEDGMENT INTEGRITY (C1): a client-perceived failure while the insert LANDED
+ * makes an agent re-emit the same post → a duplicate line, and — worse — a SECOND
+ * agent turn. Two idempotency modes close this (see `write-door-idempotency.ts`):
+ *   - EXPLICIT `idempotencyKey` → the message id is derived from it, so a retry
+ *     collapses on the PRIMARY KEY (`ON CONFLICT DO NOTHING`). Caller-owned,
+ *     window-less.
+ *   - NO key → a short-window CONTENT-equality lookup ((channel, role, content,
+ *     user) within `MESSAGE_DEDUP_WINDOW_MS`) catches the fast retry. Deliberately
+ *     NARROW: identical message TEXT is a legitimate recurring event (an agent may
+ *     honestly post "Done." twice), so this is a tight-window retry guard, NOT a
+ *     forever content-hash. The window is why a legit repeat next hour is untouched.
+ * On a duplicate hit the AI turn is NOT re-triggered (at-most-once external effect).
+ * Both lookups are best-effort — a lookup hiccup degrades to a normal insert.
+ *
+ * TRIGGER-AI EXEMPTION: a post that TURNS THE AI ON (`triggerAI`) SKIPS the no-key
+ * content lookup. Content-dedup cannot tell a landed-but-un-acked retry from a
+ * genuinely-distinct turn (two "yes" answers to two agent questions inside the
+ * window), and silently dropping a real turn is the worse, un-mitigable harm. Retry
+ * safety for a triggering post therefore lives ONLY on the explicit `idempotencyKey`
+ * path — a caller that needs at-most-once turn semantics passes a key.
  */
 
 import { randomUUID } from "crypto";
-import { db, messages, MessageRole, computeMessageHash } from "@synap/database";
+import {
+  db,
+  messages,
+  MessageRole,
+  computeMessageHash,
+  and,
+  eq,
+  gte,
+  isNull,
+  desc,
+} from "@synap/database";
+import { createLogger } from "@synap-core/core";
+import {
+  type WriteAckState,
+  deterministicUuidFromKey,
+  idempotencyWindowStart,
+} from "../../utils/write-door-idempotency.js";
+
+const logger = createLogger({ module: "post-message" });
+
+/**
+ * Retry window for the no-explicit-key content dedup. Short on purpose: a "failed"
+ * call is retried within seconds, while a genuinely-repeated identical message
+ * arrives much later — so a narrow window catches the retry without collapsing a
+ * legitimate repeat.
+ */
+export const MESSAGE_DEDUP_WINDOW_MS = 90 * 1000; // 90 seconds
 
 export interface PostChannelMessageParams {
   channelId: string;
@@ -18,16 +65,44 @@ export interface PostChannelMessageParams {
   role?: string;
   triggerAI?: boolean;
   userId: string;
+  /**
+   * Optional caller-supplied idempotency key. When present, the message id is
+   * derived from it so a retry collapses on the primary key (window-less). When
+   * absent, a short-window content-equality dedup guards fast retries.
+   */
+  idempotencyKey?: string;
+}
+
+export interface PostChannelMessageResult {
+  success: true;
+  messageId: string;
+  channelId: string;
+  /** applied = inserted now; duplicate-ignored = idempotent replay of a prior post. */
+  ackState: WriteAckState;
+  /** Present on a duplicate hit — the prior message id (same as `messageId`). */
+  priorMessageId?: string;
+}
+
+/** Build a duplicate-ignored receipt for a prior message id (pure — no I/O). */
+function duplicateReceipt(
+  msgId: string,
+  channelId: string
+): PostChannelMessageResult {
+  return {
+    success: true,
+    messageId: msgId,
+    channelId,
+    ackState: "duplicate-ignored",
+    priorMessageId: msgId,
+  };
 }
 
 export async function postChannelMessage(
   params: PostChannelMessageParams
-): Promise<{ success: true; messageId: string; channelId: string }> {
+): Promise<PostChannelMessageResult> {
   const { channelId, content, userId } = params;
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
-  const msgId = randomUUID();
-  const hash = computeMessageHash(msgId, content);
   const roleEnum =
     role === "user"
       ? MessageRole.USER
@@ -35,15 +110,80 @@ export async function postChannelMessage(
         ? MessageRole.SYSTEM
         : MessageRole.ASSISTANT;
 
-  await db.insert(messages).values({
-    id: msgId,
-    channelId,
-    role: roleEnum,
-    content,
-    userId,
-    hash,
-    previousHash: "",
-  });
+  const explicitKey =
+    typeof params.idempotencyKey === "string" && params.idempotencyKey.trim()
+      ? params.idempotencyKey.trim()
+      : undefined;
+
+  // ── Idempotency: resolve the message id + detect a prior write ──────────────
+  // Explicit key → deterministic id (PK-level idempotency). No key → best-effort
+  // short-window content lookup. A lookup failure must never block a real insert.
+  let msgId: string;
+  if (explicitKey) {
+    msgId = deterministicUuidFromKey(
+      `post_message:${channelId}:${explicitKey}`
+    );
+  } else if (triggerAI) {
+    // An AI-triggering post is a DELIBERATE invocation, not an accidental retry
+    // — never suppress it as a content-duplicate (a same-text message that turns
+    // the AI on would otherwise be swallowed and the turn dropped). Explicit-key
+    // idempotency still applies above; only the content-window guard is skipped.
+    msgId = randomUUID();
+  } else {
+    msgId = randomUUID();
+    try {
+      const [prior] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.channelId, channelId),
+            eq(messages.userId, userId),
+            eq(messages.role, roleEnum),
+            eq(messages.content, content),
+            isNull(messages.deletedAt),
+            gte(
+              messages.timestamp,
+              idempotencyWindowStart(MESSAGE_DEDUP_WINDOW_MS)
+            )
+          )
+        )
+        .orderBy(desc(messages.timestamp))
+        .limit(1);
+      if (prior) return duplicateReceipt(prior.id, channelId);
+    } catch (err) {
+      // Best-effort — degrade to a normal insert rather than block a real write.
+      logger.warn(
+        { err, channelId },
+        "message dedup lookup failed — inserting"
+      );
+    }
+  }
+
+  const hash = computeMessageHash(msgId, content);
+
+  // Insert. For the explicit-key path, ON CONFLICT DO NOTHING makes the retry a
+  // no-op; an empty `returning` means the row already existed → duplicate-ignored.
+  const inserted = await db
+    .insert(messages)
+    .values({
+      id: msgId,
+      channelId,
+      role: roleEnum,
+      content,
+      userId,
+      hash,
+      previousHash: "",
+    })
+    .onConflictDoNothing({ target: messages.id })
+    .returning({ id: messages.id });
+
+  if (inserted.length === 0) {
+    // Explicit-key retry (or a concurrent double-insert of the same derived id):
+    // the prior write is authoritative, and its AI turn already fired — do NOT
+    // re-trigger (at-most-once external effect).
+    return duplicateReceipt(msgId, channelId);
+  }
 
   if (triggerAI) {
     const { emitChatEvent } =
@@ -92,5 +232,5 @@ export async function postChannelMessage(
     }
   }
 
-  return { success: true, messageId: msgId, channelId };
+  return { success: true, messageId: msgId, channelId, ackState: "applied" };
 }

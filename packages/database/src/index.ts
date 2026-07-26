@@ -61,6 +61,7 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/insert-pending-proposal.js";
 export * from "./utils/facet-visibility.js";
 export * from "./utils/catalog-sync-stamps.js";
+export * from "./utils/workspace-client-projection.js";
 
 // Server-side vault encryption
 export {

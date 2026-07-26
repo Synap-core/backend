@@ -40,6 +40,7 @@ export * from "./enrichments.js";
 export * from "./inbox-items.js";
 export * from "./user-resource-state.js";
 export * from "./user-entity-state.js";
+export * from "./onboarding-journeys.js";
 
 // Intelligence Service Registry
 export * from "./intelligence-services.js";

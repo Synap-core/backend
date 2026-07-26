@@ -31,6 +31,7 @@ import {
   inArray,
   gt,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import {
   tools,
@@ -364,7 +365,16 @@ export async function listCapabilities(
     const rows = await db
       .selectDistinct({ toolId: links.fromId })
       .from(links)
-      .innerJoin(secrets, eq(secrets.capabilityId, links.toId))
+      // `secrets.capabilityId` is uuid, `links.toId` is text — Postgres has no
+      // implicit uuid=text operator (SQLSTATE 42883), which crashed EVERY
+      // list_capabilities call on any pod with a provider tool (the guard above
+      // fires whenever a Gmail/Calendar connector is installed). Cast the uuid
+      // side to text (always safe; both store canonical lowercase uuids). The
+      // reverse cast (text::uuid) could throw 22P02 on a malformed to_id.
+      .innerJoin(
+        secrets,
+        eq(drizzleSql`${secrets.capabilityId}::text`, links.toId)
+      )
       .where(
         and(
           eq(links.fromType, "tool"),

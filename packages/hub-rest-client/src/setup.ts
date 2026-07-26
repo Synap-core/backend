@@ -101,7 +101,10 @@ export async function checkPodHealth(podUrl: string): Promise<PodStatus> {
 export async function setupAgent(
   podUrl: string,
   provisioningToken: string,
-  agentType = "openclaw",
+  // REQUIRED (was defaulted to "openclaw"). See auth-bootstrap/setup.ts — the
+  // default silently minted bare callers onto the pod-wide `openclaw` singleton
+  // (0037); required makes any omitter a compile error, never a silent shift.
+  agentType: string,
   opts: BootstrapRequestOptions = {}
 ): Promise<AgentSetupResult> {
   assertValidPodUrl(podUrl, { allowHttp: opts.allowHttp });

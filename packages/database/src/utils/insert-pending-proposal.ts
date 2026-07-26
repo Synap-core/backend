@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
-import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
 import { stableStringify } from "./stable-stringify.js";
 
 /**
@@ -55,7 +54,8 @@ export interface InsertPendingProposalInput {
    *  produced this proposal. Both optional — non-automation proposals omit them. */
   stepRunId?: string | null;
   nodeId?: string | null;
-  /** Explicit expiry; defaults to now + PROPOSAL_TTL_DAYS when omitted. */
+  /** Optional explicit expiry. Omitted (or NULL) by default — proposals no
+   *  longer auto-expire (see the C2 note at the INSERT below). */
   expiresAt?: Date | null;
 }
 
@@ -258,9 +258,15 @@ export async function insertPendingProposal(
         data: input.data,
         status: ProposalStatus.PENDING,
         createdBy: input.createdBy,
-        expiresAt:
-          input.expiresAt ??
-          new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+        // C2 lifecycle-hygiene fix: no default TTL. A defaulted expiresAt used
+        // to silently drop a proposal out of the actionable queue after
+        // PROPOSAL_TTL_DAYS with no status change, no sweep, and no
+        // notification — data that looked gone but was still counted by
+        // `synap_orient`'s pending-review summary (a lying count). expiresAt
+        // is now NULL unless a caller has a genuine reason to pass one.
+        ...(input.expiresAt !== undefined
+          ? { expiresAt: input.expiresAt }
+          : {}),
         ...(dedupHash ? { dedupHash } : {}),
         ...(input.proposedByUserId
           ? { proposedByUserId: input.proposedByUserId }

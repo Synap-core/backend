@@ -1150,7 +1150,7 @@ async function createPendingProposalRow(
 export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
 
 /** UTC midnight for "today" — the same day boundary the hygiene worker uses. */
-function startOfUtcDay(): Date {
+export function startOfUtcDay(): Date {
   const now = new Date();
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())

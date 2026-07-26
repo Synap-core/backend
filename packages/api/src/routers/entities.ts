@@ -369,7 +369,6 @@ const FACET_SOURCE_ENUM = z
     "system",
     "agent",
     "openwebui-pipeline",
-    "openclaw",
     "extension",
     "cli",
     "n8n",
@@ -736,7 +735,7 @@ export const entitiesRouter = router({
         /**
          * Source of action for AI governance + downstream audit/event tagging.
          * Hub Protocol callers may pass connector-specific values (e.g.
-         * "openwebui-pipeline", "openclaw", "extension") so the proposal layer
+         * "openwebui-pipeline", "extension") so the proposal layer
          * carries accurate provenance. Permission gating is unchanged: the
          * legacy AI gate only branches on "ai"/"intelligence"; everything else
          * falls through to the agentUserId / role-based path.
@@ -749,7 +748,6 @@ export const entitiesRouter = router({
             "system",
             "agent",
             "openwebui-pipeline",
-            "openclaw",
             "extension",
             "cli",
             "n8n",
@@ -1031,7 +1029,7 @@ export const entitiesRouter = router({
               >[0]
             );
             // update's source enum is narrower than create's — connector
-            // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
+            // sources (openwebui/cli/n8n/raycast) aren't in it.
             // Governance only branches on ai/intelligence anyway, so map the
             // non-AI connector sources to "user" (first-party write).
             const enrichSource =

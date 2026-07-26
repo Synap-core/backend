@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import { db, proposals, findExistingPendingDuplicate } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
 import { auditLog } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
 
@@ -164,9 +163,10 @@ export async function createAutoApprovedProposal(
       createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
       reviewedBy: input.reviewedBy,
       reviewedAt,
-      expiresAt:
-        input.expiresAt ??
-        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+      // C2 lifecycle-hygiene fix: no default TTL — this row is already
+      // terminal (auto_approved), so a synthetic expiry never did anything
+      // useful. See the matching note in `insertPendingProposal`.
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),

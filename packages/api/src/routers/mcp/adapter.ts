@@ -344,6 +344,10 @@ const SESSION_STATUSES = [
   "closed",
   "failed",
   "cancelled",
+  // Added by the focus-session reaper (a long-idle `running` session is marked
+  // stale rather than deleted). Must be listable, or list_sessions({status:
+  // "stale"}) rejects a status the schema legitimately produces.
+  "stale",
 ] as const;
 
 /**
@@ -746,16 +750,28 @@ export async function executeMCPToolViaHubProtocol(
         retrieved.routedTo,
         workspaceId ?? null
       );
+      // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
+      // proposals whose content matches this query — surfaced SEPARATELY from the
+      // synthesized answer so recall never presents unvalidated work as fact.
+      // `ask.ts` computes it; the MCP door must forward it, or the whole anti-
+      // amnesia fix silently never reaches the agents that call this tool (it was
+      // dropped here — a live `ask("Talentir")` returned no pending block despite
+      // two matching pending proposals). Additive; omitted when nothing pends.
+      const pendingBlock = retrieved.pending
+        ? { pending: retrieved.pending }
+        : {};
+
       // Surface synthesis outages loudly instead of returning a null answer that
       // looks like "no results". Retrieval/sources still stand.
       if ((synthesis as { error?: string }).error === "synthesis_unavailable") {
         return ok({
           ...synthesis,
+          ...pendingBlock,
           message:
             "⚠️ AI synthesis is temporarily unavailable. The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
         });
       }
-      return ok(synthesis);
+      return ok({ ...synthesis, ...pendingBlock });
     }
 
     case "synap_get_entities": {
@@ -833,29 +849,34 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_diagnose": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const { listRuns, getRun } = await import("../../services/runs/index.js");
-      const flowType = args.flowType as
-        "automation" | "playbook" | "capture" | "session" | undefined;
-      // With a runId → that run's activity timeline (a capture's decision + trace
-      // events: what happened and WHY, each with a fixHint). Without → the feed.
-      if (args.runId) {
-        if (!flowType) {
-          return ok({ error: "flowType is required when runId is given" });
-        }
-        const detail = await getRun({
-          userId,
-          flowType,
-          id: args.runId as string,
-        });
-        return ok(detail ?? { error: "Run not found" });
-      }
-      const runs = await listRuns({
+      // The THIRD door: mode derived from payload shape (like capture), not a
+      // caller-chosen tool. {} → whole-pod health · {type} → a class surface ·
+      // {id} → auto-detect the object · {agentId} → agent scorecard. Today's
+      // run-feed grammar ({runId,flowType} / {flowType,flowId}) is preserved as
+      // a back-compat special case inside the router.
+      const { diagnoseRouter } =
+        await import("../../services/diagnose/index.js");
+      const result = await diagnoseRouter({
         userId,
-        flowType,
+        agentId: args.agentId as string | undefined,
+        id: args.id as string | undefined,
+        type: args.type as
+          | "proposal"
+          | "session"
+          | "capability"
+          | "agent"
+          | "entity"
+          | "run"
+          | undefined,
+        workspaceId: (args.workspaceId as string | undefined) ?? undefined,
+        stuckThresholdHours: args.stuckThresholdHours as number | undefined,
+        flowType: args.flowType as
+          "automation" | "playbook" | "capture" | "session" | undefined,
         flowId: args.flowId as string | undefined,
+        runId: args.runId as string | undefined,
         limit: (args.limit as number) || undefined,
       });
-      return ok({ runs });
+      return ok(result);
     }
 
     // ── Write tools ─────────────────────────────────────────────────────────
@@ -969,6 +990,8 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const result = await caller.documents.createDocument({
         userId,
+        // Idempotency: a retry with the same key/content returns the prior doc.
+        idempotencyKey: args.idempotencyKey as string | undefined,
         // Confined workspace (service-key clamp) — not the raw model-supplied id.
         workspaceId: requestedWorkspaceId as string,
         title: args.title as string,
@@ -1174,6 +1197,9 @@ export async function executeMCPToolViaHubProtocol(
           ? (args.category as UserObservationCategory)
           : undefined;
       const result = await rememberFact({
+        // Idempotency: a repeated fact within the door's window returns the
+        // prior factId instead of a second governed write + recall row.
+        idempotencyKey: args.idempotencyKey as string | undefined,
         caller: lensCaller,
         // NEVER `args.userId`: the hub `createEntity` trusts `input.userId`, so a
         // model-supplied one would mint an entity + proposal owned by another
@@ -2888,6 +2914,9 @@ export async function executeMCPToolViaHubProtocol(
       const { postChannelMessage } =
         await import("../../services/messaging/post-message.js");
       const result = await postChannelMessage({
+        // Idempotency: an explicit key (or the door's content-hash fallback)
+        // makes a retry of a "failed" post return the prior message, not a dupe.
+        idempotencyKey: args.idempotencyKey as string | undefined,
         channelId: args.channelId as string,
         content: args.content as string,
         role: args.role as string | undefined,
@@ -3036,6 +3065,10 @@ export async function executeMCPToolViaHubProtocol(
       const { executeCapability } =
         await import("../../services/capabilities/execute-capability.js");
       const outcome = await executeCapability({
+        // Idempotency: a retried capability run resolves to the prior run's
+        // proposal/result rather than firing twice. (Direct external-send verbs
+        // still carry the residual double-send gap — see the decision below.)
+        idempotencyKey: args.idempotencyKey as string | undefined,
         verbId: args.verbId as string | undefined,
         skillId: args.skillId as string | undefined,
         parameters: args.parameters as Record<string, unknown> | undefined,

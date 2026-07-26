@@ -93,7 +93,6 @@ export interface UpdateRequest {
     | "intelligence"
     | "agent"
     | "openwebui-pipeline"
-    | "openclaw"
     | "extension"
     | "cli"
     | "n8n"
@@ -788,7 +787,6 @@ function normalizeProposalSource(source: unknown): UpdateRequest["source"] {
     case "intelligence":
     case "agent":
     case "openwebui-pipeline":
-    case "openclaw":
     case "extension":
     case "cli":
     case "n8n":

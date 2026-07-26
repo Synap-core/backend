@@ -13,19 +13,51 @@ const h = vi.hoisted(() => ({
   inserted: [] as Array<Record<string, unknown>>,
   autoRespondCalls: [] as Array<Record<string, unknown>>,
   chatEvents: [] as Array<Record<string, unknown>>,
+  priorRows: [] as Array<{ id: string }>,
+}));
+
+vi.mock("@synap-core/core", () => ({
+  createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock("@synap/database", () => ({
   db: {
+    // Ack-integrity dedup lookup (no-key path): default no prior → proceed.
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          orderBy: () => ({ limit: async () => h.priorRows }),
+        }),
+      }),
+    }),
     insert: () => ({
-      values: async (v: Record<string, unknown>) => {
+      values: (v: Record<string, unknown>) => {
         h.inserted.push(v);
+        return {
+          onConflictDoNothing: () => ({
+            // A fresh insert returns the row (length 1 → applied path).
+            returning: async () => [{ id: v.id as string }],
+          }),
+        };
       },
     }),
   },
-  messages: { id: "messages.id" },
+  messages: {
+    id: "messages.id",
+    channelId: "channel_id",
+    userId: "user_id",
+    role: "role",
+    content: "content",
+    deletedAt: "deleted_at",
+    timestamp: "timestamp",
+  },
   MessageRole: { USER: "user", ASSISTANT: "assistant", SYSTEM: "system" },
   computeMessageHash: (id: string, content: string) => `hash:${id}:${content}`,
+  and: () => undefined,
+  eq: () => undefined,
+  gte: () => undefined,
+  isNull: () => undefined,
+  desc: () => undefined,
 }));
 
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({

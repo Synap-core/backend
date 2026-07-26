@@ -180,30 +180,63 @@ export const tools = {
       {
         name: "synap_diagnose",
         annotations: {
-          title: "Diagnose runs",
+          title: "Diagnose",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          "See what an AI did across flows — the unified run feed + per-run activity. Without args: recent runs across automation, playbook, capture, and session (newest first). With runId + flowType: that run's activity timeline. For a CAPTURE run this is its decision + trace events — WHY a facet/entity was dropped or a route chosen, each with a machine-readable reason + an actionable fixHint. Use this instead of guessing when a capture or automation didn't do what was expected. USER-scoped automatically.",
+          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = approved vs awaiting; type:"run" = per-flow failure counts); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
         inputSchema: {
           type: "object",
           properties: {
+            type: {
+              type: "string",
+              enum: [
+                "proposal",
+                "session",
+                "capability",
+                "agent",
+                "entity",
+                "run",
+              ],
+              description:
+                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures).",
+            },
+            id: {
+              type: "string",
+              description:
+                "Any object id — the door auto-detects whether it is a proposal / session / capability / run / agent / entity and explains its state + why.",
+            },
+            agentId: {
+              type: "string",
+              description:
+                "An agent-user id → its behavioural quality scorecard (approve/reject/revise rates, rejection reasons, duplicate rate, daily-cap posture).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Narrow whole-pod health or a class surface to ONE workspace lens (default: all workspaces you can see).",
+            },
+            stuckThresholdHours: {
+              type: "number",
+              description:
+                "Override the 'stuck run' age boundary for whole-pod health (default 24h).",
+            },
             flowType: {
               type: "string",
               enum: ["automation", "playbook", "capture", "session"],
               description:
-                "Restrict to one ledger. REQUIRED when runId is given (the id space differs per flow).",
+                "Back-compat run-feed grammar: restrict to one ledger. REQUIRED when runId is given (the id space differs per flow).",
             },
             flowId: {
               type: "string",
               description:
-                "Restrict the feed to one flow's runs (automationId / playbookId).",
+                "Back-compat: restrict the feed to one flow's runs (automationId / playbookId).",
             },
             runId: {
               type: "string",
               description:
-                "A specific run id (or a capture's correlationId) → returns its activity timeline instead of the feed.",
+                "Back-compat: a specific run id (or a capture's correlationId) → that run's activity timeline instead of the feed.",
             },
             limit: { type: "number", default: 25 },
           },
@@ -477,6 +510,11 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Optional: a stable key so a retry returns the PRIOR write, not a duplicate. Omit and identical content is deduped automatically; pass one to make a retry idempotent even if its content changed trivially.",
+            },
             title: { type: "string" },
             content: {
               type: "string",
@@ -558,6 +596,11 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Optional: a stable key so a retry returns the PRIOR write, not a duplicate. Omit and identical content is deduped automatically; pass one to make a retry idempotent even if its content changed trivially.",
+            },
             userId: {
               type: "string",
               description:
@@ -1019,11 +1062,12 @@ export const tools = {
                 "scheduled",
                 "failed",
                 "cancelled",
+                "stale",
                 "open",
                 "all",
               ],
               description:
-                "'open' (default) = every non-terminal session (active/paused/forming/scheduled). 'all' = no status filter. Or name one exact status.",
+                "'open' (default) = every non-terminal session (active/paused/forming/scheduled). 'all' = no status filter. Or name one exact status — incl. 'stale' (reaper-marked, reopenable).",
             },
             workspaceId: {
               type: "string",
@@ -1626,6 +1670,11 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Optional: a stable key so a retry returns the PRIOR message, not a duplicate. Plain posts also dedup on identical content automatically — EXCEPT a post that triggers the AI (triggerAI:true), which never content-dedups (two identical prompts are two real turns); pass a key there for at-most-once turn semantics.",
+            },
             channelId: {
               type: "string",
               description: "Channel UUID to post into",
@@ -1716,6 +1765,11 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.",
+            },
             verbId: {
               type: "string",
               description:

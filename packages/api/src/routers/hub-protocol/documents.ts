@@ -18,12 +18,25 @@ import {
   normalizeDocumentType,
   DocumentRepository,
   eventRepository,
+  documents,
+  and,
+  eq,
+  gte,
+  desc,
+  drizzleSql,
   type CreateDocumentInput,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import {
+  resolveWriteIdempotencyKey,
+  idempotencyWindowStart,
+} from "../../utils/write-door-idempotency.js";
+
+const logger = createLogger({ module: "hub-documents" });
 
 export const documentsRouter = router({
   /**
@@ -60,6 +73,10 @@ export const documentsRouter = router({
         reasoning: z.string().optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
         agentUserId: z.string().uuid().optional(),
+        // Optional caller idempotency key. Absent → derived from the document's
+        // stable content (title + type + content/url + workspace). A retry with
+        // the same content returns the prior document instead of a second row.
+        idempotencyKey: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -68,6 +85,52 @@ export const documentsRouter = router({
       // Prefer explicit agentUserId from request; API key owner is a system account.
       const agentUserId = input.agentUserId ?? userId;
       const correlationId = randomUUID();
+
+      // ── ACK INTEGRITY (C1) — content-hash idempotency ─────────────────────────
+      // The auto-approved path writes a real `documents` row with no proposal to
+      // hash-dedup against, so a client-perceived-failure retry duplicated it.
+      // Derive a stable key from the write's content and (best-effort) return a
+      // prior row created under the same key within the window. The proposed path
+      // is separately covered by the proposal SSOT's own agent hash-dedup; the key
+      // is still stamped into the proposal + document so both are traceable.
+      const idempotencyKey = resolveWriteIdempotencyKey(
+        input.idempotencyKey,
+        "create_document",
+        {
+          userId,
+          workspaceId: input.workspaceId ?? null,
+          title: input.title,
+          type: input.type,
+          content: input.content,
+          url: input.url ?? null,
+        }
+      );
+      try {
+        const [priorDoc] = await db
+          .select({ id: documents.id })
+          .from(documents)
+          .where(
+            and(
+              eq(documents.userId, userId),
+              gte(documents.createdAt, idempotencyWindowStart()),
+              drizzleSql`${documents.metadata} ->> 'idempotencyKey' = ${idempotencyKey}`
+            )
+          )
+          .orderBy(desc(documents.createdAt))
+          .limit(1);
+        if (priorDoc) {
+          return {
+            id: priorDoc.id,
+            documentId: priorDoc.id,
+            status: "created" as const,
+            ackState: "duplicate-ignored" as const,
+            priorDocumentId: priorDoc.id,
+          };
+        }
+      } catch (err) {
+        // Best-effort — a lookup hiccup must never block a real write.
+        logger.warn({ err, userId }, "document dedup lookup failed — writing");
+      }
       const requestedEvent = await auditLog({
         subjectType: "document",
         action: "create",
@@ -108,6 +171,9 @@ export const documentsRouter = router({
           url: input.url ?? null,
           workspaceId: input.workspaceId ?? null,
           userId,
+          // Stamped so an approved proposal's document carries the same key (kept
+          // stable across retries → the SSOT agent hash-dedup collapses replays).
+          idempotencyKey,
         },
       });
 
@@ -118,10 +184,15 @@ export const documentsRouter = router({
       if ("proposalId" in perm) {
         // Not auto-approved: content is stored in proposal JSONB.
         // MinIO upload happens in proposals.approve when the user accepts.
+        // `deduped` = the proposal SSOT returned an existing identical proposal
+        // (an idempotent replay), so report duplicate-ignored, not a fresh propose.
         return {
           id: documentId,
           documentId,
           status: "proposed" as const,
+          ackState: perm.deduped
+            ? ("duplicate-ignored" as const)
+            : ("proposed" as const),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,
@@ -155,7 +226,7 @@ export const documentsRouter = router({
             storageKey: null,
             size: 0,
             mimeType: null,
-            metadata: { external: true },
+            metadata: { external: true, idempotencyKey },
             userId,
             workspaceId: input.workspaceId ?? null,
             createdByKind: "ai_agent",
@@ -177,6 +248,7 @@ export const documentsRouter = router({
           id: created.id,
           documentId: created.id,
           status: "created" as const,
+          ackState: "applied" as const,
         };
       }
 
@@ -211,6 +283,7 @@ export const documentsRouter = router({
           storageKey: metadata.path,
           size: metadata.size,
           mimeType: "text/markdown",
+          metadata: { idempotencyKey },
           userId,
           workspaceId: input.workspaceId ?? null,
           content, // → writes the v1 document_versions snapshot
@@ -233,6 +306,7 @@ export const documentsRouter = router({
         id: created.id,
         documentId: created.id,
         status: "created" as const,
+        ackState: "applied" as const,
       };
     }),
 

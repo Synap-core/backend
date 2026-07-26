@@ -57,6 +57,18 @@ import { and, eq } from "drizzle-orm";
 /** Stable identity of the seeded automation — the reconcile key. */
 export const REPORT_AUTOMATION_NAME = "Generate report";
 
+/**
+ * Definition version. BUMP THIS whenever `REPORT_AUTOMATION_FLOW` or the
+ * description changes, so already-seeded workspaces pick the change up on their
+ * next reconcile instead of being frozen at whatever shipped first.
+ *
+ * v2 — dogfood fix: `summarize` maxTokens 120 → 500. Verified against the live
+ * IS that `ai.generate` returns an EMPTY STRING below ~200 tokens (the budget is
+ * consumed before the first visible token), so a low cap yields NO answer rather
+ * than a short one — and the step still reports success.
+ */
+export const REPORT_AUTOMATION_SEED_VERSION = 2;
+
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
   "report entity. Run it as-is for a general report, or pass a prompt " +
@@ -365,7 +377,14 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         inputMapping: {
           system: SUMMARIZE_SYSTEM,
           prompt: "{{steps.analyze.output}}",
-          maxTokens: "120",
+          // 500, NOT the ~120 a one-line summary "needs". DOGFOODED 2026-07-26
+          // against the live IS: `ai.generate` returns an EMPTY STRING at
+          // maxTokens 20 and 120, a degraded answer at 300, and a correct one at
+          // 500. The budget is consumed before any visible token is emitted —
+          // the signature of a reasoning model — so a low ceiling does not
+          // produce a SHORT answer, it produces NO answer, silently and with a
+          // successful step status. Brevity belongs in the prompt, not the cap.
+          maxTokens: "500",
         },
         // NO continueOnError, deliberately. `summary` is a STRING property
         // rendered verbatim in the report header, and `{{steps.summarize.output}}`
@@ -456,7 +475,7 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
 };
 
 export interface EnsureReportAutomationResult {
-  status: "created" | "skipped" | "error";
+  status: "created" | "updated" | "skipped" | "error";
   message: string;
   automationId?: string;
   error?: string;
@@ -497,12 +516,47 @@ export async function ensureReportAutomation(
         eq(automations.workspaceId, workspaceId),
         eq(automations.name, REPORT_AUTOMATION_NAME)
       ),
-      columns: { id: true },
+      columns: { id: true, metadata: true },
     });
+
     if (existing) {
+      const seededVersion = (
+        existing.metadata as { seedVersion?: number } | null
+      )?.seedVersion;
+
+      // UPGRADE PATH. A pure skip-if-exists reconcile makes the FIRST prompt bug
+      // permanent: ~half this file is prompt copy, the row is duplicated per
+      // workspace, and there is no single row to fix. That is unacceptable for a
+      // flow whose whole point is being iterated on after reading its output.
+      // So: bump REPORT_AUTOMATION_SEED_VERSION whenever the definition changes
+      // and every workspace picks it up on its next reconcile.
+      //
+      // TRADEOFF, stated: this OVERWRITES a user's edits to the seeded flow on a
+      // version bump. That is why the version is bumped deliberately and never
+      // as a side effect of an unrelated edit. A user who wants a permanent
+      // variant should duplicate the automation under another name — a different
+      // name is a different reconcile key and is never touched here.
+      if (seededVersion === REPORT_AUTOMATION_SEED_VERSION) {
+        return {
+          status: "skipped",
+          message: "Report automation already current",
+          automationId: existing.id,
+        };
+      }
+
+      await db
+        .update(automations)
+        .set({
+          description: REPORT_AUTOMATION_DESCRIPTION,
+          flowDefinition: REPORT_AUTOMATION_FLOW,
+          metadata: { seedVersion: REPORT_AUTOMATION_SEED_VERSION },
+          updatedAt: new Date(),
+        })
+        .where(eq(automations.id, existing.id));
+
       return {
-        status: "skipped",
-        message: "Report automation already exists",
+        status: "updated",
+        message: `Upgraded report automation to seed v${REPORT_AUTOMATION_SEED_VERSION}`,
         automationId: existing.id,
       };
     }
@@ -517,6 +571,7 @@ export async function ensureReportAutomation(
         triggerType: "manual",
         triggerConfig: {},
         flowDefinition: REPORT_AUTOMATION_FLOW,
+        metadata: { seedVersion: REPORT_AUTOMATION_SEED_VERSION },
         // `active` so the trigger door will actually run it. There is no schedule,
         // so an active manual automation costs nothing until a human runs it.
         status: "active",

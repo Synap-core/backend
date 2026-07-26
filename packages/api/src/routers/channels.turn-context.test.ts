@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  channelSendMessageInputSchema,
   redactTurnContext,
   TurnContextSchema,
   usesInternalSessionBoundary,
@@ -62,5 +63,20 @@ describe("channels.sendMessage turnContext", () => {
   it("gives Personal turns an internal memory-session boundary", () => {
     expect(usesInternalSessionBoundary(ChannelType.PERSONAL)).toBe(true);
     expect(usesInternalSessionBoundary(ChannelType.FEED)).toBe(false);
+  });
+
+  it("accepts only a UUID as the canonical project lens", () => {
+    expect(
+      channelSendMessageInputSchema.safeParse({
+        content: "Use the active project",
+        projectId: "79f58d96-dca2-4f96-ad20-9a3ae619fdf3",
+      }).success
+    ).toBe(true);
+    expect(
+      channelSendMessageInputSchema.safeParse({
+        content: "Use the active project",
+        projectId: "not-a-project-id",
+      }).success
+    ).toBe(false);
   });
 });

@@ -13,6 +13,16 @@
  * routes to `propose`. (Agent-initiated runs flow through the IS agent loop, not
  * this door.) A DRAFT skill is denied for everyone (approval gate) — enable it
  * first via `POST /skills/:id/approve`.
+ *
+ * ACK INTEGRITY (C1): the result carries `ackState` (`applied` for a run, `proposed`
+ * for a queued run) so a caller can tell a fresh run from a governed queue. The
+ * PROPOSAL path's external side effect is already at-most-once via
+ * `dispatchExternalOnce` at approval. RESIDUAL GAP (documented, not yet closed): a
+ * DIRECT owner/granted run of a WRITE verb that performs an external send has no
+ * persisted run receipt, so a client-perceived-failure retry could double-send.
+ * Closing it needs a small `capability_run_receipts` claim keyed by the idempotency
+ * key (a schema addition, out of this file's lane) so the direct path can CAS a
+ * one-time claim like the proposal path does. READ-only verbs are unaffected.
  */
 
 import { db, skills, eq, and, desc } from "@synap/database";
@@ -25,11 +35,17 @@ import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
 export type ExecuteCapabilityResult =
-  | { kind: "run"; skillId: string; result: unknown }
+  | { kind: "run"; skillId: string; result: unknown; ackState: WriteAckState }
   | { kind: "dry-run"; skillId: string }
-  | { kind: "proposed"; proposalId: string; reviewUrl: string }
+  | {
+      kind: "proposed";
+      proposalId: string;
+      reviewUrl: string;
+      ackState: WriteAckState;
+    }
   | { kind: "deny"; reason: string }
   | { kind: "not_found"; message: string };
 
@@ -65,6 +81,16 @@ export async function executeCapability(input: {
    * unattended.
    */
   suppressProposal?: boolean;
+  /**
+   * Optional caller idempotency key (C1). Stamped onto a `capability.run` proposal
+   * so an approved run and any retry correlate to one logical invocation. NOTE: the
+   * DIRECT-run path (an owner/granted WRITE verb that performs an external send) has
+   * no persisted receipt to replay, so this key cannot yet make that path
+   * at-most-once — see the module note. Agent WRITE verbs without a grant route to
+   * the PROPOSAL path, whose external dispatch IS at-most-once via
+   * `dispatchExternalOnce` at approval.
+   */
+  idempotencyKey?: string;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -158,6 +184,10 @@ export async function executeCapability(input: {
         // Carry the 1-of-N connection selector so an APPROVED run resolves the
         // same connection the original call intended (see runResolvedSkill).
         connectionSelector: input.connectionSelector ?? null,
+        // C1: correlate an approved run + any retry to one logical invocation.
+        ...(input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey }
+          : {}),
       },
       notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
     });
@@ -167,18 +197,21 @@ export async function executeCapability(input: {
       kind: "proposed",
       proposalId: proposal.id,
       reviewUrl: openLink(proposal.id),
+      ackState: "proposed",
     };
   }
 
   // decision === "run" → execute through the SINGLE post-gate runner (shared with
   // the capability.run proposal replay), so the door and an approved proposal can
-  // never diverge on kind-routing.
-  return runResolvedSkill(skillRow, parameters, {
+  // never diverge on kind-routing. Stamp `ackState: "applied"` on a successful run
+  // (deny/not_found carry no ack — they didn't write).
+  const ran = await runResolvedSkill(skillRow, parameters, {
     userId,
     workspaceId,
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
   });
+  return ran.kind === "run" ? { ...ran, ackState: "applied" as const } : ran;
 }
 
 /** The gate-approved skill row shape `runResolvedSkill` operates on. */

@@ -9,6 +9,10 @@
  * to the `sessions` table, which is IS memory/compaction machinery.
  *
  * Lifecycle: active → paused ↔ active → closed
+ *   (or: active/paused → stale, when the focus-session reaper — C8 lifecycle
+ *   hygiene — finds no activity for REAPER_STALE_HOURS. Non-destructive:
+ *   `stale` is not terminal, the row can still be completed/reopened like any
+ *   other session; it only stops counting as a live "in progress" session.)
  */
 
 import { sql } from "drizzle-orm";
@@ -32,6 +36,10 @@ export enum FocusSessionStatus {
   SCHEDULED = "scheduled",
   FAILED = "failed",
   CANCELLED = "cancelled",
+  /** Auto-set by the focus-session reaper (C8): active/paused with no
+   *  `updatedAt` activity for REAPER_STALE_HOURS. Not terminal — see the
+   *  lifecycle note above. */
+  STALE = "stale",
 }
 
 export const focusSessions = pgTable(
@@ -80,6 +88,7 @@ export const focusSessions = pgTable(
         "scheduled",
         "failed",
         "cancelled",
+        "stale",
       ],
     })
       .notNull()

@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { and, asc, eq, isNull, or } from "@synap/database";
+import { and, asc, desc, eq, isNull, or, drizzleSql } from "@synap/database";
 import {
   db,
   messages,
@@ -143,17 +143,23 @@ async function resolveBoundCredentialRef(
     }
 
     if (selector.connectionId) {
-      // The selected secret must be THIS capability's connection, owned by the
-      // actor, and not deleted — else a caller could point the dispatcher at an
-      // unrelated / another user's secret and have it decrypted under this tool.
+      // The selected secret must be THIS capability's connection and not deleted.
+      // It resolves when it is the actor's OWN connection OR a POD-WIDE one (0211,
+      // a shared VAULT key) — never another member's private key. Guards against a
+      // caller pointing the dispatcher at an unrelated / private secret.
       const [row] = await db
-        .select({ id: secrets.id, accountHint: secrets.accountHint })
+        .select({
+          id: secrets.id,
+          accountHint: secrets.accountHint,
+          userId: secrets.userId,
+          isPodWide: secrets.isPodWide,
+        })
         .from(secrets)
         .where(
           and(
             eq(secrets.id, selector.connectionId),
             eq(secrets.capabilityId, capEdge.capabilityId),
-            eq(secrets.userId, ctx.userId),
+            or(eq(secrets.userId, ctx.userId), eq(secrets.isPodWide, true)),
             isNull(secrets.deletedAt)
           )
         )
@@ -168,25 +174,40 @@ async function resolveBoundCredentialRef(
       // live nango:// path (no provider_integrations row required). A vault:// (or
       // other) tool's connection resolves to the picked secret directly.
       if (tool.credentialRef?.startsWith("nango://")) {
+        // VAULT ONLY: a pod-wide (non-own) Nango account can't be resolved for
+        // another member — a pod-wide OAuth would require run-as-owner proxying
+        // (explicitly out of scope). Only vault keys are shareable pod-wide.
+        if (row.userId !== ctx.userId) {
+          throw new Error(
+            `Connection "${selector.connectionId}" is a shared account/OAuth connection, which cannot be used pod-wide for "${tool.name}". Only vault keys can be shared pod-wide.`
+          );
+        }
         return { ref: tool.credentialRef, accountHint: row.accountHint };
       }
       return { ref: `vault://${row.id}` };
     }
 
     // contextObjectId → the capability's connection bound to that context object.
-    // Scope to the actor's own secrets (defense-in-depth: never resolve another
-    // user's connection even for a pod-wide capability).
+    // Resolve the actor's OWN connection first, else a POD-WIDE (0211) shared vault
+    // key for the same context — never another member's private key. `desc(own)`
+    // orders own-first so a member's own connection always wins over the pod-wide.
+    const ownFirst = desc(drizzleSql`(${secrets.userId} = ${ctx.userId})`);
     const [row] = await db
-      .select({ id: secrets.id, accountHint: secrets.accountHint })
+      .select({
+        id: secrets.id,
+        accountHint: secrets.accountHint,
+        userId: secrets.userId,
+      })
       .from(secrets)
       .where(
         and(
           eq(secrets.capabilityId, capEdge.capabilityId),
           eq(secrets.contextId, selector.contextObjectId!),
-          eq(secrets.userId, ctx.userId),
+          or(eq(secrets.userId, ctx.userId), eq(secrets.isPodWide, true)),
           isNull(secrets.deletedAt)
         )
       )
+      .orderBy(ownFirst)
       .limit(1);
     if (!row) {
       throw new Error(
@@ -194,6 +215,13 @@ async function resolveBoundCredentialRef(
       );
     }
     if (tool.credentialRef?.startsWith("nango://")) {
+      // VAULT ONLY: a pod-wide (non-own) Nango account is not resolvable for a
+      // different member (pod-wide OAuth is out of scope).
+      if (row.userId !== ctx.userId) {
+        throw new Error(
+          `The connection bound to context object "${selector.contextObjectId}" is a shared account/OAuth connection, which cannot be used pod-wide for "${tool.name}".`
+        );
+      }
       return { ref: tool.credentialRef, accountHint: row.accountHint };
     }
     return { ref: `vault://${row.id}` };
@@ -277,9 +305,11 @@ async function resolveBoundCredentialRef(
   }
 
   // Map the binding's principal to the secret's context and look up the connection
-  // scoped to THIS capability AND the actor's own secrets. NEVER fall back to an
-  // unrelated secret — a connection for a different capability/context/owner must
-  // not be mis-routed here.
+  // scoped to THIS capability. Resolves the actor's OWN connection first, else a
+  // POD-WIDE (0211) shared vault key for the same context — own wins (`desc(own)`).
+  // NEVER falls back to an unrelated secret or another member's private key. This
+  // branch always yields a `vault://` ref, so widening stays VAULT ONLY by design.
+  const ownFirstBinding = desc(drizzleSql`(${secrets.userId} = ${ctx.userId})`);
   const [row] = await db
     .select({ id: secrets.id })
     .from(secrets)
@@ -288,10 +318,11 @@ async function resolveBoundCredentialRef(
         eq(secrets.capabilityId, memberEdge.capabilityId),
         eq(secrets.contextType, principalType),
         eq(secrets.contextId, principalId),
-        eq(secrets.userId, ctx.userId),
+        or(eq(secrets.userId, ctx.userId), eq(secrets.isPodWide, true)),
         isNull(secrets.deletedAt)
       )
     )
+    .orderBy(ownFirstBinding)
     .limit(1);
   if (!row) {
     throw new Error(
@@ -1022,7 +1053,12 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // vault-direct (API key injection) and provider-delegated (Nango proxy, etc.).
   const secretRow = await db.query.secrets.findFirst({
     where: eq(secrets.id, vaultId),
-    columns: { userId: true, providerIntegrationId: true, accountHint: true },
+    columns: {
+      userId: true,
+      providerIntegrationId: true,
+      accountHint: true,
+      isPodWide: true,
+    },
   });
   if (!secretRow) {
     return {
@@ -1060,15 +1096,26 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const effectiveActor = input.agentUserId ?? userId;
   const callerIsOwner = ownerUserId === effectiveActor && !input.agentUserId;
 
-  // (a) Resolve the credential. Owner → ungated. Delegated → grant-gated with a
-  //     server-derived redeemer (atomic consume-after-decrypt inside resolver).
+  // POD-WIDE bypass (0211): a pod-wide connection is a SHARED vault key any member
+  // may use for this capability WITHOUT holding a per-user vault grant — it is
+  // decrypted under the secret's owner. This removes ONLY the per-user vault-GRANT
+  // requirement; the RUN is still governed by `gateCapabilityExecution` upstream in
+  // `triggerProviderAction` (agent runs still route to propose/deny without an
+  // approved capability + grant). VAULT ONLY: this path is reached only after the
+  // provider-integration (Nango) delegation returned above, so the secret here is
+  // always a direct vault key.
+  const podWideBypass = secretRow.isPodWide === true;
+  const ungated = callerIsOwner || podWideBypass;
+
+  // (a) Resolve the credential. Owner / pod-wide → ungated. Delegated → grant-gated
+  //     with a server-derived redeemer (atomic consume-after-decrypt inside resolver).
   let secret: string | null;
   try {
     secret = await resolveVaultSecret(
       vaultId,
       ownerUserId,
       field,
-      callerIsOwner
+      ungated
         ? undefined
         : {
             requireGrant: true,

@@ -31,11 +31,7 @@ export interface FollowUpChip {
   label: string;
   value: string;
   action:
-    | "link_entity"
-    | "set_property"
-    | "add_relation"
-    | "confirm"
-    | "dismiss";
+    "link_entity" | "set_property" | "add_relation" | "confirm" | "dismiss";
   icon?: string;
   entityId?: string;
   propertyKey?: string;
@@ -201,6 +197,49 @@ export type AgentHubRequest = IntelligenceHubRequest;
 
 /** @alias IntelligenceHubResponse */
 export type AgentHubResponse = IntelligenceHubResponse;
+
+export function buildChatRequestBody(
+  request: IntelligenceHubRequest,
+  stream: boolean
+): Record<string, unknown> {
+  const onboardingSkill =
+    request.forcedSkillName === "onboard" ||
+    request.forcedSkillName === "agent-os"
+      ? request.forcedSkillName
+      : undefined;
+
+  return {
+    query: request.query,
+    threadId: request.threadId,
+    userId: request.userId,
+    agentId: request.agentId || "orchestrator",
+    agentType: request.agentType,
+    agentConfig: request.agentConfig,
+    projectId: request.projectId,
+    stream,
+    workspaceId: request.workspaceId ?? undefined,
+    sourceMessageId: request.sourceMessageId,
+    agentUserId: request.agentUserId,
+    dataPodUrl:
+      request.dataPodUrl || process.env.PUBLIC_URL || "http://localhost:3000",
+    dataPodApiKey: request.dataPodApiKey ?? "",
+    mcpServers: request.mcpServers,
+    deepAnalysis: request.deepAnalysis,
+    workspaceSettings: request.workspaceSettings,
+    channelKind: request.channelKind,
+    focusSessionId: request.focusSessionId,
+    contextObjectType: request.contextEntityId
+      ? "entity"
+      : request.contextObjectType,
+    contextObjectId: request.contextEntityId ?? request.contextObjectId,
+    turnContext: request.turnContext,
+    ...(onboardingSkill
+      ? { onboardingSkill }
+      : request.forcedSkillName
+        ? { forcedSkillName: request.forcedSkillName }
+        : {}),
+  };
+}
 
 // ── Cheap routing types ──────────────────────────────────────────────────────
 
@@ -380,7 +419,7 @@ export class IntelligenceHubClient {
 
       try {
         const response = await fetchWithTimeout(
-          `${this.baseUrl}/api/expertise/request`,
+          `${this.baseUrl}/api/chat/stream`,
           {
             method: "POST",
             headers: {
@@ -393,42 +432,7 @@ export class IntelligenceHubClient {
                 ? { "X-Synap-Channel": request.billingChannel }
                 : {}),
             },
-            body: JSON.stringify({
-              query: request.query,
-              threadId: request.threadId,
-              userId: request.userId,
-              agentId: request.agentId || "orchestrator",
-              agentType: request.agentType,
-              agentConfig: request.agentConfig,
-              projectId: request.projectId,
-              workspaceId: request.workspaceId,
-              sourceMessageId: request.sourceMessageId,
-              agentUserId: request.agentUserId,
-              deepAnalysis: request.deepAnalysis,
-              dataPodUrl:
-                request.dataPodUrl ||
-                process.env.PUBLIC_URL ||
-                "http://localhost:3000",
-              dataPodApiKey: request.dataPodApiKey ?? "",
-              mcpServers: request.mcpServers,
-              workspaceSettings: request.workspaceSettings,
-              channelKind: request.channelKind,
-              focusSessionId: request.focusSessionId,
-              // A bound subject entity retains precedence over the generic
-              // context-object fields, while callers without one now forward
-              // their existing context-object seam unchanged.
-              contextObjectType: request.contextEntityId
-                ? "entity"
-                : request.contextObjectType,
-              contextObjectId:
-                request.contextEntityId ?? request.contextObjectId,
-              turnContext: request.turnContext,
-              // Forced skill (Discord `/skill <name>`): the IS injects this
-              // skill's content into the system prompt for this turn.
-              ...(request.forcedSkillName
-                ? { forcedSkillName: request.forcedSkillName }
-                : {}),
-            }),
+            body: JSON.stringify(buildChatRequestBody(request, false)),
           },
           // Chat (non-streaming fallback) can run a slow conversational LLM —
           // use the longer chat timeout, not the generic 30s.
@@ -443,14 +447,14 @@ export class IntelligenceHubClient {
           if (response.status === 401) {
             recordFailure(this.baseUrl);
             console.error(
-              `[IntelligenceHubClient] IS authentication failed at ${this.baseUrl}/api/expertise/request — check API key in intelligence_services table (status=${response.status}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1})`
+              `[IntelligenceHubClient] IS authentication failed at ${this.baseUrl}/api/chat/stream — check API key in intelligence_services table (status=${response.status}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1})`
             );
             throw new Error(
               `Intelligence Hub credential error: 401 Unauthorized at ${this.baseUrl}`
             );
           }
           console.error(
-            `[IntelligenceHubClient] Request failed: url=${this.baseUrl}/api/expertise/request, status=${response.status}, statusText=${response.statusText}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1}`
+            `[IntelligenceHubClient] Request failed: url=${this.baseUrl}/api/chat/stream, status=${response.status}, statusText=${response.statusText}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1}`
           );
           throw new Error(
             `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
@@ -533,34 +537,7 @@ export class IntelligenceHubClient {
               ? { "X-Synap-Channel": request.billingChannel }
               : {}),
           },
-          body: JSON.stringify({
-            query: request.query,
-            threadId: request.threadId,
-            userId: request.userId,
-            agentId: request.agentId || "orchestrator",
-            agentType: request.agentType,
-            agentConfig: request.agentConfig,
-            projectId: request.projectId,
-            stream: true,
-            workspaceId: request.workspaceId,
-            sourceMessageId: request.sourceMessageId,
-            agentUserId: request.agentUserId,
-            dataPodUrl:
-              request.dataPodUrl ||
-              process.env.PUBLIC_URL ||
-              "http://localhost:3000",
-            dataPodApiKey: request.dataPodApiKey ?? "",
-            mcpServers: request.mcpServers,
-            deepAnalysis: request.deepAnalysis,
-            workspaceSettings: request.workspaceSettings,
-            channelKind: request.channelKind,
-            focusSessionId: request.focusSessionId,
-            contextObjectType: request.contextEntityId
-              ? "entity"
-              : request.contextObjectType,
-            contextObjectId: request.contextEntityId ?? request.contextObjectId,
-            turnContext: request.turnContext,
-          }),
+          body: JSON.stringify(buildChatRequestBody(request, true)),
         },
         // Streaming yields progressively; a 30s TOTAL abort wrongly kills a
         // stream that is still producing tokens. Use the longer chat timeout.

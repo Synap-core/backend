@@ -994,6 +994,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "capability_id",
     addedBy: "0161_secrets_capability_connections.sql",
   },
+  // Pod-wide connection tier (0211): shared vault keys usable without a per-user
+  // grant. Absence means a pod is on a pre-0211 schema.
+  {
+    table: "secrets",
+    column: "is_pod_wide",
+    addedBy: "0211_secrets_pod_wide_connection_tier.sql",
+  },
 
   // channel_egress — channel-agnostic outbound action outbox (0162). Absence
   // means a pod is on a pre-0162 schema where the egress write-helper / read-ack

@@ -18,7 +18,7 @@
 import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
 
-import { requirePodAdmin } from "../../utils/workspace-role.js";
+import { requirePodAdmin, isPodAdmin } from "../../utils/workspace-role.js";
 import { syncNangoConnectionsToRegistry } from "./capability-nango-sync.js";
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
@@ -34,6 +34,11 @@ export interface CapabilityConnectionView {
   accountHint: string | null;
   /** 'nango' when the credential delegates to Nango, else 'vault' (direct key). */
   kind: "nango" | "vault";
+  /**
+   * Pod-wide (0211): a shared vault key any member may USE for this capability
+   * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
+   */
+  isPodWide: boolean;
 }
 
 /**
@@ -80,22 +85,32 @@ async function loadOwnedConnection(
   if (!row) {
     throw new Error("Connection not found for this capability.");
   }
-  if (row.userId !== actorUserId) await requirePodAdmin(actorUserId);
+  // Owner floor, PLUS a pod-wide floor: a pod-wide connection (shared vault key)
+  // is a pod-level object even though it is owned by the admin who created it, so
+  // mutating it always requires pod-admin — never just the owning actor.
+  if (row.isPodWide || row.userId !== actorUserId) {
+    await requirePodAdmin(actorUserId);
+  }
   return row;
 }
 
 /**
- * Unset the current default connection(s) for a capability (respects the partial
- * unique index `idx_secrets_capability_default` — one default per capability).
- * Excludes `exceptId` so a set-then-unset never clears the row we are promoting.
+ * Unset the current default connection(s) for a capability WITHIN a tier
+ * (respects the partial unique index `idx_secrets_capability_default`, which is
+ * keyed on (capability_id, is_pod_wide) so a per-user default and a pod-wide
+ * default coexist). Scoping to the SAME tier means promoting a pod-wide default
+ * never clears a member's per-user default and vice-versa. Excludes `exceptId`
+ * so a set-then-unset never clears the row we are promoting.
  */
 async function unsetCapabilityDefault(
   capabilityId: string,
-  exceptId?: string
+  opts: { isPodWide: boolean; exceptId?: string }
 ): Promise<void> {
+  const { isPodWide, exceptId } = opts;
   const preds = [
     eq(secrets.capabilityId, capabilityId),
     eq(secrets.isDefault, true),
+    eq(secrets.isPodWide, isPodWide),
     isNull(secrets.deletedAt),
   ];
   const rows = await db
@@ -138,10 +153,22 @@ export async function listConnections(
     )
     .orderBy(asc(secrets.createdAt));
 
-  const foreign = rows.some((r) => r.userId !== actorUserId);
-  if (foreign) await requirePodAdmin(actorUserId);
+  // A member always sees their OWN connections + any POD-WIDE connection (a shared
+  // key they can legitimately use). Foreign PER-USER connections (another member's
+  // private key) are only revealed to a pod-admin — but their mere existence must
+  // NOT error a normal member (that was the old all-or-nothing `requirePodAdmin`
+  // throw). So compute admin-ness non-throwingly and filter rather than throw.
+  const hasForeignPerUser = rows.some(
+    (r) => r.userId !== actorUserId && !r.isPodWide
+  );
+  const canSeeForeign = hasForeignPerUser
+    ? await isPodAdmin(actorUserId)
+    : true;
+  const visible = canSeeForeign
+    ? rows
+    : rows.filter((r) => r.userId === actorUserId || r.isPodWide);
 
-  return rows.map((r) => ({
+  return visible.map((r) => ({
     id: r.id,
     label: r.name,
     contextType: r.contextType ?? null,
@@ -149,6 +176,7 @@ export async function listConnections(
     isDefault: r.isDefault,
     accountHint: r.accountHint ?? null,
     kind: connectionKind(r),
+    isPodWide: r.isPodWide,
   }));
 }
 
@@ -164,13 +192,20 @@ export interface AddConnectionInput {
   contextId?: string | null;
   accountHint?: string | null;
   isDefault?: boolean;
+  /**
+   * Mark this a POD-WIDE connection (shared vault key). Pod-admin only (enforced
+   * here). VAULT ONLY — rejected for a Nango connection (one carrying an
+   * accountHint), which would be an unsupported pod-wide OAuth.
+   */
+  isPodWide?: boolean;
 }
 
 /**
  * Create a server-encrypted connection stamped with `capability_id` + fields.
- * When `isDefault` is set OR this is the capability's FIRST connection, any
- * existing default is unset first and this one becomes default (respects
- * `idx_secrets_capability_default`). The secret is always owned by the actor.
+ * When `isDefault` is set OR this is the capability's FIRST connection IN ITS
+ * TIER, any existing default of that tier is unset first and this one becomes
+ * default (respects `idx_secrets_capability_default`, keyed on
+ * (capability_id, is_pod_wide)). The secret is always owned by the actor.
  */
 export async function addConnection(
   input: AddConnectionInput
@@ -184,20 +219,39 @@ export async function addConnection(
     contextId,
     accountHint,
   } = input;
+  const isPodWide = input.isPodWide === true;
 
-  // First-connection auto-default: if the capability has no connection yet, this
-  // one must be the default (the resolver's is_default fallback needs a target).
+  // Write RBAC: creating a pod-wide (shared) connection is a pod-level privileged
+  // action. VAULT ONLY: reject a pod-wide Nango connection (accountHint present) —
+  // a pod-wide OAuth would need run-as-owner proxying and is out of scope.
+  if (isPodWide) {
+    if (accountHint != null) {
+      throw new Error(
+        "A pod-wide connection must be a vault key — Nango/account connections cannot be pod-wide."
+      );
+    }
+    await requirePodAdmin(actorUserId);
+  }
+
+  // First-connection auto-default (per TIER): if the capability has no connection
+  // yet in this tier, this one must be its default (the resolver's is_default
+  // fallback needs a target). Tier-scoped so the first pod-wide connection becomes
+  // the pod-wide default without stealing a member's per-user default slot.
   const [existingAny] = await db
     .select({ id: secrets.id })
     .from(secrets)
     .where(
-      and(eq(secrets.capabilityId, capabilityId), isNull(secrets.deletedAt))
+      and(
+        eq(secrets.capabilityId, capabilityId),
+        eq(secrets.isPodWide, isPodWide),
+        isNull(secrets.deletedAt)
+      )
     )
     .limit(1);
   const isFirst = !existingAny;
   const makeDefault = input.isDefault === true || isFirst;
 
-  if (makeDefault) await unsetCapabilityDefault(capabilityId);
+  if (makeDefault) await unsetCapabilityDefault(capabilityId, { isPodWide });
 
   // Reuse the SAME server-side encryption the vault route + template applier use.
   // A connection with no value of its own (Nango) still stores an (empty) blob so
@@ -216,6 +270,7 @@ export async function addConnection(
       contextType: contextType ?? null,
       contextId: contextId ?? null,
       isDefault: makeDefault,
+      isPodWide,
       encryptedData: blob.encryptedData,
       iv: blob.iv,
       authTag: blob.authTag,
@@ -277,6 +332,7 @@ export async function addConnection(
     isDefault: secret.isDefault,
     accountHint: secret.accountHint ?? null,
     kind: connectionKind(secret),
+    isPodWide: secret.isPodWide,
   };
 }
 
@@ -291,26 +347,62 @@ export interface UpdateConnectionInput {
   contextId?: string | null;
   accountHint?: string | null;
   isDefault?: boolean;
+  /** Promote/demote pod-wide (shared vault key). Pod-admin only. VAULT ONLY. */
+  isPodWide?: boolean;
   /** New secret value → re-encrypt (credential rotation). */
   value?: string;
 }
 
 /**
  * Update a connection's fields; rotate (re-encrypt) when `value` is supplied;
- * enforce a single default (unset the others when setting this one default).
+ * enforce a single default PER TIER (unset the target tier's other default when
+ * this row is/becomes default).
  */
 export async function updateConnection(
   input: UpdateConnectionInput
 ): Promise<CapabilityConnectionView> {
   const { capabilityId, connectionId, actorUserId } = input;
+  // loadOwnedConnection already requires pod-admin when the EXISTING row is
+  // pod-wide (or foreign).
   const existing = await loadOwnedConnection(
     capabilityId,
     connectionId,
     actorUserId
   );
 
-  if (input.isDefault === true) {
-    await unsetCapabilityDefault(capabilityId, connectionId);
+  // Promoting a per-user connection TO pod-wide is itself a pod-level privileged
+  // action (loadOwnedConnection only gated the existing state). VAULT ONLY: a
+  // Nango connection (accountHint present, existing or being set) can't be pod-wide.
+  if (input.isPodWide === true && !existing.isPodWide) {
+    const effectiveAccountHint =
+      input.accountHint !== undefined
+        ? input.accountHint
+        : existing.accountHint;
+    // Gate on the SAME discriminator the runtime resolver uses
+    // (`connectionKind` = providerIntegrationId OR accountHint), not accountHint
+    // alone. A row carrying `providerIntegrationId` with a null accountHint is
+    // still Nango at dispatch time (external-dispatch routes on
+    // providerIntegrationId first), so it must never be promotable pod-wide.
+    const isNango =
+      existing.providerIntegrationId != null || effectiveAccountHint != null;
+    if (isNango) {
+      throw new Error(
+        "A pod-wide connection must be a vault key — Nango/account connections cannot be pod-wide."
+      );
+    }
+    await requirePodAdmin(actorUserId);
+  }
+
+  // Single-default is enforced PER TIER. When this row is/becomes the default,
+  // clear the OTHER default in the row's EFFECTIVE tier (covers both "set default"
+  // and "move a default row to the other tier").
+  const effectiveIsPodWide = input.isPodWide ?? existing.isPodWide;
+  const effectiveIsDefault = input.isDefault ?? existing.isDefault;
+  if (effectiveIsDefault) {
+    await unsetCapabilityDefault(capabilityId, {
+      isPodWide: effectiveIsPodWide,
+      exceptId: connectionId,
+    });
   }
 
   const patch: Record<string, unknown> = { updatedAt: new Date() };
@@ -319,6 +411,7 @@ export async function updateConnection(
   if (input.contextId !== undefined) patch.contextId = input.contextId;
   if (input.accountHint !== undefined) patch.accountHint = input.accountHint;
   if (input.isDefault !== undefined) patch.isDefault = input.isDefault;
+  if (input.isPodWide !== undefined) patch.isPodWide = input.isPodWide;
   if (input.value !== undefined) {
     const blob = encryptServerSide(input.value);
     patch.encryptedData = blob.encryptedData;
@@ -351,6 +444,7 @@ export async function updateConnection(
     isDefault: row.isDefault,
     accountHint: row.accountHint ?? null,
     kind: connectionKind(row),
+    isPodWide: row.isPodWide,
   };
 }
 
@@ -406,11 +500,18 @@ export async function removeConnection(input: {
 
   let promotedDefaultId: string | null = null;
   if (existing.isDefault) {
+    // Promote WITHIN the removed row's tier — promoting across tiers would create a
+    // second default in the target tier and violate idx_secrets_capability_default
+    // (keyed on (capability_id, is_pod_wide)).
     const [oldest] = await db
       .select({ id: secrets.id })
       .from(secrets)
       .where(
-        and(eq(secrets.capabilityId, capabilityId), isNull(secrets.deletedAt))
+        and(
+          eq(secrets.capabilityId, capabilityId),
+          eq(secrets.isPodWide, existing.isPodWide),
+          isNull(secrets.deletedAt)
+        )
       )
       .orderBy(asc(secrets.createdAt))
       .limit(1);

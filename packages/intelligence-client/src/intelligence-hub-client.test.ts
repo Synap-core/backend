@@ -65,6 +65,7 @@ describe("IntelligenceHubClient.sendMessageStream", () => {
       query: "What is open?",
       threadId: "thread-1",
       userId: "user-1",
+      projectId: "79f58d96-dca2-4f96-ad20-9a3ae619fdf3",
       contextObjectType: "view",
       contextObjectId: "view-1",
       turnContext: { surface: { name: "Inbox" } },
@@ -80,6 +81,7 @@ describe("IntelligenceHubClient.sendMessageStream", () => {
     expect(body).toMatchObject({
       contextObjectType: "view",
       contextObjectId: "view-1",
+      projectId: "79f58d96-dca2-4f96-ad20-9a3ae619fdf3",
       turnContext: { surface: { name: "Inbox" } },
     });
   });

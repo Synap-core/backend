@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   WorkspaceJsonValue,
+  WorkspacePrimarySurface,
   WorkspacePrimarySurfaceDefinition,
 } from "@synap/database";
 
@@ -14,6 +15,18 @@ const workspaceJsonValueSchema: z.ZodType<WorkspaceJsonValue> = z.lazy(() =>
     z.record(z.string(), workspaceJsonValueSchema),
   ])
 );
+
+const webUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const protocol = new URL(value).protocol;
+    return protocol === "https:" || protocol === "http:";
+  }, "URL must use http or https")
+  .refine((value) => {
+    const parsed = new URL(value);
+    return !parsed.username && !parsed.password;
+  }, "URL must not include credentials");
 
 /**
  * One inbound validator for package/template primary surfaces. A view may use
@@ -37,7 +50,7 @@ export const workspacePrimarySurfaceSchema: z.ZodType<WorkspacePrimarySurfaceDef
         kind: z.literal("app"),
         appId: z.string().min(1),
         rendererType: z.literal("external"),
-        url: z.string().url(),
+        url: webUrlSchema,
         title: z.string().optional(),
         props: z.record(z.string(), workspaceJsonValueSchema).optional(),
       })
@@ -48,6 +61,13 @@ export const workspacePrimarySurfaceSchema: z.ZodType<WorkspacePrimarySurfaceDef
         cellKey: z.string().min(1),
         title: z.string().optional(),
         props: z.record(z.string(), workspaceJsonValueSchema).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("url"),
+        url: webUrlSchema,
+        title: z.string().optional(),
       })
       .strict(),
     z
@@ -74,3 +94,18 @@ export const workspacePrimarySurfaceSchema: z.ZodType<WorkspacePrimarySurfaceDef
       })
       .strict(),
   ]);
+
+function isRuntimePrimarySurface(
+  surface: WorkspacePrimarySurfaceDefinition
+): surface is WorkspacePrimarySurface {
+  return surface.kind !== "view" || "viewId" in surface;
+}
+
+/** Persisted/runtime surfaces cannot contain unresolved template view names. */
+export const workspaceRuntimePrimarySurfaceSchema: z.ZodType<WorkspacePrimarySurface> =
+  workspacePrimarySurfaceSchema
+    .refine(
+      isRuntimePrimarySurface,
+      "A persisted view surface requires a viewId"
+    )
+    .transform((surface) => surface as WorkspacePrimarySurface);

@@ -111,4 +111,51 @@ describe("domain-event-bridge — facet events", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("broadcasts workspace updates in the cache envelope without settings secrets", async () => {
+    emitDomainEventToRealtime(
+      makeEvent({
+        subjectId: "ws_1",
+        subjectType: "workspaces",
+        eventType: "workspaces.update.completed",
+        data: {
+          id: "ws_1",
+          workspace: {
+            id: "ws_1",
+            name: "CRM",
+            settings: {
+              layout: {
+                primarySurface: {
+                  kind: "app",
+                  appId: "crm",
+                  rendererType: "external",
+                  url: "https://crm.synap.live",
+                },
+              },
+              nango: { secretKey: "nango-secret" },
+              mcpServers: [{ env: { API_KEY: "mcp-secret" } }],
+            },
+          },
+        },
+      })
+    );
+    await Promise.resolve();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.workspaceId).toBe("ws_1");
+    expect(body.data.workspace).toEqual(
+      expect.objectContaining({
+        id: "ws_1",
+        name: "CRM",
+        settings: {
+          layout: expect.objectContaining({
+            primarySurface: expect.objectContaining({ appId: "crm" }),
+          }),
+        },
+      })
+    );
+    expect(body.data.id).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("nango-secret");
+    expect(JSON.stringify(body)).not.toContain("mcp-secret");
+  });
 });

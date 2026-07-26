@@ -99,6 +99,11 @@ function sessionStatus(s: string): RunStatus {
       return "failed";
     case "cancelled":
       return "cancelled";
+    // A reaper-marked stale session is NOT "still going" — mapping it to
+    // "running" in the run feed would mislabel a dead session as active. It is
+    // a terminal, non-success end-state → cancelled.
+    case "stale":
+      return "cancelled";
     // active / paused / forming / scheduled are all "still going" for a run view.
     default:
       return "running";
@@ -119,7 +124,8 @@ type FocusSessionStatus =
   | "forming"
   | "scheduled"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "stale";
 
 function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
   switch (status) {
@@ -156,7 +162,10 @@ function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
     case "failed":
       return ["failed"];
     case "cancelled":
-      return ["cancelled"];
+      // `stale` projects to the `cancelled` RunStatus (see normalizeSessionStatus),
+      // so the reverse filter MUST include it — else a stale session shows a
+      // `cancelled` badge in the run feed but is unreachable by the cancelled filter.
+      return ["cancelled", "stale"];
     case "proposed":
     case "skipped":
       return []; // focus_sessions is never "proposed"/"skipped"

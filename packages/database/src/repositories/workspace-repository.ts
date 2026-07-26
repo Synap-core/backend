@@ -5,7 +5,11 @@
  */
 
 import { eq, sql, inArray, or, type SQL } from "drizzle-orm";
-import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
+import {
+  workspaces,
+  type WorkspacePrimarySurface,
+  type WorkspaceSettings,
+} from "../schema/workspaces.js";
 import { entities } from "../schema/entities.js";
 import { relations } from "../schema/relations.js";
 import { proposals } from "../schema/proposals.js";
@@ -13,6 +17,7 @@ import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
+import { projectWorkspaceSettings } from "../utils/workspace-client-projection.js";
 
 export interface PurgeWorkspaceResult {
   entityIds: string[];
@@ -45,6 +50,23 @@ export class WorkspaceRepository extends BaseRepository<
   }
 
   /**
+   * Workspace settings is an open JSONB document and can contain credentials.
+   * Persist only the client-safe projection in the event store, wrapped in the
+   * shape consumed by the realtime cache synchronizer.
+   */
+  private async emitWorkspaceCompleted(
+    action: "create" | "update",
+    workspace: Workspace,
+    userId: string
+  ): Promise<void> {
+    const eventData = {
+      id: workspace.id,
+      workspace: projectWorkspaceSettings(workspace),
+    };
+    await this.emitCompleted(action, eventData, userId);
+  }
+
+  /**
    * Create a new workspace
    * Emits: workspaces.create.completed
    */
@@ -69,7 +91,7 @@ export class WorkspaceRepository extends BaseRepository<
       .returning();
 
     // Emit completed event
-    await this.emitCompleted("create", workspace, userId);
+    await this.emitWorkspaceCompleted("create", workspace, userId);
 
     return workspace;
   }
@@ -108,7 +130,7 @@ export class WorkspaceRepository extends BaseRepository<
     }
 
     // Emit completed event
-    await this.emitCompleted("update", workspace, userId);
+    await this.emitWorkspaceCompleted("update", workspace, userId);
 
     return workspace;
   }
@@ -156,7 +178,48 @@ export class WorkspaceRepository extends BaseRepository<
       throw new Error("Workspace not found");
     }
 
-    await this.emitCompleted("update", workspace, userId);
+    await this.emitWorkspaceCompleted("update", workspace, userId);
+    return workspace;
+  }
+
+  /**
+   * Atomically replace only `settings.layout.primarySurface`.
+   *
+   * Client-visible workspace settings intentionally omit server-only package,
+   * provisioning, and governance keys, so they must never be round-tripped
+   * through the full-settings update door.
+   */
+  async setPrimarySurface(
+    id: string,
+    primarySurface: WorkspacePrimarySurface | null,
+    userId: string
+  ): Promise<Workspace> {
+    const encodedSurface = JSON.stringify(primarySurface);
+    const [workspace] = await this.db
+      .update(workspaces)
+      .set({
+        settings: sql`jsonb_set(
+          ${workspaces.settings},
+          '{layout}',
+          (
+            CASE
+              WHEN jsonb_typeof(${workspaces.settings}->'layout') = 'object'
+                THEN ${workspaces.settings}->'layout'
+              ELSE '{}'::jsonb
+            END
+          ) || jsonb_build_object('primarySurface', ${encodedSurface}::jsonb),
+          true
+        )`,
+        updatedAt: new Date(),
+      } as Partial<NewWorkspace>)
+      .where(eq(workspaces.id, id))
+      .returning();
+
+    if (!workspace) {
+      throw new Error("Workspace not found");
+    }
+
+    await this.emitWorkspaceCompleted("update", workspace, userId);
     return workspace;
   }
 

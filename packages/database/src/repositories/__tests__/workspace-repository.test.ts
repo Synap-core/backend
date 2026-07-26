@@ -86,6 +86,59 @@ describe("WorkspaceRepository", () => {
         })
       );
     });
+
+    it("persists a wrapped client-safe event instead of raw workspace settings", async () => {
+      mockDb.update.mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([
+              {
+                id: "ws-1",
+                name: "CRM",
+                settings: {
+                  layout: {
+                    primarySurface: {
+                      kind: "app",
+                      appId: "crm",
+                      rendererType: "external",
+                      url: "https://crm.synap.live",
+                    },
+                  },
+                  nango: { secretKey: "nango-secret" },
+                  mcpServers: [{ env: { API_KEY: "mcp-secret" } }],
+                },
+              },
+            ]),
+          }),
+        }),
+      });
+
+      await workspaceRepo.setPrimarySurface(
+        "ws-1",
+        {
+          kind: "app",
+          appId: "crm",
+          rendererType: "external",
+          url: "https://crm.synap.live",
+        },
+        "user-1"
+      );
+
+      const event = vi.mocked(mockEventRepo.append).mock.calls[0]?.[0];
+      expect(event?.data).toEqual({
+        id: "ws-1",
+        workspace: expect.objectContaining({
+          id: "ws-1",
+          settings: {
+            layout: expect.objectContaining({
+              primarySurface: expect.objectContaining({ appId: "crm" }),
+            }),
+          },
+        }),
+      });
+      expect(JSON.stringify(event?.data)).not.toContain("nango-secret");
+      expect(JSON.stringify(event?.data)).not.toContain("mcp-secret");
+    });
   });
 
   describe("delete", () => {

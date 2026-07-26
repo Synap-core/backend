@@ -82,7 +82,12 @@ export async function checkPodHealth(
 export async function setupAgent(
   podUrl: string,
   provisioningToken: string,
-  agentType = "openclaw",
+  // REQUIRED (was defaulted to "openclaw"). The default silently minted every
+  // bare caller onto the pod-wide `openclaw` agent-singleton (0037); with
+  // OpenClaw removed that default is both dead and dangerous — a hidden omitter
+  // would land on a stale/foreign singleton row. Required = any omitter is now a
+  // COMPILE error that must name its agentType explicitly.
+  agentType: string,
   opts: BootstrapRequestOptions = {}
 ): Promise<AgentSetupResult> {
   assertValidPodUrl(podUrl, { allowHttp: opts.allowHttp });

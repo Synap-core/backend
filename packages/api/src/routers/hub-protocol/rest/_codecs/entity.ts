@@ -110,7 +110,6 @@ export const CreateEntityRequestSchema = z
         "intelligence",
         "agent",
         "openwebui-pipeline",
-        "openclaw",
         "extension",
         "cli",
         "n8n",

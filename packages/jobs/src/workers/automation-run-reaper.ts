@@ -97,7 +97,12 @@ export async function handleAutomationRunReaper(): Promise<void> {
         .set({ status: "closed", closedAt: new Date() })
         .where(
           and(
-            eq(focusSessions.status, "active"),
+            // Also match `stale`: the 24h focus-session reaper can flip a long-
+            // running automation session active→stale before this per-run reaper
+            // fires (e.g. if this worker was down > 24h). Without `stale` here the
+            // run's session would keep closedAt=NULL forever. Terminal statuses
+            // (closed/failed/cancelled) still correctly don't re-close.
+            drizzleSql`${focusSessions.status} IN ('active', 'stale')`,
             drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${id}`
           )
         )
