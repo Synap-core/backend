@@ -46,6 +46,7 @@ import { views } from "../schema/views.js";
 import { profileRelations } from "../schema/profile-relations.js";
 import { workspaces } from "../schema/workspaces.js";
 import type {
+  WorkspaceLayoutDefinition,
   WorkspaceSettings,
   WorkspaceLayoutConfig,
 } from "../schema/workspaces.js";
@@ -55,6 +56,10 @@ import {
   type PropertyTargetResolutionReport,
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
+import {
+  mergeWorkspacePrimarySurface,
+  resolveWorkspacePrimarySurface,
+} from "./workspace-primary-surface.js";
 
 const logger = createLogger({ module: "reconcile-workspace-from-definition" });
 
@@ -781,31 +786,91 @@ export async function reconcileWorkspaceFromDefinition(
   // a stable per-kind key. Both changes are persisted in ONE merge so a sidebar
   // reconcile cannot accidentally restore the pre-reconcile primary surface.
   {
-    const incomingLayout = definition.layoutConfig as
-      WorkspaceLayoutConfig | undefined;
-    const hasPrimarySurfaceDirective =
-      incomingLayout !== undefined &&
-      Object.prototype.hasOwnProperty.call(incomingLayout, "primarySurface");
-    const overlaySidebar = incomingLayout?.sidebarItems ?? [];
+    const authoredLayout = definition.layoutConfig as
+      WorkspaceLayoutDefinition | undefined;
+    const overlaySidebar = authoredLayout?.sidebarItems ?? [];
     const liveSettings = (ws.settings as WorkspaceSettings | null) ?? {};
     const liveLayout = liveSettings.layout ?? {};
-    let nextLayout: WorkspaceLayoutConfig = liveLayout;
-    let shouldPersistLayout = false;
-
-    if (hasPrimarySurfaceDirective) {
-      const incomingPrimarySurface = incomingLayout.primarySurface;
-      if (
-        JSON.stringify(liveLayout.primarySurface) !==
-        JSON.stringify(incomingPrimarySurface)
-      ) {
-        nextLayout = {
-          ...nextLayout,
-          primarySurface: incomingPrimarySurface,
+    const authoredPrimary = authoredLayout?.primarySurface;
+    const primaryNeedsViewResolution =
+      authoredPrimary?.kind === "view" && !("viewId" in authoredPrimary);
+    let primaryCandidates: Array<{
+      id: string;
+      name: string;
+      slug?: string;
+    }> = [];
+    if (authoredPrimary && primaryNeedsViewResolution) {
+      const wsViews = await dbConn.query.views.findMany({
+        where: eq(views.workspaceId, workspaceId),
+      });
+      primaryCandidates = wsViews.map((view) => {
+        const config = (view.config as Record<string, unknown> | null) ?? {};
+        return {
+          id: view.id,
+          name: view.name,
+          ...(typeof config.slug === "string" ? { slug: config.slug } : {}),
         };
-        report.layout.primarySurfaceChanged = true;
-        shouldPersistLayout = true;
+      });
+
+      // A dry run does not insert the newly reported views/home. Represent
+      // those would-be rows with deterministic preview IDs so resolution still
+      // validates the authored reference without writing.
+      if (dryRun) {
+        for (const view of normalizedViews) {
+          if (
+            report.views.added.includes(view.name) &&
+            !primaryCandidates.some(
+              (candidate) =>
+                candidate.name === view.name && candidate.slug === view.slug
+            )
+          ) {
+            primaryCandidates.push({
+              id: `dry-run:view:${view.slug ?? view.name}`,
+              name: view.name,
+              ...(view.slug ? { slug: view.slug } : {}),
+            });
+          }
+        }
+        if (
+          report.home.created &&
+          !primaryCandidates.some(
+            (candidate) =>
+              candidate.name === (definition.bentoViewName ?? "Home")
+          )
+        ) {
+          primaryCandidates.push({
+            id: `dry-run:view:${definition.bentoViewName ?? "Home"}`,
+            name: definition.bentoViewName ?? "Home",
+          });
+        }
       }
     }
+    const incomingLayout: WorkspaceLayoutConfig | undefined = (() => {
+      if (!authoredLayout) return undefined;
+      const { primarySurface: _primarySurface, ...layoutWithoutPrimary } =
+        authoredLayout;
+      return {
+        ...layoutWithoutPrimary,
+        ...(Object.prototype.hasOwnProperty.call(
+          authoredLayout,
+          "primarySurface"
+        )
+          ? {
+              primarySurface: resolveWorkspacePrimarySurface(
+                authoredPrimary ?? null,
+                primaryCandidates
+              ),
+            }
+          : {}),
+      };
+    })();
+    const primarySurfaceMerge = mergeWorkspacePrimarySurface(
+      liveLayout,
+      incomingLayout
+    );
+    let nextLayout = primarySurfaceMerge.layout;
+    let shouldPersistLayout = primarySurfaceMerge.changed;
+    report.layout.primarySurfaceChanged = primarySurfaceMerge.changed;
 
     if (overlaySidebar.length > 0) {
       const baseItems = liveLayout.sidebarItems ?? [];

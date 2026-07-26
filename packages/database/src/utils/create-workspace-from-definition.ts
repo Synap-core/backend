@@ -32,12 +32,14 @@ import { ProfileRelationRepository } from "../repositories/profile-relation-repo
 import { entityTemplates } from "../schema/entity-templates.js";
 import type {
   WorkspaceDefaultSource,
+  WorkspaceLayoutDefinition,
   WorkspaceLayoutConfig,
   WorkspaceSettings,
   WorkspaceSourceRole,
   WorkspaceVisibility,
 } from "../schema/workspaces.js";
 import { createLogger } from "@synap-core/core";
+import { resolveWorkspacePrimarySurface } from "./workspace-primary-surface.js";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
 
@@ -265,13 +267,9 @@ export interface WorkspaceDefinitionInput {
     isDefault?: boolean;
     config: Record<string, unknown>;
   }>;
-  layoutConfig?: {
+  layoutConfig?: WorkspaceLayoutDefinition & {
     pinnedApps?: string[];
     defaultView?: string;
-    primarySurface?: WorkspaceLayoutConfig["primarySurface"];
-    /** Compatibility input only; new definitions use primarySurface. */
-    defaultApp?: string;
-    theme?: string;
     sidebarItems?: Array<{
       kind: "app" | "view" | "profile" | "external" | "cell";
       appId?: string;
@@ -781,7 +779,12 @@ export async function createWorkspaceFromDefinition(
   };
 
   if (definition.layoutConfig) {
-    settings.layout = definition.layoutConfig;
+    // An authored view reference cannot be persisted before its view exists.
+    // Hold every primary-surface directive until the final settings write so
+    // the workspace JSONB always contains the canonical persisted form.
+    const { primarySurface: _primarySurface, ...initialLayout } =
+      definition.layoutConfig;
+    settings.layout = initialLayout;
   }
   if (definition.workspaceSubtype) {
     settings.workspaceSubtype = definition.workspaceSubtype;
@@ -1518,8 +1521,15 @@ export async function createWorkspaceFromDefinition(
           : rawBlocks;
       const resolvedConfig =
         rawBlocks.length > 0
-          ? { ...view.config, blocks: resolvedBlocks }
-          : view.config;
+          ? {
+              ...view.config,
+              ...(view.slug ? { slug: view.slug } : {}),
+              blocks: resolvedBlocks,
+            }
+          : {
+              ...view.config,
+              ...(view.slug ? { slug: view.slug } : {}),
+            };
 
       const isProfileBento = !!scopeProfileSlug;
       const metadata = isProfileBento
@@ -1755,7 +1765,10 @@ export async function createWorkspaceFromDefinition(
           ? [profileMap[view.scopeProfileSlug]].filter(Boolean)
           : undefined;
 
-      const config = { ...(view.config || {}) };
+      const config: Record<string, unknown> = {
+        ...(view.slug ? { slug: view.slug } : {}),
+        ...(view.config || {}),
+      };
       if (config.nodes && Array.isArray(config.nodes)) {
         config.nodes = (config.nodes as Array<Record<string, unknown>>).map(
           (node) => {
@@ -1851,7 +1864,39 @@ export async function createWorkspaceFromDefinition(
   // Resolve sidebarItems.viewName → viewId now that all views exist.
   // Definitions store human-readable viewName; the Browser sidebar expects viewId
   // to navigate. Without this patch, clicking a sidebar view does nothing.
-  let resolvedLayout: WorkspaceLayoutConfig | undefined;
+  let resolvedLayout: WorkspaceLayoutConfig | undefined = settings.layout;
+  if (
+    definition.layoutConfig &&
+    Object.prototype.hasOwnProperty.call(
+      definition.layoutConfig,
+      "primarySurface"
+    )
+  ) {
+    const workspaceViews = await dbConn.query.views.findMany({
+      where: eq(views.workspaceId, workspaceId),
+    });
+    const candidates = workspaceViews.map((view) => {
+      const config = (view.config as Record<string, unknown> | null) ?? {};
+      return {
+        id: view.id,
+        name: view.name,
+        ...(typeof config.slug === "string" ? { slug: config.slug } : {}),
+      };
+    });
+    let primarySurface: WorkspaceLayoutConfig["primarySurface"];
+    try {
+      primarySurface = resolveWorkspacePrimarySurface(
+        definition.layoutConfig.primarySurface ?? null,
+        candidates
+      );
+    } catch (err) {
+      await handleStepError("layout.primarySurface", err);
+    }
+    resolvedLayout = {
+      ...(resolvedLayout ?? {}),
+      primarySurface: primarySurface!,
+    };
+  }
   if (settings.layout?.sidebarItems?.length) {
     const patchedItems = settings.layout.sidebarItems.map((item) => {
       if (item.kind !== "view" || item.viewId || !item.viewName) return item;
@@ -1865,7 +1910,10 @@ export async function createWorkspaceFromDefinition(
       }
       return { ...item, viewId: resolvedId };
     });
-    resolvedLayout = { ...settings.layout, sidebarItems: patchedItems };
+    resolvedLayout = {
+      ...(resolvedLayout ?? settings.layout),
+      sidebarItems: patchedItems,
+    };
   }
 
   // Also resolve nested surface.viewName → surface.viewId for rich sidebar targets.

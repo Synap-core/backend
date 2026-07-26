@@ -47,7 +47,9 @@ vi.mock("@synap/database", () => {
     getDb: async () => ({
       query: {
         workspaces: { findFirst: async () => workspaceRow.ref.current },
-        views: { findMany: async () => [] },
+        views: {
+          findMany: async () => rowsByTable.get(sentinel.views) ?? [],
+        },
       },
     }),
     db: { select: () => chainFor() },
@@ -202,7 +204,7 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       id: "ws-1",
       name: "Home-first",
       description: "No primary application",
-      settings: { layout: { primarySurface: null } },
+      settings: { layout: { primarySurface: null, defaultApp: null } },
     };
 
     const def = await workspaceToPackageDefinition({
@@ -210,6 +212,67 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       userId: "user-1",
     });
 
-    expect(def.layoutConfig).toEqual({ primarySurface: null });
+    expect(def.layoutConfig).toEqual({
+      primarySurface: null,
+      defaultApp: null,
+    });
+  });
+
+  it("de-references a persisted primary view for package re-application", async () => {
+    workspaceRow.ref.current = {
+      id: "ws-1",
+      name: "Sales",
+      description: "Pipeline workspace",
+      settings: {
+        layout: {
+          primarySurface: {
+            kind: "view",
+            viewId: "view-pipeline",
+            title: "Pipeline",
+          },
+        },
+      },
+    };
+    rowsByTable.set(sentinel.views, [
+      {
+        id: "view-pipeline",
+        name: "Pipeline",
+        type: "kanban",
+        config: { slug: "pipeline" },
+        metadata: {},
+        scopeProfileIds: [],
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.layoutConfig?.primarySurface).toEqual({
+      kind: "view",
+      viewName: "Pipeline",
+      viewSlug: "pipeline",
+      title: "Pipeline",
+    });
+  });
+
+  it("fails export rather than emitting a stale primary viewId", async () => {
+    workspaceRow.ref.current = {
+      id: "ws-1",
+      name: "Broken",
+      settings: {
+        layout: {
+          primarySurface: { kind: "view", viewId: "view-missing" },
+        },
+      },
+    };
+
+    await expect(
+      workspaceToPackageDefinition({
+        workspaceId: "ws-1",
+        userId: "user-1",
+      })
+    ).rejects.toThrow(/workspace view not found/);
   });
 });

@@ -93,45 +93,9 @@ import {
   type PackagePostWorkspaceBody,
 } from "../services/package-apply-post-workspace.js";
 import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
+import { workspacePrimarySurfaceSchema } from "../schemas/workspace-primary-surface.js";
 
 const logger = createLogger({ module: "workspaces" });
-
-const workspacePrimarySurfaceSchema = z.union([
-  z
-    .object({
-      kind: z.literal("app"),
-      appId: z.string().min(1),
-      rendererType: z.literal("native"),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("app"),
-      appId: z.string().min(1),
-      rendererType: z.literal("external"),
-      url: z.string().url(),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cell"),
-      cellKey: z.string().min(1),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("view"),
-      viewId: z.string().min(1),
-      title: z.string().optional(),
-    })
-    .strict(),
-]);
 
 /**
  * The `definition` fields the post-workspace body-builder reads. A structural
@@ -2701,14 +2665,9 @@ export const workspacesRouter = router({
               .object({
                 pinnedApps: z.array(z.string()).optional(),
                 primarySurface: workspacePrimarySurfaceSchema.nullish(),
-                /** Browser: which app to open by default (e.g. 'intelligence' for chat-first).
-                 *  Accept `null` (templates like crm.yaml/marketing.yaml set these to null to
-                 *  mean "no default") but normalize to undefined so the output type stays
-                 *  string|undefined — .optional() alone rejects null. */
-                defaultApp: z
-                  .string()
-                  .nullish()
-                  .transform((v) => v ?? undefined),
+                /** Legacy compatibility input. New definitions author
+                 *  `primarySurface`; null remains an explicit home fallback. */
+                defaultApp: z.string().nullable().optional(),
                 defaultView: z
                   .string()
                   .nullish()

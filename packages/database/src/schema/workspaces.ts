@@ -145,6 +145,24 @@ export type WorkspacePrimarySurface =
       title?: string;
     };
 
+export type WorkspacePrimarySurfaceViewReference =
+  | {
+      kind: "view";
+      viewName: string;
+      viewSlug?: string;
+      title?: string;
+    }
+  | {
+      kind: "view";
+      viewName?: string;
+      viewSlug: string;
+      title?: string;
+    };
+
+/** Package/template input. Resolved to `WorkspacePrimarySurface` before write. */
+export type WorkspacePrimarySurfaceDefinition =
+  WorkspacePrimarySurface | WorkspacePrimarySurfaceViewReference;
+
 export interface WorkspaceLayoutConfig {
   pinnedApps?: string[]; // App IDs pinned to the top of the activity bar
   defaultView?: string; // Default view when entering workspace (web)
@@ -154,11 +172,10 @@ export interface WorkspaceLayoutConfig {
    */
   primarySurface?: WorkspacePrimarySurface | null;
   /**
-   * Default app view to navigate to when a workspace is first opened (browser only).
-   * Applied once per profile switch by useTemplateIntegration.
-   * Valid values: 'browser' | 'dashboard' | 'data' | 'intelligence' | 'terminal' | …
+   * Legacy compatibility value. Importers normalize it to a native
+   * `primarySurface`; new definitions should not author this field.
    */
-  defaultApp?: string;
+  defaultApp?: string | null;
   theme?: string; // Per-workspace theme override: 'dark' | 'light'
   /** Ordered list of sidebar items. When set, replaces the generic app list. */
   sidebarItems?: WorkspaceSidebarItem[];
@@ -169,6 +186,13 @@ export interface WorkspaceLayoutConfig {
    */
   sidebarSections?: WorkspaceSidebarSection[];
 }
+
+export type WorkspaceLayoutDefinition = Omit<
+  WorkspaceLayoutConfig,
+  "primarySurface"
+> & {
+  primarySurface?: WorkspacePrimarySurfaceDefinition | null;
+};
 
 /**
  * MCP server configuration — stored per workspace.

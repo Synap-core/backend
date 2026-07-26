@@ -186,7 +186,12 @@ export async function workspaceToPackageDefinition(opts: {
     where: eq(viewsTable.workspaceId, workspaceId),
   });
   const viewNameById: Record<string, string> = {};
+  const viewSlugById: Record<string, string> = {};
   for (const v of wsViews) if (v.name) viewNameById[v.id] = v.name;
+  for (const v of wsViews) {
+    const config = (v.config as Record<string, unknown> | null) ?? {};
+    if (typeof config.slug === "string") viewSlugById[v.id] = config.slug;
+  }
   const slugForProfileId: Record<string, string> = {};
   for (const [slug, id] of Object.entries(profileIdBySlug))
     slugForProfileId[id] = slug;
@@ -465,15 +470,42 @@ export async function workspaceToPackageDefinition(opts: {
   // instruction when this package is later reconciled.
   if (settings.layout) {
     const liveLayout = settings.layout;
+    const primarySurface = (() => {
+      if (
+        !Object.prototype.hasOwnProperty.call(liveLayout, "primarySurface") ||
+        liveLayout.primarySurface == null ||
+        liveLayout.primarySurface.kind !== "view"
+      ) {
+        return liveLayout.primarySurface;
+      }
+      const viewName = viewNameById[liveLayout.primarySurface.viewId];
+      if (!viewName) {
+        throw new Error(
+          `Cannot export primary view ${liveLayout.primarySurface.viewId}: workspace view not found`
+        );
+      }
+      return {
+        kind: "view" as const,
+        viewName,
+        ...(viewSlugById[liveLayout.primarySurface.viewId]
+          ? { viewSlug: viewSlugById[liveLayout.primarySurface.viewId] }
+          : {}),
+        ...(liveLayout.primarySurface.title
+          ? { title: liveLayout.primarySurface.title }
+          : {}),
+      };
+    })();
     const layoutConfig: NonNullable<PackageDefinition["layoutConfig"]> = {
       ...(liveLayout.pinnedApps ? { pinnedApps: liveLayout.pinnedApps } : {}),
       ...(liveLayout.defaultView
         ? { defaultView: liveLayout.defaultView }
         : {}),
       ...(Object.prototype.hasOwnProperty.call(liveLayout, "primarySurface")
-        ? { primarySurface: liveLayout.primarySurface }
+        ? { primarySurface }
         : {}),
-      ...(liveLayout.defaultApp ? { defaultApp: liveLayout.defaultApp } : {}),
+      ...(Object.prototype.hasOwnProperty.call(liveLayout, "defaultApp")
+        ? { defaultApp: liveLayout.defaultApp }
+        : {}),
       ...(liveLayout.theme ? { theme: liveLayout.theme } : {}),
       ...(liveLayout.sidebarItems
         ? {

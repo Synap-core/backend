@@ -240,9 +240,8 @@ const bentoBase: WorkspaceDefinitionInput = {
   profiles: [{ slug: bProfileSlug, displayName: "BProj" }],
   layoutConfig: {
     primarySurface: {
-      kind: "app",
-      appId: "dashboard",
-      rendererType: "native",
+      kind: "view",
+      viewName: "Home",
     },
   },
   // Base home dashboard carries ONE widget the overlay must never clobber.
@@ -363,9 +362,8 @@ describe.skipIf(!SCHEMA_LOADS)(
         true
       );
       expect(ws.settings?.layout?.primarySurface).toEqual({
-        kind: "app",
-        appId: "dashboard",
-        rendererType: "native",
+        kind: "view",
+        viewId: homeBefore.id,
       });
     });
 
@@ -392,6 +390,11 @@ describe.skipIf(!SCHEMA_LOADS)(
     });
 
     it("replaces and clears primarySurface only when explicitly directed", async () => {
+      const [homeView] = await sql`
+        SELECT id FROM views
+        WHERE workspace_id = ${bWorkspaceId}
+          AND (metadata->>'homeScope') = 'workspace'
+      `;
       const replacement = {
         kind: "app" as const,
         appId: "crm",
@@ -411,6 +414,24 @@ describe.skipIf(!SCHEMA_LOADS)(
       const [replaced] =
         await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
       expect(replaced.settings?.layout?.primarySurface).toEqual(replacement);
+
+      const viewReport = await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: {
+          workspaceName: `Bento Base ${bSuf}`,
+          layoutConfig: {
+            primarySurface: { kind: "view", viewName: "Home" },
+          },
+        },
+      });
+      expect(viewReport.layout.primarySurfaceChanged).toBe(true);
+      const [homePrimary] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(homePrimary.settings?.layout?.primarySurface).toEqual({
+        kind: "view",
+        viewId: homeView.id,
+      });
 
       const clearReport = await reconcileWorkspaceFromDefinition({
         workspaceId: bWorkspaceId,
@@ -435,6 +456,19 @@ describe.skipIf(!SCHEMA_LOADS)(
         },
       });
       expect(noOpReport.layout.primarySurfaceChanged).toBe(false);
+
+      await expect(
+        reconcileWorkspaceFromDefinition({
+          workspaceId: bWorkspaceId,
+          userId: bUserId,
+          definition: {
+            workspaceName: `Bento Base ${bSuf}`,
+            layoutConfig: {
+              primarySurface: { kind: "view", viewName: "Missing" },
+            },
+          },
+        })
+      ).rejects.toThrow(/did not match a workspace view/);
     });
   }
 );

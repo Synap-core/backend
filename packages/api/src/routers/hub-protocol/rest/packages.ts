@@ -23,45 +23,9 @@ import {
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
+import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
-
-const WorkspacePrimarySurfaceSchema = z.union([
-  z
-    .object({
-      kind: z.literal("app"),
-      appId: z.string().min(1),
-      rendererType: z.literal("native"),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("app"),
-      appId: z.string().min(1),
-      rendererType: z.literal("external"),
-      url: z.string().url(),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cell"),
-      cellKey: z.string().min(1),
-      title: z.string().optional(),
-      props: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("view"),
-      viewId: z.string().min(1),
-      title: z.string().optional(),
-    })
-    .strict(),
-]);
 
 const ParamSpecSchema = z.object({
   name: z.string(),
@@ -252,7 +216,7 @@ const PackageApplySchema = z.object({
     .optional(),
   layoutConfig: z
     .object({
-      primarySurface: WorkspacePrimarySurfaceSchema.nullish(),
+      primarySurface: workspacePrimarySurfaceSchema.nullish(),
     })
     .catchall(z.unknown())
     .optional(),

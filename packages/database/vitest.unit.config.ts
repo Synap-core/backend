@@ -14,6 +14,7 @@ export default defineConfig({
       "src/utils/set-channel-branch-purpose.test.ts",
       "src/utils/insert-pending-proposal.test.ts",
       "src/utils/open-run-session.test.ts",
+      "src/utils/workspace-primary-surface.test.ts",
       "src/utils/resolve-agent-governance-decision.test.ts",
       "src/utils/project-slug.test.ts",
       "src/utils/ensure-report-automation.test.ts",
