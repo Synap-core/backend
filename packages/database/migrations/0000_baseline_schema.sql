@@ -1874,9 +1874,14 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_facts_relevance ON "knowledge_facts"(re
 ALTER TABLE "knowledge_facts"
   ADD COLUMN IF NOT EXISTS "fact_hash" text
   GENERATED ALWAYS AS (encode(digest(fact, 'sha256'), 'hex')) STORED;
+-- dedup_bucket is a DEFAULTed plain column, NOT generated: extract(epoch FROM
+-- timestamptz) is STABLE, not IMMUTABLE, so it can't back a generated column (42P17).
+-- ADD without default (existing rows -> NULL, distinct in the unique index), THEN
+-- SET DEFAULT so only future inserts get the 600s bucket.
 ALTER TABLE "knowledge_facts"
-  ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint
-  GENERATED ALWAYS AS (floor(extract(epoch FROM created_at) / 600)) STORED;
+  ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint;
+ALTER TABLE "knowledge_facts"
+  ALTER COLUMN "dedup_bucket" SET DEFAULT floor(extract(epoch FROM now()) / 600);
 CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
   ON "knowledge_facts" ("user_id", "fact_hash", "dedup_bucket");
 

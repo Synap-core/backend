@@ -89,9 +89,9 @@ describe("hydration re-checks before injecting a proposal into the prompt", () =
     const gateIdx = src.indexOf(
       "assertProposalVisibleTo(thread.contextObjectId, threadUserId"
     );
-    const renderIdx = src.indexOf(
-      "renderProposalForPrompt(thread.contextObjectId)"
-    );
+    // Match the call site only (not the import) — robust to the formatter
+    // wrapping the argument onto its own line.
+    const renderIdx = src.indexOf("renderProposalForPrompt(");
     expect(gateIdx).toBeGreaterThan(-1);
     expect(renderIdx).toBeGreaterThan(-1);
     expect(gateIdx).toBeLessThan(renderIdx);

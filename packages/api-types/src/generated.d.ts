@@ -5586,6 +5586,9 @@ export type ExecuteCapabilityResult = {
 	kind: "deny";
 	reason: string;
 } | {
+	kind: "error";
+	message: string;
+} | {
 	kind: "not_found";
 	message: string;
 };
@@ -12788,13 +12791,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				status: "setup_required";
-				message: string;
+				message: string | undefined;
 				sessionId?: undefined;
 				proposalId?: undefined;
 				reviewUrl?: undefined;
 				fieldCount?: undefined;
 			} | {
 				status: "denied";
+				message: string;
+				sessionId?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+				fieldCount?: undefined;
+			} | {
+				status: "failed";
 				message: string;
 				sessionId?: undefined;
 				proposalId?: undefined;
@@ -12808,6 +12818,49 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				fieldCount: number;
 				message?: undefined;
 			} | {
+				sessionId: string;
+				status: "empty";
+				fieldCount: 0;
+				message?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+			} | {
+				sessionId: string;
+				status: "proposed";
+				proposalId: string;
+				reviewUrl: string;
+				fieldCount: number;
+				message?: undefined;
+			};
+			meta: object;
+		}>;
+		importContact: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				url: string;
+				verbId: string;
+				workspaceId: string;
+			};
+			output: {
+				mode: "created" | "existing";
+				entityId: string | null;
+				status: "setup_required";
+				message: string | undefined;
+				sessionId?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+				fieldCount?: undefined;
+			} | {
+				mode: "created" | "existing";
+				entityId: string | null;
+				status: "denied";
+				message: string;
+				sessionId?: undefined;
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+				fieldCount?: undefined;
+			} | {
+				mode: "created" | "existing";
+				entityId: string | null;
 				status: "failed";
 				message: string;
 				sessionId?: undefined;
@@ -12815,18 +12868,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewUrl?: undefined;
 				fieldCount?: undefined;
 			} | {
-				status: "empty";
-				sessionId: string;
+				mode: "created" | "existing";
+				entityId: string | null;
+				status: "proposed";
+				sessionId: null;
+				proposalId: string;
+				reviewUrl: string;
 				fieldCount: number;
+				message?: undefined;
+			} | {
+				sessionId: string;
+				status: "empty";
+				fieldCount: 0;
+				mode: "created" | "existing";
+				entityId: string;
 				message?: undefined;
 				proposalId?: undefined;
 				reviewUrl?: undefined;
 			} | {
-				status: "proposed";
 				sessionId: string;
+				status: "proposed";
 				proposalId: string;
 				reviewUrl: string;
 				fieldCount: number;
+				mode: "created" | "existing";
+				entityId: string;
 				message?: undefined;
 			};
 			meta: object;

@@ -40,13 +40,13 @@ export const knowledgeFacts = pgTable("knowledge_facts", {
     sql`encode(digest(fact, 'sha256'), 'hex')`
   ),
   /**
-   * floor(epoch(created_at) / 600) (0216) — buckets rows into the same
-   * ~10-minute window `rememberFact`'s app-level guard already checks.
-   * Generated column: never written directly.
+   * ~10-minute dedup window bucket (0216) — floor(epoch(now) / 600), applied as a
+   * DB column DEFAULT at insert time (NOT a generated column: extract(epoch FROM
+   * timestamptz) is STABLE, not IMMUTABLE, so it can't back GENERATED ALWAYS —
+   * PG 42P17). The app never writes this; the DB DEFAULT fills it. Pre-0216 rows
+   * are NULL (distinct in the unique index, so they never block index creation).
    */
-  dedupBucket: bigint("dedup_bucket", { mode: "number" }).generatedAlwaysAs(
-    sql`floor(extract(epoch FROM created_at) / 600)`
-  ),
+  dedupBucket: bigint("dedup_bucket", { mode: "number" }),
 });
 
 export type KnowledgeFactRow = typeof knowledgeFacts.$inferSelect;
