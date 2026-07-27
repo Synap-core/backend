@@ -9,6 +9,7 @@ import {
   markDescendantsSkipped,
   computePathTaken,
   seedResumeState,
+  seedPruningState,
   executeSelectStep,
   resolveExecutionActor,
   shouldRunFlow,
@@ -485,12 +486,112 @@ describe("seedResumeState (Wave 4.R resume-from-ledger)", () => {
     expect(priorSteps.A).toBeUndefined(); // but nothing to reload into context
   });
 
-  it("ignores skipped/failed rows", () => {
+  it("does not treat skipped/failed rows as completed", () => {
     const { completed } = seedResumeState(undefined, [
       row("A", "skipped"),
       row("B", "failed"),
     ]);
     expect(completed.size).toBe(0);
+  });
+
+  it("carries skipped rows through — a prune decision must survive a resume", () => {
+    // The bug: `skipped` rows were DISCARDED, so a resumed pass rebuilt
+    // skippedNodes empty and executed a node the run had already pruned.
+    const { skipped } = seedResumeState(undefined, [
+      row("A", "completed", {}),
+      row("B", "skipped"),
+      row("C", "failed"),
+    ]);
+    expect([...skipped]).toEqual(["B"]);
+  });
+
+  it("gives `completed` precedence over `skipped` for the same node", () => {
+    const { completed, skipped } = seedResumeState(
+      ["N"],
+      [row("N", "skipped")]
+    );
+    expect(completed.has("N")).toBe(true);
+    expect(skipped.has("N")).toBe(false); // never re-run, never double-recorded
+  });
+});
+
+describe("seedPruningState (a resumed pass inherits the pruning)", () => {
+  // cond --yes--> A --> delay --> E ;  cond --no--> B1 --> B2
+  const eYes = edge("e1", "cond", "A", "yes");
+  const eNo = edge("e2", "cond", "B1", "no");
+  const eB = edge("e3", "B1", "B2");
+  const eAD = edge("e4", "A", "delay");
+  const eDE = edge("e5", "delay", "E");
+  const edges = [eYes, eNo, eB, eAD, eDE];
+
+  it("is a no-op for a fresh run", () => {
+    const { skippedNodes, prunedEdges } = seedPruningState(
+      edges,
+      new Set(),
+      null
+    );
+    expect(skippedNodes.size).toBe(0);
+    expect(prunedEdges.size).toBe(0);
+  });
+
+  it("re-skips a pruned node the first pass recorded, AND its descendants", () => {
+    // The first pass walked past B1 (wrote a `skipped` row) but suspended at the
+    // delay before reaching B2 — so only B1 has a row. B2 must still be pruned.
+    const { skippedNodes } = seedPruningState(edges, new Set(["B1"]), null);
+    expect(skippedNodes.has("B1")).toBe(true);
+    expect(skippedNodes.has("B2")).toBe(true);
+  });
+
+  it("re-skips a branch that has NO ledger row at all, from the stored pathTaken", () => {
+    // Topo order can put the whole untaken branch after the delay node, so the
+    // ledger is silent about it. `pathTaken.prunedEdgeIds` is the only record.
+    const { skippedNodes, prunedEdges } = seedPruningState(edges, new Set(), {
+      traversedEdgeIds: ["e1"],
+      prunedEdgeIds: ["e2"],
+    });
+    expect(prunedEdges.has(eNo)).toBe(true);
+    expect(skippedNodes.has("B1")).toBe(true);
+    expect(skippedNodes.has("B2")).toBe(true);
+  });
+
+  it("leaves the TAKEN branch alone", () => {
+    const { skippedNodes } = seedPruningState(edges, new Set(["B1"]), {
+      traversedEdgeIds: ["e1"],
+      prunedEdgeIds: ["e2"],
+    });
+    expect(skippedNodes.has("A")).toBe(false);
+    expect(skippedNodes.has("E")).toBe(false);
+  });
+
+  it("keeps a join reachable from the taken branch alive (diamond)", () => {
+    // cond --yes--> A --> J ; cond --no--> B --> J
+    const yes = edge("y", "cond", "A", "yes");
+    const no = edge("n", "cond", "B", "no");
+    const aj = edge("aj", "A", "J");
+    const bj = edge("bj", "B", "J");
+    const { skippedNodes } = seedPruningState(
+      [yes, no, aj, bj],
+      new Set(["B"]),
+      { traversedEdgeIds: ["y"], prunedEdgeIds: ["n"] }
+    );
+    expect(skippedNodes.has("B")).toBe(true);
+    expect(skippedNodes.has("J")).toBe(false);
+  });
+
+  it("re-derives the same pruned edges the first pass stored (union stays stable)", () => {
+    // What computePathTaken merges on the second pass must equal what it stored
+    // on the first — the seed re-derives, it does not invent.
+    const { prunedEdges, skippedNodes } = seedPruningState(edges, new Set(), {
+      traversedEdgeIds: ["e1"],
+      prunedEdgeIds: ["e2"],
+    });
+    const path = computePathTaken(edges, prunedEdges, new Set(["cond", "A"]), {
+      traversedEdgeIds: ["e1"],
+      prunedEdgeIds: ["e2"],
+    });
+    expect(path.prunedEdgeIds.sort()).toEqual(["e2", "e3"]);
+    expect(path.traversedEdgeIds.sort()).toEqual(["e1", "e4"]);
+    expect(skippedNodes.has("B2")).toBe(true);
   });
 });
 

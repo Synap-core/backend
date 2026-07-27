@@ -31,9 +31,10 @@ The response has legacy `status`/`id` fields plus `writeReceipt`:
 `pending`/`proposed` means a proposal exists and no entity is live yet;
 `applied` means the reported direct write completed; `partial` means a follow-up
 (for example a facet) failed after the entity applied. **A `proposed`/`pending`
-receipt is a governed success, not an error** — surface its `reviewUrl`, never
-claim completion, and only enrich again when the receipt identifies a real
-missing fact.
+receipt is a governed success, not an error** — you MUST surface its
+`reviewUrl` as a clickable markdown link in the same reply (see
+`inline-patterns.md`), never claim completion, and only enrich again when the
+receipt identifies a real missing fact.
 
 For several entities, creation-time roles/facets, or relations that need one
 review, send the whole graph through the capture door (`synap_capture` with

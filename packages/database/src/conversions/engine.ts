@@ -29,6 +29,7 @@ import type {
   DedupeProfileRowsOp,
   ReconcileEntityScopeOp,
   RemapPropertyValuesOp,
+  MoveBasePropertyToFacetOp,
 } from "./manifest.js";
 import {
   validateManifest,
@@ -55,6 +56,12 @@ export interface OpCounts {
   profilePropertiesRepointed?: number;
   /** remapPropertyValues: entities whose source value was folded onto the target key. */
   entitiesRemapped?: number;
+  /** moveBasePropertyToFacet: facets that received the moved base value. */
+  facetPropertiesMoved?: number;
+  /** moveBasePropertyToFacet: base entities whose moved key was stripped. */
+  entitiesBasePropertyStripped?: number;
+  /** moveBasePropertyToFacet: entities with the source value but NO live target facet — left untouched, counted for follow-up. */
+  entitiesSkippedNoFacet?: number;
 }
 
 export type OpStatus =
@@ -133,6 +140,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   dedupeProfileRows: "fatal",
   // ADVISORY — per-entity value/scope remaps; data stays dual-readable.
   remapPropertyValues: "advisory",
+  moveBasePropertyToFacet: "advisory",
   reconcileEntityScope: "advisory",
   keep: "advisory",
   extractNonEntity: "advisory",
@@ -364,6 +372,8 @@ async function applyOp(
       return applyReconcileEntityScope(tx, op);
     case "remapPropertyValues":
       return applyRemapPropertyValues(tx, op);
+    case "moveBasePropertyToFacet":
+      return applyMoveBasePropertyToFacet(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -1136,6 +1146,76 @@ export async function applyRemapPropertyValues(
   return n > 0 ? { entitiesRemapped: n } : {};
 }
 
+/**
+ * Move a BASE entity property onto a currently-worn facet's own properties,
+ * then strip the base key. See MoveBasePropertyToFacetOp for the contract.
+ * One transaction (runConversions wraps applyOp in `sql.begin`), idempotent,
+ * retry-safe; never loses data — an entity without the target facet keeps its
+ * base value untouched and is counted, not silently dropped.
+ */
+export async function applyMoveBasePropertyToFacet(
+  tx: Sql,
+  op: MoveBasePropertyToFacetOp
+): Promise<OpCounts> {
+  const targetKey = op.targetKey ?? op.sourceKey;
+  const counts: OpCounts = {};
+
+  // (a) copy the base value onto the facet's own properties — collision-skip:
+  // an existing facet value for targetKey is never clobbered.
+  const moved = await tx`
+    UPDATE entity_facets f
+    SET properties = COALESCE(f.properties, '{}'::jsonb)
+          || jsonb_build_object(${targetKey}::text, to_jsonb(e.properties->>${op.sourceKey})),
+        updated_at = now()
+    FROM entities e
+    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    WHERE f.entity_id = e.id
+      AND f.profile_id = (SELECT id FROM profiles WHERE slug = ${op.facetSlug} AND is_active = true LIMIT 1)
+      AND f.deleted_at IS NULL AND e.deleted_at IS NULL
+      AND e.properties ? ${op.sourceKey}::text
+      AND (e.properties->>${op.sourceKey}) <> ''
+      AND NOT (COALESCE(f.properties, '{}'::jsonb) ? ${targetKey}::text)
+  `;
+  if (moved.count) counts.facetPropertiesMoved = moved.count;
+
+  // (b) strip the base key from every entity wearing a LIVE facet of
+  // facetSlug — regardless of whether (a) actually wrote (an existing facet
+  // value already held it). Entities WITHOUT that facet are left untouched.
+  const stripped = await tx`
+    UPDATE entities e
+    SET properties = properties - ${op.sourceKey}::text, updated_at = now()
+    FROM profiles p
+    WHERE e.profile_id = p.id AND p.slug = ${op.slug}
+      AND e.deleted_at IS NULL
+      AND e.properties ? ${op.sourceKey}::text
+      AND (e.properties->>${op.sourceKey}) <> ''
+      AND EXISTS (
+        SELECT 1 FROM entity_facets f
+        JOIN profiles fp ON fp.id = f.profile_id
+        WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
+      )
+  `;
+  if (stripped.count) counts.entitiesBasePropertyStripped = stripped.count;
+
+  // (c) count entities left behind — source value present, no live target
+  // facet — so the run surfaces how many still need a manual call.
+  const skipped = await tx<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM entities e
+    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    WHERE e.deleted_at IS NULL
+      AND e.properties ? ${op.sourceKey}::text
+      AND (e.properties->>${op.sourceKey}) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM entity_facets f
+        JOIN profiles fp ON fp.id = f.profile_id
+        WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
+      )
+  `;
+  if (skipped[0]?.n) counts.entitiesSkippedNoFacet = skipped[0].n;
+
+  return counts;
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 export async function computeCounts(
@@ -1232,6 +1312,43 @@ export async function computeCounts(
       `;
       const n = r[0]?.n ?? 0;
       return n > 0 ? { entitiesRemapped: n } : {};
+    }
+    case "moveBasePropertyToFacet": {
+      // Mirrors applyMoveBasePropertyToFacet's three sets, without writing.
+      const targetKey = op.targetKey ?? op.sourceKey;
+      const r = await sql<
+        Array<{ moved: number; stripped: number; skipped: number }>
+      >`
+        SELECT
+          COUNT(*) FILTER (WHERE has_facet AND NOT facet_has_target)::int AS moved,
+          COUNT(*) FILTER (WHERE has_facet)::int AS stripped,
+          COUNT(*) FILTER (WHERE NOT has_facet)::int AS skipped
+        FROM (
+          SELECT
+            EXISTS (
+              SELECT 1 FROM entity_facets f
+              JOIN profiles fp ON fp.id = f.profile_id
+              WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
+            ) AS has_facet,
+            EXISTS (
+              SELECT 1 FROM entity_facets f
+              JOIN profiles fp ON fp.id = f.profile_id
+              WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
+                AND COALESCE(f.properties, '{}'::jsonb) ? ${targetKey}::text
+            ) AS facet_has_target
+          FROM entities e
+          JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+          WHERE e.deleted_at IS NULL
+            AND e.properties ? ${op.sourceKey}::text
+            AND (e.properties->>${op.sourceKey}) <> ''
+        ) sub
+      `;
+      const row = r[0];
+      const counts: OpCounts = {};
+      if (row?.moved) counts.facetPropertiesMoved = row.moved;
+      if (row?.stripped) counts.entitiesBasePropertyStripped = row.stripped;
+      if (row?.skipped) counts.entitiesSkippedNoFacet = row.skipped;
+      return counts;
     }
     case "keep":
     case "extractNonEntity":

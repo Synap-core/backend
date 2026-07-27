@@ -875,7 +875,12 @@ export async function executeMCPToolViaHubProtocol(
         workspaceId: (args.workspaceId as string | undefined) ?? undefined,
         stuckThresholdHours: args.stuckThresholdHours as number | undefined,
         flowType: args.flowType as
-          "automation" | "playbook" | "capture" | "session" | undefined,
+          | "automation"
+          | "playbook"
+          | "capture"
+          | "capability"
+          | "session"
+          | undefined,
         flowId: args.flowId as string | undefined,
         runId: args.runId as string | undefined,
         limit: (args.limit as number) || undefined,

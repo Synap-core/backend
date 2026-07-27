@@ -71,13 +71,27 @@ function deriveGranularities(p: ProposalForRule): Granularity[] {
       : undefined;
   const options: Granularity[] = [];
 
-  // NOTE: a "this capability" (targetKind:"capability") granularity is
-  // deliberately NOT offered yet — capability execution is governed by the
-  // separate vault_grants exec-mode axis, not decideAgentPolicy, so the
-  // resolver does not consult capability-target rules (Governance Convergence
-  // Plan, phase 3). Offering it would store a rule that never auto-approves.
-  // The "action type" option below already covers a capability.run proposal
-  // (targetPattern "capability.run"). Re-add this when phase 3 unifies the axes.
+  // "This capability" — capability runs are governed in the gate
+  // (`gateCapabilityExecution`), which matches a rule on `data.capabilityId`
+  // (the exact value it also stores on the proposal). Key on that same field so
+  // the rule the gate resolves is byte-identical to what we store. (Phase 2 /
+  // Option B wired the gate to consult these; a verdict:"auto" rule authorizes
+  // the run — never a secret, never past the approval floor.)
+  const capabilityId = stringField(p.request?.data, "capabilityId");
+  if (capabilityId) {
+    options.push({
+      key: "capability",
+      label: "This capability",
+      build: () => ({
+        principalKind: "any",
+        ...scope,
+        targetKind: "capability",
+        targetPattern: capabilityId,
+        verdict: "auto",
+        sourceProposalId: p.id,
+      }),
+    });
+  }
 
   if (eventKey) {
     options.push({

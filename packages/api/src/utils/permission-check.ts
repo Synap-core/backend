@@ -858,6 +858,30 @@ export async function checkPermissionOrPropose(
     if (source === "ai" || source === "intelligence") {
       const eventKey = `${subjectType}.${action}`;
 
+      // GOVERNANCE BY KIND (user_observation) — the inverse gap this path used
+      // to have: the agentUserId branch above consults `subjectUoValidated`
+      // via resolveAgentGovernanceDecision (mirroring rung 2.6 in
+      // governance-policy), but this legacy no-agent-row path never did, so an
+      // AI-INFERRED user_observation (uo_validated !== true) could auto-execute
+      // here through the whitelist/aiAutoApprove branches below instead of
+      // always proposing. Mirror rung 2.6's floor: an inference is never
+      // auto-executed via this path, regardless of whitelist/aiAutoApprove.
+      // Tightens only — an explicit (uo_validated === true) observation is
+      // unaffected and still falls through to the normal whitelist logic.
+      const subjectProfileSlug =
+        typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
+      const dataProperties = (data?.properties ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      const subjectUoValidated =
+        typeof dataProperties?.uo_validated === "boolean"
+          ? dataProperties.uo_validated
+          : undefined;
+      const isUnvalidatedUserObservation =
+        subjectProfileSlug === "user_observation" &&
+        subjectUoValidated !== true;
+
       // ONE-STORE (Phase B, #1 must-fix): this path used to read
       // settings.aiGovernance.autoApproveFor DIRECTLY — a second concurrent
       // store, alongside the agentUserId path's resolveAgentGovernanceDecision
@@ -879,6 +903,7 @@ export async function checkPermissionOrPropose(
       const isDestructive = DESTRUCTIVE_ACTIONS.includes(action);
       const whitelisted =
         !isDestructive &&
+        !isUnvalidatedUserObservation &&
         (ruleMatch
           ? ruleMatch.verdict === "auto"
           : isAutoApproved(eventKey, DEFAULT_AUTO_APPROVE));
@@ -906,8 +931,14 @@ export async function checkPermissionOrPropose(
 
       // Note: reaching here with whitelisted === true means effectiveForcePropose
       // is true (the whitelisted-and-not-forced case already returned above), so
-      // this unconditionally still proposes for that case.
-      if (!aiAutoApprove || effectiveForcePropose) {
+      // this unconditionally still proposes for that case. isUnvalidatedUserObservation
+      // is included so the legacy aiAutoApprove workspace toggle can't bypass the
+      // same user_observation inference floor the whitelist branch above enforces.
+      if (
+        !aiAutoApprove ||
+        effectiveForcePropose ||
+        isUnvalidatedUserObservation
+      ) {
         return createProposal({
           userId,
           agentUserId,

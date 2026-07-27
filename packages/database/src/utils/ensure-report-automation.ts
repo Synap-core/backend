@@ -33,24 +33,33 @@
  *     the assembler's markdown through unstringified.
  *
  * KNOWN LIMITS (deliberate, stated rather than papered over):
- *   - The `query` node DOES have an ordering clause (`orderBy`/`orderDir`,
- *     `automation-executor.ts` `parseQueryOrderBy` + `executeQueryStep`, verified
- *     2026-07-27) — but it only orders by a JSONB PROPERTY path, via
- *     `entities.properties->>propKey` (numeric-if-parseable, else text). It has no
- *     branch for the entities table's own `createdAt`/`updatedAt` columns, which
- *     live outside `properties` — asking it to order by either of those names would
- *     look up a key that plain task/note/person/company rows never carry and
- *     silently return unordered rows while claiming success, exactly the class of
- *     bug the v6 note below describes. None of the four kinds gathered here store a
- *     recency-bearing property, so "recent" is still not mechanically expressible
- *     for THIS flow; the gather rounds sample up to `limit` rows of each kind and
- *     the prompts correctly say "a sample of", never "the latest". (A profile that
- *     did carry its own timestamp-like property could legitimately use `orderBy` —
- *     this is a limit of these four kinds' data, not of the node.)
- *   - `{{trigger.payload.projectId}}` / `.focus` narrow at the INTERPRETATION layer,
- *     not in SQL. The `query` node's `filter` treats an empty string as a real value
- *     (`properties->>'projectId' = ''`), so wiring the payload straight into `filter`
- *     would make the NO-payload run return zero rows. Narrowing lives in the prompts.
+ *   - RESOLVED, and this bullet used to say the opposite. The `query` node now
+ *     addresses the entities table's REAL COLUMNS for both ordering and
+ *     filtering, through one shared `QUERY_COLUMNS` allowlist
+ *     (`createdAt`/`updatedAt`/`title`/`type`) in `automation-executor.ts`.
+ *     Precedence: an explicit `properties.` prefix ALWAYS means jsonb (the
+ *     escape hatch for a profile that genuinely carries a property of that
+ *     name); a bare allowlisted name means the column; anything else stays a
+ *     jsonb key, so no existing flow changed meaning.
+ *     Before that, `orderBy: "updatedAt"` looked up a jsonb key no row carries
+ *     and returned unordered rows while reporting success — which is why the
+ *     old text warned against it. That warning is now obsolete, and leaving it
+ *     standing would have been its own bug: the next engineer reads a KNOWN
+ *     LIMIT and re-implements a workaround for a limit that no longer exists.
+ *     The four gathers therefore order `updatedAt DESC` (see `gatherNode`).
+ *   - Filters may now carry a TIME BOUND from the trigger payload, which the
+ *     old text also said was impossible. The reason it is safe is specific and
+ *     worth stating: for a DATE column an unparseable value (including the ""
+ *     a no-payload run produces) is DROPPED with a warning rather than bound.
+ *     Dropping WIDENS the result — visible, self-correcting. Binding would
+ *     NARROW it to zero rows — invisible, and the narrator would report the
+ *     emptiness as a finding. That asymmetry is the whole design, and it is
+ *     pinned against the SHIPPED filter strings by
+ *     `packages/jobs/src/workers/__tests__/report-flow-filter-safety.test.ts`.
+ *     The old warning still holds for a PROPERTY equality filter, where ""
+ *     really is a value (`properties->>'projectId' = ''`) — which is why
+ *     `projectId`/`focus` still narrow at the interpretation layer, in the
+ *     prompts, and NOT in SQL.
  *   - `reportPeriod` and the entity title carry the raw ISO timestamp from the
  *     `compute:now` node. No node in the engine can format a date ("July 2026",
  *     "2026-W30"), and inventing one in an AI round would make the header
@@ -58,6 +67,41 @@
  *   - There is no digest-endpoint shortcut: `GET /workspaces/:id/digest` is Hub REST,
  *     and the only node that speaks HTTP (`fetch`) runs behind `validateExternalUrl`
  *     plus needs a service key it has no way to hold. Gather is `query` nodes.
+ *   - THE GATHER STAGE CANNOT BE MADE KIND-AGNOSTIC WITH TODAY'S `loop` NODE, and
+ *     the four hardcoded gather/project pairs stay. Evaluated 2026-07-27 against
+ *     `automation-executor.ts` and rejected on EVIDENCE, not on effort:
+ *       · The body itself is fine — `loop` dispatches `query` and `transform` as
+ *         child types, and it writes `context.steps[childNode.id]` after each
+ *         child, so a per-iteration `transform` does read that iteration's
+ *         `query`. `profileSlug` also goes through `resolveTemplate`
+ *         (`resolveQueryProfileSlug`), so `{{loop.item}}` as a kind works.
+ *       · What breaks is ADDRESSING THE RESULTS. Per-iteration outputs are keyed
+ *         `${nodeId}_iter${i}` — by POSITION, never by the kind that produced
+ *         them. Nothing carries the iterated item into the result record, and
+ *         `delete context.loop` fires before any downstream node runs, so a round
+ *         has no way to say "Tasks — N found". `GATHERED_DATA` would have to list
+ *         a FIXED number of `_iter0…_iterN` placeholders — reintroducing exactly
+ *         the hardcoding the generalization exists to remove, and doing it worse:
+ *         with fewer kinds than placeholders the spares resolve to "" and the
+ *         round reads that as "nothing found"; with more, the surplus kinds are
+ *         dropped and no one is told.
+ *       · The plain key is OVERWRITTEN every iteration, so a downstream
+ *         `{{steps.project.output.result}}` yields only the LAST kind's rows
+ *         while looking like the whole gather. That is the v6 failure verbatim.
+ *       · The aggregate `{{steps.<loop>.output.results}}` is not a way out: it
+ *         holds one record per CHILD per iteration, including the `query` child's
+ *         FULL entity JSON, and it is interpolated (so JSON-stringified) into the
+ *         prompt. That is the v4/v5 prompt-cap blowup restored at up to 100
+ *         iterations.
+ *       · It would also dissolve INTEGRITY_RULE: count and list would come from
+ *         one object instead of two independent steps, so they could no longer
+ *         disagree — deleting the only in-band signal a round has that its data
+ *         was lost in transit.
+ *     The unblocker is an ENGINE change, not a flow change: the loop must record
+ *     the item alongside each iteration result (and/or key `context.steps` by a
+ *     resolved label) so a kind is addressable by NAME downstream. Until then,
+ *     four honest hardcoded pairs beat a generic graph that silently reports the
+ *     wrong workspace.
  */
 
 import { getDb } from "../client-pg.js";
@@ -149,8 +193,53 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * changed. The prompt copy moved with it: claiming "a SAMPLE, not ordered"
  * would now be false, and a prompt that misdescribes its own evidence is how
  * an honest model reaches a wrong conclusion.
+ *
+ * v8 — two capabilities the engine grew this session, both wired so that the
+ * NO-PAYLOAD run is byte-for-byte what v7 did.
+ *
+ * (a) PRESENTATION IS NOW DECLARABLE BY THE GENERATOR. `entity_create` accepts
+ * `config.systemData`, so the flow that WRITES a report can also say how that
+ * report should be PRESENTED, instead of every report of every shape being
+ * forced through whatever the `report` profile's default renderer happens to be.
+ * The stamp is `systemData.renderer = {kind:"cell", cellKey}` — `kind:"cell"` is
+ * the only variant `resolveEntityRendererOverride` honours, deliberately, since
+ * `url`/`iframe-srcdoc` are arbitrary-content vectors.
+ * DECISION: it stamps the PAYLOAD, not `entity-detail-report-slides`. Two
+ * reasons, and the second is the load-bearing one. First, the user asked for the
+ * generator to be ABLE to override, not for the default to move; scroll stays
+ * the default and a no-payload run produces a report that renders exactly as it
+ * did yesterday. Second, THE SLIDES CELL IS NOT REGISTERED YET — `grep` finds
+ * `entity-detail-report` in `registerWorkspacePersonalizationCells.ts` and finds
+ * NO `entity-detail-report-slides` anywhere. Seeding a cellKey into every
+ * workspace's automation on the bet that a cell lands later is precisely how
+ * this file earned its version history. A payload-driven key needs no bet: the
+ * flow ships the mechanism, and whoever knows the cell exists names it.
+ * Safe by CONSTRUCTION, not by hope: with no payload the key resolves to "" and
+ * `resolveEntityRendererOverride` returns null for a zero-length `cellKey`
+ * (renderer-runtime/src/index.ts:355, covered by its own test), so the override
+ * layer falls through to the profile default. An empty stamp is a NO-OP, not a
+ * broken renderer.
+ *
+ * (b) THE GATHERS ARE NOW TIME-BOUNDABLE. `query` filters address real
+ * `entities` COLUMNS through the same `QUERY_COLUMNS` allowlist the v7 ordering
+ * fix introduced, so `updatedAt >= <date>` is finally expressible in SQL rather
+ * than being begged for in a prompt. The KNOWN LIMIT above says a payload must
+ * never be wired straight into `filter` because an empty string is treated as a
+ * real value — that remains true for jsonb keys and is why `projectId` is still
+ * interpretation-layer only. It is NOT true for a DATE column: the parser
+ * coerces the value first and DROPS a term it cannot parse as a date
+ * (`coerceDateFilterValue` → `push()` returns after a warn), and "" fails
+ * `value.trim()`. So the no-payload run drops the term and reads unfiltered,
+ * identically to v7 — the failure direction is WIDER results, which is visible,
+ * never zero rows, which is not. The prompt copy moved with it for the same
+ * reason it did in v7: the rounds are now told what window they are looking
+ * through, so they cannot mistake a bounded gather for the whole workspace.
+ *
+ * NOT done, and stated so the next reader does not re-derive it: making the
+ * gather stage kind-agnostic via a `loop`. It is expressible in the body and
+ * unaddressable downstream — full evidence in KNOWN LIMITS at the top.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 7;
+export const REPORT_AUTOMATION_SEED_VERSION = 8;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -246,11 +335,81 @@ const GATHERED_DATA = [
   "capped per kind. Recent does not mean important, and this is not exhaustive —",
   "older records exist and are not shown. Never claim something does not exist",
   "just because it is absent here.",
+  // The rounds are TOLD their window, because it is now real. When a `since`
+  // payload is given the gathers are bounded in SQL, and a round that does not
+  // know that would read "few tasks" as "a quiet workspace" rather than "a
+  // narrow window". Empty line = no bound was applied, which is the default and
+  // is what the next line says out loud. Same discipline as the v7 copy change:
+  // a prompt that misdescribes its own evidence is how an honest model reaches
+  // a wrong conclusion.
+  "Time window (may be empty — an empty value means NO time bound was applied",
+  "and the records span the whole workspace history): only records updated on or",
+  "after {{trigger.payload.since}}",
   "Tasks — {{steps.gather-tasks.output.count}} found: {{steps.project-tasks.output.result}}",
   "Notes — {{steps.gather-notes.output.count}} found: {{steps.project-notes.output.result}}",
   "People — {{steps.gather-people.output.count}} found: {{steps.project-people.output.result}}",
   "Companies — {{steps.gather-companies.output.count}} found: {{steps.project-companies.output.result}}",
 ].join("\n");
+
+/**
+ * Optional time bound, applied in SQL, shared by all four gathers.
+ *
+ * WHY THIS IS SAFE WHEN THE PAYLOAD IS ABSENT — and why the KNOWN LIMIT that
+ * forbids wiring a payload into `filter` does not apply here. That limit is
+ * about JSONB keys: `properties->>'projectId' = ''` is a real comparison that
+ * matches nothing, so an absent payload would silently empty the report.
+ * `updatedAt` is a real COLUMN on the allowlist, and the column path coerces
+ * before it compiles: `coerceDateFilterValue("")` fails `value.trim()` and
+ * returns undefined, so `parseQueryFilterConditions` DROPS the term with a
+ * warning instead of binding `Invalid Date`. Dropping WIDENS the result set,
+ * which is visible; binding a broken date narrows it to zero, which is not.
+ * The no-payload run is therefore unfiltered — exactly v7's behavior.
+ *
+ * The same drop covers garbage: `since: "last week"` is not a parseable date,
+ * so it is dropped and logged rather than quietly matching nothing. And a
+ * `since` containing a double quote breaks `JSON.parse` on this string, which
+ * yields no filter at all (`filterObj = undefined`) — degrading to unfiltered,
+ * the same safe direction.
+ *
+ * A STRING, not an object, deliberately: `parseQueryFilterConditions` only runs
+ * `resolveTemplate` over the STRING form, so this is the shape in which a
+ * placeholder inside a filter is resolved at all.
+ */
+const SINCE_FILTER = '{"updatedAt": {"$gte": "{{trigger.payload.since}}"}}';
+
+/**
+ * One gather node per kind. Extracted because all four differ ONLY in slug,
+ * label and cap — the ordering rationale and the time bound are identical, and
+ * four hand-maintained copies of the same WHY is how two of them drift.
+ *
+ * `orderBy: "updatedAt"` is the real column (v7). `updatedAt`, not `createdAt`:
+ * a report about "what is going on here" should surface the rows people are
+ * actually working, not the rows that happen to be oldest-created.
+ *
+ * `continueOnError` so one dead read degrades the report instead of killing the
+ * run — the assembler is instructed to render the gap.
+ */
+function gatherNode(
+  kind: string,
+  profileSlug: string,
+  limit: number,
+  y: number
+) {
+  return {
+    id: `gather-${kind}`,
+    type: "query" as const,
+    position: { x: 420, y },
+    data: {
+      label: kind.charAt(0).toUpperCase() + kind.slice(1),
+      profileSlug,
+      filter: SINCE_FILTER,
+      orderBy: "updatedAt",
+      orderDir: "desc" as const,
+      limit,
+      errorHandling: { continueOnError: true },
+    },
+  };
+}
 
 /** One projection node per gather — `entities[] → ["<id> · <title>", …]`. */
 function projectionNode(kind: string, x: number, y: number) {
@@ -397,76 +556,13 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
       },
     },
     // ── Round 1: GATHER (deterministic, no AI) ────────────────────────────────
-    // Four independent reads of real workspace state. `continueOnError` so one
-    // dead read degrades the report instead of killing the run.
-    {
-      id: "gather-tasks",
-      type: "query",
-      position: { x: 420, y: 20 },
-      data: {
-        label: "Tasks",
-        profileSlug: "task",
-        filter: "",
-        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
-        // about "what is going on here" should surface the rows people are
-        // actually working, not the rows that happen to be oldest-created.
-        orderBy: "updatedAt",
-        orderDir: "desc",
-        limit: 25,
-        errorHandling: { continueOnError: true },
-      },
-    },
-    {
-      id: "gather-notes",
-      type: "query",
-      position: { x: 420, y: 140 },
-      data: {
-        label: "Notes",
-        profileSlug: "note",
-        filter: "",
-        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
-        // about "what is going on here" should surface the rows people are
-        // actually working, not the rows that happen to be oldest-created.
-        orderBy: "updatedAt",
-        orderDir: "desc",
-        limit: 15,
-        errorHandling: { continueOnError: true },
-      },
-    },
-    {
-      id: "gather-people",
-      type: "query",
-      position: { x: 420, y: 260 },
-      data: {
-        label: "People",
-        profileSlug: "person",
-        filter: "",
-        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
-        // about "what is going on here" should surface the rows people are
-        // actually working, not the rows that happen to be oldest-created.
-        orderBy: "updatedAt",
-        orderDir: "desc",
-        limit: 15,
-        errorHandling: { continueOnError: true },
-      },
-    },
-    {
-      id: "gather-companies",
-      type: "query",
-      position: { x: 420, y: 380 },
-      data: {
-        label: "Companies",
-        profileSlug: "company",
-        filter: "",
-        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
-        // about "what is going on here" should surface the rows people are
-        // actually working, not the rows that happen to be oldest-created.
-        orderBy: "updatedAt",
-        orderDir: "desc",
-        limit: 15,
-        errorHandling: { continueOnError: true },
-      },
-    },
+    // Four independent reads of real workspace state. Four, and HARDCODED —
+    // a `loop` over `trigger.payload.kinds` is expressible in the body and
+    // unaddressable downstream; see KNOWN LIMITS at the top of this file.
+    gatherNode("tasks", "task", 25, 20),
+    gatherNode("notes", "note", 15, 140),
+    gatherNode("people", "person", 15, 260),
+    gatherNode("companies", "company", 15, 380),
     // ── Projection: raw entity JSON → compact `<id> · <title>` lines ─────────
     // Without these the AI rounds receive full entity JSON and every round 400s
     // on the prompt cap. See the note on GATHERED_DATA.
@@ -645,6 +741,32 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
           // markdown through as a native string, and the entity_create node
           // materializes it into a `documents` row linked via entities.documentId.
           body: "{{steps.assemble.output}}",
+          // PRESENTATION, DECLARED BY THE GENERATOR. `entities.system_data` is
+          // machine state, never a user-editable property, and
+          // `resolveEntityRendererOverride` reads exactly this shape as the
+          // highest-precedence per-entity renderer. `kind:"cell"` is the ONLY
+          // honoured variant — `url`/`iframe-srcdoc` are arbitrary-content
+          // vectors and are rejected at the reader, so this stamp cannot become
+          // one however the payload is filled.
+          //
+          // The key comes from the PAYLOAD, and the default is deliberately
+          // nothing: with no payload it resolves to "", the reader returns null
+          // for a zero-length cellKey, and the profile default (the scroll
+          // renderer `entity-detail-report`) wins exactly as before. Passing
+          // `renderer: "<cellKey>"` when triggering makes THAT report render
+          // through THAT cell — one report, one run, reversible through the
+          // same door. Nothing is silently flipped for anyone.
+          //
+          // NOT hardcoded to the slides cell, on purpose: that key is not
+          // registered anywhere in the tree yet, and seeding an unresolvable
+          // cellKey into every workspace is the kind of "it will land shortly"
+          // bet the version history above is made of.
+          systemData: {
+            renderer: {
+              kind: "cell",
+              cellKey: "{{trigger.payload.renderer}}",
+            },
+          },
         },
       },
     },

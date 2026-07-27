@@ -119,6 +119,29 @@ export function recordTemplateMiss(name: string, kind: TemplateMissKind): void {
   storage.getStore()?.record(name, kind);
 }
 
+/**
+ * The misses worth telling a human about: the ones an AUTHOR can fix.
+ *
+ * `unresolved-context` is deliberately dropped. Whether `@{context:url}` /
+ * `@{context:text}` has anything to resolve is decided by the SURFACE, not by
+ * the template: a browser run supplies a URL, a CLI/agent/automation run
+ * legitimately supplies none, and `resolveGoal` never supplies any context at
+ * all. Reporting those would make every playbook whose goal reads context warn
+ * on its canonical happy path — and grammar #3 already paid for that lesson
+ * (`unresolved-references.ts`, `isCallerSuppliedInput`): a diagnostic that fires
+ * when nothing is wrong teaches the reader to ignore the ones that matter.
+ *
+ * THE TRADEOFF, stated rather than hidden: a genuine `@{context:urI}` typo is
+ * invisible here — it parses as an unknown context type and resolves to `""`.
+ * The right fix for that is author-time validation of the context vocabulary,
+ * not a runtime warning nobody trusts. The collector still RECORDS context
+ * misses; a caller that knows context was offered (an authoring preview) can
+ * read `collector.list()` and show them.
+ */
+export function authoringMisses(misses: TemplateMiss[]): TemplateMiss[] {
+  return misses.filter((m) => m.kind !== "unresolved-context");
+}
+
 /** The collector for the substitution currently executing, if any. */
 export function currentTemplateDiagnostics():
   TemplateMissCollector | undefined {

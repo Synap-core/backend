@@ -65,9 +65,9 @@ import {
   profiles,
   profileWorkspaceAccess,
   entityFacets,
-  workspaceMembers,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -94,9 +94,74 @@ import {
   facetInWorkspaceLensWhere,
 } from "../utils/project-scope.js";
 import { createLogger } from "@synap-core/core";
+import { idempotencyWindowSeconds } from "../utils/write-door-idempotency.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
+import { canWriteFacet } from "../utils/facet-write-gate.js";
 
 const logger = createLogger({ module: "entities-router" });
+
+/**
+ * Merge a patch into an entity's `system_data` JSONB bag.
+ *
+ * `system_data` is SHARED system-managed state — `viewMode`, `bentoViewId`,
+ * `onboardingScaffold`, `mergedInto`, `renderer`, … A wholesale
+ * `.set({ systemData: { ...patch } })` silently destroys every key the caller
+ * did not happen to know about. Every writer must go through this merge.
+ *
+ * A `null`/`undefined` patch value DELETES the key (clearing an override must
+ * not leave a `renderer: null` tombstone that readers then have to special-case).
+ *
+ * Exported for the merge-preservation test; not part of the tRPC surface.
+ */
+export function mergeSystemData(
+  current: unknown,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const base: Record<string, unknown> =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) {
+      delete base[key];
+    } else {
+      base[key] = value;
+    }
+  }
+
+  return base;
+}
+
+/**
+ * SECURITY — the accepted shape for a PER-ENTITY renderer override.
+ *
+ * `RendererTarget` (`@synap-core/renderer-runtime`) has 7 variants, two of which
+ * (`iframe-srcdoc`, `url`) carry arbitrary, attacker-controllable content into a
+ * rendering surface. The PROFILE door (`profiles.setProfileRendererOverride` →
+ * `RendererRefSchema`) accepts the wider union deliberately: a profile renderer
+ * is a workspace-schema-level artifact, set once by a workspace admin and
+ * reviewed like a schema change.
+ *
+ * A PER-ENTITY renderer is a different risk class: it is set per row and is
+ * reachable from every entity-shaped write path (AI capture, import, MCP), so it
+ * is a far cheaper injection point. This door therefore accepts ONLY a `cell`
+ * ref — a registered cell key resolved through `cellRegistry`, which cannot
+ * smuggle markup or a remote origin. If a per-entity `url`/`iframe-srcdoc` is
+ * ever genuinely needed it must go through a cell that owns and sandboxes it.
+ *
+ * `.strict()` so an extra `srcdoc`/`url` field cannot ride along into JSONB.
+ *
+ * Exported for the narrowing test; not part of the tRPC surface.
+ */
+export const EntityRendererRefSchema = z
+  .object({
+    kind: z.literal("cell"),
+    cellKey: z.string().min(1).max(200),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().max(500).optional(),
+  })
+  .strict();
 
 // The entity user floor = the canonical DATA-table resolver (`accessScopeWhere`,
 // no lens): pod-personal (NULL workspace, owner-gated) OR workspace-member access
@@ -151,32 +216,6 @@ function entityLensWhere(
     facetLens: true,
     includeGlobalsInLens: opts?.includePodWide ?? false,
   });
-}
-
-/**
- * Workspace facets are shared operational state: an editor may update a role
- * another member originally attached. Pod-wide facets remain private to their
- * author. Repository writes still receive the original owner for their row
- * predicate while audit/event provenance records the acting member.
- */
-async function canWriteFacet(
-  facet: { userId: string; workspaceId: string | null },
-  userId: string
-): Promise<boolean> {
-  if (facet.userId === userId) return true;
-  if (!facet.workspaceId) return false;
-  const member = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, facet.workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
-  return (
-    member?.role === "owner" ||
-    member?.role === "admin" ||
-    member?.role === "editor"
-  );
 }
 
 /**
@@ -1349,6 +1388,94 @@ export const entitiesRouter = router({
         ...profileDefaults,
         ...(input.properties ?? {}),
       };
+
+      // RETRY-SAFE DEDUP (W3, direct/auto-approved writes — the "No approval
+      // received" damage): the client's confirmation window can give up on a
+      // write that already landed, the model retries, and — unlike an
+      // agent-authored PROPOSAL (hash-deduped by `insertPendingProposal`) — a
+      // granted/auto-approved create had NOTHING catching an identical retry,
+      // so it duplicated. Scoped to agent-driven writes ONLY (`agentUserId`
+      // set) — mirrors `insertPendingProposal`'s human-exemption: a person may
+      // deliberately file the same note/task twice, so a human direct write is
+      // NEVER deduped here. Runs BEFORE `entityBodyService.setBody` below
+      // (which would otherwise mint a fresh document on every retry).
+      // `shouldMaterializeAsDocument` predicts the SAME inline/document branch
+      // `setBody` will take from `input.content` — long-form content that
+      // routes to a document is OUT OF SCOPE here (its text lives in object
+      // storage via `documents.storageKey`, not a column this lookup can
+      // compare); this covers the common case (short/no content), which is
+      // the bulk of agent-driven note/task creates.
+      if (input.agentUserId) {
+        const contentGoesToDocument =
+          !!input.content && shouldMaterializeAsDocument(input.content);
+        if (!contentGoesToDocument) {
+          try {
+            const candidates = await database
+              .select({
+                id: entities.id,
+                properties: entities.properties,
+              })
+              .from(entities)
+              .where(
+                and(
+                  eq(entities.agentUserId, input.agentUserId),
+                  eq(entities.profileId, earlyResolvedProfile.id),
+                  entityWorkspaceId
+                    ? eq(entities.workspaceId, entityWorkspaceId)
+                    : isNull(entities.workspaceId),
+                  input.title
+                    ? eq(entities.title, input.title)
+                    : isNull(entities.title),
+                  isNull(entities.deletedAt),
+                  drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
+                )
+              )
+              .orderBy(desc(entities.createdAt))
+              .limit(5);
+
+            const dup = candidates.find((c) => {
+              const props = (c.properties ?? {}) as Record<string, unknown>;
+              const sameContent = input.content
+                ? props.content === input.content
+                : props.content == null;
+              if (!sameContent) return false;
+              return Object.entries(effectiveProperties).every(
+                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
+              );
+            });
+
+            if (dup) {
+              const matched = await database.query.entities.findFirst({
+                where: eq(entities.id, dup.id),
+              });
+              const dedupFacets = await attachRequestedFacets(dup.id);
+              logger.info(
+                {
+                  event: "entity_create_dedup",
+                  entityId: dup.id,
+                  profileSlug,
+                  agentUserId: input.agentUserId,
+                },
+                "[entities.create] retry-safe dedup: returning previously created entity, no second row written"
+              );
+              return {
+                status: "created",
+                message:
+                  "Duplicate retry ignored — returning the previously created entity",
+                id: dup.id,
+                entity: matched ? toApiEntity(matched) : null,
+                ackState: "duplicate-ignored" as const,
+                facets: dedupFacets,
+              };
+            }
+          } catch (err) {
+            logger.warn(
+              { err },
+              "[entities.create] retry-dedup lookup failed — creating normally"
+            );
+          }
+        }
+      }
 
       let createdEntity: any;
 
@@ -3059,8 +3186,8 @@ export const entitiesRouter = router({
       const eventRepo = eventRepository;
       const facetRepo = new FacetRepository(database, eventRepo);
 
-      // A workspace-scoped role is shared operational state; a pod-wide role
-      // remains private to its creator.
+      // A workspace-scoped role is shared operational state (owner/admin/editor
+      // of that workspace); a pod-wide role answers to the pod owner/admins.
       const existing = await facetRepo.getById(input.facetId);
       if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
         throw new TRPCError({
@@ -3613,14 +3740,21 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Fetch entity — allow any workspace member (not just creator)
+      // Any workspace MEMBER may set the view mode (not just the creator) —
+      // that part is deliberate. What was NOT deliberate: the previous lookup
+      // was `or(eq(workspaceId, ctx.workspaceId), isNull(workspaceId))`, and
+      // that `isNull` branch carried NO user term. A pod-personal row
+      // (`workspace_id IS NULL`) belonging to ANOTHER user matched it, so any
+      // authenticated user could pass a foreign entity id and mutate its
+      // `systemData` — a cross-user WRITE, not merely a read.
+      // `entityWriteVisibleWhere` is the canonical floor and applies the OWNER
+      // condition to NULL-workspace rows. Same fix as the door below; the two
+      // must not diverge again.
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.entityId),
-          or(
-            eq(entities.workspaceId, ctx.workspaceId!),
-            isNull(entities.workspaceId)
-          )
+          isNull(entities.deletedAt),
+          entityWriteVisibleWhere(ctx.userId)
         ),
       });
 
@@ -3705,6 +3839,116 @@ export const entitiesRouter = router({
         status: "ok",
         viewMode: input.mode,
         bentoViewId: bentoViewId ?? null,
+      };
+    }),
+
+  /**
+   * Set (or clear) the PER-ENTITY renderer override.
+   *
+   * This is the governed write door for `entities.system_data.renderer` — the
+   * lowest, most specific layer of renderer resolution. Precedence (one
+   * definition, mirrored in `@synap-core/renderer-runtime`):
+   *
+   *   1. entity `systemData.renderer`   ← this door
+   *   2. entity `systemData.viewMode`/`bentoViewId` (legacy bento toggle)
+   *   3. workspace overlay / profile default  (profiles.setProfileRendererOverride)
+   *   4. hardcoded host fallback
+   *
+   * GOVERNED, unlike the sibling `setEntityViewMode` (which is an ungoverned
+   * `workspaceProcedure` — a known hole; do not copy it). Same three-way
+   * contract as `profiles.setProfileRendererOverride`: applied / proposed /
+   * FORBIDDEN.
+   */
+  setEntityRenderer: workspaceProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        /** `null` clears the override. Narrowed to `cell` — see EntityRendererRefSchema. */
+        ref: EntityRendererRefSchema.nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Load first — the write is gated on the row's OWN workspace via the
+      // canonical write floor, never on a request-supplied workspaceId
+      // (access-layer rule). `entityWriteVisibleWhere` also applies the
+      // OWNER floor to NULL-workspace (pod-personal) rows — the naive
+      // `or(eq(workspaceId, ctx.workspaceId), isNull(workspaceId))` that
+      // `setEntityViewMode` uses does NOT, and lets any user reach another
+      // user's unfiled entities.
+      const entity = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.entityId),
+          isNull(entities.deletedAt),
+          entityWriteVisibleWhere(ctx.userId)
+        ),
+        columns: {
+          id: true,
+          workspaceId: true,
+          type: true,
+          title: true,
+          systemData: true,
+        },
+      });
+
+      if (!entity) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: entity.workspaceId ?? ctx.workspaceId,
+        subjectType: "entity",
+        action: "renderer.set",
+        source: ctx.source ?? undefined,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
+        projectId: ctx.projectId ?? undefined,
+        data: {
+          entityId: input.entityId,
+          entityTitle: entity.title,
+          profileSlug: entity.type,
+          ref: input.ref,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          success: false,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // MERGE — `systemData` is a shared bag (viewMode, bentoViewId,
+      // onboardingScaffold, mergedInto, …). A wholesale `.set({ systemData })`
+      // would silently destroy every other key.
+      const nextSystemData = mergeSystemData(entity.systemData, {
+        renderer: input.ref,
+      });
+
+      await db
+        .update(entities)
+        .set({ systemData: nextSystemData, updatedAt: new Date() })
+        .where(eq(entities.id, input.entityId));
+
+      logger.info(
+        {
+          entityId: input.entityId,
+          cleared: input.ref === null,
+          cellKey: input.ref?.cellKey,
+          workspaceId: entity.workspaceId ?? ctx.workspaceId,
+        },
+        "Entity renderer override updated"
+      );
+
+      return {
+        success: true,
+        status: "applied" as const,
+        proposalId: null,
       };
     }),
 

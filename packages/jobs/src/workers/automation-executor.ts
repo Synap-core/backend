@@ -34,6 +34,11 @@ import {
   isNull,
   isNotNull,
   inArray,
+  gt,
+  gte,
+  lt,
+  lte,
+  ne,
   desc,
   asc,
   automations,
@@ -77,6 +82,7 @@ import type {
   GuardNodeDef,
   RunPathTaken,
 } from "@synap/database";
+import type { Column, SQL } from "@synap/database";
 import { getBoss, emitSideEffects } from "@synap/events";
 import {
   resolveVaultReferences,
@@ -229,6 +235,17 @@ export interface LedgerStepRow {
  * output. Loop caveat: a loop writes ONE step row — a completed loop row skips
  * the whole loop (correct); an incomplete one re-runs it (accepted at-least-once).
  *
+ * A `skipped` row is a DECISION, not telemetry: it says a condition/switch pruned
+ * that node on an earlier pass. Dropping it (as this did before) meant a resumed
+ * pass rebuilt `skippedNodes` EMPTY and re-executed a node the run had already
+ * decided against — real side effects on a dead branch. So skipped rows are
+ * returned too, and `seedPruningState` turns them back into pruning.
+ *
+ * Precedence when a node is BOTH: `completed` wins and the node is not reported
+ * skipped. It shouldn't happen (a node that ran had a live parent), but the safe
+ * reading of "it already ran" is never to run it again, which is what the walk's
+ * already-completed check does first.
+ *
  * Pure so it can be unit-tested; the executor passes the ledger rows it loaded.
  */
 export function seedResumeState(
@@ -236,11 +253,17 @@ export function seedResumeState(
   ledgerRows: LedgerStepRow[]
 ): {
   completed: Set<string>;
+  skipped: Set<string>;
   priorSteps: Record<string, { output: Record<string, unknown> }>;
 } {
   const completed = new Set(completedNodeIds ?? []);
+  const skipped = new Set<string>();
   const priorSteps: Record<string, { output: Record<string, unknown> }> = {};
   for (const row of ledgerRows) {
+    if (row.status === "skipped") {
+      skipped.add(row.nodeId);
+      continue;
+    }
     if (row.status !== "completed") continue;
     completed.add(row.nodeId);
     if (row.output) {
@@ -249,7 +272,60 @@ export function seedResumeState(
       };
     }
   }
-  return { completed, priorSteps };
+  for (const nodeId of completed) skipped.delete(nodeId);
+  return { completed, skipped, priorSteps };
+}
+
+/**
+ * Rebuild a resumed run's BRANCH PRUNING from what earlier passes durably
+ * recorded, so the walk inherits the decisions instead of re-deriving them from
+ * nothing.
+ *
+ * Why this is needed at all: the condition/switch node that did the pruning is
+ * `completed`, so a resumed pass skips it — and with it the
+ * `markDescendantsSkipped` call that produced `skippedNodes`. Without a seed the
+ * set starts empty and every pruned node downstream of the suspension executes.
+ *
+ * TWO sources, because neither alone is complete:
+ *  - `ledgerSkipped` — nodes the first pass WALKED PAST and wrote a `skipped`
+ *    row for. Their out-edges are pruned here so the cascade below can reach
+ *    descendants the walk never got to.
+ *  - `previousPathTaken.prunedEdgeIds` — the exact edges the condition/switch
+ *    pruned, frozen at the delay suspension. This is the only record of a
+ *    pruned node that sorts AFTER the delay node (topo order interleaves
+ *    branches, so that happens), which has no ledger row at all.
+ *
+ * The cascade re-runs `markDescendantsSkipped` — the SAME function the main pass
+ * uses — with the whole pruned set seeded first, so the diamond rule (a join
+ * reachable from the taken branch survives) still decides every node. A node
+ * that already completed always has a live parent, so the cascade cannot reach
+ * one and mistakenly prune its descendants.
+ *
+ * Pure — unit-testable without a database.
+ */
+export function seedPruningState(
+  edges: AutomationEdge[],
+  ledgerSkipped: Set<string>,
+  previousPathTaken: RunPathTaken | null | undefined
+): { skippedNodes: Set<string>; prunedEdges: Set<AutomationEdge> } {
+  const skippedNodes = new Set<string>();
+  const prunedEdges = new Set<AutomationEdge>();
+
+  const prunedIds = new Set(previousPathTaken?.prunedEdgeIds ?? []);
+  for (const edge of edges) {
+    if (edge.id && prunedIds.has(edge.id)) prunedEdges.add(edge);
+  }
+  for (const nodeId of ledgerSkipped) {
+    skippedNodes.add(nodeId);
+    for (const edge of edges) {
+      if (edge.source === nodeId) prunedEdges.add(edge);
+    }
+  }
+  for (const edge of [...prunedEdges]) {
+    markDescendantsSkipped(edge.target, edges, skippedNodes, prunedEdges);
+  }
+
+  return { skippedNodes, prunedEdges };
 }
 
 /**
@@ -921,6 +997,26 @@ export async function executeOutputStep(
       const profileSlug = (config.profileSlug as string) ?? "note";
       const title = config.title as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
+      // Optional SYSTEM DATA — machine state stamped on the created row's
+      // `entities.system_data` column, never rendered as a user-editable
+      // property. This is what lets a generator mark the entity it just
+      // produced (run id, source cursor, an idempotency stamp another worker
+      // reads back) without polluting the entity's schema-validated
+      // `properties`. Templates inside it resolve for free: the WHOLE `config`
+      // object already went through `deepResolveTemplates` at the top of this
+      // function, exactly like `properties`, so `{{steps.x.output}}` works at
+      // any depth here with no extra plumbing.
+      // Absent → `undefined` → `EntityRepository.create` applies its `{}`
+      // default, i.e. byte-for-byte the previous behavior.
+      // CREATE-ONLY: `entity_update` has no counterpart and must not grow one
+      // (see MaterializeEntityInput.systemData for why).
+      const rawSystemData = config.systemData;
+      const systemData =
+        rawSystemData &&
+        typeof rawSystemData === "object" &&
+        !Array.isArray(rawSystemData)
+          ? (rawSystemData as Record<string, unknown>)
+          : undefined;
       // Optional long-form BODY (markdown), e.g. `body: "{{steps.assemble.output}}"`.
       // When present it is materialized through the canonical body door
       // (EntityBodyService) into a `documents` row linked via
@@ -1005,6 +1101,14 @@ export async function executeOutputStep(
           title,
           properties,
           ...(bodyText ? { content: bodyText } : {}),
+          // Carried on the proposal so a force-propose workspace doesn't
+          // SILENTLY lose the stamp. ⚠️ The entity/create approve executor
+          // (api, approve-executors.ts) does not read this key yet — same
+          // situation as `content` above; when the flat-vs-nested payload bug
+          // there is fixed, `systemData` must be read alongside it. Omitted
+          // entirely when unset, so the payload is unchanged for every
+          // existing flow.
+          ...(systemData ? { systemData } : {}),
         },
         reasoning: "Automation proposed creating an entity.",
         subjectProfileSlug: profileSlug,
@@ -1111,6 +1215,7 @@ export async function executeOutputStep(
           profileSlug,
           title,
           properties: entityProperties,
+          ...(systemData ? { systemData } : {}),
           ...(documentId ? { documentId } : {}),
           workspaceId,
           userId: ownerId,
@@ -2028,11 +2133,37 @@ async function executeFetchStep(
  * numeric thresholds, e.g. `{ "properties.strengthScore": { "$gt": 30 } }`). */
 type QueryFilterOperator = "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
 
-interface QueryPropertyCondition {
+export interface QueryPropertyCondition {
   propKey: string;
   op: QueryFilterOperator;
   value: unknown;
 }
+
+/**
+ * A filter term that addresses a real `entities` COLUMN rather than a key
+ * inside the `properties` jsonb. See `QUERY_COLUMNS` for why this exists.
+ *
+ * SHAPE NOTE: the two variants are discriminated by the PRESENCE of `column`
+ * (narrowed with `"column" in condition`), not by a `kind` tag. That is
+ * deliberate — `QueryPropertyCondition` keeps the exact `{ propKey, op, value }`
+ * shape it has always had, so nothing that reads the output of
+ * `parseQueryFilterConditions` changes meaning or needs a new field.
+ * `QueryOrderBy` can afford a `kind` tag because its two arms carry genuinely
+ * different payloads (a Drizzle column object vs a string key); here they don't.
+ */
+export interface QueryColumnCondition {
+  column: QueryColumnName;
+  op: QueryFilterOperator;
+  /**
+   * Already coerced to the column's own type at PARSE time: a `Date` for the
+   * timestamp columns, the raw value for the text ones. Coercing in the parser
+   * (rather than at SQL-build time) is what lets an un-parseable date be
+   * DROPPED instead of compiled into a wrong comparison.
+   */
+  value: unknown;
+}
+
+export type QueryCondition = QueryPropertyCondition | QueryColumnCondition;
 
 const QUERY_FILTER_OPERATORS: Record<string, QueryFilterOperator> = {
   $gt: "gt",
@@ -2086,11 +2217,23 @@ export function resolveQueryProfileSlug(
  * emit directly (`{ profileSlug, "properties.<key>": value | { $gt, … } }`).
  * `profileSlug` is resolved separately (`resolveQueryProfileSlug`) and
  * skipped here. Never throws: an unparseable/empty filter yields `[]`.
+ *
+ * KEY RESOLUTION — identical precedence to `parseQueryOrderBy`, on purpose, so
+ * the two halves of a query node mean the same thing by the same name:
+ *  1. An explicit `properties.` prefix ALWAYS means the jsonb blob. The escape
+ *     hatch for a workspace whose entities genuinely carry a property called
+ *     `updatedAt`.
+ *  2. A bare name in `QUERY_COLUMNS` means the real `entities` COLUMN.
+ *  3. Anything else is a jsonb property key — what every existing flow already
+ *     relies on, so nothing that works today changes meaning.
+ *
+ * A date-column term whose value will not parse as a date is DROPPED here (see
+ * `coerceDateFilterValue`) rather than emitted as a broken comparison.
  */
 export function parseQueryFilterConditions(
   filter: unknown,
   context: StepContext
-): QueryPropertyCondition[] {
+): QueryCondition[] {
   let filterObj = asQueryFilterObject(filter);
   if (!filterObj && typeof filter === "string") {
     const resolved = resolveTemplate(filter, context);
@@ -2104,10 +2247,43 @@ export function parseQueryFilterConditions(
   }
   if (!filterObj) return [];
 
-  const conditions: QueryPropertyCondition[] = [];
+  const conditions: QueryCondition[] = [];
+  const push = (
+    rawKey: string,
+    column: QueryColumnName | undefined,
+    propKey: string,
+    op: QueryFilterOperator,
+    value: unknown
+  ) => {
+    if (!column) {
+      conditions.push({ propKey, op, value });
+      return;
+    }
+    if (!QUERY_DATE_COLUMNS.has(column)) {
+      conditions.push({ column, op, value });
+      return;
+    }
+    const date = coerceDateFilterValue(value);
+    if (!date) {
+      logger.warn(
+        { filterKey: rawKey, op, value },
+        "query node: dropping date-column filter — value is not a parseable date (ISO-8601 string, epoch millis or Date expected)"
+      );
+      return;
+    }
+    conditions.push({ column, op, value: date });
+  };
+
   for (const [rawKey, rawValue] of Object.entries(filterObj)) {
     if (rawKey === "profileSlug" || rawValue === undefined || rawValue === null)
       continue;
+    // Precedence 1+2: an explicit `properties.` prefix pins the key to jsonb;
+    // only a BARE name is eligible to resolve to a real column.
+    const column = rawKey.startsWith("properties.")
+      ? undefined
+      : QUERY_COLUMNS[rawKey as QueryColumnName]
+        ? (rawKey as QueryColumnName)
+        : undefined;
     const propKey = stripPropertiesPrefix(rawKey);
     if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
       for (const [opKey, opValue] of Object.entries(
@@ -2115,20 +2291,21 @@ export function parseQueryFilterConditions(
       )) {
         const op = QUERY_FILTER_OPERATORS[opKey];
         if (!op || opValue === undefined || opValue === null) continue;
-        conditions.push({ propKey, op, value: opValue });
+        push(rawKey, column, propKey, op, opValue);
       }
     } else {
-      conditions.push({ propKey, op: "eq", value: rawValue });
+      push(rawKey, column, propKey, "eq", rawValue);
     }
   }
   return conditions;
 }
 
 /**
- * Real `entities` COLUMNS a query node may order by, mapped to their Drizzle
- * column. An allowlist, not a lookup: `orderBy` is author-supplied, and an
- * open mapping into `entities` would let a flow order by any column in the
- * table (including ones the SELECT does not expose).
+ * Real `entities` COLUMNS a query node may address, mapped to their Drizzle
+ * column. An allowlist, not a lookup: `orderBy`/`filter` keys are
+ * author-supplied, and an open mapping into `entities` would let a flow read
+ * or sort by any column in the table (including ones the SELECT does not
+ * expose, e.g. `user_id`).
  *
  * `createdAt`/`updatedAt` are the reason this exists — they are timestamp
  * COLUMNS, never mirrored into the `properties` jsonb, so before this an
@@ -2137,18 +2314,65 @@ export function parseQueryFilterConditions(
  * arbitrary order WHILE LOOKING LIKE IT WORKED. That is the same
  * silently-wrong failure mode as the 2026-07-27 null-projection bug, so it
  * gets a real fix rather than a workaround.
+ *
+ * ONE ALLOWLIST FOR BOTH HALVES, deliberately (it was ORDER-only when the
+ * ordering half was fixed; the FILTER half then shipped the identical bug —
+ * `filter: { updatedAt: { $gt: … } }` compiled to `properties->>'updatedAt'`
+ * and matched ZERO rows). Splitting it into an order-list and a filter-list
+ * would let the two drift, and a key that is sortable but not filterable (or
+ * the reverse) is a distinction no flow author can predict — the surprise IS
+ * the bug class this fixes. Same names, same precedence, both halves.
  */
-const QUERY_ORDER_COLUMNS = {
+const QUERY_COLUMNS = {
   createdAt: entities.createdAt,
   updatedAt: entities.updatedAt,
   title: entities.title,
   type: entities.type,
 } as const;
 
+type QueryColumnName = keyof typeof QUERY_COLUMNS;
+
+/**
+ * Which of the allowlisted columns are `timestamp`s. Their filter values must
+ * be bound as real `Date`s through Drizzle's typed operators — NEVER as
+ * `Number(value)` (the old filter path's coercion, which yields NaN for every
+ * ISO string) and NEVER interpolated into a `drizzleSql` template (a repo-wide
+ * rule: binding a `Date` inside a template has caused live breakage; use
+ * `gt()/gte()/lt()/lte()` instead).
+ */
+const QUERY_DATE_COLUMNS: ReadonlySet<QueryColumnName> = new Set([
+  "createdAt",
+  "updatedAt",
+]);
+
+/**
+ * Coerce a filter value for a date column. Accepts an ISO-8601 string (the
+ * shape flow authors and `{{now}}`-style templates emit), an epoch-millis
+ * number, or an already-materialized `Date`.
+ *
+ * UN-PARSEABLE VALUES RETURN `undefined`, and the caller DROPS the condition
+ * rather than binding `Invalid Date`. Dropping widens the result set, which is
+ * visible; binding a broken date narrows it to zero rows silently — the exact
+ * failure mode this whole change exists to kill. The drop is logged.
+ */
+function coerceDateFilterValue(value: unknown): Date | undefined {
+  if (value instanceof Date)
+    return Number.isNaN(value.getTime()) ? undefined : value;
+  if (typeof value === "number") {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const d = new Date(value.trim());
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+  return undefined;
+}
+
 export type QueryOrderBy =
   | {
       kind: "column";
-      column: (typeof QUERY_ORDER_COLUMNS)[keyof typeof QUERY_ORDER_COLUMNS];
+      column: (typeof QUERY_COLUMNS)[QueryColumnName];
       dir: "asc" | "desc";
     }
   | { kind: "property"; propKey: string; dir: "asc" | "desc" };
@@ -2163,7 +2387,7 @@ export type QueryOrderBy =
  *  1. An explicit `properties.` prefix ALWAYS means the jsonb blob. This is
  *     the escape hatch that keeps a workspace whose entities genuinely carry a
  *     property named `updatedAt` addressable and unambiguous.
- *  2. A bare name matching `QUERY_ORDER_COLUMNS` means the real column.
+ *  2. A bare name matching `QUERY_COLUMNS` means the real column.
  *  3. Anything else is a jsonb property key — the behavior every existing flow
  *     already relies on, so nothing that works today changes meaning.
  */
@@ -2176,7 +2400,7 @@ export function parseQueryOrderBy(data: {
   const dir = data.orderDir === "asc" ? "asc" : "desc";
 
   if (!raw.startsWith("properties.")) {
-    const column = QUERY_ORDER_COLUMNS[raw as keyof typeof QUERY_ORDER_COLUMNS];
+    const column = QUERY_COLUMNS[raw as QueryColumnName];
     if (column) return { kind: "column", column, dir };
   }
 
@@ -2191,6 +2415,45 @@ export function parseQueryOrderBy(data: {
  * comparisons (NULL) and are left to the caller's text-based fallback. */
 function numericPropertyExpr(propKey: string) {
   return drizzleSql`(CASE WHEN ${entities.properties}->>${propKey} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (${entities.properties}->>${propKey})::numeric ELSE NULL END)`;
+}
+
+/**
+ * Compile a COLUMN filter term. Uses Drizzle's typed operators rather than a
+ * `drizzleSql` template on purpose: for the timestamp columns the bound value
+ * is a real `Date`, and binding a `Date` inside a `drizzleSql` template is a
+ * standing repo prohibition (it has broken production before) — `gt()/gte()/
+ * lt()/lte()` bind it correctly through the column's own mapper. The text
+ * columns go through the same operators for symmetry; `gt`/`lt` on them is
+ * plain collation-ordered text comparison, which is well-defined.
+ */
+function columnConditionSql(condition: QueryColumnCondition): SQL {
+  // Widened to the base `Column` on purpose: `QUERY_COLUMNS` is a UNION of four
+  // differently-typed Drizzle columns, and TS intersects a union's operator
+  // overloads down to `never`. The runtime binding is still the column's own
+  // mapper — the widening only stops the compiler from demanding one concrete
+  // column type. `value` is already coerced per column at parse time.
+  const column = QUERY_COLUMNS[condition.column] as Column;
+  const value = condition.value as Date | string;
+  switch (condition.op) {
+    case "eq":
+      return eq(column, value);
+    case "ne":
+      return ne(column, value);
+    case "gt":
+      return gt(column, value);
+    case "gte":
+      return gte(column, value);
+    case "lt":
+      return lt(column, value);
+    case "lte":
+      return lte(column, value);
+  }
+}
+
+function queryConditionSql(condition: QueryCondition) {
+  return "column" in condition
+    ? columnConditionSql(condition)
+    : propertyConditionSql(condition);
 }
 
 function propertyConditionSql(condition: QueryPropertyCondition) {
@@ -2254,7 +2517,7 @@ async function executeQueryStep(
   ];
 
   for (const condition of parseQueryFilterConditions(data.filter, context)) {
-    conditions.push(propertyConditionSql(condition));
+    conditions.push(queryConditionSql(condition));
   }
 
   const baseQuery = db
@@ -3156,12 +3419,20 @@ async function executeAutomationFlow(params: {
       context.steps[nodeId] = entry;
     }
 
-    // Track which nodes to skip (condition branches not taken)
-    const skippedNodes = new Set<string>();
-    // Edges on an untaken condition/switch branch. A node is only pruned when ALL
-    // its incoming edges are dead (pruned or from a skipped source) — this is what
+    // Track which nodes to skip (condition branches not taken), and the edges on
+    // an untaken condition/switch branch. A node is only pruned when ALL its
+    // incoming edges are dead (pruned or from a skipped source) — this is what
     // keeps a join/merge node reachable from the TAKEN branch alive (diamond fix).
-    const prunedEdges = new Set<AutomationEdge>();
+    //
+    // SEEDED from the ledger's `skipped` rows and the run's stored `pathTaken`:
+    // the condition node that pruned is `completed`, so a resumed pass never
+    // re-derives its decision. Starting these empty made a pruned node execute
+    // after a delay resumption — side effects on a branch the run rejected.
+    const { skippedNodes, prunedEdges } = seedPruningState(
+      flow.edges,
+      seeded.skipped,
+      loadedRun.pathTaken
+    );
     let stepsCompleted = 0;
     let stepsFailed = 0;
 
@@ -3249,13 +3520,17 @@ async function executeAutomationFlow(params: {
       // Skip already-completed nodes (delay resumption)
       if (alreadyCompleted.has(node.id)) continue;
 
-      // Skip if this node was excluded by a condition branch
+      // Skip if this node was excluded by a condition branch. Record the
+      // decision ONCE: a node an earlier pass already wrote a `skipped` row for
+      // is being re-derived from that row here, not newly decided.
       if (skippedNodes.has(node.id)) {
-        await db.insert(automationStepRuns).values({
-          runId,
-          nodeId: node.id,
-          status: "skipped",
-        });
+        if (!seeded.skipped.has(node.id)) {
+          await db.insert(automationStepRuns).values({
+            runId,
+            nodeId: node.id,
+            status: "skipped",
+          });
+        }
         continue;
       }
 

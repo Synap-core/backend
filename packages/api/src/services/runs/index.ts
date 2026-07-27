@@ -33,6 +33,7 @@ import {
   messages,
   users,
 } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import {
   userVisibleWhere,
   workspaceLensWhere,
@@ -54,6 +55,9 @@ import type {
 } from "./types.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
+/** `proposals.proposalType` for the agnostic-capability last-mile executor
+ * (Workstream 1 — see approve-executors.ts's `capability.run` executor). */
+const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
 
 /**
  * Server-side scope — narrows the feed to a lens WITHIN the user floor, so the
@@ -412,6 +416,101 @@ async function listCaptureRuns(
   });
 }
 
+/** Map a `capability.run` proposal's ProposalStatus to the unified RunStatus. */
+function capabilityRunStatus(status: string): RunStatus {
+  switch (status) {
+    case ProposalStatus.PENDING:
+      return "proposed";
+    case ProposalStatus.APPROVED:
+    case ProposalStatus.AUTO_APPROVED:
+      return "completed";
+    case ProposalStatus.APPROVAL_FAILED:
+      return "failed";
+    case ProposalStatus.REJECTED:
+    case ProposalStatus.WITHDRAWN:
+    case ProposalStatus.REVERTED:
+      return "cancelled";
+    default:
+      return "proposed";
+  }
+}
+
+/**
+ * A capability run = one `capability.run` proposal (Workstream 1's agnostic
+ * capability last-mile — approve-executors.ts's `capability.run` executor).
+ * Mirrors `listCaptureRuns`: the executor stamps `correlationId` on approval,
+ * which is the join key for the run's `ai_decision`-keyed timeline (see
+ * getRun's "capability" branch below). Has no `flowId`/channel, exactly like
+ * capture (an ad-hoc, non-grouped run).
+ */
+async function listCapabilityRuns(
+  userId: string,
+  scope: RunScope,
+  limit: number,
+  status?: RunStatus
+): Promise<UnifiedRun[]> {
+  // No entity-subject linkage exists for a capability run (unlike capture's
+  // materialized entityIds) — an entity-focused scope has nothing to match.
+  if (scope.subjectEntityId) return [];
+
+  const rows = await db
+    .select({
+      id: proposals.id,
+      correlationId: proposals.correlationId,
+      status: proposals.status,
+      createdAt: proposals.createdAt,
+      reviewedAt: proposals.reviewedAt,
+      workspaceId: proposals.workspaceId,
+      projectId: proposals.projectId,
+      data: proposals.data,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, CAPABILITY_RUN_PROPOSAL_TYPE),
+        userVisibleWhere(proposals.workspaceId, userId),
+        scope.workspaceId
+          ? eq(proposals.workspaceId, scope.workspaceId)
+          : undefined,
+        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(limit);
+
+  return rows
+    .map((r) => {
+      const data = (r.data ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        flowType: "capability" as const,
+        flowId: null,
+        flowName:
+          typeof data.verbId === "string" && data.verbId
+            ? data.verbId
+            : typeof data.skillId === "string"
+              ? data.skillId
+              : "Capability",
+        status: capabilityRunStatus(r.status),
+        startedAt: r.createdAt,
+        completedAt: r.reviewedAt ?? null,
+        workspaceId: r.workspaceId ?? null,
+        projectId: r.projectId ?? null,
+        subjectEntityId: null,
+        channelId: null,
+        correlationId: r.correlationId ?? null,
+        replayOf: null,
+        summary: null,
+        error: null,
+        triggeredBy: null,
+        stepsCompleted: null,
+        stepsFailed: null,
+        definitionVersion: null,
+      };
+    })
+    .filter((r) => !status || r.status === status);
+}
+
 async function listSessionRuns(
   userId: string,
   scope: RunScope,
@@ -516,9 +615,12 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
   if (!flowType || flowType === "playbook")
     jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow, status));
-  // capture/session have no per-flow id, so a flowId filter excludes them.
+  // capture/capability/session have no per-flow id, so a flowId filter
+  // excludes them.
   if ((!flowType || flowType === "capture") && !flowId)
     jobs.push(listCaptureRuns(userId, scope, perFlow, status));
+  if ((!flowType || flowType === "capability") && !flowId)
+    jobs.push(listCapabilityRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "session") && !flowId)
     jobs.push(listSessionRuns(userId, scope, perFlow, status));
 
@@ -766,6 +868,72 @@ export async function getRun(
   if (flowType === "capture") {
     const [run] = await listRunsById(
       () => listCaptureRuns(userId, {}, 200),
+      id
+    );
+    if (!run || !run.correlationId)
+      return run
+        ? {
+            run,
+            activity: [],
+            trigger: null,
+            outputSummary: null,
+            playbookDetail: null,
+            definitionSnapshot: null,
+            pathTaken: null,
+          }
+        : null;
+    const rows = await db
+      .select({
+        id: events.id,
+        at: events.timestamp,
+        subjectType: events.subjectType,
+        action: events.type,
+        data: events.data,
+      })
+      .from(events)
+      .where(
+        and(
+          eq(events.correlationId, run.correlationId),
+          inArray(events.subjectType, [AI_DECISION, AI_PROCESSING])
+        )
+      );
+    const activity: RunActivityItem[] = rows
+      .map((e) => {
+        const data = (e.data ?? {}) as Record<string, unknown>;
+        const kind =
+          typeof data.kind === "string" ? (data.kind as string) : e.subjectType;
+        const reason =
+          typeof data.reason === "string" ? (data.reason as string) : null;
+        return {
+          id: e.id,
+          at: e.at ?? null,
+          kind,
+          status: null,
+          label: reason ? `${e.action}: ${reason}` : e.action,
+          hint:
+            typeof data.fixHint === "string" ? (data.fixHint as string) : null,
+          detail: data,
+        };
+      })
+      .sort(byAtAsc);
+    return {
+      run,
+      activity,
+      trigger: null,
+      outputSummary: null,
+      playbookDetail: null,
+      definitionSnapshot: null,
+      pathTaken: null,
+    };
+  }
+
+  // Mirrors the "capture" branch above verbatim (same correlationId-keyed
+  // ai_decision/ai_processing join) — the executor stamps correlationId +
+  // emits an ai_decision on approval (see approve-executors.ts's
+  // `capability.run` executor).
+  if (flowType === "capability") {
+    const [run] = await listRunsById(
+      () => listCapabilityRuns(userId, {}, 200),
       id
     );
     if (!run || !run.correlationId)

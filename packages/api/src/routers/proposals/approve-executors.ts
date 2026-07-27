@@ -40,9 +40,12 @@ import {
   drizzleSql,
   type LinkEndpointType,
   type LinkType,
+  knowledgeRepository,
 } from "@synap/database";
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { ProposalStatus } from "@synap/database/schema";
+import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import {
   isEntityMergeProposalData,
   type ProposalMaterializedRecord,
@@ -55,7 +58,10 @@ import { auditLog } from "../../utils/audit-log.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
 import { channelsRouter } from "../channels.js";
-import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import {
+  entitiesRouter as regularEntitiesRouter,
+  mergeSystemData,
+} from "../entities.js";
 import { projectsRouter } from "../projects.js";
 import { viewsRouter } from "../views.js";
 import {
@@ -1713,6 +1719,75 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── entity / renderer.set ───────────────────────────────────────────────────
+  registerProposalExecutor({
+    /**
+     * Apply a per-ENTITY renderer override that was routed through review.
+     *
+     * WHY THIS MUST EXIST. Executors resolve on the composite key
+     * `${targetType}/${proposalType}`. `entities.setEntityRenderer` proposes
+     * with `subjectType: "entity"` + `action: "renderer.set"`, and there was no
+     * `entity/renderer.set` entry and no entity-wide wildcard — so the proposal
+     * fell through to the catch-all executor, which emits a `.validated` audit
+     * event and flips the row to APPROVED **without writing anything**.
+     *
+     * `entity.renderer.set` is NOT in DEFAULT_AUTO_APPROVE, so that is the
+     * ordinary path for an AI/MCP caller and for any workspace with
+     * `forcePropose`: the reviewer approves, sees success, and the renderer
+     * never changes. The door's docstring claimed parity with the profile door;
+     * this is what makes that claim true.
+     */
+    key: "entity/renderer.set",
+    async execute({ proposal, input }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const entityId = innerData.entityId as string | undefined;
+      const ref = innerData.ref as
+        { kind: "cell"; cellKey: string } | null | undefined;
+      if (!entityId || ref === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Entity renderer proposal is missing entityId/ref",
+        });
+      }
+
+      // Idempotency, mirroring the profile executor: an already-APPROVED
+      // proposal must not be applied twice.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const [row] = await db
+        .select({ systemData: entities.systemData })
+        .from(entities)
+        .where(and(eq(entities.id, entityId), isNull(entities.deletedAt)))
+        .limit(1);
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Entity no longer exists",
+        });
+      }
+
+      // The SAME merge the direct door uses — siblings (`viewMode`,
+      // `bentoViewId`, `onboardingScaffold`, `mergedInto`) must survive, and a
+      // null ref deletes the key rather than leaving a tombstone.
+      await db
+        .update(entities)
+        .set({
+          systemData: mergeSystemData(row.systemData, { renderer: ref }),
+          updatedAt: new Date(),
+        })
+        .where(eq(entities.id, entityId));
+
+      return { success: true, primaryId: entityId };
+    },
+  });
+
   // ── profile / renderer.set ──────────────────────────────────────────────────
   // Materializes an approved "bind a cell as a profile renderer" proposal via
   // the SAME shared write path the governed Hub route uses on operator
@@ -3287,6 +3362,13 @@ export function registerApproveExecutors(): void {
         return { delivered: true };
       });
 
+      // Workstream 1 (capability-run observability contract): a delivered run
+      // reaching this point was, until now, unobservable — no correlationId,
+      // no run-ledger row, no recall deposit. Stamp a correlationId (the join
+      // key `listCapabilityRuns`/getRun's "capability" branch read) so the run
+      // becomes listable + diagnosable, mirroring the capture pattern exactly.
+      const correlationId = randomUUID();
+
       const materializedPayload = {
         ...payload,
         runResult,
@@ -3297,11 +3379,56 @@ export function registerApproveExecutors(): void {
         .set({
           status: ProposalStatus.APPROVED,
           data: materializedPayload,
+          correlationId,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Emit the run's ONE timeline entry — correlationId-keyed, exactly like a
+      // capture's ai_decision — so `diagnose(runId)`/getRun renders a timeline
+      // instead of an empty activity list. Best-effort (emitAiDecision never
+      // throws): a telemetry hiccup must not undo the already-delivered run.
+      void emitAiDecision({
+        action: "capability_run",
+        userId,
+        workspaceId: proposal.workspaceId,
+        correlationId,
+        data: {
+          kind: "capability_run",
+          skillId,
+          verbId: (data.verbId as string | null) ?? null,
+        },
+      });
+
+      // Recall deposit — the SAME door `remember_fact` uses to index a fact for
+      // `ask`'s episodic substrate (`knowledgeRepository.saveFact`), not a
+      // bespoke insert, so a capability run's result is recallable and shaped
+      // like every other recall-indexed fact. Best-effort: embedding/index
+      // failure must not undo the already-delivered run.
+      try {
+        let embedding: number[];
+        try {
+          const { generateEmbedding } = await import("@synap/ai-embeddings");
+          embedding = await generateEmbedding(
+            `Ran capability "${(data.verbId as string | null) ?? skillId}" → ${JSON.stringify(runResult).slice(0, 1000)}`
+          );
+        } catch {
+          embedding = new Array(1536).fill(0);
+        }
+        await knowledgeRepository.saveFact({
+          userId,
+          fact: `Ran capability "${(data.verbId as string | null) ?? skillId}" → ${JSON.stringify(runResult).slice(0, 1000)}`,
+          confidence: 0.9,
+          embedding,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, proposalId: input.proposalId, skillId },
+          "capability.run executor: recall deposit failed (run kept delivered)"
+        );
+      }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -3613,6 +3740,12 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      // Captures the skill/command result so it can be materialized below —
+      // only set on the "skill"/"command" branch; the "tool" branch's own
+      // result handling is untouched (this executor does not persist a `data`
+      // field for it, unchanged from before this wave).
+      let skillRunResult: unknown;
+
       // Re-enter the SAME execute path the auto path uses. The `alreadyApproved`
       // bypass (documented above) is set so the chokepoint does NOT re-propose.
       if (capabilityKind === "tool") {
@@ -3663,14 +3796,77 @@ export function registerApproveExecutors(): void {
           }
           return { delivered: true };
         });
+      } else if (capabilityKind === "skill" || capabilityKind === "command") {
+        // Was: flip to APPROVED with NO execution ("wired by Wave 3b" never
+        // landed) — an approved skill/command run silently did nothing. Wire
+        // it to the SAME post-gate runner the door + `capability.run` executor
+        // use, so this shape can no longer diverge from either. A distinct
+        // branch from "tool" above — no shared code path, no double-execute.
+        const [skillRow] = await db
+          .select({
+            id: skills.id,
+            name: skills.name,
+            kind: skills.kind,
+            providerSpec: skills.providerSpec,
+          })
+          .from(skills)
+          .where(eq(skills.id, capabilityId))
+          .limit(1);
+
+        if (!skillRow) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `capability/run ${capabilityKind} "${capabilityId}" not found`,
+          });
+        }
+
+        // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+        await dispatchExternalOnce(input.proposalId, async () => {
+          const runOutcome = await runResolvedSkill(
+            skillRow,
+            (data.input as Record<string, unknown> | undefined) ?? {},
+            {
+              userId,
+              workspaceId: (data.workspaceId as string | undefined) ?? null,
+            }
+          );
+          if (runOutcome.kind !== "run") {
+            const reason =
+              runOutcome.kind === "deny"
+                ? runOutcome.reason
+                : runOutcome.kind === "error" || runOutcome.kind === "not_found"
+                  ? runOutcome.message
+                  : "unknown";
+            logger.warn(
+              {
+                proposalId: input.proposalId,
+                capabilityKind,
+                capabilityId,
+                reason,
+              },
+              "capability/run executor: skill/command run not delivered"
+            );
+            return { delivered: false };
+          }
+          skillRunResult = runOutcome.result;
+          return { delivered: true };
+        });
       }
-      // skill / command dispatch is wired by Wave 3b (skill-execute door); the
-      // approval + status flip below still apply so the proposal closes cleanly.
+      // Only the "skill"/"command" branch materializes a result (the "tool"
+      // branch's own result handling is unchanged, pre-existing behavior).
+      const materializedPayload =
+        capabilityKind === "skill" || capabilityKind === "command"
+          ? ({ ...data, runResult: skillRunResult } as unknown as Record<
+              string,
+              unknown
+            >)
+          : null;
 
       await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
+          ...(materializedPayload ? { data: materializedPayload } : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

@@ -28,23 +28,46 @@ import type {
   LinkInput,
   PlaybookStage,
 } from "@synap/playbooks";
+import { createLogger } from "@synap-core/core";
 import { parseCommandTemplate } from "../../utils/command-template.js";
+import { authoringMisses } from "../../utils/template-diagnostics.js";
 import {
   createLinks,
   extractCapabilities,
   getLinksFor,
 } from "../links/links-service.js";
 
-/** Resolve a playbook's goalTemplate against caller-supplied param values. */
+const logger = createLogger({ module: "playbook-lifecycle" });
+
+/**
+ * Resolve a playbook's goalTemplate against caller-supplied param values.
+ *
+ * An unresolved reference still renders as `""` (or, for a bare `{name}`, as
+ * the literal braces) — flows depend on that and it does not change here. What
+ * changes is that it is no longer SILENT: the substitution runs inside a
+ * diagnostics scope and the authoring-level misses are logged with the
+ * playbook's id, so "the agent ignored my param" is greppable instead of being
+ * a mutilated prompt nobody can explain.
+ */
 export function resolveGoal(
   goalTemplate: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  playbookId?: string
 ): string {
   const argValues: Record<string, string> = {};
   for (const [k, v] of Object.entries(params ?? {})) {
     argValues[k] = v == null ? "" : String(v);
   }
-  return parseCommandTemplate(goalTemplate).substitute(argValues);
+  const { text, misses } =
+    parseCommandTemplate(goalTemplate).substituteWithMisses(argValues);
+  const reportable = authoringMisses(misses);
+  if (reportable.length > 0) {
+    logger.warn(
+      { playbookId, misses: reportable },
+      "Playbook goal template had references that resolved to nothing"
+    );
+  }
+  return text;
 }
 
 export interface InstantiateInput {
@@ -103,7 +126,8 @@ export async function instantiateSession(
     input.goalOverride ??
     resolveGoal(
       playbook.goalTemplate,
-      (input.params ?? {}) as Record<string, unknown>
+      (input.params ?? {}) as Record<string, unknown>,
+      playbook.id
     );
   const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
   // Seed the active stage from the playbook's first stage (null when stageless,

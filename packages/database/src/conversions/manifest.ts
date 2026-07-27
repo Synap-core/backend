@@ -28,7 +28,8 @@ export type ConversionOp =
   | ExtractNonEntityOp
   | DedupeProfileRowsOp
   | ReconcileEntityScopeOp
-  | RemapPropertyValuesOp;
+  | RemapPropertyValuesOp
+  | MoveBasePropertyToFacetOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -302,6 +303,43 @@ export interface RemapPropertyValuesOp extends BaseOp {
    * mapped value always wins.
    */
   preferTargetValues?: string[];
+}
+
+/**
+ * Move a BASE entity property onto a currently-worn FACET's own properties,
+ * then strip the base key — the shape a property takes when it was written to
+ * a kind's `entities.properties` (ungoverned, no property_def) but semantically
+ * belongs on one of the kind's role-facets (e.g. CRM's `driveLink`, captured on
+ * `person` but scoped to the `client` relationship).
+ *
+ * Per live entity of `slug` that still carries `sourceKey` in its base
+ * `properties` (empty-string values are ignored, same as "not set"):
+ *   (a) if the entity wears a LIVE facet whose profile slug is `facetSlug`, the
+ *       value is copied onto that facet's `properties[targetKey]` — collision-
+ *       skipped: an existing facet value for `targetKey` is never clobbered;
+ *   (b) the base `properties[sourceKey]` is then stripped from the entity —
+ *       but ONLY when the entity wears that facet. An entity WITHOUT the facet
+ *       keeps its base value entirely untouched (never lost, left for a later
+ *       decision);
+ *   (c) entities left untouched by (b) are counted as `entitiesSkippedNoFacet`
+ *       so the run surfaces how many still need a manual call.
+ *
+ * Idempotent: (a) skips once the facet already carries `targetKey`, (b) strips
+ * `sourceKey` so a re-run's `properties ? sourceKey` guard selects nothing for
+ * already-moved entities; the ledgered `opKey` makes a second real run skip the
+ * op outright. NOT destructive (no profile row is deactivated) but IS a data
+ * cutover — mark `deferAtBoot: true` so it never auto-applies at pod boot.
+ */
+export interface MoveBasePropertyToFacetOp extends BaseOp {
+  op: "moveBasePropertyToFacet";
+  /** Profile slug of the KIND whose base property is being moved. */
+  slug: string;
+  /** Base entity-property key read, then stripped once moved. */
+  sourceKey: string;
+  /** Role/facet slug the entity must currently wear for the value to move. */
+  facetSlug: string;
+  /** Facet-property key the value is written into. Defaults to `sourceKey`. */
+  targetKey?: string;
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -1034,6 +1072,23 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       intoSlug: "client",
       intoScope: "shared",
     },
+
+    // ─── CRM: driveLink base property → client facet ──────────────────────────
+    //
+    // `driveLink` was written by the CRM contact page directly to `person`'s
+    // base `entities.properties` — no property_def, ungoverned. It belongs on
+    // the `client` role facet (see crm.yaml/foundation.yaml `client.driveLink`).
+    // DEFERRED: an operator applies it with `run-conversions.ts --apply` after
+    // the property-def cutover lands, same posture as `crm.deal-stage.commercial-fold`.
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "crm.person.drive-link-to-client-facet",
+      deferAtBoot: true,
+      slug: "person",
+      sourceKey: "driveLink",
+      facetSlug: "client",
+      targetKey: "driveLink",
+    },
   ],
 };
 
@@ -1051,6 +1106,7 @@ export const CONVERSION_OP_TYPES = [
   "dedupeProfileRows",
   "reconcileEntityScope",
   "remapPropertyValues",
+  "moveBasePropertyToFacet",
 ] as const;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -1235,6 +1291,11 @@ export function validateManifest(manifest: ConversionManifest): void {
             `Conversion manifest: remapPropertyValues '${op.opKey}' needs a non-empty valueMap`
           );
         }
+        break;
+      case "moveBasePropertyToFacet":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.sourceKey, "sourceKey");
+        requireSlug(op.opKey, op.facetSlug, "facetSlug");
         break;
     }
   }

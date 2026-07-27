@@ -28,11 +28,17 @@ There is no `[[open:…|proposal:…]]` chip — `open`'s `resourceType` only ac
 `entity`, `view`, `doc`, `cell`, `channel`. A proposal is not one of those, so
 never invent that form.
 
-When a write returns `status: "proposed"`, the response also carries a
-`reviewUrl` (a full Synap Studio URL). Surface it as a plain markdown link, and
-add one sentence explaining why the write was proposed instead of auto-applied:
+When a write returns `status: "proposed"` (or any per-op outcome carrying a
+`reviewUrl` — `writeReceipt.reviewUrl`, `perm.reviewUrl`, a capability run's
+`kind: "proposed"`), the response also carries that `reviewUrl` (a real,
+resolvable `${PUBLIC_URL}/open/<id>` link — never invented). **Surfacing it is
+MANDATORY, not optional:** every reply that reports a proposed write MUST
+include the link as a plain markdown link, plus one sentence explaining why it
+was proposed instead of auto-applied:
 
-> Queued the task deletion for your review — destructive actions always need approval: [Review proposal](https://pod.example.com/proposals/prp_abc)
+> Queued the task deletion for your review — destructive actions always need approval: [Review proposal](https://pod.example.com/open/prp_abc)
 
-`"proposed"` is normal, not an error — don't apologize for it or wait for the
-user to approve before continuing the conversation.
+A reply that only says "I've proposed that for review" with no link is
+incomplete — the user has no way to act on it. `"proposed"` is normal, not an
+error — don't apologize for it or wait for the user to approve before
+continuing the conversation.

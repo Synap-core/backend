@@ -24,6 +24,7 @@ import {
   executeTransformStep,
   executeGuardStep,
   parseQueryOrderBy,
+  parseQueryFilterConditions,
   type StepContext,
 } from "../automation-executor.js";
 
@@ -248,5 +249,104 @@ describe("transform: multi-placeholder BEFORE the pipe", () => {
       ctx({ a: { output: ["x", "x", "y"] } })
     );
     expect(out.result).toEqual(["x", "y"]);
+  });
+});
+
+/**
+ * The FILTER half of the same bug. `parseQueryOrderBy` was fixed to address
+ * real `entities` columns; `parseQueryFilterConditions` shipped the identical
+ * defect and kept it: EVERY operator compiled to
+ * `entities.properties->>'<key>'`, so `filter: { updatedAt: { $gt: … } }`
+ * looked up a jsonb key no entity carries and matched ZERO rows — with no
+ * throw and step status SUCCESS. `gt/gte/lt/lte` made it worse by coercing
+ * with `Number(value)`, which is `NaN` for every ISO-8601 date string.
+ *
+ * These tests assert BOTH directions: the new column path, AND that the two
+ * legacy addressing forms (`properties.`-prefixed, and a bare unknown name)
+ * still mean exactly what they meant before.
+ */
+describe("parseQueryFilterConditions: real columns vs jsonb properties", () => {
+  it("resolves a bare date column and binds a real Date, not Number(value)", () => {
+    const conditions = parseQueryFilterConditions(
+      { profileSlug: "task", updatedAt: { $gte: "2026-07-01T00:00:00.000Z" } },
+      ctx({})
+    );
+    expect(conditions).toHaveLength(1);
+    const c = conditions[0] as { column: string; op: string; value: unknown };
+    expect(c.column).toBe("updatedAt");
+    expect(c.op).toBe("gte");
+    expect(c.value).toBeInstanceOf(Date);
+    expect((c.value as Date).toISOString()).toBe("2026-07-01T00:00:00.000Z");
+    // The old path produced Number("2026-07-01T…") === NaN.
+    expect(Number.isNaN(Number(c.value))).toBe(false);
+  });
+
+  it("accepts epoch millis and a Date for a date column", () => {
+    const ms = Date.UTC(2026, 6, 1);
+    for (const raw of [ms, new Date(ms)]) {
+      const [c] = parseQueryFilterConditions(
+        { createdAt: { $lt: raw } },
+        ctx({})
+      ) as Array<{ column: string; value: unknown }>;
+      expect(c.column).toBe("createdAt");
+      expect((c.value as Date).getTime()).toBe(ms);
+    }
+  });
+
+  it("DROPS a date-column term whose value will not parse — never a wrong comparison", () => {
+    // Dropping widens the result set (visible); binding `Invalid Date` would
+    // narrow it to zero rows silently, which is the bug class being fixed.
+    expect(
+      parseQueryFilterConditions(
+        { updatedAt: { $gt: "last tuesday" } },
+        ctx({})
+      )
+    ).toEqual([]);
+    expect(parseQueryFilterConditions({ createdAt: true }, ctx({}))).toEqual(
+      []
+    );
+  });
+
+  it("resolves the bare text columns (title / type) to columns too", () => {
+    const conditions = parseQueryFilterConditions(
+      { title: "Weekly report", type: "task" },
+      ctx({})
+    );
+    expect(conditions).toEqual([
+      { column: "title", op: "eq", value: "Weekly report" },
+      { column: "type", op: "eq", value: "task" },
+    ]);
+  });
+
+  it("an explicit properties. prefix ALWAYS means jsonb, even for a column name", () => {
+    // Same escape hatch as parseQueryOrderBy: a workspace whose entities
+    // genuinely carry a property named `updatedAt` stays addressable.
+    expect(
+      parseQueryFilterConditions(
+        { "properties.updatedAt": { $gt: 5 } },
+        ctx({})
+      )
+    ).toEqual([{ propKey: "updatedAt", op: "gt", value: 5 }]);
+  });
+
+  it("an unknown bare name stays a jsonb property — existing flows unchanged", () => {
+    expect(
+      parseQueryFilterConditions(
+        { strengthScore: { $gt: 30 }, status: "active" },
+        ctx({})
+      )
+    ).toEqual([
+      { propKey: "strengthScore", op: "gt", value: 30 },
+      { propKey: "status", op: "eq", value: "active" },
+    ]);
+  });
+
+  it("the legacy JSON-stringified flat filter keeps its jsonb meaning", () => {
+    expect(
+      parseQueryFilterConditions(
+        JSON.stringify({ "properties.status": "active" }),
+        ctx({})
+      )
+    ).toEqual([{ propKey: "status", op: "eq", value: "active" }]);
   });
 });

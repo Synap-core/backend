@@ -37,12 +37,14 @@ import {
 import { workspaces } from "@synap/database/schema";
 import { EventRepository, ApiKeyRepository } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
+import { createLogger } from "@synap-core/core";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 import {
   parseCommandTemplate,
   validateArgumentValues,
   type SelectionContext,
 } from "../utils/command-template.js";
+import { authoringMisses } from "../utils/template-diagnostics.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { scopedDb, accessFor } from "../access/index.js";
@@ -149,6 +151,8 @@ async function getServiceEndpoint(
   });
   return { endpoint: resolved.endpoint, apiKey: resolved.serviceApiKey };
 }
+
+const logger = createLogger({ module: "intelligence-router" });
 
 /** Default (proprietary) Synap Intelligence service manifest — used when no custom service is configured. */
 const DEFAULT_SERVICE_MANIFEST = {
@@ -432,12 +436,24 @@ export const intelligenceRouter = router({
 
       const resolvedUrl = input.currentUrl;
 
-      const compiledPrompt = parsedTemplate.substitute(
-        input.argumentValues,
-        input.selectionContext as SelectionContext | undefined,
-        resolvedEntities,
-        resolvedUrl
-      );
+      // Same substituted text as before — an unresolved reference still renders
+      // as "" and flows depend on that. The only change is that the misses come
+      // back instead of vanishing, so a renamed argument that silently empties
+      // half a prompt leaves a trace with the command's id on it.
+      const { text: compiledPrompt, misses } =
+        parsedTemplate.substituteWithMisses(
+          input.argumentValues,
+          input.selectionContext as SelectionContext | undefined,
+          resolvedEntities,
+          resolvedUrl
+        );
+      const reportableMisses = authoringMisses(misses);
+      if (reportableMisses.length > 0) {
+        logger.warn(
+          { commandId: cmd.id, workspaceId, misses: reportableMisses },
+          "Command prompt template had references that resolved to nothing"
+        );
+      }
 
       const [thread] = await db
         .insert(channels)

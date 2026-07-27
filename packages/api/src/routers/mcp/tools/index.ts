@@ -224,7 +224,13 @@ export const tools = {
             },
             flowType: {
               type: "string",
-              enum: ["automation", "playbook", "capture", "session"],
+              enum: [
+                "automation",
+                "playbook",
+                "capture",
+                "session",
+                "capability",
+              ],
               description:
                 "Back-compat run-feed grammar: restrict to one ledger. REQUIRED when runId is given (the id space differs per flow).",
             },
@@ -1344,7 +1350,7 @@ export const tools = {
           "\n" +
           'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
           "\n" +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS — give the user the reviewUrl.\n' +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent) or "structuring-unavailable" (text lane only: the AI structurer is down — tell the user and retry later).',
         inputSchema: {
           type: "object",
@@ -1761,7 +1767,7 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          "Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first.",
+          'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval.',
         inputSchema: {
           type: "object",
           properties: {

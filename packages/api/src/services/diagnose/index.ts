@@ -29,10 +29,13 @@ import {
   capabilities,
   entities,
   users,
+  skills,
+  tools,
   ProposalStatus,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import {
   collapseProposalsToClusters,
@@ -293,17 +296,75 @@ async function diagnoseObject(
           )
         )
         .limit(1);
-      if (!row) return { error: "Capability not found" };
+      if (row) {
+        return {
+          mode: "object",
+          kind,
+          id,
+          summary: `Capability "${row.name}" is ${row.approved ? "approved" : "awaiting approval"}`,
+          state: {
+            name: row.name,
+            description: row.description,
+            approved: row.approved,
+            workspaceId: row.workspaceId,
+          },
+          why: null,
+        };
+      }
+
+      // Not a registered `capabilities` verb — resolveObjectKind also matches a
+      // bare `skills`/`tools` row under "capability" (a `capability.run`'s
+      // skillId is rarely a `capabilities` row), so explain it from there.
+      const [skillRow] = await db
+        .select({
+          id: skills.id,
+          name: skills.name,
+          kind: skills.kind,
+          approved: skills.approved,
+          workspaceId: skills.workspaceId,
+        })
+        .from(skills)
+        .where(and(eq(skills.id, id), visibleSkillsWhere(userId)))
+        .limit(1);
+      if (skillRow) {
+        return {
+          mode: "object",
+          kind,
+          id,
+          summary: `Skill "${skillRow.name}" (${skillRow.kind}) is ${skillRow.approved ? "approved" : "awaiting approval"}`,
+          state: {
+            name: skillRow.name,
+            description: null,
+            approved: skillRow.approved,
+            workspaceId: skillRow.workspaceId,
+          },
+          why: null,
+        };
+      }
+
+      const [toolRow] = await db
+        .select({
+          id: tools.id,
+          name: tools.name,
+          description: tools.description,
+          workspaceId: tools.workspaceId,
+        })
+        .from(tools)
+        .where(
+          and(eq(tools.id, id), userVisibleWhere(tools.workspaceId, userId))
+        )
+        .limit(1);
+      if (!toolRow) return { error: "Capability not found" };
       return {
         mode: "object",
         kind,
         id,
-        summary: `Capability "${row.name}" is ${row.approved ? "approved" : "awaiting approval"}`,
+        summary: `Tool "${toolRow.name}"`,
         state: {
-          name: row.name,
-          description: row.description,
-          approved: row.approved,
-          workspaceId: row.workspaceId,
+          name: toolRow.name,
+          description: toolRow.description,
+          approved: null,
+          workspaceId: toolRow.workspaceId,
         },
         why: null,
       };

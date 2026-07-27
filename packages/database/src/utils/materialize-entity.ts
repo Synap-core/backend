@@ -100,6 +100,18 @@ export interface MaterializeEntityInput {
   preview?: string;
   documentId?: string;
   properties?: Record<string, unknown>;
+  /**
+   * System-managed metadata forwarded verbatim to `EntityRepository.create`
+   * (which owns the `{}` default). NOT user-editable properties and NOT
+   * schema-validated — it is the lane for per-entity machine state a producer
+   * stamps at create time (generator run marks, idempotency stamps, source
+   * cursors) that must never surface in the property editor.
+   *
+   * CREATE-ONLY, deliberately: `EntityRepository.update` has no `systemData`
+   * field and never touches the column, so an update can't clobber a stamp
+   * written by a different producer. Don't "symmetrize" this.
+   */
+  systemData?: Record<string, unknown>;
   /** null = pod-wide. The router/worker resolves the effective scope. */
   workspaceId?: string | null;
   userId: string;
@@ -238,6 +250,7 @@ export async function materializeEntity(
       preview: input.preview,
       documentId: input.documentId,
       properties: input.properties,
+      systemData: input.systemData,
       workspaceId: input.workspaceId,
       userId: input.userId,
       skipValidation: input.skipValidation,

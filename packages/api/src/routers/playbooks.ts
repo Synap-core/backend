@@ -1448,7 +1448,8 @@ export const playbooksRouter = router({
           name: playbook.name,
           goal: resolveGoal(
             playbook.goalTemplate,
-            (input.params ?? {}) as Record<string, unknown>
+            (input.params ?? {}) as Record<string, unknown>,
+            input.playbookId
           ),
         },
       });

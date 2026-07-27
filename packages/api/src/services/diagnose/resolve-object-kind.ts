@@ -24,8 +24,11 @@ import {
   playbookRuns,
   users,
   entities,
+  skills,
+  tools,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import type { ObjectKind } from "./types.js";
 
 export interface ResolvedObject {
@@ -101,7 +104,7 @@ export async function resolveObjectKind(
     {
       kind: "capability",
       run: async () => {
-        const [r] = await db
+        const [capabilityRow] = await db
           .select({ one: drizzleSql<number>`1` })
           .from(capabilities)
           .where(
@@ -111,7 +114,28 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        if (capabilityRow) return true;
+
+        // A `capability.run`/`capability/run` proposal's skillId is a `skills`
+        // (or `tools`) row, not necessarily a registered `capabilities` verb —
+        // without this, `diagnose(<skillId>)` fell through to "no diagnosable
+        // object" for those. Probed under the SAME "capability" kind (there is
+        // no separate ObjectKind for a raw skill/tool).
+        const [skillRow] = await db
+          .select({ one: drizzleSql<number>`1` })
+          .from(skills)
+          .where(and(eq(skills.id, id), visibleSkillsWhere(userId)))
+          .limit(1);
+        if (skillRow) return true;
+
+        const [toolRow] = await db
+          .select({ one: drizzleSql<number>`1` })
+          .from(tools)
+          .where(
+            and(eq(tools.id, id), userVisibleWhere(tools.workspaceId, userId))
+          )
+          .limit(1);
+        return !!toolRow;
       },
     },
     {
