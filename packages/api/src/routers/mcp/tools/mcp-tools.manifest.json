@@ -1248,6 +1248,26 @@
       }
     },
     {
+      "name": "synap_set_workspace_focus",
+      "annotations": {
+        "title": "Set workspace focus",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Pin your runtime workspace focus so every subsequent write (create/update/capture) with no explicit workspaceId lands there — the 'use the CRM workspace until I say otherwise' scenario. ADVISORY: a call that DOES pass an explicit workspaceId still overrides the focus; reads are unaffected. Sticky across calls until cleared. Pass `workspace` as a name (matched against your workspaces) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "Workspace name or id to focus on. Omit, or pass 'none'/'clear', to clear the current focus."
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "synap_capture",
       "annotations": {
         "title": "Capture",

@@ -26,6 +26,20 @@ export interface AgentMetadata {
   /** Per-agent auto-approve list — overrides the workspace default when set. */
   autoApproveFor?: string[];
   activePersonality?: string;
+  /**
+   * Runtime, sticky workspace focus (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+   * Layer 2, advisory slice). Settable at provisioning OR at runtime via the
+   * `synap_set_workspace_focus` MCP tool; cleared by unsetting the field.
+   * Read LIVE at request time — no migration, no key-stamping. Read live, when
+   * present and the caller supplied no explicit workspace lens, it becomes the
+   * ADVISORY default for `ctx.workspaceId` (writes only; never enforced, never
+   * a 403 on mismatch — an explicit per-call workspace always overrides it).
+   */
+  focusWorkspaceId?: string;
+  /** Reserved for the enforced (hard read+write scope) follow-on wave; only
+   * "advisory" is implemented today — the field exists so a future "enforced"
+   * value doesn't require another migration. */
+  focusMode?: "advisory";
 }
 
 export const users = pgTable("users", {

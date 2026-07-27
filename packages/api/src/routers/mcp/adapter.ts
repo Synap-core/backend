@@ -45,6 +45,7 @@ import {
   entities,
   focusSessions,
   tools as toolsTable,
+  workspaces,
   eq,
   and,
   or,
@@ -72,6 +73,10 @@ import { validateCaptureGraphRefs } from "../hub-protocol/rest/_capture-graph-de
 import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
+import {
+  getAgentFocusWorkspaceId,
+  setAgentFocusWorkspace,
+} from "../../services/agent-identity-service.js";
 
 // ── tRPC caller factory ───────────────────────────────────────────────────────
 
@@ -250,6 +255,21 @@ function ok(data: unknown): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
   };
+}
+
+/**
+ * ADVISORY WORKSPACE FOCUS precedence (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+ * Layer 2) — pulled out as a pure function so the priority rule is unit-testable
+ * without a database: explicit-per-call / service-key pin (`confinedWorkspaceId`)
+ * ALWAYS wins; the agent's live focus is consulted ONLY when that resolved to
+ * nothing. Never a 403 — a stale focus is just another lens candidate the
+ * caller's `verifyWorkspaceAccess` check may still drop.
+ */
+export function pickAdvisoryWorkspaceId(
+  confinedWorkspaceId: string | undefined,
+  agentFocusWorkspaceId: string | null | undefined
+): string | undefined {
+  return confinedWorkspaceId ?? agentFocusWorkspaceId ?? undefined;
 }
 
 function requireScope(scopes: string[], scope: string, toolName: string): void {
@@ -651,12 +671,23 @@ export async function executeMCPToolViaHubProtocol(
   // with no target is positively pinned to its binding; non-service/unbound keys
   // return the requested value unchanged. Downstream reads `requestedWorkspaceId`
   // (the confined value) everywhere it previously read the raw `args.workspaceId`.
-  const requestedWorkspaceId =
+  const confinedWorkspaceId =
     resolveConfinedWorkspace(
       keyType,
       keyWorkspaceId,
       rawRequestedWorkspaceId
     ) ?? undefined;
+  // ADVISORY WORKSPACE FOCUS (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2):
+  // only consulted when NEITHER an explicit `args.workspaceId` NOR a bound
+  // service-key pin resolved anything above — priority is explicit-per-call >
+  // service-key pin > agent's live focus > (the old membership-fallback deeper
+  // in the hub write procs, unchanged). Never overrides, never 403s: a focus on
+  // a workspace the caller has since lost access to is silently dropped by the
+  // `verifyWorkspaceAccess` check right below, same as any other lens.
+  const requestedWorkspaceId = pickAdvisoryWorkspaceId(
+    confinedWorkspaceId,
+    agentUserId ? await getAgentFocusWorkspaceId(agentUserId) : undefined
+  );
   const workspaceAccessible = requestedWorkspaceId
     ? await verifyWorkspaceAccess(userId, requestedWorkspaceId)
     : false;
@@ -1652,6 +1683,86 @@ export async function executeMCPToolViaHubProtocol(
         projectId: args.projectId as string | undefined,
       });
       return ok(result);
+    }
+
+    // WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2 (advisory slice). Sets or
+    // clears the acting agent's sticky runtime workspace focus — the founder
+    // scenario is "use the CRM workspace until I say otherwise": the agent
+    // resolves the workspace once here, then every subsequent write with no
+    // explicit `workspaceId` defaults there (see `requestedWorkspaceId` above),
+    // until this tool clears it. ADVISORY ONLY: a per-call explicit workspaceId
+    // still overrides it, and it is NEVER enforced on reads (that's the
+    // deferred hard-scope wave). One concept, one tool: pass `workspace` to set
+    // it, omit/null/empty/"none"/"clear" to clear it.
+    case "synap_set_workspace_focus": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (!agentUserId) {
+        return ok({
+          error:
+            "No agent identity on this key — workspace focus is per-agent and this call isn't authenticated as one.",
+        });
+      }
+      const raw =
+        typeof args.workspace === "string" ? args.workspace.trim() : "";
+      if (raw === "" || /^(none|clear|null)$/i.test(raw)) {
+        await setAgentFocusWorkspace(agentUserId, null);
+        return ok({
+          status: "cleared",
+          message:
+            "Workspace focus cleared — writes will resolve their own placement again.",
+        });
+      }
+
+      // The user's own workspaces are the only valid targets (mirrors the
+      // membership-only fallback the rest of the MCP adapter uses).
+      const memberIds = await getUserMemberWorkspaceIds(userId);
+      if (memberIds.length === 0) {
+        return ok({ error: "You have no workspaces to focus on yet." });
+      }
+      const memberRows = await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(inArray(workspaces.id, memberIds));
+
+      // 1) exact id match among accessible workspaces
+      let resolved = memberRows.find((w) => w.id === raw);
+      // 2) exact case-insensitive name match
+      if (!resolved) {
+        resolved = memberRows.find(
+          (w) => w.name.toLowerCase() === raw.toLowerCase()
+        );
+      }
+      // 3) unique case-insensitive substring match
+      if (!resolved) {
+        const substringMatches = memberRows.filter((w) =>
+          w.name.toLowerCase().includes(raw.toLowerCase())
+        );
+        if (substringMatches.length === 1) {
+          resolved = substringMatches[0];
+        } else if (substringMatches.length > 1) {
+          return ok({
+            error: `"${raw}" matches ${substringMatches.length} workspaces — be more specific or pass the id.`,
+            candidates: substringMatches.map((w) => ({
+              id: w.id,
+              name: w.name,
+            })),
+          });
+        }
+      }
+      if (!resolved) {
+        return ok({
+          error: `No workspace named "${raw}" among your workspaces.`,
+          candidates: memberRows.map((w) => ({ id: w.id, name: w.name })),
+        });
+      }
+
+      await setAgentFocusWorkspace(agentUserId, resolved.id);
+      return ok({
+        status: "focused",
+        workspaceId: resolved.id,
+        workspaceName: resolved.name,
+        message: `Focused on ${resolved.name} — new writes will land there until you clear it.`,
+      });
     }
 
     // ── Focus sessions (work tracking) ──────────────────────────────────────

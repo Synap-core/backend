@@ -7,6 +7,7 @@ import {
   MessageRole,
   MessageAuthorType,
   computeMessageHash,
+  resolveWorkspacePlacement,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
@@ -96,12 +97,7 @@ export type SubmitBatchItem = {
 };
 
 export type ImportRevealSource =
-  | "obsidian"
-  | "markdown"
-  | "csv"
-  | "bookmark"
-  | "json"
-  | "connector_sync";
+  "obsidian" | "markdown" | "csv" | "bookmark" | "json" | "connector_sync";
 
 export type ImportAnalyzeInput = {
   source: ImportRevealSource;
@@ -403,6 +399,71 @@ export class ImportOrchestrator {
   }
 
   /**
+   * WORKSPACE PLACEMENT (routing fix): `analyze`/`analyzeLarge` build the
+   * `import.graph` pending proposal with whatever `this.ctx.workspaceId` was —
+   * `null` when the caller supplied no explicit lens/focus (a hub write with no
+   * lens deliberately lands pod-personal, `_shared.ts:303-309`), which stranded
+   * agent-generated leads pod-wide instead of the CRM workspace. Mirror the
+   * `capture.structure` resolver override (`routers/capture.ts:1195-1253`):
+   * collect every `create_entity` op's profileSlug in the graph and run the ONE
+   * placement door. A deterministic ontology hit (rung ≤4, single candidate)
+   * re-lenses the whole graph; an ambiguous hit (>1 candidate) or no ontology
+   * signal (rung 6) ABSTAINS — staying pod-wide is the honest default over an
+   * arbitrary guess. Only called when `this.ctx.workspaceId` is null — an
+   * explicit lens/focus always wins (never overridden by the ontology).
+   */
+  private async resolveGraphPlacement(
+    operations: CompositeProposalOperation[],
+    sessionId?: string | null
+  ): Promise<string | null> {
+    const { userId } = this.ctx;
+    const routingSlugs = Array.from(
+      new Set(
+        operations
+          .filter(
+            (
+              op
+            ): op is Extract<
+              CompositeProposalOperation,
+              { op: "create_entity" }
+            > => op.op === "create_entity"
+          )
+          .flatMap((op) => [
+            op.profileSlug,
+            ...(op.facets?.map((f) => f.profileSlug) ?? []),
+          ])
+          .filter((s): s is string => typeof s === "string" && s.length > 0)
+      )
+    );
+    if (routingSlugs.length === 0) return null;
+    try {
+      const placement = await resolveWorkspacePlacement(db, {
+        userId,
+        kindSlug: routingSlugs[0],
+        facetSlugs: routingSlugs.slice(1),
+        ambientWorkspaceId: null,
+        ...(sessionId ? { context: { sessionId } } : {}),
+      });
+      if (
+        placement.candidates.length === 0 &&
+        placement.rung <= 4 &&
+        placement.workspaceId
+      ) {
+        return placement.workspaceId;
+      }
+      // candidates.length > 1 (ambiguous) or rung 6 (no ontology signal) →
+      // stay pod-wide; never guess.
+      return null;
+    } catch (err) {
+      logger.warn(
+        { err, userId },
+        "import.analyze: workspace placement resolve failed — staying pod-wide"
+      );
+      return null;
+    }
+  }
+
+  /**
    * Preview-before-apply: structure the supplied items into a composite graph
    * (deep for prose, shallow for structured), record it as a governed
    * `import.graph` proposal, AND return the operations so the caller can render
@@ -412,7 +473,8 @@ export class ImportOrchestrator {
    * created (no re-structuring drift).
    */
   async analyze(input: ImportAnalyzeInput) {
-    const { workspaceId, userId } = this.ctx;
+    let { workspaceId } = this.ctx;
+    const { userId } = this.ctx;
     // Optional workspaceId for IS routing + the live-search resolver — a pod-wide
     // analyze (null) resolves the user-default service and an unscoped search.
     const wsId = workspaceId ?? undefined;
@@ -556,6 +618,12 @@ export class ImportOrchestrator {
     // Best-effort: a session hiccup must never fail the import.
     const sessionId = await resolveImportSession(this.ctx, input, tablePlan);
 
+    // No explicit lens/focus supplied → resolve placement from the graph's
+    // ontology before filing the proposal (see `resolveGraphPlacement` doc).
+    if (workspaceId === null) {
+      workspaceId = await this.resolveGraphPlacement(ops, sessionId);
+    }
+
     const targetId = randomUUID();
     const { proposal: created } = await createEventBackedProposal({
       userId,
@@ -690,7 +758,8 @@ export class ImportOrchestrator {
    * keep using `analyze()` where 1 row = 1 entity is already correct.
    */
   async analyzeLarge(input: ImportAnalyzeInput, opts?: LargeImportOpts) {
-    const { workspaceId, userId } = this.ctx;
+    let { workspaceId } = this.ctx;
+    const { userId } = this.ctx;
     // Optional workspaceId for IS routing + the live-search resolver — a pod-wide
     // analyze (null) resolves the user-default service and an unscoped search.
     const wsId = workspaceId ?? undefined;
@@ -819,6 +888,15 @@ export class ImportOrchestrator {
       wikilinkLinksUnresolved,
       chunks: totalChunks,
     };
+
+    // No explicit lens/focus supplied → resolve placement from the graph's
+    // ontology before filing the proposal (see `resolveGraphPlacement` doc).
+    if (workspaceId === null) {
+      workspaceId = await this.resolveGraphPlacement(
+        operations,
+        input.sessionId ?? this.ctx.sessionId ?? null
+      );
+    }
 
     const { proposal: created } = await createEventBackedProposal({
       userId,

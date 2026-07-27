@@ -39,6 +39,7 @@ import {
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
+  resolveWorkspacePlacement,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
@@ -226,7 +227,7 @@ export async function submitCaptureGraph(
   input: SubmitCaptureGraphInput
 ): Promise<SubmitCaptureGraphResult> {
   const { userId } = input;
-  const workspaceId = input.workspaceId ?? null;
+  let workspaceId = input.workspaceId ?? null;
 
   // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
   // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
@@ -300,6 +301,54 @@ export async function submitCaptureGraph(
   const graphEntities = collapsed.entities;
   const relations = collapsed.relations;
   const bindings = collapsed.bindings;
+
+  // WORKSPACE PLACEMENT (routing fix): `workspaceId` null here means the caller
+  // supplied no explicit lens/focus (see `input.workspaceId ?? ctx.workspaceId ??
+  // null` upstream) — mirror the `capture.structure` resolver override
+  // (`routers/capture.ts:1195-1253`): collect every entity + facet profileSlug
+  // in the graph and run the ONE placement door. A deterministic ontology hit
+  // (rung ≤4, single candidate) re-lenses the WHOLE graph into that workspace;
+  // an ambiguous hit (>1 candidate) or no ontology signal (rung 6) ABSTAINS —
+  // staying pod-wide (null) is the honest default over an arbitrary guess.
+  if (workspaceId === null) {
+    const routingSlugs = Array.from(
+      new Set(
+        graphEntities
+          .flatMap((e) => [
+            e.profileSlug,
+            ...(e.facets?.map((f) => f.profileSlug) ?? []),
+          ])
+          .filter((s): s is string => typeof s === "string" && s.length > 0)
+      )
+    );
+    if (routingSlugs.length > 0) {
+      try {
+        const placement = await resolveWorkspacePlacement(db, {
+          userId,
+          kindSlug: routingSlugs[0],
+          facetSlugs: routingSlugs.slice(1),
+          ambientWorkspaceId: null,
+          ...(input.sessionId
+            ? { context: { sessionId: input.sessionId } }
+            : {}),
+        });
+        if (
+          placement.candidates.length === 0 &&
+          placement.rung <= 4 &&
+          placement.workspaceId
+        ) {
+          workspaceId = placement.workspaceId;
+        }
+        // candidates.length > 1 (ambiguous) or rung 6 (no ontology signal) →
+        // stay pod-wide; never guess.
+      } catch (err) {
+        logger.warn(
+          { err, userId },
+          "capture/graph: workspace placement resolve failed — staying pod-wide"
+        );
+      }
+    }
+  }
 
   const bindingNote = bindings.length
     ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
@@ -620,6 +669,15 @@ export async function submitCaptureGraph(
             ),
           {
             source,
+            // Workspace-resolved graphs (explicit lens/focus OR the placement
+            // resolver above) must pin their entities to `workspaceId` —
+            // OVERRIDING a pod-default profile's `entityScope` — same as the
+            // approve-flow composite branch (`proposals.ts`:
+            // `...(proposal.workspaceId ? { workspaceScoped: true } : {})`).
+            // Without this, `entities.create`'s own rung-1/6-only placement
+            // would independently re-derive null for a pod-scope kind and
+            // silently undo the graph-level placement decided above.
+            ...(workspaceId ? { workspaceScoped: true } : {}),
             // The composite ctx's `attachFacet` door — same governance context,
             // so a policy-approved graph attaches facets directly.
             facetCaller: entityCaller,

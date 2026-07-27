@@ -22,6 +22,7 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
+import type { AgentMetadata } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import {
   createAndVerifyHubInboundKey,
@@ -70,6 +71,63 @@ export async function resolveAgentUser(
 export async function hasUserIdentity(agentId: string): Promise<boolean> {
   const agent = await getAgentById(agentId);
   return Boolean(agent?.userId);
+}
+
+/**
+ * WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2 (advisory slice).
+ *
+ * Read the agent-user's live runtime workspace focus (`agentMetadata.focusWorkspaceId`).
+ * LIVE, not cached — the whole point of the design is that
+ * `synap_set_workspace_focus` can flip it between calls with no key/provisioning
+ * round-trip. Returns null when the agent has no user row, no agentMetadata, or
+ * no focus set — every caller treats null as "no advisory default", never an error.
+ */
+export async function getAgentFocusWorkspaceId(
+  agentUserId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  const meta = row?.agentMetadata as AgentMetadata | null | undefined;
+  return meta?.focusWorkspaceId ?? null;
+}
+
+/**
+ * Set or clear the agent-user's runtime workspace focus. `workspaceId: null`
+ * clears it (the tool's "use no workspace until further notice" path).
+ * Dual-write-safe: merges into whatever `agentMetadata` JSONB already holds
+ * (autoApproveFor, writesRequireProposal, …) rather than overwriting the column.
+ * `.set()` on a JSONB column MUST use `drizzleSql` per repo convention, but this
+ * is a plain object literal (no `sql` tag needed) since we read-modify-write the
+ * whole JS object through drizzle's `$type<AgentMetadata | null>()`.
+ */
+export async function setAgentFocusWorkspace(
+  agentUserId: string,
+  workspaceId: string | null
+): Promise<void> {
+  const [row] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  const current = (row?.agentMetadata as AgentMetadata | null | undefined) ?? {
+    agentType: "unknown",
+    createdByUserId: agentUserId,
+  };
+  const next: AgentMetadata = { ...current };
+  if (workspaceId) {
+    next.focusWorkspaceId = workspaceId;
+    next.focusMode = "advisory";
+  } else {
+    delete next.focusWorkspaceId;
+    delete next.focusMode;
+  }
+  await db
+    .update(users)
+    .set({ agentMetadata: next })
+    .where(eq(users.id, agentUserId));
 }
 
 /**
