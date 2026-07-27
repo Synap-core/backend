@@ -70,7 +70,9 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
         if (initialFlowId) {
           loaded = await fetchLoginFlow(initialFlowId);
         } else {
-          const r = await createLoginFlow();
+          // Return the browser HERE after a federated (oidc) round-trip — this
+          // page's mount then detects the fresh session and routes on.
+          const r = await createLoginFlow(window.location.href);
           if (r.existingSession) {
             if (!cancelled) goReturn();
             return;
@@ -107,6 +109,14 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
           goReturn();
           return;
         }
+        if (r.redirectBrowserTo) {
+          // Federated "Continue with Synap Cloud": leave for the Control Plane.
+          // The CP round-trips back to the pod's Kratos callback, which sets the
+          // session cookie and returns to this page's `return_to` — where mount
+          // detects the session and routes on.
+          window.location.assign(r.redirectBrowserTo);
+          return;
+        }
         if (r.flow) {
           setFlow(r.flow);
           setValues((prev) => mergeHiddenValues(prev, r.flow!));
@@ -125,7 +135,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
             r.structuralError.id &&
             FLOW_RESET_ERROR_IDS.has(r.structuralError.id)
           ) {
-            const fresh = await createLoginFlow();
+            const fresh = await createLoginFlow(window.location.href);
             if (fresh.existingSession) {
               goReturn();
               return;
@@ -194,9 +204,25 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
               values={values}
               setValues={setValues}
               onSubmit={onSubmit}
-              onSubmitMethod={(name, value) =>
-                void submitFlow({ ...values, [name]: value })
-              }
+              onSubmitMethod={(method, name, value) => {
+                // A method trigger (federated "Continue with Synap Cloud" =
+                // oidc) must post ONLY its own method + the hidden fields
+                // (csrf_token) — never the empty identifier/password inputs, or
+                // Kratos routes to the PASSWORD method and rejects it with
+                // "identifier/password missing" (the error in the screenshot).
+                const hidden: Record<string, string> = {};
+                for (const n of flow?.ui.nodes ?? []) {
+                  const nm = n.attributes?.name;
+                  if (
+                    typeof nm === "string" &&
+                    n.attributes?.type === "hidden"
+                  ) {
+                    const v = n.attributes.value;
+                    hidden[nm] = typeof v === "string" ? v : "";
+                  }
+                }
+                void submitFlow({ ...hidden, method, [name]: value });
+              }}
               submitting={submitting}
               error={error}
             />
@@ -219,9 +245,32 @@ interface FlowFieldsProps {
     updater: (prev: Record<string, string>) => Record<string, string>
   ) => void;
   onSubmit: (e: React.FormEvent) => void;
-  onSubmitMethod: (name: string, value: string) => void;
+  onSubmitMethod: (method: string, name: string, value: string) => void;
   submitting: boolean;
   error: string | null;
+}
+
+/**
+ * Human name for an oidc provider button. Prefers the provider `label` Kratos
+ * carries in `node.meta.label.text` (e.g. "Synap Cloud", set in the pod's
+ * kratos.yml), and maps the built-in `cp` provider id to "Synap Cloud" so the
+ * button reads correctly even before a config refresh — never the raw id.
+ */
+function providerButtonLabel(node: KratosFlow["ui"]["nodes"][number]): string {
+  const value =
+    typeof node.attributes?.value === "string" ? node.attributes.value : "";
+  const metaText = node.meta?.label?.text?.trim();
+  const name =
+    metaText && metaText.toLowerCase() !== value.toLowerCase()
+      ? metaText
+      : value.toLowerCase() === "cp"
+        ? "Synap Cloud"
+        : value || "Synap Cloud";
+  // Kratos' meta text is sometimes already a full CTA ("Sign in with …") —
+  // don't double-prefix it.
+  return /^(sign in|continue|log in)/i.test(name)
+    ? name
+    : `Continue with ${name}`;
 }
 
 function FlowFields({
@@ -276,14 +325,10 @@ function FlowFields({
             return null;
           }
           const value = typeof attrs.value === "string" ? attrs.value : "";
-          // WebAuthn/passkey triggers already returned null above, so no
-          // passkey label branch is reachable here.
-          const label =
-            typeof attrs.label === "string"
-              ? attrs.label
-              : value
-                ? `Continue with ${value}`
-                : "Continue";
+          // Federated method (oidc) — carry the flow's method so the submit
+          // routes to it, and render the provider's human name ("Synap Cloud")
+          // rather than the raw provider id ("cp").
+          const method = node.group ?? "oidc";
           return (
             <Button
               key={`${name}-${idx}`}
@@ -291,9 +336,9 @@ function FlowFields({
               variant="flat"
               radius="md"
               isDisabled={submitting}
-              onPress={() => onSubmitMethod(name, value)}
+              onPress={() => onSubmitMethod(method, name, value)}
             >
-              {label}
+              {providerButtonLabel(node)}
             </Button>
           );
         }

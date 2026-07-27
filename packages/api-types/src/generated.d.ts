@@ -5880,18 +5880,20 @@ export interface FunnelStep {
  *
  * There is no unified `runs` table (a deliberate D3 decision: presentation-union,
  * no migration). Instead each existing ledger — `automation_runs`,
- * `playbook_runs`, the `capture.graph` proposal+events, and standalone
- * `focus_sessions` — is mapped to this one `UnifiedRun` so a single Runs/Activity
- * view can render "what an AI did" across every flow.
+ * `playbook_runs`, the `capture.graph` proposal+events, standalone
+ * `focus_sessions`, and the `capability.run` proposal+events — is mapped to
+ * this one `UnifiedRun` so a single Runs/Activity view can render "what an AI
+ * did" across every flow.
  *
  * The channel rule the model encodes (validated with the user):
  *   - automation → ONE channel for all its runs
  *   - playbook   → ONE channel per run (its session's channel)
  *   - capture    → no channel (its story is its correlationId-keyed events)
+ *   - capability → no channel (mirrors capture: correlationId-keyed events)
  *   - session    → its own channel
  */
 /** Which ledger a run came from. */
-export type FlowType = "automation" | "playbook" | "capture" | "session";
+export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session";
 /** Normalised lifecycle across all ledgers. */
 export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped";
 /** One run, ledger-agnostic. */
@@ -7056,6 +7058,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalType?: undefined;
 				reviewUrl?: undefined;
 				proposedEntityId?: undefined;
+				ackState?: undefined;
 			} | {
 				status: string;
 				message: string;
@@ -7073,6 +7076,54 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id?: undefined;
 				deduplicated?: undefined;
 				contentDropped?: undefined;
+				ackState?: undefined;
+			} | {
+				status: string;
+				message: string;
+				id: string;
+				entity: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
+				} | null;
+				ackState: "duplicate-ignored";
+				facets: {
+					slug: string;
+					status: string;
+					outcome: string;
+					facetId?: string;
+					proposalId?: string;
+					error?: string;
+				}[];
+				deduplicated?: undefined;
+				contentDropped?: undefined;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				proposedEntityId?: undefined;
 			} | {
 				unmodeled?: any;
 				status: string;
@@ -7120,6 +7171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalType?: undefined;
 				reviewUrl?: undefined;
 				proposedEntityId?: undefined;
+				ackState?: undefined;
 			};
 			meta: object;
 		}>;
@@ -7589,6 +7641,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				viewMode: "document" | "bento";
 				bentoViewId: string | null;
+			};
+			meta: object;
+		}>;
+		setEntityRenderer: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				ref: {
+					kind: "cell";
+					cellKey: string;
+					props?: Record<string, unknown> | undefined;
+					title?: string | undefined;
+				} | null;
+			};
+			output: {
+				success: boolean;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				success: boolean;
+				status: "applied";
+				proposalId: null;
 			};
 			meta: object;
 		}>;

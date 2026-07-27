@@ -72,6 +72,13 @@ export interface KratosUiNode {
   group?: string;
   messages?: { type: string; text: string }[];
   attributes?: Record<string, string | boolean | number | undefined>;
+  /**
+   * Presentation metadata. For an oidc method button Kratos puts the provider's
+   * configured `label` here (e.g. "Synap Cloud") — NOT in `attributes.label` —
+   * so the caller must read this to show a human name instead of the raw
+   * provider id.
+   */
+  meta?: { label?: { text?: string; id?: number } };
 }
 
 export interface KratosUi {
@@ -108,6 +115,15 @@ export interface SubmitLoginFlowResult {
   flow?: KratosFlow;
   /** Auth succeeded. */
   session?: KratosSession;
+  /**
+   * Kratos needs the browser to leave for another origin to continue — the
+   * federated "Continue with Synap Cloud" (oidc) submit answers with HTTP 422
+   * `browser_location_change_required` carrying `redirect_browser_to`, the
+   * Control Plane authorization URL. The caller navigates the top-level browser
+   * there; the CP round-trips back to the pod's Kratos callback, which sets the
+   * (parent-domain) session cookie and returns to `return_to`.
+   */
+  redirectBrowserTo?: string;
   /** Unrecoverable: caller should recreate the flow (CSRF, expired, etc.). */
   structuralError?: {
     id?: string;
@@ -147,8 +163,16 @@ export async function whoami(): Promise<KratosSession | null> {
 // Login flow
 // ---------------------------------------------------------------------------
 
-export async function createLoginFlow(): Promise<CreateLoginFlowResult> {
-  const res = await fetch(`${kratosPublic()}/self-service/login/browser`, {
+export async function createLoginFlow(
+  returnTo?: string
+): Promise<CreateLoginFlowResult> {
+  // `return_to` brings the browser back here after a federated (oidc) round-trip
+  // through the Control Plane. It must be an allowed Kratos return URL — the
+  // pod-admin origin is allow-listed in the pod's kratos.yml. Kratos ignores it
+  // for a plain password login, so it is always safe to pass.
+  const url = new URL(`${kratosPublic()}/self-service/login/browser`);
+  if (returnTo) url.searchParams.set("return_to", returnTo);
+  const res = await fetch(url.toString(), {
     credentials: "include",
     headers: { Accept: "application/json" },
     redirect: "follow",
@@ -242,6 +266,23 @@ export async function submitLoginFlow(
   ) {
     const session = (data as { session?: KratosSession }).session;
     if (session) return { session };
+  }
+
+  // Federated (oidc) submit → Kratos asks the browser to leave for the Control
+  // Plane. It answers HTTP 422 `browser_location_change_required` with the target
+  // in top-level `redirect_browser_to` (and, on some builds, inside
+  // `error.reason`). Surface it so the caller can navigate the browser.
+  if (isJson && typeof data === "object" && data !== null) {
+    const d = data as {
+      redirect_browser_to?: string;
+      error?: { id?: string; reason?: string };
+    };
+    let redirect = d.redirect_browser_to;
+    if (!redirect && d.error?.reason) {
+      const m = d.error.reason.match(/https?:\/\/\S+/);
+      if (m) redirect = m[0];
+    }
+    if (redirect) return { redirectBrowserTo: redirect };
   }
 
   if (

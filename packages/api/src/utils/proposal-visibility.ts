@@ -20,6 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, eq, and } from "@synap/database";
 import { proposals, workspaceMembers } from "@synap/database/schema";
+import { isPodAdmin } from "./workspace-role.js";
 
 type Database = typeof defaultDb;
 
@@ -43,6 +44,15 @@ export async function assertProposalVisibleTo(
   if (!proposal) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
   }
+
+  // Pod admins may view ANY proposal on their pod. The pod-admin surface is
+  // pod-scoped authority, and a pod-wide proposal (workspaceId NULL) has no
+  // workspace membership to gate on — the strict `sourceId === userId` branch
+  // below only ever admits the PROPOSER (an agent, for agent writes), which
+  // locked the human owner out of reviewing agent-authored pod-wide proposals
+  // (the /open-link 403). This bypass also aligns this gate with the browser's
+  // lenient `userVisibleWhere` read path, which already shows these to admins.
+  if (await isPodAdmin(userId)) return;
 
   if (proposal.workspaceId) {
     const membership = await database.query.workspaceMembers.findFirst({
