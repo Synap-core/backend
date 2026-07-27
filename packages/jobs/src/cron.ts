@@ -24,6 +24,10 @@ import {
   POD_HYGIENE_NEAR_DUP_CRON,
 } from "./workers/pod-hygiene-near-dup.js";
 import {
+  GOVERNANCE_LANE_SCANNER_QUEUE,
+  GOVERNANCE_LANE_SCANNER_CRON,
+} from "./workers/governance-lane-scanner.js";
+import {
   LIBRARIAN_ARCHIVER_QUEUE,
   LIBRARIAN_ARCHIVER_CRON,
 } from "./workers/librarian-archiver.js";
@@ -164,6 +168,17 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info(
     "Registered cron: pod-hygiene.near-dup-scan (daily at 3:15 AM UTC)"
   );
+
+  // Governance trusted-lane scanner (daily at 3:30 AM UTC — after near-dup).
+  // Files PENDING governance.widen_lane proposals only; never writes
+  // governance_rules directly — only proposal approval does.
+  await scheduleSafe(
+    boss,
+    GOVERNANCE_LANE_SCANNER_QUEUE,
+    GOVERNANCE_LANE_SCANNER_CRON,
+    {}
+  );
+  logger.info("Registered cron: governance.lane-scan (daily at 3:30 AM UTC)");
 
   // Librarian project archiver (daily at 3:45 AM UTC — after near-dup at 3:15).
   // Proposes archival of stale 0-gravity active projects; never auto-archives.

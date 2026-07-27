@@ -1,8 +1,15 @@
 # Governance Convergence Plan — one engine, one store, attributed & self-widening
 
-**Status:** PLAN (needs founder decisions before code). Written 2026-07-27.
+**Status:** DECISIONS RATIFIED 2026-07-27 — ready to build. Written 2026-07-27.
 **Research:** two read-only deep-dives, every claim `file:line`-verified against `synap-backend/` HEAD
 (`gov-attribution`, `gov-rules-lane-cap`). Nothing below is built yet.
+
+### Ratified decisions (founder, 2026-07-27)
+
+- **D1 = Hard-reject.** A `linkedUserId==null` key writing over `/mcp` → loud 403 ("not an agent key — run `synap init`"). Human PATs on Hub REST stay anonymous.
+- **D2 = Keep `DEFAULT_AUTO_APPROVE` as code floor.** Consulted when no rule matches; not seeded into the table.
+- **D3 = Wire automation profile-granularity NOW.** Thread `subjectProfileSlug` through the automation door (`automation-governance.ts:154`) this wave — full parity with the chat door.
+- **D4 = Full 0→D in scope.** Attribution → store → collapse → retire → trusted lane + per-agent cap. Build in sequenced, committed, gate-green waves (files overlap across phases — NOT parallel).
 
 ---
 

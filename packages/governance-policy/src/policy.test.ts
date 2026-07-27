@@ -8,7 +8,6 @@ import {
   agentHasCapability,
   isBlockedFilesystemPath,
   resolveChannelCapabilityDecision,
-  GOVERNANCE_MODES,
   DEFAULT_AUTO_APPROVE,
   ADMIN_ACTIONS,
   DESTRUCTIVE_ACTIONS,
@@ -470,12 +469,6 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
     }
     // Not on the default whitelist either.
     expect(isAutoApproved("entity.merge", DEFAULT_AUTO_APPROVE)).toBe(false);
-    expect(
-      isAutoApproved("entity.merge", GOVERNANCE_MODES.normal.autoApproveFor)
-    ).toBe(false);
-    expect(
-      isAutoApproved("entity.merge", GOVERNANCE_MODES.safe.autoApproveFor)
-    ).toBe(false);
   });
 
   it("a non-destructive action in the same broad autoApproveFor list still auto-approves", () => {
@@ -804,6 +797,102 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
   });
 });
 
+describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire)", () => {
+  it("a rule can NEVER override a floor: ADMIN_ACTIONS still propose even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "workspace",
+      action: "update", // workspace.update is an ADMIN_ACTIONS verb
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+  });
+
+  it("a rule can NEVER override a floor: forcePropose still proposes even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      forcePropose: true,
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("a rule can NEVER override a floor: DESTRUCTIVE_ACTIONS still propose even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
+  });
+
+  it("a rule can NEVER override a floor: user_observation-by-kind inference still proposes even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: false,
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+    });
+  });
+
+  it("a non-floor action with governanceRuleVerdict:'auto' executes", () => {
+    // document.update is NOT on DEFAULT_AUTO_APPROVE and would otherwise
+    // default-propose (rung 9) — the rule widens it to execute.
+    const v = decideAgentPolicy({
+      subjectType: "document",
+      action: "update",
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({ verdict: "execute" });
+  });
+
+  it("a non-floor action with governanceRuleVerdict:'propose' proposes with the GOVERNANCE_RULE reason", () => {
+    // entity.create is on DEFAULT_AUTO_APPROVE and would otherwise execute
+    // (rung 8) — the rule tightens it to a proposal.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      governanceRuleVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.GOVERNANCE_RULE,
+    });
+  });
+
+  it("governanceRuleVerdict:undefined leaves the verdict byte-identical to the baseline (no rule matched)", () => {
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "create" })
+    ).toEqual(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        governanceRuleVerdict: undefined,
+      })
+    );
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "delete" })
+    ).toEqual(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "delete",
+        governanceRuleVerdict: undefined,
+      })
+    );
+  });
+});
+
 describe("findUnsafeAutoApproveEntries", () => {
   it("flags exact destructive verbs and subject.verb forms", () => {
     expect(findUnsafeAutoApproveEntries(["delete"])).toEqual(["delete"]);
@@ -880,35 +969,6 @@ describe("constants are intact", () => {
       expect(DEFAULT_AUTO_APPROVE).toContain(k);
     }
   });
-  it("NORMAL mode: non-destructive create + merge-update instant; full-replace & destructive gated", () => {
-    const normal = GOVERNANCE_MODES.normal.autoApproveFor;
-    // Creates instant (as before)
-    expect(normal).toContain("entity.create");
-    expect(normal).toContain("document.create");
-    // Non-destructive (merge / field-level partial) edits ALSO instant.
-    expect(normal).toContain("entity.update");
-    expect(normal).toContain("relation.update");
-    // Full-REPLACE writes stay proposal-gated — they can silently drop unrestated
-    // content (document = full body, view = full config), so NEVER auto-approved.
-    expect(normal).not.toContain("document.update");
-    expect(normal).not.toContain("view.update");
-    // Destructive stays proposal-gated too.
-    for (const d of DESTRUCTIVE_ACTIONS) {
-      expect(normal).not.toContain(`entity.${d}`);
-      expect(normal).not.toContain(`document.${d}`);
-    }
-    // Kind + Facets (Wave 1B): attach/update/detach are all instant in NORMAL —
-    // detach is a reversible soft-delete, not a DESTRUCTIVE_ACTIONS verb.
-    expect(normal).toContain("facet.attach");
-    expect(normal).toContain("facet.update");
-    expect(normal).toContain("facet.detach");
-  });
-  it("SAFE mode: facet actions are NOT auto-approved (require proposal, like entity.create)", () => {
-    const safe = GOVERNANCE_MODES.safe.autoApproveFor;
-    expect(safe).not.toContain("facet.attach");
-    expect(safe).not.toContain("facet.update");
-    expect(safe).not.toContain("facet.detach");
-  });
   it("ADMIN_ACTIONS contains the privileged verbs", () => {
     for (const k of [
       "workspace.update",
@@ -935,9 +995,6 @@ describe("constants are intact", () => {
   // an agent's playbook create actually route to a proposal.
   it("playbook.create proposes even under Normal (wired via checkPermissionOrPropose)", () => {
     expect(isAutoApproved("playbook.create", DEFAULT_AUTO_APPROVE)).toBe(false);
-    expect(
-      isAutoApproved("playbook.create", GOVERNANCE_MODES.normal.autoApproveFor)
-    ).toBe(false);
     // Data creates stay instant — the reversal is surgical, not a blanket gate.
     expect(isAutoApproved("entity.create", DEFAULT_AUTO_APPROVE)).toBe(true);
     expect(isAutoApproved("automation.create", DEFAULT_AUTO_APPROVE)).toBe(
@@ -956,8 +1013,5 @@ describe("constants are intact", () => {
   // propose at runtime today" — they do not.
   it("channel.create is out of the policy lists (enforcement wiring is a tracked follow-up)", () => {
     expect(isAutoApproved("channel.create", DEFAULT_AUTO_APPROVE)).toBe(false);
-    expect(
-      isAutoApproved("channel.create", GOVERNANCE_MODES.normal.autoApproveFor)
-    ).toBe(false);
   });
 });

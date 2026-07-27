@@ -26,9 +26,11 @@ import {
   and,
   eq,
   inArray,
+  isNull,
   users,
   workspaces,
   workspaceMembers,
+  governanceRules,
   type AgentMetadata,
 } from "@synap/database";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -125,6 +127,53 @@ function metadataInSync(meta: AgentMetadata | null): boolean {
   return current.every((v, i) => v === desired[i]);
 }
 
+const GOVERNANCE_RULES_CREATED_BY = "system:ensure-capture-agent";
+
+/**
+ * Mirror CAPTURE_AGENT_DEF.autoApproveFor into `governance_rules` (Governance
+ * Convergence Plan, Phase B one-store) — agent-scoped, pod-wide rows, one per
+ * verb. Idempotent: only inserts patterns not already covered by an ACTIVE
+ * rule for this agent, so this is safe to call on every boot regardless of
+ * whether the agent row itself was just created, drift-healed, or already in
+ * sync — a pod upgrading onto this wave may have agent_metadata already
+ * correct but no rules seeded yet.
+ */
+async function syncCaptureAgentGovernanceRules(agentId: string): Promise<void> {
+  const existing = await db
+    .select({ targetPattern: governanceRules.targetPattern })
+    .from(governanceRules)
+    .where(
+      and(
+        isNull(governanceRules.revokedAt),
+        eq(governanceRules.principalKind, "agent"),
+        eq(governanceRules.scopeKind, "pod"),
+        eq(governanceRules.targetKind, "action"),
+        eq(governanceRules.agentUserId, agentId)
+      )
+    );
+  const existingPatterns = new Set(existing.map((r) => r.targetPattern));
+  const toInsert = CAPTURE_AGENT_DEF.autoApproveFor.filter(
+    (pattern) => !existingPatterns.has(pattern)
+  );
+  if (toInsert.length === 0) return;
+
+  await db.insert(governanceRules).values(
+    toInsert.map((targetPattern) => ({
+      principalKind: "agent" as const,
+      scopeKind: "pod" as const,
+      agentUserId: agentId,
+      targetKind: "action" as const,
+      targetPattern,
+      verdict: "auto" as const,
+      createdBy: GOVERNANCE_RULES_CREATED_BY,
+    }))
+  );
+  logger.info(
+    { agentId, inserted: toInsert.length },
+    "Seeded capture agent governance_rules (Phase B one-store)"
+  );
+}
+
 /**
  * Ensure the pod-level capture agent exists. Safe to call on every boot.
  * Idempotent + reconciling (mirrors `ensureSynapCoreCapability`'s convergence
@@ -156,6 +205,10 @@ export async function ensureCaptureAgent(): Promise<void> {
         logger.debug(
           "Capture agent present and metadata in sync — skipping seed"
         );
+        // Metadata is converged, but a pod upgrading onto Phase B may not
+        // have any governance_rules rows yet — the idempotent sync below
+        // no-ops once seeded.
+        await syncCaptureAgentGovernanceRules(existing.id);
         return;
       }
 
@@ -181,6 +234,7 @@ export async function ensureCaptureAgent(): Promise<void> {
         { agentId: existing.id },
         "Drift-healed capture agent governance metadata to CAPTURE_AGENT_DEF"
       );
+      await syncCaptureAgentGovernanceRules(existing.id);
       return;
     }
 
@@ -217,6 +271,8 @@ export async function ensureCaptureAgent(): Promise<void> {
     });
 
     cachedCaptureAgentUserId = agentId;
+
+    await syncCaptureAgentGovernanceRules(agentId);
 
     logger.info(
       { agentId, autoApproveFor: CAPTURE_AGENT_DEF.autoApproveFor },

@@ -40,6 +40,7 @@ import { relationDefsRouter } from "./routers/relation-defs.js";
 import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
+import { governanceRulesRouter } from "./routers/governance-rules.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
@@ -123,6 +124,7 @@ export const coreRouter = router({
   relationDefs: relationDefsRouter,
   profileRelations: profileRelationsRouter,
   agentUsers: agentUsersRouter,
+  governanceRules: governanceRulesRouter,
   mcpServers: mcpServersRouter,
   agentConfigs: agentConfigsRouter,
   agents: agentsRouter,

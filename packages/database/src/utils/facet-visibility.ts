@@ -8,8 +8,10 @@
  * entityFacets in packages/api access/registry.ts — keep the two in sync):
  * workspace-scoped facets are shared with the workspace's members (the caller
  * has already verified membership on the lens it passes here); pod-wide
- * (null-workspace) facets carry an OWNER floor and are visible only to their
- * owner.
+ * (null-workspace) facets carry an OWNER floor, WIDENED in Wave 2 (Membership →
+ * Visibility) to also admit any caller who is a POD MEMBER — a pod-wide facet is
+ * the pod-level share signal, the twin of "a facet in workspace W is shared with
+ * W's members". A non-pod-member still sees only their own (fail closed).
  * - lens `undefined` → all lenses, optionally bounded by allowedWorkspaceIds
  * - lens `null`      → base-only (facets with no workspace)
  * - lens `string`    → that workspace's facets + pod-wide (null-workspace) ones
@@ -17,6 +19,7 @@
 
 import { type SQL, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { entityFacets } from "../schema/entity-facets.js";
+import { podMemberWhere } from "./pod-membership.js";
 
 /**
  * In-memory twin of {@link facetVisibilityConditions} for the string / null lens
@@ -25,27 +28,38 @@ import { entityFacets } from "../schema/entity-facets.js";
  * rather than a SQL WHERE. Keep the two derivations in lockstep: this predicate
  * IS the boolean form of the same two SQL clauses.
  *
- *   - lens `null`   → facet.workspaceId IS NULL  AND  userId === viewer
+ *   - lens `null`   → facet.workspaceId IS NULL
+ *                       AND (userId === viewer OR viewerIsPodMember)
  *   - lens `string` → (facet.workspaceId === lens OR NULL)
- *                       AND (facet.workspaceId NOT NULL OR userId === viewer)
+ *                       AND (facet.workspaceId NOT NULL OR userId === viewer
+ *                            OR viewerIsPodMember)
  *
  * The workspace clause mirrors the `workspaceId === null` / `!== undefined`
  * branches; the AND'd owner-floor clause mirrors the always-appended
- * `or(isNotNull(workspaceId), eq(userId, viewer))`. (The identity-wide
- * `workspaceId === undefined` + `allowedWorkspaceIds` branch is SQL-only — this
- * in-memory helper is used where the lens is a concrete workspace or pod-wide.)
+ * `or(isNotNull(workspaceId), eq(userId, viewer), podMemberWhere(viewer))`. (The
+ * identity-wide `workspaceId === undefined` + `allowedWorkspaceIds` branch is
+ * SQL-only — this in-memory helper is used where the lens is a concrete
+ * workspace or pod-wide.)
+ *
+ * `viewerIsPodMember` is the JS form of the SQL `EXISTS (pod_members)` term —
+ * resolve it via `AccessContext.podMembership()`. It DEFAULTS TO FALSE so a
+ * caller that has not resolved membership fails CLOSED to the owner floor (the
+ * pre-Wave-2 behaviour), never open.
  */
 export function isFacetVisibleForLens(
   facet: { workspaceId: string | null; userId?: string | null },
   lensWorkspaceId: string | null,
-  viewerUserId: string
+  viewerUserId: string,
+  viewerIsPodMember = false
 ): boolean {
   const workspaceMatch =
     lensWorkspaceId === null
       ? facet.workspaceId === null
       : facet.workspaceId === lensWorkspaceId || facet.workspaceId === null;
   const ownerFloor =
-    facet.workspaceId !== null || facet.userId === viewerUserId;
+    facet.workspaceId !== null ||
+    facet.userId === viewerUserId ||
+    viewerIsPodMember;
   return workspaceMatch && ownerFloor;
 }
 
@@ -77,10 +91,17 @@ export function facetVisibilityConditions(opts: {
     );
   }
 
+  // Owner floor on the pod-wide (null-workspace) rows, WIDENED to pod members
+  // (Wave 2). The three branches: workspace-scoped rows are already lensed
+  // above; pod-wide rows are admitted for their owner, or for any caller with a
+  // `pod_members` row. Keep in lockstep with the `entityFacets` VisibilityRule
+  // (packages/api access/registry.ts) and `podSharedFacetWhere`
+  // (packages/api utils/project-scope.ts).
   conditions.push(
     or(
       isNotNull(entityFacets.workspaceId),
-      eq(entityFacets.userId, opts.userId)
+      eq(entityFacets.userId, opts.userId),
+      podMemberWhere(opts.userId)
     ) as SQL
   );
 

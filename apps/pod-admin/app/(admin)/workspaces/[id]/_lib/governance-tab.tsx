@@ -12,15 +12,76 @@
 
 import { addToast, Button } from "@heroui/react";
 import { useMemo } from "react";
-import {
-  GOVERNANCE_MODES,
-  type GovernanceMode,
-} from "@synap/governance-policy";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
 import type { ConfigFieldSpec } from "../../../../../lib/config-form/types";
 import { useConfigForm } from "../../../../../lib/config-form/useConfigForm";
 import { ConfigForm } from "../../../components/config-form/ConfigForm";
+
+// ─── Approval-stance presets ──────────────────────────────────────────────────
+// UI-only sugar that pre-fills the form's autoApproveFor + writesRequireProposal.
+// These live here (not in the pure @synap/governance-policy engine, which no
+// longer carries preset objects) because presets are a UI convenience, not a
+// governance primitive. The saved autoApproveFor is mirrored into
+// governance_rules server-side on save (workspaces.update → syncAutoApproveRules).
+type GovernanceMode = "safe" | "normal" | "crazy";
+
+const GOVERNANCE_PRESETS: Record<
+  GovernanceMode,
+  { autoApproveFor: string[]; writesRequireProposal: boolean }
+> = {
+  safe: {
+    autoApproveFor: [
+      "search.*",
+      "memory.recall",
+      "entity.read",
+      "document.read",
+      "context.*",
+      "filesystem.read",
+      "bento.arrange",
+    ],
+    writesRequireProposal: true,
+  },
+  normal: {
+    autoApproveFor: [
+      "search.*",
+      "memory.recall",
+      "entity.read",
+      "document.read",
+      "context.*",
+      "filesystem.read",
+      "bento.arrange",
+      "entity.create",
+      "document.create",
+      "relation.create",
+      "view.create",
+      "profile.create",
+      "property_def.create",
+      "entity.update",
+      "relation.update",
+      "profile.update",
+      "property_def.update",
+      "automation.create",
+      "link.create",
+      "tool.create",
+      "skill.create",
+      "playbook.read",
+      "tool.read",
+      "link.read",
+      "capability.read",
+      "terminal.read_logs",
+      "filesystem.write_workspace",
+      "facet.attach",
+      "facet.update",
+      "facet.detach",
+    ],
+    writesRequireProposal: false,
+  },
+  crazy: {
+    autoApproveFor: ["*"],
+    writesRequireProposal: false,
+  },
+};
 
 // ─── Field specs ──────────────────────────────────────────────────────────────
 
@@ -188,8 +249,8 @@ export function GovernanceTab({ ws }: GovernanceTabProps) {
       form.values.writesRequireProposal === true ||
       form.values.writesRequireProposal === "true";
 
-    for (const mode of Object.keys(GOVERNANCE_MODES) as GovernanceMode[]) {
-      const preset = GOVERNANCE_MODES[mode];
+    for (const mode of Object.keys(GOVERNANCE_PRESETS) as GovernanceMode[]) {
+      const preset = GOVERNANCE_PRESETS[mode];
       const presetList = [...preset.autoApproveFor];
       const presetSet = new Set<string>(presetList);
       const currentSet = new Set<string>(currentAutoApprove);
@@ -208,7 +269,7 @@ export function GovernanceTab({ ws }: GovernanceTabProps) {
 
   // Preset picker: populates form values WITHOUT saving.
   function applyPreset(mode: GovernanceMode) {
-    const preset = GOVERNANCE_MODES[mode];
+    const preset = GOVERNANCE_PRESETS[mode];
     form.setField("autoApproveFor", [...preset.autoApproveFor]);
     form.setField("writesRequireProposal", preset.writesRequireProposal);
   }
@@ -222,29 +283,31 @@ export function GovernanceTab({ ws }: GovernanceTabProps) {
       >
         <div className="flex flex-col gap-3 pt-1">
           <div className="flex flex-wrap gap-2">
-            {(Object.keys(GOVERNANCE_MODES) as GovernanceMode[]).map((mode) => {
-              const d = PRESET_DISPLAY[mode];
-              const isActive = activeMode === mode;
-              return (
-                <Button
-                  key={mode}
-                  variant={isActive ? "solid" : "flat"}
-                  color={isActive ? "primary" : "default"}
-                  radius="md"
-                  className="h-auto py-2 px-3"
-                  onPress={() => applyPreset(mode)}
-                >
-                  <span className="flex flex-col items-start gap-0.5">
-                    <span className="text-[12px] font-semibold leading-none">
-                      {d.title}
+            {(Object.keys(GOVERNANCE_PRESETS) as GovernanceMode[]).map(
+              (mode) => {
+                const d = PRESET_DISPLAY[mode];
+                const isActive = activeMode === mode;
+                return (
+                  <Button
+                    key={mode}
+                    variant={isActive ? "solid" : "flat"}
+                    color={isActive ? "primary" : "default"}
+                    radius="md"
+                    className="h-auto py-2 px-3"
+                    onPress={() => applyPreset(mode)}
+                  >
+                    <span className="flex flex-col items-start gap-0.5">
+                      <span className="text-[12px] font-semibold leading-none">
+                        {d.title}
+                      </span>
+                      <span className="text-[10.5px] font-normal opacity-65 leading-tight">
+                        {d.hint}
+                      </span>
                     </span>
-                    <span className="text-[10.5px] font-normal opacity-65 leading-tight">
-                      {d.hint}
-                    </span>
-                  </span>
-                </Button>
-              );
-            })}
+                  </Button>
+                );
+              }
+            )}
           </div>
           <p className="text-[11px] text-foreground/40">
             Clicking a preset pre-fills the form below. Review, then Save to

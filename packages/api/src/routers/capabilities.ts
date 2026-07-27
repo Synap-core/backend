@@ -602,8 +602,30 @@ export const capabilitiesRouter = router({
         });
       }
 
+      // A `code` verb (all enrichment verbs are code) returns the sandbox's
+      // SkillExecutionResult ENVELOPE — `{ success, result?, error? }` — as
+      // `res.result`, unlike builtin/declarative verbs which return their data
+      // directly. Unwrap it. A FAILED run (success:false, e.g. the provider 400'd
+      // "not in your plan") is a real ERROR to surface — NOT enrichment data: left
+      // unwrapped, the error string lands as a proposed `error` property on the
+      // entity (the bug this fixes). Detect the envelope by its boolean `success`.
+      const raw = res.result;
+      const envelope =
+        raw &&
+        typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        typeof (raw as { success?: unknown }).success === "boolean"
+          ? (raw as { success: boolean; result?: unknown; error?: string })
+          : null;
+      if (envelope && !envelope.success) {
+        return {
+          status: "failed" as const,
+          message: envelope.error ?? "Enrichment failed",
+        };
+      }
+
       // 3. Strip the run-metadata envelope → the properties we intend to write.
-      const mapped = normalizeVerbResult(res.result);
+      const mapped = normalizeVerbResult(envelope ? envelope.result : raw);
 
       // 4. The receipt: one session per enrichment run. Channel-less by design —
       //    a single-tier run needs a receipt, not a live room. It is CLOSED on

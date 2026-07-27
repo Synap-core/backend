@@ -14,6 +14,7 @@ import {
 import { Check, X, ExternalLink, ShieldCheck } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -263,6 +264,11 @@ export function ProposalReview({ proposalId }: { proposalId: string }) {
               >
                 Reject…
               </Button>
+              <AlwaysApproveMenu
+                proposal={p}
+                disabled={busy}
+                onDone={() => void query.refetch()}
+              />
             </div>
           ) : (
             <div className="flex flex-col gap-2">

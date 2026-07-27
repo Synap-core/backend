@@ -637,6 +637,30 @@ export async function runStartupHooks(): Promise<void> {
     logger.warn({ err }, "Failed to seed capture agent on startup (non-fatal)");
   }
 
+  // ONE-STORE BACKFILL (Governance Convergence Plan, Phase B) — seed
+  // governance_rules from every existing workspace/agent autoApproveFor JSONB
+  // list. Idempotent + standalone (NOT a pg-boss job); must run BEFORE the
+  // pod starts serving writes so resolveAgentGovernanceDecision's rung 2.8
+  // (which now drives the auto-approve decision instead of the JSONB — see
+  // resolve-agent-governance-decision.ts) sees an equivalent rule for every
+  // pre-existing override. Non-fatal: logged and skipped on failure, same as
+  // every other startup seeder here.
+  try {
+    const { backfillGovernanceRules } = await import("@synap/database");
+    const result = await backfillGovernanceRules(db);
+    if (result.workspaceRulesInserted > 0 || result.agentRulesInserted > 0) {
+      logger.info(
+        result,
+        "Backfilled governance_rules from existing autoApproveFor JSONB"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to backfill governance_rules on startup (non-fatal)"
+    );
+  }
+
   // Converge every installed capability CONTAINER to its Control-Plane template
   // (the capability-layer counterpart to reconcileWorkspacesToTemplates above) —
   // additively re-projects drifted skills (e.g. a `providerSpec.baseUrlOverride`

@@ -58,6 +58,13 @@ import {
   insertChannelMessage,
   openRunSession,
 } from "@synap/database";
+import {
+  beginStepDiagnostics,
+  recordUnresolvedReference,
+  UNRESOLVED_REFS_KEY,
+  type UnresolvedReferenceCollector,
+  type UnresolvedReferenceReason,
+} from "./unresolved-references.js";
 import { ChannelType } from "@synap/database/schema";
 import { ChannelRepository } from "@synap/database";
 import type {
@@ -272,13 +279,15 @@ export function resolveTemplate(
   context: StepContext
 ): string {
   return template.replace(/\{\{(.+?)\}\}/g, (_, path: string) => {
-    const parts = path.trim().split(".");
-    let current: unknown = context;
-    for (const part of parts) {
-      if (current == null || typeof current !== "object") return "";
-      current = (current as Record<string, unknown>)[part];
+    const { value: current, miss } = lookupContextPath(path, context);
+    // UNCHANGED BEHAVIOR: anything that resolves to nothing still renders "".
+    // Flows depend on it (an absent `{{trigger.payload.prompt}}` means "no
+    // steer given"). We only stop being SILENT about it — see
+    // unresolved-references.ts for why that mattered.
+    if (miss) {
+      recordUnresolvedReference(path.trim(), miss);
+      return "";
     }
-    if (current == null) return "";
     // A Date renders as an ISO string (not JSON-quoted) — keep the old
     // human-readable passthrough for raw Date fields (e.g. a query step's
     // createdAt), since JSON.stringify would wrap it in quotes.
@@ -292,6 +301,36 @@ export function resolveTemplate(
 }
 
 /**
+ * Is this string ONE whole-string `{{path}}` reference (a value binding), as
+ * opposed to text that merely CONTAINS placeholders (an interpolation)?
+ *
+ * Returns the inner path for a value binding, or `null` for interpolation.
+ *
+ * WHY `[^{}]` AND NOT `.+?` — this is the fix for a silent data-loss bug.
+ * The obvious pattern `/^\{\{(.+?)\}\}$/` looks non-greedy but is anchored at
+ * BOTH ends, so the engine backtracks until the trailing `\}\}` lines up with
+ * the LAST `}}` in the string. That means a genuine interpolation like
+ *   "{{item.id}} · {{item.title}}"
+ * MATCHES, and captures the nonsense path `item.id}} · {{item.title` — which
+ * resolves to `undefined`. Not an error, not a warning: a null, silently, in
+ * place of the user's data.
+ *
+ * Observed live 2026-07-27: every projection node in the report automation
+ * emitted `[null, null, …]`, so all three AI rounds were handed empty lists and
+ * faithfully reported "the workspace contains no data" — while the `query`
+ * steps upstream had in fact returned 15 notes, 25 tasks, and so on, and every
+ * step reported SUCCESS. The data was fetched, then destroyed in transit.
+ *
+ * Requiring the captured path to contain NO braces makes a value binding
+ * exactly what it claims to be: one reference, nothing else. Any string with a
+ * second placeholder in it is interpolation and takes the string path.
+ */
+export function matchWholeStringReference(value: string): string | null {
+  const m = value.match(/^\{\{([^{}]+)\}\}$/);
+  return m ? m[1] : null;
+}
+
+/**
  * Deep-resolve templates in any value (string, object, array).
  */
 export function deepResolveTemplates(
@@ -302,9 +341,9 @@ export function deepResolveTemplates(
     // An exact placeholder is a value binding, not text interpolation. Preserve
     // its native number/boolean/object shape for governed output verbs; only an
     // embedded placeholder is rendered as a human string.
-    const exactReference = value.match(/^\{\{(.+?)\}\}$/);
-    return exactReference
-      ? resolveContextPath(exactReference[1], context)
+    const exactReference = matchWholeStringReference(value);
+    return exactReference !== null
+      ? resolveReferencePath(exactReference, context)
       : resolveTemplate(value, context);
   }
   if (Array.isArray(value))
@@ -497,16 +536,55 @@ async function dispatchOutputVerb(
 }
 
 /**
- * Resolve a dot-path from context to its actual value (not stringified).
+ * Walk a dot-path from context, distinguishing WHY it produced nothing.
+ *
+ * `miss: "missing"` — a segment does not exist on the context (typo, a step
+ * that never ran, or a junk path like the `item.id}} · {{item.title` a
+ * mis-anchored regex once captured). `miss: "null"` — every segment existed and
+ * the value is null/undefined. `miss: null` — a real value (possibly `""`).
+ *
+ * The early `in` check is NOT a behavior change: previously a missing segment
+ * left `current === undefined`, and the next iteration's null-guard bailed with
+ * the same result. It only lets us name the failure.
  */
-function resolveContextPath(path: string, context: StepContext): unknown {
+function lookupContextPath(
+  path: string,
+  context: StepContext
+): { value: unknown; miss: UnresolvedReferenceReason | null } {
   const parts = path.trim().split(".");
   let current: unknown = context;
   for (const part of parts) {
-    if (current == null || typeof current !== "object") return undefined;
+    if (current == null || typeof current !== "object")
+      return { value: undefined, miss: "missing" };
+    if (!(part in (current as Record<string, unknown>)))
+      return { value: undefined, miss: "missing" };
     current = (current as Record<string, unknown>)[part];
   }
-  return current;
+  return { value: current, miss: current == null ? "null" : null };
+}
+
+/**
+ * Resolve a dot-path from context to its actual value (not stringified).
+ *
+ * Deliberately NON-recording: several callers use it as an EXISTENCE PROBE
+ * (guard-node `check.path`, dedup candidate paths) where "absent" is a normal
+ * answer, and recording those would drown the real signal. Sites that resolve a
+ * reference the AUTHOR WROTE use `resolveReferencePath` below.
+ */
+function resolveContextPath(path: string, context: StepContext): unknown {
+  return lookupContextPath(path, context).value;
+}
+
+/**
+ * `resolveContextPath` + diagnostics. Use at every site that resolves a
+ * user-authored `{{...}}` value binding (whole-string reference, pipe argument,
+ * loop iterator) — the string-interpolation sites are covered by
+ * `resolveTemplate`.
+ */
+function resolveReferencePath(path: string, context: StepContext): unknown {
+  const { value, miss } = lookupContextPath(path, context);
+  if (miss) recordUnresolvedReference(path.trim(), miss);
+  return value;
 }
 
 /**
@@ -911,6 +989,7 @@ export async function executeOutputStep(
           ...(bodyText ? { content: bodyText } : {}),
         },
         reasoning: "Automation proposed creating an entity.",
+        subjectProfileSlug: profileSlug,
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,
@@ -945,14 +1024,22 @@ export async function executeOutputStep(
         .from(users)
         .where(eq(users.id, ownerId))
         .limit(1);
+      // `correlationId` is carried on the SAME provenance object the document
+      // path already uses, so the entity and its body land with identical run
+      // attribution — "which run produced this?" is answerable for both.
       const provenance =
         ownerUser?.userType === "agent"
           ? {
               createdByKind: "ai_agent" as const,
               agentUserId: ownerId,
               createdByUserId: ownerId,
+              correlationId: automationContext.rootRunId,
             }
-          : { createdByKind: "system" as const, createdByUserId: ownerId };
+          : {
+              createdByKind: "system" as const,
+              createdByUserId: ownerId,
+              correlationId: automationContext.rootRunId,
+            };
 
       // BODY (optional) — materialized through the canonical door BEFORE the
       // entity row is inserted, with the row id pre-minted, exactly like the
@@ -1661,7 +1748,7 @@ export function executeTransformStep(
   // If it looks like a plain {{...}} reference, resolve the raw path value (not stringified)
   const templateMatch = templatePart.match(/^\{\{(.+?)\}\}$/);
   if (templateMatch) {
-    value = resolveContextPath(templateMatch[1], context);
+    value = resolveReferencePath(templateMatch[1], context);
   } else {
     value = resolveTemplate(templatePart, context);
   }
@@ -1706,15 +1793,15 @@ export function executeTransformStep(
           // Resolve `pipeArg` as a template per item, exposing `item`. Returns
           // the raw resolved value when the arg is a single `{{...}}` ref,
           // otherwise the interpolated string.
-          const singleRef = pipeArg.match(/^\{\{(.+?)\}\}$/);
+          const singleRef = matchWholeStringReference(pipeArg);
           current = arr.map((item, index) => {
             const itemContext: StepContext = {
               ...context,
               loop: { item, index },
               item,
             };
-            return singleRef
-              ? resolveContextPath(singleRef[1], itemContext)
+            return singleRef !== null
+              ? resolveReferencePath(singleRef, itemContext)
               : resolveTemplate(pipeArg, itemContext);
           });
           break;
@@ -1999,16 +2086,48 @@ export function parseQueryFilterConditions(
   return conditions;
 }
 
-export interface QueryOrderBy {
-  propKey: string;
-  dir: "asc" | "desc";
-}
+/**
+ * Real `entities` COLUMNS a query node may order by, mapped to their Drizzle
+ * column. An allowlist, not a lookup: `orderBy` is author-supplied, and an
+ * open mapping into `entities` would let a flow order by any column in the
+ * table (including ones the SELECT does not expose).
+ *
+ * `createdAt`/`updatedAt` are the reason this exists — they are timestamp
+ * COLUMNS, never mirrored into the `properties` jsonb, so before this an
+ * `orderBy: "updatedAt"` was silently read as the property `updatedAt`,
+ * matched nothing, produced NULL for every row, and left the result in
+ * arbitrary order WHILE LOOKING LIKE IT WORKED. That is the same
+ * silently-wrong failure mode as the 2026-07-27 null-projection bug, so it
+ * gets a real fix rather than a workaround.
+ */
+const QUERY_ORDER_COLUMNS = {
+  createdAt: entities.createdAt,
+  updatedAt: entities.updatedAt,
+  title: entities.title,
+  type: entities.type,
+} as const;
+
+export type QueryOrderBy =
+  | {
+      kind: "column";
+      column: (typeof QUERY_ORDER_COLUMNS)[keyof typeof QUERY_ORDER_COLUMNS];
+      dir: "asc" | "desc";
+    }
+  | { kind: "property"; propKey: string; dir: "asc" | "desc" };
 
 /**
  * Parse a query node's optional `orderBy`/`orderDir` fields. This is the
  * other half of the unresolved-path guard: a missing/non-string `orderBy`
  * yields `undefined` (no ordering applied) rather than ever reaching a
  * `.replace()` call on it.
+ *
+ * RESOLUTION ORDER, and why:
+ *  1. An explicit `properties.` prefix ALWAYS means the jsonb blob. This is
+ *     the escape hatch that keeps a workspace whose entities genuinely carry a
+ *     property named `updatedAt` addressable and unambiguous.
+ *  2. A bare name matching `QUERY_ORDER_COLUMNS` means the real column.
+ *  3. Anything else is a jsonb property key — the behavior every existing flow
+ *     already relies on, so nothing that works today changes meaning.
  */
 export function parseQueryOrderBy(data: {
   orderBy?: unknown;
@@ -2016,9 +2135,16 @@ export function parseQueryOrderBy(data: {
 }): QueryOrderBy | undefined {
   const raw = typeof data.orderBy === "string" ? data.orderBy.trim() : "";
   if (!raw) return undefined;
+  const dir = data.orderDir === "asc" ? "asc" : "desc";
+
+  if (!raw.startsWith("properties.")) {
+    const column = QUERY_ORDER_COLUMNS[raw as keyof typeof QUERY_ORDER_COLUMNS];
+    if (column) return { kind: "column", column, dir };
+  }
+
   const propKey = stripPropertiesPrefix(raw);
   if (!propKey) return undefined;
-  return { propKey, dir: data.orderDir === "asc" ? "asc" : "desc" };
+  return { kind: "property", propKey, dir };
 }
 
 /** A JSONB property value compared/ordered numerically when it parses as a
@@ -2107,17 +2233,24 @@ async function executeQueryStep(
     .where(and(...conditions));
 
   const orderBy = parseQueryOrderBy(data);
-  const results = orderBy
-    ? await baseQuery
-        .orderBy(
+  // A real column orders by ONE key. A jsonb property needs TWO — numeric-first
+  // so "9" doesn't rank above "30", then text for the rows where the value
+  // isn't a number. Keeping the two shapes separate is why `QueryOrderBy` is a
+  // discriminated union rather than a string with a flag.
+  const orderTerms = !orderBy
+    ? null
+    : orderBy.kind === "column"
+      ? [orderBy.dir === "asc" ? asc(orderBy.column) : desc(orderBy.column)]
+      : [
           orderBy.dir === "asc"
             ? asc(numericPropertyExpr(orderBy.propKey))
             : desc(numericPropertyExpr(orderBy.propKey)),
           orderBy.dir === "asc"
             ? asc(drizzleSql`${entities.properties}->>${orderBy.propKey}`)
-            : desc(drizzleSql`${entities.properties}->>${orderBy.propKey}`)
-        )
-        .limit(limit)
+            : desc(drizzleSql`${entities.properties}->>${orderBy.propKey}`),
+        ];
+  const results = orderTerms
+    ? await baseQuery.orderBy(...orderTerms).limit(limit)
     : await baseQuery.limit(limit);
 
   return { entities: results, count: results.length };
@@ -2125,9 +2258,9 @@ async function executeQueryStep(
 
 function resolveBoundValue(value: unknown, context: StepContext): unknown {
   if (typeof value !== "string") return value;
-  const exactReference = value.match(/^\{\{(.+?)\}\}$/);
-  return exactReference
-    ? resolveContextPath(exactReference[1], context)
+  const exactReference = matchWholeStringReference(value);
+  return exactReference !== null
+    ? resolveReferencePath(exactReference, context)
     : resolveTemplate(value, context);
 }
 
@@ -2365,7 +2498,7 @@ class WorkflowGuardBlockedError extends Error {
   }
 }
 
-function executeGuardStep(
+export function executeGuardStep(
   data: GuardNodeDef["data"],
   context: StepContext
 ): Record<string, unknown> {
@@ -2382,6 +2515,16 @@ function executeGuardStep(
           !value.includes(resolveBoundValue(check.arrayIncludes, context)))) ||
       (check.lengthEquals !== undefined &&
         (!Array.isArray(value) || value.length !== check.lengthEquals)) ||
+      // `minLength` asserts CONTENT, which `exists` deliberately does not:
+      // `exists` is a null check, so "" satisfies it. Strings are trimmed
+      // first so a body of whitespace fails like the empty body it is. Any
+      // non-string / non-array value fails rather than passing by accident.
+      (check.minLength !== undefined &&
+        (typeof value === "string"
+          ? value.trim().length < check.minLength
+          : Array.isArray(value)
+            ? value.length < check.minLength
+            : true)) ||
       (check.numberGte !== undefined &&
         (!(typeof value === "number") || value < check.numberGte)) ||
       (check.numberLte !== undefined &&
@@ -3016,6 +3159,51 @@ async function executeAutomationFlow(params: {
       }
     };
 
+    /**
+     * Persist a step's unresolved-reference diagnostics (D-ref). Merged INTO
+     * `resolved_inputs` under a reserved key rather than a new column: no
+     * migration, and it sits exactly where a UI already looks for "what did
+     * this step read". jsonb `||` merges server-side so it cannot clobber the
+     * resolvedInputs a node wrote earlier in its own execution, whatever the
+     * ordering.
+     *
+     * NOT written to `output`: the resume-from-ledger path rebuilds later
+     * steps' context from `output`, so anything added there would leak into the
+     * flow's data.
+     *
+     * Non-throwing and no-op when clean — a diagnostic is never a reason to
+     * fail a run.
+     */
+    const persistStepDiagnostics = async (
+      stepRunId: string,
+      collector: UnresolvedReferenceCollector,
+      nodeId: string
+    ): Promise<void> => {
+      if (collector.size === 0) return;
+      const refs = collector.list();
+      logger.warn(
+        { runId, nodeId, unresolvedRefs: refs },
+        "Automation step resolved references to nothing"
+      );
+      try {
+        await db
+          .update(automationStepRuns)
+          // postgres.js `sql.json()` is broken on the pod image — JSON.stringify
+          // + an explicit ::jsonb cast is the house pattern.
+          .set({
+            resolvedInputs: drizzleSql`coalesce(${automationStepRuns.resolvedInputs}, '{}'::jsonb) || ${JSON.stringify(
+              { [UNRESOLVED_REFS_KEY]: refs }
+            )}::jsonb`,
+          })
+          .where(eq(automationStepRuns.id, stepRunId));
+      } catch (err) {
+        logger.warn(
+          { err, runId, nodeId },
+          "Failed to persist step reference diagnostics"
+        );
+      }
+    };
+
     for (const node of sortedNodes) {
       // Skip trigger node (already fired)
       if (node.type === "trigger") continue;
@@ -3048,6 +3236,12 @@ async function executeAutomationFlow(params: {
           startedAt: new Date(),
         })
         .returning({ id: automationStepRuns.id });
+
+      // Open this step's unresolved-reference scope. Every `{{...}}` the node
+      // resolves from here until the next node opens its own — including inside
+      // loop bodies and array-pipe predicates — is attributed to THIS step.
+      // Recording only; nothing here can fail or skip a step.
+      const stepDiagnostics = beginStepDiagnostics();
 
       // Resolve per-node error handling config
       const nodeErrorHandling = ((node.data as Record<string, unknown>)
@@ -3208,6 +3402,13 @@ async function executeAutomationFlow(params: {
               // Freeze the branch decisions made BEFORE the suspension — the
               // resumed invocation unions its own on top.
               await persistPathTaken();
+              // The delay node exits the walk early — drain its diagnostics
+              // here or they are lost with the suspension.
+              await persistStepDiagnostics(
+                stepRun.id,
+                stepDiagnostics,
+                node.id
+              );
 
               return {}; // Exit — execution resumes after delay
             }
@@ -3249,7 +3450,7 @@ async function executeAutomationFlow(params: {
               };
 
               // Resolve the collection to iterate over
-              const collection = resolveContextPath(
+              const collection = resolveReferencePath(
                 data.iteratorExpression,
                 context
               );
@@ -3846,6 +4047,11 @@ async function executeAutomationFlow(params: {
         }
       } // end retry loop
 
+      // Record what resolved to nothing — on the SUCCESS path too. That is the
+      // whole point: the 2026-07-27 failure was a run in which every step
+      // "succeeded" while its references silently emptied out.
+      await persistStepDiagnostics(stepRun.id, stepDiagnostics, node.id);
+
       if (succeeded) {
         // Record step output
         context.steps[node.id] = { output };
@@ -4113,7 +4319,7 @@ function resolveOperandList(raw: string, context: StepContext): string[] {
 
   // Bare context path → resolve to its native value.
   if (/^(trigger|steps|automation|loop|item)\./.test(trimmed)) {
-    const value = resolveContextPath(trimmed, context);
+    const value = resolveReferencePath(trimmed, context);
     if (value == null) return [];
     if (Array.isArray(value))
       return value.filter((v) => v != null).map((v) => String(v));

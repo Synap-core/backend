@@ -50,13 +50,16 @@ import {
   workspaces,
   ProfileRepository,
 } from "@synap/database";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
 import {
   userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { EntityConnection } from "./entity-connections.js";
 
@@ -197,6 +200,137 @@ const KIND_TABLE: Record<string, KindSpec> = {
 };
 
 /**
+ * The per-kind READ FLOOR for node hydration — the ONE place that decides which
+ * rows of a `KIND_TABLE` table this caller may see the NAME of.
+ *
+ * Extracted from `hydrateNodes` because the default is UNSAFE for a whole class
+ * of tables and the exceptions must be readable rather than buried in a nested
+ * ternary. The trap it exists to close:
+ *
+ *   `workspaceLensWhere` floors on `userVisibleWhere`, whose `isNull(workspaceId)`
+ *   branch is OWNER-BLIND (no `user_id` term). On an `ownerPrivate` table — one
+ *   where a NULL workspace means "personal to the owner" — that admits EVERY
+ *   user's private rows to EVERY pod user. `user-visible-where.ts` warns about
+ *   exactly this, and names focus_sessions / entities / documents.
+ *
+ * So the rule is: **check `nullWorkspaceMeans` in `access/registry.ts` before
+ * adding a kind here.** `podGlobalConfig` may use the plain lens; `ownerPrivate`
+ * MUST NOT. Note that some ownerPrivate tables (`projects`, `views`,
+ * `focus_sessions`) have NO registered rule at all — unclassified is not the same
+ * as safe; their own routers hand-inline the owner-gate, which is the tell.
+ * Enforced by `__tripwires__/hydration-floor-owner-private.test.ts`.
+ *
+ * Every branch must ALSO honour the workspace lens. The owner-aware helpers
+ * (`ownerPrivateVisibleWhere`, `channelVisibilityWhere`) carry no workspace
+ * dimension, so the lens is re-ANDed via `lensNarrowing` — an AND can only
+ * narrow, so it cannot reopen the owner hole.
+ */
+
+/**
+ * The workspace-lens narrowing as a standalone conjunct, matching
+ * `workspaceLensWhere`'s three lens states: `undefined` → no narrowing,
+ * `null` → globals only, `"<id>"` → that workspace only. Returned as
+ * `undefined` for the no-narrowing case so Drizzle's `and()` drops it.
+ */
+function lensNarrowing(column: AnyPgColumn, lens: string | null | undefined) {
+  if (lens === undefined) return undefined;
+  if (lens === null) return isNull(column);
+  return eq(column, lens);
+}
+
+function hydrationScopeWhere(
+  kind: string,
+  t: any,
+  userId: string,
+  workspaceId?: string | null
+) {
+  switch (kind) {
+    // `workspace` has no `workspaceId` column — the row IS the workspace, so its
+    // own `id` is the scope dimension (userVisibleWhere accepts any column).
+    case "workspace":
+      return and(
+        isNull((t as typeof workspaces).archivedAt),
+        workspaceLensWhere(t.id, userId, workspaceId)
+      );
+    // Agents have no `workspaceId` — a pod-global registry. SYSTEM-owned (shared
+    // built-ins) OR owned by this caller (private local adjuncts stay owner-only).
+    case "agent":
+      return or(
+        eq((t as typeof agents).ownerType, "system"),
+        eq((t as typeof agents).userId, userId)
+      );
+    // ownerPrivate + part of the entity-facet substrate → the canonical entity
+    // READ scope (owner-gated NULL + membership + exposure + role-lens).
+    case "entity":
+      return accessScopeWhere({
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
+        userId,
+        workspaceLens: workspaceId,
+        facetLens: true,
+      });
+    // ownerPrivate, NOT facet-substrate → the minimal owner-gate.
+    // `documents` is the sharp one: its create door DELIBERATELY lands pod-wide
+    // when no workspace signal is present (routers/documents.ts:124-127), so a
+    // NULL workspace is the DEFAULT here, not a rare edge case.
+    case "document":
+      return and(
+        ownerPrivateVisibleWhere(
+          (t as typeof documents).workspaceId,
+          (t as typeof documents).userId,
+          userId
+        ),
+        lensNarrowing((t as typeof documents).workspaceId, workspaceId)
+      );
+    case "session":
+      return and(
+        ownerPrivateVisibleWhere(
+          (t as typeof focusSessions).workspaceId,
+          (t as typeof focusSessions).userId,
+          userId
+        ),
+        lensNarrowing((t as typeof focusSessions).workspaceId, workspaceId)
+      );
+    // `projects` and `views` are ownerPrivate BY BEHAVIOUR but have no registered
+    // VisibilityRule — their own routers hand-inline the owner-gate
+    // (routers/projects.ts:87, routers/views.ts:72), which is what proves the
+    // semantics. Both have a nullable `workspace_id` and a NOT NULL `user_id`, so
+    // the plain lens would expose every user's personal projects/views by name.
+    case "project":
+      return and(
+        ownerPrivateVisibleWhere(
+          (t as typeof projects).workspaceId,
+          (t as typeof projects).userId,
+          userId
+        ),
+        lensNarrowing((t as typeof projects).workspaceId, workspaceId)
+      );
+    case "view":
+      return and(
+        ownerPrivateVisibleWhere(
+          (t as typeof views).workspaceId,
+          (t as typeof views).userId,
+          userId
+        ),
+        lensNarrowing((t as typeof views).workspaceId, workspaceId)
+      );
+    // Channels are ownerPrivate but NOT uniformly owner-gated: a NULL-workspace
+    // PERSONAL channel is owner-private, while a shared-TYPE NULL channel is
+    // legitimately pod-wide. `ownerPrivateVisibleWhere` would over-restrict and
+    // hide shared channels. Use the canonical predicate the channels router and
+    // the registry's own VisibilityRule both use.
+    case "channel":
+      return and(
+        channelVisibilityWhere(userId),
+        lensNarrowing((t as typeof channels).workspaceId, workspaceId)
+      );
+    default:
+      return workspaceLensWhere(t.workspaceId, userId, workspaceId);
+  }
+}
+
+/**
  * Batch-hydrate a set of (kind, id) refs into named nodes — ONE query per kind,
  * never N+1. Unknown/stub kinds resolve to a raw-id node (name = short id) so
  * the neighbour is still listed.
@@ -240,10 +374,8 @@ export async function hydrateNodes(
       const t = spec.table;
       // SCOPE the hydration — an edge can be visible while its far endpoint lives
       // in a workspace the user can't see; without this AND, the neighbour's NAME
-      // would leak. `userVisibleWhere` is the same floor every pod read uses.
-      // `workspace` is the one KIND_TABLE entry with no `workspaceId` column —
-      // the row IS the workspace, so its own `id` is the scope dimension
-      // (userVisibleWhere accepts any scope column, including `id`).
+      // would leak. Per-kind floors live in `hydrationScopeWhere` above; read its
+      // header before adding a kind (the default is unsafe for ownerPrivate).
       const rows = await db
         .select()
         .from(t)
@@ -251,36 +383,7 @@ export async function hydrateNodes(
           and(
             inArray(t.id, ids),
             spec.deletedAt ? isNull(t[spec.deletedAt]) : undefined,
-            kind === "workspace"
-              ? and(
-                  isNull((t as typeof workspaces).archivedAt),
-                  workspaceLensWhere(t.id, userId, workspaceId)
-                )
-              : kind === "agent"
-                ? // Agents have no `workspaceId` column — they are a pod-global
-                  // registry. Floor: SYSTEM-owned (shared built-ins) OR owned by
-                  // this caller (private local adjuncts stay owner-only). This
-                  // prevents leaking another user's private agent's NAME.
-                  or(
-                    eq((t as typeof agents).ownerType, "system"),
-                    eq((t as typeof agents).userId, userId)
-                  )
-                : kind === "entity"
-                  ? // `entities` is ownerPrivate — a bare `workspaceLensWhere`
-                    // floors on `userVisibleWhere`, which admits pod-wide NULL
-                    // rows to ALL users and leaks another tenant's entity NAME.
-                    // Floor on the canonical entity READ scope (owner-gated NULL +
-                    // membership + exposure + role-lens) and thread the workspace
-                    // lens through it. Mirrors resolveByName below + entities.list.
-                    accessScopeWhere({
-                      workspaceIdColumn: entities.workspaceId,
-                      entityIdColumn: entities.id,
-                      ownerColumn: entities.userId,
-                      userId,
-                      workspaceLens: workspaceId,
-                      facetLens: true,
-                    })
-                  : workspaceLensWhere(t.workspaceId, userId, workspaceId)
+            hydrationScopeWhere(kind, t, userId, workspaceId)
           )
         );
 

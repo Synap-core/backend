@@ -35,6 +35,10 @@
  *                                    (capability RUNS only; no-ops for data
  *                                     writes; a channel grant may still tighten
  *                                     an "auto" capability — see below)
+ *   2.8 governance_rules store    → additive: auto execute / propose (fires
+ *                                    ONLY when the caller resolved a matching
+ *                                    rule; undefined = no-op, falls through
+ *                                    byte-identical — see below)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -135,105 +139,6 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
   "purge",
   "merge",
 ];
-
-/**
- * Named governance presets — choose one when provisioning an external agent.
- * Applied to workspace settings.aiGovernance at bridge-setup time.
- *
- * SAFE:   everything is proposed — human gates every mutation.
- * NORMAL: creates + non-destructive (merge/partial) edits auto-execute; deletes,
- *         full-REPLACE writes (document/view content), and ADMIN stay proposed (recommended).
- * CRAZY:  everything auto-executes — revert is the safety net (needs revert-without-proposal).
- */
-export const GOVERNANCE_MODES = {
-  safe: {
-    label: "Safe — every change requires your approval",
-    autoApproveFor: [
-      "search.*",
-      "memory.recall",
-      "entity.read",
-      "document.read",
-      "context.*",
-      "filesystem.read",
-      "bento.arrange",
-    ],
-    writesRequireProposal: true,
-  },
-  normal: {
-    label:
-      "Normal — creating & editing are instant, deletes need approval (recommended)",
-    autoApproveFor: [
-      "search.*",
-      "memory.recall",
-      "entity.read",
-      "document.read",
-      "context.*",
-      "filesystem.read",
-      "bento.arrange",
-      "entity.create",
-      "document.create",
-      "relation.create",
-      "view.create",
-      "profile.create",
-      "property_def.create",
-      // channel.create is intentionally absent here too — see the note in
-      // DEFAULT_AUTO_APPROVE. A new channel is a durable SURFACE the operator must
-      // see + accept, so create-new proposes even under Normal; resolve-existing
-      // (channel.resolve/ensure/bind) is unaffected.
-      // Non-destructive DATA edits are instant too — these write paths MERGE or
-      // do a field-level partial (they never wipe unspecified fields), so an edit
-      // is no more destructive than a create. Governance splits on the write
-      // being non-destructive, NOT on create-vs-update.
-      //   entity.update / profile.update / property_def.update — already in
-      //     DEFAULT_AUTO_APPROVE; NORMAL previously (wrongly) re-gated them.
-      //   relation.update — field-level partial (type/metadata only-if-present).
-      // DELIBERATELY EXCLUDED (full-REPLACE writes — can silently drop unrestated
-      // content, so they stay proposal-gated): document.update (full-body replace),
-      // view.update (full-config replace). Plus deletes/archive/purge
-      // (DESTRUCTIVE_ACTIONS), substrate updates, and ADMIN_ACTIONS.
-      "entity.update",
-      "relation.update",
-      "profile.update",
-      "property_def.update",
-      // Capability-substrate creates. Under Normal "creates are instant": both
-      // behavior-wiring (automation/playbook/link — orchestrate existing
-      // capabilities) AND power-granting (tool/skill — define new abilities)
-      // execute directly. What they DO at runtime is still governed separately,
-      // and ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
-      // Updates & deletes of the substrate remain proposal-gated.
-      "automation.create",
-      // playbook.create intentionally absent — a playbook is a durable process
-      // SURFACE (like a channel), so create-new proposes for visibility+acceptance
-      // even under Normal. Automations (short, wire existing capabilities) stay
-      // instant. See the note in DEFAULT_AUTO_APPROVE.
-      "link.create",
-      "tool.create",
-      "skill.create",
-      "playbook.read",
-      "tool.read",
-      "link.read",
-      "capability.read",
-      "terminal.read_logs",
-      "filesystem.write_workspace",
-      // Kind + Facets (Wave 1B): same "creates/edits are instant" philosophy
-      // as entity.create/update above. facet.detach is included too — it is
-      // a reversible soft-delete (see DEFAULT_AUTO_APPROVE comment), unlike
-      // the full DESTRUCTIVE_ACTIONS (delete/archive/purge) that this preset
-      // deliberately excludes.
-      "facet.attach",
-      "facet.update",
-      "facet.detach",
-    ],
-    writesRequireProposal: false,
-  },
-  crazy: {
-    label: "Crazy — everything is instant; revert in Studio if needed",
-    autoApproveFor: ["*"],
-    writesRequireProposal: false,
-  },
-} as const;
-
-export type GovernanceMode = keyof typeof GOVERNANCE_MODES;
 
 /**
  * The ONE canonical reader of `workspaces.settings.governanceMode`. Both
@@ -661,13 +566,22 @@ export interface AgentPolicyInput {
    * be resolved to "execute" by a downstream override rung (ownership, explicit
    * autoApproveFor, DEFAULT_AUTO_APPROVE, capability governance). Absent/false
    * (the default) → destructive actions ALWAYS propose, mirroring the
-   * ADMIN_ACTIONS hard floor. This is the raw escape hatch for the future
-   * "Crazy" mode (GOVERNANCE_MODES.crazy), where modes are not yet first-class
-   * on the agent/workspace record.
-   * TODO: wire to a first-class Crazy mode instead of a raw boolean once
-   * GOVERNANCE_MODES becomes a persisted, resolvable setting.
+   * ADMIN_ACTIONS hard floor. This is the raw escape hatch for a future
+   * "Crazy" mode, which is not yet first-class on the agent/workspace record.
+   * TODO: wire to a first-class Crazy mode instead of a raw boolean once one
+   * becomes a persisted, resolvable setting.
    */
   allowDestructiveAutoApprove?: boolean;
+  /**
+   * The resolved `governance_rules` store verdict for this
+   * (principal, scope, target) tuple — rung 2.8. Resolved by the caller
+   * (`resolveGovernanceRule` in @synap/database, which has `db`; this engine
+   * stays pure). `"auto"` executes, `"propose"` proposes; absent/undefined
+   * means no rule matched and the rung no-ops, falling through
+   * byte-identical to every rung below. NEVER `"deny"` — a rule can only
+   * widen or keep-reviewable, never close a door a floor already opened.
+   */
+  governanceRuleVerdict?: "auto" | "propose";
 }
 
 /**
@@ -696,6 +610,7 @@ export const PROPOSE_REASON = {
     "This change alters the record's scope or identity and requires human approval.",
   DESTRUCTIVE_HARD_FLOOR:
     "Destructive action (delete/archive/purge/merge) always requires human approval.",
+  GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -828,6 +743,23 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       return { verdict: "deny", reason: CHANNEL_BLOCK_REASON };
     }
     return { verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE };
+  }
+
+  // 2.8 GOVERNANCE_RULES store — additive; fires ONLY when the caller resolved
+  // a matching rule (`resolveGovernanceRule`, @synap/database — has `db`; this
+  // engine stays pure). Sits after every floor (2 ADMIN, 2.1 forcePropose, 2.5
+  // DESTRUCTIVE, 2.6 by-kind) and after 2.7 (capability governance), but BEFORE
+  // ownership (rung 3) and autoApproveFor (rungs 4/8): a stored rule is a more
+  // specific, operator-authored signal than the routing workspace's ownership
+  // or blanket whitelist, so it should win over them — but it can never
+  // override a floor (all four floors already returned above) and can never
+  // deny (the store's verdict enum is auto|propose only, never deny). When no
+  // rule matched, `governanceRuleVerdict` is undefined and this rung no-ops,
+  // falling through byte-identical to every rung below.
+  if (input.governanceRuleVerdict) {
+    return input.governanceRuleVerdict === "auto"
+      ? { verdict: "execute" }
+      : { verdict: "propose", reason: PROPOSE_REASON.GOVERNANCE_RULE };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").

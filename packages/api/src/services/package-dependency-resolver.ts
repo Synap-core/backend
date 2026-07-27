@@ -458,6 +458,105 @@ async function ensureCapabilityDependencyPresent(
 }
 
 /**
+ * Ensure a `kind:'cell'` dependency is present on the pod for `userId`.
+ *
+ * A cell dependency is a SIBLING artifact (a ViewFrame renderer), not a
+ * workspace overlay: a compound template that ships a custom cell wants that
+ * cell's renderer registered pod-wide so any workspace it stands up can use it.
+ * We route through `applyMarketInstall({kind:'cell'})` — the SAME "one door per
+ * kind" installer the `market.install` verb and the `capability.install`
+ * approve-executor use — which resolves the cell's renderer source from the
+ * `cp_catalog_cache` row (cache-first, synced by `cp-catalog-sync`) and upserts
+ * it via `defineCell` (the ONE cell-write door, shared with `synap_create_cell`
+ * / `POST /cells/define`). No cell installer is reinvented here.
+ *
+ * Scope: pod-wide by construction (`workspaceId: null` → `defineCell` writes a
+ * pod-global widget_definition visible in every workspace), matching the
+ * capability-dependency default. A bare cell dependency has no host workspace,
+ * and a pod-global renderer is exactly what a reusable dependency wants.
+ *
+ * GOVERNANCE: unlike a capability/skill, a cell carries NO executable code path
+ * on the pod — it is an inert renderer definition (widget_definitions upsert),
+ * and `defineCell` is a direct write on EVERY door (MCP, Hub, marketplace), never
+ * `checkPermissionOrPropose`-gated. So installing a cell dependency directly is
+ * consistent with how cells are installed everywhere; there is no proposal
+ * membrane to thread `agentUserId` through (hence `applyMarketInstall` takes
+ * none). The compound install itself is the governance unit.
+ *
+ * NON-FATAL: a cache-miss (cell not yet synced / retired) or any applier failure
+ * degrades to `required-absent` for THIS dep with a clear message — it never
+ * throws, so one unsynced cell can't abort the whole compound install.
+ */
+async function ensureCellDependencyPresent(
+  slug: string,
+  userId: string,
+  resolved: Map<string, ResolveResult>,
+  installed: ResolvedPackageDependency[]
+): Promise<ResolveResult> {
+  // Namespaced cache key so a cell slug never collides with a workspace subtype
+  // or capability slug in the SHARED `resolved` map (diamond dedup across members).
+  const cacheKey = `cell:${slug}`;
+  const cached = resolved.get(cacheKey);
+  if (cached) return cached;
+
+  const record = (res: ResolveResult): ResolveResult => {
+    resolved.set(cacheKey, res);
+    installed.push({
+      slug,
+      kind: "cell",
+      relation: "require",
+      action: res.action,
+      message: res.message,
+    });
+    return res;
+  };
+
+  try {
+    const { applyMarketInstall } =
+      await import("./capabilities/marketplace-install.js");
+    const r = await applyMarketInstall({
+      kind: "cell",
+      slug,
+      userId,
+      // Pod-wide renderer — no host workspace for a bare dependency.
+      workspaceId: null,
+    });
+    return record({
+      action: "installed",
+      message: `Cell "${slug}" installed (typeKey: ${
+        (r as { typeKey?: string }).typeKey ?? slug
+      }, ${(r as { changeType?: string }).changeType ?? "upserted"}).`,
+    });
+  } catch (err) {
+    return record({
+      action: "required-absent",
+      message: `Cell "${slug}" could not be installed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+}
+
+/** Kinds that have NO standalone by-slug applier on the pod yet — accepted on
+ * the wire (so a compound template carrying them never 400s at the door) but
+ * surfaced as `required-absent`, non-fatal, until the pod grows a per-kind
+ * catalog sync + applier. Kept in sync with `PackageDependencyKind`: the ONLY
+ * installable non-workspace/non-capability kind today is `cell`. */
+function recordUnsupportedSiblingDependency(
+  kind: PackageDependencyKind,
+  slug: string,
+  installed: ResolvedPackageDependency[]
+): void {
+  installed.push({
+    slug,
+    kind,
+    relation: "require",
+    action: "required-absent",
+    message: `${kind} dependency "${slug}" is not auto-installable on this pod yet — it has no standalone catalog sync + applier. Ensure it is installed on the pod (or install it as part of a workspace template).`,
+  });
+}
+
+/**
  * Ensure a `kind:'workspace'` dependency is present on the pod for `userId`.
  * Recurses into the template's OWN dependencies first (topological, deps-first)
  * under a slug-keyed ancestor-path cycle guard, then either COMPOSES it onto its
@@ -541,7 +640,11 @@ async function ensureWorkspaceDependencyPresent(
   path.add(slug);
   try {
     for (const nested of baseDeps) {
-      const nestedKind = nested.kind ?? "workspace";
+      // `baseDeps` is typed by the frozen `@synap-core/workspace-templates`
+      // union (no `cell` yet), but a cache-resolved template body is JSON off
+      // the wire and CAN carry any kind the CP emits — cast to the pod's own
+      // (widened) `PackageDependencyKind` so the `cell` branch is reachable.
+      const nestedKind = (nested.kind ?? "workspace") as PackageDependencyKind;
       // A capability a base template itself requires installs too (recursive):
       // resolve + install it through the same canonical door, idempotent + non-fatal.
       if (nestedKind === "capability") {
@@ -554,7 +657,24 @@ async function ensureWorkspaceDependencyPresent(
         );
         continue;
       }
-      if (nestedKind !== "workspace") continue;
+      // A cell a base template requires installs through the marketplace door.
+      if (nestedKind === "cell") {
+        await ensureCellDependencyPresent(
+          nested.slug,
+          userId,
+          resolved,
+          installed
+        );
+        continue;
+      }
+      if (nestedKind !== "workspace") {
+        // Other sibling kinds (automation + the not-yet-installable ones) are
+        // surfaced non-fatally rather than SILENTLY dropped as before — a base
+        // template's declared dependency the pod can't yet stand up must be
+        // visible in the resolved graph, not invisible.
+        recordUnsupportedSiblingDependency(nestedKind, nested.slug, installed);
+        continue;
+      }
       const nestedRes = await ensureWorkspaceDependencyPresent(
         { slug: nested.slug, relation: nested.relation ?? "require" },
         userId,
@@ -708,19 +828,22 @@ export async function resolvePackageDependencies(
       continue;
     }
 
+    if (kind === "cell") {
+      // Cell deps are require-only siblings — resolve the renderer source from
+      // the CP catalog cache + upsert via `defineCell`, through the shared
+      // marketplace door (idempotent, pod-wide, non-fatal on miss).
+      await ensureCellDependencyPresent(dep.slug, userId, resolved, installed);
+      continue;
+    }
+
     if (kind !== "workspace") {
-      // `automation` deps stay require-only surfaced: unlike a capability there is
-      // no standalone catalog loader for a bare automation, and an automation is a
-      // workspace-scoped WHEN→THEN flow seeded onto a HOST workspace (the package's
-      // post-workspace `automations` layer) — a bare dependency has no host to
-      // attach to. So there is no symmetric install door; surface, never fatal.
-      installed.push({
-        slug: dep.slug,
-        kind,
-        relation: "require",
-        action: "required-absent",
-        message: `${kind} dependency "${dep.slug}" is not auto-verified in V1 — ensure it is installed on the pod.`,
-      });
+      // Every OTHER sibling kind has no standalone by-slug applier on the pod
+      // yet — `automation` is a workspace-scoped WHEN→THEN flow with no host for a
+      // bare dependency, and `skill`/`view`/`workflow`/… are not synced into the
+      // pod's catalog with a standalone installer. Surface, never fatal (the same
+      // non-fatal degrade a missing capability/cell gets), so a compound install
+      // proceeds and the unmet dependency is VISIBLE in the resolved graph.
+      recordUnsupportedSiblingDependency(kind, dep.slug, installed);
       continue;
     }
 

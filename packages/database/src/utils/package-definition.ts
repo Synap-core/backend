@@ -176,7 +176,32 @@ export interface OnboardingSpec {
 // workspace. Mirrors `TemplateDependency` in @synap-core/workspace-templates
 // VERBATIM so the wire shape never drifts.
 
-export type PackageDependencyKind = "workspace" | "capability" | "automation";
+// The accepted-on-the-wire dependency vocabulary — locked to the CP's
+// `POST /api/packages` `dependencies[].kind` enum (CP `PACKAGE_TYPES`
+// = workspace/capability/skill/workflow/view/cell, PLUS legacy `automation`
+// which the CP keeps for back-compat with stored deps published before the
+// automation→workflow rename). This union, the hub Zod enum
+// (`rest/packages.ts`), and the tRPC `createFromDefinition` Zod enum
+// (`routers/workspaces.ts`) MUST stay EXACTLY these 7 literals in lockstep
+// with the CP — no more, no less.
+//
+// What `resolvePackageDependencies` DOES with each:
+//   - `workspace`  → resolve+install (compose/require) via the workspace path.
+//   - `capability` → resolve+install via `createCapabilityFromDefinition`.
+//   - `cell`       → resolve+install via `applyMarketInstall({kind:'cell'})`
+//                    → `defineCell` (pod-wide, idempotent).
+//   - `automation` / `skill` / `workflow` / `view` → ACCEPTED but surfaced as
+//     `required-absent` (non-fatal): the pod has no standalone by-slug catalog
+//     sync + applier for these yet. When one grows on the pod, move it out of
+//     the catch-all into its own install branch — the enum already permits it.
+export type PackageDependencyKind =
+  | "workspace"
+  | "capability"
+  | "skill"
+  | "workflow"
+  | "view"
+  | "cell"
+  | "automation";
 export type PackageDependencyRelation = "compose" | "require";
 
 export interface TemplateDependency {
@@ -184,8 +209,8 @@ export interface TemplateDependency {
   slug: string;
   /**
    * What the dependency is. Default `'workspace'`. Only `'workspace'`
-   * dependencies can be `compose`d; `'capability'`/`'automation'` are always
-   * `require`d present without merging.
+   * dependencies can be `compose`d; `'capability'`/`'cell'`/`'automation'` are
+   * always `require`d present without merging.
    */
   kind?: PackageDependencyKind;
   /**

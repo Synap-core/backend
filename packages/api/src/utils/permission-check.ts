@@ -16,7 +16,6 @@ import {
   eq,
   and,
   gte,
-  isNotNull,
   drizzleSql,
   entities,
   ProfileResolutionService,
@@ -24,7 +23,10 @@ import {
   findExistingPendingDuplicate,
   type InsertPendingProposalResult,
 } from "@synap/database";
-import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
+import {
+  resolveAgentGovernanceDecision,
+  resolveGovernanceRule,
+} from "@synap/database/agent-governance";
 import {
   users,
   workspaces,
@@ -853,6 +855,41 @@ export async function checkPermissionOrPropose(
 
     // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
     if (source === "ai" || source === "intelligence") {
+      const eventKey = `${subjectType}.${action}`;
+
+      // ONE-STORE (Phase B, #1 must-fix): this path used to read
+      // settings.aiGovernance.autoApproveFor DIRECTLY — a second concurrent
+      // store, alongside the agentUserId path's resolveAgentGovernanceDecision
+      // (which already reads governance_rules, not the JSONB). It now consults
+      // the SAME table via resolveGovernanceRule — `includeAgentPrincipal:
+      // false` because there is no agent user here to attribute an
+      // agent-scoped rule to, only "any"-principal (workspace-authored) rules
+      // are eligible — falling back to DEFAULT_AUTO_APPROVE when no rule
+      // matches, exactly mirroring decideAgentPolicy's rung 8. Destructive
+      // actions never auto-approve via this path (mirrors rung 2.5's hard
+      // floor), and forcePropose always wins.
+      const ruleMatch = await resolveGovernanceRule({
+        db,
+        workspaceId,
+        subjectType,
+        action,
+        includeAgentPrincipal: false,
+      });
+      const isDestructive = DESTRUCTIVE_ACTIONS.includes(action);
+      const whitelisted =
+        !isDestructive &&
+        (ruleMatch
+          ? ruleMatch.verdict === "auto"
+          : isAutoApproved(eventKey, DEFAULT_AUTO_APPROVE));
+
+      if (whitelisted && !effectiveForcePropose) {
+        return { granted: true };
+      }
+
+      // Legacy aiAutoApprove workspace toggle — fallback when the action isn't
+      // covered (or is destructive) by the modern whitelist. Distinct legacy
+      // field, not part of the governance_rules convergence — still read
+      // directly off the workspace row.
       const [ws] = workspaceId
         ? await db
             .select({ settings: workspaces.settings })
@@ -860,28 +897,7 @@ export async function checkPermissionOrPropose(
             .where(eq(workspaces.id, workspaceId))
             .limit(1)
         : [undefined];
-
       const settings = ws?.settings as WorkspaceSettings | undefined;
-      const eventKey = `${subjectType}.${action}`;
-
-      // Modern whitelist, honored BEFORE the legacy aiAutoApprove fallback — a
-      // no-agentUserId AI call (e.g. the Discord channel-digest's entity.create /
-      // context.link, source:"intelligence") is governed by the SAME
-      // autoApproveFor SSOT as the agentUserId path, not just the legacy boolean.
-      // Destructive actions never auto-approve via this path (mirrors
-      // decideAgentPolicy's rung 2.5 hard floor), and forcePropose always wins.
-      const effectiveAutoApproveFor =
-        settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
-      const isDestructive = DESTRUCTIVE_ACTIONS.includes(action);
-      const whitelisted =
-        !isDestructive && isAutoApproved(eventKey, effectiveAutoApproveFor);
-
-      if (whitelisted && !effectiveForcePropose) {
-        return { granted: true };
-      }
-
-      // Legacy aiAutoApprove workspace toggle — fallback when the action isn't
-      // covered (or is destructive) by the modern whitelist.
       const aiAutoApprove =
         settings?.aiGovernance?.autoApprove ??
         (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
@@ -1141,13 +1157,21 @@ async function createPendingProposalRow(
  * Create a proposal for an AI-sourced action that requires review.
  */
 /**
- * Hard per-user daily budget for AGENT-created proposals (UTC day). A scheduled
- * or chained agent that keeps proposing must not be able to flood a user's
- * review queue: past this count, the agent write is REFUSED (neither executed
- * nor proposed) for the rest of the day. Product-confirmed hard cap; mirrors the
- * deterministic hygiene worker's MAX_PROPOSALS_PER_USER_PER_DAY.
+ * Hard per-AGENT daily budget for agent-created proposals (UTC day). A
+ * scheduled or chained agent that keeps proposing must not be able to flood a
+ * user's review queue: past this count, the agent write is REFUSED (neither
+ * executed nor proposed) for the rest of the day. Base cap; a trusted agent's
+ * effective ceiling may be scaled up — see `agentDailyProposalCap()`. Mirrors
+ * the deterministic hygiene worker's MAX_PROPOSALS_PER_USER_PER_DAY.
  */
 export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
+
+/** Multiplier applied to the base cap for a proven-trustworthy agent. */
+const TRUSTED_AGENT_CAP_MULTIPLIER = 3;
+/** Minimum lifetime proposal volume before trust can raise the cap. */
+const TRUSTED_AGENT_MIN_TOTAL = 100;
+/** Minimum lifetime approve rate before trust can raise the cap. */
+const TRUSTED_AGENT_MIN_APPROVE_RATE = 0.95;
 
 /** UTC midnight for "today" — the same day boundary the hygiene worker uses. */
 export function startOfUtcDay(): Date {
@@ -1158,23 +1182,57 @@ export function startOfUtcDay(): Date {
 }
 
 /**
- * Count proposals attributed to an AI agent that were created for `userId` today
- * (UTC). Agent proposals store `createdBy = userId` (the human owner) and a
- * non-null `agentUserId`; human-member proposals carry a null agentUserId and so
- * never count against this budget.
+ * Count proposals attributed to THIS agent (not its owner's whole roster)
+ * created today (UTC). Per-agent, mirroring the shape of the scorecard's own
+ * today-count query (`agent-scorecard.ts`) so the two never disagree.
  */
-async function countTodayAgentProposals(userId: string): Promise<number> {
+async function countTodayAgentProposals(
+  userId: string,
+  agentUserId: string
+): Promise<number> {
   const [row] = await db
     .select({ count: drizzleSql<number>`count(*)::int` })
     .from(proposals)
     .where(
       and(
         eq(proposals.createdBy, userId),
-        isNotNull(proposals.agentUserId),
+        eq(proposals.agentUserId, agentUserId),
         gte(proposals.createdAt, startOfUtcDay())
       )
     );
   return row?.count ?? 0;
+}
+
+/**
+ * Lightweight trust check for the daily cap: a single aggregate over this
+ * agent's lifetime proposals (total + approved count), NOT the full
+ * `diagnose` scorecard (which also runs fingerprint-clustering for a
+ * duplicate rate — too heavy for this hot path). A proven agent
+ * (>=100 proposals, >=95% approve rate) gets a 3x ceiling; everyone else gets
+ * the base cap.
+ */
+export async function agentDailyProposalCap(
+  agentUserId: string
+): Promise<number> {
+  const [row] = await db
+    .select({
+      total: drizzleSql<number>`count(*)::int`,
+      approved: drizzleSql<number>`count(*) filter (where ${proposals.status} in (${ProposalStatus.APPROVED}, ${ProposalStatus.AUTO_APPROVED}))::int`,
+    })
+    .from(proposals)
+    .where(eq(proposals.agentUserId, agentUserId));
+
+  const total = row?.total ?? 0;
+  const approved = row?.approved ?? 0;
+  const approveRate = total > 0 ? approved / total : 0;
+
+  if (
+    total >= TRUSTED_AGENT_MIN_TOTAL &&
+    approveRate >= TRUSTED_AGENT_MIN_APPROVE_RATE
+  ) {
+    return AGENT_PROPOSALS_PER_USER_PER_DAY * TRUSTED_AGENT_CAP_MULTIPLIER;
+  }
+  return AGENT_PROPOSALS_PER_USER_PER_DAY;
 }
 
 async function createProposal(opts: {
@@ -1284,16 +1342,25 @@ async function createProposal(opts: {
   // queue. Only the AGENT path is budgeted — attributionAgentUserId is set for
   // both an explicit agent write and a legacy AI-source write whose personal
   // agent we just resolved. Human-member proposals (proposedByUserId, no agent
-  // attribution) are never capped. Past the daily cap the write is REFUSED
-  // (neither executed nor proposed) — the agent gets a denial it can surface.
-  if (attributionAgentUserId) {
-    const alreadyToday = await countTodayAgentProposals(userId);
-    if (alreadyToday >= AGENT_PROPOSALS_PER_USER_PER_DAY) {
+  // attribution) are never capped. The cap is PER AGENT (not shared across an
+  // owner's whole roster) and scales with the agent's own trust — see
+  // `agentDailyProposalCap()`. `governance.*` proposals (e.g.
+  // `governance.widen_lane`) are meta-actions, not a data flood, and are
+  // exempt. Past the daily cap the write is REFUSED (neither executed nor
+  // proposed) — the agent gets a denial it can surface.
+  const isGovernanceMetaProposal = action.startsWith("governance.");
+  if (attributionAgentUserId && !isGovernanceMetaProposal) {
+    const [alreadyToday, cap] = await Promise.all([
+      countTodayAgentProposals(userId, attributionAgentUserId),
+      agentDailyProposalCap(attributionAgentUserId),
+    ]);
+    if (alreadyToday >= cap) {
       logger.warn(
         {
           userId,
           agentUserId: attributionAgentUserId,
           alreadyToday,
+          cap,
           subjectType,
           action,
         },
@@ -1301,7 +1368,7 @@ async function createProposal(opts: {
       );
       return {
         denied: true,
-        reason: `Daily agent proposal limit reached (${AGENT_PROPOSALS_PER_USER_PER_DAY}/day). Ask the user to review pending proposals, or try again tomorrow.`,
+        reason: `Daily agent proposal limit reached (${cap}/day). Ask the user to review pending proposals, or try again tomorrow.`,
       };
     }
   }

@@ -42,9 +42,20 @@ vi.mock("@synap/database", () => ({
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(async () => selectQueue.rows.shift() ?? []),
-        })),
+        where: vi.fn(() => {
+          // Chainable AND thenable: `.limit(1)` serves the owning-user /
+          // workspace lookups; a bare `await ...where(...)` (no `.limit()`)
+          // serves `resolveGovernanceRule`'s governance_rules query (rung
+          // 2.8's I/O half) — both consume the SAME queue, in call order.
+          const rows = selectQueue.rows.shift() ?? [];
+          return {
+            limit: vi.fn(async () => rows),
+            then: (
+              resolve: (v: unknown) => unknown,
+              reject: (e: unknown) => unknown
+            ) => Promise.resolve(rows).then(resolve, reject),
+          };
+        }),
       })),
     })),
   },

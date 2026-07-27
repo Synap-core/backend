@@ -4,6 +4,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, inArray } from "@synap/database";
+import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 
@@ -270,6 +271,21 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         .update(users)
         .set({ agentMetadata: merged as never })
         .where(eq(users.id, agentUserId));
+
+      // ONE-STORE (Phase B write surface): mirror this agent's autoApproveFor
+      // list into governance_rules (agent-scoped, pod-wide) — the resolver's
+      // read side (rung 2.8) is now the enforcement path. The agent_metadata
+      // JSONB above is unchanged (back-compat / CP / UI display); this keeps
+      // the rules mirror from drifting from what was just set. REPLACE
+      // semantics: an empty array clears the mirrored rules.
+      await syncAutoApproveRules({
+        db,
+        principalKind: "agent",
+        agentUserId,
+        scopeKind: "pod",
+        actions: merged.autoApproveFor as string[],
+        createdBy: (c.get("userId") as string | undefined) ?? agentUserId,
+      });
 
       return c.json({
         ok: true,

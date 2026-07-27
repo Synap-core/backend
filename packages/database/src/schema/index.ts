@@ -216,3 +216,8 @@ export * from "./cp-catalog-cache.js";
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";
+
+// Governance Rules (0215) — the ONE store for agent/pod auto-approve policy
+// (Governance Convergence Plan, Phase A). Storage only here; resolver + engine
+// rung 2.8 wiring land in a separate wave.
+export * from "./governance-rules.js";

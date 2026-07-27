@@ -81,6 +81,15 @@ export interface AutomationGovernanceOpts {
   action: string;
   data: Record<string, unknown>;
   reasoning?: string;
+  /**
+   * The write SUBJECT's entity profile slug (D3 — automation-door parity with
+   * the chat door, which has carried this since `resolveAgentGovernanceDecision`
+   * was introduced). Governs by KIND: e.g. lets a "note" write auto-approve
+   * while a "lead" write on the same automation still proposes, via a
+   * `target_kind: "profile"` governance_rules row. Absent → no profile-kind
+   * rule can match (byte-identical to before this field existed).
+   */
+  subjectProfileSlug?: string | null;
   /** Provenance: the automation run that triggered this write. */
   automationRunId?: string;
   correlationId?: string;
@@ -113,6 +122,7 @@ export async function checkAutomationWriteOrPropose(
     action,
     data,
     reasoning,
+    subjectProfileSlug,
     automationRunId,
     correlationId,
     sessionId,
@@ -157,6 +167,10 @@ export async function checkAutomationWriteOrPropose(
     workspaceId,
     subjectType,
     action,
+    // D3: thread the write subject's profile slug so a profile-KIND
+    // governance_rules row (e.g. "note" auto vs "lead" propose) applies to
+    // automation writes too — full parity with the chat door.
+    subjectProfileSlug,
     preferAgentMetadataAutoApproveFor: false,
   });
 
@@ -245,7 +259,9 @@ async function proposeAutomationWrite(opts: {
     const [existing] = await db
       .select({ id: proposals.id })
       .from(proposals)
-      .where(and(eq(proposals.stepRunId, stepRunId), eq(proposals.nodeId, nodeId)))
+      .where(
+        and(eq(proposals.stepRunId, stepRunId), eq(proposals.nodeId, nodeId))
+      )
       .limit(1);
     if (existing) {
       return { proposed: true, proposalId: existing.id, deduped: true };
@@ -342,5 +358,9 @@ async function proposeAutomationWrite(opts: {
       : "Automation write routed to attributed proposal"
   );
 
-  return { proposed: true, proposalId: proposal.id, ...(deduped ? { deduped: true } : {}) };
+  return {
+    proposed: true,
+    proposalId: proposal.id,
+    ...(deduped ? { deduped: true } : {}),
+  };
 }

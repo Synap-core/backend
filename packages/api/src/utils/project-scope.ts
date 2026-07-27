@@ -47,6 +47,7 @@ import {
 import {
   userVisibleWhere,
   workspaceLensWhere,
+  podMemberWhere,
   type WorkspaceLens,
 } from "./user-visible-where.js";
 
@@ -196,6 +197,51 @@ export function facetLensMemberWhere(
   userId: string
 ): SQL {
   return inArray(entityIdColumn, facetLensedEntityIdsSubquery(userId));
+}
+
+/**
+ * FLOOR BRANCH — the POD-LEVEL twin of `facetLensMemberWhere` (Membership →
+ * Visibility, Wave 2). `facetLensMemberWhere` grants a WORKSPACE's members read
+ * on an entity that carries a facet in THAT workspace; a POD-WIDE facet
+ * (`entity_facets.workspace_id IS NULL`) joins no workspace, so before this
+ * branch it granted nobody anything and a pod-wide role (a `client` facet on a
+ * pod-scoped company, say) was visible only to the run owner.
+ *
+ * SHARED-TO-POD is defined as: the ENTITY is itself pod-wide
+ * (`workspace_id IS NULL`) AND it carries a LIVE pod-wide facet. There is no
+ * per-facet private flag, so the pod-wide facet IS the share signal — exactly as
+ * a workspace facet is the workspace share signal. The caller must additionally
+ * be a `pod_members` row (`podMemberWhere`).
+ *
+ * WIDENING-ONLY and NARROW BY CONSTRUCTION:
+ *   - it is ORed into the floor — it never removes a row;
+ *   - it requires a pod-wide row, so it can NEVER admit a workspace-scoped
+ *     (`workspace_id` non-null) row — no workspace data is widened;
+ *   - it requires an explicit, live facet attachment, so an UN-FACETED pod-wide
+ *     entity stays owner-private under `podPersonal`;
+ *   - it binds the CALLER's id only (symmetric across users, never a row owner);
+ *   - a non-pod-member matches nothing (the EXISTS is false) — fail closed.
+ */
+export function podSharedFacetWhere(
+  workspaceIdColumn: AnyPgColumn,
+  entityIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  const podWideFacetedEntityIds = db
+    .select({ id: entityFacets.entityId })
+    .from(entityFacets)
+    .where(
+      and(
+        isNull(entityFacets.workspaceId),
+        // Soft-delete gate — a DETACHED role must stop sharing the entity.
+        isNull(entityFacets.deletedAt)
+      )
+    );
+  return and(
+    isNull(workspaceIdColumn),
+    inArray(entityIdColumn, podWideFacetedEntityIds),
+    podMemberWhere(userId)
+  )!;
 }
 
 /**
@@ -417,6 +463,15 @@ export function accessScopeWhere(args: {
   if (facetLens) {
     floorBranches.push(facetLensMemberWhere(entityIdColumn, userId));
   }
+  // POD-shared (Wave 2): the pod-level twin of role-as-lens — a pod-wide entity
+  // carrying a LIVE pod-wide facet is shared with the pod's members. Same opt-in
+  // gate as `facetLens` (it reads `entity_facets.entity_id`, so it is only valid
+  // where `entityIdColumn` maps to it). Widening-only, pod-wide rows only; an
+  // un-faceted pod-wide entity stays owner-gated by `podPersonal`.
+  const podShared = facetLens
+    ? podSharedFacetWhere(workspaceIdColumn, entityIdColumn, userId)
+    : undefined;
+  if (podShared) floorBranches.push(podShared);
   const floor = or(...floorBranches)!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
@@ -425,7 +480,13 @@ export function accessScopeWhere(args: {
   const wsEmpty = Array.isArray(workspaceLens) && workspaceLens.length === 0;
   let workspaceNarrow: SQL | undefined;
   if (workspaceLens === null) {
-    workspaceNarrow = podPersonal;
+    // `null` lens = the POD view. Historically this was the owner's pod-personal
+    // rows ONLY, which re-imposed the owner floor on top of the (already
+    // widened) floor and hid pod-SHARED rows from every non-owner. The narrow is
+    // now "pod-wide rows I may see": my own, plus the pod-shared ones. Still a
+    // NARROW — both branches require `workspace_id IS NULL`, and it is ANDed with
+    // the floor, which carries the identical `podShared` branch.
+    workspaceNarrow = podShared ? or(podPersonal, podShared)! : podPersonal;
   } else if (workspaceLens !== undefined && !wsEmpty) {
     const lensNarrow = workspaceLensWhere(
       workspaceIdColumn,

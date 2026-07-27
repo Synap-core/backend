@@ -29,6 +29,7 @@
  */
 
 import { Hono } from "hono";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
@@ -166,6 +167,45 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * Phase 0 attribution hard-reject (GOVERNANCE-CONVERGENCE-PLAN.md §Phase 0).
+ *
+ * A `user_pat`/`hub_inbound` key with no `linkedUserId` is a bare human key
+ * used directly against MCP — a human doesn't speak MCP, so a `tools/call`
+ * for a WRITE tool arriving here on a bare key is by definition an
+ * un-provisioned agent. Left alone it falls to the anonymous/human
+ * governance path and, for DEFAULT_AUTO_APPROVE verbs, executes with no
+ * proposal at all — the silent bypass this closes.
+ *
+ * Reads still work (an unknown/read-only tool, or any non-`tools/call`
+ * method, is never rejected) — an un-provisioned key isn't bricked, only
+ * blocked from writing. Hub REST (`/api/hub/*`) is untouched — a human
+ * curling it with the same bare key stays anonymous, correctly.
+ *
+ * Pure (no DB) so the decision is unit-testable without mocking the SDK
+ * transport or the key-validation DB call — mirrors `formatGrounding` above.
+ */
+export function shouldRejectUnattributedWrite(
+  parsedBody: unknown,
+  toolDefs: ReadonlyArray<Pick<Tool, "name" | "annotations">>,
+  keyType: string | null | undefined,
+  linkedUserId: string | null | undefined
+): boolean {
+  const isBareKey =
+    !linkedUserId && (keyType === "user_pat" || keyType === "hub_inbound");
+  if (!isBareKey) return false;
+
+  const method = (parsedBody as { method?: string } | null)?.method;
+  if (method !== "tools/call") return false;
+
+  const toolName = (parsedBody as { params?: { name?: string } } | null)?.params
+    ?.name;
+  const tool = toolDefs.find((t) => t.name === toolName);
+  // Unknown tool name isn't ours to explain — let the SDK's own "unknown
+  // tool" error surface it. Only a KNOWN, non-read-only tool is rejected.
+  return !!tool && tool.annotations?.readOnlyHint !== true;
+}
+
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
 /**
@@ -263,6 +303,20 @@ function jsonRpcRateLimited(id: unknown, message: string) {
   return Response.json(
     { jsonrpc: "2.0", id, error: { code: -32000, message } },
     { status: 429 }
+  );
+}
+
+/**
+ * A valid, non-agent key attempting a write over `/mcp` (see the attribution
+ * hard-reject below). This is neither an auth failure (401 → try again with a
+ * new key) nor a rate limit (429 → back off) — the key works fine, it's just
+ * not provisioned to write here. 403, no `WWW-Authenticate` header: retrying
+ * auth would not fix this.
+ */
+function jsonRpcForbidden(id: unknown, message: string) {
+  return Response.json(
+    { jsonrpc: "2.0", id, error: { code: -32001, message } },
+    { status: 403 }
   );
 }
 
@@ -378,6 +432,22 @@ mcpHttpApp.post("/", async (c) => {
         error: { code: -32700, message: "Parse error" },
       },
       { status: 400 }
+    );
+  }
+
+  // ── 2b. Attribution hard-reject (Phase 0, GOVERNANCE-CONVERGENCE-PLAN.md) ──
+  if (
+    shouldRejectUnattributedWrite(
+      parsedBody,
+      await tools.list(),
+      keyRecord.keyType,
+      keyRecord.linkedUserId
+    )
+  ) {
+    const requestId = (parsedBody as { id?: unknown } | null)?.id ?? null;
+    return jsonRpcForbidden(
+      requestId,
+      "This key is not an agent key. Run `synap init` to provision one."
     );
   }
 

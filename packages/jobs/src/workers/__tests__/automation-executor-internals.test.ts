@@ -652,11 +652,12 @@ describe("parseQueryOrderBy (query node orderBy parsing)", () => {
         orderBy: "properties.strengthScore",
         orderDir: "desc",
       })
-    ).toEqual({ propKey: "strengthScore", dir: "desc" });
+    ).toEqual({ kind: "property", propKey: "strengthScore", dir: "desc" });
   });
 
   it("defaults orderDir to desc when omitted", () => {
     expect(parseQueryOrderBy({ orderBy: "properties.startDate" })).toEqual({
+      kind: "property",
       propKey: "startDate",
       dir: "desc",
     });
@@ -665,7 +666,7 @@ describe("parseQueryOrderBy (query node orderBy parsing)", () => {
   it("honors an explicit asc orderDir", () => {
     expect(
       parseQueryOrderBy({ orderBy: "properties.startDate", orderDir: "asc" })
-    ).toEqual({ propKey: "startDate", dir: "asc" });
+    ).toEqual({ kind: "property", propKey: "startDate", dir: "asc" });
   });
 
   it("returns undefined (not a throw) when orderBy is missing/non-string", () => {

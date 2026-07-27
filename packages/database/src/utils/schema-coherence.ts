@@ -1274,6 +1274,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "slug",
     addedBy: "0200_project_slug.sql",
   },
+  // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
+  // policy. New table; checking one column confirms the migration ran.
+  {
+    table: "governance_rules",
+    column: "verdict",
+    addedBy: "0215_governance_rules.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

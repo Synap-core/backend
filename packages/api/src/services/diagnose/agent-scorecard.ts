@@ -30,6 +30,7 @@ import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
   AGENT_PROPOSALS_PER_USER_PER_DAY,
+  agentDailyProposalCap,
   startOfUtcDay,
 } from "../../utils/permission-check.js";
 import type { AgentScorecard } from "./types.js";
@@ -198,23 +199,30 @@ export async function agentScorecard(params: {
     .orderBy(desc(proposals.createdAt))
     .limit(SCORECARD_SCAN_LIMIT);
 
-  // Daily-cap posture: the cap is per-OWNER (createdBy) across all their agents;
-  // here we report THIS agent's share of today's proposals against that shared cap.
-  const [todayRow] = await db
-    .select({ count: drizzleSql<number>`count(*)::int` })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.createdBy, userId),
-        eq(proposals.agentUserId, agentId),
-        gte(proposals.createdAt, startOfUtcDay())
+  // Daily-cap posture: the cap is per-AGENT (not shared across the owner's
+  // roster) and scales with this agent's own trust (base 10, x3 for a proven
+  // agent) — see `agentDailyProposalCap()`, the same helper `createProposal`
+  // enforces against.
+  const [todayRow, cap] = await Promise.all([
+    db
+      .select({ count: drizzleSql<number>`count(*)::int` })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.createdBy, userId),
+          eq(proposals.agentUserId, agentId),
+          gte(proposals.createdAt, startOfUtcDay())
+        )
       )
-    );
+      .then((rows) => rows[0]),
+    agentDailyProposalCap(agentId),
+  ]);
 
   return computeAgentScorecard(rows, {
     agentId,
     agentName: agent.name ?? agent.email ?? null,
     agentType: agent.agentType ?? null,
     todayCount: todayRow?.count ?? 0,
+    cap,
   });
 }

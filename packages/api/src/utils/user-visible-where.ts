@@ -34,11 +34,7 @@ import {
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
-import {
-  workspaceMembers,
-  workspaces,
-  podMembers,
-} from "@synap/database/schema";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /**
  * The workspace lens, as a composable scope dimension:
@@ -113,14 +109,14 @@ export function userVisibleWhere(
  * `EXISTS (SELECT 1 FROM pod_members WHERE user_id = <userId>)`, so it is a
  * membership FACT about the caller, independent of any row's columns.
  *
- * DORMANT (Membership → Visibility, Wave 1): defined here so Wave 2 can AND it
- * into a NEW `podShared` floor branch (`isNull(ws) AND <shared-to-pod> AND
- * podMemberWhere(viewer)`). NOTHING in Wave 1 references it — no VisibilityRule /
- * floor consumes it yet. Adding a consumer is the security-critical Wave 2 edit.
+ * LIVE (Membership → Visibility, Wave 2). Consumers: the `podShared` floor branch
+ * in `accessScopeWhere` (utils/project-scope.ts) and the `entityFacets`
+ * VisibilityRule (access/registry.ts). The IMPLEMENTATION moved to
+ * `@synap/database` (utils/pod-membership.ts) because `@synap/jobs` and
+ * `@synap/database` itself need the identical predicate and neither may import
+ * `@synap/api`; this stays as the api-side name so existing imports are unchanged.
  */
-export function podMemberWhere(userId: string): SQL {
-  return drizzleSql`EXISTS (SELECT 1 FROM ${podMembers} WHERE ${podMembers.userId} = ${userId})`;
-}
+export { podMemberWhere } from "@synap/database";
 
 /**
  * OWNER-PRIVATE floor for tables that have BOTH a `workspace_id` and a per-user

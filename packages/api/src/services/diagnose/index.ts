@@ -484,6 +484,7 @@ async function diagnoseClass(
             approveRate: card.rates.approveRate,
             rejectRate: card.rates.rejectRate,
             duplicateRate: card.rates.duplicateRate,
+            dailyCap: card.dailyCap.cap,
             atOrOverCap: card.dailyCap.atOrOverCap,
           };
         })
@@ -494,7 +495,10 @@ async function diagnoseClass(
         summary:
           cards.length === 0
             ? "No agents registered for this owner."
-            : `${cards.length} agent(s). Cap: ${AGENT_PROPOSALS_PER_USER_PER_DAY}/day (shared).`,
+            : // Per-agent cap: each agent gets its OWN daily budget (base
+              // AGENT_PROPOSALS_PER_USER_PER_DAY, scaled up for a proven agent) —
+              // not a pool shared across the owner's roster.
+              `${cards.length} agent(s). Base cap: ${AGENT_PROPOSALS_PER_USER_PER_DAY}/day per agent (trusted agents get more — see each agent's dailyCap).`,
         detail: { agents: cards },
       };
     }

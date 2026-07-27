@@ -137,6 +137,10 @@ import {
   POD_HYGIENE_NEAR_DUP_QUEUE,
 } from "./pod-hygiene-near-dup.js";
 import {
+  handleGovernanceLaneScan,
+  GOVERNANCE_LANE_SCANNER_QUEUE,
+} from "./governance-lane-scanner.js";
+import {
   handleLibrarianArchiver,
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
@@ -599,6 +603,13 @@ export async function registerAllWorkers(): Promise<void> {
     handlePodHygieneNearDupScan()
   );
   logger.info("Registered worker: pod-hygiene.near-dup-scan");
+
+  // Governance trusted-lane scanner (cron: daily 03:30 UTC — files
+  // governance.widen_lane proposals only; never writes governance_rules)
+  await boss.work(GOVERNANCE_LANE_SCANNER_QUEUE, async () =>
+    handleGovernanceLaneScan()
+  );
+  logger.info("Registered worker: governance.lane-scan");
 
   await boss.work(LIBRARIAN_ARCHIVER_QUEUE, async () =>
     handleLibrarianArchiver()

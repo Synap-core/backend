@@ -259,4 +259,33 @@ describe("entity_create — optional long-form body", () => {
     expect(mocks.setBody).not.toHaveBeenCalled();
     expect(mocks.materializeEntity).not.toHaveBeenCalled();
   });
+
+  // ── Run provenance on the ENTITY (not just the document) ──────────────────
+  // The document has carried `correlationId: rootRunId` since the body wave;
+  // the entity's provenance dropped it, so "which run produced this entity?"
+  // had no answer. Both halves of the write must name the same run.
+  it("(f) stamps the run id as correlationId on the entity's provenance — agent owner", async () => {
+    mocks.selectRows = [[{ userType: "agent" }]];
+
+    await runEntityCreate({ profileSlug: "report", title: "Run-stamped" });
+
+    const opts = mocks.materializeEntity.mock.calls[0][1];
+    expect(opts.provenance).toMatchObject({
+      createdByKind: "ai_agent",
+      agentUserId: OWNER,
+      correlationId: "root-run-1",
+    });
+  });
+
+  it("(f2) stamps correlationId for a human-owned automation too (system provenance)", async () => {
+    mocks.selectRows = [[{ userType: "human" }]];
+
+    await runEntityCreate({ profileSlug: "report", title: "Run-stamped 2" });
+
+    expect(mocks.materializeEntity.mock.calls[0][1].provenance).toMatchObject({
+      createdByKind: "system",
+      createdByUserId: OWNER,
+      correlationId: "root-run-1",
+    });
+  });
 });

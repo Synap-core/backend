@@ -66,6 +66,19 @@ export interface EntityProvenance {
   createdByUserId?: string;
   agentUserId?: string;
   sourceProposalId?: string;
+  /**
+   * WHICH RUN produced this row (`automation_runs.id` / the automation
+   * context's `rootRunId`), stamped onto `entities.correlation_id`.
+   *
+   * WHY it is part of provenance and not an ad-hoc caller argument: the SAME
+   * automation step already stamps it on the DOCUMENT it materializes (via
+   * `EntityBodyService` → `DocumentRepository`), so an entity+body pair used to
+   * come out half-attributed — the document knew its run, the entity did not,
+   * and "what did run X create?" was unanswerable for entities. The column
+   * already exists; only this field was missing from the type, which is why
+   * the materializer silently dropped the value it was handed.
+   */
+  correlationId?: string;
 }
 
 /**
@@ -232,6 +245,10 @@ export async function materializeEntity(
       createdByUserId: provenance.createdByUserId,
       agentUserId: provenance.agentUserId,
       sourceProposalId: provenance.sourceProposalId,
+      // Run provenance. EntityRepository.create already writes this straight to
+      // `entities.correlation_id` (and onto the role-facet row it may attach) —
+      // it was only ever missing here.
+      correlationId: provenance.correlationId,
     },
     input.userId
   );

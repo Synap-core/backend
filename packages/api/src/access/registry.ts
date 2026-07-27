@@ -44,7 +44,10 @@ import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
-import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import {
+  workspaceLensWhere,
+  podMemberWhere,
+} from "../utils/user-visible-where.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -319,6 +322,11 @@ registerVisibility({
   // OWNER floor so they never leak via the flat `workspace` rule. NOT
   // `workspaceOwned` (owner-only on ALL rows) — that would hide a member's
   // facets from teammates on shared entities.
+  //
+  // Wave 2 (Membership → Visibility): the pod-wide branch ALSO admits any caller
+  // who is a `pod_members` row — a pod-wide facet is the pod-level share signal,
+  // the twin of the workspace branch above. Widening-only, pod-wide rows only; a
+  // non-pod-member still sees just their own (the EXISTS is false → fail closed).
   rule: {
     kind: "custom",
     predicate: (access) =>
@@ -334,7 +342,10 @@ registerVisibility({
         ),
         and(
           isNull(entityFacets.workspaceId),
-          eq(entityFacets.userId, access.userId)
+          or(
+            eq(entityFacets.userId, access.userId),
+            podMemberWhere(access.userId)
+          )
         )
       ),
     nullWorkspaceMeans: "ownerPrivate",

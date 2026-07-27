@@ -250,8 +250,19 @@ const PackageApplySchema = z.object({
     .array(
       z.object({
         slug: z.string().min(1),
+        // Locked to the CP `dependencies[].kind` enum (7 literals). See
+        // `PackageDependencyKind` in @synap/database for what the resolver does
+        // with each — cell installs; skill/workflow/view/automation surface.
         kind: z
-          .enum(["workspace", "capability", "automation"])
+          .enum([
+            "workspace",
+            "capability",
+            "skill",
+            "workflow",
+            "view",
+            "cell",
+            "automation",
+          ])
           .default("workspace"),
         relation: z.enum(["compose", "require"]).default("require"),
         reason: z.string().optional(),

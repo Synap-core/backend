@@ -148,7 +148,7 @@ import {
 import { checkPermissionOrPropose } from "./permission-check.js";
 
 // The mocked SSOT pending-proposal INSERT — asserted on to prove proposer stamping.
-import { insertPendingProposal } from "@synap/database";
+import { insertPendingProposal, eq as mockEq } from "@synap/database";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -851,6 +851,58 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     });
   }
 
+  /**
+   * Like `setupAgentBudget`, but also mocks the lifetime trust aggregate
+   * (`agentDailyProposalCap`'s total/approved query). Dispatches by the
+   * SHAPE of the `.select({...})` field object rather than call order — the
+   * real (unmocked) `resolveAgentGovernanceDecision`/`resolveGovernanceRule`
+   * run their own `db.select(...)` calls in between, so a call-count-based
+   * mock would silently mis-route once that ladder does more than one query.
+   */
+  function setupWeightedAgentBudget(opts: {
+    todayCount: number;
+    lifetimeTotal: number;
+    lifetimeApproved: number;
+    agentMetadata?: Record<string, unknown>;
+  }) {
+    const {
+      todayCount,
+      lifetimeTotal,
+      lifetimeApproved,
+      agentMetadata = { writesRequireProposal: true },
+    } = opts;
+    mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
+      const keys = Object.keys(fields);
+      const isTodayCountQuery = keys.length === 1 && keys[0] === "count";
+      const isCapQuery = keys.includes("total") && keys.includes("approved");
+      const isAgentRowQuery = keys.includes("userType");
+      const isWorkspaceRowQuery = keys.includes("settings");
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi
+          .fn()
+          .mockResolvedValue(
+            isAgentRowQuery
+              ? [{ userType: "agent", agentMetadata }]
+              : isWorkspaceRowQuery
+                ? [{ settings: {} }]
+                : []
+          ),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
+          const row = isCapQuery
+            ? { total: lifetimeTotal, approved: lifetimeApproved }
+            : isTodayCountQuery
+              ? { count: todayCount }
+              : undefined;
+          return Promise.resolve(row ? [row] : []).then(res, rej);
+        },
+      };
+      return b;
+    });
+  }
+
   it("refuses the 11th agent proposal in a day (10 already filed → denied)", async () => {
     setupAgentBudget(10);
 
@@ -875,6 +927,79 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
       agentUserId: "agent-ok-1",
       subjectType: "entity",
       action: "create",
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("counts per-AGENT, not per-owner: the budget query is scoped to THIS agent's id", async () => {
+    setupAgentBudget(0);
+    const eqSpy = vi.mocked(mockEq);
+    eqSpy.mockClear();
+
+    await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-b",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    // The daily-budget count query (and the trust-weight query) must filter on
+    // THIS agent's id — not just the owning human — so a flooding agent A can
+    // never eat agent B's separate budget.
+    const agentIdArgs = eqSpy.mock.calls.map((c) => c[1]);
+    expect(agentIdArgs).toContain("agent-b");
+  });
+
+  it("gives a proven agent (>=100 proposals, >=95% approve rate) a 3x (30/day) ceiling", async () => {
+    setupWeightedAgentBudget({
+      todayCount: 15,
+      lifetimeTotal: 100,
+      lifetimeApproved: 96,
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-trusted-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    // 15 filed today is over the base cap of 10 but under the trusted 30 cap.
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("keeps the flat 10/day cap for an agent that hasn't earned trust yet (same today-count denied)", async () => {
+    setupWeightedAgentBudget({
+      todayCount: 15,
+      lifetimeTotal: 100,
+      lifetimeApproved: 80, // 80% approve rate — below the 95% trust bar
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-untrusted-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+    expect((result as { reason: string }).reason).toContain(
+      "Daily agent proposal limit reached (10/day)"
+    );
+  });
+
+  it("exempts governance.* meta-proposals from the daily cap entirely", async () => {
+    // Budget already exhausted (10 filed today) — a normal proposal would be denied.
+    setupAgentBudget(10);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-governance-1",
+      subjectType: "governance",
+      action: "governance.widen_lane",
     });
 
     expect("granted" in result && result.granted === false).toBe(true);
@@ -971,6 +1096,57 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
     });
 
     expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("ONE-STORE (Phase B #1 must-fix): auto-approves an AI-sourced action via a governance_rules row even when the JSONB autoApproveFor does NOT cover it", async () => {
+    // The legacy-AI path used to read settings.aiGovernance.autoApproveFor
+    // DIRECTLY — a second concurrent store. It must now consult the SAME
+    // governance_rules table the agentUserId path's resolver reads. Proof:
+    // the JSONB here explicitly does NOT whitelist "view.update" (only
+    // "search.*"), yet an active governance_rules row for it still
+    // auto-approves — the JSONB is provably NOT what decided this.
+    const ruleRow = {
+      principalKind: "any",
+      scopeKind: "workspace",
+      targetKind: "action",
+      targetPattern: "view.update",
+      targetProfile: null,
+      verdict: "auto",
+      createdAt: new Date(),
+    };
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        // Workspace-settings lookup (`.limit(1)` chain).
+        limit: vi.fn().mockResolvedValue([
+          {
+            settings: {
+              aiGovernance: {
+                autoApproveFor: ["search.*"],
+                autoApprove: false,
+              },
+            },
+          },
+        ]),
+        // governance_rules lookup (`resolveGovernanceRule` — awaited directly,
+        // no `.limit()`).
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([ruleRow]).then(res, rej),
+      };
+      return b;
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "view",
+      action: "update",
+      data: { id: "view-1" },
+    });
+
+    expect(result).toEqual({ granted: true });
   });
 
   it("forcePropose always proposes even for a whitelisted AI-sourced action", async () => {

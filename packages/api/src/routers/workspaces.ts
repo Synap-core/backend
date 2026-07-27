@@ -49,6 +49,7 @@ import {
   ONBOARDING_SCAFFOLD_SYSTEM_DATA,
   projectWorkspaceSettings,
 } from "@synap/database";
+import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type {
   WorkspaceSettings,
@@ -730,6 +731,24 @@ export const workspacesRouter = router({
       // Workspace overlay of per-kind AI posture changed → drop cached merges
       if (input.settings && "profileAiPosture" in input.settings) {
         ProfileResolutionService.invalidateAiPostureCache();
+      }
+
+      // ONE-STORE (Phase B write surface): mirror an explicit autoApproveFor
+      // list into governance_rules — the resolver's read side (rung 2.8) is
+      // now the enforcement path (see resolve-agent-governance-decision.ts).
+      // The JSONB column itself is unchanged above (back-compat / CP / UI
+      // display); this keeps the rules mirror from drifting from what the
+      // operator just set. REPLACE semantics: an empty array legitimately
+      // clears the mirrored rules.
+      if (Array.isArray(autoApproveFor)) {
+        await syncAutoApproveRules({
+          db,
+          principalKind: "any",
+          scopeKind: "workspace",
+          workspaceId: input.id,
+          actions: autoApproveFor as string[],
+          createdBy: ctx.userId,
+        });
       }
 
       // 3. Audit log
@@ -2947,8 +2966,19 @@ export const workspacesRouter = router({
               .array(
                 z.object({
                   slug: z.string().min(1),
+                  // Locked to the CP `dependencies[].kind` enum (7 literals),
+                  // matching @synap/database `PackageDependencyKind` + the hub
+                  // door. cell installs; skill/workflow/view/automation surface.
                   kind: z
-                    .enum(["workspace", "capability", "automation"])
+                    .enum([
+                      "workspace",
+                      "capability",
+                      "skill",
+                      "workflow",
+                      "view",
+                      "cell",
+                      "automation",
+                    ])
                     .default("workspace"),
                   relation: z.enum(["compose", "require"]).default("require"),
                   reason: z.string().optional(),

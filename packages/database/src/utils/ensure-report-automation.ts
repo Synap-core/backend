@@ -33,9 +33,20 @@
  *     the assembler's markdown through unstringified.
  *
  * KNOWN LIMITS (deliberate, stated rather than papered over):
- *   - The `query` node has NO ordering clause, so "recent" is not expressible; the
- *     gather rounds sample up to `limit` rows of each kind. The prompts therefore say
- *     "a sample of", never "the latest".
+ *   - The `query` node DOES have an ordering clause (`orderBy`/`orderDir`,
+ *     `automation-executor.ts` `parseQueryOrderBy` + `executeQueryStep`, verified
+ *     2026-07-27) — but it only orders by a JSONB PROPERTY path, via
+ *     `entities.properties->>propKey` (numeric-if-parseable, else text). It has no
+ *     branch for the entities table's own `createdAt`/`updatedAt` columns, which
+ *     live outside `properties` — asking it to order by either of those names would
+ *     look up a key that plain task/note/person/company rows never carry and
+ *     silently return unordered rows while claiming success, exactly the class of
+ *     bug the v6 note below describes. None of the four kinds gathered here store a
+ *     recency-bearing property, so "recent" is still not mechanically expressible
+ *     for THIS flow; the gather rounds sample up to `limit` rows of each kind and
+ *     the prompts correctly say "a sample of", never "the latest". (A profile that
+ *     did carry its own timestamp-like property could legitimately use `orderBy` —
+ *     this is a limit of these four kinds' data, not of the node.)
  *   - `{{trigger.payload.projectId}}` / `.focus` narrow at the INTERPRETATION layer,
  *     not in SQL. The `query` node's `filter` treats an empty string as a real value
  *     (`properties->>'projectId' = ''`), so wiring the payload straight into `filter`
@@ -100,8 +111,46 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * RULE going forward: inside a flow, a placeholder that feeds a STRING field is
  * always embedded in text. Bare `{{...}}` is reserved for the cases that must
  * stay native — `entity_create.body`, and array inputs.
+ *
+ * v6 — the v4/v5 projection nodes were themselves broken, and this is the
+ * important one because the failure was SILENT. `{{item.id}} · {{item.title}}`
+ * was matched by the engine's whole-string-reference regex `/^\{\{(.+?)\}\}$/`
+ * (anchored at both ends, so it backtracks to the LAST `}}`), captured as the
+ * junk path `item.id}} · {{item.title`, and resolved to `undefined`. Every
+ * projection emitted `[null, null, …]`, so all three AI rounds received empty
+ * lists and truthfully reported that the workspace contained no data — while
+ * the `query` steps above them had returned 15 notes and 25 tasks, and every
+ * step reported SUCCESS.
+ * The engine matcher is fixed at its three call sites behind
+ * `matchWholeStringReference()`, so no flow change was needed for that. What
+ * IS changed here: `guard-assembled` now uses `minLength` instead of `exists`.
+ * `exists` is a null check that "" satisfies, so the guard whose message reads
+ * "refusing to write an empty report" was doing no such thing — it passed an
+ * empty body to the writer, which is why the report rendered "Nothing written
+ * yet" on a green run. Two silent failures stacked: one destroyed the data,
+ * the other declined to notice.
+ *
+ * STANDING LESSON: a step that reports SUCCESS while producing nothing is worse
+ * than one that throws. Guard the VALUE, not the key.
+ *
+ * v7 — the four gathers now order by `updatedAt` DESC, so a report reads the
+ * work people are actually touching instead of an arbitrary slice.
+ * This was previously believed impossible: the header here claimed the `query`
+ * node "has NO ordering clause". Half true, and the half that was false was
+ * the dangerous half — `orderBy` existed but could ONLY address keys inside
+ * the `properties` jsonb. `createdAt`/`updatedAt` are real COLUMNS and are
+ * never mirrored into `properties`, so setting `orderBy: "updatedAt"` would
+ * have evaluated `properties->>'updatedAt'`, produced NULL for every row, and
+ * returned the same arbitrary order as before WHILE APPEARING TO WORK — the
+ * third instance of this exact failure mode in one session.
+ * So the engine was fixed first (`parseQueryOrderBy` is now a discriminated
+ * union: explicit `properties.` prefix ⇒ jsonb, a bare allowlisted name ⇒ the
+ * real column, anything else ⇒ jsonb as before), and only then was the flow
+ * changed. The prompt copy moved with it: claiming "a SAMPLE, not ordered"
+ * would now be false, and a prompt that misdescribes its own evidence is how
+ * an honest model reaches a wrong conclusion.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 5;
+export const REPORT_AUTOMATION_SEED_VERSION = 7;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -141,6 +190,40 @@ const EVIDENCE_RULE =
   'A step whose value looks like {"error": "..."} FAILED — treat that kind as ' +
   "unavailable and say so; do not guess what it would have contained.";
 
+/**
+ * The last line of defense against a silent pipeline fault.
+ *
+ * WHY THIS EXISTS: on 2026-07-27 a bug in the engine's template matcher made
+ * every projection emit `[null, null, …]`. The rounds received empty lists,
+ * had no way to know a fault had occurred, and did the reasonable thing —
+ * they reported that the workspace contained no data. The pod held 706
+ * entities. Nothing errored; the run was green; the output was a confident,
+ * well-written, completely false conclusion.
+ *
+ * That is the failure mode specific to AI-native systems, and it deserves a
+ * specific guard. In a conventional app a broken query renders an empty table
+ * and the user sees "empty" and doubts it. Here the emptiness gets LAUNDERED
+ * into authoritative prose. Fail-soft plumbing plus a fluent narrator equals
+ * fabrication, even though no component lied.
+ *
+ * So each kind now carries its own row COUNT, taken from the `query` step
+ * rather than from the projection — two independent sources for the same
+ * fact. When they disagree, the round is told to report the disagreement
+ * instead of interpreting it. The model becomes a fault DETECTOR rather than
+ * a fault NARRATOR, which is the only role it can honestly hold over data it
+ * did not fetch.
+ */
+const INTEGRITY_RULE =
+  "DATA INTEGRITY CHECK — do this BEFORE interpreting anything. Each kind below " +
+  "states how many records were found, then lists them. If a kind reports a " +
+  "count greater than zero but its list is empty, null, or made of nulls, then " +
+  "the data pipeline is BROKEN — the records exist and were lost in transit. " +
+  "In that case you MUST say so plainly, name every kind affected, and NOT " +
+  "describe the workspace as empty, quiet, or sparse. Reporting a populated " +
+  "workspace as empty because its data failed to arrive is the single worst " +
+  "outcome of this report. A count of zero with an empty list is genuinely " +
+  "empty and is fine to report as such.";
+
 /** The gathered-data block every AI round receives, verbatim. */
 // PROJECTED, not raw. The FIRST real run (2026-07-26) failed at every AI round
 // with `400 prompt: String must contain at most 8000 character(s)` — the raw
@@ -152,13 +235,21 @@ const EVIDENCE_RULE =
 // `<id> · <title>` line per row. That keeps the ids the rounds need in order to
 // emit `[[kind:id|label]]` chips, drops everything they never read, and makes
 // prompt size scale with ROW COUNT instead of with property count.
+// The COUNT comes from the `query` step and the LIST from the `project` step —
+// deliberately two different steps, so the pair can disagree. That disagreement
+// is the only in-band signal a round has that its data was lost in transit; see
+// INTEGRITY_RULE. Reading both from the projection would make them agree even
+// when both are wrong, which is exactly the failure that shipped.
 const GATHERED_DATA = [
   "GATHERED DATA — one line per record, formatted `<id> · <title>`.",
-  "This is a SAMPLE, not an ordered or exhaustive listing.",
-  "Tasks: {{steps.project-tasks.output.result}}",
-  "Notes: {{steps.project-notes.output.result}}",
-  "People: {{steps.project-people.output.result}}",
-  "Companies: {{steps.project-companies.output.result}}",
+  "These are the MOST RECENTLY UPDATED records of each kind, newest first,",
+  "capped per kind. Recent does not mean important, and this is not exhaustive —",
+  "older records exist and are not shown. Never claim something does not exist",
+  "just because it is absent here.",
+  "Tasks — {{steps.gather-tasks.output.count}} found: {{steps.project-tasks.output.result}}",
+  "Notes — {{steps.gather-notes.output.count}} found: {{steps.project-notes.output.result}}",
+  "People — {{steps.gather-people.output.count}} found: {{steps.project-people.output.result}}",
+  "Companies — {{steps.gather-companies.output.count}} found: {{steps.project-companies.output.result}}",
 ].join("\n");
 
 /** One projection node per gather — `entities[] → ["<id> · <title>", …]`. */
@@ -181,6 +272,7 @@ const ANALYZE_SYSTEM = [
   "You are the ANALYST round of a Synap workspace report.",
   "Read the gathered workspace data and say what it MEANS: volume and shape of work,",
   "what is in flight versus stalled, what is well-covered versus thin.",
+  INTEGRITY_RULE,
   EVIDENCE_RULE,
   STEER_RULE,
   "Output PLAIN PROSE — short paragraphs and bullets. No markdown headings, no",
@@ -194,6 +286,7 @@ const RELATE_SYSTEM = [
   "clusters, repeated themes, people or companies that recur across kinds, gaps",
   "where a kind is conspicuously empty, and anything that looks like it needs a",
   "decision. Prefer three sharp observations over ten shallow ones.",
+  INTEGRITY_RULE,
   EVIDENCE_RULE,
   STEER_RULE,
   "When you name a specific record, write it as [[<kind>:<id>|<label>]] using an id",
@@ -314,6 +407,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         label: "Tasks",
         profileSlug: "task",
         filter: "",
+        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
+        // about "what is going on here" should surface the rows people are
+        // actually working, not the rows that happen to be oldest-created.
+        orderBy: "updatedAt",
+        orderDir: "desc",
         limit: 25,
         errorHandling: { continueOnError: true },
       },
@@ -326,6 +424,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         label: "Notes",
         profileSlug: "note",
         filter: "",
+        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
+        // about "what is going on here" should surface the rows people are
+        // actually working, not the rows that happen to be oldest-created.
+        orderBy: "updatedAt",
+        orderDir: "desc",
         limit: 15,
         errorHandling: { continueOnError: true },
       },
@@ -338,6 +441,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         label: "People",
         profileSlug: "person",
         filter: "",
+        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
+        // about "what is going on here" should surface the rows people are
+        // actually working, not the rows that happen to be oldest-created.
+        orderBy: "updatedAt",
+        orderDir: "desc",
         limit: 15,
         errorHandling: { continueOnError: true },
       },
@@ -350,6 +458,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         label: "Companies",
         profileSlug: "company",
         filter: "",
+        // Most-RECENTLY-TOUCHED first. `updatedAt`, not `createdAt`: a report
+        // about "what is going on here" should surface the rows people are
+        // actually working, not the rows that happen to be oldest-created.
+        orderBy: "updatedAt",
+        orderDir: "desc",
         limit: 15,
         errorHandling: { continueOnError: true },
       },
@@ -483,11 +596,20 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
       data: {
         label: "Body assembled",
         checks: [
+          // `minLength`, NOT `exists`. `exists` is a NULL check — "" satisfies
+          // it — so the original guard promised "refusing to write an empty
+          // report" while letting exactly that through. It shipped, and an
+          // empty-string body from `ai.generate` (a documented live behavior,
+          // see the maxTokens note below) produced a successful run whose
+          // report body read "Nothing written yet".
+          // 200 rather than 1: a body shorter than that is not a report, and a
+          // loud guard failure is a better outcome than a hollow artifact.
           {
             path: "steps.assemble.output",
-            exists: true,
+            minLength: 200,
             message:
-              "The assembler produced no body — refusing to write an empty report.",
+              "The assembler produced no usable body (under 200 characters) — " +
+              "refusing to write an empty report.",
           },
           {
             path: "steps.assemble.output.error",

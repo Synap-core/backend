@@ -115,6 +115,9 @@ import {
   focusSessions,
   playbooks,
   skills,
+  governanceRules,
+  type GovernanceScope,
+  type GovernanceTarget,
 } from "@synap/database";
 import type { FlowDefinition } from "@synap/database";
 
@@ -1592,7 +1595,8 @@ export function planProposalRevert(
  * MATERIALIZATION. Order is the historical top-down if-chain:
  *   1. composite (multi-op graph)  — keyed off PAYLOAD SHAPE, not a type string
  *   2. document-content (AI edit)  — same
- *   3. the proposal-execution registry (every typed key + the catch-all)
+ *   3. governance.widen_lane (trusted-lane widen) — keyed off proposalType
+ *   4. the proposal-execution registry (every typed key + the catch-all)
  *
  * Extracted because `batchApprove` used to inline ONLY step 3's generic
  * `.validated`-emit tail and never resolved an executor at all: "Approve all"
@@ -1603,6 +1607,29 @@ export function planProposalRevert(
  * from the first is exactly the bug class that produced this — hence one door,
  * not two.
  */
+
+/**
+ * `governance.widen_lane` proposal payload (Governance Convergence Plan,
+ * Phase D). Emitted ONLY by the trusted-lane scanner job (never inserted
+ * directly) — approval here is the ONE door that turns it into a
+ * `governance_rules` row. `verdict` is always "auto": a widen proposal only
+ * ever opens the auto-approve door, never denies.
+ */
+export interface GovernanceWidenLaneProposalData {
+  agentUserId: string;
+  targetKind: GovernanceTarget;
+  targetPattern: string;
+  targetProfile?: string | null;
+  scopeKind: GovernanceScope;
+  workspaceId?: string | null;
+  verdict: "auto";
+  evidence: {
+    total: number;
+    approveRate: number;
+    duplicateRate: number;
+  };
+}
+
 async function applyProposalApproval(args: {
   proposal: NonNullable<
     Awaited<ReturnType<typeof db.query.proposals.findFirst>>
@@ -1992,6 +2019,73 @@ async function applyProposalApproval(args: {
       .where(eq(proposals.id, input.proposalId));
 
     // Report to IS telemetry (fire-and-forget — never blocks)
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // B4: governance.widen_lane — Phase D trusted-lane widen. Keyed off
+  // proposalType (not payload shape) so it stays inline rather than in the
+  // registry (execution-registry.ts is out of scope for this change). The
+  // ONLY place a `governance_rules` row is ever inserted — the scanner job
+  // that emits this proposal type never writes the table directly.
+  if (proposal.proposalType === "governance.widen_lane") {
+    const widenData = payload as GovernanceWidenLaneProposalData | null;
+    if (
+      !widenData ||
+      typeof widenData !== "object" ||
+      !widenData.agentUserId ||
+      !widenData.targetKind ||
+      !widenData.targetPattern ||
+      !widenData.scopeKind
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.widen_lane proposal data.",
+      });
+    }
+
+    await db.insert(governanceRules).values({
+      principalKind: "agent",
+      agentUserId: widenData.agentUserId,
+      scopeKind: widenData.scopeKind,
+      workspaceId:
+        widenData.scopeKind === "workspace"
+          ? (widenData.workspaceId ?? null)
+          : null,
+      targetKind: widenData.targetKind,
+      targetPattern: widenData.targetPattern,
+      targetProfile: widenData.targetProfile ?? null,
+      verdict: "auto",
+      sourceProposalId: proposal.id,
+      createdBy: userId,
+    });
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
     reportProposalOutcome({
       proposalId: input.proposalId,
       outcome: "approved",
@@ -2922,7 +3016,12 @@ export const proposalsRouter = router({
         requestId: existing.requestId,
       };
 
-      await db
+      // CAS: the status was read above, but re-gate the write on PENDING and
+      // CHECK the result — if a concurrent approve/reject flipped the row in the
+      // window, this matches zero rows and we must NOT report success (that would
+      // silently drop the reviewer's edits while approve materializes the original
+      // draft). Same at-most-once discipline as dispatchExternalOnce.
+      const [updated] = await db
         .update(proposals)
         .set({
           data: merged as typeof proposals.$inferInsert.data,
@@ -2933,7 +3032,16 @@ export const proposalsRouter = router({
             eq(proposals.id, input.proposalId),
             eq(proposals.status, ProposalStatus.PENDING)
           )
-        );
+        )
+        .returning({ id: proposals.id });
+
+      if (!updated) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This proposal was just reviewed elsewhere — your edits were not saved. Reload to see its current state.",
+        });
+      }
 
       return { success: true };
     }),

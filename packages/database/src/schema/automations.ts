@@ -246,6 +246,24 @@ export interface QueryNodeDef extends AutomationNodeBase {
     profileSlug: string;
     filter: string;
     limit: number;
+    /**
+     * Sort key. `executeQueryStep` resolves it in this order:
+     *   1. a `properties.<key>` prefix always means the jsonb blob;
+     *   2. a bare `createdAt` | `updatedAt` | `title` | `type` means the real
+     *      `entities` COLUMN;
+     *   3. anything else is a jsonb property key.
+     *
+     * These fields were READ by the executor long before they were DECLARED
+     * here. That drift is not cosmetic: the flow editor builds its controls
+     * from this type, so a capability the engine had was one the authoring UI
+     * could not offer, and the only way to use it was to hand-write JSON.
+     * Keep this in sync with `parseQueryOrderBy`.
+     */
+    orderBy?: string;
+    /** Sort direction. Anything other than `"asc"` is treated as `"desc"`. */
+    orderDir?: "asc" | "desc";
+    /** Visibility lens override; see `executeQueryStep`. */
+    scope?: string;
     /** Optional per-node error handling */
     errorHandling?: NodeErrorHandling;
   };
@@ -335,6 +353,20 @@ export interface GuardNodeDef extends AutomationNodeBase {
       notEquals?: unknown;
       arrayIncludes?: unknown;
       lengthEquals?: number;
+      /**
+       * Minimum length of a string or array, AFTER trimming for strings.
+       *
+       * WHY THIS EXISTS SEPARATELY FROM `exists`: `exists: true` is a NULL
+       * check — `""`, `0` and `{}` all satisfy it. So a guard written to mean
+       * "refuse to continue without a body" does not actually stop an empty
+       * body; it only stops a missing one. That gap shipped: the report flow's
+       * "refusing to write an empty report" guard passed an empty-string body
+       * straight through to the writer, and the reader then showed "Nothing
+       * written yet" for a report the run had reported as successful.
+       * Use `minLength: 1` (or higher) whenever a guard is meant to assert
+       * that a value has CONTENT, not merely that a key is present.
+       */
+      minLength?: number;
       numberGte?: number;
       numberLte?: number;
       /** At least one path/literal pair must match. */
