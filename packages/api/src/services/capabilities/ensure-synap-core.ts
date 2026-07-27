@@ -495,6 +495,29 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "channel.ingest",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Record a GENERIC inbound message onto its external channel via the shared inbound sink (resolve-or-create the channel, dedup-insert the message, emit external_message.received). Provider-agnostic — every field is a parameter, so provider ingest can be composed as config/automation from outside the pod. WRITE: flows through the full capability gate (an owner-run automation passes straight through). Returns { channelId, contextObjectId, inboundHash, created } (created=false on a duplicate delivery).",
+      parameters: {
+        type: "object",
+        required: ["provider", "externalId", "text", "idempotencySeed"],
+        properties: {
+          provider: { type: "string" },
+          externalId: { type: "string" },
+          text: { type: "string" },
+          participant: { type: "string" },
+          participantExternalId: { type: "string" },
+          accountExternalId: { type: "string" },
+          title: { type: "string" },
+          idempotencySeed: { type: "string" },
+          sentAt: { type: "string" },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+      },
+    },
   ],
 };
 

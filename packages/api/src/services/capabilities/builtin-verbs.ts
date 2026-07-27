@@ -1732,6 +1732,266 @@ const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * channel.ingest — WRITE: record a GENERIC inbound message onto its EXTERNAL
+ * channel (resolve-or-create the channel, dedup-insert the message, emit
+ * `external_message.received`). Delegates to the SHARED `recordInboundMessage`
+ * service — the SAME sink every provider webhook (the inbound REST routes) calls
+ * — so channel resolve + dedup + side-effects live in exactly one place and are
+ * never reimplemented here.
+ *
+ * This is the composition seam: provider ingest can now be driven as
+ * config/automation from OUTSIDE the pod (a config feed / automation node runs
+ * this verb with the parsed message) instead of only from a hard-wired webhook
+ * route. It carries NO provider-specific logic — `provider`/`externalId`/etc. are
+ * all opaque PARAMETERS, exactly like the recorder itself.
+ *
+ * GOVERNED like the other write verbs: it is NOT in READ_ONLY_BUILTIN_VERBS, so
+ * it flows through the full capability gate (approval + grant). The intended
+ * caller is a workspace-owner-run automation — the owner passes straight through
+ * the gate (same posture as the mail-feed / cal-backfill runners). We enforce
+ * workspace membership when a workspace lens is in play (mirroring entity.create,
+ * since recordInboundMessage is a service, not a self-governing router) and bound
+ * the write to the operator (userId=ctx.userId).
+ */
+/**
+ * Field-path map for BATCH mode. Each value is a dot-path INTO one raw message
+ * row (e.g. `"text"`, `"sender.name"`), so the verb stays PROVIDER-AGNOSTIC —
+ * the caller's CONFIG (an automation node) says where each field lives; the
+ * substrate hardcodes no provider shape.
+ */
+const channelIngestMessageMap = z.object({
+  /** Dot-path to the message body (required for batch). */
+  text: z.string().min(1).max(200),
+  /**
+   * Dot-path to the message's STABLE external id — REQUIRED. It is the per-message
+   * dedup key. It must NOT be positional: providers page newest-first, so a raw
+   * array index shifts every time a new message arrives, which would collide seeds
+   * and silently drop/duplicate history on re-run. If a row is missing this id at
+   * runtime we fall back to a CONTENT key (sentAt+text), never the index.
+   */
+  id: z.string().min(1).max(200),
+  /** Dot-path to the message timestamp (ISO). */
+  sentAt: z.string().max(200).optional(),
+  /** Dot-path to the sender display name. */
+  participant: z.string().max(200).optional(),
+  /** Dot-path to the sender external id. */
+  participantExternalId: z.string().max(200).optional(),
+});
+
+const channelIngestParams = z
+  .object({
+    /** Opaque provider key (channel dedup namespace), e.g. the connector name. */
+    provider: z.string().min(1).max(200),
+    /** External thread/channel id — the channel dedup key. */
+    externalId: z.string().min(1).max(500),
+
+    // ── Single-message mode ──────────────────────────────────────────────
+    /** Message body (single mode). */
+    text: z.string().min(1).max(100000).optional(),
+    /** Stable idempotency seed for THIS message (single mode). */
+    idempotencySeed: z.string().min(1).max(1000).optional(),
+
+    // ── Batch mode (for pure-config automations that CANNOT loop per-message:
+    //    the automation engine has no nested loops, so a whole thread's message
+    //    array is ingested in ONE call). Each row is normalized server-side via
+    //    `messageMap` field-paths — the provider shape stays in the caller's
+    //    config, never in this verb. ──────────────────────────────────────
+    /** Raw message rows (e.g. a thread's `messages[]` from a list verb). */
+    messages: z.array(z.record(z.string(), z.unknown())).max(2000).optional(),
+    /** Where each field lives inside a `messages[]` row. Required with `messages`. */
+    messageMap: channelIngestMessageMap.optional(),
+
+    // ── Common ───────────────────────────────────────────────────────────
+    /** Participant display name (single mode, or batch fallback). */
+    participant: z.string().max(500).optional(),
+    /** Participant id in the external system. */
+    participantExternalId: z.string().max(500).optional(),
+    /** Account id in the external system. */
+    accountExternalId: z.string().max(500).optional(),
+    /** Channel title for a freshly-created row; defaults to participant/externalId. */
+    title: z.string().max(500).optional(),
+    /** Message timestamp (ISO); single mode, defaults to now server-side. */
+    sentAt: z.string().max(100).optional(),
+    /** Optional explicit workspace lens; falls back to the acting workspace, else pod-level. */
+    workspaceId: z.string().uuid().optional(),
+  })
+  .refine(
+    (v) => {
+      // Exactly ONE mode (XOR) — not neither, not both — so a caller can never
+      // supply conflicting single+batch inputs and silently get one discarded.
+      const batch = v.messages !== undefined && v.messageMap !== undefined;
+      const single = v.text !== undefined && v.idempotencySeed !== undefined;
+      return batch !== single;
+    },
+    {
+      message:
+        "channel.ingest needs EITHER { messages[], messageMap } (batch) OR { text, idempotencySeed } (single) — exactly one.",
+    }
+  );
+
+/** Read a dot-path (`"a.b.c"`) out of a plain object; undefined if any hop misses. */
+function readPath(row: Record<string, unknown>, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (acc, key) =>
+        acc && typeof acc === "object"
+          ? (acc as Record<string, unknown>)[key]
+          : undefined,
+      row
+    );
+}
+
+const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelIngestParams.parse(params);
+
+  // recordInboundMessage tolerates a null workspace (records a pod-level
+  // channel) — mirror entity.create: only enforce membership when a workspace
+  // lens IS in play, so a workspace-pinned ingest is bounded to a workspace the
+  // operator belongs to.
+  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+  if (workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+  }
+
+  // Delegate to THE shared inbound sink — do NOT reimplement channel
+  // resolve/dedup/side-effects. Lazy-imported to keep this module's load graph
+  // light, mirroring every other service/router import in this file.
+  const { recordInboundMessage } =
+    await import("../connectors/inbound-recorder.js");
+
+  // One call per inbound message; the recorder resolves-or-creates the ONE
+  // channel keyed on (provider, externalId) and dedups each message by its
+  // idempotencySeed — so a whole batch lands on a single thread, re-runs no-op.
+  const recordOne = (args: {
+    text: string;
+    idempotencySeed: string;
+    participant?: string;
+    participantExternalId?: string;
+    sentAt?: string;
+  }) =>
+    recordInboundMessage({
+      provider: input.provider,
+      externalId: input.externalId,
+      userId: ctx.userId,
+      workspaceId,
+      text: args.text,
+      // recordInboundMessage requires a title for a freshly-created row; default
+      // to the participant, else the external id, so a title-less call still names
+      // the channel meaningfully.
+      title:
+        input.title ??
+        args.participant ??
+        input.participant ??
+        input.externalId,
+      ...(args.participant !== undefined
+        ? { participant: args.participant }
+        : {}),
+      ...(args.participantExternalId !== undefined
+        ? { participantExternalId: args.participantExternalId }
+        : {}),
+      ...(input.accountExternalId !== undefined
+        ? { accountExternalId: input.accountExternalId }
+        : {}),
+      idempotencySeed: args.idempotencySeed,
+      ...(args.sentAt !== undefined ? { sentAt: args.sentAt } : {}),
+    });
+
+  // ── Batch mode: normalize each raw row via messageMap (dot-paths) ─────────
+  if (input.messages !== undefined && input.messageMap !== undefined) {
+    const map = input.messageMap;
+    let channelId: string | null = null;
+    let contextObjectId: string | null = null;
+    let recorded = 0;
+    let skipped = 0;
+    for (let i = 0; i < input.messages.length; i++) {
+      const row = input.messages[i];
+      const bodyRaw = readPath(row, map.text);
+      const text = typeof bodyRaw === "string" ? bodyRaw : "";
+      if (!text.trim()) {
+        skipped++;
+        continue; // empty/non-text row (e.g. a system event) — skip, don't fabricate.
+      }
+      const sentRaw = map.sentAt ? readPath(row, map.sentAt) : undefined;
+      const partRaw = map.participant
+        ? readPath(row, map.participant)
+        : undefined;
+      const partIdRaw = map.participantExternalId
+        ? readPath(row, map.participantExternalId)
+        : undefined;
+      // Stable per-message dedup key. Prefer the provider's native id (map.id is
+      // required). If a row is missing it, fall back to a CONTENT key (sentAt +
+      // body) — NEVER the array index, which shifts on newest-first pagination
+      // and would collide seeds → silent drop/duplicate on re-run.
+      const idRaw = readPath(row, map.id);
+      const msgId =
+        idRaw !== undefined && idRaw !== null && String(idRaw).length > 0
+          ? String(idRaw)
+          : `c:${typeof sentRaw === "string" ? sentRaw : ""}:${text.slice(0, 180)}`;
+      const result = await recordOne({
+        text,
+        // Namespaced by the thread so the same message id in two threads never
+        // collides; order-independent so re-runs are exactly idempotent.
+        idempotencySeed: `${input.externalId}:${msgId}`,
+        ...(typeof partRaw === "string" ? { participant: partRaw } : {}),
+        ...(typeof partIdRaw === "string"
+          ? { participantExternalId: partIdRaw }
+          : {}),
+        ...(typeof sentRaw === "string" ? { sentAt: sentRaw } : {}),
+      });
+      channelId = result.channelId;
+      contextObjectId = result.contextObjectId;
+      if (result.recorded) recorded++;
+      else skipped++;
+    }
+    return {
+      channelId,
+      contextObjectId,
+      recorded,
+      skipped,
+      total: input.messages.length,
+      // Alias so a caller can read `.created` regardless of single/batch mode.
+      created: recorded > 0,
+    };
+  }
+
+  // ── Single-message mode (unchanged contract) ─────────────────────────────
+  const result = await recordOne({
+    // guaranteed present in single mode by the schema refine
+    text: input.text!,
+    idempotencySeed: input.idempotencySeed!,
+    ...(input.participant !== undefined
+      ? { participant: input.participant }
+      : {}),
+    ...(input.participantExternalId !== undefined
+      ? { participantExternalId: input.participantExternalId }
+      : {}),
+    ...(input.sentAt !== undefined ? { sentAt: input.sentAt } : {}),
+  });
+
+  // Normalize the recorder's result. It exposes no messageId (the inbound row is
+  // keyed by `inboundHash`, its deterministic dedup hash), so we surface that +
+  // the context binding, and map `recorded` → `created` (false on a duplicate
+  // delivery, which the recorder no-ops).
+  return {
+    channelId: result.channelId,
+    contextObjectId: result.contextObjectId,
+    inboundHash: result.inboundHash,
+    created: result.recorded,
+  };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -1770,6 +2030,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
+  // Inbound sink — record a generic inbound message onto its external channel
+  // via the shared recordInboundMessage (the one composition seam so provider
+  // ingest can be driven from outside the pod as config/automation).
+  "channel.ingest": channelIngestHandler,
 };
 
 /**
@@ -1811,6 +2075,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
   "connector.health_check": connectorHealthCheckParams,
+  "channel.ingest": channelIngestParams,
 };
 
 /**
