@@ -56,6 +56,7 @@ import {
   promoteToPrimary,
 } from "../utils/split-brain-service.js";
 import { upsertSyncPeer } from "./sync-management.js";
+import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import { safeTokenEqual } from "@synap/auth";
 
 const logger = createLogger({ module: "sync-receive" });
@@ -662,6 +663,19 @@ const SUPPLEMENTARY_TABLES: Record<
           metadata: values.metadata,
           updatedAt: values.updatedAt,
         };
+        // Replicated rows never pass through the automations create/update door,
+        // so run the SAME validator here. LOG, don't reject: this pod is a
+        // REPLICA, not the author — the peer already holds this row, so dropping
+        // it would leave the two pods permanently divergent with only a log line
+        // to show for it, whereas a structurally broken flow fails loudly at
+        // execution time exactly as it does on the peer.
+        const syncFlowError = flowValidationErrorMessage(values.flowDefinition);
+        if (syncFlowError) {
+          logger.warn(
+            { table: "automations", rowId: row.id, flowError: syncFlowError },
+            "Replicated automation has an invalid flowDefinition — storing it anyway (replica fidelity)"
+          );
+        }
         await db.insert(automations).values(values).onConflictDoUpdate({
           target: automations.id,
           set: updateSet,

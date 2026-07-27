@@ -27,11 +27,28 @@ metadata:
 
 # Marketplace & templates on Synap
 
-The marketplace is Synap's **package layer**: workspace templates, capabilities,
-automations, and cells — anything that can be installed into a pod rather than
-hand-built. It lives in the Control Plane (CP) catalog and is discoverable and
-installable from any door: the `synap` CLI, MCP (`run_capability`), or the Hub
-REST API (`/api/hub/capabilities/execute`).
+Synap is **configuration-first**: a feature is _stored, user-editable config_
+published to one catalog and installed through shared substrate — not hardcoded in
+the pod backend. The marketplace is that **package layer**, and the catalog
+(`synap_packages`) is **kind-agnostic** — one door serves every kind:
+
+| Kind                      | Configures                                                       | Tier                                       |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------ |
+| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ first-class                             |
+| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ first-class                             |
+| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ first-class                             |
+| **view**                  | a saved view/layout                                              | 🟡 publish yes; standalone-install pending |
+| **skill**                 | agent know-how                                                   | 🟡 embedded in a capability today          |
+| **workflow / automation** | a WHEN→ACTION flow                                               | 🟡 publish yes; standalone-install pending |
+
+First-class = author → publish → install standalone → compose. 🟡 = accepted +
+composable, but the standalone _install_ applier isn't wired yet (the system is
+honest about this — it accepts the kind rather than faking install).
+
+It lives in the Control Plane (CP) catalog and is discoverable and installable from
+any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub REST
+API. **Everything that is config, not code, can be a template** — workspaces, entity
+profiles/views, renderers (cells), capabilities, skills, automations.
 
 ## The two reflexes
 
@@ -201,11 +218,22 @@ retrying.
 
 # Author & publish — the ONE write door
 
-`synap market <verb>` is the only supported authoring path today (human or AI
-driving the CLI). There is no agent-native "publish a template" MCP verb —
-`market.install` only ever CONSUMES the catalog. Authoring is a human/CLI
-action; if you're an agent helping the user author one, drive the CLI on
-their behalf and always tell them what you ran.
+Every kind (workspace, capability, cell, view, …) publishes through the SAME door:
+`POST /api/packages` → `publishPackageCore`. `synap market <verb>` is the CLI front
+end (human, or an AI driving the CLI on the user's behalf — always say what you ran).
+
+**Two distinct AI paths — don't conflate them:**
+
+- **Publish to the MARKET (the shared catalog)** = human / CLI / browser only.
+  Publishing a template to the CP catalog needs the user's CP session; an agent
+  in the pod holds no CP credential (founder-gated trust boundary). So an agent
+  _authors + drives the CLI_, or the user publishes from the browser wizard.
+- **Author + PROPOSE an install** = agents CAN do this natively. The IS tool
+  **`propose_workspace_template`** authors a full workspace definition and routes it
+  through the pod's governed `/packages/apply` → a **reviewable proposal** carrying
+  the whole definition (the user sees a live preview and approves). This is NOT a
+  market publish — it installs the AI-authored template into the user's pod, governed.
+  Use it when the user wants a whole workspace set up as a reviewable proposal.
 
 ## The loop
 
@@ -250,6 +278,31 @@ synap market publish [file] [--public|--private] [--from-workspace <id>] [--json
 - Slugs `foundation`, `crm`, `operations`, `content-os`, `enterprise-os`,
   `research-base` are reserved bedrock templates — publishing under one of
   those 403s; pick a different slug.
+
+### Standalone non-workspace kinds (`--kind`)
+
+A lone **cell** (a renderer — the code that draws an entity/widget) or **view** can
+be authored + published on its own, same door:
+
+```bash
+synap market scaffold --kind cell my-card   # → my-card.cell.json  {category, slug, displayName, definition}
+# edit the cell's code/definition
+synap market publish my-card.cell.json       # category:"cell", same publish client
+```
+
+`--kind view` works the same. `--kind skill` is refused today (no standalone skill
+schema yet — author skills _inside_ a capability). The door is category-gated: only
+`category:"workspace"` runs the WorkspaceYaml validator + lossless normalization;
+every other kind is stored pod-native as-is (a capability/cell is NOT a WorkspaceYaml).
+
+### Compose — ship a whole stack in one install
+
+A template declares `dependencies[]` (`{kind, relation: compose|require}`) so
+installing it installs its whole stack in one governed pass. The resolver
+materializes **workspace / capability / cell** dependencies today; skill/view/workflow
+are _accepted and composable but not yet installed standalone_ (pending appliers) —
+so a workspace template can ship its cells + capabilities + a base workspace as ONE
+install. Compose, don't inline.
 
 ### `unpublish <slug>`
 

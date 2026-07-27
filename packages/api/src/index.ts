@@ -809,6 +809,12 @@ export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
+// Exported for the @synap/jobs flow-validator IoC slot: the pattern detector
+// writes `automations` directly and cannot import this package statically.
+export {
+  validateFlowDefinition,
+  flowValidationErrorMessage,
+} from "./services/automations/validate-flow.js";
 export {
   runPlaybook,
   type RunPlaybookInput,

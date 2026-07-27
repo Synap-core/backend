@@ -66,9 +66,34 @@ import {
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
+import { findUnresolvedGoalReferences } from "../services/playbooks/goal-references.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 
 const logger = createLogger({ module: "playbooks-router" });
+
+/**
+ * WARN (never reject) when a persisted goal carries references substitution
+ * cannot resolve. This is the catch-all door — MCP, CLI, Hub and the browser
+ * all land here, and unlike the IS tool's `.refine()` it sees the MERGED stored
+ * row rather than only the params passed in the same call. Rejecting would fail
+ * several live playbooks and would stop an author saving a work-in-progress
+ * goal, so the write proceeds and the miss is named in the log.
+ */
+function warnUnresolvedGoalReferences(playbook: Playbook): void {
+  const unresolved = findUnresolvedGoalReferences(
+    playbook.goalTemplate,
+    playbook.params
+  );
+  if (unresolved.length === 0) return;
+  logger.warn(
+    {
+      playbookId: playbook.id,
+      workspaceId: playbook.workspaceId,
+      unresolved,
+    },
+    "Playbook goalTemplate has references no declared param backs — substitution will drop or pass them through"
+  );
+}
 
 /**
  * Resolve a subject entity id to bind to a run/session, guarding cross-workspace
@@ -1127,6 +1152,8 @@ export const playbooksRouter = router({
         })
         .returning();
 
+      warnUnresolvedGoalReferences(created as Playbook);
+
       // S1: a scheduled playbook maintains ONE backing cron automation (stamped
       // on flow_automation_id) that the existing automation-cron-scheduler fires.
       await materializePlaybookCronAutomation(created as Playbook, {
@@ -1290,6 +1317,8 @@ export const playbooksRouter = router({
         .where(eq(playbooks.id, input.id))
         .returning();
 
+      warnUnresolvedGoalReferences(updated as Playbook);
+
       // S1: re-reconcile the backing cron automation against the new schedule.
       // Idempotent — re-points/updates the SAME row via flow_automation_id, or
       // tears it down when the schedule was cleared/disabled.
@@ -1373,6 +1402,14 @@ export const playbooksRouter = router({
         .set({ status: "archived", updatedAt: new Date() })
         .where(eq(playbooks.id, input.id))
         .returning();
+
+      // S1: an archived playbook is not live, so neither is its schedule.
+      // Materialize reads `status` and takes the teardown branch — without this
+      // call the backing cron automation stayed `active` with a live nextRunAt
+      // and kept firing a playbook nothing else would surface.
+      await materializePlaybookCronAutomation(archived as Playbook, {
+        userId: input.agentUserId ?? ctx.userId,
+      });
 
       return {
         playbook: archived as Playbook,

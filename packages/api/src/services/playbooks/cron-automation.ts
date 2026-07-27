@@ -31,6 +31,9 @@ import type { Playbook } from "@synap/database/schema";
 import type { PlaybookSchedule } from "@synap/playbooks";
 // Reuse the scheduler's cron parser — do NOT add a second one.
 import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.js";
+// Same validator the automations create/update door runs — this module writes
+// `automations` directly and would otherwise bypass it entirely.
+import { flowValidationErrorMessage } from "../automations/validate-flow.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
@@ -166,11 +169,20 @@ export interface CronAutomationCtx {
 /**
  * Reconcile a playbook's `schedule` into its backing cron automation.
  *
- * - `schedule.enabled === true` → upsert ONE active cron automation (idempotent:
- *   re-points/updates the SAME row via `flow_automation_id`, never duplicates),
- *   stamp `playbooks.flow_automation_id`.
- * - `schedule.enabled === false` / schedule cleared → deactivate the backing
- *   automation (status `paused`) and null out `flow_automation_id`.
+ * - `schedule.enabled === true` AND the playbook is `active` → upsert ONE active
+ *   cron automation (idempotent: re-points/updates the SAME row via
+ *   `flow_automation_id`, never duplicates), stamp `playbooks.flow_automation_id`.
+ * - `schedule.enabled === false` / schedule cleared / playbook NOT `active` →
+ *   deactivate the backing automation (status `paused`) and null out
+ *   `flow_automation_id`.
+ *
+ * The status gate is what makes every lifecycle transition safe, not just one:
+ * a playbook that is `draft`, `paused` or `archived` is not live, so its
+ * schedule must not be either. Without it, archiving a playbook stopped it
+ * being suggested on entities while its backing automation KEPT FIRING on a
+ * live `nextRunAt`. Arming happens exactly when the playbook becomes `active`
+ * (the `update` door re-reconciles), which is also why creating a `draft`
+ * playbook with an enabled schedule deliberately does NOT arm it.
  *
  * Returns the backing automation id (or null when there is none).
  */
@@ -183,15 +195,18 @@ export async function materializePlaybookCronAutomation(
     | "schedule"
     | "flowAutomationId"
     | "subjectProfile"
+    | "status"
   >,
   ctx: CronAutomationCtx
 ): Promise<string | null> {
   const db = await getDb();
   const schedule = readSchedule(playbook.schedule);
   const existingId = playbook.flowAutomationId ?? null;
+  // Only a LIVE playbook may hold a live schedule — see the status gate above.
+  const live = playbook.status === "active";
 
   // ── No active schedule → tear down any backing automation. ──────────────────
-  if (!schedule || !schedule.enabled) {
+  if (!schedule || !schedule.enabled || !live) {
     if (existingId) {
       await db
         .update(automations)
@@ -202,8 +217,12 @@ export async function materializePlaybookCronAutomation(
         .set({ flowAutomationId: null, updatedAt: new Date() })
         .where(eq(playbooks.id, playbook.id));
       logger.info(
-        { playbookId: playbook.id, automationId: existingId },
-        "Deactivated backing cron automation (schedule disabled/cleared)"
+        {
+          playbookId: playbook.id,
+          automationId: existingId,
+          playbookStatus: playbook.status,
+        },
+        "Deactivated backing cron automation (schedule disabled/cleared, or playbook not active)"
       );
     }
     return null;
@@ -216,6 +235,22 @@ export async function materializePlaybookCronAutomation(
     subjectProfile: readSubjectProfile(playbook.subjectProfile),
   });
   const nextRunAt = computeNextRunAt(schedule.cron, new Date());
+
+  // This path writes `automations` DIRECTLY, so it never meets the create/update
+  // door's `flowValidationErrorMessage`. Run the SAME validator here: the flow is
+  // machine-built above, so a failure means a bug in the builder, not bad user
+  // input — and the parent playbook write has ALREADY committed by the time we
+  // get here. Throwing would surface a 500 on a successful write, so we refuse
+  // to persist the broken definition (an invalid flow never reaches the
+  // executor) and say so loudly, leaving any existing backing row untouched.
+  const flowError = flowValidationErrorMessage(flowDefinition);
+  if (flowError) {
+    logger.error(
+      { playbookId: playbook.id, automationId: existingId, flowError },
+      "Refusing to write backing cron automation — generated flow is invalid"
+    );
+    return existingId;
+  }
 
   // ── Active schedule → update the SAME backing row if one exists. ────────────
   if (existingId) {

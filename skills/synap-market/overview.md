@@ -1,10 +1,27 @@
 # Marketplace & templates on Synap
 
-The marketplace is Synap's **package layer**: workspace templates, capabilities,
-automations, and cells — anything that can be installed into a pod rather than
-hand-built. It lives in the Control Plane (CP) catalog and is discoverable and
-installable from any door: the `synap` CLI, MCP (`run_capability`), or the Hub
-REST API (`/api/hub/capabilities/execute`).
+Synap is **configuration-first**: a feature is _stored, user-editable config_
+published to one catalog and installed through shared substrate — not hardcoded in
+the pod backend. The marketplace is that **package layer**, and the catalog
+(`synap_packages`) is **kind-agnostic** — one door serves every kind:
+
+| Kind                      | Configures                                                       | Tier                                       |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------ |
+| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ first-class                             |
+| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ first-class                             |
+| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ first-class                             |
+| **view**                  | a saved view/layout                                              | 🟡 publish yes; standalone-install pending |
+| **skill**                 | agent know-how                                                   | 🟡 embedded in a capability today          |
+| **workflow / automation** | a WHEN→ACTION flow                                               | 🟡 publish yes; standalone-install pending |
+
+First-class = author → publish → install standalone → compose. 🟡 = accepted +
+composable, but the standalone _install_ applier isn't wired yet (the system is
+honest about this — it accepts the kind rather than faking install).
+
+It lives in the Control Plane (CP) catalog and is discoverable and installable from
+any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub REST
+API. **Everything that is config, not code, can be a template** — workspaces, entity
+profiles/views, renderers (cells), capabilities, skills, automations.
 
 ## The two reflexes
 

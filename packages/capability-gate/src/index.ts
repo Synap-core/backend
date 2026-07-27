@@ -54,12 +54,25 @@ export interface GateToolRow {
   approved: boolean | null;
   /** Owner principal — `tools.created_by`. */
   createdBy: string | null;
+  /**
+   * The tool's stable NAME (`tools.name`) — this IS the verbId a capability
+   * rule's `target_pattern` matches against (execute-capability.ts: "verbId =
+   * backing skill/tool NAME"). Optional because some callers pre-load a row
+   * without it (e.g. connector-import-bridge's synthetic tool row); absent →
+   * a rule can only match by the (reinstall-unstable) row id.
+   */
+  name?: string | null;
 }
 export interface GateSkillRow {
   id: string;
   approved: boolean | null;
   /** Owner principal — `skills.user_id`. */
   userId: string | null;
+  /**
+   * The skill's stable NAME (`skills.name`) — this IS the verbId (see
+   * `GateToolRow.name`). Optional for the same pre-load reason.
+   */
+  name?: string | null;
 }
 
 export interface GateCapabilityExecutionInput {
@@ -175,12 +188,15 @@ function readGrantExecMode(raw: unknown): GrantExecMode | null {
  * NO writes (use-count is consumed at the dispatch point only when the verdict
  * is `run`).
  *
- * KNOWN LIMITATION (not solved here — flagged as a follow-up): a capability
- * rule is keyed on `capabilityId` (the same value the UI stores as
- * `target_pattern`), and skills/tools are RE-CREATED with a new id on
- * reinstall (`execute-capability.ts:124-129`) — a rule authored against the
- * old id silently stops matching after a reinstall, the same staleness class
- * `vault_grants` already has.
+ * KNOWN LIMITATION, NARROWED (2026-07-27): a capability rule MAY still be
+ * keyed on the row `capabilityId`, and skills/tools are RE-CREATED with a new
+ * id on reinstall (`execute-capability.ts:124-129`) — a rule authored against
+ * the old id alone would silently stop matching after a reinstall, the same
+ * staleness class `vault_grants` already has. Rules are now ALSO matchable by
+ * the capability's stable VERB NAME (`tools.name`/`skills.name`, = `verbId` —
+ * `scoreRuleTarget`'s `targetKind: "capability"` branch matches either), which
+ * survives a reinstall — the UI should author "always approve this
+ * capability" rules against the verb name, not the id, to be reinstall-safe.
  */
 export async function gateCapabilityExecution(
   input: GateCapabilityExecutionInput
@@ -188,6 +204,11 @@ export async function gateCapabilityExecution(
   // ── (a) load approval-state + owner ─────────────────────────────────────────
   let approved: boolean | null = null;
   let ownerId: string | null = null;
+  // The capability's stable NAME (= verbId) — threaded into the capability-rule
+  // lookup below so a rule can target the verb name (reinstall-stable) instead
+  // of only the row id (reinstall-unstable). `null` for commands (no row) or a
+  // pre-loaded row that omitted `name`.
+  let verbName: string | null = null;
 
   if (input.capabilityKind === "tool") {
     let row = input.tool ?? null;
@@ -198,6 +219,7 @@ export async function gateCapabilityExecution(
           id: tools.id,
           approved: tools.approved,
           createdBy: tools.createdBy,
+          name: tools.name,
         })
         .from(tools)
         .where(eq(tools.id, input.capabilityId));
@@ -205,6 +227,7 @@ export async function gateCapabilityExecution(
     }
     approved = row?.approved ?? null;
     ownerId = row?.createdBy ?? null;
+    verbName = row?.name ?? null;
   } else if (input.capabilityKind === "skill") {
     let row = input.skill ?? null;
     if (!row) {
@@ -214,6 +237,7 @@ export async function gateCapabilityExecution(
           id: skills.id,
           approved: skills.approved,
           userId: skills.userId,
+          name: skills.name,
         })
         .from(skills)
         .where(eq(skills.id, input.capabilityId));
@@ -221,6 +245,7 @@ export async function gateCapabilityExecution(
     }
     approved = row?.approved ?? null;
     ownerId = row?.userId ?? null;
+    verbName = row?.name ?? null;
   } else {
     // commands have no approved/owner column today → conservative defaults.
     approved = null;
@@ -292,7 +317,7 @@ export async function gateCapabilityExecution(
       // before proposing (Option B, D1: a rule can authorize a run with NO
       // grant at all). No matching "auto" rule → route to a reviewable
       // proposal (a human can approve the run); do NOT hard-deny.
-      if (await capabilityRuleAuthorizesRun(input)) {
+      if (await capabilityRuleAuthorizesRun(input, verbName)) {
         return { decision: "run" };
       }
       return buildProposeDecision(input);
@@ -335,7 +360,7 @@ export async function gateCapabilityExecution(
   }
   // propose — consult a stored capability rule (Option B) before falling
   // through to a reviewable `capability/run` proposal.
-  if (await capabilityRuleAuthorizesRun(input)) {
+  if (await capabilityRuleAuthorizesRun(input, verbName)) {
     return { decision: "run" };
   }
   return buildProposeDecision(input);
@@ -354,9 +379,16 @@ export async function gateCapabilityExecution(
  * deny floor or the `dry-run` short-circuit — both are checked strictly
  * BEFORE either call site that invokes this helper (see the resolution-order
  * doc above), so a rule can never cross those floors.
+ *
+ * `verbName` (the capability's stable `tools.name`/`skills.name`) is passed
+ * through to `resolveGovernanceRule` alongside `capabilityId` so a rule
+ * authored against the VERB NAME (reinstall-stable) matches equally to one
+ * authored against the row id (reinstall-unstable, the KNOWN LIMITATION
+ * above) — see `scoreRuleTarget`'s `targetKind: "capability"` branch.
  */
 async function capabilityRuleAuthorizesRun(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  verbName: string | null
 ): Promise<boolean> {
   if (!input.agentUserId) return false;
   // Defence-in-depth: `input.capabilityKind` is typed `CapabilityRunKind`
@@ -372,6 +404,7 @@ async function capabilityRuleAuthorizesRun(
     subjectType: CAPABILITY_RUN_PROPOSAL.targetType,
     action: CAPABILITY_RUN_PROPOSAL.proposalType,
     capabilityId: input.capabilityId,
+    capabilityVerbName: verbName,
   });
   return match?.verdict === "auto";
 }

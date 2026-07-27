@@ -156,6 +156,28 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
     expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
   });
 
+  it("threads the tool row's stable NAME through to resolveGovernanceRule as capabilityVerbName (2026-07-27)", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+
+    await gateCapabilityExecution({
+      ...BASE_INPUT,
+      tool: {
+        id: "tool-123",
+        approved: true,
+        createdBy: "owner-1",
+        name: "unipile_list_accounts",
+      },
+    });
+
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capabilityId: "tool-123",
+        capabilityVerbName: "unipile_list_accounts",
+      })
+    );
+  });
+
   it("a 'propose' verdict rule (not auto) never widens — still propose", async () => {
     findCapabilityGrantMock.mockResolvedValue({ ok: false });
     resolveGovernanceRuleMock.mockResolvedValue({

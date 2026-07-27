@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { validateFlowDefinition } from "./validate-flow.js";
 
 /**
- * Author-time gate for the config automations that SHADOW/REPLACE bespoke
- * workers (mail-feed, proactive-digest). These live as capability-template seeds
+ * Author-time gate for EVERY config automation seeded from the CP repo —
+ * including the ones that SHADOW/REPLACE bespoke workers (mail-feed,
+ * proactive-digest). These live as capability-template seeds
  * in the sibling CP repo; this test reads their JSON, runs the SAME pure
  * `validateFlowDefinition` the persist doors run, and asserts each flow is
  * author-valid with the new node/verb vocabulary (transform `not-in`/`to_ms`,
@@ -40,10 +41,16 @@ function loadSeed(file: string): SeededCapability {
   ) as SeededCapability;
 }
 
-const SEED_FILES = [
-  "mail-feed.capability.json",
-  "proactive-digest.capability.json",
-] as const;
+/**
+ * GLOB, never a hardcoded list. The list used to name two files while five CP
+ * seeds carried `automations[]` — so three seeds shipped with zero author-time
+ * coverage, and every new seed inherited that hole by default. Reading the
+ * directory means a seed is covered the moment it exists.
+ */
+const SEED_FILES = readdirSync(CP_TEMPLATES_DIR)
+  .filter((f) => f.endsWith(".capability.json"))
+  .filter((f) => (loadSeed(f).automations?.length ?? 0) > 0)
+  .sort();
 
 describe("config automation seeds — author-valid flows", () => {
   for (const file of SEED_FILES) {
@@ -63,10 +70,16 @@ describe("config automation seeds — author-valid flows", () => {
             expect(result.valid).toBe(true);
           });
 
-          it('cron automation is seeded status:"active" (a draft never fires)', () => {
-            expect(automation.triggerType).toBe("cron");
-            expect(automation.status).toBe("active");
-          });
+          // Only CRON seeds carry the never-fires gotcha (a draft cron gets a
+          // null nextRunAt). Event/manual seeds are legitimately draft, so the
+          // assertion is scoped to the trigger type it is actually about —
+          // globbing the directory brought both kinds into view.
+          it.skipIf(automation.triggerType !== "cron")(
+            'cron automation is seeded status:"active" (a draft never fires)',
+            () => {
+              expect(automation.status).toBe("active");
+            }
+          );
         });
       }
     });

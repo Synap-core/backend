@@ -1907,6 +1907,8 @@ try {
               await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
               await import("@synap/jobs/utils/proactive-post.js");
+            const { registerFlowValidator } =
+              await import("@synap/jobs/workers/automation-pattern-detector.js");
             const api = await import("@synap/api");
             registerCapabilityExecutor((input) => api.executeCapability(input));
             // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
@@ -1927,6 +1929,12 @@ try {
             registerEventEndRunner(() => api.runEventEnd());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
+            // The pattern detector writes an LLM's suggested flow straight to
+            // `automations`, so it never meets the create/update door's check.
+            // Same validator, injected across the circular-dep boundary.
+            registerFlowValidator((flow) =>
+              api.flowValidationErrorMessage(flow)
+            );
             apiLogger.info(
               "Registered capability / mail-feed / event-sync / event-end / session-recap / signal handlers (IoC)"
             );

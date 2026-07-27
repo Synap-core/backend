@@ -28,6 +28,24 @@ import { getDefaultActiveService } from "@synap/intelligence-client";
 
 const logger = createLogger({ module: "automation-pattern-detector" });
 
+/**
+ * IoC slot for the flow validator (`flowValidationErrorMessage`, @synap/api).
+ * @synap/jobs cannot statically import @synap/api (circular dep), so apps/api
+ * fills this slot at boot — the SAME pattern as `registerPlaybookRunner` /
+ * `registerSignalRouter`. Without it an LLM's `suggestedFlow` was written to
+ * `automations` with ZERO validation, the only door in the repo that did so.
+ *
+ * Unregistered → warn+skip (never throw): a missed check must not kill the
+ * nightly sweep, and the row it guards is a `draft` either way.
+ */
+type FlowValidator = (flow: unknown) => string | null;
+
+let flowValidator: FlowValidator | null = null;
+
+export function registerFlowValidator(fn: FlowValidator): void {
+  flowValidator = fn;
+}
+
 /** Minimum entity mutations in last 24h to consider a workspace eligible */
 const MIN_ACTIVITY_THRESHOLD = 10;
 
@@ -175,27 +193,43 @@ async function saveDraftAutomation(
   workspaceId: string,
   proposal: PatternProposal
 ): Promise<void> {
+  const flowDefinition = proposal.suggestedFlow ?? { nodes: [], edges: [] };
+
+  // Run the SAME validator the automations create/update door runs. The flow
+  // came from an LLM, so a failure is expected traffic, not a bug — and the row
+  // is a `draft` that only a human can activate, which is exactly what a draft
+  // is for. So keep it, keep it draft, and record WHY it is suspect on the
+  // metadata the Workflows screen already reads.
+  const flowError = flowValidator ? flowValidator(flowDefinition) : null;
+  if (!flowValidator) {
+    logger.warn(
+      { workspaceId },
+      "Flow validator not registered — saving suggested flow unvalidated"
+    );
+  } else if (flowError) {
+    logger.warn(
+      { workspaceId, name: proposal.name, flowError },
+      "Suggested flow failed validation — saved as draft with the findings attached"
+    );
+  }
+
   await db.insert(automations).values({
     workspaceId,
     createdBy: "system",
     name: proposal.name,
     description: proposal.description,
     triggerType: proposal.triggerType as
-      | "event"
-      | "cron"
-      | "webhook"
-      | "manual",
+      "event" | "cron" | "webhook" | "manual",
     triggerConfig: {},
-    flowDefinition: (proposal.suggestedFlow ?? {
-      nodes: [],
-      edges: [],
-    }) as (typeof automations.$inferInsert)["flowDefinition"],
+    flowDefinition:
+      flowDefinition as (typeof automations.$inferInsert)["flowDefinition"],
     status: "draft",
     metadata: {
       createdVia: "ai" as const,
       suggestedByPattern: true,
       patternConfidence: proposal.confidence,
       description: proposal.description,
+      ...(flowError ? { flowValidationError: flowError } : {}),
     },
     createdAt: new Date(),
     updatedAt: new Date(),

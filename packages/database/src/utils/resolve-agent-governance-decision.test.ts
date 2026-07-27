@@ -403,4 +403,89 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
 
     expect(match).toBeUndefined();
   });
+
+  it("resolveGovernanceRule: capability rule matches by VERB NAME (reinstall-stable, 2026-07-27)", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "agent",
+          scopeKind: "workspace",
+          targetKind: "capability",
+          // Authored against the stable verb name, NOT the row id — the id
+          // changes on every reinstall, the name doesn't.
+          targetPattern: "unipile_list_accounts",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+
+    const match = await resolveGovernanceRule({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "capability",
+      action: "run",
+      // A reinstall means the row id no longer matches the rule at all —
+      // only the verb name does.
+      capabilityId: "skill-id-after-reinstall",
+      capabilityVerbName: "unipile_list_accounts",
+    });
+
+    expect(match).toEqual({
+      verdict: "auto",
+      matchedPattern: "unipile_list_accounts",
+    });
+  });
+
+  it("resolveGovernanceRule: capability rule still matches by ROW ID (back-compat, pre-existing rules)", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "agent",
+          scopeKind: "workspace",
+          targetKind: "capability",
+          targetPattern: "skill-id-abc",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+
+    const match = await resolveGovernanceRule({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "capability",
+      action: "run",
+      capabilityId: "skill-id-abc",
+      capabilityVerbName: "unipile_list_accounts",
+    });
+
+    expect(match).toEqual({ verdict: "auto", matchedPattern: "skill-id-abc" });
+  });
+
+  it("resolveGovernanceRule: capability rule matching neither id nor verb name → undefined", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "agent",
+          scopeKind: "workspace",
+          targetKind: "capability",
+          targetPattern: "some_other_verb",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+
+    const match = await resolveGovernanceRule({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "capability",
+      action: "run",
+      capabilityId: "skill-id-abc",
+      capabilityVerbName: "unipile_list_accounts",
+    });
+
+    expect(match).toBeUndefined();
+  });
 });

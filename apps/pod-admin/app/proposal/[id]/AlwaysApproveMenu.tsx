@@ -71,22 +71,27 @@ function deriveGranularities(p: ProposalForRule): Granularity[] {
       : undefined;
   const options: Granularity[] = [];
 
-  // "This capability" — capability runs are governed in the gate
-  // (`gateCapabilityExecution`), which matches a rule on `data.capabilityId`
-  // (the exact value it also stores on the proposal). Key on that same field so
-  // the rule the gate resolves is byte-identical to what we store. (Phase 2 /
-  // Option B wired the gate to consult these; a verdict:"auto" rule authorizes
-  // the run — never a secret, never past the approval floor.)
-  const capabilityId = stringField(p.request?.data, "capabilityId");
-  if (capabilityId) {
+  // "This capability" — a `capability.run` proposal stores `data.verbId`
+  // (e.g. "unipile_list_accounts"), not `data.capabilityId`; the gate
+  // (`gateCapabilityExecution`) matches a capability rule on that verb name.
+  // Prefer verbId, fall back to skillId, then the older `capabilityId` shape
+  // (some gate paths still store that) so the rule we create is byte-identical
+  // to what the gate resolves. (Phase 2 / Option B wired the gate to consult
+  // these; a verdict:"auto" rule authorizes the run — never a secret, never
+  // past the approval floor.)
+  const verbId =
+    stringField(p.request?.data, "verbId") ??
+    stringField(p.request?.data, "skillId") ??
+    stringField(p.request?.data, "capabilityId");
+  if (verbId) {
     options.push({
       key: "capability",
-      label: "This capability",
+      label: `Always approve "${verbId}"`,
       build: () => ({
         principalKind: "any",
         ...scope,
         targetKind: "capability",
-        targetPattern: capabilityId,
+        targetPattern: verbId,
         verdict: "auto",
         sourceProposalId: p.id,
       }),
