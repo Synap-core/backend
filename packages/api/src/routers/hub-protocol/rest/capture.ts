@@ -481,6 +481,12 @@ export function registerCaptureRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+    // D3: the same agentic signal `/capture/structure` already reads on this
+    // router (c.get("agentUserId"), set by the Hub-protocol auth middleware
+    // for a genuine agent/IS caller, absent for a human interactive caller) —
+    // threaded into the proposal below so an agent-driven import resolves an
+    // agentUserId (dedup + attribution engage); a human import stays undefined.
+    const importAgentUserId = c.get("agentUserId") as string | undefined;
 
     try {
       // Resolve the workspace's REAL profiles → typed hints for the structuring
@@ -619,6 +625,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         action: "create",
         source: "intelligence",
         summary,
+        ...(importAgentUserId ? { agentUserId: importAgentUserId } : {}),
         data: { operations: operations!, source: body.source },
       });
 

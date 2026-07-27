@@ -448,6 +448,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "relevance_score",
     addedBy: "0113_ebbinghaus_decay.sql",
   },
+  {
+    table: "knowledge_facts",
+    column: "fact_hash",
+    addedBy: "0216_knowledge_facts_dedup.sql",
+  },
+  {
+    table: "knowledge_facts",
+    column: "dedup_bucket",
+    addedBy: "0216_knowledge_facts_dedup.sql",
+  },
 
   // focus_sessions — goal-bound user work sessions (0114)
   {

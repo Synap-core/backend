@@ -86,6 +86,8 @@ import {
   applyGraphDispositions,
   type GraphDispositionMap,
 } from "./proposals/graph-dispositions.js";
+import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
+import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -2632,34 +2634,10 @@ export const proposalsRouter = router({
         });
       }
 
-      // Workspace access check
-      if (proposal.workspaceId) {
-        const { workspaceMembers } = await import("@synap/database/schema");
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, proposal.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-        });
-        if (
-          !membership ||
-          !["owner", "admin", "editor"].includes(membership.role)
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Editor or higher role required to view this proposal",
-          });
-        }
-      } else {
-        // Pod-wide proposal (no workspaceId) — only the proposer can see it
-        const proposalData = proposal.data as Record<string, unknown> | null;
-        if (proposalData?.sourceId !== userId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Not authorized to view this proposal",
-          });
-        }
-      }
+      // Visibility gate — the SSOT shared with `source`, the channel-bind
+      // chokepoint, and the AI-hydration path (workspace member editor+ / the
+      // proposer for a pod-wide proposal).
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
 
       return {
         ...(await enrichProposalsForDisplay([proposal], userId))[0],
@@ -2693,33 +2671,8 @@ export const proposalsRouter = router({
         });
       }
 
-      // Identical access gate to `get`.
-      if (proposal.workspaceId) {
-        const { workspaceMembers } = await import("@synap/database/schema");
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, proposal.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-        });
-        if (
-          !membership ||
-          !["owner", "admin", "editor"].includes(membership.role)
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Editor or higher role required to view this proposal",
-          });
-        }
-      } else {
-        const proposalData = proposal.data as Record<string, unknown> | null;
-        if (proposalData?.sourceId !== userId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Not authorized to view this proposal",
-          });
-        }
-      }
+      // Identical access gate to `get` — the shared SSOT.
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
 
       type SourceTargetKind =
         "session" | "channel" | "automation" | "skill" | "playbook" | "agent";
@@ -2988,13 +2941,6 @@ export const proposalsRouter = router({
         });
       }
 
-      if (proposal.status !== ProposalStatus.PENDING) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Cannot revise proposal with status '${proposal.status}' — only pending proposals can be revised`,
-        });
-      }
-
       // Authority — SAME ladder `approve` enforces (a revise is a pre-approval
       // edit, so it requires review authority). Pod-wide proposals skip the check.
       const canReview = await computeCanReviewApproval({ proposal, userId });
@@ -3005,43 +2951,18 @@ export const proposalsRouter = router({
         });
       }
 
-      // Merge the corrected payload over the existing envelope, preserving the
-      // identity fields the approve materializer keys on (mirrors the hub door).
-      const existing = (proposal.data ?? {}) as Record<string, unknown>;
-      const merged = {
-        ...existing,
-        ...input.data,
-        targetType: existing.targetType,
-        changeType: existing.changeType,
-        requestId: existing.requestId,
-      };
-
-      // CAS: the status was read above, but re-gate the write on PENDING and
-      // CHECK the result — if a concurrent approve/reject flipped the row in the
-      // window, this matches zero rows and we must NOT report success (that would
-      // silently drop the reviewer's edits while approve materializes the original
-      // draft). Same at-most-once discipline as dispatchExternalOnce.
-      const [updated] = await db
-        .update(proposals)
-        .set({
-          data: merged as typeof proposals.$inferInsert.data,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        )
-        .returning({ id: proposals.id });
-
-      if (!updated) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "This proposal was just reviewed elsewhere — your edits were not saved. Reload to see its current state.",
-        });
-      }
+      // Route through the ONE shared revise core. The Studio reviewer's
+      // "Save & Approve" pre-wraps its edited inner as `{ data: inner }`, so the
+      // deployed frontend already speaks envelope-language — pass it through as
+      // an ENVELOPE patch (byte-identical to the historic top-level merge). The
+      // core row-locks + asserts PENDING (CONFLICT if a concurrent approve/reject
+      // flipped it — the reviewer's edits are never silently dropped) and now
+      // appends a `revisionHistory` entry so "Save & Approve" is recorded.
+      await mergeProposalRevision({
+        proposalId: input.proposalId,
+        actorId: userId,
+        patch: { kind: "envelope", fields: input.data },
+      });
 
       return { success: true };
     }),

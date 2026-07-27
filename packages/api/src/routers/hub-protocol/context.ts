@@ -27,6 +27,7 @@ import {
   renderProposalForPrompt,
   type ProposalPromptContext,
 } from "../proposals/render-for-prompt.js";
+import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 
 export const contextRouter = router({
   /**
@@ -155,7 +156,22 @@ export const contextRouter = router({
       // surface `proposalId` explicitly so the tool has its target.
       let linkedProposal: ProposalPromptContext | null = null;
       if (thread?.contextObjectType === "proposal" && thread?.contextObjectId) {
-        linkedProposal = await renderProposalForPrompt(thread.contextObjectId);
+        // SECURITY (defense in depth) — re-verify the channel OWNER may see the
+        // bound proposal before injecting its contents into the prompt. The
+        // channel-bind chokepoint (resolve-or-create-channel) is the primary
+        // gate; this is the belt-and-suspenders re-check on the hydration side.
+        // A binding the owner can't justify ⇒ skip hydration (never hard-crash a
+        // legit thread that merely lost visibility later).
+        try {
+          await assertProposalVisibleTo(thread.contextObjectId, threadUserId, {
+            db,
+          });
+          linkedProposal = await renderProposalForPrompt(
+            thread.contextObjectId
+          );
+        } catch {
+          linkedProposal = null;
+        }
       }
 
       return {

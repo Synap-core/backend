@@ -89,6 +89,38 @@ describe("substitute — bare {name}, resolved ONLY against declared params", ()
     );
   });
 
+  // Regression: a MALFORMED `@{arg:` used to scan forward to the next `}`
+  // anywhere in the template, swallowing a `{{…}}` binding whole and returning
+  // mangled text with no error — the same silent-destruction shape that cost the
+  // DAG grammar real data. A malformed opener must stay literal.
+  it("a malformed @{arg: does not scan across a {{path}} binding", () => {
+    expect(
+      parseCommandTemplate(
+        "@{arg:tone{{trigger.payload.prompt}} rest"
+      ).substitute({
+        tone: "T",
+      })
+    ).toBe("@{arg:tone{{trigger.payload.prompt}} rest");
+  });
+
+  it("a malformed @{entity: does not scan across a {{path}} binding", () => {
+    expect(
+      parseCommandTemplate("@{entity:e1:{{focus}}").substitute({ focus: "F" })
+    ).toBe("@{entity:e1:{{focus}}");
+  });
+
+  // Regression: `argValues[name]` walks the prototype chain, so these resolved to
+  // V8 source text and injected it into the model prompt.
+  it.each(["constructor", "toString", "__proto__", "valueOf"])(
+    "never resolves the inherited key %s",
+    (key) => {
+      expect(parseCommandTemplate(`@{arg:${key}}`).substitute({})).toBe("");
+      expect(
+        parseCommandTemplate(`{argument name="${key}"}`).substitute({})
+      ).toBe("");
+    }
+  );
+
   it("never eats a grammar-#3 {{path}} — even a single-identifier one", () => {
     const t = parseCommandTemplate(
       "{{focus}} and {{trigger.payload.prompt}} and {{ spaced }}"

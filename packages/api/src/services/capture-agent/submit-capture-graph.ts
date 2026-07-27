@@ -724,6 +724,14 @@ export async function submitCaptureGraph(
     action: "create",
     source,
     summary,
+    // D3: input.agentUserId is the genuine agent-key signal (see the field's
+    // doc comment above) — already used to derive agent-mode auto-apply, but
+    // never threaded into THIS proposal. Without it, an agent-driven capture
+    // that falls through to the pending path (a non-auto-approving op, or
+    // channel bindings present) filed an unattributed proposal that bypassed
+    // dedup. A webhook/cron/human-confirm caller still has no agentUserId, so
+    // it stays correctly unattributed.
+    ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
       : {}),

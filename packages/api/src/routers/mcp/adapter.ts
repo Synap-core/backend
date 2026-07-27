@@ -3046,7 +3046,12 @@ export async function executeMCPToolViaHubProtocol(
         agentUserId: agentUserId ?? null,
       });
       // Surface the same discriminated outcome the hub door returns, in a shape
-      // the agent reads naturally (proposed is NOT an error).
+      // the agent reads naturally (proposed is NOT an error). A `kind:"error"`
+      // (the verb ran and its handler failed) surfaces as an error to the agent —
+      // the adapter's `{ error }` convention — not a success payload.
+      if (outcome.kind === "error") {
+        return ok({ error: outcome.message });
+      }
       return ok(outcome);
     }
 

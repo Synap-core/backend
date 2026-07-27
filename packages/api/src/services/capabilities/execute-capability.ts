@@ -35,6 +35,7 @@ import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
 export type ExecuteCapabilityResult =
@@ -47,6 +48,11 @@ export type ExecuteCapabilityResult =
       ackState: WriteAckState;
     }
   | { kind: "deny"; reason: string }
+  // A run that REACHED its handler and FAILED (a code skill's sandbox returned
+  // success:false, or a declarative provider verb returned an error envelope).
+  // The ONE failure channel: callers must NOT dig a success:false envelope out of
+  // a `kind:"run"` result — a failed run is `kind:"error"`, never `kind:"run"`.
+  | { kind: "error"; message: string }
   | { kind: "not_found"; message: string };
 
 export async function executeCapability(input: {
@@ -248,6 +254,7 @@ export async function runResolvedSkill(
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
+  | { kind: "error"; message: string }
   | { kind: "not_found"; message: string }
   | { kind: "deny"; reason: string }
 > {
@@ -281,6 +288,22 @@ export async function runResolvedSkill(
       workspaceId: ctx.workspaceId ?? undefined,
       connectionSelector: ctx.connectionSelector ?? null,
     });
+    // executeProviderVerb flattens a provider FAILURE back to its `{success:false,
+    // error}` envelope (execute-provider-verb.ts). Surface it as `kind:"error"` so
+    // callers have ONE failure channel — never a success:false riding inside a
+    // `kind:"run"`. A PROPOSED (unapproved write) envelope carries `proposed:true`
+    // and is NOT an error: let it flow through as a run so the caller surfaces the
+    // review inline. `capErrorMessage` is the SHARED envelope-message extractor.
+    const isProposed =
+      !!result &&
+      typeof result === "object" &&
+      (result as Record<string, unknown>).proposed === true;
+    if (!isProposed) {
+      const errMessage = capErrorMessage({ kind: "run", result });
+      if (errMessage !== undefined) {
+        return { kind: "error", message: errMessage };
+      }
+    }
     return { kind: "run", skillId: skill.id, result };
   }
 
@@ -300,11 +323,21 @@ export async function runResolvedSkill(
   }
 
   // TIER 2 (code/instruction): execute the backing skill in the IS sandbox.
-  const result = await executeSkillViaIS({
+  // executeSkillViaIS ALWAYS returns the `SkillExecutionResult` envelope
+  // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
+  // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
+  // failure — a success:false must never ride through as a `kind:"run"` result.
+  const envelope = await executeSkillViaIS({
     skillId: skill.id,
     userId: ctx.userId,
     parameters,
     workspaceId: ctx.workspaceId,
   });
-  return { kind: "run", skillId: skill.id, result };
+  if (!envelope.success) {
+    return {
+      kind: "error",
+      message: envelope.error ?? `Skill "${skill.name}" execution failed.`,
+    };
+  }
+  return { kind: "run", skillId: skill.id, result: envelope.result };
 }

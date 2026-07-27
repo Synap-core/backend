@@ -42,6 +42,7 @@ vi.mock("@synap/database", () => {
 });
 
 import { rememberFact } from "./remember-fact.js";
+import { knowledgeRepository } from "@synap/database";
 
 function makeCaller(createResult: {
   status: string;
@@ -152,5 +153,34 @@ describe("rememberFact — ack integrity", () => {
     });
     expect(r.ackState).toBe("duplicate-ignored");
     expect(createEntity).not.toHaveBeenCalled();
+  });
+
+  it("race backstop (0216): a concurrent 23505 on the recall-index insert is recovered, not thrown", async () => {
+    // Step-0 peek sees nothing — this IS the race (both callers peeked before
+    // either committed). The recall-index insert then loses the DB-level
+    // unique index to a concurrent winner.
+    state.priorFactRows = [];
+    const dup = Object.assign(new Error("duplicate key value"), {
+      code: "23505",
+    });
+    vi.mocked(knowledgeRepository.saveFact).mockImplementationOnce(() => {
+      // Simulate the concurrent winner's row already committed by the time
+      // this call's post-conflict lookup runs.
+      state.priorFactRows = [{ id: "fact-winner", sourceEntityId: "e-winner" }];
+      return Promise.reject(dup);
+    });
+    const { caller, createEntity } = makeCaller({
+      status: "created",
+      id: "e2",
+    });
+    const r = await rememberFact({ caller, userId: "u1", fact: "likes async" });
+    // This call's OWN governed write already landed — it is not a duplicate
+    // of anything, so it still reports success for ITS entity.
+    expect(createEntity).toHaveBeenCalledTimes(1);
+    expect(r.ackState).toBe("applied");
+    expect(r.entityId).toBe("e2");
+    // Only the recall-index row is deduped onto the winner — no second
+    // knowledge_facts row for the same (user, fact, bucket).
+    expect(r.recallIndex.factId).toBe("fact-winner");
   });
 });

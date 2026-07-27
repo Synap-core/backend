@@ -43,7 +43,14 @@ import {
   withTemplateDiagnostics,
   type TemplateMiss,
 } from "./template-diagnostics.js";
-import { REF_BARE_ARG } from "./template-references.js";
+import {
+  REF_ARG,
+  REF_BARE_ARG,
+  REF_CONTEXT,
+  REF_ENTITY,
+  REF_LEGACY_ARG,
+  REF_LEGACY_SELECTION,
+} from "./template-references.js";
 
 export {
   findUnresolvedReferences,
@@ -57,19 +64,19 @@ export {
  * Matches @{arg:NAME} and @{arg:NAME:TYPE} and @{arg:NAME:choice=...}
  * Groups: 1=name, 2=full type/choice string (optional, e.g. "number", "choice=a,b,c")
  */
-const NEW_ARG_REGEX_FULL = /@\{arg:([^:}\s]+)(?::([^}]*))?\}/g;
+const NEW_ARG_REGEX_FULL = new RegExp(REF_ARG.source, "g");
 
 /**
  * Matches @{context:entity|view|url|text}
  * Groups: 1=contextType
  */
-const NEW_CONTEXT_REGEX = /@\{context:(entity|view|url|text)\}/g;
+const NEW_CONTEXT_REGEX = new RegExp(REF_CONTEXT.source, "g");
 
 /**
  * Matches @{entity:ENTITY_ID:DISPLAY_NAME}
  * Groups: 1=entityId, 2=displayName
  */
-const NEW_STATIC_REGEX = /@\{entity:([^:}]+):([^}]*)\}/g;
+const NEW_STATIC_REGEX = new RegExp(REF_ENTITY.source, "g");
 
 // ── Legacy backward-compat regexes ────────────────────────────────────────
 
@@ -77,15 +84,13 @@ const NEW_STATIC_REGEX = /@\{entity:([^:}]+):([^}]*)\}/g;
  * Matches {argument name="X"}, {argument name="Y" options="a,b" default="a"}
  * Groups: 1=name, 2=options csv (optional), 3=default (optional)
  */
-const OLD_ARG_REGEX =
-  /\{argument\s+name\s*=\s*["']([^"']+)["'](?:\s+options\s*=\s*["']([^"']*)["'])?(?:\s+default\s*=\s*["']([^"']*)["'])?\}/gi;
+const OLD_ARG_REGEX = new RegExp(REF_LEGACY_ARG.source, "gi");
 
 /**
  * Matches {selection} and {selection type="viewRows"} (optional type).
  * Groups: 1=type (optional)
  */
-const OLD_SELECTION_REGEX =
-  /\{selection(?:\s+type\s*=\s*["'](entities|viewRows|documents|text)["'])?\}/gi;
+const OLD_SELECTION_REGEX = new RegExp(REF_LEGACY_SELECTION.source, "gi");
 
 /**
  * Bare `{name}` — the legacy-compat rule. Its source, its three guards and the
@@ -300,7 +305,14 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(NEW_ARG_REGEX_FULL.source, "g"),
       (_, name: string) => {
-        if (!declared(name)) recordTemplateMiss(name, "unknown-arg");
+        // Return BEFORE reading: `argValues[name]` walks the prototype chain, so
+        // an undeclared `constructor` / `toString` / `__proto__` would resolve to
+        // V8 source text (never nullish, so `??` never fires) and inject it into
+        // the prompt. The own-key guard has to gate the read, not just the miss.
+        if (!declared(name)) {
+          recordTemplateMiss(name, "unknown-arg");
+          return "";
+        }
         return argValues[name] ?? "";
       }
     );
@@ -348,7 +360,14 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(OLD_ARG_REGEX.source, "gi"),
       (_, name: string) => {
-        if (!declared(name)) recordTemplateMiss(name, "unknown-arg");
+        // Return BEFORE reading: `argValues[name]` walks the prototype chain, so
+        // an undeclared `constructor` / `toString` / `__proto__` would resolve to
+        // V8 source text (never nullish, so `??` never fires) and inject it into
+        // the prompt. The own-key guard has to gate the read, not just the miss.
+        if (!declared(name)) {
+          recordTemplateMiss(name, "unknown-arg");
+          return "";
+        }
         return argValues[name] ?? "";
       }
     );

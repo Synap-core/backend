@@ -139,14 +139,14 @@ function extractProposalName(data: unknown): string | undefined {
   );
 }
 
-interface FingerprintInput {
+export interface FingerprintInput {
   proposalType: string;
   targetType: string;
   targetId: string;
   data: unknown;
 }
 
-function computeFingerprint(p: FingerprintInput): string {
+export function computeFingerprint(p: FingerprintInput): string {
   const cls = classifyChange(p.proposalType);
   let signature: string;
   if (cls === "create") {
@@ -163,7 +163,7 @@ function computeFingerprint(p: FingerprintInput): string {
       signature = name ? `name:${normalizeSignatureToken(name)}` : "id:";
     }
   }
-  return `${p.proposalType} ${p.targetType} ${signature}`;
+  return `${p.proposalType}\0${p.targetType}\0${signature}`;
 }
 
 // ── Pure qualification math (unit-testable, DB-free) ────────────────────────
@@ -306,7 +306,23 @@ async function hasPendingWidenProposal(agentId: string): Promise<boolean> {
   });
 }
 
-/** Any ACTIVE governance_rules row already covering this agent + motif. */
+/**
+ * Any ACTIVE governance_rules row already covering this agent + motif.
+ *
+ * Considers BOTH `target_kind: "action"` rows (the scanner's own writes,
+ * matched by exact/glob/"*" pattern as before) AND `target_kind: "capability"`
+ * rows (Option B / D1, GOVERNANCE-PHASE2-PLAN.md §1) — the dominant motif for
+ * an agent whose approved proposals are mostly `capability.run`
+ * (`CAPABILITY_RUN_PROPOSAL` in `@synap/capability-gate`) resolves to the
+ * generic action pattern `"capability.run"`; if this agent already holds ANY
+ * active per-capability rule, that agent's capability runs are already
+ * governed at the (more specific) capability level, so proposing a blanket
+ * `capability.run` action-widen on top would be redundant. Not a byte-exact
+ * "same target" check (a capability rule's `target_pattern` is a capability
+ * id, not an action string) — a coarser "already governed at capability
+ * granularity" signal, deliberately conservative (skip the widen rather than
+ * risk a duplicate/conflicting proposal).
+ */
 async function hasCoveringRule(
   agentId: string,
   targetPattern: string
@@ -315,22 +331,31 @@ async function hasCoveringRule(
   // Filtered in JS (not a SQL `IN`) — small per-agent row set, and avoids a
   // postgres.js array-binding edge case for a 3-way OR on targetPattern.
   const active = await db
-    .select({ targetPattern: governanceRules.targetPattern })
+    .select({
+      targetKind: governanceRules.targetKind,
+      targetPattern: governanceRules.targetPattern,
+    })
     .from(governanceRules)
     .where(
       and(
         eq(governanceRules.principalKind, "agent"),
         eq(governanceRules.agentUserId, agentId),
-        eq(governanceRules.targetKind, "action"),
         isNull(governanceRules.revokedAt)
       )
     );
-  return active.some(
-    (r) =>
-      r.targetPattern === targetPattern ||
-      r.targetPattern === wildcardPattern ||
-      r.targetPattern === "*"
-  );
+  return active.some((r) => {
+    if (r.targetKind === "action") {
+      return (
+        r.targetPattern === targetPattern ||
+        r.targetPattern === wildcardPattern ||
+        r.targetPattern === "*"
+      );
+    }
+    if (r.targetKind === "capability") {
+      return targetPattern.split(".")[0] === "capability";
+    }
+    return false;
+  });
 }
 
 async function scanAgent(agent: AgentRow): Promise<void> {

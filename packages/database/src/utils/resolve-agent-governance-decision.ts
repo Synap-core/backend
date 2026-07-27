@@ -103,14 +103,18 @@ interface GovernanceRuleCandidate {
 /**
  * Target-match score for one candidate row against the write being resolved,
  * or `undefined` if the row's target does not match at all (not a candidate).
- * Higher = more specific: exact action (3) > profile (2) > glob action (1) >
- * bare "*" catch-all (0). `matchesActionPattern` (the same matcher every
- * `autoApproveFor` glob check uses) only recognizes exact and "<subject>.*"
- * globs — NOT a bare "*" — so the catch-all case is handled explicitly here.
+ * Higher = more specific: exact action / exact capability (3) > profile (2) >
+ * glob action (1) > bare "*" catch-all (0). `matchesActionPattern` (the same
+ * matcher every `autoApproveFor` glob check uses) only recognizes exact and
+ * "<subject>.*" globs — NOT a bare "*" — so the catch-all case is handled
+ * explicitly here.
  *
- * `target_kind: "capability"` rows are not yet matchable from this call site
- * (no capability id is threaded into `resolveGovernanceRule` in this phase) —
- * they never match here, a known Phase A limitation.
+ * `target_kind: "capability"` rows match by exact `capabilityId` (Phase 3,
+ * Option B — GOVERNANCE-PHASE2-PLAN.md §1/D1). `capabilityId` is only
+ * threaded in from the capability-gate call site
+ * (`gateCapabilityExecution` → `@synap/capability-gate`); every other caller
+ * (chat-write door, automation door) never passes it, so a capability rule
+ * never matches a plain data-write resolution.
  */
 function scoreRuleTarget(
   rule: Pick<
@@ -118,7 +122,8 @@ function scoreRuleTarget(
     "targetKind" | "targetPattern" | "targetProfile"
   >,
   eventKey: string,
-  profileSlug: string | null | undefined
+  profileSlug: string | null | undefined,
+  capabilityId?: string | null
 ): number | undefined {
   if (rule.targetKind === "profile") {
     return profileSlug != null && rule.targetProfile === profileSlug
@@ -131,8 +136,10 @@ function scoreRuleTarget(
     if (matchesActionPattern(eventKey, [rule.targetPattern])) return 1;
     return undefined;
   }
-  // targetKind === "capability" — not wired yet at this call site.
-  return undefined;
+  // targetKind === "capability"
+  return capabilityId != null && rule.targetPattern === capabilityId
+    ? 3
+    : undefined;
 }
 
 export interface ResolveGovernanceRuleInput {
@@ -149,6 +156,13 @@ export interface ResolveGovernanceRuleInput {
   subjectType: string;
   action: string;
   profileSlug?: string | null;
+  /**
+   * The capability being resolved (tool/skill/command id), when the caller
+   * is the capability-execution gate (`@synap/capability-gate`) — the ONLY
+   * thing that lets a `target_kind: "capability"` row match (see
+   * `scoreRuleTarget`). Absent for every data-write door.
+   */
+  capabilityId?: string | null;
   /**
    * Whether `principal_kind = 'agent'` rows are eligible to match at all.
    * Defaults to `true` (agent-scoped rows are considered whenever an
@@ -191,6 +205,7 @@ export async function resolveGovernanceRule(
     subjectType,
     action,
     profileSlug,
+    capabilityId,
     includeAgentPrincipal = true,
   } = input;
   const eventKey = `${subjectType}.${action}`;
@@ -253,7 +268,12 @@ export async function resolveGovernanceRule(
     // can never accidentally let an agent-scoped rule leak into a caller
     // (the automation door) that must not consult per-agent rules.
     if (!includeAgentPrincipal && rule.principalKind === "agent") continue;
-    const targetScore = scoreRuleTarget(rule, eventKey, profileSlug);
+    const targetScore = scoreRuleTarget(
+      rule,
+      eventKey,
+      profileSlug,
+      capabilityId
+    );
     if (targetScore === undefined) continue;
     const principalScore = rule.principalKind === "agent" ? 2 : 0;
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;

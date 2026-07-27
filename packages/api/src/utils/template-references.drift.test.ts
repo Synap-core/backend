@@ -32,22 +32,28 @@ const APP_COPY = join(
 
 describe("template-references.ts — no drift between the two copies", () => {
   it("synap-app's unresolved.ts is byte-identical to the backend copy", () => {
-    if (!existsSync(APP_COPY)) {
-      // Isolated checkout (synap-app not a sibling). Nothing to bind against.
-      console.warn(
-        `[drift] synap-app copy not found at ${APP_COPY} — skipping cross-repo drift check.`
-      );
-      return;
-    }
+    // A guard that silently passes when it cannot run is WORSE than no guard —
+    // both file headers tell the reader the copies are byte-bound, so a quiet
+    // skip in CI would make that claim false while looking green. synap-backend
+    // and synap-app are separate repos, so a backend-only checkout is a real
+    // scenario: it must be opted into explicitly, not inferred from absence.
+    if (process.env.SYNAP_ISOLATED_CHECKOUT === "1") return;
+
+    expect(
+      existsSync(APP_COPY),
+      `synap-app copy not found at ${APP_COPY}. This guard binds two copies of ` +
+        "the grammar across repos; without the sibling checkout it cannot run. " +
+        "Set SYNAP_ISOLATED_CHECKOUT=1 to acknowledge running without it."
+    ).toBe(true);
 
     const appSrc = readFileSync(APP_COPY, "utf-8");
-    if (!/function findUnresolvedReferences/.test(appSrc)) {
-      // Cutover done: the app copy re-exports a shared module.
-      console.warn(
-        "[drift] synap-app unresolved.ts has no findUnresolvedReferences body — appears to re-export (cutover complete); drift check retired."
-      );
-      return;
-    }
+    // Renaming the function in the app copy must not silently retire the guard.
+    expect(
+      /function findUnresolvedReferences/.test(appSrc),
+      "synap-app's unresolved.ts no longer defines findUnresolvedReferences. If " +
+        "the copies were genuinely merged behind a shared module, DELETE this " +
+        "test deliberately — do not let it pass by not finding what it guards."
+    ).toBe(true);
 
     expect(
       appSrc,

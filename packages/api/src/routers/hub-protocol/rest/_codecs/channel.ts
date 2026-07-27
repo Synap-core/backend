@@ -23,13 +23,22 @@ export const WireChannelSchema = z
   .passthrough()
   .openapi("Channel");
 
-/** POST /channels/by-context request body. */
+/**
+ * POST /channels/by-context request body.
+ *
+ * SECURITY: "proposal" is intentionally EXCLUDED here. A proposal-bound thread is
+ * hydrated into the AI prompt from its unvalidated primary binding, so a guessed
+ * proposal UUID on this service-key REST door would be an IDOR. The legitimate
+ * "Discuss a proposal" flow reaches the backend via the user-session tRPC
+ * `channels.resolveOrCreateChannel` door (which keeps "proposal" and gates it),
+ * NOT this by-context door.
+ */
 export const ChannelByContextRequestSchema = z
   .object({
     userId: z.string(),
     workspaceId: z.string().optional(),
     contextObjectId: z.string(),
-    contextObjectType: z.enum(["entity", "document", "view", "proposal"]),
+    contextObjectType: z.enum(["entity", "document", "view"]),
   })
   .openapi("ChannelByContextRequest");
 

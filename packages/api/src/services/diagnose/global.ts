@@ -127,14 +127,23 @@ export function summarizeGlobalHealth(
     detail: signals.backlog,
   });
 
-  // Duplicate proposals — attention when clusters exist.
+  // Similar-proposal groups — a review-GROUPING signal, not a duplicate
+  // detector: `computeProposalFingerprint` clusters on a deliberately loose
+  // structural key (proposalType × targetType × name), so a cluster can
+  // legitimately contain distinct payloads that merely share that shape (see
+  // the file's own FINGERPRINT_CAUSE_EXTENSION note). It reads "N proposals
+  // want to change X" for the reviewer — it is NOT evidence of a governance
+  // bug. The strict, preventive de-duplication is `dedup_hash` + the 0208
+  // partial unique index, a separate mechanism this section does not surface.
+  // `attention` here means "worth a look", never "degraded" — a grouping is
+  // informational and must never register as a health failure.
   sections.push({
     key: "duplicate_proposals",
     status: signals.duplicateClusters.length > 0 ? "attention" : "ok",
     headline:
       signals.duplicateClusters.length > 0
-        ? `${signals.duplicateClusters.length} duplicate proposal cluster(s)`
-        : "No duplicate proposals",
+        ? `${signals.duplicateClusters.length} proposal(s) grouped by similarity for review`
+        : "No similar-proposal groups pending review",
     detail: { clusters: signals.duplicateClusters.slice(0, 10) },
   });
 

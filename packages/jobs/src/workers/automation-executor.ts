@@ -381,6 +381,10 @@ type CapabilityDispatchResult =
   | { kind: "dry-run"; skillId: string }
   | { kind: "proposed"; proposalId: string }
   | { kind: "deny"; reason: string }
+  // The verb RAN and its handler FAILED (code sandbox success:false / provider
+  // error envelope). Inside an automation this is a node failure — the call-sites
+  // THROW rather than storing the failure envelope as node output.
+  | { kind: "error"; message: string }
   | { kind: "not_found"; message: string };
 
 /**
@@ -521,6 +525,10 @@ async function dispatchOutputVerb(
   }
   if (dispatch.kind === "not_found") {
     throw new Error(`${verbId} could not be dispatched: ${dispatch.message}`);
+  }
+  if (dispatch.kind === "error") {
+    // The verb ran and FAILED — the node fails (never store the failure as output).
+    throw new Error(`${verbId} failed: ${dispatch.message}`);
   }
   if (dispatch.kind === "dry-run") {
     return { status: "dry_run", verbId };
@@ -751,6 +759,11 @@ async function executeSkillNode(
       `Skill ${skillId} could not be dispatched: ${skillDispatch.message}`
     );
   }
+  if (skillDispatch.kind === "error") {
+    // The skill ran in the IS sandbox and FAILED (success:false) — the node fails
+    // rather than storing the error envelope as node output.
+    throw new Error(`Skill ${skillId} failed: ${skillDispatch.message}`);
+  }
   if (skillDispatch.kind === "dry-run") {
     // Grant resolved to dry-run preview — no external side effect.
     return { dryRun: true, skillId: skillDispatch.skillId };
@@ -841,6 +854,11 @@ async function executeCapabilityNode(
     throw new Error(
       `Capability ${verbId} could not be dispatched: ${capDispatch.message}`
     );
+  }
+  if (capDispatch.kind === "error") {
+    // The verb ran and its handler FAILED — the node fails (never store the
+    // failure envelope as node output).
+    throw new Error(`Capability ${verbId} failed: ${capDispatch.message}`);
   }
   if (capDispatch.kind === "dry-run") {
     // Grant resolved to dry-run preview — no external side effect.
@@ -1120,6 +1138,19 @@ export async function executeOutputStep(
       if (!entityId)
         throw new Error("entity_update requires entityId in config");
 
+      // Look up the target entity's profile slug so profile-scoped governance
+      // rules (e.g. "note=auto, lead=propose") can match on UPDATE the same way
+      // they already do on CREATE. `entities.type` IS the profile slug — it's
+      // populated from `profile.slug` at create time (entity-repository.ts) and
+      // used as the profile-slug filter elsewhere (e.g. `eq(entities.type, profileSlug)`
+      // in listEntities). Entity-not-found just leaves this undefined, which the
+      // gate treats as "no profile match" — never a hard failure.
+      const [targetEntity] = await db
+        .select({ type: entities.type })
+        .from(entities)
+        .where(eq(entities.id, entityId))
+        .limit(1);
+
       // Governed — same gate as entity_create above.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
@@ -1128,6 +1159,7 @@ export async function executeOutputStep(
         action: "update",
         data: { entityId, properties },
         reasoning: "Automation proposed updating an entity.",
+        subjectProfileSlug: targetEntity?.type,
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,

@@ -337,20 +337,22 @@ export function registerChannelsRoutes(app: HubHono): void {
         403
       );
     }
-    const body = (await c.req.json()) as {
-      userId: string;
-      workspaceId?: string;
-      contextObjectId: string;
-      contextObjectType: "entity" | "document" | "view";
-    };
-    if (!body.userId || !body.contextObjectId || !body.contextObjectType) {
+    // Validate at the boundary (was a raw `as` cast). The schema rejects
+    // contextObjectType "proposal" — an IDOR surface on this service-key door —
+    // and any other unknown type, returning 400 instead of forwarding it.
+    const parsed = ChannelByContextRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
       return c.json(
         {
-          error: "userId, contextObjectId, and contextObjectType are required",
+          error:
+            "userId, contextObjectId, and contextObjectType (entity|document|view) are required",
         },
         400
       );
     }
+    const body = parsed.data;
     // Item 3 Part 3: positively pin a bound service key to its workspace.
     // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
     let workspaceId: string | undefined;

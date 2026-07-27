@@ -17,6 +17,7 @@ import { SectionCard } from "../../../components/section-card";
 import type { ConfigFieldSpec } from "../../../../../lib/config-form/types";
 import { useConfigForm } from "../../../../../lib/config-form/useConfigForm";
 import { ConfigForm } from "../../../components/config-form/ConfigForm";
+import { GovernanceRulesPanel } from "./governance-rules-panel";
 
 // ─── Approval-stance presets ──────────────────────────────────────────────────
 // UI-only sugar that pre-fills the form's autoApproveFor + writesRequireProposal.
@@ -161,6 +162,7 @@ const PRESET_DISPLAY: Record<GovernanceMode, { title: string; hint: string }> =
 interface GovernanceTabProps {
   ws: {
     id: string;
+    name?: string;
     settings: Record<string, unknown>;
   };
 }
@@ -325,6 +327,9 @@ export function GovernanceTab({ ws }: GovernanceTabProps) {
           <ConfigForm fields={GOVERNANCE_FIELDS} form={form} />
         </div>
       </SectionCard>
+
+      {/* Standing rules — the revocable "always approve for X" ledger */}
+      <GovernanceRulesPanel workspaceId={ws.id} workspaceName={ws.name} />
     </div>
   );
 }

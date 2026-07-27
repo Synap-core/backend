@@ -21,14 +21,27 @@
 
 // ── The forms the substituter resolves ────────────────────────────────────
 
-/** `@{arg:NAME}` / `@{arg:NAME:type}` / `@{arg:NAME:choice=a,b}`. Group 1 = name. */
-export const REF_ARG = /@\{arg:([^:}\s]+)(?::([^}]*))?\}/;
+/**
+ * `@{arg:NAME}` / `@{arg:NAME:type}` / `@{arg:NAME:choice=a,b}`. Group 1 = name.
+ *
+ * The name and type classes exclude `{` and `@` as well as `:}` and whitespace.
+ * WHY: without `{`, a MALFORMED `@{arg:tone` scans forward to the next `}`
+ * anywhere in the template — so `"@{arg:tone{{trigger.payload.prompt}} rest"`
+ * matched across the `{{…}}` and substituted to `"} rest"`, silently deleting a
+ * grammar-#3 DAG binding. Excluding `{` makes a malformed opener fail to match
+ * and stay literal, which is the honest outcome.
+ */
+export const REF_ARG = /@\{arg:([^:}{@\s]+)(?::([^}{]*))?\}/;
 
 /** `@{context:entity|view|url|text}`. Group 1 = context type. */
 export const REF_CONTEXT = /@\{context:(entity|view|url|text)\}/;
 
-/** `@{entity:ENTITY_ID:DISPLAY_NAME}`. Groups: 1 = id, 2 = display name. */
-export const REF_ENTITY = /@\{entity:([^:}]+):([^}]*)\}/;
+/**
+ * `@{entity:ENTITY_ID:DISPLAY_NAME}`. Groups: 1 = id, 2 = display name.
+ * Classes exclude `{` for the same reason as `REF_ARG` — a malformed opener
+ * must not scan across a `{{…}}` binding.
+ */
+export const REF_ENTITY = /@\{entity:([^:}{]+):([^}{]*)\}/;
 
 /** Legacy `{argument name="X" [options="a,b"] [default="a"]}`. Group 1 = name. */
 export const REF_LEGACY_ARG =

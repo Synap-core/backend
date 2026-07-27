@@ -38,6 +38,7 @@
  */
 
 import { getDb, eq, findCapabilityGrant } from "@synap/database";
+import { resolveGovernanceRule } from "@synap/database/agent-governance";
 import { tools, skills } from "@synap/database/schema";
 import { decideAgentPolicy } from "@synap/governance-policy";
 
@@ -153,17 +154,33 @@ function readGrantExecMode(raw: unknown): GrantExecMode | null {
  *      identity is NOT owner-bypassed — it is grant-gated like any agent.
  *   2. GRANT EXISTENCE + exec-mode (the model's namesake) — for an agent run
  *      (`agentUserId` present) that is not an owner run, look up an ACTIVE
- *      capability grant for this redeemer (NON-CONSUMING). NO grant → `propose`
- *      (a human reviews; an ungranted capability must never auto-run). A grant →
- *      its `execMode` is the source of truth (`auto | propose | dry-run`);
- *      `dry-run` short-circuits to a preview before the policy call.
+ *      capability grant for this redeemer (NON-CONSUMING). NO grant → consult a
+ *      stored `governance_rules` capability rule (see `capabilityRuleAuthorizesRun`
+ *      below); an ACTIVE `verdict:"auto"` rule authorizes the run WITH NO GRANT
+ *      (Option B, D1 — GOVERNANCE-PHASE2-PLAN.md §1). No rule either → `propose`
+ *      (a human reviews; an ungranted, unruled capability must never auto-run).
+ *      A grant → its `execMode` is the source of truth (`auto | propose |
+ *      dry-run`); `dry-run` short-circuits to a preview before the policy call
+ *      — a rule can NEVER override dry-run, it is checked strictly after.
  *   3. Approval-state — an UNAPPROVED capability is never auto-runnable for a
- *      non-owner → `capabilityGovernance = "propose"`; approved → "auto".
+ *      non-owner → `capabilityGovernance = "propose"`; approved → "auto". This
+ *      floor is absolute: `approved === false` denies above (step 0) BEFORE any
+ *      grant/rule consultation, so a rule can never resurrect a disabled capability.
  *   4. `decideAgentPolicy` rung 2.6 maps the two signals to execute/propose/deny.
+ *      A `propose` verdict here ALSO consults the capability rule (same helper)
+ *      before falling through to a reviewable proposal.
  *
  * Reads the one tool/skill row (when not pre-loaded) + a non-consuming grant
- * existence check. NO writes (use-count is consumed at the dispatch point only
- * when the verdict is `run`).
+ * existence check + (only on the propose path) one `governance_rules` lookup.
+ * NO writes (use-count is consumed at the dispatch point only when the verdict
+ * is `run`).
+ *
+ * KNOWN LIMITATION (not solved here — flagged as a follow-up): a capability
+ * rule is keyed on `capabilityId` (the same value the UI stores as
+ * `target_pattern`), and skills/tools are RE-CREATED with a new id on
+ * reinstall (`execute-capability.ts:124-129`) — a rule authored against the
+ * old id silently stops matching after a reinstall, the same staleness class
+ * `vault_grants` already has.
  */
 export async function gateCapabilityExecution(
   input: GateCapabilityExecutionInput
@@ -271,8 +288,13 @@ export async function gateCapabilityExecution(
       }
     );
     if (!grant.ok) {
-      // No active grant for this agent → must NOT auto-run. Route to a reviewable
+      // No active grant for this agent → consult a stored capability rule
+      // before proposing (Option B, D1: a rule can authorize a run with NO
+      // grant at all). No matching "auto" rule → route to a reviewable
       // proposal (a human can approve the run); do NOT hard-deny.
+      if (await capabilityRuleAuthorizesRun(input)) {
+        return { decision: "run" };
+      }
       return buildProposeDecision(input);
     }
     // Grant row is the source of truth for exec-mode (override only if explicitly
@@ -311,8 +333,47 @@ export async function gateCapabilityExecution(
   if (verdict.verdict === "deny") {
     return { decision: "deny", reason: verdict.reason };
   }
-  // propose — build the `capability/run` proposal data the executor re-enters on.
+  // propose — consult a stored capability rule (Option B) before falling
+  // through to a reviewable `capability/run` proposal.
+  if (await capabilityRuleAuthorizesRun(input)) {
+    return { decision: "run" };
+  }
   return buildProposeDecision(input);
+}
+
+/**
+ * Consult a stored `governance_rules` `target_kind: "capability"` row for
+ * this `(agentUserId, workspaceId, capabilityId)` — Option B / D1 (ratified
+ * 2026-07-27, GOVERNANCE-PHASE2-PLAN.md §1). An ACTIVE `verdict: "auto"` row
+ * widens an otherwise-`propose` capability run to `run`.
+ *
+ * Scoped to grantable kinds ONLY: `input.capabilityKind` is typed
+ * `CapabilityRunKind` ("tool" | "skill" | "command"), which never includes
+ * `"secret"` — so this can never be reached for, and can never authorize, a
+ * secret decrypt. Callers must NEVER call this for the `approved === false`
+ * deny floor or the `dry-run` short-circuit — both are checked strictly
+ * BEFORE either call site that invokes this helper (see the resolution-order
+ * doc above), so a rule can never cross those floors.
+ */
+async function capabilityRuleAuthorizesRun(
+  input: GateCapabilityExecutionInput
+): Promise<boolean> {
+  if (!input.agentUserId) return false;
+  // Defence-in-depth: `input.capabilityKind` is typed `CapabilityRunKind`
+  // ("tool" | "skill" | "command"), which structurally excludes "secret" —
+  // this runtime guard holds even against a future type widening or an
+  // `as` cast, so a rule can never be consulted for a secret grantable.
+  if ((input.capabilityKind as string) === "secret") return false;
+  const db = await getDb();
+  const match = await resolveGovernanceRule({
+    db,
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId ?? null,
+    subjectType: CAPABILITY_RUN_PROPOSAL.targetType,
+    action: CAPABILITY_RUN_PROPOSAL.proposalType,
+    capabilityId: input.capabilityId,
+  });
+  return match?.verdict === "auto";
 }
 
 /**

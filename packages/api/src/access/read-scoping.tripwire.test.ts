@@ -107,6 +107,12 @@ const SCOPING_HELPERS = [
   //     visibility SQL, the floor skills.list/get already apply.
   "graphEntityFloor",
   "visibleSkillsWhere",
+  // The proposal-visibility SSOT (utils/proposal-visibility.ts): loads the
+  // proposal by id then throws unless the caller is an editor+ member (workspace
+  // proposal) or the proposer (pod-wide). The floor proposals.get/source now
+  // route through — recognized so the extraction from the old inline membership
+  // check isn't false-flagged.
+  "assertProposalVisibleTo",
 ];
 
 // Per-user scoping: the row's userId pinned to the caller — `eq(t.userId,
@@ -402,15 +408,6 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     // read its slug/config (then proxy a tool-list to its IS). Floor it via
     // scopedDb(mcpServers) or a membership check on the loaded server.workspaceId.
     "mcp-servers.ts::listTools",
-    // TODO(access-convergence): FALSE POSITIVE (not a leak) — the scan can't see
-    // the floor. `proposals.get` loads by id then EXPLICITLY gates: for a
-    // workspace proposal it checks owner/admin/editor membership via an inline
-    // `db.query.workspaceMembers.findFirst(eq(...userId, userId))`; for a pod-wide
-    // proposal it checks `proposalData.sourceId === userId`. Neither the inline
-    // membership query (local-var userId) nor the `sourceId` compare matches a
-    // recognized signal, so the heuristic mis-flags it. Kept here (shrink-only)
-    // until it routes through scopedDb / getWorkspaceMembership so the scan sees it.
-    "proposals.ts::get",
   ]);
 
   it("every by-id read of a registered scoped table applies a scope floor", () => {

@@ -58,6 +58,9 @@ export function capErrorMessage(cap: {
   message?: string;
   reason?: string;
 }): string | undefined {
+  // A failed run now surfaces as the dedicated `kind:"error"` channel — its
+  // message is the failure text directly (no envelope to dig through).
+  if (cap.kind === "error") return cap.message;
   if (cap.kind === "not_found") return cap.message;
   if (cap.kind === "deny") return cap.reason;
   if (cap.kind !== "run") return undefined; // dry-run / proposed — not errors

@@ -158,6 +158,13 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
             { error: `Capability refused by gate: ${outcome.reason}` },
             403
           );
+        case "error":
+          // The verb RAN and its handler FAILED (code sandbox / provider error).
+          // A failure is not a 200 success — surface it as a server-side error.
+          return c.json(
+            { error: `Capability execution failed: ${outcome.message}` },
+            500
+          );
         case "dry-run":
           return c.json(
             {

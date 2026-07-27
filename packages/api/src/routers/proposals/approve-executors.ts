@@ -3267,6 +3267,22 @@ export function registerApproveExecutors(): void {
           );
           return { delivered: false };
         }
+        if (runOutcome.kind === "error") {
+          // The run REACHED its handler and FAILED (code sandbox success:false, or
+          // a provider verb error envelope). This is a DEFINITE not-delivered →
+          // release the at-most-once claim so Retry re-runs. Previously this rode
+          // through as a `kind:"run"` carrying success:false, which BURNED the claim
+          // (delivered:true) and left the failed send stuck as "delivered".
+          logger.warn(
+            {
+              proposalId: input.proposalId,
+              skillId,
+              reason: runOutcome.message,
+            },
+            "capability.run executor: run failed"
+          );
+          return { delivered: false };
+        }
         runResult = runOutcome.result;
         return { delivered: true };
       });

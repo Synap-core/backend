@@ -6,8 +6,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("./execute-provider-verb.js", () => ({
   executeProviderVerb: vi.fn(async () => ({ ran: "provider" })),
 }));
+// executeSkillViaIS ALWAYS returns the SkillExecutionResult envelope
+// `{success, result?, error?}` — the runner UNWRAPS `.result` on success.
 vi.mock("../skills/execute-skill-via-is.js", () => ({
-  executeSkillViaIS: vi.fn(async () => ({ ran: "is" })),
+  executeSkillViaIS: vi.fn(async () => ({
+    success: true,
+    result: { ran: "is" },
+  })),
 }));
 
 import {
@@ -108,5 +113,79 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
     const out = await runResolvedSkill(row({ kind: "instruction" }), {}, ctx);
     expect(out.kind).toBe("run");
     expect(executeSkillViaIS).toHaveBeenCalledOnce();
+  });
+});
+
+// TRIPWIRE: a FAILED run must surface as the dedicated `kind:"error"` channel,
+// NEVER as a `kind:"run"` carrying a `success:false` envelope in `result`. This
+// was the root bug — a code-skill failure rode through as data, burning the
+// at-most-once claim in the approve-executor and leaking the error string into
+// enrichment writes. Callers now branch on ONE failure kind.
+describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const k of Object.keys(BUILTIN_VERBS)) delete BUILTIN_VERBS[k];
+  });
+
+  it('TIER 2: a FAILED code skill returns kind:"error" (never kind:"run" carrying success:false)', async () => {
+    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+      success: false,
+      error: "provider 400: not in your plan",
+    });
+    const out = await runResolvedSkill(row({ kind: "code" }), {}, ctx);
+    expect(out).toEqual({
+      kind: "error",
+      message: "provider 400: not in your plan",
+    });
+    // The failure must NOT be laundered into a run result.
+    expect(out.kind).not.toBe("run");
+  });
+
+  it("TIER 2: a SUCCESSFUL code skill UNWRAPS the envelope's .result", async () => {
+    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+      success: true,
+      result: { enriched: { name: "Acme" } },
+    });
+    const out = await runResolvedSkill(row({ kind: "code" }), {}, ctx);
+    expect(out).toEqual({
+      kind: "run",
+      skillId: "s1",
+      result: { enriched: { name: "Acme" } },
+    });
+  });
+
+  it('TIER 1: a declarative provider ERROR envelope returns kind:"error"', async () => {
+    vi.mocked(executeProviderVerb).mockResolvedValueOnce({
+      success: false,
+      error: "google: invalid_grant",
+    });
+    const spec = { tool: "google", method: "GET", pathTemplate: "/x" };
+    const out = await runResolvedSkill(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      row({ kind: "declarative", providerSpec: spec as any }),
+      {},
+      ctx
+    );
+    expect(out).toEqual({ kind: "error", message: "google: invalid_grant" });
+  });
+
+  it('TIER 1: a declarative PROPOSED envelope is NOT an error (stays kind:"run")', async () => {
+    // An unapproved declarative WRITE comes back as a proposed envelope
+    // (success:false + proposed:true) — it must flow through as a run so the
+    // caller can surface the review inline, never be misread as a failure.
+    const proposed = {
+      success: false,
+      proposed: true,
+      proposalId: "p1",
+    };
+    vi.mocked(executeProviderVerb).mockResolvedValueOnce(proposed);
+    const spec = { tool: "google", method: "POST", pathTemplate: "/x" };
+    const out = await runResolvedSkill(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      row({ kind: "declarative", providerSpec: spec as any }),
+      {},
+      ctx
+    );
+    expect(out).toEqual({ kind: "run", skillId: "s1", result: proposed });
   });
 });

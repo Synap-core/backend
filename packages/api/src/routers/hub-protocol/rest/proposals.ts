@@ -306,7 +306,12 @@ export function registerProposalsRoutes(app: HubHono): void {
           ? 404
           : err instanceof TRPCError && err.code === "BAD_REQUEST"
             ? 400
-            : 500;
+            : // The shared revise core throws CONFLICT for a no-longer-pending
+              // proposal (concurrent approve/reject) — surface it as 409, not a
+              // blanket 500, so the caller can tell a race from a server fault.
+              err instanceof TRPCError && err.code === "CONFLICT"
+              ? 409
+              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code

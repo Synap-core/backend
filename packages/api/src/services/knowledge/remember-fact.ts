@@ -263,10 +263,41 @@ export async function rememberFact(params: {
     });
     factId = record.id;
   } catch (err) {
-    logger.error(
-      { err, userId, entityId, status: created.status },
-      "recall index write failed — governed write kept, episodic recall degraded"
-    );
+    // RACE BACKSTOP (0216): a concurrent identical rememberFact call won the
+    // `knowledge_facts_dedup_uq` unique index first (SQLSTATE 23505) — the
+    // read-then-write guard at step 0 let both calls through because neither
+    // had committed its recall row yet. Recover the winner's row instead of
+    // surfacing the constraint error. This call's OWN governed write (step 1)
+    // has already landed, so it still reports success; only the recall-index
+    // row is deduped onto the winner (mirrors insertPendingProposal's 23505
+    // recovery for `proposals`).
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "23505") {
+      try {
+        const [winner] = await db
+          .select({ id: knowledgeFacts.id })
+          .from(knowledgeFacts)
+          .where(
+            and(
+              eq(knowledgeFacts.userId, userId),
+              eq(knowledgeFacts.fact, fact)
+            )
+          )
+          .orderBy(desc(knowledgeFacts.createdAt))
+          .limit(1);
+        factId = winner?.id ?? null;
+      } catch (lookupErr) {
+        logger.error(
+          { lookupErr, userId, entityId },
+          "post-23505 winner lookup failed — recall index left unindexed for this fact"
+        );
+      }
+    } else {
+      logger.error(
+        { err, userId, entityId, status: created.status },
+        "recall index write failed — governed write kept, episodic recall degraded"
+      );
+    }
   }
 
   // A queued proposal is an ACCEPTED write, not a failure (see `success` doc).

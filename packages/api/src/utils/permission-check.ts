@@ -16,6 +16,7 @@ import {
   eq,
   and,
   gte,
+  desc,
   drizzleSql,
   entities,
   ProfileResolutionService,
@@ -1168,10 +1169,20 @@ export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
 
 /** Multiplier applied to the base cap for a proven-trustworthy agent. */
 const TRUSTED_AGENT_CAP_MULTIPLIER = 3;
-/** Minimum lifetime proposal volume before trust can raise the cap. */
+/** Minimum proposal volume (within the trust window) before trust can raise the cap. */
 const TRUSTED_AGENT_MIN_TOTAL = 100;
-/** Minimum lifetime approve rate before trust can raise the cap. */
+/** Minimum approve rate (within the trust window) before trust can raise the cap. */
 const TRUSTED_AGENT_MIN_APPROVE_RATE = 0.95;
+/**
+ * Recent-proposal window the trust check scores over. MUST match
+ * `agent-scorecard.ts`'s `SCORECARD_SCAN_LIMIT` (not imported directly — that
+ * would create a module cycle, since agent-scorecard.ts already imports
+ * `agentDailyProposalCap` from here) so the cap's trust verdict and the
+ * scorecard's DISPLAYED approve rate are computed over the identical set of
+ * rows and can never visibly disagree. Trust is earnable back over an agent's
+ * RECENT behavior rather than accumulating forever over its lifetime.
+ */
+const CAP_TRUST_WINDOW = 500;
 
 /** UTC midnight for "today" — the same day boundary the hygiene worker uses. */
 export function startOfUtcDay(): Date {
@@ -1204,26 +1215,35 @@ async function countTodayAgentProposals(
 }
 
 /**
- * Lightweight trust check for the daily cap: a single aggregate over this
- * agent's lifetime proposals (total + approved count), NOT the full
- * `diagnose` scorecard (which also runs fingerprint-clustering for a
+ * Lightweight trust check for the daily cap: scored over the agent's most
+ * recent `CAP_TRUST_WINDOW` proposals (NOT its unbounded lifetime), NOT the
+ * full `diagnose` scorecard (which also runs fingerprint-clustering for a
  * duplicate rate — too heavy for this hot path). A proven agent
- * (>=100 proposals, >=95% approve rate) gets a 3x ceiling; everyone else gets
- * the base cap.
+ * (>=100 proposals, >=95% approve rate, both within that recent window) gets
+ * a 3x ceiling; everyone else gets the base cap.
+ *
+ * D4a: previously scored the agent's ENTIRE lifetime, which could silently
+ * disagree with the recent-500 approve rate `agent-scorecard.ts` displays —
+ * an agent could show a dropping recent rate on its scorecard while still
+ * holding the 3x cap earned from old history. Scoring the same window makes
+ * the two agree and lets trust be earned back / lost based on recent conduct.
  */
 export async function agentDailyProposalCap(
   agentUserId: string
 ): Promise<number> {
-  const [row] = await db
-    .select({
-      total: drizzleSql<number>`count(*)::int`,
-      approved: drizzleSql<number>`count(*) filter (where ${proposals.status} in (${ProposalStatus.APPROVED}, ${ProposalStatus.AUTO_APPROVED}))::int`,
-    })
+  const recentRows = await db
+    .select({ status: proposals.status })
     .from(proposals)
-    .where(eq(proposals.agentUserId, agentUserId));
+    .where(eq(proposals.agentUserId, agentUserId))
+    .orderBy(desc(proposals.createdAt))
+    .limit(CAP_TRUST_WINDOW);
 
-  const total = row?.total ?? 0;
-  const approved = row?.approved ?? 0;
+  const total = recentRows.length;
+  const approved = recentRows.filter(
+    (r) =>
+      r.status === ProposalStatus.APPROVED ||
+      r.status === ProposalStatus.AUTO_APPROVED
+  ).length;
   const approveRate = total > 0 ? approved / total : 0;
 
   if (

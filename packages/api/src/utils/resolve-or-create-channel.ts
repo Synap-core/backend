@@ -39,6 +39,7 @@ import {
   ensureProactiveFeedChannel,
 } from "./personal-channel.js";
 import { ensureExternalChannel } from "@synap/database";
+import { assertProposalVisibleTo } from "./proposal-visibility.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -224,6 +225,18 @@ export async function resolveOrCreateChannel(
         message:
           "contextObjectId is required when contextObjectType is set on a thread",
       });
+    }
+
+    // SECURITY (IDOR chokepoint) — a "proposal" thread binds the channel to its
+    // primary contextObject, which `hub-protocol/context.ts` later hydrates into
+    // the AI prompt (renderProposalForPrompt). Without a gate here, a guessed
+    // proposal UUID → blind upsert → attacker-owned channel → the proposal's
+    // contents leak into the prompt. Gate the bind on the SAME visibility the
+    // Studio proposal-detail page enforces, so a user can only open a discuss
+    // thread for a proposal they may already see. (entity/document/view bind from
+    // separately-authorized channel_context_items and are inert here.)
+    if (contextObjectType === "proposal") {
+      await assertProposalVisibleTo(contextObjectId, userId);
     }
 
     const orchestratorAgentId = agentSlug

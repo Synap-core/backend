@@ -724,6 +724,30 @@ export interface ProposalWithRequest extends Proposal {
 }
 
 /**
+ * The nesting contract for a stored `proposals.data` envelope — the SSOT.
+ *
+ * Stored proposal data is an ENVELOPE `{ requestId, source, targetType,
+ * changeType, data: INNER, reasoning }`. For "nested-reader" targets (entity /
+ * facet / property_def / view / skill / automation / playbook / project /
+ * focus_session) the executor reads the edited fields from the NESTED inner
+ * (`proposal.data.data.*`). For "flat" targets (document, composite `{operations}`,
+ * capability.*, provider.action, workspace/*) the fields live at the envelope top
+ * level and there is no inner `data` object.
+ *
+ * `buildRequestFromProposal` (below) and the shared revise core
+ * (`mergeProposalRevision`) both branch on this ONE predicate so a revise patch
+ * always lands in the same slot the approve executors read.
+ */
+export function isNestedEnvelope(data: unknown): boolean {
+  return (
+    data != null &&
+    typeof data === "object" &&
+    typeof (data as Record<string, unknown>).data === "object" &&
+    (data as Record<string, unknown>).data !== null
+  );
+}
+
+/**
  * Build an UpdateRequest from a raw proposal row's JSONB `data` column.
  * Used server-side in proposals.list and available as a shared utility.
  */
@@ -737,12 +761,11 @@ export function buildRequestFromProposal(row: Proposal): UpdateRequest {
     "";
   const changeType =
     (raw?.changeType as UpdateRequest["changeType"]) ?? "update";
-  const data =
-    raw && typeof raw.data === "object" && raw.data !== null
-      ? (raw.data as UpdateRequest["data"])
-      : raw && typeof raw === "object"
-        ? (raw as UpdateRequest["data"])
-        : undefined;
+  const data = isNestedEnvelope(raw)
+    ? (raw!.data as UpdateRequest["data"])
+    : raw && typeof raw === "object"
+      ? (raw as UpdateRequest["data"])
+      : undefined;
 
   return {
     requestId: (typeof raw?.requestId === "string" && raw.requestId) || row.id,

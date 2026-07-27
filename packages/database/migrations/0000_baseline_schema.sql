@@ -1870,6 +1870,15 @@ ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "access_count" integer NO
 ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "last_accessed_at" timestamp with time zone;
 ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "relevance_score" real NOT NULL DEFAULT 1.0;
 CREATE INDEX IF NOT EXISTS idx_knowledge_facts_relevance ON "knowledge_facts"(relevance_score DESC) WHERE relevance_score < 1.0;
+-- 0216: race-fix dedup columns + unique index (see migration for rationale)
+ALTER TABLE "knowledge_facts"
+  ADD COLUMN IF NOT EXISTS "fact_hash" text
+  GENERATED ALWAYS AS (encode(digest(fact, 'sha256'), 'hex')) STORED;
+ALTER TABLE "knowledge_facts"
+  ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint
+  GENERATED ALWAYS AS (floor(extract(epoch FROM created_at) / 600)) STORED;
+CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
+  ON "knowledge_facts" ("user_id", "fact_hash", "dedup_bucket");
 
 -- ─── 30. skills ──────────────────────────────────────────────────────────────
 

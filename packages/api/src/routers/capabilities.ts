@@ -25,6 +25,9 @@ import {
   NotificationStatus,
   openRunSession,
   closeRunSession,
+  resolveIdentity,
+  signalsFromExplicit,
+  normalizeIdentitySignal,
   eq,
   and,
   or,
@@ -39,7 +42,14 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { entitiesRouter } from "./entities.js";
+import {
+  normalizeVerbResult,
+  runEnrichmentVerb,
+  fileEnrichmentProposal,
+  EnrichmentProposalDeniedError,
+} from "../services/capabilities/enrich-shared.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
 import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
@@ -93,34 +103,24 @@ async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
   }
 }
 
-// ─── Enrichment result normalization ──────────────────────────────────────────
-
 /**
- * Run-metadata envelope keys a verb result carries ALONGSIDE the real entity
- * properties (`code` verbs return `{ matched, fields, url, … }` around their
- * normalized fields; a `declarative` verb returns a pure scalar map, for which
- * this is a no-op). This is the single copy — the CRM client calls this door
- * rather than re-normalizing.
+ * Readable fallback title for a LinkedIn contact when the scrape returned no
+ * `scrapedName` — derived from the profile URL slug (`/in/john-doe-2a4f91` →
+ * "John Doe"), stripping a trailing LinkedIn id hash. Never the raw URL.
  */
-const ENRICH_META_KEYS = new Set([
-  "matched",
-  "fields",
-  "success",
-  "proposed",
-  "proposalId",
-  "url",
-]);
-
-/** Strip the run-metadata envelope + empty values → writable entity properties. */
-function normalizeVerbResult(result: unknown): Record<string, unknown> {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return {};
-  const mapped: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(result as Record<string, unknown>)) {
-    if (ENRICH_META_KEYS.has(k)) continue;
-    if (v === null || v === undefined || v === "") continue;
-    mapped[k] = v;
+function titleFromLinkedinUrl(url: string): string {
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, "");
+    const slug = path.split("/").filter(Boolean).pop() ?? "";
+    const cleaned = decodeURIComponent(slug)
+      .replace(/-[a-z0-9]{6,}$/i, "") // trailing linkedin id hash
+      .replace(/[-_]+/g, " ")
+      .trim();
+    if (!cleaned) return "LinkedIn contact";
+    return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+  } catch {
+    return "LinkedIn contact";
   }
-  return mapped;
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -561,71 +561,42 @@ export const capabilitiesRouter = router({
       // workspace (a pod-scoped enrichment verb is visible from either).
       const runWorkspaceId = entity.workspaceId;
 
-      // 2. Run the verb through the shared governed core.
-      const res = await executeCapability({
+      // 2. Run the verb through the shared governed core. Nothing ran → no
+      //    session, no receipt: `setup_required` is the "capability isn't
+      //    installed/connected here" signal the UI routes to Settings; `failed`
+      //    is a run that reached its handler and failed (the failure text never
+      //    leaks in as a proposed `error` property); `verb_proposed` is the
+      //    verb's OWN run being governance-queued (non-owner running a pod-wide
+      //    verb) — surface it in the SAME `proposed` shape (fieldCount 0 ⇒
+      //    "queued for review", not "N changes") so the client's single branch
+      //    renders it.
+      const verb = await runEnrichmentVerb({
         verbId: input.verbId,
         parameters: input.parameters,
         workspaceId: runWorkspaceId ?? input.workspaceId,
         userId,
       });
-
-      // Nothing ran → no session, no receipt. `not_found` is the "capability
-      // isn't installed/connected here" signal the UI routes to Settings.
-      if (res.kind === "not_found") {
-        return { status: "setup_required" as const, message: res.message };
+      if (verb.status === "setup_required") {
+        return { status: "setup_required" as const, message: verb.message };
       }
-      if (res.kind === "deny") {
-        return { status: "denied" as const, message: res.reason };
+      if (verb.status === "denied") {
+        return { status: "denied" as const, message: verb.message };
       }
-      // The verb's OWN run was governance-queued (reachable only for a non-owner
-      // member running a pod-wide verb — the owner path bypasses to `run`). There
-      // is no enrichment result to write; surface the verb proposal in the SAME
-      // shape so the client's single `proposed` branch renders it (fieldCount 0
-      // ⇒ "queued for review", not "N changes").
-      if (res.kind === "proposed") {
+      if (verb.status === "failed") {
+        return { status: "failed" as const, message: verb.message };
+      }
+      if (verb.status === "verb_proposed") {
         return {
           status: "proposed" as const,
           sessionId: null,
-          proposalId: res.proposalId,
-          reviewUrl: res.reviewUrl,
+          proposalId: verb.proposalId,
+          reviewUrl: verb.reviewUrl,
           fieldCount: 0,
         };
       }
 
-      // Only `run` remains — not_found/deny/proposed returned above, and the door
-      // never requests a dry-run. Narrows the union (and fails loud if the
-      // executor's contract ever grows a case this door doesn't handle).
-      if (res.kind !== "run") {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `enrichEntity: unexpected verb result "${res.kind}"`,
-        });
-      }
-
-      // A `code` verb (all enrichment verbs are code) returns the sandbox's
-      // SkillExecutionResult ENVELOPE — `{ success, result?, error? }` — as
-      // `res.result`, unlike builtin/declarative verbs which return their data
-      // directly. Unwrap it. A FAILED run (success:false, e.g. the provider 400'd
-      // "not in your plan") is a real ERROR to surface — NOT enrichment data: left
-      // unwrapped, the error string lands as a proposed `error` property on the
-      // entity (the bug this fixes). Detect the envelope by its boolean `success`.
-      const raw = res.result;
-      const envelope =
-        raw &&
-        typeof raw === "object" &&
-        !Array.isArray(raw) &&
-        typeof (raw as { success?: unknown }).success === "boolean"
-          ? (raw as { success: boolean; result?: unknown; error?: string })
-          : null;
-      if (envelope && !envelope.success) {
-        return {
-          status: "failed" as const,
-          message: envelope.error ?? "Enrichment failed",
-        };
-      }
-
-      // 3. Strip the run-metadata envelope → the properties we intend to write.
-      const mapped = normalizeVerbResult(envelope ? envelope.result : raw);
+      // 3. Strip any run-metadata → the properties we intend to write.
+      const mapped = normalizeVerbResult(verb.result);
 
       // 4. The receipt: one session per enrichment run. Channel-less by design —
       //    a single-tier run needs a receipt, not a live room. It is CLOSED on
@@ -639,47 +610,231 @@ export const capabilitiesRouter = router({
         source: "enrichment",
       });
       try {
-        if (Object.keys(mapped).length === 0) {
-          return { status: "empty" as const, sessionId, fieldCount: 0 };
-        }
-
-        // 5. The governed write — the SAME shape `entities.update` uses.
-        //    `forcePropose`: the operator clicked Enrich, but the DATA came from a
-        //    provider, so it lands as a reviewable proposal, sessionId-stamped.
-        const perm = await checkPermissionOrPropose({
-          userId,
-          workspaceId: runWorkspaceId,
-          subjectType: "entity",
-          action: "update",
-          source: "ai",
-          forcePropose: true,
+        // 5. The governed write — `forcePropose`, sessionId-stamped (shared door).
+        const filed = await fileEnrichmentProposal({
+          entityId: input.entityId,
+          mapped,
           sessionId,
-          reasoning: "Data enrichment",
-          data: { id: input.entityId, properties: mapped },
+          workspaceId: runWorkspaceId,
+          userId,
         });
-
-        if ("denied" in perm && perm.denied) {
-          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        return { ...filed, sessionId };
+      } catch (err) {
+        if (err instanceof EnrichmentProposalDeniedError) {
+          throw new TRPCError({ code: "FORBIDDEN", message: err.message });
         }
-        if ("proposalId" in perm) {
+        throw err;
+      } finally {
+        await closeRunSession(sessionId);
+      }
+    }),
+
+  /**
+   * "Import from a LinkedIn URL" — the server-side, canonical-dedup import door.
+   *
+   * Shares its spine with `enrichEntity` (the `enrich-shared` helpers): it runs
+   * an enrichment VERB, then files the scraped fields as a governed proposal
+   * under a run session. What it adds is IDENTITY-FIRST creation:
+   *   1. Resolve the person by the `linkedin_url` STRONG signal via the canonical
+   *      `IdentityResolutionService` (never a client-side list-scan).
+   *   2. Existing (visible) match → enrich it in place (`mode:"existing"`).
+   *   3. No match → run the verb, title a NEW person with the scraped name via the
+   *      CANONICAL `entities.create` door (dedup + events + identity-signal
+   *      registration all handled there — never a raw insert), then enrich it
+   *      (`mode:"created"`).
+   *
+   * The verb ALWAYS runs exactly once; a run that yields no writable data touches
+   * nothing (no create, no session), matching enrichEntity's "no empty receipt".
+   */
+  importContact: protectedProcedure
+    .input(
+      z.object({
+        url: z.string(),
+        // The catalog-discovered LinkedIn scrape verb — never hardcoded here.
+        verbId: z.string(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      // 1. Normalize the URL through the SAME door the `linkedin_url` strong-signal
+      //    atom uses, so this lookup and any later write agree byte-for-byte
+      //    (lowercase + strip trailing slash).
+      const normalizedUrl = normalizeIdentitySignal("linkedin_url", input.url);
+
+      // 2. Canonical dedup: resolve the person by the linkedin_url strong signal.
+      //    `signalsFromExplicit` classifies the bare URL linkedin-vs-website via
+      //    the same domain-anchored check used everywhere.
+      const identity = await resolveIdentity(db, {
+        userId,
+        kindSlug: "person",
+        signals: signalsFromExplicit({ url: normalizedUrl }),
+        userScope: userVisibleWhere(entities.workspaceId, userId),
+        limit: 5,
+      });
+
+      // The strong identity index is GLOBAL (one subject per url pod-wide), so a
+      // match may belong to a row the caller cannot see. Gate on the caller's
+      // visibility floor; an invisible match falls through to CREATE (mirrors
+      // entities.create's resolve-then-merge security gate) — never enrich or
+      // return a row the caller can't see.
+      const matched =
+        identity.match === "strong" && identity.entity
+          ? await db.query.entities.findFirst({
+              where: and(
+                eq(entities.id, identity.entity.id),
+                isNull(entities.deletedAt),
+                userVisibleWhere(entities.workspaceId, userId)
+              ),
+              columns: { id: true, title: true, workspaceId: true },
+            })
+          : undefined;
+
+      // 3. Run the enrichment verb ONCE through the shared governed core.
+      const verb = await runEnrichmentVerb({
+        verbId: input.verbId,
+        parameters: { url: normalizedUrl },
+        workspaceId: input.workspaceId,
+        userId,
+      });
+
+      // A verb that produced no writable data touches nothing — no create, no
+      // session. `mode` reflects the RESOLUTION (an existing contact is named so
+      // the caller knows it's already there; a would-be create has no id yet).
+      let mode: "existing" | "created" = matched ? "existing" : "created";
+      if (verb.status === "setup_required") {
+        return {
+          mode,
+          entityId: matched?.id ?? null,
+          status: "setup_required" as const,
+          message: verb.message,
+        };
+      }
+      if (verb.status === "denied") {
+        return {
+          mode,
+          entityId: matched?.id ?? null,
+          status: "denied" as const,
+          message: verb.message,
+        };
+      }
+      if (verb.status === "failed") {
+        return {
+          mode,
+          entityId: matched?.id ?? null,
+          status: "failed" as const,
+          message: verb.message,
+        };
+      }
+      if (verb.status === "verb_proposed") {
+        return {
+          mode,
+          entityId: matched?.id ?? null,
+          status: "proposed" as const,
+          sessionId: null,
+          proposalId: verb.proposalId,
+          reviewUrl: verb.reviewUrl,
+          fieldCount: 0,
+        };
+      }
+
+      // 4. Resolve the target entity: enrich the existing match, or create a
+      //    titled person through the CANONICAL create door.
+      let entityId: string;
+      let runWorkspaceId: string | null;
+      let goalTitle: string;
+      if (matched) {
+        entityId = matched.id;
+        runWorkspaceId = matched.workspaceId;
+        goalTitle = matched.title ?? "contact";
+      } else {
+        // scrapedName is the TITLE — read from the RAW verb result, BEFORE
+        // normalize strips it as a meta key.
+        const rawResult =
+          verb.result &&
+          typeof verb.result === "object" &&
+          !Array.isArray(verb.result)
+            ? (verb.result as Record<string, unknown>)
+            : {};
+        const scrapedName = rawResult.scrapedName;
+        const title =
+          (typeof scrapedName === "string" && scrapedName.trim()) ||
+          titleFromLinkedinUrl(normalizedUrl);
+
+        // Canonical create door — runs under the caller's workspace lens. Person
+        // is pod-default (entityScope 'pod') → not workspace-scoped, so it joins
+        // the un-fragmented global contact graph. The door registers the
+        // linkedin_url signal + emits create events; it re-checks dedup, so a
+        // race between our resolve and this create merges rather than duplicates.
+        const created = await entitiesRouter
+          .createCaller({
+            ...ctx,
+            workspaceId: input.workspaceId,
+          } as unknown as Parameters<typeof entitiesRouter.createCaller>[0])
+          .create({
+            profileSlug: "person",
+            title,
+            properties: { linkedinUrl: normalizedUrl, source: "linkedin" },
+            source: "user",
+          });
+
+        // A restricted member's create could be proposal-gated (no id yet) —
+        // surface that instead of filing an enrichment against a phantom id.
+        if (created.status === "proposed" || !("id" in created)) {
           return {
+            mode: "created" as const,
+            entityId: null,
             status: "proposed" as const,
-            sessionId,
-            proposalId: perm.proposalId,
-            reviewUrl: perm.reviewUrl,
-            fieldCount: Object.keys(mapped).length,
+            sessionId: null,
+            proposalId: (created as { proposalId: string }).proposalId,
+            reviewUrl: (created as { reviewUrl: string }).reviewUrl,
+            fieldCount: 0,
           };
         }
 
-        // Unreachable: `forcePropose:true` on a machine-sourced write always
-        // proposes (the gate can only RAISE governance). Reaching here means the
-        // gate contract changed under us — fail loud rather than silently drop
-        // the enriched fields.
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "enrichEntity: forcePropose write was unexpectedly auto-granted",
+        entityId = created.id;
+        // The canonical door may have DEDUPED onto an existing row (resolve↔create
+        // race, or a visible-elsewhere match) — report it as existing, not created.
+        if ((created as { deduplicated?: boolean }).deduplicated) {
+          mode = "existing";
+        }
+        // A person is pod-default (workspaceId null) — read the created row's own
+        // workspace so the run + proposal land where the entity actually lives.
+        const createdRow = await db.query.entities.findFirst({
+          where: eq(entities.id, entityId),
+          columns: { workspaceId: true, title: true },
         });
+        runWorkspaceId = createdRow?.workspaceId ?? null;
+        goalTitle = createdRow?.title ?? title;
+      }
+
+      // 5. One run session for the whole import, closed in `finally`. Opened only
+      //    now (after a real run + a resolved entity) so a failed verb never
+      //    litters the feed with an empty receipt.
+      const { sessionId } = await openRunSession({
+        userId,
+        goal: `Import ${goalTitle}`,
+        workspaceId: runWorkspaceId,
+        subjectEntityId: entityId,
+        source: "import",
+      });
+      try {
+        // The governed write — the SAME shared door enrichEntity uses.
+        const filed = await fileEnrichmentProposal({
+          entityId,
+          mapped: normalizeVerbResult(verb.result),
+          sessionId,
+          workspaceId: runWorkspaceId,
+          userId,
+          reasoning: "LinkedIn import enrichment",
+        });
+        return { mode, entityId, ...filed, sessionId };
+      } catch (err) {
+        if (err instanceof EnrichmentProposalDeniedError) {
+          throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+        }
+        throw err;
       } finally {
         await closeRunSession(sessionId);
       }

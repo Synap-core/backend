@@ -9,10 +9,10 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 
 export const proposalsRouter = router({
   /**
@@ -92,56 +92,22 @@ export const proposalsRouter = router({
         summary: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
-      // Verify the proposal exists and is still pending
-      const proposal = await db.query.proposals.findFirst({
-        where: eq(proposals.id, input.proposalId),
+    .mutation(async ({ input, ctx }) => {
+      // The IS `update_proposal` tool sends FLAT INNER fields ("Must match the
+      // original proposal's structure (e.g. entity fields for entity
+      // proposals)") — or a composite `{ operations }`. Route through the ONE
+      // shared revise core as an INNER patch: for a nested-reader envelope it
+      // now lands in `data.data` (the slot the approve executors read) instead
+      // of as junk top-level keys — the silent-drop bug — while flat envelopes
+      // (document / composite / capability.* / workspace/*) still merge at the
+      // top level. The core row-locks + asserts PENDING (CONFLICT, not silent
+      // success) and appends a `revisionHistory` entry.
+      await mergeProposalRevision({
+        proposalId: input.proposalId,
+        actorId: ctx.userId as string,
+        patch: { kind: "inner", fields: input.data },
+        summary: input.summary,
       });
-
-      if (!proposal) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Proposal not found",
-        });
-      }
-
-      if (proposal.status !== ProposalStatus.PENDING) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Cannot update proposal with status '${proposal.status}' — only pending proposals can be revised`,
-        });
-      }
-
-      // Merge updated data with existing (preserving system fields like targetType, requestId)
-      const existingData = (proposal.data as Record<string, unknown>) ?? {};
-      const mergedData = {
-        ...existingData,
-        ...input.data,
-        // Preserve identity fields
-        targetType: existingData.targetType,
-        changeType: existingData.changeType,
-        requestId: existingData.requestId,
-      };
-
-      const updatePayload: Record<string, unknown> = {
-        data: mergedData,
-        updatedAt: new Date(),
-      };
-
-      if (input.summary !== undefined) {
-        // Store summary in metadata or as part of data
-        (mergedData as Record<string, unknown>)._summary = input.summary;
-      }
-
-      await db
-        .update(proposals)
-        .set(updatePayload as typeof proposals.$inferInsert)
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        );
 
       return {
         success: true,

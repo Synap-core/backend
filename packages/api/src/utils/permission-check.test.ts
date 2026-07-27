@@ -95,6 +95,7 @@ vi.mock("@synap/database", async () => {
     and: vi.fn((...conds) => ({ and: conds })),
     inArray: vi.fn((col, arr) => ({ inArray: [col, arr] })),
     gte: vi.fn((a, b) => ({ gte: [a, b] })),
+    desc: vi.fn((a) => ({ desc: a })),
     isNotNull: vi.fn((a) => ({ isNotNull: a })),
     drizzleSql: vi.fn(() => ({})),
     verifyPermission: mockVerifyPermission,
@@ -141,6 +142,7 @@ import {
   DEFAULT_AUTO_APPROVE,
   buildProposalSummary,
   buildProposalResponseFields,
+  agentDailyProposalCap,
 } from "./permission-check.js";
 
 // We also need checkPermissionOrPropose for the integration-style unit tests.
@@ -852,29 +854,35 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
   }
 
   /**
-   * Like `setupAgentBudget`, but also mocks the lifetime trust aggregate
-   * (`agentDailyProposalCap`'s total/approved query). Dispatches by the
-   * SHAPE of the `.select({...})` field object rather than call order — the
-   * real (unmocked) `resolveAgentGovernanceDecision`/`resolveGovernanceRule`
+   * Like `setupAgentBudget`, but also mocks `agentDailyProposalCap`'s
+   * recent-window trust query (D4a: `.select({ status })...orderBy(desc(
+   * createdAt)).limit(CAP_TRUST_WINDOW)`, scored the same way as this test's
+   * `mockRecentWindow` helper below — most-recent-first rows, the first
+   * `windowApproved` of them AUTO_APPROVED, the rest PENDING). Dispatches by
+   * the SHAPE of the `.select({...})` field object rather than call order —
+   * the real (unmocked) `resolveAgentGovernanceDecision`/`resolveGovernanceRule`
    * run their own `db.select(...)` calls in between, so a call-count-based
    * mock would silently mis-route once that ladder does more than one query.
    */
   function setupWeightedAgentBudget(opts: {
     todayCount: number;
-    lifetimeTotal: number;
-    lifetimeApproved: number;
+    windowTotal: number;
+    windowApproved: number;
     agentMetadata?: Record<string, unknown>;
   }) {
     const {
       todayCount,
-      lifetimeTotal,
-      lifetimeApproved,
+      windowTotal,
+      windowApproved,
       agentMetadata = { writesRequireProposal: true },
     } = opts;
+    const windowRows = Array.from({ length: windowTotal }, (_, i) => ({
+      status: i < windowApproved ? "auto_approved" : "pending",
+    }));
     mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
       const keys = Object.keys(fields);
       const isTodayCountQuery = keys.length === 1 && keys[0] === "count";
-      const isCapQuery = keys.includes("total") && keys.includes("approved");
+      const isCapWindowQuery = keys.length === 1 && keys[0] === "status";
       const isAgentRowQuery = keys.includes("userType");
       const isWorkspaceRowQuery = keys.includes("settings");
       const b: Record<string, unknown> = {
@@ -888,14 +896,12 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
               ? [{ userType: "agent", agentMetadata }]
               : isWorkspaceRowQuery
                 ? [{ settings: {} }]
-                : []
+                : isCapWindowQuery
+                  ? windowRows
+                  : []
           ),
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
-          const row = isCapQuery
-            ? { total: lifetimeTotal, approved: lifetimeApproved }
-            : isTodayCountQuery
-              ? { count: todayCount }
-              : undefined;
+          const row = isTodayCountQuery ? { count: todayCount } : undefined;
           return Promise.resolve(row ? [row] : []).then(res, rej);
         },
       };
@@ -955,8 +961,8 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
   it("gives a proven agent (>=100 proposals, >=95% approve rate) a 3x (30/day) ceiling", async () => {
     setupWeightedAgentBudget({
       todayCount: 15,
-      lifetimeTotal: 100,
-      lifetimeApproved: 96,
+      windowTotal: 100,
+      windowApproved: 96,
     });
 
     const result = await checkPermissionOrPropose({
@@ -974,8 +980,8 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
   it("keeps the flat 10/day cap for an agent that hasn't earned trust yet (same today-count denied)", async () => {
     setupWeightedAgentBudget({
       todayCount: 15,
-      lifetimeTotal: 100,
-      lifetimeApproved: 80, // 80% approve rate — below the 95% trust bar
+      windowTotal: 100,
+      windowApproved: 80, // 80% approve rate — below the 95% trust bar
     });
 
     const result = await checkPermissionOrPropose({
@@ -1356,5 +1362,82 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
     });
 
     expect("denied" in result && result.denied === true).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: agentDailyProposalCap — direct unit tests (not via checkPermissionOrPropose)
+//
+// Locks the branch logic in isolation: given the RECENT-WINDOW rows the query
+// returns (ordered by createdAt desc, capped at CAP_TRUST_WINDOW — the same
+// window agent-scorecard.ts's SCORECARD_SCAN_LIMIT scans), does the trust
+// threshold (>=100 in-window, >=95% in-window approve rate) correctly gate the
+// 3x (30/day) ceiling vs the flat 10/day base cap.
+//
+// D4a: this used to score the agent's UNBOUNDED lifetime, which could
+// silently disagree with the scorecard's displayed recent-500 approve rate
+// (dogfood context: `diagnose type:agent` showed a scorecard approveRate of
+// 0.974 sampled over the recent 500 but a dailyCap of 10, not 30 — the two
+// numbers looked contradictory to a reviewer). Scoring the SAME window as the
+// scorecard makes trust earnable back / lost on recent conduct, and the two
+// numbers can no longer visibly disagree.
+// ---------------------------------------------------------------------------
+
+describe("agentDailyProposalCap", () => {
+  /**
+   * Build `total` rows (most-recent-first, matching `orderBy(desc(createdAt))
+   * .limit(CAP_TRUST_WINDOW)`) with `approved` of them AUTO_APPROVED and the
+   * rest PENDING, then stub the query chain to resolve them.
+   */
+  function mockRecentWindow(row: { total: number; approved: number }) {
+    const rows = Array.from({ length: row.total }, (_, i) => ({
+      status: i < row.approved ? "auto_approved" : "pending",
+    }));
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(rows),
+      };
+      return b;
+    });
+  }
+
+  it("gives a proven agent (500 in-window, 487 approved → 97.4%) the 3x (30/day) ceiling", async () => {
+    mockRecentWindow({ total: 500, approved: 487 });
+
+    const cap = await agentDailyProposalCap("agent-trusted");
+
+    expect(cap).toBe(30);
+  });
+
+  it("keeps the flat 10/day cap when the in-window approve rate is below 95% (500 in-window, 400 approved → 80%)", async () => {
+    mockRecentWindow({ total: 500, approved: 400 });
+
+    const cap = await agentDailyProposalCap("agent-untrusted");
+
+    expect(cap).toBe(10);
+  });
+
+  it("keeps the flat 10/day cap below the minimum in-window volume even at 100% approval (50 in-window, 50 approved)", async () => {
+    mockRecentWindow({ total: 50, approved: 50 });
+
+    const cap = await agentDailyProposalCap("agent-too-new");
+
+    expect(cap).toBe(10);
+  });
+
+  it("caps the trust query at the recent window (never scores more than CAP_TRUST_WINDOW rows) — a formerly-trusted agent whose recent conduct regressed loses the 3x ceiling", async () => {
+    // Simulates an agent with a huge trustworthy lifetime history, but whose
+    // most recent CAP_TRUST_WINDOW rows (what the capped query actually
+    // returns) have regressed below the approve-rate threshold. Because the
+    // query itself is `.limit(CAP_TRUST_WINDOW)`, only the recent rows are
+    // ever visible to this function — the mock returns exactly that shape.
+    mockRecentWindow({ total: 500, approved: 450 }); // 90% — below 95%
+
+    const cap = await agentDailyProposalCap("agent-regressed");
+
+    expect(cap).toBe(10);
   });
 });
