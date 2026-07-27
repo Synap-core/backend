@@ -40,6 +40,8 @@ import {
   insertChannelMessage,
   getEffectiveFacets,
   profileSlugScopeConditionFromRows,
+  MessageRole,
+  MessageAuthorType,
 } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -1776,6 +1778,14 @@ const channelIngestMessageMap = z.object({
   participant: z.string().max(200).optional(),
   /** Dot-path to the sender external id. */
   participantExternalId: z.string().max(200).optional(),
+  /**
+   * Dot-path to a BOOLEAN in each raw row marking the message as OUTBOUND — the
+   * operator's OWN sent message (e.g. Unipile's `"is_sender"`). PROVIDER-AGNOSTIC:
+   * it is just a dot-path in the caller's config, no provider shape is hardcoded.
+   * When the resolved value is truthy the row is recorded as HUMAN/ASSISTANT so
+   * the inbox renders it right-aligned; otherwise it is a normal inbound (default).
+   */
+  isOutbound: z.string().max(200).optional(),
 });
 
 const channelIngestParams = z
@@ -1814,6 +1824,14 @@ const channelIngestParams = z
     sentAt: z.string().max(100).optional(),
     /** Optional explicit workspace lens; falls back to the acting workspace, else pod-level. */
     workspaceId: z.string().uuid().optional(),
+    /**
+     * When true, SKIP the per-message `external_message.received` side-effect
+     * (channel resolve + dedup insert still run). Threaded into every recorder
+     * call. Use for a HISTORICAL backfill so replaying a whole thread does not
+     * fan out through the webhook + automation-trigger reactors. Defaults to
+     * false — live ingest keeps firing the event.
+     */
+    suppressSideEffects: z.boolean().optional(),
   })
   .refine(
     (v) => {
@@ -1879,6 +1897,7 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
     participant?: string;
     participantExternalId?: string;
     sentAt?: string;
+    outbound?: boolean;
   }) =>
     recordInboundMessage({
       provider: input.provider,
@@ -1886,6 +1905,17 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
       userId: ctx.userId,
       workspaceId,
       text: args.text,
+      // An OUTBOUND row (the operator's own sent message) is recorded as
+      // HUMAN/ASSISTANT so the inbox attributes it to the operator, not the
+      // contact. Inbound rows omit both → the recorder defaults to EXTERNAL/USER.
+      ...(args.outbound
+        ? { authorType: MessageAuthorType.HUMAN, role: MessageRole.ASSISTANT }
+        : {}),
+      // Threaded from the top-level param: a historical backfill suppresses the
+      // per-message event fan-out. Omitted (undefined) → recorder default false.
+      ...(input.suppressSideEffects !== undefined
+        ? { suppressSideEffects: input.suppressSideEffects }
+        : {}),
       // recordInboundMessage requires a title for a freshly-created row; default
       // to the participant, else the external id, so a title-less call still names
       // the channel meaningfully.
@@ -1929,6 +1959,12 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
       const partIdRaw = map.participantExternalId
         ? readPath(row, map.participantExternalId)
         : undefined;
+      // Truthy `isOutbound` marks the operator's own sent message → record as
+      // HUMAN/ASSISTANT (right-aligned in the inbox). Provider-agnostic: the
+      // dot-path is caller config; any truthy JS value counts as outbound.
+      const outbound = map.isOutbound
+        ? Boolean(readPath(row, map.isOutbound))
+        : false;
       // Stable per-message dedup key. Prefer the provider's native id (map.id is
       // required). If a row is missing it, fall back to a CONTENT key (sentAt +
       // body) — NEVER the array index, which shifts on newest-first pagination
@@ -1948,6 +1984,7 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
           ? { participantExternalId: partIdRaw }
           : {}),
         ...(typeof sentRaw === "string" ? { sentAt: sentRaw } : {}),
+        outbound,
       });
       channelId = result.channelId;
       contextObjectId = result.contextObjectId;

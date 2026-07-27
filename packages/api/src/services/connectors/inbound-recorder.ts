@@ -335,6 +335,30 @@ export interface RecordInboundMessageArgs {
    * cannot affect either chain.
    */
   attachments?: { type: string; url: string; name?: string }[];
+  /**
+   * Provenance override for the stored message row. Defaults to the historical
+   * inbound shape (`authorType=EXTERNAL`, `role=USER`) when omitted, so every
+   * existing caller (Discord bridge, Unipile webhook) is byte-for-byte unchanged.
+   *
+   * Set `authorType=HUMAN` + `role=ASSISTANT` to record an OUTBOUND message —
+   * the operator's OWN sent message — so the inbox renders it right-aligned
+   * instead of mis-attributing it to the external contact. This is the seam the
+   * LinkedIn/Unipile thread backfill uses to reconstruct both sides of a
+   * conversation from a single provider message list.
+   */
+  authorType?: MessageAuthorType;
+  role?: MessageRole;
+  /**
+   * When true, SKIP the `external_message.received` side-effect emit (channel
+   * resolve + dedup insert still run). Defaults to false — today's behavior.
+   *
+   * Rationale: a bulk backfill/reconciliation of HISTORICAL messages must NOT
+   * fan out `external_message.received` per message. That event drives
+   * `webhookDeliveryReactor` + `automationTriggerMatchReactor`, so the first
+   * backfill would otherwise replay an entire thread's history into any
+   * auto-reply automation. Live inbound (the default) keeps firing the event.
+   */
+  suppressSideEffects?: boolean;
 }
 
 export interface RecordInboundMessageResult {
@@ -420,8 +444,10 @@ export async function recordInboundMessage(
     .values({
       channelId,
       userId: args.userId,
-      role: MessageRole.USER,
-      authorType: MessageAuthorType.EXTERNAL,
+      // Default = historical inbound shape (EXTERNAL/USER); an OUTBOUND backfill
+      // overrides to HUMAN/ASSISTANT so the inbox attributes it to the operator.
+      role: args.role ?? MessageRole.USER,
+      authorType: args.authorType ?? MessageAuthorType.EXTERNAL,
       messageCategory: MessageCategory.CHAT,
       externalSource: args.provider,
       content: args.text,
@@ -453,6 +479,13 @@ export async function recordInboundMessage(
     { channelId, provider: args.provider, externalId: args.externalId },
     "Inbound message stored"
   );
+
+  // Bulk backfill/reconciliation suppresses the fan-out so historical messages
+  // don't replay through webhook + automation-trigger reactors. Everything above
+  // (channel resolve + dedup insert) already ran; only the emit is skipped.
+  if (args.suppressSideEffects) {
+    return { channelId, contextObjectId, inboundHash, recorded: true };
+  }
 
   // Fire for ALL inbound messages (pre-linked or not). Automations with
   // eventPattern "external_message.received.completed" match. When the channel
