@@ -60,17 +60,23 @@ describe("unresolved-reference diagnostics", () => {
   });
 
   it("separates a null-valued field (`null`) from a nonexistent path (`missing`)", () => {
+    // Demonstrated on WIRING (`steps.*`), not on `trigger.payload.*`. The
+    // payload is caller-supplied input whose absence is a normal input
+    // condition, so it is deliberately not recorded at all — see
+    // `isCallerSuppliedInput`. The taxonomy itself is unchanged; this is where
+    // it now applies.
     const refs = collect(() => {
-      resolveTemplate(
-        "{{trigger.payload.nothing}}|{{trigger.payload.absent}}",
-        context()
-      );
+      resolveTemplate("{{steps.q1.output.blank}}|{{steps.q1.gone.deep}}", {
+        trigger: { payload: {} },
+        steps: { q1: { output: { blank: null } } },
+        automation: { id: "auto-1", state: {} },
+      } as never);
     });
 
     expect(refs).toEqual(
       expect.arrayContaining([
-        { path: "trigger.payload.nothing", reason: "null", count: 1 },
-        { path: "trigger.payload.absent", reason: "missing", count: 1 },
+        { path: "steps.q1.output.blank", reason: "null", count: 1 },
+        { path: "steps.q1.gone.deep", reason: "missing", count: 1 },
       ])
     );
     expect(refs).toHaveLength(2);
@@ -147,5 +153,44 @@ describe("unresolved-reference diagnostics", () => {
   it("pins the reserved persistence key the run UI reads", () => {
     // Changing this string silently breaks every consumer of the step row.
     expect(UNRESOLVED_REFS_KEY).toBe("__unresolvedRefs");
+  });
+});
+
+/**
+ * The diagnostic must not fire on its own happy path. The report flow's STEER
+ * block reads three `trigger.payload.*` keys in each of three AI rounds, and
+ * running with NO steer is the documented default — so before this rule a
+ * healthy report emitted nine "could not be resolved" warnings.
+ */
+describe("caller-supplied input is not a wiring fault", () => {
+  it("does NOT record a missing trigger.payload key", () => {
+    const refs = collect(() => {
+      resolveTemplate("Prompt: {{trigger.payload.prompt}}", {
+        trigger: { payload: {} },
+        steps: {},
+      } as never);
+    });
+    expect(refs).toEqual([]);
+  });
+
+  it("STILL records a missing steps.* wiring reference", () => {
+    const refs = collect(() => {
+      resolveTemplate("{{steps.nope.output.result}}", {
+        trigger: { payload: {} },
+        steps: {},
+      } as never);
+    });
+    expect(refs.map((r) => r.path)).toEqual(["steps.nope.output.result"]);
+  });
+
+  it("records nothing for a whole steer block, but flags a typo'd step in the same string", () => {
+    const refs = collect(() => {
+      resolveTemplate(
+        "{{trigger.payload.prompt}} {{trigger.payload.focus}} {{steps.gone.output}}",
+        { trigger: { payload: {} }, steps: {} } as never
+      );
+    });
+    expect(refs).toHaveLength(1);
+    expect(refs[0].path).toBe("steps.gone.output");
   });
 });

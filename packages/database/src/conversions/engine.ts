@@ -654,11 +654,200 @@ export async function applyConvertToKind(
   return counts;
 }
 
+/**
+ * Resolve the ONE pod-wide canonical row for a slug: `scope='shared'`, active,
+ * IGNORING workspace_id (a shared profile always carries workspace_id NULL).
+ * Earliest-created wins if a pod somehow carries two. Null when the pod has no
+ * shared row for the slug (e.g. foundation never installed).
+ */
+async function resolveSharedCanonicalId(
+  sql: Sql,
+  slug: string
+): Promise<string | null> {
+  const rows = await sql<Array<{ id: string }>>`
+    SELECT id FROM profiles
+    WHERE slug = ${slug} AND scope = 'shared' AND is_active = true
+    ORDER BY created_at ASC
+    LIMIT 1
+  `;
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * How much USER DATA is still parked on these source slugs — live entities plus
+ * live facet instances. Counts rows that would be STRANDED (unreadable) if the
+ * merge were recorded as done without a canonical to move them to. A bare
+ * profile row carrying no entities and no facets strands nothing, so it is
+ * deliberately NOT counted: a pod that merely declares the legacy slug (or an
+ * empty test/plan database) must stay a clean no-op.
+ */
+async function countStrandedSourceRows(
+  sql: Sql,
+  slugs: string[]
+): Promise<number> {
+  const rows = await sql<Array<{ n: number }>>`
+    SELECT (
+      (SELECT COUNT(*) FROM entities e
+        JOIN profiles src ON src.id = e.profile_id
+        WHERE src.slug = ANY(${slugs}::text[]) AND e.deleted_at IS NULL)
+      +
+      (SELECT COUNT(*) FROM entity_facets f
+        JOIN profiles src ON src.id = f.profile_id
+        WHERE src.slug = ANY(${slugs}::text[]) AND f.deleted_at IS NULL)
+    )::int AS n
+  `;
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * CROSS-SCOPE mergeInto (`intoScope: 'shared'`) — see MergeIntoOp for the
+ * contract. Collapses EVERY source row of each `fromSlug`, at any scope and in
+ * any workspace, onto the ONE pod-wide `scope='shared'` row of `intoSlug`.
+ *
+ * The same-scope path (applyMergeInto below) matches its canonical with
+ * `k.scope = src.scope AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id`
+ * — which structurally CANNOT reach a shared target from a workspace-scoped
+ * source. That is the gap this branch closes; the same-scope SQL is untouched.
+ *
+ * Facet instances are the payload here: a live `crm-client` facet carries the
+ * relationship's own per-instance state (handoffStatus, becameClientAt, …) and
+ * its workspace lens. ONLY `profile_id` moves — workspace_id / properties /
+ * status / context_entity_id are never written, so the instance survives intact
+ * and simply starts resolving against the shared role's schema.
+ *
+ * Idempotent: after a run no row of a source slug is left pointing anywhere but
+ * the canonical, so a re-run selects empty sets → noop. One transaction
+ * (runConversions wraps applyOp in `sql.begin`), retry-safe.
+ */
+async function applyMergeIntoCrossScope(
+  tx: Sql,
+  op: MergeIntoOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {
+    entitiesRepointed: 0,
+    facetsRepointed: 0,
+    propertyDefsRepointed: 0,
+    profilePropertiesRepointed: 0,
+    viewsRewritten: 0,
+    profilesDeactivated: 0,
+  };
+
+  const canonicalId = await resolveSharedCanonicalId(tx, op.intoSlug);
+  if (!canonicalId) {
+    // No pod-wide target. If no data sits on the legacy slugs either, this pod
+    // has nothing to move → clean no-op (ledgered, correctly). If live entities
+    // or facets DO sit there, ledgering a zero-count "applied" would strand them
+    // forever (a later run skips the opKey) — fail loudly instead so the op is
+    // retried once the shared role is installed.
+    const stranded = await countStrandedSourceRows(tx, op.fromSlugs);
+    if (stranded > 0) {
+      throw new Error(
+        `mergeInto '${op.opKey}': cross-scope target '${op.intoSlug}' (scope='shared') not found, but ${stranded} live entity/facet row(s) still sit on [${op.fromSlugs.join(", ")}] — refusing to record a no-op that would strand them.`
+      );
+    }
+    return {};
+  }
+
+  for (const from of op.fromSlugs) {
+    // profile_properties first (its property_def_id must still resolve), then
+    // property_defs, then entities, then facets, then views. Each collision-skips.
+    const pp = await tx`
+      UPDATE profile_properties pp
+      SET profile_id = ${canonicalId}
+      FROM profiles src
+      WHERE pp.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
+        AND NOT EXISTS (
+          SELECT 1 FROM profile_properties pp2
+          WHERE pp2.profile_id = ${canonicalId}
+            AND pp2.property_def_id = pp.property_def_id
+        )
+    `;
+    counts.profilePropertiesRepointed! += pp.count ?? 0;
+
+    // A BASE def (workspace_id NULL) on a WORKSPACE-scoped source row was only
+    // ever visible inside that workspace. Landing it as a base def on the
+    // pod-wide row would leak it into every OTHER workspace's `client`/`lead`,
+    // so re-stamp it as that workspace's OVERLAY. An existing overlay keeps its
+    // own workspace_id. The collision guard compares the POST-move lens.
+    const pd = await tx`
+      UPDATE property_defs pd
+      SET profile_id = ${canonicalId},
+          workspace_id = COALESCE(pd.workspace_id, src.workspace_id)
+      FROM profiles src
+      WHERE pd.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
+        AND NOT EXISTS (
+          SELECT 1 FROM property_defs pd2
+          WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
+            AND pd2.workspace_id IS NOT DISTINCT FROM COALESCE(pd.workspace_id, src.workspace_id)
+        )
+    `;
+    counts.propertyDefsRepointed! += pd.count ?? 0;
+
+    const ent = await tx`
+      UPDATE entities e
+      SET profile_id = ${canonicalId}, type = ${op.intoSlug}, updated_at = now()
+      FROM profiles src
+      WHERE e.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
+    `;
+    counts.entitiesRepointed! += ent.count ?? 0;
+
+    // THE payload of a role collapse. Only `profile_id` is written: the facet's
+    // own workspace_id lens, per-instance `properties`, `status` and
+    // `context_entity_id` are preserved verbatim. Collision-skipped against the
+    // live-facet unique key (entity_id, profile_id, COALESCE(context),
+    // COALESCE(workspace)) — same predicate dedupeProfileRows uses. Colliding
+    // leftovers (the entity already wears the shared role in that workspace)
+    // stay on the drained row and vanish with its deactivation.
+    const fac = await tx`
+      UPDATE entity_facets f
+      SET profile_id = ${canonicalId}, updated_at = now()
+      FROM profiles src
+      WHERE f.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
+        AND f.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets f2
+          WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
+            AND f2.deleted_at IS NULL
+            AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        )
+    `;
+    counts.facetsRepointed! += fac.count ?? 0;
+
+    const vw = await tx`
+      UPDATE views v
+      SET scope_profile_ids = array_replace(v.scope_profile_ids, src.id, ${canonicalId})
+      FROM profiles src
+      WHERE src.slug = ${from} AND src.id <> ${canonicalId}
+        AND v.scope_profile_ids @> ARRAY[src.id]
+    `;
+    counts.viewsRewritten! += vw.count ?? 0;
+
+    if (destructiveTail) {
+      const deact = await tx`
+        UPDATE profiles
+        SET is_active = false, updated_at = now()
+        WHERE slug = ${from} AND is_active = true AND id <> ${canonicalId}
+      `;
+      counts.profilesDeactivated! += deact.count ?? 0;
+    }
+  }
+
+  return counts;
+}
+
 async function applyMergeInto(
   tx: Sql,
   op: MergeIntoOp,
   destructiveTail: boolean
 ): Promise<OpCounts> {
+  if (op.intoScope === "shared") {
+    return applyMergeIntoCrossScope(tx, op, destructiveTail);
+  }
+
   const counts: OpCounts = {
     entitiesRepointed: 0,
     propertyDefsRepointed: 0,
@@ -1091,11 +1280,100 @@ async function computeDedupeCounts(
   return counts;
 }
 
+/** Dry-run mirror of applyMergeIntoCrossScope — counts only, writes nothing. */
+async function computeMergeCrossScopeCounts(
+  sql: Sql,
+  op: MergeIntoOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {
+    entitiesRepointed: 0,
+    facetsRepointed: 0,
+    propertyDefsRepointed: 0,
+    profilePropertiesRepointed: 0,
+    viewsRewritten: 0,
+    profilesDeactivated: 0,
+  };
+  const canonicalId = await resolveSharedCanonicalId(sql, op.intoSlug);
+  // A dry run never ledgers anything, so a missing canonical is reported as an
+  // empty tally rather than thrown — the apply path is where it must be loud.
+  if (!canonicalId) return {};
+
+  for (const from of op.fromSlugs) {
+    const ent = await sql<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM entities e
+      JOIN profiles src ON src.id = e.profile_id AND src.slug = ${from}
+        AND src.id <> ${canonicalId}
+    `;
+    counts.entitiesRepointed! += ent[0]?.n ?? 0;
+
+    const fac = await sql<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM entity_facets f
+      JOIN profiles src ON src.id = f.profile_id AND src.slug = ${from}
+        AND src.id <> ${canonicalId}
+      WHERE f.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets f2
+          WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
+            AND f2.deleted_at IS NULL
+            AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        )
+    `;
+    counts.facetsRepointed! += fac[0]?.n ?? 0;
+
+    const pd = await sql<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM property_defs pd
+      JOIN profiles src ON src.id = pd.profile_id AND src.slug = ${from}
+        AND src.id <> ${canonicalId}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM property_defs pd2
+        WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
+          AND pd2.workspace_id IS NOT DISTINCT FROM COALESCE(pd.workspace_id, src.workspace_id)
+      )
+    `;
+    counts.propertyDefsRepointed! += pd[0]?.n ?? 0;
+
+    const pp = await sql<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM profile_properties pp
+      JOIN profiles src ON src.id = pp.profile_id AND src.slug = ${from}
+        AND src.id <> ${canonicalId}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM profile_properties pp2
+        WHERE pp2.profile_id = ${canonicalId} AND pp2.property_def_id = pp.property_def_id
+      )
+    `;
+    counts.profilePropertiesRepointed! += pp[0]?.n ?? 0;
+
+    const vw = await sql<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM views v
+      JOIN profiles src ON src.slug = ${from} AND src.id <> ${canonicalId}
+        AND v.scope_profile_ids @> ARRAY[src.id]
+    `;
+    counts.viewsRewritten! += vw[0]?.n ?? 0;
+
+    if (destructiveTail) {
+      const dc = await sql<Array<{ n: number }>>`
+        SELECT COUNT(*)::int AS n FROM profiles src
+        WHERE src.slug = ${from} AND src.is_active = true AND src.id <> ${canonicalId}
+      `;
+      counts.profilesDeactivated! += dc[0]?.n ?? 0;
+    }
+  }
+  return counts;
+}
+
 async function computeMergeCounts(
   sql: Sql,
   op: MergeIntoOp,
   destructiveTail: boolean
 ): Promise<OpCounts> {
+  if (op.intoScope === "shared") {
+    return computeMergeCrossScopeCounts(sql, op, destructiveTail);
+  }
+
   const counts: OpCounts = {
     entitiesRepointed: 0,
     propertyDefsRepointed: 0,

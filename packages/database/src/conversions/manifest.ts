@@ -165,6 +165,35 @@ export interface MergeIntoOp extends BaseOp {
   op: "mergeInto";
   fromSlugs: string[];
   intoSlug: string;
+  /**
+   * CROSS-SCOPE merge. Absent (the default) = the same-scope behaviour above:
+   * the canonical is matched at the SOURCE's own scope + workspace, so a
+   * WORKSPACE-scoped source can only ever merge into a workspace-scoped target
+   * in the SAME workspace.
+   *
+   * Set to `"shared"` to collapse a workspace-scoped (or system, or several
+   * per-workspace) source slug into the ONE pod-wide `scope='shared'` row of
+   * `intoSlug`, resolved by (slug, scope='shared', is_active) IGNORING
+   * workspace_id. This is the shape a role collapse takes: `crm-client` was a
+   * WORKSPACE-scope role row baked into a CRM workspace, and it is being retired
+   * in favour of foundation's pod-wide `client` shared role.
+   *
+   * Cross-scope semantics that differ from the same-scope path (see
+   * engine.ts applyMergeIntoCrossScope):
+   *   - `entity_facets` rows are REPOINTED to the shared canonical. Only
+   *     `profile_id` moves: each facet keeps its own `workspace_id` lens,
+   *     `properties` (handoffStatus / becameClientAt / lifecycleStage / …),
+   *     `status` and `context_entity_id` UNCHANGED. Collision-skipped against
+   *     the live-facet unique key, exactly like dedupeProfileRows.
+   *   - `property_defs` moving off a workspace-scoped source are re-stamped
+   *     `workspace_id = COALESCE(pd.workspace_id, src.workspace_id)` so a BASE
+   *     def on a workspace-only profile lands as a WORKSPACE OVERLAY on the
+   *     pod-wide row — it must not become a pod-wide base def visible in every
+   *     other workspace.
+   *   - If the shared canonical does NOT exist but source rows DO, the op
+   *     THROWS rather than ledgering a silent zero-count "applied".
+   */
+  intoScope?: "shared";
 }
 
 /** Ledger-recorded no-op: this slug is intentionally kept as-is. Audit trail. */
@@ -964,6 +993,47 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
       preferTargetValues: ["proposed", "negotiating", "won", "lost"],
     },
+
+    // ─── CRM role collapse: crm-lead / crm-client → the pod-wide lead / client ─
+    //
+    // `crm-lead` and `crm-client` were WORKSPACE-scoped role profiles baked into
+    // the CRM / business-developer workspace. The template and the app now read
+    // foundation's pod-wide shared roles `lead` / `client` (`scope: shared`,
+    // workspace_id NULL) — which is exactly what makes the CRM → Operations
+    // handoff possible, since both workspaces read the SAME role row.
+    //
+    // Live pods still carry `entity_facets` rows pointing at the OLD
+    // workspace-scoped profile rows, so a handed-off party resolves against a
+    // role nothing reads any more and renders blank. These two ops repoint them.
+    //
+    // Why `intoScope: "shared"`: the default mergeInto matches its canonical at
+    // the SOURCE's own scope+workspace, which can never reach a pod-wide row
+    // from a workspace-scoped source. See MergeIntoOp / engine.ts
+    // applyMergeIntoCrossScope.
+    //
+    // What moves and what does NOT: only the facet's `profile_id` pointer. Each
+    // facet keeps its own `workspace_id` lens and its per-instance `properties`
+    // (handoffStatus / handoffDestination / becameClientAt / lifecycleStage / …),
+    // `status` and `context_entity_id` — the relationship's state survives
+    // verbatim and simply resolves against the shared role's schema. The old
+    // rows' property_defs land as that workspace's OVERLAY on the shared row
+    // (never as pod-wide base defs). Deactivation of the drained `crm-lead` /
+    // `crm-client` rows is gated behind --destructive-tail, so the legacy
+    // profiles are retired only on a deliberate operator run.
+    {
+      op: "mergeInto",
+      opKey: "w7.merge.crm-lead-into-shared-lead",
+      fromSlugs: ["crm-lead"],
+      intoSlug: "lead",
+      intoScope: "shared",
+    },
+    {
+      op: "mergeInto",
+      opKey: "w7.merge.crm-client-into-shared-client",
+      fromSlugs: ["crm-client"],
+      intoSlug: "client",
+      intoScope: "shared",
+    },
   ],
 };
 
@@ -1123,6 +1193,11 @@ export function validateManifest(manifest: ConversionManifest): void {
               `Conversion manifest: mergeInto '${op.opKey}' cannot merge slug '${from}' into itself`
             );
           }
+        }
+        if (op.intoScope !== undefined && op.intoScope !== "shared") {
+          throw new Error(
+            `Conversion manifest: mergeInto '${op.opKey}' has invalid intoScope '${op.intoScope}' (only 'shared' is supported)`
+          );
         }
         break;
       case "dedupeProfileRows":

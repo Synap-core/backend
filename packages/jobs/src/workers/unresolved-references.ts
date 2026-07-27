@@ -123,7 +123,37 @@ export function recordUnresolvedReference(
   path: string,
   reason: UnresolvedReferenceReason
 ): void {
+  if (isCallerSuppliedInput(path)) return;
   storage.getStore()?.record(path, reason);
+}
+
+/**
+ * Is this path reading the CALLER'S INPUT rather than the flow's own WIRING?
+ *
+ * `trigger.payload.*` is whatever the caller passed when starting the run. On a
+ * manually-triggered automation with no payload, every one of those references
+ * legitimately resolves to nothing — that is an input condition, not a fault.
+ *
+ * WHY THIS MATTERS ENOUGH TO SPECIAL-CASE: the report flow's STEER block reads
+ * three payload keys in each of three AI rounds, and running it with no steer
+ * is its DOCUMENTED default. Without this rule a perfectly healthy report
+ * produces NINE "could not be resolved" warnings — and a diagnostic that fires
+ * on the canonical happy path of the very feature it was built for is not a
+ * diagnostic, it is noise that teaches the reader to ignore the panel. The
+ * signal is only worth having if it stays rare.
+ *
+ * THE TRADEOFF, stated rather than hidden: a genuine TYPO in a payload path
+ * (`trigger.payload.promt`) is now invisible here. That is the deliberate
+ * lesser evil — it still renders as empty text the author can see in the
+ * step's resolved inputs, whereas a panel nobody trusts catches nothing at
+ * all. The real fix for that case is letting a flow DECLARE a reference
+ * required, which is a config-level change, not a recording-level one.
+ *
+ * Wiring references — `steps.*`, `loop.*`, `automation.*` — are unaffected:
+ * those are authored by the flow, and a miss there is almost always a bug.
+ */
+function isCallerSuppliedInput(path: string): boolean {
+  return path === "trigger.payload" || path.startsWith("trigger.payload.");
 }
 
 /** The collector for the step currently executing, if any. */

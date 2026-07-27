@@ -1,4 +1,14 @@
-import { and, or, eq, isNull, entities } from "@synap/database";
+import {
+  and,
+  or,
+  eq,
+  isNull,
+  inArray,
+  db,
+  entities,
+  entityFacets,
+  podMemberWhere,
+} from "@synap/database";
 import type { SQL } from "drizzle-orm";
 
 /**
@@ -21,7 +31,9 @@ import type { SQL } from "drizzle-orm";
  *
  *   - `podPersonal` = `workspace_id IS NULL AND user_id = ownerId` — mirrors
  *     accessScopeWhere's `podPersonal` branch exactly (owner floor on the NULL
- *     rows). Pod-scoped kinds (company/person/bookmark…) live at
+ *     rows), ORed with the Wave-2 `podShared` branch (a pod-wide entity carrying
+ *     a live pod-wide facet, for a pod member). Pod-scoped kinds
+ *     (company/person/bookmark…) live at
  *     `workspace_id IS NULL` (workspace-resolution-service K1: entityScope
  *     "pod" → null), so WITHOUT this branch a `query {profileSlug:'company'}`
  *     node returned ZERO rows — the bug that made every per-client daily loop
@@ -31,7 +43,9 @@ import type { SQL } from "drizzle-orm";
  *     owner-floored, exactly like accessScopeWhere's workspace floor branch).
  *
  * SECURITY: the result matches ONLY (a) this workspace's rows and (b) pod-wide
- * rows owned by `ownerId`. It can never match another workspace's rows (their
+ * rows owned by `ownerId` or explicitly shared to the pod via a pod-wide facet
+ * (and only when `ownerId` is a pod member). It can never match another
+ * workspace's rows (their
  * `workspace_id` is a different non-null id) nor another user's pod-wide rows
  * (the owner floor). Workspace-scoped kinds (deal/grant_submission…) always
  * carry a non-null `workspace_id`, so the pod branch matches none of them → the
@@ -51,15 +65,42 @@ export function entityQueryVisibilityWhere(args: {
 }): SQL {
   const { workspaceId, ownerId, podOnly = false } = args;
 
+  // Pod-wide rows the run owner may see: their OWN (owner floor), plus the
+  // POD-SHARED ones — a pod-wide entity carrying a LIVE pod-wide facet, when the
+  // owner is a `pod_members` row. Mirrors `podSharedFacetWhere` in the SSOT
+  // (packages/api utils/project-scope.ts); keep the two in lockstep.
+  const podShared =
+    ownerId !== undefined
+      ? and(
+          isNull(entities.workspaceId),
+          inArray(
+            entities.id,
+            db
+              .select({ id: entityFacets.entityId })
+              .from(entityFacets)
+              .where(
+                and(
+                  isNull(entityFacets.workspaceId),
+                  isNull(entityFacets.deletedAt)
+                )
+              )
+          ),
+          podMemberWhere(ownerId)
+        )
+      : undefined;
   const podWide =
     ownerId !== undefined
-      ? and(isNull(entities.workspaceId), eq(entities.userId, ownerId))
+      ? or(
+          and(isNull(entities.workspaceId), eq(entities.userId, ownerId)),
+          podShared
+        )
       : undefined;
   const workspaceOwn = eq(entities.workspaceId, workspaceId);
 
   if (podOnly) {
-    // Owner-gate the pod-wide rows so this never returns another user's private
-    // pod-wide entities. Fail closed when the owner is unknown.
+    // Owner-gate the pod-wide rows (or pod-membership + an explicit pod-wide
+    // facet) so this never returns another user's PRIVATE pod-wide entities.
+    // Fail closed when the owner is unknown.
     if (!podWide) {
       throw new Error("query node: scope 'pod' requires an owner");
     }

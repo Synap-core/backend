@@ -146,8 +146,10 @@ describe("H2 — structured knowledge floor no longer leaks pod-wide entities", 
     ).toBe(true);
     // The lens still surfaces pod-wide globals (includeGlobalsInLens) — the narrow
     // ORs `workspace_id is null` with the selected workspace.
+    // (Param index is $10, not $9, since Wave 2 added the `podShared` floor
+    // branch — one more bound caller id ahead of the lens. Same assertion.)
     expect(q.sql).toContain(
-      '"entities"."workspace_id" is null or "entities"."workspace_id" = $9'
+      '"entities"."workspace_id" is null or "entities"."workspace_id" = $10'
     );
     expect(q.params).toContain("ws-1");
     // Caller-bound throughout.

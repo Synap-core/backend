@@ -731,7 +731,7 @@ export async function ensureReportAutomation(
         eq(automations.workspaceId, workspaceId),
         eq(automations.name, REPORT_AUTOMATION_NAME)
       ),
-      columns: { id: true, metadata: true },
+      columns: { id: true, metadata: true, version: true },
     });
 
     if (existing) {
@@ -764,7 +764,20 @@ export async function ensureReportAutomation(
         .set({
           description: REPORT_AUTOMATION_DESCRIPTION,
           flowDefinition: REPORT_AUTOMATION_FLOW,
-          metadata: { seedVersion: REPORT_AUTOMATION_SEED_VERSION },
+          // MERGE, never replace. `automations.metadata` is a shared bag —
+          // `tags`, `createdVia`, `averageExecutionTime`, plus an open index
+          // signature — so `.set({ metadata: { seedVersion } })` silently
+          // destroyed everything else on every version bump.
+          metadata: {
+            ...((existing.metadata as Record<string, unknown> | null) ?? {}),
+            seedVersion: REPORT_AUTOMATION_SEED_VERSION,
+          },
+          // The run ledger stamps `definitionSnapshot: { version, flowDefinition }`
+          // per run. Leaving `version` untouched while replacing the flow made a
+          // v6 run and a v7 run both report version 1 — the snapshot's FLOW was
+          // right, but the number naming it was a lie, which is worse than
+          // having no number at all.
+          version: (existing.version ?? 1) + 1,
           updatedAt: new Date(),
         })
         .where(eq(automations.id, existing.id));

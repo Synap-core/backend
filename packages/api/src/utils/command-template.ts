@@ -19,6 +19,17 @@
  *   {argument name="X"}
  *   {argument name="X" options="a,b" default="a"}
  *   {selection} / {selection type="entities"}
+ *
+ * LEGACY-COMPAT bare form:
+ *   {NAME}  → substituted ONLY when NAME is a declared argument of THIS run
+ *             (i.e. an own key of the `argValues` passed to substitute()).
+ *             Anything else inside braces is left byte-for-byte as written.
+ *             See BARE_ARG_REGEX for the exact rule and its guards.
+ *
+ * MISS POLICY — every unresolved reference keeps its value (`""`, or the
+ * author-time display name for a static entity) but is RECORDED via
+ * `recordTemplateMiss`, so a caller that opened a diagnostics scope can see it.
+ * See `template-diagnostics.ts` for why silence was the bug worth fixing.
  */
 
 import type {
@@ -26,6 +37,19 @@ import type {
   DerivedContextRef,
   DerivedStaticEntityRef,
 } from "@synap/database/schema";
+import {
+  TemplateMissCollector,
+  recordTemplateMiss,
+  withTemplateDiagnostics,
+  type TemplateMiss,
+} from "./template-diagnostics.js";
+import { REF_BARE_ARG } from "./template-references.js";
+
+export {
+  findUnresolvedReferences,
+  type UnresolvedReference,
+  type UnresolvedReferenceKind,
+} from "./template-references.js";
 
 // ── New @{...} regexes ─────────────────────────────────────────────────────
 
@@ -62,6 +86,13 @@ const OLD_ARG_REGEX =
  */
 const OLD_SELECTION_REGEX =
   /\{selection(?:\s+type\s*=\s*["'](entities|viewRows|documents|text)["'])?\}/gi;
+
+/**
+ * Bare `{name}` — the legacy-compat rule. Its source, its three guards and the
+ * reason it is NOT a declaration form all live in `template-references.ts`,
+ * next to the author-time checker that has to agree with it exactly.
+ */
+const BARE_ARG_REGEX = REF_BARE_ARG;
 
 // ── SelectionContext ──────────────────────────────────────────────────────
 
@@ -100,6 +131,21 @@ export interface ParsedTemplate {
     resolvedEntities?: Record<string, string>,
     resolvedUrl?: string
   ): string;
+
+  /**
+   * `substitute()` with its misses handed back instead of dropped on the floor.
+   *
+   * Same arguments, same resulting text — the only difference is that the
+   * substitution runs inside a diagnostics scope, so a caller that wants to
+   * surface "this prompt had 3 references that resolved to nothing" can,
+   * without every existing caller having to change.
+   */
+  substituteWithMisses(
+    argValues: Record<string, string>,
+    selectionContext?: SelectionContext | null,
+    resolvedEntities?: Record<string, string>,
+    resolvedUrl?: string
+  ): { text: string; misses: TemplateMiss[] };
 }
 
 // ── Helper: parse a type/options string from @{arg:NAME:...} ─────────────
@@ -246,10 +292,15 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
   ): string {
     let out = promptTemplate;
 
+    /** Own-key lookup: `constructor`/`toString` must never resolve. */
+    const declared = (name: string): boolean =>
+      Object.prototype.hasOwnProperty.call(argValues, name);
+
     // New: @{arg:NAME[:type]}
     out = out.replace(
       new RegExp(NEW_ARG_REGEX_FULL.source, "g"),
       (_, name: string) => {
+        if (!declared(name)) recordTemplateMiss(name, "unknown-arg");
         return argValues[name] ?? "";
       }
     );
@@ -258,21 +309,26 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(NEW_CONTEXT_REGEX.source, "g"),
       (_, ctxType: string) => {
-        switch (ctxType) {
-          case "entity":
-            return (
-              resolvedEntities?.["__context_entity"] ??
-              formatSelectionContext(selectionContext)
-            );
-          case "view":
-            return selectionContext?.viewId ?? "";
-          case "url":
-            return resolvedUrl ?? "";
-          case "text":
-            return selectionContext?.text ?? "";
-          default:
-            return "";
-        }
+        const resolved = ((): string => {
+          switch (ctxType) {
+            case "entity":
+              return (
+                resolvedEntities?.["__context_entity"] ??
+                formatSelectionContext(selectionContext)
+              );
+            case "view":
+              return selectionContext?.viewId ?? "";
+            case "url":
+              return resolvedUrl ?? "";
+            case "text":
+              return selectionContext?.text ?? "";
+            default:
+              return "";
+          }
+        })();
+        if (resolved === "")
+          recordTemplateMiss(`context:${ctxType}`, "unresolved-context");
+        return resolved;
       }
     );
 
@@ -280,7 +336,11 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(NEW_STATIC_REGEX.source, "g"),
       (_, entityId: string, displayName: string) => {
-        return resolvedEntities?.[entityId] ?? displayName;
+        const resolved = resolvedEntities?.[entityId];
+        // Falling back to the author-time label is not nothing, but it IS stale.
+        if (resolved === undefined)
+          recordTemplateMiss(entityId, "unresolved-entity");
+        return resolved ?? displayName;
       }
     );
 
@@ -288,6 +348,7 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(OLD_ARG_REGEX.source, "gi"),
       (_, name: string) => {
+        if (!declared(name)) recordTemplateMiss(name, "unknown-arg");
         return argValues[name] ?? "";
       }
     );
@@ -296,17 +357,53 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     out = out.replace(
       new RegExp(OLD_SELECTION_REGEX.source, "gi"),
       (_, rawType?: string) => {
-        if (!selectionContext) return "";
+        if (!selectionContext) {
+          recordTemplateMiss("selection", "unresolved-context");
+          return "";
+        }
         // If a specific type was requested in the legacy tag, honour it
         if (rawType === "text") return selectionContext.text ?? "";
         return formatSelectionContext(selectionContext);
       }
     );
 
+    // Legacy-compat: bare {NAME} — LAST, so canonical syntax always wins.
+    // An undeclared name is returned byte-for-byte, so nothing that works
+    // today can change meaning; it is only recorded.
+    out = out.replace(
+      new RegExp(BARE_ARG_REGEX.source, "g"),
+      (whole: string, name: string) => {
+        if (!declared(name)) {
+          recordTemplateMiss(name, "literal-brace");
+          return whole;
+        }
+        return argValues[name] ?? "";
+      }
+    );
+
     return out;
   }
 
-  return { derivedInputs, contextRefs, staticRefs, substitute };
+  function substituteWithMisses(
+    argValues: Record<string, string>,
+    selectionContext?: SelectionContext | null,
+    resolvedEntities?: Record<string, string>,
+    resolvedUrl?: string
+  ): { text: string; misses: TemplateMiss[] } {
+    const collector = new TemplateMissCollector();
+    const text = withTemplateDiagnostics(collector, () =>
+      substitute(argValues, selectionContext, resolvedEntities, resolvedUrl)
+    );
+    return { text, misses: collector.list() };
+  }
+
+  return {
+    derivedInputs,
+    contextRefs,
+    staticRefs,
+    substitute,
+    substituteWithMisses,
+  };
 }
 
 // ── formatSelectionContext ────────────────────────────────────────────────

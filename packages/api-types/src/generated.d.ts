@@ -3761,7 +3761,7 @@ export interface BackfillTeamPersonBridgeResult {
 	skipped: number;
 	errors: number;
 }
-export type PackageDependencyKind = "workspace" | "capability" | "automation";
+export type PackageDependencyKind = "workspace" | "capability" | "skill" | "workflow" | "view" | "cell" | "automation";
 export type PackageDependencyRelation = "compose" | "require";
 /** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
 export type PropertyTargetUnresolvedReason = 
@@ -14235,7 +14235,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					dependencies?: {
 						slug: string;
-						kind?: "workspace" | "capability" | "automation" | undefined;
+						kind?: "skill" | "workspace" | "capability" | "cell" | "view" | "automation" | "workflow" | undefined;
 						relation?: "compose" | "require" | undefined;
 						reason?: string | undefined;
 					}[] | undefined;

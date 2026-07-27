@@ -226,3 +226,27 @@ describe("parseQueryOrderBy: real columns vs jsonb properties", () => {
     expect(parseQueryOrderBy({ orderBy: 42 })).toBeUndefined();
   });
 });
+
+/**
+ * The FOURTH call site — missed on the first pass, which is exactly why the
+ * matcher is a shared named export instead of a regex re-typed per site.
+ * `executeTransformStep` resolves the part BEFORE the first " | " separately;
+ * that branch kept the old both-ends-anchored regex.
+ */
+describe("transform: multi-placeholder BEFORE the pipe", () => {
+  it("interpolates the pre-pipe part instead of yielding undefined", () => {
+    const out = executeTransformStep(
+      { expression: "{{steps.a.output}} and {{steps.b.output}} | trim" },
+      ctx({ a: { output: "first" }, b: { output: "second" } })
+    );
+    expect(out.result).toBe("first and second");
+  });
+
+  it("still passes a TRUE single reference through natively (array stays an array)", () => {
+    const out = executeTransformStep(
+      { expression: "{{steps.a.output}} | unique" },
+      ctx({ a: { output: ["x", "x", "y"] } })
+    );
+    expect(out.result).toEqual(["x", "y"]);
+  });
+});

@@ -1745,10 +1745,16 @@ export function executeTransformStep(
 
   // Resolve the template variable (or literal) before the pipe
   let value: unknown;
-  // If it looks like a plain {{...}} reference, resolve the raw path value (not stringified)
-  const templateMatch = templatePart.match(/^\{\{(.+?)\}\}$/);
-  if (templateMatch) {
-    value = resolveReferencePath(templateMatch[1], context);
+  // If it looks like a plain {{...}} reference, resolve the raw path value (not
+  // stringified). Uses the SHARED matcher — this site was missed when the
+  // both-ends-anchored `/^\{\{(.+?)\}\}$/` was replaced elsewhere, and a
+  // transform whose pre-pipe part held two placeholders (`"{{a}} {{b}} | trim"`)
+  // would still have captured the junk path `a}} {{b` and yielded undefined.
+  // Four call sites, not three: that is why the matcher is a named export
+  // rather than a regex written out per site.
+  const templateMatch = matchWholeStringReference(templatePart);
+  if (templateMatch !== null) {
+    value = resolveReferencePath(templateMatch, context);
   } else {
     value = resolveTemplate(templatePart, context);
   }
