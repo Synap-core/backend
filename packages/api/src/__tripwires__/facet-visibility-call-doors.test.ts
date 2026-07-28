@@ -72,4 +72,22 @@ describe("facet visibility call doors", () => {
       "message: `Context entity not found: ${input.contextEntityId}`"
     );
   });
+
+  // A pod-member reviewer must see a legitimately pod-shared facet's live
+  // state in a proposal diff — `isFacetVisibleForLens` fails CLOSED to the
+  // owner floor unless its 4th `viewerIsPodMember` arg is threaded through. If
+  // either proposals.ts call site regresses to the 3-arg form, a pod-member
+  // reviewing someone else's pod-shared facet update silently loses the
+  // before-state (under-render, not a leak — but still the bug this guards).
+  it("threads viewerIsPodMember into both proposals.ts isFacetVisibleForLens call sites", () => {
+    const proposalsRouter = read("packages/api/src/routers/proposals.ts");
+    const callSites = [
+      ...proposalsRouter.matchAll(/isFacetVisibleForLens\(([\s\S]*?)\)/g),
+    ];
+
+    expect(callSites.length).toBeGreaterThanOrEqual(2);
+    for (const call of callSites) {
+      expect(call[1]).toContain("viewerIsPodMember");
+    }
+  });
 });

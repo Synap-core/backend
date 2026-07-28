@@ -26,6 +26,50 @@ export interface EnsureSystemProfilesResult {
 }
 
 /**
+ * Canonical slug set of every profile this seeder creates on every pod.
+ *
+ * SINGLE SOURCE OF TRUTH for pod-side referential validation: the template
+ * cross-reference checks in `create-workspace-from-definition.ts`
+ * (`collectCrossRefErrors` + the preflight resolver) treat these as
+ * always-present, so a template may reference `company`/`person`/`task`/… in a
+ * view scope, suggested entity, or entityLink WITHOUT re-declaring them — exactly
+ * what the PUBLISH-time `SYSTEM_PROFILES` allow-list in
+ * `@synap-core/workspace-templates` already permits. Without this the two doors
+ * disagree: such templates PUBLISH but fail to APPLY (422).
+ *
+ * This MUST stay in lockstep with the `profiles` array built inside
+ * `ensureSystemProfiles()` below. That function runs a coherence guard on every
+ * pod startup and returns an error result if the two diverge — so adding a
+ * profile to the seeder without listing it here fails loudly at boot instead of
+ * silently re-breaking template apply.
+ */
+export const SYSTEM_PROFILE_SLUGS: ReadonlySet<string> = new Set([
+  // Core capture hierarchy
+  "note",
+  "task",
+  "event",
+  "bookmark",
+  "website",
+  "article",
+  // People / orgs / CRM
+  "person",
+  "contact",
+  "company",
+  "deal",
+  // Files + programmatic kinds
+  "file",
+  "anchor",
+  "signal_item",
+  // Knowledge-work flow
+  "decision",
+  "question",
+  "research",
+  "knowledge",
+  "report",
+  "user_observation",
+]);
+
+/**
  * Ensure system profiles and property definitions exist
  *
  * @returns Result with status and counts
@@ -1004,6 +1048,25 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
       },
     ];
+
+    // Coherence tripwire: SYSTEM_PROFILE_SLUGS is the SSOT consumed by template
+    // referential validation; it MUST list exactly what this seeder creates.
+    // Fail loudly here (caught below → status:"error") rather than let a template
+    // that references a newly-seeded system profile silently fail to apply.
+    const seededSlugs = new Set(profiles.map((p) => p.slug));
+    const missingFromSsot = [...seededSlugs].filter(
+      (s) => !SYSTEM_PROFILE_SLUGS.has(s)
+    );
+    const staleInSsot = [...SYSTEM_PROFILE_SLUGS].filter(
+      (s) => !seededSlugs.has(s)
+    );
+    if (missingFromSsot.length > 0 || staleInSsot.length > 0) {
+      throw new Error(
+        `SYSTEM_PROFILE_SLUGS drift vs ensureSystemProfiles() seeder: ` +
+          `seeded-but-unlisted=[${missingFromSsot.join(", ")}], ` +
+          `listed-but-unseeded=[${staleInSsot.join(", ")}]`
+      );
+    }
 
     const createdProfiles = new Map<string, string>();
 

@@ -65,10 +65,36 @@ export function isFacetVisibleForLens(
 
 export function facetVisibilityConditions(opts: {
   userId: string;
+  /**
+   * INVARIANT (load-bearing, not enforced by this function): a concrete
+   * `workspaceId` here is trusted to be a lens the caller has ALREADY verified
+   * `userId` is a member of — this builder has no DB access of its own to
+   * re-check membership, only row-shape SQL. All current callers
+   * (`FacetRepository`, `facet-resolution-service`, `entities.ts`) resolve
+   * `workspaceId` from a pre-authorized request context, never a raw
+   * client-supplied value. A FUTURE caller passing an unchecked
+   * client-supplied workspaceId here would leak that workspace's facets to a
+   * non-member — verify membership (`AccessContext.podMembership()` /
+   * `getWorkspaceMembership()`) BEFORE calling, do not rely on this function
+   * to gate it.
+   */
   workspaceId?: string | null;
   /** Access floor for an identity-wide read when workspaceId is undefined. */
   allowedWorkspaceIds?: string[];
 }): SQL[] {
+  // Cheap shape guard: "" is never a valid workspace id (the lens is either a
+  // concrete id, `null` for pod-wide-only, or `undefined`/omitted for
+  // identity-wide). It is not itself a leak — `eq(workspaceId, "")` matches no
+  // row — but it is the TELL of an unvalidated request param forwarded
+  // straight through (e.g. a missing query param defaulting to ""), which is
+  // exactly the caller mistake this function cannot otherwise catch. Fail loud
+  // here rather than let it silently return zero rows downstream.
+  if (opts.workspaceId === "") {
+    throw new Error(
+      "facetVisibilityConditions: workspaceId must not be an empty string (use null for pod-wide-only, or omit for identity-wide)"
+    );
+  }
+
   const conditions: SQL[] = [];
 
   if (opts.workspaceId === undefined && opts.allowedWorkspaceIds) {

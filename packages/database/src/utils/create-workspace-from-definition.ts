@@ -17,6 +17,7 @@ import { WorkspaceMemberRepository } from "../repositories/workspace-member-repo
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { SYSTEM_PROFILE_SLUGS } from "./ensure-system-profiles.js";
 import { resolvePropertyTargetProfiles } from "./resolve-property-target-profiles.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
@@ -468,14 +469,24 @@ function collectCrossRefErrors(def: WorkspaceDefinitionInput): string[] {
     definedSlugs.add(p.slug);
   }
 
+  // A referenced profile resolves if it is declared in THIS definition OR is a
+  // pod-wide system profile every pod seeds (company/person/task/…). Matches the
+  // PUBLISH-time allow-list (`@synap-core/workspace-templates` `SYSTEM_PROFILES`)
+  // so a template that publishes green also applies green — a template legitimately
+  // references system profiles without re-declaring them. Kept separate from
+  // `definedSlugs` so a definition that DOES re-declare `person` (to overlay
+  // props) is still allowed and not flagged as a duplicate.
+  const known = (s: string) =>
+    definedSlugs.has(s) || SYSTEM_PROFILE_SLUGS.has(s);
+
   for (const v of def.views ?? []) {
     const vname = v.name ?? v.displayName ?? "(unnamed)";
     for (const s of [v.scopeProfileSlug, ...(v.scopeProfileSlugs ?? [])].filter(
       Boolean
     ) as string[]) {
-      if (!definedSlugs.has(s)) {
+      if (!known(s)) {
         errors.push(
-          `View '${vname}': scopeProfile '${s}' not in definition.profiles`
+          `View '${vname}': scopeProfile '${s}' not in definition.profiles or system profiles`
         );
       }
     }
@@ -486,22 +497,22 @@ function collectCrossRefErrors(def: WorkspaceDefinitionInput): string[] {
       errors.push(`Entity '${e.title}': missing required 'profileSlug'`);
       continue;
     }
-    if (!definedSlugs.has(e.profileSlug)) {
+    if (!known(e.profileSlug)) {
       errors.push(
-        `Entity '${e.title}': profileSlug '${e.profileSlug}' not in definition.profiles`
+        `Entity '${e.title}': profileSlug '${e.profileSlug}' not in definition.profiles or system profiles`
       );
     }
   }
 
   for (const link of def.entityLinks ?? []) {
-    if (!definedSlugs.has(link.sourceProfileSlug)) {
+    if (!known(link.sourceProfileSlug)) {
       errors.push(
-        `entityLink: sourceProfileSlug '${link.sourceProfileSlug}' not in definition.profiles`
+        `entityLink: sourceProfileSlug '${link.sourceProfileSlug}' not in definition.profiles or system profiles`
       );
     }
-    if (!definedSlugs.has(link.targetProfileSlug)) {
+    if (!known(link.targetProfileSlug)) {
       errors.push(
-        `entityLink: targetProfileSlug '${link.targetProfileSlug}' not in definition.profiles`
+        `entityLink: targetProfileSlug '${link.targetProfileSlug}' not in definition.profiles or system profiles`
       );
     }
   }
@@ -652,8 +663,14 @@ export async function preflightWorkspaceFromDefinition(opts: {
   const profileRepo = new ProfileRepository(dbConn);
   // Fresh empty-workspace lens: models exactly what a create provisions.
   const workspaceId = randomUUID();
-  /** Slugs that WOULD land in the create loop's profileMap (everything but a conflict). */
-  const resolvedSlugs = new Set<string>();
+  /**
+   * Slugs that WOULD land in the create loop's profileMap (everything but a
+   * conflict). Pre-seeded with the pod-wide system profiles: they always exist
+   * pod-wide, so an entityLink or view that references `company`/`person`/… (and
+   * never declares it) resolves at apply — without this seed the soft checks
+   * below would wrongly flag those as unresolved and keep `ok:false` (422).
+   */
+  const resolvedSlugs = new Set<string>(SYSTEM_PROFILE_SLUGS);
 
   for (const profile of definition.profiles ?? []) {
     const scope = normalizeProfileScope(profile.scope);

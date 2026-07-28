@@ -48,6 +48,7 @@ import {
   workspaces,
   entityFacets,
   profiles,
+  podMembers,
 } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import type {
@@ -535,105 +536,124 @@ async function enrichProposalsForDisplay(
   ).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
-  const [entityRows, userRows, traceEntries, facetRows, roleFacetRows] =
-    await Promise.all([
-      entityIds.length > 0
-        ? db
-            .select({
-              id: entities.id,
-              title: entities.title,
-              preview: entities.preview,
-              type: entities.type,
-              properties: entities.properties,
-              workspaceId: entities.workspaceId,
-            })
-            .from(entities)
-            .where(inArray(entities.id, entityIds))
-        : Promise.resolve([]),
-      userIds.length > 0
-        ? db
-            .select({
-              id: users.id,
-              name: users.name,
-              email: users.email,
-              userType: users.userType,
-              agentMetadata: users.agentMetadata,
-            })
-            .from(users)
-            .where(inArray(users.id, userIds))
-        : Promise.resolve([]),
-      // ONE batched query for ALL correlation ids on this page (was N+1: one
-      // round-trip per proposal → pool exhaustion). Grouped in memory below.
-      correlationIds.length > 0
-        ? eventRepo
-            .getCorrelatedEventsBatch(correlationIds, userId)
-            .then((events) => {
-              const grouped = new Map<string, EventRecord[]>();
-              for (const ev of events) {
-                const key = ev.correlationId;
-                if (!key) continue;
-                const bucket = grouped.get(key);
-                if (bucket) bucket.push(ev);
-                else grouped.set(key, [ev]);
-              }
-              return Array.from(grouped.entries()) as Array<
-                readonly [string, EventRecord[]]
-              >;
-            })
-        : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
-      // B4: current role-facet state for facet-UPDATE proposals (live-current
-      // before→after). One batched query for every facetId on the page.
-      uniqueFacetIds.length > 0
-        ? db
-            .select({
-              id: entityFacets.id,
-              status: entityFacets.status,
-              properties: entityFacets.properties,
-              workspaceId: entityFacets.workspaceId,
-              userId: entityFacets.userId,
-            })
-            .from(entityFacets)
-            .where(inArray(entityFacets.id, uniqueFacetIds))
-        : Promise.resolve(
-            [] as Array<{
-              id: string;
-              status: string | null;
-              properties: unknown;
-              workspaceId: string | null;
-              userId: string;
-            }>
-          ),
-      // Roles v2: CURRENT live role-facets of every pre-existing entity a composite
-      // op links (`existingEntityId`), joined to profiles for the role slug. ONE
-      // batched query for the whole page; the per-proposal workspace lens (MF2) is
-      // applied in memory below so a role in another workspace can't leak.
-      uniqueRoleEntityIds.length > 0
-        ? db
-            .select({
-              entityId: entityFacets.entityId,
-              profileSlug: profiles.slug,
-              status: entityFacets.status,
-              workspaceId: entityFacets.workspaceId,
-              userId: entityFacets.userId,
-            })
-            .from(entityFacets)
-            .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
-            .where(
-              and(
-                inArray(entityFacets.entityId, uniqueRoleEntityIds),
-                isNull(entityFacets.deletedAt)
-              )
+  const [
+    entityRows,
+    userRows,
+    traceEntries,
+    facetRows,
+    roleFacetRows,
+    viewerIsPodMember,
+  ] = await Promise.all([
+    entityIds.length > 0
+      ? db
+          .select({
+            id: entities.id,
+            title: entities.title,
+            preview: entities.preview,
+            type: entities.type,
+            properties: entities.properties,
+            workspaceId: entities.workspaceId,
+          })
+          .from(entities)
+          .where(inArray(entities.id, entityIds))
+      : Promise.resolve([]),
+    userIds.length > 0
+      ? db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : Promise.resolve([]),
+    // ONE batched query for ALL correlation ids on this page (was N+1: one
+    // round-trip per proposal → pool exhaustion). Grouped in memory below.
+    correlationIds.length > 0
+      ? eventRepo
+          .getCorrelatedEventsBatch(correlationIds, userId)
+          .then((events) => {
+            const grouped = new Map<string, EventRecord[]>();
+            for (const ev of events) {
+              const key = ev.correlationId;
+              if (!key) continue;
+              const bucket = grouped.get(key);
+              if (bucket) bucket.push(ev);
+              else grouped.set(key, [ev]);
+            }
+            return Array.from(grouped.entries()) as Array<
+              readonly [string, EventRecord[]]
+            >;
+          })
+      : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
+    // B4: current role-facet state for facet-UPDATE proposals (live-current
+    // before→after). One batched query for every facetId on the page.
+    uniqueFacetIds.length > 0
+      ? db
+          .select({
+            id: entityFacets.id,
+            status: entityFacets.status,
+            properties: entityFacets.properties,
+            workspaceId: entityFacets.workspaceId,
+            userId: entityFacets.userId,
+          })
+          .from(entityFacets)
+          .where(inArray(entityFacets.id, uniqueFacetIds))
+      : Promise.resolve(
+          [] as Array<{
+            id: string;
+            status: string | null;
+            properties: unknown;
+            workspaceId: string | null;
+            userId: string;
+          }>
+        ),
+    // Roles v2: CURRENT live role-facets of every pre-existing entity a composite
+    // op links (`existingEntityId`), joined to profiles for the role slug. ONE
+    // batched query for the whole page; the per-proposal workspace lens (MF2) is
+    // applied in memory below so a role in another workspace can't leak.
+    uniqueRoleEntityIds.length > 0
+      ? db
+          .select({
+            entityId: entityFacets.entityId,
+            profileSlug: profiles.slug,
+            status: entityFacets.status,
+            workspaceId: entityFacets.workspaceId,
+            userId: entityFacets.userId,
+          })
+          .from(entityFacets)
+          .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+          .where(
+            and(
+              inArray(entityFacets.entityId, uniqueRoleEntityIds),
+              isNull(entityFacets.deletedAt)
             )
-        : Promise.resolve(
-            [] as Array<{
-              entityId: string;
-              profileSlug: string;
-              status: string | null;
-              workspaceId: string | null;
-              userId: string;
-            }>
-          ),
-    ]);
+          )
+      : Promise.resolve(
+          [] as Array<{
+            entityId: string;
+            profileSlug: string;
+            status: string | null;
+            workspaceId: string | null;
+            userId: string;
+          }>
+        ),
+    // B4/Roles v2: resolve the viewer's pod membership ONCE for the whole page
+    // (mirrors AccessContext.podMembership()'s single indexed lookup) so the
+    // `isFacetVisibleForLens` calls below can admit a legitimately pod-shared
+    // facet/role to a pod-member reviewer, not just its own owner — only run
+    // when a facet/role is actually being visibility-checked below.
+    uniqueFacetIds.length > 0 || uniqueRoleEntityIds.length > 0
+      ? db
+          .select({ userId: podMembers.userId })
+          .from(podMembers)
+          .where(eq(podMembers.userId, userId))
+          .limit(1)
+          .then((rows) => rows.length > 0)
+      : Promise.resolve(false),
+  ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
@@ -750,7 +770,12 @@ async function enrichProposalsForDisplay(
       const facetRow = fid ? facetById.get(fid) : undefined;
       if (
         facetRow &&
-        isFacetVisibleForLens(facetRow, row.workspaceId, userId)
+        isFacetVisibleForLens(
+          facetRow,
+          row.workspaceId,
+          userId,
+          viewerIsPodMember
+        )
       ) {
         reviewCurrent = { properties: facetRow.properties };
       }
@@ -776,7 +801,7 @@ async function enrichProposalsForDisplay(
       >();
       for (const [eid, facets] of roleFacetsByEntityId) {
         const visible = facets.filter((f) =>
-          isFacetVisibleForLens(f, lensWorkspaceId, userId)
+          isFacetVisibleForLens(f, lensWorkspaceId, userId, viewerIsPodMember)
         );
         if (visible.length > 0) {
           scoped.set(
