@@ -59,6 +59,90 @@ export function buildImportSummary(
 }
 
 /**
+ * Per-op homes summary for an import graph — how create_entity ops are
+ * distributed across workspaces / projects. Consumed by analyze/analyzeLarge
+ * return payloads so the client can render multi-home placement before apply.
+ */
+export type ImportHomesSummary = {
+  /** targetWorkspaceId → create_entity count */
+  byWorkspace: Record<string, number>;
+  /** create_entity ops with no targetWorkspaceId (pod-wide) */
+  podWide: number;
+  /** projectId → create_entity count */
+  byProject: Record<string, number>;
+  /**
+   * True when the graph spans more than one home:
+   * >1 distinct workspace pins, OR mix of pod-wide + at least one pin.
+   */
+  multiHome: boolean;
+};
+
+/**
+ * Tally create_entity ops into a homes summary. Pure / side-effect free.
+ */
+export function computeImportHomes(
+  operations: ReadonlyArray<CompositeProposalOperation>
+): ImportHomesSummary {
+  const byWorkspace: Record<string, number> = {};
+  const byProject: Record<string, number> = {};
+  let podWide = 0;
+  for (const op of operations) {
+    if (op.op !== "create_entity") continue;
+    const ws = op.targetWorkspaceId;
+    if (typeof ws === "string" && ws.length > 0) {
+      byWorkspace[ws] = (byWorkspace[ws] ?? 0) + 1;
+    } else {
+      podWide++;
+    }
+    const projectId = op.projectId;
+    if (typeof projectId === "string" && projectId.length > 0) {
+      byProject[projectId] = (byProject[projectId] ?? 0) + 1;
+    }
+  }
+  const workspaceKeys = Object.keys(byWorkspace);
+  const multiHome =
+    workspaceKeys.length > 1 || (podWide > 0 && workspaceKeys.length > 0);
+  return { byWorkspace, podWide, byProject, multiHome };
+}
+
+/**
+ * Majority targetWorkspaceId among create_entity pins (highest count wins;
+ * ties break by first-seen insertion order of Object.keys). Null when no pins.
+ */
+export function majorityWorkspaceFromHomes(
+  homes: ImportHomesSummary
+): string | null {
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [id, n] of Object.entries(homes.byWorkspace)) {
+    if (n > bestN) {
+      best = id;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Stamp a single-lens workspaceId onto every create_entity op that still lacks
+ * `targetWorkspaceId`. Mutates the ops array in place (and replaces each
+ * unpinned create_entity entry). Used after resolveGraphPlacement so apply's
+ * multi-home materialize path is consistent with the proposal's home.
+ * Does NOT overwrite existing per-op pins.
+ */
+export function stampWorkspaceOnUnpinnedOps(
+  operations: CompositeProposalOperation[],
+  workspaceId: string
+): void {
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (op.op !== "create_entity") continue;
+    if (op.targetWorkspaceId) continue;
+    operations[i] = { ...op, targetWorkspaceId: workspaceId };
+  }
+}
+
+/**
  * The `data` payload for an `import.graph` proposal. Centralised so the three
  * proposal-creation sites (submitBatch / analyze / analyzeLarge) cannot drift —
  * a new provenance field is added ONCE, here. These keys are read by

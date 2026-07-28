@@ -17,6 +17,7 @@
  */
 
 import { drainISChatStream } from "./is-chat-stream.js";
+import type { DrainISChatStreamResult } from "./is-chat-stream.js";
 
 /** Body fields for a headless `/api/chat/stream` turn (a2ai worker). */
 export interface HeadlessChatRequest {
@@ -32,6 +33,17 @@ export interface HeadlessChatRequest {
   sourceMessageId: string;
   focusSessionId?: string | null;
   agentUserId?: string;
+  /**
+   * LLM scheduling priority for the IS FairSemaphore.
+   * Headless / background workers SHOULD pass `"background"` so live chat keeps
+   * interactive slots. Omitted = IS default (interactive).
+   */
+  priority?: "interactive" | "background";
+  /**
+   * When true, collect `step` frames into the result (for metadata.aiSteps).
+   * Default false — session-recap and other text-only callers stay unchanged.
+   */
+  collectSteps?: boolean;
 }
 
 /**
@@ -41,13 +53,14 @@ export interface HeadlessChatRequest {
  *
  * Throws `Intelligence hub returned <status>` on a non-OK / body-less response;
  * transport errors (abort/network) propagate. Returns the drained
- * `{ text, error }` so the caller keeps its own logging / empty-reply handling.
+ * `{ text, error, steps? }` so the caller keeps its own logging / empty-reply
+ * handling. `steps` is only present when `payload.collectSteps` is true.
  */
 export async function requestHeadlessChatText(
   serviceUrl: string,
   serviceApiKey: string,
   payload: HeadlessChatRequest
-): Promise<{ text: string; error: string | null }> {
+): Promise<DrainISChatStreamResult> {
   const body = JSON.stringify({
     query: payload.query,
     threadId: payload.threadId,
@@ -63,6 +76,8 @@ export async function requestHeadlessChatText(
     // dropped as empty. With stream:true the IS emits SSE (content deltas + the
     // authoritative `complete` event), which drainISChatStream consumes.
     stream: true,
+    // Background headless work yields FairSemaphore slots to live chat when set.
+    ...(payload.priority ? { priority: payload.priority } : {}),
   });
 
   const headers: Record<string, string> = {
@@ -83,7 +98,9 @@ export async function requestHeadlessChatText(
     throw new Error(`Intelligence hub returned ${res.status}`);
   }
 
-  return drainISChatStream(res);
+  return drainISChatStream(res, {
+    collectSteps: payload.collectSteps === true,
+  });
 }
 
 /** Body for a headless `/api/tasks/execute` command run (automation executor). */

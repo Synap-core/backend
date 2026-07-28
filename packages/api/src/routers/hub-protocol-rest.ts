@@ -100,6 +100,7 @@ import {
   registerUiRoutes,
   registerArtifactsRoutes,
   registerRunsRoutes,
+  registerDiagnoseRoutes,
   registerWorkflowsRoutes,
   registerResolveRoutes,
   registerGraphRoutes,
@@ -611,6 +612,7 @@ registerAgentSkillsRoutes(app); // /agent-skills*
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
+registerDiagnoseRoutes(app); // /diagnose — the THIRD door (mode from payload shape)
 registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow place)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph

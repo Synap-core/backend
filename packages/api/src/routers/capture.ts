@@ -2278,22 +2278,28 @@ export const captureRouter = router({
           source: "capture",
           resolveRelationType: (type) =>
             validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
-          // U1: when the caller supplies a stable key, a retry links the
-          // entities it already created (keyed by `${key}:${tempId}`) instead of
-          // duplicating. Absent → no idempotency (unchanged).
-          ...(input.idempotencyKey
-            ? {
-                idempotency: makeExternalLinkIdempotency(database, {
-                  // userId-scoped: capture's idempotencyKey is CLIENT-supplied,
-                  // so without this a colliding key could link another tenant's
-                  // entity (the global provider/externalId index). Prefixing the
-                  // user id makes cross-tenant collision impossible.
-                  namespace: `${userId}:${input.idempotencyKey}`,
-                  provider: "capture",
-                  userId,
-                }),
-              }
-            : {}),
+          // U1: always key materialize. Prefer client key; else stable hash of
+          // proposal tempIds so a blind retry of the same plan does not double-create.
+          idempotency: makeExternalLinkIdempotency(database, {
+            // userId-scoped: without this a colliding key could link another
+            // tenant's entity (global provider/externalId index).
+            namespace: `${userId}:${
+              input.idempotencyKey && input.idempotencyKey.length > 0
+                ? input.idempotencyKey.slice(0, 200)
+                : `cap:${operations
+                    .map((o) =>
+                      "tempId" in o && typeof o.tempId === "string"
+                        ? o.tempId
+                        : "ref" in o && typeof o.ref === "string"
+                          ? o.ref
+                          : ""
+                    )
+                    .join("|")
+                    .slice(0, 160)}`
+            }`,
+            provider: "capture",
+            userId,
+          }),
         }
       );
 

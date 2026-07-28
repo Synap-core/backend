@@ -11,6 +11,11 @@
  *
  * Auth: Bearer API key with scope "chat.stream" (handled by externalApiKeyAuth).
  * IS credentials are never exposed in any response body.
+ *
+ * Durable ledger: every stream reserves a `chat_turns` row (full ledger for
+ * external AI — not ephemeral-only). Clients may supply X-Request-Id or
+ * body.requestId (UUID); otherwise the pod allocates one. Turn id is returned
+ * via `X-Synap-Turn-Id` and a leading SSE `turn` frame.
  */
 
 import { Hono } from "hono";
@@ -26,6 +31,13 @@ import {
 } from "../../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
+import {
+  beginExternalDurableTurn,
+  resolveExternalRequestId,
+  safeFinishExternalTurn,
+  SYNAP_TURN_ID_HEADER,
+  wrapUpstreamStreamWithTurnLifecycle,
+} from "../../services/chat-turns/external-durable-turn.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -34,6 +46,8 @@ const streamBodySchema = z.object({
   channelId: z.string().uuid().optional(),
   workspaceId: z.string().uuid().optional(),
   agentType: z.string().optional(),
+  /** Client idempotency key (UUID). Also accepted via X-Request-Id header. */
+  requestId: z.string().uuid().optional(),
 });
 
 export const externalChatApp = new Hono<{
@@ -107,9 +121,10 @@ externalChatApp.get(
  * Steps:
  *   1. Resolve workspaceId (from body or first membership)
  *   2. Resolve channelId (from body or personal channel via ensurePersonalChannel)
- *   3. Resolve IS endpoint + key (resolveIntelligenceService)
- *   4. Build IS request body
- *   5. Fetch IS and pipe SSE frames back to caller
+ *   3. Reserve durable chat_turn (full external ledger)
+ *   4. Resolve IS endpoint + key (resolveIntelligenceService)
+ *   5. Build IS request body
+ *   6. Fetch IS and pipe SSE frames back to caller; finish turn on drain/error
  */
 externalChatApp.post(
   "/stream",
@@ -202,7 +217,93 @@ externalChatApp.post(
       }
     }
 
-    // ── Step 3: Resolve IS endpoint ──────────────────────────────────────────
+    // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
+    const requestId = resolveExternalRequestId(
+      c.req.header("x-request-id") ?? c.req.header("X-Request-Id"),
+      input.requestId
+    );
+
+    let durableTurn: Awaited<
+      ReturnType<typeof beginExternalDurableTurn>
+    >["turn"];
+    let turnCreated: boolean;
+    try {
+      const claimed = await beginExternalDurableTurn({
+        channelId: resolvedChannelId,
+        userId,
+        requestId,
+        content: input.query,
+        source: "external_chat",
+      });
+      durableTurn = claimed.turn;
+      turnCreated = claimed.created;
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to create durable chat turn"
+      );
+      return c.json({ error: "Failed to start chat turn" }, 500);
+    }
+
+    // Idempotent retry: never re-invoke the model for the same requestId.
+    if (!turnCreated) {
+      const encoder = new TextEncoder();
+      const leading = `data: ${JSON.stringify({
+        type: "turn",
+        turnId: durableTurn.id,
+        requestId: durableTurn.requestId,
+        status: durableTurn.status,
+        reused: true,
+      })}\n\n`;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(leading));
+          if (durableTurn.status === "completed") {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "complete", turnId: durableTurn.id, reused: true })}\n\n`
+              )
+            );
+          } else if (
+            durableTurn.status === "failed" ||
+            durableTurn.status === "cancelled"
+          ) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "error",
+                  turnId: durableTurn.id,
+                  message: durableTurn.error ?? "Turn already finished",
+                  reused: true,
+                })}\n\n`
+              )
+            );
+          } else {
+            // Still running from a concurrent request — surface without double-call.
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "error",
+                  turnId: durableTurn.id,
+                  message: "Turn already in progress for this requestId",
+                  reused: true,
+                })}\n\n`
+              )
+            );
+          }
+          controller.close();
+        },
+      });
+      return c.newResponse(stream, 200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        [SYNAP_TURN_ID_HEADER]: durableTurn.id,
+      });
+    }
+
+    // ── Step 4: Resolve IS endpoint ──────────────────────────────────────────
     let isUrl: string;
     let isApiKey: string;
     try {
@@ -217,10 +318,22 @@ externalChatApp.post(
         { err: err instanceof Error ? err.message : String(err) },
         "Failed to resolve intelligence service"
       );
-      return c.json({ error: "Intelligence service unavailable" }, 502);
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service unavailable",
+      });
+      return c.json(
+        {
+          error: "Intelligence service unavailable",
+          turnId: durableTurn.id,
+        },
+        502,
+        { [SYNAP_TURN_ID_HEADER]: durableTurn.id }
+      );
     }
 
-    // ── Step 4: Build IS request body ────────────────────────────────────────
+    // ── Step 5: Build IS request body ────────────────────────────────────────
     const isBody = {
       query: input.query,
       threadId: resolvedChannelId, // IS calls channels "threads"
@@ -231,7 +344,7 @@ externalChatApp.post(
       stream: true,
     };
 
-    // ── Step 5: Proxy to IS and stream SSE back ──────────────────────────────
+    // ── Step 6: Proxy to IS and stream SSE back ──────────────────────────────
     let isResponse: Response;
     try {
       isResponse = await fetch(`${isUrl}/api/chat/stream`, {
@@ -247,8 +360,20 @@ externalChatApp.post(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ err: msg }, "Failed to reach intelligence service");
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service unreachable",
+      });
       // Never expose IS URL or IS API key in the error
-      return c.json({ error: "Intelligence service unreachable" }, 502);
+      return c.json(
+        {
+          error: "Intelligence service unreachable",
+          turnId: durableTurn.id,
+        },
+        502,
+        { [SYNAP_TURN_ID_HEADER]: durableTurn.id }
+      );
     }
 
     if (!isResponse.ok) {
@@ -258,25 +383,55 @@ externalChatApp.post(
         { status: isResponse.status, channelId: resolvedChannelId },
         "Intelligence service returned non-OK status"
       );
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: `Chat stream failed: IS returned ${isResponse.status}`,
+      });
       return c.json(
-        { error: `Chat stream failed: IS returned ${isResponse.status}` },
-        502
+        {
+          error: `Chat stream failed: IS returned ${isResponse.status}`,
+          turnId: durableTurn.id,
+        },
+        502,
+        { [SYNAP_TURN_ID_HEADER]: durableTurn.id }
       );
     }
 
     if (!isResponse.body) {
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service returned empty response",
+      });
       return c.json(
-        { error: "Intelligence service returned empty response" },
-        502
+        {
+          error: "Intelligence service returned empty response",
+          turnId: durableTurn.id,
+        },
+        502,
+        { [SYNAP_TURN_ID_HEADER]: durableTurn.id }
       );
     }
 
-    // Pipe the SSE response body directly back to the caller
-    return c.newResponse(isResponse.body, 200, {
+    const leadingSseFrame = `data: ${JSON.stringify({
+      type: "turn",
+      turnId: durableTurn.id,
+      requestId: durableTurn.requestId,
+    })}\n\n`;
+
+    const body = wrapUpstreamStreamWithTurnLifecycle({
+      upstream: isResponse.body,
+      turnId: durableTurn.id,
+      leadingSseFrame,
+    });
+
+    return c.newResponse(body, 200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      [SYNAP_TURN_ID_HEADER]: durableTurn.id,
     });
   }
 );

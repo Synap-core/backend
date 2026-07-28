@@ -108,4 +108,90 @@ describe("drainISChatStream", () => {
     await drainISChatStream(res, (c) => chunks.push(c));
     expect(chunks).toEqual(["x", "y"]);
   });
+
+  it("does not return steps by default (backward compatible)", async () => {
+    const res = sseResponse(
+      sse([
+        {
+          type: "step",
+          step: {
+            id: "s1",
+            type: "tool",
+            content: "ask",
+            toolName: "synap_ask",
+          },
+        },
+        { type: "content", content: "hi" },
+        { type: "complete", data: { content: "hi" } },
+      ])
+    );
+    const result = await drainISChatStream(res);
+    expect(result.text).toBe("hi");
+    expect(result.error).toBeNull();
+    expect("steps" in result).toBe(false);
+  });
+
+  it("collects step frames when collectSteps: true", async () => {
+    const toolStep = {
+      id: "s1",
+      type: "tool",
+      content: "searching",
+      toolName: "synap_ask",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    };
+    const resultStep = {
+      id: "s2",
+      type: "tool_result",
+      content: "found it",
+      toolName: "synap_ask",
+      timestamp: "2026-01-01T00:00:01.000Z",
+    };
+    const res = sseResponse(
+      sse([
+        { type: "step", step: toolStep },
+        { type: "content", content: "Answer " },
+        { type: "step", step: resultStep },
+        { type: "content", content: "here." },
+        { type: "complete", data: { content: "Answer here." } },
+      ])
+    );
+    const { text, error, steps } = await drainISChatStream(res, {
+      collectSteps: true,
+    });
+    expect(text).toBe("Answer here.");
+    expect(error).toBeNull();
+    expect(steps).toEqual([toolStep, resultStep]);
+  });
+
+  it("returns empty steps array when collectSteps but no step frames", async () => {
+    const res = sseResponse(
+      sse([
+        { type: "content", content: "only text" },
+        { type: "complete", data: { content: "only text" } },
+      ])
+    );
+    const { text, steps } = await drainISChatStream(res, {
+      collectSteps: true,
+    });
+    expect(text).toBe("only text");
+    expect(steps).toEqual([]);
+  });
+
+  it("options form still supports onContent alongside collectSteps", async () => {
+    const chunks: string[] = [];
+    const res = sseResponse(
+      sse([
+        { type: "step", step: { id: "s", type: "think", content: "…" } },
+        { type: "content", content: "a" },
+        { type: "content", content: "b" },
+      ])
+    );
+    const { text, steps } = await drainISChatStream(res, {
+      onContent: (c) => chunks.push(c),
+      collectSteps: true,
+    });
+    expect(text).toBe("ab");
+    expect(chunks).toEqual(["a", "b"]);
+    expect(steps).toHaveLength(1);
+  });
 });

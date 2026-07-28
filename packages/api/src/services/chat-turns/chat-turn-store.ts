@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
 import {
   ChatTurnStatus,
@@ -10,6 +10,58 @@ import {
 
 export type DurableChatTurn = typeof chatTurns.$inferSelect;
 export type DurableChatTurnEvent = typeof chatTurnEvents.$inferSelect;
+
+/**
+ * Deterministic UUID from an arbitrary seed (e.g. Discord
+ * `${channelId}:${messageId}`). `chat_turns.request_id` is a UUID column; non-
+ * UUID client seeds (snowflakes) still need a stable idempotency key.
+ */
+export function stableUuidFromSeed(seed: string): string {
+  const h = createHash("sha256").update(seed).digest();
+  // RFC 4122 version-5 style nibble + variant so Postgres uuid accepts it.
+  h[6] = (h[6]! & 0x0f) | 0x50;
+  h[8] = (h[8]! & 0x3f) | 0x80;
+  const hex = Buffer.from(h.subarray(0, 16)).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * Reserve an idempotent chat turn WITHOUT inserting a user message.
+ * Use when the user message is already durable (e.g. Discord inbound recorder)
+ * and only the lifecycle ledger row is needed.
+ */
+export async function createOrGetChatTurn(input: {
+  channelId: string;
+  userId: string;
+  requestId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}): Promise<{ turn: DurableChatTurn; created: boolean }> {
+  const [created] = await db
+    .insert(chatTurns)
+    .values({
+      channelId: input.channelId,
+      userId: input.userId,
+      requestId: input.requestId,
+      userMessageId: input.userMessageId,
+      assistantMessageId: input.assistantMessageId,
+    })
+    .onConflictDoNothing({
+      target: [chatTurns.userId, chatTurns.requestId],
+    })
+    .returning();
+
+  if (created) return { turn: created, created: true };
+
+  const existing = await getChatTurnByRequest({
+    userId: input.userId,
+    requestId: input.requestId,
+  });
+  if (!existing) {
+    throw new Error("Could not load an idempotent chat turn after conflict");
+  }
+  return { turn: existing, created: false };
+}
 
 /**
  * Reserve an idempotent turn and persist its triggering user message in one

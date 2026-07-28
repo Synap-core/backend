@@ -8,6 +8,9 @@ import {
   MessageAuthorType,
   computeMessageHash,
   resolveWorkspacePlacement,
+  proposals,
+  ProposalStatus,
+  eq,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
@@ -28,6 +31,12 @@ import {
   deepStructureImportItems,
   makeGraphResolver,
 } from "../import/import-deep.js";
+import {
+  buildCorpusMap,
+  corpusMapToOperations,
+  linkProvenanceToContainers,
+  orderItemsByCorpusMap,
+} from "../import/corpus-map.js";
 import { SharedGraphResolver } from "../import/shared-graph-resolver.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { searchService } from "@synap/search";
@@ -54,6 +63,7 @@ import {
   resolveImportSession,
   resolvePlaybookOutputKind,
   stampProjectMembership,
+  closeImportProposalOnApply,
 } from "./import/session.js";
 import {
   resolveProfileHints,
@@ -61,10 +71,15 @@ import {
   proposeImportGraph,
   buildImportSummary,
   buildImportGraphProposalData,
+  computeImportHomes,
+  majorityWorkspaceFromHomes,
+  stampWorkspaceOnUnpinnedOps,
   type ProfileHints,
 } from "./import/structuring.js";
+import { suggestViewsFromImportGraph } from "./import/suggest-views.js";
 // Re-exported to preserve the prior public named export from this module.
-export { buildImportSummary };
+export { buildImportSummary, computeImportHomes };
+export type { ImportHomesSummary } from "./import/structuring.js";
 import type { OrchestratorContext } from "./import/types.js";
 export type { OrchestratorContext };
 
@@ -122,17 +137,31 @@ export type ImportAnalyzeInput = {
   playbookId?: string | null;
   /** Params to resolve the playbook's goalTemplate against (e.g. {source:"CSV"}). */
   playbookParams?: Record<string, string>;
+  /**
+   * Force minting an Import focus session even when N&lt;2.
+   * Default mint still runs for N≥2 (see resolveImportSession).
+   */
+  forceSession?: boolean;
 };
 
 export type ImportApplyInput = {
   source: ImportRevealSource;
-  operations: CompositeProposalOperation[];
+  /**
+   * Operations to materialize. Optional when `proposalId` is set — the stored
+   * proposal is SSOT for ops (HITL: preview === commit). Client ops are only
+   * used when the proposal has no stored ops (back-compat) or when proposalId
+   * is omitted.
+   */
+  operations?: CompositeProposalOperation[];
   /**
    * Client-stable idempotency namespace (U1). When set, materialization is keyed
    * per-op so a retry of this apply links the entities it already created instead
-   * of duplicating them. Absent → unchanged (no idempotency).
+   * of duplicating them. When omitted, server defaults to `proposalId` or a
+   * stable hash of operation refs so retries never double-create by accident.
    */
   idempotencyKey?: string;
+  /** Analyze proposal id — SSOT for ops when present; default idempotencyKey. */
+  proposalId?: string | null;
 };
 
 /** Tuning for the chunked large-import variants. */
@@ -145,6 +174,115 @@ export type LargeImportOpts = {
 
 const ANALYZE_CHUNK_SIZE = 750;
 const APPLY_CHUNK_SIZE = 4000;
+
+/**
+ * Always resolve a stable idempotency namespace for import materialize.
+ * Preference: explicit key → analyze proposalId → hash of op refs.
+ */
+export function resolveImportIdempotencyKey(
+  input: Pick<ImportApplyInput, "idempotencyKey" | "proposalId" | "operations">
+): string {
+  if (input.idempotencyKey && input.idempotencyKey.length > 0) {
+    return input.idempotencyKey.slice(0, 200);
+  }
+  if (input.proposalId && input.proposalId.length > 0) {
+    return input.proposalId.slice(0, 200);
+  }
+  // Content-aware fallback: op + ref + profileSlug + title so two different
+  // graphs with the same ref skeleton never share a namespace.
+  const ops = input.operations ?? [];
+  const parts: string[] = [];
+  for (const op of ops) {
+    const rec = op as {
+      op?: string;
+      ref?: string;
+      profileSlug?: string;
+      title?: string;
+      properties?: { title?: string };
+    };
+    const title =
+      typeof rec.title === "string"
+        ? rec.title
+        : typeof rec.properties?.title === "string"
+          ? rec.properties.title
+          : "";
+    parts.push(
+      `${rec.op ?? "?"}:${rec.ref ?? ""}:${rec.profileSlug ?? ""}:${title}`
+    );
+  }
+  let h = 0x811c9dc5;
+  const s = parts.join("|");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `ops:${(h >>> 0).toString(16)}:${ops.length}`;
+}
+
+/**
+ * Resolve materialize ops for apply / applyLarge.
+ *
+ * HITL SSOT: when `proposalId` is set, load the analyze-time proposal and use
+ * `proposal.data.operations` (buildImportGraphProposalData shape) so what was
+ * previewed is what commits — client cannot substitute a different graph.
+ * Client ops are only accepted when stored ops are missing (back-compat) or
+ * when `proposalId` is omitted.
+ */
+export async function resolveApplyOperations(
+  input: Pick<ImportApplyInput, "proposalId" | "operations">
+): Promise<CompositeProposalOperation[]> {
+  const clientOps = input.operations ?? [];
+
+  if (!input.proposalId) {
+    if (clientOps.length === 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "operations required when proposalId is omitted",
+      });
+    }
+    return clientOps;
+  }
+
+  const [row] = await db
+    .select({ data: proposals.data, status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, input.proposalId))
+    .limit(1);
+
+  if (row) {
+    const data = row.data as { operations?: unknown } | null;
+    const stored = Array.isArray(data?.operations)
+      ? (data!.operations as CompositeProposalOperation[])
+      : [];
+    if (stored.length > 0) {
+      // Proposal is SSOT — ignore client-supplied ops (preview = commit).
+      return stored;
+    }
+  }
+
+  // Back-compat: client ops when stored ops missing.
+  if (clientOps.length > 0) {
+    return clientOps;
+  }
+
+  // proposalId set but no usable ops.
+  if (!row) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Import proposal ${input.proposalId} not found`,
+    });
+  }
+  if (row.status !== ProposalStatus.PENDING) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Import proposal ${input.proposalId} is not pending (status: ${row.status})`,
+    });
+  }
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: `Import proposal ${input.proposalId} has no operations`,
+  });
+}
 
 export class ImportOrchestrator {
   constructor(private readonly ctx: OrchestratorContext) {}
@@ -537,6 +675,23 @@ export class ImportOrchestrator {
     let stats: Record<string, unknown> = {};
     let mode: "deep" | "shallow" = "shallow";
 
+    // Phase 0 — corpus map (folder tree → container intents). Runs for any
+    // multi-file prose import so hierarchy is first-class, not only path homes.
+    const mapItems = items.map((it) => ({
+      pathSegments: it.path,
+      title: it.title,
+    }));
+    const corpusMap = buildCorpusMap(mapItems);
+    const { operations: containerOps, containerRefByPath } =
+      corpusMapToOperations(corpusMap, {
+        targetWorkspaceId: workspaceId ?? undefined,
+      });
+    // Prefer structuring leaves under higher-priority containers first.
+    items = orderItemsByCorpusMap(
+      items.map((it) => ({ ...it, pathSegments: it.path })),
+      corpusMap
+    );
+
     if (isProse && input.aiStructure !== false) {
       try {
         const { client } = await resolveIntelligenceService({
@@ -559,11 +714,26 @@ export class ImportOrchestrator {
           { logger }
         );
         if (deep.stats.entityCount > 0) {
-          operations = deep.operations;
+          const linkOps = linkProvenanceToContainers(
+            deep.operations,
+            mapItems,
+            corpusMap,
+            containerRefByPath
+          );
+          // Containers first (parents before children), then content graph, then hierarchy links.
+          operations = [...containerOps, ...deep.operations, ...linkOps];
           aiTyped = deep.stats.entityCount;
           mode = "deep";
-          stats = { ...deep.stats };
-          summary = buildImportSummary(deep.operations, input.source);
+          stats = {
+            ...deep.stats,
+            corpusMap: {
+              folders: corpusMap.folders.length,
+              containers: containerOps.filter((o) => o.op === "create_entity")
+                .length,
+              intentCounts: corpusMap.intentCounts,
+            },
+          };
+          summary = buildImportSummary(operations, input.source);
         }
       } catch (e) {
         logger.warn(
@@ -604,10 +774,34 @@ export class ImportOrchestrator {
         validSlugs
       );
       const composite = importProposalToComposite(proposal);
-      operations = composite.operations;
+      // Containers still first even on shallow path.
+      operations = [...containerOps, ...composite.operations];
       droppedReferences = composite.droppedReferences;
-      stats = { ...proposal.stats };
-      summary = buildImportSummary(composite.operations, input.source);
+      stats = {
+        ...proposal.stats,
+        corpusMap: {
+          folders: corpusMap.folders.length,
+          containers: containerOps.filter((o) => o.op === "create_entity")
+            .length,
+          intentCounts: corpusMap.intentCounts,
+        },
+      };
+      summary = buildImportSummary(operations, input.source);
+    }
+
+    // Deep path failed entirely but we still have containers from the map.
+    if ((!operations || operations.length === 0) && containerOps.length > 0) {
+      operations = containerOps;
+      stats = {
+        ...stats,
+        corpusMap: {
+          folders: corpusMap.folders.length,
+          containers: containerOps.filter((o) => o.op === "create_entity")
+            .length,
+          intentCounts: corpusMap.intentCounts,
+        },
+      };
+      summary = buildImportSummary(operations, input.source);
     }
 
     const ops = operations ?? [];
@@ -617,11 +811,32 @@ export class ImportOrchestrator {
     // focusSessions.create requires a workspaceId) create an `Import …` session.
     // Best-effort: a session hiccup must never fail the import.
     const sessionId = await resolveImportSession(this.ctx, input, tablePlan);
+    // Thread minted/passed session onto orchestrator so a same-instance apply
+    // (or apply that reuses this.ctx) stamps produced-links correctly.
+    if (sessionId) this.ctx.sessionId = sessionId;
 
-    // No explicit lens/focus supplied → resolve placement from the graph's
-    // ontology before filing the proposal (see `resolveGraphPlacement` doc).
+    // Homes / placement (Wave 1.5):
+    // - Multi-home graphs (per-op targetWorkspaceIds already diverge, or mix of
+    //   pod-wide + pins): leave per-op homes alone; file the proposal row under
+    //   majority workspace when every entity is pinned, else null (preserve
+    //   pod-wide ambient so apply doesn't re-home unpinned ops).
+    // - Single-home / all pod-wide with no explicit lens: resolveGraphPlacement,
+    //   then stamp the resolved workspace onto unpinned create_entity ops so
+    //   apply's multi-home materialize path is consistent with the proposal.
+    let homes = computeImportHomes(ops);
     if (workspaceId === null) {
-      workspaceId = await this.resolveGraphPlacement(ops, sessionId);
+      if (homes.multiHome) {
+        workspaceId =
+          homes.podWide > 0 ? null : majorityWorkspaceFromHomes(homes);
+      } else {
+        const placed = await this.resolveGraphPlacement(ops, sessionId);
+        if (placed) {
+          workspaceId = placed;
+          this.ctx.workspaceId = placed;
+          stampWorkspaceOnUnpinnedOps(ops, placed);
+          homes = computeImportHomes(ops);
+        }
+      }
     }
 
     const targetId = randomUUID();
@@ -652,6 +867,7 @@ export class ImportOrchestrator {
         sessionId,
         droppedReferences,
         aiTyped,
+        multiHome: homes.multiHome,
         ...stats,
       },
       "import.analyze"
@@ -668,19 +884,22 @@ export class ImportOrchestrator {
       stats,
       droppedReferences,
       aiTyped,
+      homes,
     };
   }
 
   /**
-   * Materialize the EXACT operations the user previewed in `analyze()` — N
-   * entities + linked documents + M relations, workspace-scoped (pinned to this
-   * workspace, purged with it). This is a user-confirmed direct write of their
-   * own data (the preview WAS the review), so it follows the same "human UI
-   * action = direct write" rule as the REST /import/apply path and reuses the
-   * identical composite materializer the proposal-approve loop uses.
+   * Materialize the import graph the user confirmed — N entities + linked
+   * documents + M relations, workspace-scoped. Ops SSOT is the analyze-time
+   * proposal when `proposalId` is set (HITL: preview = commit); otherwise the
+   * client-echoed operations. Same "human UI action = direct write" rule as
+   * REST /import/apply; reuses the composite materializer approve uses.
    */
   async apply(input: ImportApplyInput) {
     const { workspaceId, userId, trpcCtx } = this.ctx;
+
+    // HITL SSOT: prefer proposal.data.operations over client-supplied ops.
+    const operations = await resolveApplyOperations(input);
 
     // Thread the import's session onto the entity-create ctx: entities.create
     // reads ctx.sessionId to (a) write the `session --produced--> entity` link
@@ -697,12 +916,17 @@ export class ImportOrchestrator {
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
 
+    const idempotencyKey = resolveImportIdempotencyKey({
+      ...input,
+      operations,
+    });
+
     const {
       created,
       linked,
       entities: materialized,
     } = await materializeCompositeGraph(
-      input.operations,
+      operations,
       entityCaller,
       relationCaller,
       (err, type) =>
@@ -712,32 +936,53 @@ export class ImportOrchestrator {
         // apply (null) lets each profile land in its natural scope (pod-default
         // NULL), mirroring capture.
         workspaceScoped: !!workspaceId,
-        // U1: when the caller supplies a stable key, retries link instead of
-        // duplicating. Absent → no idempotency (unchanged).
-        ...(input.idempotencyKey
-          ? {
-              idempotency: makeExternalLinkIdempotency(db, {
-                // userId-scoped so the global (provider, externalId) index can
-                // never collide across tenants.
-                namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
-                provider: "import",
-                userId: this.ctx.userId,
-              }),
-            }
-          : {}),
+        // U1: always key materialize so retries link instead of duplicating.
+        idempotency: makeExternalLinkIdempotency(db, {
+          // userId-scoped so the global (provider, externalId) index can
+          // never collide across tenants.
+          namespace: `${this.ctx.userId}:${idempotencyKey}`,
+          provider: "import",
+          userId: this.ctx.userId,
+        }),
       }
     );
 
     // Project membership (lens-context): file imported entities into the active
     // project. Import materializes directly (the proposal is a record), so the
     // membership write lands here — the project mirror of `workspaceScoped`.
+    // Skips entities materialize already filed via op.projectId.
     await stampProjectMembership(this.ctx, materialized);
 
+    // Close the analyze-time proposal row (PENDING → APPROVED). Best-effort —
+    // materialize already succeeded; a close failure must never fail the import.
+    await closeImportProposalOnApply(input.proposalId, userId);
+
+    // HITL: suggest useful views from the imported profile mix. Best-effort —
+    // never fails the import; human reviews proposals in the proposal UI.
+    // Use the same resolved ops that materialize used (proposal SSOT when present).
+    const viewProposalIds = await suggestViewsFromImportGraph(
+      this.ctx,
+      operations
+    );
+
     logger.info(
-      { userId, workspaceId, source: input.source, created, linked },
+      {
+        userId,
+        workspaceId,
+        source: input.source,
+        created,
+        linked,
+        viewProposalIds,
+      },
       "import.apply materialized"
     );
-    return { workspaceId, source: input.source, created, linked };
+    return {
+      workspaceId,
+      source: input.source,
+      created,
+      linked,
+      ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
+    };
   }
 
   /**
@@ -766,7 +1011,22 @@ export class ImportOrchestrator {
     const chunkSize = Math.max(1, opts?.analyzeChunkSize ?? ANALYZE_CHUNK_SIZE);
     const { availableProfiles, validSlugs, availableWorkspaces } =
       await this.resolveProfileHints();
-    const items = adaptItems(input.source as ImportAdapterSource, input.items);
+    let items = adaptItems(input.source as ImportAdapterSource, input.items);
+
+    // Phase 0 corpus map — containers first (same as analyze).
+    const mapItems = items.map((it) => ({
+      pathSegments: it.path,
+      title: it.title,
+    }));
+    const corpusMap = buildCorpusMap(mapItems);
+    const { operations: containerOps, containerRefByPath } =
+      corpusMapToOperations(corpusMap, {
+        targetWorkspaceId: workspaceId ?? undefined,
+      });
+    items = orderItemsByCorpusMap(
+      items.map((it) => ({ ...it, pathSegments: it.path })),
+      corpusMap
+    );
 
     const { client } = await resolveIntelligenceService({
       userId,
@@ -781,7 +1041,8 @@ export class ImportOrchestrator {
     );
 
     const batchId = randomUUID();
-    const operations: CompositeProposalOperation[] = [];
+    // Start with containers so materialize order is parent-before-child.
+    const operations: CompositeProposalOperation[] = [...containerOps];
     const byType: Record<string, number> = {};
     let entityCount = 0;
     let relationCount = 0;
@@ -793,6 +1054,7 @@ export class ImportOrchestrator {
     let itemsFailed = 0;
     let wikilinkLinksResolved = 0;
     let wikilinkLinksUnresolved = 0;
+    const homesByWorkspace: Record<string, number> = {};
 
     const totalChunks = Math.max(1, Math.ceil(items.length / chunkSize));
     for (let c = 0; c < totalChunks; c++) {
@@ -859,6 +1121,8 @@ export class ImportOrchestrator {
       wikilinkLinksUnresolved += deep.stats.wikilinkLinksUnresolved;
       for (const [t, n] of Object.entries(deep.stats.byType))
         byType[t] = (byType[t] ?? 0) + n;
+      for (const [wid, n] of Object.entries(deep.stats.homesByWorkspace ?? {}))
+        homesByWorkspace[wid] = (homesByWorkspace[wid] ?? 0) + n;
 
       void emitImportFileProgress(
         {
@@ -886,16 +1150,29 @@ export class ImportOrchestrator {
       byType,
       wikilinkLinksResolved,
       wikilinkLinksUnresolved,
+      homesByWorkspace,
       chunks: totalChunks,
     };
 
-    // No explicit lens/focus supplied → resolve placement from the graph's
-    // ontology before filing the proposal (see `resolveGraphPlacement` doc).
+    // Same session mint rules as analyze() (N≥2 / forceSession / playbook / pass-through).
+    const sessionId = await resolveImportSession(this.ctx, input, null);
+    if (sessionId) this.ctx.sessionId = sessionId;
+
+    // Homes / placement — same rules as analyze() (see comment there).
+    let homes = computeImportHomes(operations);
     if (workspaceId === null) {
-      workspaceId = await this.resolveGraphPlacement(
-        operations,
-        input.sessionId ?? this.ctx.sessionId ?? null
-      );
+      if (homes.multiHome) {
+        workspaceId =
+          homes.podWide > 0 ? null : majorityWorkspaceFromHomes(homes);
+      } else {
+        const placed = await this.resolveGraphPlacement(operations, sessionId);
+        if (placed) {
+          workspaceId = placed;
+          this.ctx.workspaceId = placed;
+          stampWorkspaceOnUnpinnedOps(operations, placed);
+          homes = computeImportHomes(operations);
+        }
+      }
     }
 
     const { proposal: created } = await createEventBackedProposal({
@@ -907,7 +1184,7 @@ export class ImportOrchestrator {
       action: "create",
       source: "intelligence",
       summary,
-      sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
+      sessionId: sessionId ?? null,
       data: buildImportGraphProposalData({
         operations,
         source: input.source,
@@ -922,7 +1199,8 @@ export class ImportOrchestrator {
         source: input.source,
         mode: "deep",
         proposalId: (created as { id?: string })?.id,
-        sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
+        sessionId: sessionId ?? null,
+        multiHome: homes.multiHome,
         ...stats,
       },
       "import.analyzeLarge"
@@ -933,11 +1211,12 @@ export class ImportOrchestrator {
       source: input.source,
       mode: "deep" as const,
       proposalId: (created as { id?: string })?.id ?? null,
-      sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
+      sessionId: sessionId ?? null,
       operations,
       summary,
       stats,
       aiTyped: entityCount,
+      homes,
     };
   }
 
@@ -956,6 +1235,9 @@ export class ImportOrchestrator {
     const { workspaceId, userId, trpcCtx } = this.ctx;
     const chunkSize = Math.max(1, opts?.applyChunkSize ?? APPLY_CHUNK_SIZE);
 
+    // HITL SSOT: prefer proposal.data.operations over client-supplied ops.
+    const operations = await resolveApplyOperations(input);
+
     // Same session threading as apply() — see note there. The large/chunked
     // path materializes through the identical entityCaller, so it needs the
     // session on ctx for produced-links + automation-firing too.
@@ -973,30 +1255,27 @@ export class ImportOrchestrator {
     let created = 0;
     let linked = 0;
 
-    // U1: build the idempotency hooks ONCE (stable namespace) and pass them to
-    // every chunk. Chunk refs are already re-namespaced (c0_e0, c1_e0, …) so
-    // per-op keys stay distinct across chunks and stable on retry. Absent key →
-    // no idempotency (unchanged).
-    const idempotency = input.idempotencyKey
-      ? makeExternalLinkIdempotency(db, {
-          // userId-scoped (see apply()) — global index, no cross-tenant collision.
-          namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
-          provider: "import",
-          userId: this.ctx.userId,
-        })
-      : undefined;
+    // U1: always build idempotency hooks (stable namespace) once for all chunks.
+    // Chunk refs are re-namespaced (c0_e0, c1_e0, …) so per-op keys stay distinct.
+    const idempotencyKey = resolveImportIdempotencyKey({
+      ...input,
+      operations,
+    });
+    const idempotency = makeExternalLinkIdempotency(db, {
+      // userId-scoped (see apply()) — global index, no cross-tenant collision.
+      namespace: `${this.ctx.userId}:${idempotencyKey}`,
+      provider: "import",
+      userId: this.ctx.userId,
+    });
     // One dedup guard shared across all chunks of THIS apply, so a duplicate
     // op.ref split across two chunks can't merge two distinct entities (the
     // per-call Set would otherwise reset each chunk). Fresh per apply → retries
     // (a new applyLarge call) still link correctly via the registered keys.
-    const idemSeen = idempotency ? new Set<string>() : undefined;
+    const idemSeen = new Set<string>();
 
-    const totalChunks = Math.max(
-      1,
-      Math.ceil(input.operations.length / chunkSize)
-    );
+    const totalChunks = Math.max(1, Math.ceil(operations.length / chunkSize));
     for (let c = 0; c < totalChunks; c++) {
-      const chunk = input.operations.slice(c * chunkSize, (c + 1) * chunkSize);
+      const chunk = operations.slice(c * chunkSize, (c + 1) * chunkSize);
       if (chunk.length === 0) continue;
       void emitImportFileProgress(
         {
@@ -1022,8 +1301,8 @@ export class ImportOrchestrator {
           // !!workspaceId: pin to active workspace, else pod-wide (NULL) — see apply().
           workspaceScoped: !!workspaceId,
           seedRefToRealId: refToRealId,
-          ...(idempotency ? { idempotency } : {}),
-          ...(idemSeen ? { idemSeen } : {}),
+          idempotency,
+          idemSeen,
         }
       );
       // Carry this chunk's ref→id mappings forward for cross-chunk relations.
@@ -1031,6 +1310,7 @@ export class ImportOrchestrator {
       created += res.created;
       linked += res.linked;
       // Project membership (lens-context) per chunk — same as apply().
+      // Skips entities materialize already filed via op.projectId.
       await stampProjectMembership(this.ctx, res.entities);
 
       void emitImportFileProgress(
@@ -1045,6 +1325,18 @@ export class ImportOrchestrator {
       ).catch(() => {});
     }
 
+    // Close the analyze-time proposal row (PENDING → APPROVED). Best-effort —
+    // materialize already succeeded; a close failure must never fail the import.
+    await closeImportProposalOnApply(input.proposalId, userId);
+
+    // HITL: suggest useful views from the imported profile mix. Best-effort —
+    // never fails the import; human reviews proposals in the proposal UI.
+    // Use the same resolved ops that materialize used (proposal SSOT when present).
+    const viewProposalIds = await suggestViewsFromImportGraph(
+      this.ctx,
+      operations
+    );
+
     logger.info(
       {
         userId,
@@ -1053,6 +1345,7 @@ export class ImportOrchestrator {
         created,
         linked,
         chunks: totalChunks,
+        viewProposalIds,
       },
       "import.applyLarge materialized"
     );
@@ -1062,6 +1355,7 @@ export class ImportOrchestrator {
       created,
       linked,
       chunks: totalChunks,
+      ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
     };
   }
 

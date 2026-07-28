@@ -311,10 +311,8 @@ export const CaptureExecuteRequestSchema = z
   .openapi("CaptureExecuteRequest");
 
 /**
- * POST /import/analyze and /import/apply request body (shared — both endpoints
- * take the same shape). `source` must stay in sync with the `ImportSource`
- * union in import-adapters.ts; an out-of-date enum here silently 400s sources
- * the engine actually supports.
+ * POST /import/analyze body. Same engine as tRPC `import.analyze`
+ * (ImportOrchestrator) — returns operations for preview.
  */
 export const ImportRequestSchema = z
   .object({
@@ -324,9 +322,7 @@ export const ImportRequestSchema = z
     /** Relation type for cross-references (default "references"). */
     relationType: z.string().min(1).max(64).optional(),
     /**
-     * Route items through AI bulk-structuring to recover real typed profiles +
-     * extracted properties (best-effort; falls back to deterministic). Default
-     * on; set false for a pure deterministic faithful import.
+     * Route items through AI structuring (deep for prose). Default on.
      */
     aiStructure: z.boolean().optional().default(true),
     items: z
@@ -339,8 +335,41 @@ export const ImportRequestSchema = z
       )
       .min(1)
       .max(2000),
+    sessionId: z.string().uuid().optional(),
+    projectId: z.string().uuid().nullish(),
+    /** Force mint Import session even when N&lt;2. */
+    forceSession: z.boolean().optional(),
   })
   .openapi("ImportRequest");
+
+/**
+ * POST /import/apply body — materialize the analyze preview.
+ * When `proposalId` is set the stored proposal ops are SSOT (HITL: preview =
+ * commit); client `operations` are optional then. Without proposalId,
+ * operations (min 1) are required. Do NOT re-send only items (legacy drift).
+ */
+export const ImportApplyRequestSchema = z
+  .object({
+    userId: z.string().min(1),
+    workspaceId: z.string().uuid().optional(),
+    source: z.enum(["obsidian", "markdown", "csv", "bookmark"]),
+    operations: z.array(z.record(z.string(), z.unknown())).max(8000).optional(),
+    sessionId: z.string().uuid().optional(),
+    projectId: z.string().uuid().nullish(),
+    idempotencyKey: z.string().max(200).optional(),
+    proposalId: z.string().uuid().optional(),
+  })
+  .refine(
+    (v) =>
+      (Array.isArray(v.operations) && v.operations.length > 0) ||
+      Boolean(v.proposalId),
+    {
+      message:
+        "Either operations (min 1) or proposalId is required (proposal is SSOT for ops when set)",
+      path: ["operations"],
+    }
+  )
+  .openapi("ImportApplyRequest");
 
 // ── Events ──────────────────────────────────────────────────────────────────
 

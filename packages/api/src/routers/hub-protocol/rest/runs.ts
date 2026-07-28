@@ -33,7 +33,14 @@ import {
 
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
 
-const FlowTypeSchema = z.enum(["automation", "playbook", "capture", "session"]);
+const FlowTypeSchema = z.enum([
+  "automation",
+  "playbook",
+  "capture",
+  "capability",
+  "session",
+  "chat",
+]);
 const RunStatusSchema = z.enum([
   "running",
   "completed",
@@ -76,7 +83,7 @@ export function registerRunsRoutes(app: HubHono): void {
     tags: ["Runs"],
     summary: "List runs across flows (unified feed)",
     description:
-      "Newest-first run feed across automation / playbook / capture / session. " +
+      "Newest-first run feed across automation / playbook / capture / capability / session / chat. " +
       "Filter to one ledger with flowType, or one flow with flowId. This is the " +
       "AI/CLI diagnose door: a capture run's activity (via GET /runs/{id}) is its " +
       "correlationId-keyed decision + trace events — what happened and why.",

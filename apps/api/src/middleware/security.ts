@@ -2,59 +2,156 @@
  * Security Middleware
  *
  * Implements defense-in-depth security measures:
- * - Rate limiting (prevent DoS)
+ * - Multi-class rate limiting (prevent DoS; fair per API key / IP)
  * - Request size limits (prevent memory exhaustion)
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";
 import { getDynamicCorsOrigins } from "@synap/api";
+import {
+  buildRateLimitKey,
+  classifyRateLimitPath,
+  getRateLimitClassConfig,
+  type RateLimitClass,
+} from "./rate-limit-classes.js";
+
+// Re-export pure helpers so existing import sites can stay on security.js
+export {
+  buildRateLimitKey,
+  classifyRateLimitPath,
+  getRateLimitClassConfig,
+  hashBearerToken,
+  type RateLimitClass,
+} from "./rate-limit-classes.js";
+
+function clientIp(c: Context): string {
+  return (
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    c.req.header("x-real-ip") ||
+    "unknown"
+  );
+}
 
 /**
- * Rate Limiting Middleware (General)
- *
- * Limits: 100 requests per 15 minutes per IP
- * Applied to all routes by default
+ * Shared key-generator: class + Bearer-hash (or IP), with dev/localhost bypasses.
+ * Bypass keys are unique so they never collide with a shared bucket.
  */
-export const rateLimitMiddleware = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 500, // Max 500 requests per window
-  standardHeaders: "draft-7", // Use standard RateLimit headers
-  keyGenerator: (c) => {
+function classKeyGenerator(className: RateLimitClass) {
+  return (c: Context): string => {
     // Bypass for test user (development only)
     if (
       process.env.NODE_ENV === "development" &&
       c.req.header("x-test-user-id")
     ) {
-      return "test-bypass-" + Math.random(); // Unique key every time to avoid hitting limit
+      return `test-bypass-${className}-` + Math.random();
     }
 
-    // Bypass for localhost (Inngest, internal calls)
-    const ip =
-      c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
-    // In development, bypass if IP is unknown (often happens with local fetch/Inngest)
+    const ip = clientIp(c);
+
+    // In development, bypass if IP is unknown (local fetch / Inngest)
     if (process.env.NODE_ENV === "development" && ip === "unknown") {
-      return "localhost-bypass-" + Math.random();
+      return `localhost-bypass-${className}-` + Math.random();
     }
 
     if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") {
-      return "localhost-bypass-" + Math.random();
+      return `localhost-bypass-${className}-` + Math.random();
     }
 
-    // Use IP address as key
-    return ip;
-  },
-  handler: (c) => {
-    return c.json(
+    return buildRateLimitKey(className, c.req.header("Authorization"), ip);
+  };
+}
+
+function classHandler(
+  className: Exclude<RateLimitClass, "free">,
+  limit: number,
+  retryAfter: string
+) {
+  return (c: Context) =>
+    c.json(
       {
         error: "Too many requests",
         message: "Rate limit exceeded. Please try again later.",
-        retryAfter: "15 minutes",
+        retryAfter,
+        class: className,
+        limit,
       },
       429
     );
-  },
+}
+
+const rateLimitClassConfig = getRateLimitClassConfig();
+
+const importRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.import.windowMs,
+  limit: rateLimitClassConfig.import.max,
+  standardHeaders: "draft-7",
+  keyGenerator: classKeyGenerator("import"),
+  handler: classHandler(
+    "import",
+    rateLimitClassConfig.import.max,
+    rateLimitClassConfig.import.retryAfter
+  ),
 });
+
+const aiInteractiveRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.ai_interactive.windowMs,
+  limit: rateLimitClassConfig.ai_interactive.max,
+  standardHeaders: "draft-7",
+  keyGenerator: classKeyGenerator("ai_interactive"),
+  handler: classHandler(
+    "ai_interactive",
+    rateLimitClassConfig.ai_interactive.max,
+    rateLimitClassConfig.ai_interactive.retryAfter
+  ),
+});
+
+const aiAgentTurnRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.ai_agent_turn.windowMs,
+  limit: rateLimitClassConfig.ai_agent_turn.max,
+  standardHeaders: "draft-7",
+  keyGenerator: classKeyGenerator("ai_agent_turn"),
+  handler: classHandler(
+    "ai_agent_turn",
+    rateLimitClassConfig.ai_agent_turn.max,
+    rateLimitClassConfig.ai_agent_turn.retryAfter
+  ),
+});
+
+const crudRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.crud.windowMs,
+  limit: rateLimitClassConfig.crud.max,
+  standardHeaders: "draft-7",
+  keyGenerator: classKeyGenerator("crud"),
+  handler: classHandler(
+    "crud",
+    rateLimitClassConfig.crud.max,
+    rateLimitClassConfig.crud.retryAfter
+  ),
+});
+
+/**
+ * Multi-class pod-edge rate limiting.
+ *
+ * Classifies by path, keys by Bearer token hash (or IP), and applies
+ * per-class windows/limits. Health/metrics are skipped (unlimited).
+ */
+export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
+  const cls = classifyRateLimitPath(c.req.path);
+  switch (cls) {
+    case "free":
+      return next();
+    case "import":
+      return importRateLimiter(c, next);
+    case "ai_agent_turn":
+      return aiAgentTurnRateLimiter(c, next);
+    case "ai_interactive":
+      return aiInteractiveRateLimiter(c, next);
+    case "crud":
+    default:
+      return crudRateLimiter(c, next);
+  }
+};
 
 /**
  * AI Endpoint Rate Limiting Middleware
@@ -97,7 +194,7 @@ export const aiRateLimitMiddleware = rateLimiter({
 
     // Try to use user ID from context if available (better than IP)
     // Fall back to IP if no user context
-    const userId = (c as any).userId;
+    const userId = (c as { userId?: string }).userId;
     if (userId) {
       return `user:${userId}`;
     }
@@ -112,6 +209,7 @@ export const aiRateLimitMiddleware = rateLimiter({
         retryAfter: "5 minutes",
         limit: 20,
         window: "5 minutes",
+        class: "ai_trpc",
       },
       429
     );
@@ -143,6 +241,7 @@ export const handshakeRateLimitMiddleware = rateLimiter({
         error: "Too many authentication attempts",
         message: "Rate limit exceeded. Please try again in 15 minutes.",
         retryAfter: "15 minutes",
+        class: "handshake",
       },
       429
     );
@@ -175,6 +274,7 @@ export const applicationConnectionStatusRateLimitMiddleware = rateLimiter({
         error: "Too many connection status checks",
         message: "Please wait before checking this connection again.",
         retryAfter: "15 minutes",
+        class: "application_connection_status",
       },
       429
     ),

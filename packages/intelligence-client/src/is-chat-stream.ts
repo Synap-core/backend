@@ -73,29 +73,79 @@ export async function* iterateISChatStream(
   }
 }
 
+/** Options for draining an IS chat stream (headless / non-interactive). */
+export type DrainISChatStreamOptions = {
+  /** Invoked for each content delta as it arrives. */
+  onContent?: (chunk: string) => void;
+  /**
+   * When true, accumulate `step` frames into `result.steps` (tool/thinking
+   * steps for metadata.aiSteps). Default false — other callers keep the
+   * text-only return shape.
+   */
+  collectSteps?: boolean;
+};
+
+export type DrainISChatStreamResult = {
+  text: string;
+  error: string | null;
+  /** Present only when `collectSteps: true` was requested. */
+  steps?: unknown[];
+};
+
+function normalizeDrainOptions(
+  onContentOrOptions?: ((chunk: string) => void) | DrainISChatStreamOptions
+): DrainISChatStreamOptions {
+  if (typeof onContentOrOptions === "function") {
+    return { onContent: onContentOrOptions };
+  }
+  return onContentOrOptions ?? {};
+}
+
 /**
  * Drain an IS chat stream to its final text — for non-interactive callers that
  * do not forward deltas onward (e.g. the a2ai worker). Accumulates `content`
  * frames and prefers them; falls back to the authoritative `complete.data.content`
  * when the agent produced text only in its final message. Surfaces the first
  * `error` frame. Never throws on frame content; transport errors propagate.
+ *
+ * Second arg accepts either a legacy `onContent` callback or an options object
+ * `{ onContent?, collectSteps? }`. When `collectSteps` is true, `step` frames
+ * are collected into `result.steps` (for assistant metadata.aiSteps).
  */
 export async function drainISChatStream(
   response: Response,
-  onContent?: (chunk: string) => void
-): Promise<{ text: string; error: string | null }> {
+  onContentOrOptions?: ((chunk: string) => void) | DrainISChatStreamOptions
+): Promise<DrainISChatStreamResult> {
+  const options = normalizeDrainOptions(onContentOrOptions);
   let acc = "";
   let completeContent = "";
   let streamError: string | null = null;
+  const steps: unknown[] | undefined = options.collectSteps ? [] : undefined;
+
   for await (const frame of iterateISChatStream(response)) {
     if (frame.type === "content" && frame.content) {
       acc += frame.content;
-      onContent?.(frame.content);
+      options.onContent?.(frame.content);
+    } else if (
+      options.collectSteps &&
+      frame.type === "step" &&
+      frame.step != null &&
+      steps
+    ) {
+      steps.push(frame.step);
     } else if (frame.type === "complete") {
       completeContent = frame.data?.content ?? "";
     } else if (frame.type === "error") {
       streamError = streamError ?? frame.error ?? "unknown IS stream error";
     }
   }
-  return { text: acc || completeContent, error: streamError };
+
+  const result: DrainISChatStreamResult = {
+    text: acc || completeContent,
+    error: streamError,
+  };
+  if (steps !== undefined) {
+    result.steps = steps;
+  }
+  return result;
 }

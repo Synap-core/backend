@@ -13721,6 +13721,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			})[];
 			meta: object;
 		}>;
+		isPodMember: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: boolean;
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;

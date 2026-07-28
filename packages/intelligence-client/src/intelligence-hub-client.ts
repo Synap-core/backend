@@ -133,6 +133,12 @@ export interface IntelligenceHubRequest {
    * the agent runs WITH the skill as know-how. Optional, backward-compatible.
    */
   forcedSkillName?: string;
+  /**
+   * LLM scheduling priority for the IS FairSemaphore.
+   * "interactive" (default) = user waiting; "background" = digests/sub-agents.
+   * Forwarded on the wire so background work yields slots to live chat.
+   */
+  priority?: "interactive" | "background";
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
   billingChannel?: "browser" | "api" | "relay";
   /** Channel kind: pm = private message / personal, group = workspace-shared channel */
@@ -238,6 +244,7 @@ export function buildChatRequestBody(
       : request.forcedSkillName
         ? { forcedSkillName: request.forcedSkillName }
         : {}),
+    ...(request.priority ? { priority: request.priority } : {}),
   };
 }
 

@@ -2,53 +2,17 @@
  * Hub Protocol REST — capture (AI-powered tab clustering, structure, execute)
  */
 
-import { randomUUID } from "crypto";
-
 import { z } from "zod";
 
-import {
-  captureRouter,
-  buildAvailableProfiles,
-  type AccessibleProfileLike,
-} from "../../capture.js";
-import {
-  adaptItems,
-  type ImportSource,
-} from "../../../import/import-adapters.js";
-import {
-  buildImportProposal,
-  importProposalToComposite,
-} from "../../../import/import-items.js";
-import { aiEnrichImportItems } from "../../../import/import-ai.js";
-import {
-  deepStructureImportItems,
-  makeGraphResolver,
-} from "../../../import/import-deep.js";
-import { fetchRoutingMemory } from "../../../services/routing-memory.js";
-import { searchService } from "@synap/search";
-import {
-  resolveIntelligenceService,
-  getDefaultActiveService,
-} from "../../../utils/intelligence-routing.js";
-import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
-import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
+import { captureRouter } from "../../capture.js";
+import { getDefaultActiveService } from "../../../utils/intelligence-routing.js";
 import {
   storeEntitySourceBlob,
   SourceBlobTooLargeError,
   SourceBlobEmptyError,
   SOURCE_BLOB_MAX_BYTES,
 } from "../../../utils/store-entity-source-blob.js";
-import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
-import { relationsRouter } from "../../relations.js";
-import {
-  db,
-  getDb,
-  ProfileResolutionService,
-  eq,
-  workspaces,
-  workspaceMembers,
-} from "@synap/database";
-import type { Context } from "../../../types/context.js";
+import { db } from "@synap/database";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import {
@@ -69,7 +33,10 @@ import {
   ClusterTabsRequestSchema,
   ClusterTabsResponseSchema,
   ImportRequestSchema,
+  ImportApplyRequestSchema,
 } from "./_codecs/misc.js";
+import { ImportOrchestrator } from "../../../services/import-orchestrator.js";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   resolveActingContext,
@@ -150,6 +117,48 @@ export function registerCaptureRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Created entities + relations",
+        schema: z.record(z.string(), z.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/import/analyze",
+    tags: ["Import"],
+    summary: "Structure import items into a preview graph",
+    description:
+      "AI/deterministic structure of markdown/obsidian/csv/bookmark items into composite operations + a governed import.graph proposal. Pair with POST /import/apply (proposalId is SSOT for ops).",
+    request: {
+      body: ImportRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Operations + proposalId for preview-before-apply",
+        schema: z.record(z.string(), z.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/import/apply",
+    tags: ["Import"],
+    summary: "Materialize a previewed import graph",
+    description:
+      "Creates entities + relations from /import/analyze. When proposalId is set the stored proposal ops are SSOT (HITL); otherwise client operations (min 1) are required.",
+    request: {
+      body: ImportApplyRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Created + linked counts",
         schema: z.record(z.string(), z.unknown()),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -440,240 +449,13 @@ export function registerCaptureRoutes(app: HubHono): void {
   /**
    * POST /import/analyze
    *
-   * Source-agnostic import analysis. Takes raw `{ path, content }` records plus a
-   * `source` (e.g. "obsidian"), normalizes them to ImportItems via the matching
-   * adapter, and returns a GOVERNED structure proposal: which entity types to
-   * create, which items map to each, and which cross-references become relations.
-   *
-   * Review-only (no writes). Deterministic and cheap — safe to run on a whole
-   * corpus. The client reviews, then materializes via POST /capture/execute
-   * (which carries the proposal/approval gate). This is FAITHFUL ingestion of
-   * already-structured data; it is NOT the AI capture path (/capture/structure),
-   * which is for turning one unstructured blob into entities.
+   * SSOT: delegates to ImportOrchestrator.analyze (same as tRPC import.analyze).
+   * Returns operations + proposalId + sessionId for preview-before-apply.
+   * Human apply is POST /import/apply with the SAME operations (no re-structure).
    */
   app.post("/import/analyze", async (c) => {
-    if (
-      !hasScope(c.get("scopes") as string[], "hub-protocol.read") &&
-      !hasScope(c.get("scopes") as string[], "mcp.read")
-    ) {
-      return c.json(
-        { error: "Missing scope: hub-protocol.read or mcp.read" },
-        403
-      );
-    }
-
-    let rawBody: unknown;
-    try {
-      rawBody = await c.req.json();
-    } catch {
-      return c.json({ error: "Invalid JSON body" }, 400);
-    }
-
-    const parsed = ImportRequestSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return c.json(
-        { error: "Invalid request body", details: parsed.error.issues },
-        400
-      );
-    }
-
-    const body = parsed.data;
-    const acting = await resolveActingContext(c, body);
-    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
-    // D3: the same agentic signal `/capture/structure` already reads on this
-    // router (c.get("agentUserId"), set by the Hub-protocol auth middleware
-    // for a genuine agent/IS caller, absent for a human interactive caller) —
-    // threaded into the proposal below so an agent-driven import resolves an
-    // agentUserId (dedup + attribution engage); a human import stays undefined.
-    const importAgentUserId = c.get("agentUserId") as string | undefined;
-
-    try {
-      // Resolve the workspace's REAL profiles → typed hints for the structuring
-      // model + the allow-list of slugs that may be assigned as a type.
-      const db2 = await getDb();
-      const accessible = await new ProfileResolutionService(
-        db2
-      ).getAccessibleProfiles(userId, workspaceId);
-      const availableProfiles = buildAvailableProfiles(
-        accessible as unknown as AccessibleProfileLike[]
-      );
-      const validSlugs = new Set(availableProfiles.map((p) => p.slug));
-      // The user's workspaces — for the model's workspace-routing suggestion.
-      const wsRows = await db2
-        .select({
-          id: workspaces.id,
-          name: workspaces.name,
-          description: workspaces.description,
-        })
-        .from(workspaces)
-        .innerJoin(
-          workspaceMembers,
-          eq(workspaceMembers.workspaceId, workspaces.id)
-        )
-        .where(eq(workspaceMembers.userId, userId))
-        .limit(8);
-      const availableWorkspaces = wsRows.map((w) => ({
-        id: w.id,
-        name: w.name,
-        description: w.description ?? undefined,
-      }));
-
-      const items = adaptItems(body.source as ImportSource, body.items);
-
-      // Optional AI pass: route items through bulk-structuring so each note gets
-      // a real typed profile + extracted properties. Best-effort: on any IS
-      // failure aiEnrichImportItems returns items unchanged and we proceed with
-      // the deterministic proposal.
-      let aiTyped = 0;
-      // Prose (markdown/obsidian) → DEEP extraction: decompose each note into a
-      // typed entity graph (the SAME engine as ImportOrchestrator.submitBatch —
-      // single source: import-deep). Structured rows stay on the shallow 1:1
-      // path. Deep is best-effort; on no yield we fall back to shallow.
-      const isProse = body.source === "obsidian" || body.source === "markdown";
-      let operations:
-        ReturnType<typeof importProposalToComposite>["operations"] | undefined;
-      let summary = "";
-      let droppedReferences = 0;
-      let stats: Record<string, unknown> = {};
-      let mode: "deep" | "shallow" = "shallow";
-
-      if (isProse && body.aiStructure !== false) {
-        try {
-          const { client } = await resolveIntelligenceService({
-            userId,
-            workspaceId: workspaceId ?? undefined,
-            capability: "default",
-          });
-          // Pre-fetch routing memory ONCE for the whole import (identical for
-          // every item) so the deep structurer learns from past corrections
-          // just like interactive capture. Best-effort — never blocks import.
-          const routingMemory = await fetchRoutingMemory(userId).catch(
-            () => undefined
-          );
-          const deep = await deepStructureImportItems(
-            items,
-            client,
-            {
-              availableProfiles,
-              validSlugs,
-              availableWorkspaces,
-              routingMemory,
-              resolveExisting: makeGraphResolver(searchService, {
-                userId,
-                workspaceId: workspaceId ?? undefined,
-              }),
-            },
-            { logger }
-          );
-          if (deep.stats.entityCount > 0) {
-            operations = deep.operations;
-            aiTyped = deep.stats.entityCount;
-            mode = "deep";
-            stats = { ...deep.stats };
-            const typeCount = Object.keys(deep.stats.byType).length;
-            summary = `Deep import ${deep.stats.itemsProcessed} ${body.source} note(s) → ${deep.stats.entityCount} entities (${typeCount} types), ${deep.stats.relationCount} relations`;
-          }
-        } catch (e) {
-          logger.warn(
-            { e, userId },
-            "import/analyze deep failed, falling back to shallow"
-          );
-        }
-      }
-
-      if (mode === "shallow") {
-        if (body.aiStructure !== false) {
-          try {
-            const { client } = await resolveIntelligenceService({
-              userId,
-              workspaceId: workspaceId ?? undefined,
-              capability: "default",
-            });
-            const enriched = await aiEnrichImportItems(
-              items,
-              client,
-              { availableProfiles },
-              { logger }
-            );
-            aiTyped = enriched.aiTyped;
-          } catch (e) {
-            logger.warn(
-              { e, userId },
-              "import/analyze AI enrich failed, using deterministic"
-            );
-          }
-        }
-        const proposal = buildImportProposal(
-          items,
-          body.relationType,
-          validSlugs
-        );
-        const composite = importProposalToComposite(proposal);
-        operations = composite.operations;
-        droppedReferences = composite.droppedReferences;
-        stats = { ...proposal.stats };
-        summary = `Import ${proposal.stats.itemCount} ${body.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
-      }
-
-      const { proposal: created } = await createEventBackedProposal({
-        userId,
-        workspaceId,
-        targetType: "entity",
-        targetId: randomUUID(),
-        proposalType: "import.graph",
-        action: "create",
-        source: "intelligence",
-        summary,
-        ...(importAgentUserId ? { agentUserId: importAgentUserId } : {}),
-        data: { operations: operations!, source: body.source },
-      });
-
-      logger.info(
-        {
-          userId,
-          workspaceId,
-          source: body.source,
-          mode,
-          proposalId: (created as { id?: string })?.id,
-          droppedReferences,
-          aiTyped,
-          ...stats,
-        },
-        "POST /import/analyze"
-      );
-      return c.json({
-        workspaceId,
-        source: body.source,
-        mode,
-        proposalId: (created as { id?: string })?.id,
-        stats,
-        droppedReferences,
-        aiTyped,
-      });
-    } catch (err) {
-      logger.error({ err, userId }, "POST /import/analyze failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
-    }
-  });
-
-  /**
-   * POST /import/apply
-   *
-   * User-initiated DIRECT import: materialize the structured graph (N entities +
-   * linked documents + M relations) immediately — NO proposal. This is the
-   * user's own data (a deterministic faithful mirror), so per the permission
-   * model it follows the "human's own UI action = direct write (with a
-   * preview-before from /import/analyze)" rule, not the agent proposal gate.
-   *
-   * The frontend flow: POST /import/analyze (preview) → user confirms →
-   * POST /import/apply (same items) materializes. Reuses the EXACT composite
-   * materialization the approve loop uses, so behavior is identical.
-   */
-  app.post("/import/apply", async (c) => {
+    // Analyze writes a durable import.graph proposal (+ may mint a focus session).
+    // Require write scopes — read-only keys must not spam proposals.
     if (
       !hasScope(c.get("scopes") as string[], "hub-protocol.write") &&
       !hasScope(c.get("scopes") as string[], "mcp.write")
@@ -698,108 +480,154 @@ export function registerCaptureRoutes(app: HubHono): void {
         400
       );
     }
-    const body = parsed.data;
 
-    // Bind the acting identity to the authenticated principal and verify the
-    // RESOLVED user is a member of the target workspace. This materializes
-    // directly (user-initiated, no proposal), so the caller MUST own the write.
+    const body = parsed.data;
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId, role } = acting;
+    const { userId, workspaceId } = acting;
 
     try {
-      const db2 = await getDb();
-      const accessible = await new ProfileResolutionService(
-        db2
-      ).getAccessibleProfiles(userId, workspaceId);
-      const availableProfiles = buildAvailableProfiles(
-        accessible as unknown as AccessibleProfileLike[]
-      );
-      const validSlugs = new Set(availableProfiles.map((p) => p.slug));
-
-      const items = adaptItems(body.source as ImportSource, body.items);
-
-      // Optional AI pass: typed profiles + extracted properties (best-effort).
-      let aiTyped = 0;
-      if (body.aiStructure !== false) {
-        try {
-          const { client } = await resolveIntelligenceService({
-            userId,
-            workspaceId: workspaceId ?? undefined,
-            capability: "default",
-          });
-          const enriched = await aiEnrichImportItems(
-            items,
-            client,
-            { availableProfiles },
-            { logger }
-          );
-          aiTyped = enriched.aiTyped;
-        } catch (e) {
-          logger.warn(
-            { e, userId },
-            "import/apply AI enrich failed, using deterministic"
-          );
-        }
-      }
-
-      const proposal = buildImportProposal(
-        items,
-        body.relationType,
-        validSlugs
-      );
-      const { operations } = importProposalToComposite(proposal);
-
-      // Workspace-scoped caller context — identical shape to the approve loop's
-      // compositeCtx, so materialization behaves the same (full side-effects,
-      // linked documents, relation FKs).
-      const ctx = {
-        db,
-        authenticated: true as const,
+      const scopes = c.get("scopes") as string[];
+      const trpcCtx = await createHubProtocolCallerContext(
         userId,
-        workspaceId,
-        workspaceRole: role,
-      } as unknown as Context;
-      const entityCaller = regularEntitiesRouter.createCaller(ctx);
-      const relationCaller = relationsRouter.createCaller(ctx);
-
-      const { created, linked } = await materializeCompositeGraph(
-        operations,
-        entityCaller,
-        relationCaller,
-        (err, type) =>
-          logger.warn({ err, type }, "import/apply: relation create failed"),
-        // Imports are workspace-scoped: pin entities to the target workspace
-        // (overrides pod-default profiles) so they isolate to this workspace
-        // and are purged when the workspace is deleted.
-        { workspaceScoped: true }
+        scopes,
+        workspaceId
       );
+      const orchestrator = new ImportOrchestrator({
+        workspaceId: workspaceId ?? null,
+        userId,
+        trpcCtx: trpcCtx as unknown as Record<string, unknown>,
+        sessionId: body.sessionId ?? null,
+        projectId: body.projectId ?? null,
+      });
+      const result = await orchestrator.analyze({
+        source: body.source,
+        items: body.items,
+        relationType: body.relationType,
+        aiStructure: body.aiStructure,
+        sessionId: body.sessionId ?? null,
+        projectId: body.projectId ?? null,
+        forceSession: body.forceSession,
+      });
 
       logger.info(
         {
           userId,
-          workspaceId,
+          workspaceId: result.workspaceId,
           source: body.source,
-          created,
-          linked,
-          droppedReferences: proposal.stats.unresolvedReferences,
-          aiTyped,
+          mode: result.mode,
+          proposalId: result.proposalId,
+          sessionId: result.sessionId,
+          opCount: result.operations?.length ?? 0,
         },
-        "POST /import/apply materialized"
+        "POST /import/analyze (orchestrator)"
       );
-      return c.json({
-        workspaceId,
-        source: body.source,
-        created,
-        linked,
-        stats: proposal.stats,
-        aiTyped,
-      });
+      return c.json(result);
     } catch (err) {
-      logger.error({ err, userId }, "POST /import/apply failed");
+      logger.error({ err, userId }, "POST /import/analyze failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
+      );
+    }
+  });
+
+  /**
+   * POST /import/apply
+   *
+   * Materialize the import graph from /import/analyze (human-confirmed).
+   * When proposalId is set, stored proposal ops are SSOT (HITL: preview =
+   * commit); client operations optional then. Never re-structures from items.
+   */
+  app.post("/import/apply", async (c) => {
+    if (
+      !hasScope(c.get("scopes") as string[], "hub-protocol.write") &&
+      !hasScope(c.get("scopes") as string[], "mcp.write")
+    ) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.write or mcp.write" },
+        403
+      );
+    }
+
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = ImportApplyRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      // Help clients still sending legacy { items } without operations/proposalId.
+      const legacy = ImportRequestSchema.safeParse(rawBody);
+      if (legacy.success) {
+        return c.json(
+          {
+            error:
+              "POST /import/apply requires `proposalId` and/or `operations` from /import/analyze (preview-before-apply). Do not re-send items alone.",
+          },
+          400
+        );
+      }
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.issues },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
+
+    try {
+      const scopes = c.get("scopes") as string[];
+      const trpcCtx = await createHubProtocolCallerContext(
+        userId,
+        scopes,
+        workspaceId
+      );
+      const orchestrator = new ImportOrchestrator({
+        workspaceId: workspaceId ?? null,
+        userId,
+        trpcCtx: trpcCtx as unknown as Record<string, unknown>,
+        sessionId: body.sessionId ?? null,
+        projectId: body.projectId ?? null,
+      });
+      const result = await orchestrator.apply({
+        source: body.source,
+        // Optional when proposalId is set — orchestrator loads SSOT ops from DB.
+        operations: body.operations as CompositeProposalOperation[] | undefined,
+        idempotencyKey: body.idempotencyKey,
+        proposalId: body.proposalId,
+      });
+
+      logger.info(
+        {
+          userId,
+          workspaceId: result.workspaceId,
+          source: body.source,
+          proposalId: body.proposalId,
+          created: result.created,
+          linked: result.linked,
+        },
+        "POST /import/apply (orchestrator)"
+      );
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err, userId }, "POST /import/apply failed");
+      // Surface BAD_REQUEST (missing/non-pending proposal, empty ops) as 400.
+      const code =
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "BAD_REQUEST"
+          ? 400
+          : 500;
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        code
       );
     }
   });

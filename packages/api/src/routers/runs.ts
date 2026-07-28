@@ -16,7 +16,14 @@ import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { listRuns, getRun, listRunGroups } from "../services/runs/index.js";
 
-const flowType = z.enum(["automation", "playbook", "capture", "session"]);
+const flowType = z.enum([
+  "automation",
+  "playbook",
+  "capture",
+  "capability",
+  "session",
+  "chat",
+]);
 const runStatus = z.enum([
   "running",
   "completed",

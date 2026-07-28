@@ -37,9 +37,11 @@ const AnalyzeImportSchema = z.object({
   relationType: z.string().min(1).max(64).optional(),
   aiStructure: z.boolean().optional().default(true),
   // Pre-existing focus session to attach this import's proposals to. Omitted →
-  // analyze creates an `Import …` session (workspace-scoped) and returns its id.
+  // analyze may mint an Import session (N≥2 or forceSession) and returns its id.
   sessionId: z.string().uuid().optional(),
   projectId: z.string().uuid().nullish(),
+  /** Force mint Import session even when N&lt;2. */
+  forceSession: z.boolean().optional(),
   // Playbook to template the import session from. When present, analyze()
   // instantiates a playbook-templated session (goal, expectedOutputs, playbookId
   // FK, instantiated_from link) instead of a bare Import session.
@@ -47,21 +49,41 @@ const AnalyzeImportSchema = z.object({
   playbookParams: z.record(z.string(), z.string()).optional(),
 });
 
-const ApplyImportSchema = z.object({
+const applyImportOpsOrProposal = (
+  v: { operations?: unknown[]; proposalId?: string },
+  ctx: z.RefinementCtx
+) => {
+  const hasOps = Array.isArray(v.operations) && v.operations.length > 0;
+  if (!hasOps && !v.proposalId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "Either operations (min 1) or proposalId is required (proposal is SSOT for ops when set)",
+      path: ["operations"],
+    });
+  }
+};
+
+const ApplyImportBaseSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   source: RevealSource,
-  // The exact operations returned by `analyze` — echoed back so what the user
-  // previewed is what is created (no server re-structuring drift).
-  operations: z.array(z.record(z.string(), z.unknown())).max(8000),
-  // Client-stable idempotency namespace (U1). When supplied (e.g. the analyze
-  // proposalId), a retry of this apply with the SAME key links the entities it
-  // already created instead of duplicating them. Absent → unchanged behavior.
+  // Ops echoed from analyze. Optional when proposalId is set — the stored
+  // proposal is SSOT for ops (HITL: preview = commit). Required when no proposalId.
+  operations: z.array(z.record(z.string(), z.unknown())).max(8000).optional(),
+  // Client-stable idempotency namespace (U1). Prefer the analyze proposalId.
+  // When omitted, server derives a stable key (proposalId field or op-ref hash).
   idempotencyKey: z.string().max(200).optional(),
+  // Analyze proposal id — SSOT for ops when present; default idempotencyKey.
+  proposalId: z.string().uuid().optional(),
   // Session this apply's writes belong to (the id returned by analyze). Threaded
   // onto the orchestrator so the import groups under its session. Optional.
   sessionId: z.string().uuid().optional(),
   projectId: z.string().uuid().nullish(),
 });
+
+const ApplyImportSchema = ApplyImportBaseSchema.superRefine(
+  applyImportOpsOrProposal
+);
 
 // Large (chunked) variants — same shape as analyze/apply with raised ceilings.
 // The orchestrator splits the corpus into chunks internally while preserving
@@ -93,9 +115,9 @@ const AnalyzeLargeImportSchema = AnalyzeImportSchema.extend({
     }),
 });
 
-const ApplyLargeImportSchema = ApplyImportSchema.extend({
-  operations: z.array(z.record(z.string(), z.unknown())).max(25_000),
-});
+const ApplyLargeImportSchema = ApplyImportBaseSchema.extend({
+  operations: z.array(z.record(z.string(), z.unknown())).max(25_000).optional(),
+}).superRefine(applyImportOpsOrProposal);
 
 // ─── Router ─────────────────────────────────────────────────────────────────
 
@@ -124,15 +146,16 @@ export const importRouter = router({
         aiStructure: input.aiStructure,
         sessionId: input.sessionId ?? null,
         projectId: input.projectId ?? null,
+        forceSession: input.forceSession,
         playbookId: input.playbookId ?? null,
         playbookParams: input.playbookParams,
       });
     }),
 
   /**
-   * Materialize the previewed graph: takes the exact `operations` from `analyze`
-   * and creates entities + relations, workspace-scoped. User-confirmed direct
-   * write of their own data (the preview was the review).
+   * Materialize the previewed graph. When `proposalId` is set the stored
+   * proposal ops are SSOT (HITL); otherwise client-echoed `operations` from
+   * analyze are required. User-confirmed direct write (preview was the review).
    */
   // NOTE: must NOT be named `apply` — tRPC v11.17+ rejects reserved words
   // (Function.prototype.apply) as procedure keys and refuses to build the router.
@@ -149,8 +172,10 @@ export const importRouter = router({
       });
       return orchestrator.apply({
         source: input.source,
-        operations: input.operations as unknown as CompositeProposalOperation[],
+        operations: input.operations as
+          CompositeProposalOperation[] | undefined,
         idempotencyKey: input.idempotencyKey,
+        proposalId: input.proposalId,
       });
     }),
 
@@ -231,8 +256,10 @@ export const importRouter = router({
       });
       return orchestrator.applyLarge({
         source: input.source,
-        operations: input.operations as unknown as CompositeProposalOperation[],
+        operations: input.operations as
+          CompositeProposalOperation[] | undefined,
         idempotencyKey: input.idempotencyKey,
+        proposalId: input.proposalId,
       });
     }),
 

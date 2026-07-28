@@ -32,6 +32,9 @@ import {
   entities,
   messages,
   users,
+  chatTurns,
+  chatTurnEvents,
+  ChatTurnStatus,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -173,6 +176,42 @@ function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
     case "proposed":
     case "skipped":
       return []; // focus_sessions is never "proposed"/"skipped"
+  }
+}
+
+type ChatTurnStatusValue =
+  | typeof ChatTurnStatus.RUNNING
+  | typeof ChatTurnStatus.COMPLETED
+  | typeof ChatTurnStatus.FAILED
+  | typeof ChatTurnStatus.CANCELLED;
+
+function chatRunStatus(s: string): RunStatus {
+  switch (s) {
+    case ChatTurnStatus.COMPLETED:
+      return "completed";
+    case ChatTurnStatus.FAILED:
+      return "failed";
+    case ChatTurnStatus.CANCELLED:
+      return "cancelled";
+    case ChatTurnStatus.RUNNING:
+    default:
+      return "running";
+  }
+}
+
+function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
+  switch (status) {
+    case "running":
+      return [ChatTurnStatus.RUNNING];
+    case "completed":
+      return [ChatTurnStatus.COMPLETED];
+    case "failed":
+      return [ChatTurnStatus.FAILED];
+    case "cancelled":
+      return [ChatTurnStatus.CANCELLED];
+    case "proposed":
+    case "skipped":
+      return []; // chat_turns has neither
   }
 }
 
@@ -594,11 +633,78 @@ async function listSessionRuns(
   }));
 }
 
+/**
+ * A chat run = one `chat_turns` row (browser `channels.sendMessage` or Discord
+ * `/discord/agent-turn`). USER-floored on `chat_turns.userId` (the acting
+ * principal). Workspace lens joins `channels`. No project/entity subject —
+ * those scopes return empty (same as capability).
+ *
+ * GLOBAL diagnose only cares about failed + stuck (running past threshold);
+ * successful Discord pings stay off the stuck/failed sections. Callers can
+ * still list every turn via `listRuns({ flowType: "chat" })`.
+ */
+async function listChatRuns(
+  userId: string,
+  scope: RunScope,
+  limit: number,
+  status?: RunStatus
+): Promise<UnifiedRun[]> {
+  if (scope.projectId || scope.subjectEntityId) return [];
+  const statusValues = status ? chatStatusValues(status) : null;
+  if (statusValues && statusValues.length === 0) return [];
+
+  const rows = await db
+    .select({
+      id: chatTurns.id,
+      status: chatTurns.status,
+      startedAt: chatTurns.startedAt,
+      completedAt: chatTurns.completedAt,
+      channelId: chatTurns.channelId,
+      error: chatTurns.error,
+      workspaceId: channels.workspaceId,
+    })
+    .from(chatTurns)
+    .innerJoin(channels, eq(channels.id, chatTurns.channelId))
+    .where(
+      and(
+        eq(chatTurns.userId, userId),
+        statusValues ? inArray(chatTurns.status, statusValues) : undefined,
+        scope.workspaceId
+          ? eq(channels.workspaceId, scope.workspaceId)
+          : undefined
+      )
+    )
+    .orderBy(desc(chatTurns.startedAt))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    flowType: "chat" as const,
+    flowId: null,
+    flowName: "Chat",
+    status: chatRunStatus(r.status),
+    startedAt: r.startedAt,
+    completedAt: r.completedAt ?? null,
+    workspaceId: r.workspaceId ?? null,
+    projectId: null,
+    subjectEntityId: null,
+    channelId: r.channelId,
+    correlationId: null,
+    replayOf: null,
+    summary: null,
+    error: r.error ?? null,
+    triggeredBy: userId,
+    stepsCompleted: null,
+    stepsFailed: null,
+    definitionVersion: null,
+  }));
+}
+
 // ── Public: list (merged cross-flow feed) ────────────────────────────────────
 
 /**
  * List runs across flows (or one flow), newest first. USER-floored. When
- * `flowType` is set only that ledger is read; otherwise all four are merged.
+ * `flowType` is set only that ledger is read; otherwise all ledgers are merged.
  */
 export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   const { userId, flowType, flowId, status } = input;
@@ -615,7 +721,7 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
   if (!flowType || flowType === "playbook")
     jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow, status));
-  // capture/capability/session have no per-flow id, so a flowId filter
+  // capture/capability/session/chat have no per-flow id, so a flowId filter
   // excludes them.
   if ((!flowType || flowType === "capture") && !flowId)
     jobs.push(listCaptureRuns(userId, scope, perFlow, status));
@@ -623,6 +729,14 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     jobs.push(listCapabilityRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "session") && !flowId)
     jobs.push(listSessionRuns(userId, scope, perFlow, status));
+  // Chat in the merged feed only when the caller is looking for trouble
+  // (running/failed) or explicitly filters flowType=chat — avoids flooding the
+  // Activity feed with every successful Discord ping. Explicit flowType=chat
+  // still lists all statuses (completed included).
+  const includeChat =
+    flowType === "chat" ||
+    (!flowType && !flowId && (status === "running" || status === "failed"));
+  if (includeChat) jobs.push(listChatRuns(userId, scope, perFlow, status));
 
   const merged = (await Promise.all(jobs)).flat();
   // Dedupe by (flowType,id) — a defensive guard against a run row being
@@ -982,6 +1096,108 @@ export async function getRun(
         };
       })
       .sort(byAtAsc);
+    return {
+      run,
+      activity,
+      trigger: null,
+      outputSummary: null,
+      playbookDetail: null,
+      definitionSnapshot: null,
+      pathTaken: null,
+    };
+  }
+
+  if (flowType === "chat") {
+    const [run] = await listRunsById(() => listChatRuns(userId, {}, 200), id);
+    if (!run) return null;
+
+    // Prefer durable chat_turn_events when present; fall back to the assistant
+    // message's metadata.aiSteps (Discord agent-turn path does not always
+    // append turn events, but does persist aiSteps on the reply).
+    const eventRows = await db
+      .select({
+        id: chatTurnEvents.id,
+        seq: chatTurnEvents.seq,
+        type: chatTurnEvents.type,
+        payload: chatTurnEvents.payload,
+        createdAt: chatTurnEvents.createdAt,
+      })
+      .from(chatTurnEvents)
+      .where(eq(chatTurnEvents.turnId, id));
+    eventRows.sort((a, b) => a.seq - b.seq);
+
+    let activity: RunActivityItem[];
+    if (eventRows.length > 0) {
+      activity = eventRows.map((e) => ({
+        id: e.id,
+        at: e.createdAt ?? null,
+        kind: e.type,
+        status: null,
+        label: e.type,
+        hint:
+          typeof (e.payload as { error?: unknown } | null)?.error === "string"
+            ? ((e.payload as { error: string }).error as string)
+            : null,
+        detail: e.payload ?? null,
+      }));
+    } else {
+      const [turnMeta] = await db
+        .select({
+          assistantMessageId: chatTurns.assistantMessageId,
+          error: chatTurns.error,
+          status: chatTurns.status,
+          startedAt: chatTurns.startedAt,
+          completedAt: chatTurns.completedAt,
+        })
+        .from(chatTurns)
+        .where(and(eq(chatTurns.id, id), eq(chatTurns.userId, userId)))
+        .limit(1);
+
+      const lifecycle: RunActivityItem = {
+        id: run.id,
+        at: turnMeta?.startedAt ?? run.startedAt,
+        kind: "lifecycle",
+        status: run.status,
+        label: run.summary ?? run.flowName,
+        hint: run.error ?? turnMeta?.error ?? null,
+        detail: null,
+      };
+
+      let stepItems: RunActivityItem[] = [];
+      if (turnMeta?.assistantMessageId) {
+        const [msg] = await db
+          .select({
+            metadata: messages.metadata,
+            timestamp: messages.timestamp,
+          })
+          .from(messages)
+          .where(eq(messages.id, turnMeta.assistantMessageId))
+          .limit(1);
+        const meta = (msg?.metadata ?? {}) as {
+          aiSteps?: Array<Record<string, unknown>>;
+        };
+        const steps = Array.isArray(meta.aiSteps) ? meta.aiSteps : [];
+        stepItems = steps.map((s, i) => {
+          const stepId =
+            typeof s.id === "string" ? s.id : `${run.id}-step-${i}`;
+          const toolName =
+            typeof s.toolName === "string" ? s.toolName : undefined;
+          const content = typeof s.content === "string" ? s.content : "";
+          const stepType = typeof s.type === "string" ? s.type : "step";
+          return {
+            id: stepId,
+            at: msg?.timestamp ?? run.startedAt,
+            kind: stepType,
+            status: typeof s.status === "string" ? s.status : null,
+            label: toolName ?? (content.slice(0, 80) || stepType),
+            hint: typeof s.error === "string" ? s.error : null,
+            detail: s,
+          };
+        });
+      }
+      activity = [...stepItems, lifecycle].sort(byAtAsc);
+    }
+
     return {
       run,
       activity,

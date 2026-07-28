@@ -29,6 +29,14 @@ import {
 } from "../../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
+import {
+  beginExternalDurableTurn,
+  resolveExternalRequestId,
+  safeFinishExternalTurn,
+  SYNAP_TURN_ID_HEADER,
+  type ExternalTurnSource,
+} from "../../services/chat-turns/external-durable-turn.js";
+import type { DurableChatTurn } from "../../services/chat-turns/chat-turn-store.js";
 
 const logger = createLogger({ module: "openai-compat" });
 
@@ -84,7 +92,8 @@ async function proxyToCustomProvider(
   ctx: Context<{ Variables: ExternalApiVariables }>,
   cp: CustomProviderEnv,
   input: z.infer<typeof completionRequestSchema>,
-  stream: boolean
+  stream: boolean,
+  durableTurn: DurableChatTurn
 ) {
   const url = `${cp.baseUrl}/v1/chat/completions`;
   const oaiMessages: Array<{ role: string; content: string }> = [];
@@ -102,6 +111,7 @@ async function proxyToCustomProvider(
 
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 120_000);
+  const turnHeaders = { [SYNAP_TURN_ID_HEADER]: durableTurn.id };
 
   try {
     const res = await fetch(url, {
@@ -118,13 +128,22 @@ async function proxyToCustomProvider(
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: `Custom provider "${cp.name}" error (${res.status})`,
+      });
       return ctx.json(
-        oaiErrorBody(
-          `Custom provider "${cp.name}" error (${res.status}): ${text.slice(0, 200)}`,
-          "upstream_error",
-          res.status.toString()
-        ),
-        502
+        {
+          ...oaiErrorBody(
+            `Custom provider "${cp.name}" error (${res.status}): ${text.slice(0, 200)}`,
+            "upstream_error",
+            res.status.toString()
+          ),
+          turnId: durableTurn.id,
+        },
+        502,
+        turnHeaders
       );
     }
 
@@ -133,31 +152,49 @@ async function proxyToCustomProvider(
         choices?: Array<{ message?: { content?: string } }>;
       };
       const content = json.choices?.[0]?.message?.content ?? "";
-      return ctx.json({
-        id: generateId(),
-        object: "chat.completion" as const,
-        created: Math.floor(Date.now() / 1000),
-        model: input.model,
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant" as const, content },
-            finish_reason: "stop" as const,
-          },
-        ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "completed",
       });
+      return ctx.json(
+        {
+          id: generateId(),
+          object: "chat.completion" as const,
+          created: Math.floor(Date.now() / 1000),
+          model: input.model,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant" as const, content },
+              finish_reason: "stop" as const,
+            },
+          ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          turnId: durableTurn.id,
+        },
+        200,
+        turnHeaders
+      );
     }
 
     // Streaming path: transform provider SSE → OpenAI SSE
     if (!res.body) {
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Custom provider returned empty response",
+      });
       return ctx.json(
-        oaiErrorBody(
-          "Custom provider returned empty response",
-          "server_error",
-          "empty_response"
-        ),
-        500
+        {
+          ...oaiErrorBody(
+            "Custom provider returned empty response",
+            "server_error",
+            "empty_response"
+          ),
+          turnId: durableTurn.id,
+        },
+        500,
+        turnHeaders
       );
     }
 
@@ -165,11 +202,23 @@ async function proxyToCustomProvider(
     const decoder = new TextDecoder();
     let sentRole = false;
     let doneFlag = false;
+    let turnFinished = false;
+    const finishTurnOnce = (status: "completed" | "failed", error?: string) => {
+      if (turnFinished) return;
+      turnFinished = true;
+      void safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status,
+        error,
+      });
+    };
 
     const transformStream = new ReadableStream({
       async start(controller) {
         const reader = res.body!.getReader();
         let buffer = "";
+        let terminalStatus: "completed" | "failed" = "completed";
+        let terminalError: string | undefined;
 
         function sendDone() {
           if (doneFlag) return;
@@ -233,11 +282,20 @@ async function proxyToCustomProvider(
             }
           }
           if (!doneFlag && sentRole) sendDone();
-        } catch {
+        } catch (err) {
+          terminalStatus = "failed";
+          terminalError =
+            err instanceof Error
+              ? err.message
+              : "custom provider stream failed";
           if (!doneFlag) sendDone();
         } finally {
+          finishTurnOnce(terminalStatus, terminalError);
           controller.close();
         }
+      },
+      cancel() {
+        finishTurnOnce("failed", "client disconnected");
       },
     });
 
@@ -247,17 +305,27 @@ async function proxyToCustomProvider(
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
       "X-Synap-Model-Tier": "custom",
+      ...turnHeaders,
     });
   } catch (err) {
     clearTimeout(timeout);
     const msg = err instanceof Error ? err.message : String(err);
+    await safeFinishExternalTurn({
+      turnId: durableTurn.id,
+      status: "failed",
+      error: msg,
+    });
     return ctx.json(
-      oaiErrorBody(
-        `Failed to reach custom provider "${cp.name}" at ${cp.baseUrl}: ${msg}`,
-        "server_error",
-        "upstream_error"
-      ),
-      502
+      {
+        ...oaiErrorBody(
+          `Failed to reach custom provider "${cp.name}" at ${cp.baseUrl}: ${msg}`,
+          "server_error",
+          "upstream_error"
+        ),
+        turnId: durableTurn.id,
+      },
+      502,
+      turnHeaders
     );
   }
 }
@@ -285,6 +353,8 @@ const completionRequestSchema = z.object({
   stream: z.boolean().default(false),
   temperature: z.number().min(0).max(2).optional(),
   max_tokens: z.number().int().positive().optional(),
+  /** Client idempotency key (UUID). Also accepted via X-Request-Id header. */
+  requestId: z.string().uuid().optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -382,19 +452,7 @@ openaiCompatApp.post(
     // knownTier is defined for synap/* aliases, undefined for pass-through models
     const tierLabel = knownTier ?? "passthrough";
 
-    // ── Custom provider check: bypass IS entirely for custom providers ───────
-    const customProviders = parseCustomProviderEnv();
-    if (customProviders.length > 0) {
-      const targetCp = resolveCustomProviderForModel(
-        requestedModel,
-        customProviders
-      );
-      if (targetCp) {
-        return proxyToCustomProvider(c, targetCp, input, input.stream);
-      }
-    }
-
-    // ── Resolve workspace ────────────────────────────────────────────────────
+    // ── Resolve workspace (before turn — channel needs a workspace) ──────────
     const workspaceIdHeader = c.req.header("x-synap-workspace-id");
     let resolvedWorkspaceId: string;
 
@@ -457,6 +515,156 @@ openaiCompatApp.post(
       );
     }
 
+    // ── Reserve durable chat_turn (full external ledger) ─────────────────────
+    const requestId = resolveExternalRequestId(
+      c.req.header("x-request-id") ?? c.req.header("X-Request-Id"),
+      input.requestId
+    );
+
+    // Detect custom provider early so metadata source is accurate.
+    const customProviders = parseCustomProviderEnv();
+    const targetCp =
+      customProviders.length > 0
+        ? resolveCustomProviderForModel(requestedModel, customProviders)
+        : null;
+    const turnSource: ExternalTurnSource = targetCp
+      ? "openai_compat_custom"
+      : "openai_compat";
+
+    let durableTurn: DurableChatTurn;
+    let turnCreated: boolean;
+    try {
+      const claimed = await beginExternalDurableTurn({
+        channelId: resolvedChannelId,
+        userId,
+        requestId,
+        content: query,
+        source: turnSource,
+      });
+      durableTurn = claimed.turn;
+      turnCreated = claimed.created;
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to create durable chat turn"
+      );
+      return c.json(
+        oaiErrorBody(
+          "Failed to start chat turn",
+          "server_error",
+          "turn_create_failed"
+        ),
+        500
+      );
+    }
+
+    const turnHeaders = {
+      [SYNAP_TURN_ID_HEADER]: durableTurn.id,
+    };
+
+    // Idempotent retry: never re-invoke the model for the same requestId.
+    if (!turnCreated) {
+      if (input.stream) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // Stay OpenAI-compatible: no non-OAI frames. Header carries turnId.
+            if (durableTurn.status === "completed") {
+              const finalChunk = {
+                id: completionId,
+                object: "chat.completion.chunk",
+                created,
+                model: requestedModel,
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              };
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`)
+              );
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            } else {
+              const errChunk = {
+                error: {
+                  message:
+                    durableTurn.status === "running"
+                      ? "Turn already in progress for this requestId"
+                      : (durableTurn.error ?? "Turn already finished"),
+                  type: "invalid_request_error",
+                  param: null,
+                  code: "turn_reused",
+                },
+              };
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(errChunk)}\n\n`)
+              );
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            }
+            controller.close();
+          },
+        });
+        return c.newResponse(stream, 200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+          "X-Synap-Model-Tier": tierLabel,
+          ...turnHeaders,
+        });
+      }
+
+      if (durableTurn.status === "completed") {
+        return c.json(
+          {
+            id: completionId,
+            object: "chat.completion" as const,
+            created,
+            model: requestedModel,
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant" as const, content: "" },
+                finish_reason: "stop" as const,
+              },
+            ],
+            usage: {
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+            },
+            turnId: durableTurn.id,
+            reused: true,
+          },
+          200,
+          { "X-Synap-Model-Tier": tierLabel, ...turnHeaders }
+        );
+      }
+
+      return c.json(
+        {
+          ...oaiErrorBody(
+            durableTurn.status === "running"
+              ? "Turn already in progress for this requestId"
+              : (durableTurn.error ?? "Turn already finished"),
+            "invalid_request_error",
+            "turn_reused"
+          ),
+          turnId: durableTurn.id,
+        },
+        durableTurn.status === "running" ? 409 : 400,
+        turnHeaders
+      );
+    }
+
+    // ── Custom provider: bypass IS entirely ──────────────────────────────────
+    if (targetCp) {
+      return proxyToCustomProvider(
+        c,
+        targetCp,
+        input,
+        input.stream,
+        durableTurn
+      );
+    }
+
     // ── Resolve IS endpoint ──────────────────────────────────────────────────
     let isUrl: string;
     let isApiKey: string;
@@ -472,13 +680,22 @@ openaiCompatApp.post(
         { err: err instanceof Error ? err.message : String(err) },
         "Failed to resolve intelligence service"
       );
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service unavailable",
+      });
       return c.json(
-        oaiErrorBody(
-          "Intelligence service unavailable",
-          "server_error",
-          "service_unavailable"
-        ),
-        502
+        {
+          ...oaiErrorBody(
+            "Intelligence service unavailable",
+            "server_error",
+            "service_unavailable"
+          ),
+          turnId: durableTurn.id,
+        },
+        502,
+        turnHeaders
       );
     }
 
@@ -547,25 +764,43 @@ openaiCompatApp.post(
           { err: err instanceof Error ? err.message : String(err) },
           "Failed to reach intelligence service"
         );
+        await safeFinishExternalTurn({
+          turnId: durableTurn.id,
+          status: "failed",
+          error: "Intelligence service unreachable",
+        });
         return c.json(
-          oaiErrorBody(
-            "Intelligence service unreachable",
-            "server_error",
-            "service_unreachable"
-          ),
-          502
+          {
+            ...oaiErrorBody(
+              "Intelligence service unreachable",
+              "server_error",
+              "service_unreachable"
+            ),
+            turnId: durableTurn.id,
+          },
+          502,
+          turnHeaders
         );
       }
 
       if (!isResponse.ok) {
         await isResponse.text().catch(() => "");
+        await safeFinishExternalTurn({
+          turnId: durableTurn.id,
+          status: "failed",
+          error: `Upstream AI service error (${isResponse.status})`,
+        });
         return c.json(
-          oaiErrorBody(
-            `Upstream AI service error (${isResponse.status})`,
-            "server_error",
-            "upstream_error"
-          ),
-          502
+          {
+            ...oaiErrorBody(
+              `Upstream AI service error (${isResponse.status})`,
+              "server_error",
+              "upstream_error"
+            ),
+            turnId: durableTurn.id,
+          },
+          502,
+          turnHeaders
         );
       }
 
@@ -574,15 +809,29 @@ openaiCompatApp.post(
         const data = (await isResponse.json()) as { content?: string };
         content = data.content ?? "";
       } catch {
+        await safeFinishExternalTurn({
+          turnId: durableTurn.id,
+          status: "failed",
+          error: "Failed to parse intelligence service response",
+        });
         return c.json(
-          oaiErrorBody(
-            "Failed to parse intelligence service response",
-            "server_error",
-            "parse_error"
-          ),
-          502
+          {
+            ...oaiErrorBody(
+              "Failed to parse intelligence service response",
+              "server_error",
+              "parse_error"
+            ),
+            turnId: durableTurn.id,
+          },
+          502,
+          turnHeaders
         );
       }
+
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "completed",
+      });
 
       return c.json(
         {
@@ -602,9 +851,10 @@ openaiCompatApp.post(
             completion_tokens: 0,
             total_tokens: 0,
           },
+          turnId: durableTurn.id,
         },
         200,
-        { "X-Synap-Model-Tier": tierLabel }
+        { "X-Synap-Model-Tier": tierLabel, ...turnHeaders }
       );
     }
 
@@ -626,46 +876,88 @@ openaiCompatApp.post(
         { err: err instanceof Error ? err.message : String(err) },
         "Failed to reach intelligence service"
       );
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service unreachable",
+      });
       return c.json(
-        oaiErrorBody(
-          "Intelligence service unreachable",
-          "server_error",
-          "service_unreachable"
-        ),
-        502
+        {
+          ...oaiErrorBody(
+            "Intelligence service unreachable",
+            "server_error",
+            "service_unreachable"
+          ),
+          turnId: durableTurn.id,
+        },
+        502,
+        turnHeaders
       );
     }
 
     if (!isResponse.ok) {
       await isResponse.text().catch(() => "");
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: `Upstream AI service error (${isResponse.status})`,
+      });
       return c.json(
-        oaiErrorBody(
-          `Upstream AI service error (${isResponse.status})`,
-          "server_error",
-          "upstream_error"
-        ),
-        502
+        {
+          ...oaiErrorBody(
+            `Upstream AI service error (${isResponse.status})`,
+            "server_error",
+            "upstream_error"
+          ),
+          turnId: durableTurn.id,
+        },
+        502,
+        turnHeaders
       );
     }
 
     if (!isResponse.body) {
+      await safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status: "failed",
+        error: "Intelligence service returned empty response",
+      });
       return c.json(
-        oaiErrorBody(
-          "Intelligence service returned empty response",
-          "server_error",
-          "empty_response"
-        ),
-        502
+        {
+          ...oaiErrorBody(
+            "Intelligence service returned empty response",
+            "server_error",
+            "empty_response"
+          ),
+          turnId: durableTurn.id,
+        },
+        502,
+        turnHeaders
       );
     }
 
-    // Transform IS SSE → OpenAI SSE
+    // Transform IS SSE → OpenAI SSE (wire format unchanged; turnId via header).
+    // Frame rewrite path finishes the turn in finally/cancel (once).
     const encoder = new TextEncoder();
 
     let sentRole = false;
     let streamFinished = false;
+    let turnFinished = false;
+    const finishTurnOnce = (status: "completed" | "failed", error?: string) => {
+      if (turnFinished) return;
+      turnFinished = true;
+      void safeFinishExternalTurn({
+        turnId: durableTurn.id,
+        status,
+        error,
+      });
+    };
+
     const transformStream = new ReadableStream({
       async start(controller) {
+        let terminalStatus: "completed" | "failed" = "completed";
+        let terminalError: string | undefined;
+
         function sendDone() {
           if (streamFinished) return;
           streamFinished = true;
@@ -722,6 +1014,13 @@ openaiCompatApp.post(
 
             // "complete" or "error" frame means we're done
             if (frame.type === "complete" || frame.type === "error") {
+              if (frame.type === "error") {
+                terminalStatus = "failed";
+                terminalError =
+                  typeof frame.error === "string"
+                    ? frame.error
+                    : "upstream stream error";
+              }
               sendDone();
             }
           }
@@ -731,13 +1030,20 @@ openaiCompatApp.post(
             sendDone();
           }
         } catch (err) {
+          terminalStatus = "failed";
+          terminalError =
+            err instanceof Error ? err.message : "stream transform failed";
           logger.error(
-            { err: err instanceof Error ? err.message : String(err) },
+            { err: terminalError },
             "Error transforming IS SSE to OpenAI format"
           );
         } finally {
+          finishTurnOnce(terminalStatus, terminalError);
           controller.close();
         }
+      },
+      cancel() {
+        finishTurnOnce("failed", "client disconnected");
       },
     });
 
@@ -747,6 +1053,7 @@ openaiCompatApp.post(
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
       "X-Synap-Model-Tier": tierLabel,
+      ...turnHeaders,
     });
   }
 );

@@ -32,7 +32,8 @@ export const webhooksInboundRouter = new Hono();
 // Static route must appear before /:id dynamic routes (Hono ordering rule)
 // Inbound webhook bodies are small trigger payloads, not bulk uploads — cap
 // hard to blunt a memory-DoS via `c.req.text()`. (The app-wide rate limiter,
-// `app.use("*", rateLimitMiddleware)` = 500 req/15min per IP, already throttles.)
+// `app.use("*", rateLimitMiddleware)` — multi-class crud default 500/15m per
+// Bearer-hash or IP — already throttles.)
 const MAX_INBOUND_WEBHOOK_BODY = 1 * 1024 * 1024; // 1 MB
 
 webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {

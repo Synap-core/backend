@@ -325,6 +325,14 @@ export interface CompositeCreateEntityOp {
   profileSlug: string;
   /** Existing project to file the created entity into at materialization. */
   projectId?: string;
+  /**
+   * Pin this entity to a specific workspace at materialization (multi-home
+   * import graphs). When set, materializeCompositeGraph passes it through to
+   * entities.create as `targetWorkspaceId` and forces `workspaceScoped: true`.
+   * Ops without it keep the caller's ambient workspaceScoped flag (proposal
+   * approve path unchanged). entities.create validates membership.
+   */
+  targetWorkspaceId?: string;
   title?: string;
   description?: string;
   properties?: Record<string, unknown>;

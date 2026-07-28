@@ -14,7 +14,10 @@
  * payload for an `import.graph` proposal.
  */
 
-import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import type {
+  CompositeCreateEntityOp,
+  CompositeProposalOperation,
+} from "@synap-core/types/proposals";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { db, resolveIdentity, entities } from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
@@ -59,7 +62,15 @@ export interface StructureCapableClient {
       relationType: string;
     }>;
     targetWorkspaceId?: string | null;
+    /** Suggested project lens (only stamped when present). */
+    targetProjectId?: string | null;
   } | null>;
+}
+
+/** Optional multi-home pin applied to create_entity ops for one import note. */
+export interface ItemHome {
+  targetWorkspaceId?: string;
+  projectId?: string;
 }
 
 export interface DeepStructureStats {
@@ -80,6 +91,11 @@ export interface DeepStructureStats {
   wikilinkLinksResolved: number;
   /** Wikilinks with no match in the batch or workspace — skipped silently. */
   wikilinkLinksUnresolved: number;
+  /**
+   * Count of create_entity ops pinned to each workspace id, plus `podWide` for
+   * ops with no targetWorkspaceId. Multi-home import observability only.
+   */
+  homesByWorkspace: Record<string, number>;
 }
 
 export interface DeepStructureResult {
@@ -144,6 +160,100 @@ export const normTitle = (s: unknown): string =>
     .trim()
     .replace(/\s+/g, " ")
     .slice(0, 120);
+
+/**
+ * Case-insensitive segment match of `item.path` / `item.title` against
+ * available workspace **names**. Prefers longer names so a more specific
+ * workspace wins over a shorter substring-equal name. Backend-agnostic: only
+ * uses names from `availableWorkspaces`, never hardcodes product labels.
+ */
+export function matchWorkspaceFromPath(
+  item: { path?: string[]; title?: string },
+  availableWorkspaces: Array<{ id: string; name: string }>
+): string | undefined {
+  if (!availableWorkspaces.length) return undefined;
+
+  const segments: string[] = [];
+  for (const seg of item.path ?? []) {
+    const n = String(seg ?? "")
+      .toLowerCase()
+      .trim();
+    if (n) segments.push(n);
+  }
+  const title = String(item.title ?? "")
+    .toLowerCase()
+    .trim();
+  if (title) {
+    segments.push(title);
+    for (const part of title.split(/[/\\|>]+/)) {
+      const n = part.trim();
+      if (n) segments.push(n);
+    }
+  }
+  if (segments.length === 0) return undefined;
+
+  // Longer names first so "Work Stuff" beats "Work" when both would match.
+  const sorted = [...availableWorkspaces].sort(
+    (a, b) => b.name.length - a.name.length
+  );
+  for (const ws of sorted) {
+    const name = String(ws.name ?? "")
+      .toLowerCase()
+      .trim();
+    if (!name) continue;
+    if (segments.some((seg) => seg === name)) return ws.id;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve multi-home destination for one import note.
+ *
+ * Precedence:
+ *   1. Structure result `targetWorkspaceId` if it is a known available workspace id
+ *   2. Path/title segment match against available workspace names (longer first)
+ *   3. Omit (pod-wide / ambient default)
+ *
+ * `projectId` is only set when the structure result supplies a project id.
+ */
+export function resolveItemHome(
+  item: { path?: string[]; title?: string },
+  structure: {
+    targetWorkspaceId?: string | null;
+    targetProjectId?: string | null;
+  },
+  availableWorkspaces?: Array<{ id: string; name: string }>
+): ItemHome {
+  const home: ItemHome = {};
+  const wsList = availableWorkspaces ?? [];
+  const validIds = new Set(wsList.map((w) => w.id));
+
+  if (
+    structure.targetWorkspaceId &&
+    validIds.has(structure.targetWorkspaceId)
+  ) {
+    home.targetWorkspaceId = structure.targetWorkspaceId;
+  } else {
+    const fromPath = matchWorkspaceFromPath(item, wsList);
+    if (fromPath) home.targetWorkspaceId = fromPath;
+  }
+
+  if (structure.targetProjectId) {
+    home.projectId = structure.targetProjectId;
+  }
+
+  return home;
+}
+
+/** Spread home fields onto a create_entity op (omit keys when unset). */
+function applyHomeFields(
+  op: CompositeCreateEntityOp,
+  home: ItemHome
+): CompositeCreateEntityOp {
+  if (home.targetWorkspaceId) op.targetWorkspaceId = home.targetWorkspaceId;
+  if (home.projectId) op.projectId = home.projectId;
+  return op;
+}
 
 /** Minimal search surface needed for graph-merge resolution. */
 export interface EntitySearch {
@@ -345,18 +455,28 @@ export async function deepStructureImportItems(
     itemsProcessed++;
     const localToRef = new Map<string, string>(); // note-local tempId → graph ref
 
+    // Multi-home pin for this note (structure id → path/title name match → omit).
+    // Stamped on every NEW create_entity from this item + the provenance note.
+    // On within-batch duplicates, first op keeps its home (first wins).
+    const itemHome = resolveItemHome(items[i], res, opts.availableWorkspaces);
+
     // Provenance: preserve the original note as a versioned-document entity that
     // every entity extracted from it links back to (source of truth + traceable).
     let srcRef: string | undefined;
     if (includeProvenance && items[i].body?.trim()) {
       srcRef = `src${i}`;
-      operations.push({
-        op: "create_entity",
-        ref: srcRef,
-        profileSlug: "note",
-        title: items[i].title || "Imported note",
-        content: items[i].body, // → versioned document on materialize
-      });
+      operations.push(
+        applyHomeFields(
+          {
+            op: "create_entity" as const,
+            ref: srcRef,
+            profileSlug: "note",
+            title: items[i].title || "Imported note",
+            content: items[i].body, // → versioned document on materialize
+          },
+          itemHome
+        )
+      );
       sourceDocCount++;
       // Register for wikilink resolution — links target notes by their filename/title.
       srcRefByNormTitle.set(normTitle(items[i].title), srcRef);
@@ -374,6 +494,7 @@ export async function deepStructureImportItems(
 
       const existing = refByKey.get(key);
       if (existing) {
+        // First wins: do NOT re-home the original create_entity op.
         duplicatesMerged++;
         localToRef.set(e.tempId, existing);
         continue;
@@ -390,24 +511,33 @@ export async function deepStructureImportItems(
         ? await opts.resolveExisting(slug, title)
         : null;
       if (existingId) {
-        operations.push({
-          op: "create_entity",
-          ref,
-          profileSlug: slug,
-          title,
-          existingEntityId: existingId,
-        });
+        operations.push(
+          applyHomeFields(
+            {
+              op: "create_entity" as const,
+              ref,
+              profileSlug: slug,
+              title,
+              existingEntityId: existingId,
+            },
+            itemHome
+          )
+        );
         linkedToExisting++;
         continue;
       }
 
-      const op: Extract<CompositeProposalOperation, { op: "create_entity" }> = {
-        op: "create_entity",
-        ref,
-        profileSlug: slug,
-        title,
-        properties: e.properties ?? {},
-      };
+      const op: Extract<CompositeProposalOperation, { op: "create_entity" }> =
+        applyHomeFields(
+          {
+            op: "create_entity",
+            ref,
+            profileSlug: slug,
+            title,
+            properties: e.properties ?? {},
+          },
+          itemHome
+        );
       // Long body (a list/note that didn't decompose) → versioned document;
       // otherwise keep the short description on the entity.
       const longBody = titleIsBody
@@ -540,6 +670,14 @@ export async function deepStructureImportItems(
     }
   }
 
+  // Multi-home observability: tally create_entity ops by pinned workspace.
+  const homesByWorkspace: Record<string, number> = {};
+  for (const op of operations) {
+    if (op.op !== "create_entity") continue;
+    const key = op.targetWorkspaceId ?? "podWide";
+    homesByWorkspace[key] = (homesByWorkspace[key] ?? 0) + 1;
+  }
+
   return {
     operations,
     stats: {
@@ -556,6 +694,7 @@ export async function deepStructureImportItems(
       byType,
       wikilinkLinksResolved,
       wikilinkLinksUnresolved,
+      homesByWorkspace,
     },
   };
 }

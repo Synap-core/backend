@@ -91,6 +91,18 @@ export interface MaterializeEntityResult {
   /** True when this op linked an existing entity (existingEntityId) vs created. */
   linked: boolean;
   /**
+   * Per-op target workspace from the create_entity op (multi-home import
+   * graphs). Absent when the op did not pin a workspace.
+   */
+  workspaceId?: string | null;
+  /**
+   * Per-op project from the create_entity op (already filed via entities.create
+   * → linkEntityToProject). stampProjectMembership skips entities that carry
+   * this so it doesn't re-link; falls back to the orchestrator project lens
+   * for entities without a per-op project.
+   */
+  projectId?: string | null;
+  /**
    * Set by callers that DOWNGRADE a failed create to a note fallback — carries
    * the originally requested profileSlug. Additive; absent on the happy path.
    */
@@ -325,23 +337,30 @@ export async function materializeCompositeGraph(
       linkedExisting = true;
       if (idemExternalId) idemSeenThisCall.add(idemExternalId);
     } else {
+      // Per-op workspace pin (multi-home import graphs): when the op carries
+      // `targetWorkspaceId`, pass it through to entities.create (membership
+      // validated there) and force workspaceScoped so the entity lands in that
+      // workspace even for pod-default profiles. Ops without a pin keep the
+      // caller's ambient flag (proposal.approve path unchanged).
+      const opTargetWorkspaceId = op.targetWorkspaceId;
       const result = await entityCaller.create({
         profileSlug: op.profileSlug,
         title: op.title || "Untitled",
         description: op.description,
         properties: op.properties,
         content: op.content, // long-form body → linked document
-        // `projectId` is additive on the composite wire contract. Some
-        // consumers still compile against a pre-generated proposal declaration,
-        // so narrow locally until that generated declaration refreshes.
-        ...((op as { projectId?: string }).projectId
-          ? { projectId: (op as { projectId?: string }).projectId }
+        ...(op.projectId ? { projectId: op.projectId } : {}),
+        ...(opTargetWorkspaceId
+          ? { targetWorkspaceId: opTargetWorkspaceId }
           : {}),
         source: options?.source ?? "system",
-        // Explicit workspace-scope request (imports): pin to the caller's
-        // workspace even for pod-default profiles. The create router reads the
-        // active workspace from ctx.workspaceId.
-        workspaceScoped: options?.workspaceScoped ?? false,
+        // Explicit workspace-scope request: pin to the target (or ambient)
+        // workspace even for pod-default profiles. Per-op pin forces true;
+        // otherwise imports may set options.workspaceScoped, while proposal
+        // approve leaves it false so pod-default profiles stay global.
+        workspaceScoped: opTargetWorkspaceId
+          ? true
+          : (options?.workspaceScoped ?? false),
       });
       realId = (result as { id: string }).id;
       // A caller may report the ACTUAL profile it created (e.g. capture's
@@ -396,6 +415,8 @@ export async function materializeCompositeGraph(
       entityId: realId,
       profileSlug: resultProfileSlug,
       linked: linkedExisting,
+      ...(op.targetWorkspaceId ? { workspaceId: op.targetWorkspaceId } : {}),
+      ...(op.projectId ? { projectId: op.projectId } : {}),
       ...(degradedFrom ? { degradedFrom } : {}),
       ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
       ...(contentDropped ? { contentDropped: true as const } : {}),

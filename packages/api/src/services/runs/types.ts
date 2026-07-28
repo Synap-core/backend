@@ -4,9 +4,9 @@
  * There is no unified `runs` table (a deliberate D3 decision: presentation-union,
  * no migration). Instead each existing ledger — `automation_runs`,
  * `playbook_runs`, the `capture.graph` proposal+events, standalone
- * `focus_sessions`, and the `capability.run` proposal+events — is mapped to
- * this one `UnifiedRun` so a single Runs/Activity view can render "what an AI
- * did" across every flow.
+ * `focus_sessions`, the `capability.run` proposal+events, and `chat_turns` —
+ * is mapped to this one `UnifiedRun` so a single Runs/Activity view can render
+ * "what an AI did" across every flow.
  *
  * The channel rule the model encodes (validated with the user):
  *   - automation → ONE channel for all its runs
@@ -14,11 +14,12 @@
  *   - capture    → no channel (its story is its correlationId-keyed events)
  *   - capability → no channel (mirrors capture: correlationId-keyed events)
  *   - session    → its own channel
+ *   - chat       → the channel the turn ran in (browser chat / Discord bridge)
  */
 
 /** Which ledger a run came from. */
 export type FlowType =
-  "automation" | "playbook" | "capture" | "capability" | "session";
+  "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
 
 /** Normalised lifecycle across all ledgers. */
 export type RunStatus =

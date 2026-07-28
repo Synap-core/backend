@@ -226,73 +226,85 @@ export async function diagnoseGlobal(params: {
   const scope = workspaceId ? { workspaceId } : undefined;
 
   // Fire the independent reads together.
-  const [runningRuns, groups, backlogRow, pendingRows, capRows, agentRows] =
-    await Promise.all([
-      // Stuck: running runs across flows (per-flow cap 100), aged client-side.
-      listRuns({ userId, status: "running", scope, limit: 100 }),
-      // Failed: per-flow failure counts (already computed in-DB).
-      listRunGroups({ userId, scope, limit: 100 }),
-      // Backlog: exact count + oldest age of pending proposals (user-floored).
-      db
-        .select({
-          pending: drizzleSql<number>`count(*)::int`,
-          oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
-        })
-        .from(proposals)
-        .where(
-          and(
-            userVisibleWhere(proposals.workspaceId, userId),
-            eq(proposals.status, ProposalStatus.PENDING),
-            workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
-          )
-        ),
-      // Duplicate clustering: a capped scan of the pending rows.
-      db
-        .select({
-          id: proposals.id,
-          proposalType: proposals.proposalType,
-          targetType: proposals.targetType,
-          targetId: proposals.targetId,
-          data: proposals.data,
-          createdAt: proposals.createdAt,
-          workspaceId: proposals.workspaceId,
-        })
-        .from(proposals)
-        .where(
-          and(
-            userVisibleWhere(proposals.workspaceId, userId),
-            eq(proposals.status, ProposalStatus.PENDING),
-            workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
-          )
+  // Chat is included in listRuns only for status=running|failed (or
+  // flowType=chat) so successful Discord pings never flood stuck/failed.
+  const [
+    runningRuns,
+    groups,
+    failedChatRuns,
+    backlogRow,
+    pendingRows,
+    capRows,
+    agentRows,
+  ] = await Promise.all([
+    // Stuck: running runs across flows (per-flow cap 100), aged client-side.
+    // Includes chat turns still `running` past the threshold.
+    listRuns({ userId, status: "running", scope, limit: 100 }),
+    // Failed: per-flow failure counts (automation/playbook — already in-DB).
+    listRunGroups({ userId, scope, limit: 100 }),
+    // Failed chat turns (no flowId group) — B4: only failures, not successes.
+    listRuns({ userId, flowType: "chat", status: "failed", scope, limit: 100 }),
+    // Backlog: exact count + oldest age of pending proposals (user-floored).
+    db
+      .select({
+        pending: drizzleSql<number>`count(*)::int`,
+        oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+      })
+      .from(proposals)
+      .where(
+        and(
+          userVisibleWhere(proposals.workspaceId, userId),
+          eq(proposals.status, ProposalStatus.PENDING),
+          workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
         )
-        .orderBy(desc(proposals.createdAt))
-        .limit(PENDING_SCAN_LIMIT),
-      // Capability posture: approved vs awaiting-approval (user-floored).
-      db
-        .select({ approved: capabilities.approved })
-        .from(capabilities)
-        .where(
-          and(
-            userVisibleWhere(capabilities.workspaceId, userId),
-            workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
-          )
-        ),
-      // Agent activity today: per-agent proposal counts for this owner.
-      db
-        .select({
-          agentId: proposals.agentUserId,
-          todayCount: drizzleSql<number>`count(*)::int`,
-        })
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.createdBy, userId),
-            isNotNull(proposals.agentUserId),
-            gte(proposals.createdAt, startOfUtcDay())
-          )
+      ),
+    // Duplicate clustering: a capped scan of the pending rows.
+    db
+      .select({
+        id: proposals.id,
+        proposalType: proposals.proposalType,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        data: proposals.data,
+        createdAt: proposals.createdAt,
+        workspaceId: proposals.workspaceId,
+      })
+      .from(proposals)
+      .where(
+        and(
+          userVisibleWhere(proposals.workspaceId, userId),
+          eq(proposals.status, ProposalStatus.PENDING),
+          workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
         )
-        .groupBy(proposals.agentUserId),
-    ]);
+      )
+      .orderBy(desc(proposals.createdAt))
+      .limit(PENDING_SCAN_LIMIT),
+    // Capability posture: approved vs awaiting-approval (user-floored).
+    db
+      .select({ approved: capabilities.approved })
+      .from(capabilities)
+      .where(
+        and(
+          userVisibleWhere(capabilities.workspaceId, userId),
+          workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
+        )
+      ),
+    // Agent activity today: per-agent proposal counts for this owner.
+    db
+      .select({
+        agentId: proposals.agentUserId,
+        todayCount: drizzleSql<number>`count(*)::int`,
+      })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.createdBy, userId),
+          isNotNull(proposals.agentUserId),
+          gte(proposals.createdAt, startOfUtcDay())
+        )
+      )
+      .groupBy(proposals.agentUserId),
+  ]);
 
   const stuck = runningRuns
     .map((r) => ({
@@ -311,6 +323,14 @@ export async function diagnoseGlobal(params: {
       failedCount: g.failedCount,
       hasRunning: g.hasRunning,
     }));
+  // Chat has no flowId group — surface failed chat as one synthetic "Chat" row.
+  if (failedChatRuns.length > 0) {
+    failedFlows.push({
+      flowName: "Chat",
+      failedCount: failedChatRuns.length,
+      hasRunning: runningRuns.some((r) => r.flowType === "chat"),
+    });
+  }
 
   const backlog = {
     pending: backlogRow[0]?.pending ?? 0,

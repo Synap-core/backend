@@ -380,7 +380,7 @@ app.use("*", async (c, next) => {
 
 // Security Middleware
 app.use("*", requestSizeLimit); // Max 10MB requests
-app.use("*", rateLimitMiddleware); // 500 req/15min per IP
+app.use("*", rateLimitMiddleware); // multi-class: free/import/ai/crud; Bearer-hash or IP
 app.use("*", secureHeaders()); // Hono built-in security headers
 
 // 5xx egress sanitizer — registered as the OUTERMOST response-shaping

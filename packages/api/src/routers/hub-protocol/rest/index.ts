@@ -78,6 +78,7 @@ export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";
 export { registerArtifactsRoutes } from "./artifacts.js";
 export { registerRunsRoutes } from "./runs.js";
+export { registerDiagnoseRoutes } from "./diagnose.js";
 export { registerWorkflowsRoutes } from "./workflows.js";
 export { registerResolveRoutes } from "./resolve.js";
 export { registerGraphRoutes } from "./graph.js";
