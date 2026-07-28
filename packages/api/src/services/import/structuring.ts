@@ -158,6 +158,10 @@ export function buildImportGraphProposalData(input: {
   sourceId: string;
   contentRef?: { storageKey: string; mimeType?: string; size?: number };
   reasoning?: string;
+  /** Continuous-improvement report (refuse → inspect → re-run → apply). */
+  quality?: unknown;
+  homes?: unknown;
+  corpusMap?: unknown;
 }): Record<string, unknown> {
   return {
     operations: input.operations,
@@ -165,6 +169,9 @@ export function buildImportGraphProposalData(input: {
     sourceId: input.sourceId,
     ...(input.contentRef ? { contentRef: input.contentRef } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+    ...(input.quality ? { quality: input.quality } : {}),
+    ...(input.homes ? { homes: input.homes } : {}),
+    ...(input.corpusMap ? { corpusMap: input.corpusMap } : {}),
   };
 }
 

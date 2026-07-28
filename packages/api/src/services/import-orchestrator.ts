@@ -37,6 +37,7 @@ import {
   linkProvenanceToContainers,
   orderItemsByCorpusMap,
 } from "../import/corpus-map.js";
+import { buildImportQualityReport } from "../import/quality-report.js";
 import { SharedGraphResolver } from "../import/shared-graph-resolver.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { searchService } from "@synap/search";
@@ -677,20 +678,23 @@ export class ImportOrchestrator {
 
     // Phase 0 — corpus map (folder tree → container intents). Runs for any
     // multi-file prose import so hierarchy is first-class, not only path homes.
-    const mapItems = items.map((it) => ({
-      pathSegments: it.path,
-      title: it.title,
-    }));
-    const corpusMap = buildCorpusMap(mapItems);
+    const corpusMap = buildCorpusMap(
+      items.map((it) => ({ pathSegments: it.path, title: it.title }))
+    );
     const { operations: containerOps, containerRefByPath } =
       corpusMapToOperations(corpusMap, {
         targetWorkspaceId: workspaceId ?? undefined,
       });
     // Prefer structuring leaves under higher-priority containers first.
+    // Rebuild mapItems AFTER reorder so srcN indices match deep structure.
     items = orderItemsByCorpusMap(
       items.map((it) => ({ ...it, pathSegments: it.path })),
       corpusMap
     );
+    const mapItems = items.map((it) => ({
+      pathSegments: it.path,
+      title: it.title,
+    }));
 
     if (isProse && input.aiStructure !== false) {
       try {
@@ -839,6 +843,34 @@ export class ImportOrchestrator {
       }
     }
 
+    const corpusMapMeta =
+      stats && typeof stats === "object" && "corpusMap" in stats
+        ? (stats.corpusMap as {
+            folders?: number;
+            containers?: number;
+            intentCounts?: Record<string, number>;
+          })
+        : {
+            folders: corpusMap.folders.length,
+            containers: containerOps.filter((o) => o.op === "create_entity")
+              .length,
+            intentCounts: corpusMap.intentCounts,
+            filesLinkedToContainer: Object.keys(corpusMap.fileToContainerPath)
+              .length,
+          };
+
+    const quality = buildImportQualityReport({
+      operations: ops,
+      homes,
+      stats,
+      corpusMap: {
+        ...corpusMapMeta,
+        filesLinkedToContainer: Object.keys(corpusMap.fileToContainerPath)
+          .length,
+      },
+      itemCount: input.items.length,
+    });
+
     const targetId = randomUUID();
     const { proposal: created } = await createEventBackedProposal({
       userId,
@@ -848,12 +880,15 @@ export class ImportOrchestrator {
       proposalType: "import.graph",
       action: "create",
       source: "intelligence",
-      summary,
+      summary: `${summary} · ${quality.summary}`,
       sessionId: sessionId ?? null,
       data: buildImportGraphProposalData({
         operations: ops,
         source: input.source,
         sourceId: targetId,
+        quality,
+        homes,
+        corpusMap: corpusMapMeta,
       }),
     });
 
@@ -868,6 +903,7 @@ export class ImportOrchestrator {
         droppedReferences,
         aiTyped,
         multiHome: homes.multiHome,
+        qualityScore: quality.score,
         ...stats,
       },
       "import.analyze"
@@ -885,6 +921,7 @@ export class ImportOrchestrator {
       droppedReferences,
       aiTyped,
       homes,
+      quality,
     };
   }
 
@@ -1136,6 +1173,29 @@ export class ImportOrchestrator {
       ).catch(() => {});
     }
 
+    // Hierarchy links: container → provenance note (refs re-namespaced per chunk).
+    for (let globalI = 0; globalI < items.length; globalI++) {
+      const c = Math.floor(globalI / chunkSize);
+      const localI = globalI % chunkSize;
+      const srcRef = `c${c}_src${localI}`;
+      const keyParts = [...(items[globalI].path || []), items[globalI].title];
+      const key = keyParts.filter(Boolean).join("/");
+      const cPath = corpusMap.fileToContainerPath[key];
+      if (!cPath) continue;
+      const cRef = containerRefByPath[cPath];
+      if (!cRef) continue;
+      const hasSrc = operations.some(
+        (o) => o.op === "create_entity" && o.ref === srcRef
+      );
+      if (!hasSrc) continue;
+      operations.push({
+        op: "create_relation",
+        type: "parent_of",
+        sourceRef: cRef,
+        targetRef: srcRef,
+      });
+    }
+
     const summary = buildImportSummary(operations, input.source);
 
     const stats = {
@@ -1152,6 +1212,11 @@ export class ImportOrchestrator {
       wikilinkLinksUnresolved,
       homesByWorkspace,
       chunks: totalChunks,
+      corpusMap: {
+        folders: corpusMap.folders.length,
+        containers: containerOps.filter((o) => o.op === "create_entity").length,
+        intentCounts: corpusMap.intentCounts,
+      },
     };
 
     // Same session mint rules as analyze() (N≥2 / forceSession / playbook / pass-through).
@@ -1175,6 +1240,20 @@ export class ImportOrchestrator {
       }
     }
 
+    const quality = buildImportQualityReport({
+      operations,
+      homes,
+      stats,
+      corpusMap: {
+        folders: corpusMap.folders.length,
+        containers: containerOps.filter((o) => o.op === "create_entity").length,
+        intentCounts: corpusMap.intentCounts,
+        filesLinkedToContainer: Object.keys(corpusMap.fileToContainerPath)
+          .length,
+      },
+      itemCount: input.items.length,
+    });
+
     const { proposal: created } = await createEventBackedProposal({
       userId,
       workspaceId,
@@ -1183,12 +1262,15 @@ export class ImportOrchestrator {
       proposalType: "import.graph",
       action: "create",
       source: "intelligence",
-      summary,
+      summary: `${summary} · ${quality.summary}`,
       sessionId: sessionId ?? null,
       data: buildImportGraphProposalData({
         operations,
         source: input.source,
         sourceId: batchId,
+        quality,
+        homes,
+        corpusMap: stats.corpusMap,
       }),
     });
 
@@ -1196,6 +1278,7 @@ export class ImportOrchestrator {
       {
         userId,
         workspaceId,
+        qualityScore: quality.score,
         source: input.source,
         mode: "deep",
         proposalId: (created as { id?: string })?.id,
@@ -1217,6 +1300,7 @@ export class ImportOrchestrator {
       stats,
       aiTyped: entityCount,
       homes,
+      quality,
     };
   }
 
