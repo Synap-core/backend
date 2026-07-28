@@ -67,6 +67,15 @@ export interface ComposeOntoBaseInput {
   userId: string;
   /** The OVERLAY's definition — layered additively onto the base. */
   definition: WorkspaceDefinitionInput;
+  /**
+   * Package provenance to stamp onto the target workspace's settings. Supplied
+   * ONLY for an explicit install-onto-existing (`market attach --onto <ws>`),
+   * so `market update` can later track it; omitted for a natural declared/
+   * transitive compose so a shared base keeps its own stamp. Forwarded verbatim
+   * to `reconcileWorkspaceFromDefinition`, which writes them only when present.
+   */
+  packageSlug?: string;
+  packageVersion?: string;
 }
 
 /**
@@ -77,7 +86,13 @@ export interface ComposeOntoBaseInput {
 export async function composeOntoBaseWorkspace(
   input: ComposeOntoBaseInput
 ): Promise<ReconcileReport> {
-  const { composeTargetWorkspaceId, userId, definition } = input;
+  const {
+    composeTargetWorkspaceId,
+    userId,
+    definition,
+    packageSlug,
+    packageVersion,
+  } = input;
 
   const [baseWs] = await db
     .select({ id: workspaces.id, ownerId: workspaces.ownerId })
@@ -96,6 +111,8 @@ export async function composeOntoBaseWorkspace(
       userId,
       definition,
       mergeCapabilities: true,
+      packageSlug,
+      packageVersion,
     });
   } catch (e) {
     throw new ComposeOverlayError((e as Error).message);

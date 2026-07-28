@@ -61,6 +61,7 @@ import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 // import { WorkspaceMemberEvents } from "../lib/event-helpers.js"; // unused — reserved for future member event hooks
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { materializePodAdminsIntoWorkspace } from "../utils/workspace-role.js";
 import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { auditLog } from "../utils/audit-log.js";
@@ -239,7 +240,14 @@ function getWorkspaceVisibility(settings: unknown): string {
   return typeof visibility === "string" ? visibility : "members";
 }
 
-function isPodReadableWorkspace(settings: unknown): boolean {
+/**
+ * The pod-visibility gate for admin materialization. Exported so the
+ * materialization tripwire can assert the EXACT predicate the create /
+ * createFromDefinition / updateMemberRole triggers use to decide whether to
+ * materialize pod admins — `true` ONLY for pod_visible / pod_joinable, so a
+ * private workspace is never widened.
+ */
+export function isPodReadableWorkspace(settings: unknown): boolean {
   const visibility = getWorkspaceVisibility(settings);
   return visibility === "pod_visible" || visibility === "pod_joinable";
 }
@@ -394,6 +402,22 @@ export const workspacesRouter = router({
         ctx.userId
       );
 
+      // 2c. Materialize pod owner/admins so they can administer this workspace's
+      // shared entities inline. GATED to pod_visible/pod_joinable ONLY — a
+      // private workspace is skipped (materializing there would widen its
+      // reads). Best-effort: on failure the 0217 backfill / next trigger
+      // reconciles, and the creator's owner row (above) already stands.
+      if (isPodReadableWorkspace(input.settings)) {
+        try {
+          await materializePodAdminsIntoWorkspace(workspaceId);
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId },
+            "Failed to materialize pod admins into new pod-visible workspace (non-fatal)"
+          );
+        }
+      }
+
       // 3. Audit log
       auditLog({
         subjectType: "workspaces",
@@ -520,6 +544,26 @@ export const workspacesRouter = router({
         a.name.localeCompare(b.name)
       );
     }),
+
+  /**
+   * Whether the caller is a pod member — a single `pod_members` existence
+   * lookup for `ctx.userId`.
+   *
+   * This is the CANONICAL pod-membership signal and the durable replacement for
+   * the pod-admin-membership PROXY the CRM Operations nav derived from
+   * `workspaces.list` (a pod member holds a member row on the `pod-admin` system
+   * workspace). Exposed as a dedicated boolean procedure rather than folded into
+   * `workspaces.list`: that endpoint returns a bare array consumed as an array by
+   * ~30 call sites, so it cannot carry a top-level sibling boolean without
+   * breaking all of them. Read-only, fail-closed (false when no row).
+   */
+  isPodMember: protectedProcedure.query(async ({ ctx }) => {
+    const row = await db.query.podMembers.findFirst({
+      where: eq(podMembers.userId, ctx.userId),
+      columns: { id: true },
+    });
+    return !!row;
+  }),
 
   /**
    * Get workspace details
@@ -1659,6 +1703,38 @@ export const workspacesRouter = router({
           memberId: member.id,
         },
       });
+
+      // 4. If this promotion made the target a pod admin (admin of the
+      // `pod-admin` system workspace), materialize them into every EXISTING
+      // pod_visible/pod_joinable workspace so their admin write reaches shared
+      // surfaces. The materialization is idempotent + owner-first — re-running
+      // for every pod-visible workspace adds only the newly-promoted admin (all
+      // existing pod-admin rows no-op). GATED to the pod-admin workspace + admin
+      // role; best-effort/non-fatal (fail-closed: a failure grants LESS, never
+      // more — the 0217 backfill / next trigger reconciles).
+      if (input.role === "admin") {
+        try {
+          const ws = await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, input.workspaceId),
+            columns: { systemSlug: true },
+          });
+          if (ws?.systemSlug === "pod-admin") {
+            const podVisible = await db.query.workspaces.findMany({
+              where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+              columns: { id: true, archivedAt: true },
+            });
+            for (const w of podVisible) {
+              if (w.archivedAt != null) continue;
+              await materializePodAdminsIntoWorkspace(w.id);
+            }
+          }
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId: input.workspaceId, userId: input.userId },
+            "Failed to materialize newly-promoted pod admin into pod-visible workspaces (non-fatal)"
+          );
+        }
+      }
 
       return {
         status: "updated" as const,
@@ -3856,6 +3932,26 @@ export const workspacesRouter = router({
             subjectId: result.workspaceId,
             userId: ctx.userId,
           });
+
+          // Materialize pod owner/admins into the new workspace when it is
+          // pod-visible — same gate + rationale as `workspaces.create`. The
+          // created workspace row is the authoritative visibility source (the
+          // definition's `workspaceVisibility` was stamped into `settings`).
+          // Best-effort/non-fatal.
+          try {
+            const createdWs = await db.query.workspaces.findFirst({
+              where: eq(workspaces.id, result.workspaceId),
+              columns: { settings: true },
+            });
+            if (isPodReadableWorkspace(createdWs?.settings)) {
+              await materializePodAdminsIntoWorkspace(result.workspaceId);
+            }
+          } catch (err) {
+            logger.warn(
+              { err, workspaceId: result.workspaceId },
+              "Failed to materialize pod admins into new pod-visible workspace (non-fatal)"
+            );
+          }
 
           return {
             status: "created" as const,

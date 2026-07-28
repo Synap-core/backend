@@ -248,6 +248,12 @@ export function registerChannelsRoutes(app: HubHono): void {
         // stale/dangling entity) self-heals. Default false keeps the idempotent,
         // never-clobber behaviour for automatic callers.
         relink: z.boolean().optional(),
+        // Free-form channel metadata, shallow-merged into channels.metadata jsonb.
+        // The Telegram↔Discord bridge sends `guildId` (the Discord guild this
+        // channel lives in) and `mirrors` ([{ source, chatId, title, username }] —
+        // the OTHER messaging surface the same conversation is bridged to) so the
+        // app can render one clickable icon per side of a mirrored channel.
+        metadata: z.record(z.string(), z.any()).optional(),
       }),
     },
     responses: {
@@ -779,6 +785,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       parentChannelId?: string;
       branchPurpose?: string;
       relink?: boolean;
+      metadata?: Record<string, unknown>;
     };
     if (!body.externalSource || !body.externalChannelId) {
       return c.json(
@@ -926,6 +933,23 @@ export function registerChannelsRoutes(app: HubHono): void {
           }
           throw err;
         }
+      }
+
+      // 3c. Shallow-merge caller-supplied metadata into channels.metadata. The
+      //     bridge learns the Telegram↔Discord mirror + guild id only at
+      //     mirror-create time and re-sends the full set for the channel, so an
+      //     atomic jsonb `||` merge (incoming top-level keys win, existing keys
+      //     survive) is both correct and race-free — no read-modify-write.
+      if (body.metadata && typeof body.metadata === "object") {
+        await db
+          .update(channelsTable)
+          .set({
+            metadata: drizzleSql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(
+              body.metadata
+            )}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(eq(channelsTable.id, channelId));
       }
 
       const channel = await db.query.channels.findFirst({

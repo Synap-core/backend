@@ -470,5 +470,45 @@ describe.skipIf(!SCHEMA_LOADS)(
         })
       ).rejects.toThrow(/did not match a workspace view/);
     });
+
+    it("stamps settings.packageSlug/packageVersion on a reconcile-onto, idempotently", async () => {
+      // The escape-hatch fix: an install-onto-existing (`market attach --onto`)
+      // must stamp package provenance so `market update` can track it. Before
+      // this, reconcile-onto left the workspace at "version unknown" forever.
+      await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: { workspaceName: `Bento Base ${bSuf}` },
+        packageSlug: "attached-pkg",
+        packageVersion: "2",
+      });
+      const [stamped] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(stamped.settings?.packageSlug).toBe("attached-pkg");
+      expect(stamped.settings?.packageVersion).toBe("2");
+
+      // Omitting the stamp on a later reconcile must NOT clear the existing one
+      // (additive mergeSettings — only written when provided).
+      await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: { workspaceName: `Bento Base ${bSuf}` },
+      });
+      const [preserved] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(preserved.settings?.packageVersion).toBe("2");
+
+      // A newer version updates the stamp (that is the point of `market update`).
+      await reconcileWorkspaceFromDefinition({
+        workspaceId: bWorkspaceId,
+        userId: bUserId,
+        definition: { workspaceName: `Bento Base ${bSuf}` },
+        packageSlug: "attached-pkg",
+        packageVersion: "3",
+      });
+      const [bumped] =
+        await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
+      expect(bumped.settings?.packageVersion).toBe("3");
+    });
   }
 );

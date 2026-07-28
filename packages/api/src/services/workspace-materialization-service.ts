@@ -215,6 +215,19 @@ export async function materializeWorkspaceCore(
       composeTargetWorkspaceId,
       userId,
       definition,
+      // Stamp package provenance ONLY for an explicit install-onto-existing
+      // (`market attach --onto <ws>`): the user deliberately bound THIS package
+      // to THIS workspace, so `market update` must be able to track it (the
+      // fix for the "version unknown — reinstall to enable update checks"
+      // escape hatch). A NATURAL declared compose (`input.targetWorkspaceId`
+      // absent → base resolved from the package's own `compose:` dep) must NOT
+      // stamp: it would clobber the shared base's own package identity.
+      ...(input.targetWorkspaceId
+        ? {
+            packageSlug: input.packageSlug,
+            packageVersion: input.packageVersion,
+          }
+        : {}),
     });
     return {
       status: "composed",

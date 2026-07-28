@@ -77,6 +77,18 @@ export interface ReconcileOptions {
    * template could never be removed live.
    */
   mergeCapabilities?: boolean;
+  /**
+   * Package provenance to stamp onto the reconciled workspace's settings —
+   * mirrors the create path (`create-workspace-from-definition.ts`) so an
+   * install-onto-existing (`market attach --onto <ws>`) leaves the workspace
+   * trackable by `market update` instead of stuck at "version unknown". Only
+   * threaded for an EXPLICIT install-onto-existing target; a natural declared/
+   * transitive compose onto a base carrying its own identity passes neither, so
+   * the base's own stamp is never clobbered. Set only when provided (never
+   * overwrites an existing stamp with undefined).
+   */
+  packageSlug?: string;
+  packageVersion?: string;
 }
 
 export interface ReconcileReport {
@@ -243,6 +255,11 @@ export async function reconcileWorkspaceFromDefinition(
       settingsPatch.workspaceCapabilities = definition.workspaceCapabilities;
     }
   }
+  // Package provenance stamp — additive, mirrors the create path. Only written
+  // when provided (install-onto-existing), so a re-attach with the same version
+  // is a no-op and a natural compose never clobbers the base's own stamp.
+  if (opts.packageSlug) settingsPatch.packageSlug = opts.packageSlug;
+  if (opts.packageVersion) settingsPatch.packageVersion = opts.packageVersion;
   if (Object.keys(settingsPatch).length > 0) {
     report.settings.merged = Object.keys(settingsPatch);
     if (!dryRun)
