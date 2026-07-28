@@ -115,10 +115,14 @@ export async function diagnoseRouter(
       return { error: `No diagnosable object found for id ${input.id}` };
     }
     // An agent-user id is really "OBJECT where kind=agent" → the quality view.
+    // Use `resolved.id`, not `input.id`: the correlationId fallback in
+    // resolveObjectKind resolves a stamped correlationId to the underlying
+    // proposal ROW id, which is what the object lookups below key on. For every
+    // row-id probe `resolved.id === input.id`, so this is behaviour-preserving.
     if (resolved.kind === "agent") {
-      return agentScorecard({ userId, agentId: input.id });
+      return agentScorecard({ userId, agentId: resolved.id });
     }
-    return diagnoseObject(userId, resolved.kind, input.id);
+    return diagnoseObject(userId, resolved.kind, resolved.id);
   }
 
   // 4. A diagnosable class as a surface.

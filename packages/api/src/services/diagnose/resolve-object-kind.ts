@@ -217,5 +217,28 @@ export async function resolveObjectKind(
     const probe = byKind.get(kind);
     if (probe && (await probe.run())) return { kind, id };
   }
+
+  // FALLBACK — `id` as a `proposals.correlationId`, not a row id. A capability
+  // run (and every governed request chain) is stamped with a correlationId, and
+  // that pointer is what an agent gets back from a run and hands to
+  // `diagnose(id)`. None of the row-id probes above match it, so without this
+  // the pointer dead-ends at "no diagnosable object" even though the run
+  // executed and its result sits on the proposal. Resolve it to that proposal
+  // (returning the proposal's ROW id, not the correlationId — the caller looks
+  // the object up by `resolved.id`). Runs LAST: only when nothing matched by row
+  // id, and `correlation_id` is indexed. Most recent wins if a chain shares one.
+  const [byCorrelation] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.correlationId, id),
+        userVisibleWhere(proposals.workspaceId, userId)
+      )
+    )
+    .orderBy(drizzleSql`${proposals.createdAt} DESC`)
+    .limit(1);
+  if (byCorrelation) return { kind: "proposal", id: byCorrelation.id };
+
   return null;
 }
