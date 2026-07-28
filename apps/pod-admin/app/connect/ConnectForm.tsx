@@ -415,13 +415,19 @@ export function ConnectForm({
           {step.kind === "issuer-assertion-failed" && (
             <IssuerAssertionFailedStep
               detail={step.detail}
-              integrationLabel={info.label}
-              onContinue={() => {
-                // Operator will be bounced to /login by middleware if
-                // they still have no session. After login, return=...
-                // bring them right back to this URL with the same params.
-                window.location.assign(window.location.href);
+              connectLabel={connectLabel}
+              // The one-shot SSO assertion is stale (expired — they last 5
+              // minutes — or already consumed). It is NON-FATAL: this page only
+              // renders behind a valid pod session, so we let the operator
+              // PROCEED with that session rather than reload the same dead
+              // assertion (which just fails again — the retry loop).
+              onProceed={() => {
+                setStep({ kind: "idle" });
+                setSessionReady(true);
               }}
+              // Escape hatch for the rare genuine no-session case: manual login,
+              // then middleware returns here.
+              onSignIn={() => window.location.assign(window.location.href)}
             />
           )}
         </CardBody>
@@ -687,15 +693,28 @@ function ErrorStep({ message, flowId, onRetry }: ErrorStepProps) {
 
 interface IssuerAssertionFailedStepProps {
   detail: string;
-  integrationLabel: string;
-  onContinue: () => void;
+  connectLabel: string;
+  onProceed: () => void;
+  onSignIn: () => void;
 }
 
 function IssuerAssertionFailedStep({
   detail,
-  integrationLabel,
-  onContinue,
+  connectLabel,
+  onProceed,
+  onSignIn,
 }: IssuerAssertionFailedStepProps) {
+  // Classify the failure so the message names the real cause instead of a
+  // generic "didn't work". Expiry (assertions live 5 min), replay (already
+  // consumed), and stale-key signature failures all mean the SAME thing: the
+  // one-shot link is spent — but the operator is already signed in here.
+  const d = detail.toLowerCase();
+  const isStaleLink =
+    d.includes("expired") ||
+    d.includes("replay") ||
+    d.includes("signature") ||
+    d.includes("assertion");
+
   return (
     <div className="flex flex-col gap-4">
       <div
@@ -712,10 +731,21 @@ function IssuerAssertionFailedStep({
         />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-foreground">
-            The sign-in link didn&apos;t work
+            {isStaleLink
+              ? "This connection link expired"
+              : "The sign-in link didn't work"}
           </p>
           <p className="mt-0.5 text-[12.5px] text-foreground/65">
-            Sign in manually to finish connecting {integrationLabel}.
+            {isStaleLink ? (
+              <>
+                Connection links are valid for about 5 minutes. You&apos;re
+                still signed in to this pod — continue to finish connecting{" "}
+                {connectLabel}, or start again from {connectLabel} for a fresh
+                link.
+              </>
+            ) : (
+              <>Sign in manually to finish connecting {connectLabel}.</>
+            )}
           </p>
           {detail && (
             <details className="mt-1.5">
@@ -730,15 +760,32 @@ function IssuerAssertionFailedStep({
         </div>
       </div>
 
-      <Button
-        color="primary"
-        radius="md"
-        size="md"
-        onPress={onContinue}
-        className="font-medium"
-      >
-        Sign in
-      </Button>
+      {isStaleLink ? (
+        <div className="flex flex-col gap-2">
+          <Button
+            color="primary"
+            radius="md"
+            size="md"
+            onPress={onProceed}
+            className="font-medium"
+          >
+            Continue
+          </Button>
+          <Button variant="flat" radius="md" size="sm" onPress={onSignIn}>
+            Sign in manually instead
+          </Button>
+        </div>
+      ) : (
+        <Button
+          color="primary"
+          radius="md"
+          size="md"
+          onPress={onSignIn}
+          className="font-medium"
+        >
+          Sign in
+        </Button>
+      )}
     </div>
   );
 }
