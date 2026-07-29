@@ -508,6 +508,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         sessionId: body.sessionId ?? null,
         projectId: body.projectId ?? null,
         forceSession: body.forceSession,
+        previewOnly: body.previewOnly,
       });
 
       logger.info(

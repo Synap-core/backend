@@ -1,10 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+
+// resolveApplyOperations hits the DB — mock only the proposals select path
+// used by non-pending rejection tests.
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: {
+      select: vi.fn(),
+    },
+  };
+});
+
 import {
   ImportOrchestrator,
   resolveImportIdempotencyKey,
   computeImportHomes,
+  resolveApplyOperations,
 } from "./import-orchestrator.js";
-import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import { db, ProposalStatus } from "@synap/database";
 
 function createOrchestrator() {
   return new ImportOrchestrator({
@@ -147,5 +162,51 @@ describe("computeImportHomes", () => {
     expect(homes.byProject).toEqual({ "proj-1": 2 });
     expect(homes.podWide).toBe(0);
     expect(homes.multiHome).toBe(true);
+  });
+});
+
+describe("resolveApplyOperations (HITL status gate)", () => {
+  beforeEach(() => {
+    vi.mocked(db.select).mockReset();
+  });
+
+  function mockSelectRow(row: { data: unknown; status: string } | undefined) {
+    const limit = vi.fn().mockResolvedValue(row ? [row] : []);
+    const where = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where });
+    vi.mocked(db.select).mockReturnValue({ from } as never);
+  }
+
+  it("rejects approved proposals so re-apply cannot re-file views", async () => {
+    mockSelectRow({
+      status: ProposalStatus.APPROVED,
+      data: {
+        operations: [
+          { op: "create_entity", ref: "e0", profileSlug: "note", title: "x" },
+        ],
+      },
+    });
+    await expect(
+      resolveApplyOperations({
+        proposalId: "00000000-0000-0000-0000-000000000099",
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("not pending"),
+    });
+  });
+
+  it("returns stored ops when proposal is still pending", async () => {
+    const ops = [
+      { op: "create_entity", ref: "e0", profileSlug: "note", title: "x" },
+    ];
+    mockSelectRow({
+      status: ProposalStatus.PENDING,
+      data: { operations: ops },
+    });
+    await expect(
+      resolveApplyOperations({
+        proposalId: "00000000-0000-0000-0000-000000000099",
+      })
+    ).resolves.toEqual(ops);
   });
 });

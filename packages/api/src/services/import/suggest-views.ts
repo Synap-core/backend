@@ -8,10 +8,23 @@
  * keywords (task/todo, person/contact, note/article, …).
  *
  * Best-effort: never throws; failures log and return [].
+ *
+ * Dedup contract (dogfood 2026-07-28):
+ * - Never file views when materialize created 0 entities (idempotent re-apply).
+ * - Never file a second PENDING view with the same name + profile in the same
+ *   workspace — return the existing proposal id instead.
  */
 
-import { randomUUID } from "crypto";
-import { ProfileResolutionService, db } from "@synap/database";
+import { createHash, randomUUID } from "crypto";
+import {
+  ProfileResolutionService,
+  db,
+  proposals,
+  ProposalStatus,
+  eq,
+  and,
+  isNull,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
@@ -116,17 +129,121 @@ export function resolveViewWorkspaceId(
 }
 
 /**
+ * Stable targetId for a suggested import view so agent-side dedup (when
+ * agentUserId is present) can also collide on targetId+payload.
+ * Deterministic UUID-shaped hex from name + profile + workspace home.
+ */
+export function stableViewTargetId(parts: {
+  workspaceId: string | null;
+  profileId: string;
+  viewName: string;
+}): string {
+  const h = createHash("sha256")
+    .update(
+      `import-view\0${parts.workspaceId ?? "pod"}\0${parts.profileId}\0${parts.viewName}`
+    )
+    .digest("hex");
+  // Format as UUID v4-ish (version nibble fixed to 4, variant 8).
+  return [
+    h.slice(0, 8),
+    h.slice(8, 12),
+    `4${h.slice(13, 16)}`,
+    `8${h.slice(17, 20)}`,
+    h.slice(20, 32),
+  ].join("-");
+}
+
+/**
+ * Find an existing PENDING view/create suggestion with the same display name
+ * + profile scope in this workspace (or pod-wide when workspaceId is null).
+ * Works for human-authored rows too (agent dedup_hash does not cover them).
+ */
+export async function findExistingPendingViewSuggestion(opts: {
+  workspaceId: string | null;
+  viewName: string;
+  profileId: string;
+  userId: string;
+}): Promise<string | null> {
+  try {
+    const workspaceClause =
+      opts.workspaceId == null
+        ? isNull(proposals.workspaceId)
+        : eq(proposals.workspaceId, opts.workspaceId);
+
+    const rows = await db
+      .select({ id: proposals.id, data: proposals.data })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.status, ProposalStatus.PENDING),
+          eq(proposals.proposalType, "create"),
+          eq(proposals.targetType, "view"),
+          eq(proposals.createdBy, opts.userId),
+          workspaceClause
+        )
+      )
+      .limit(40);
+
+    for (const row of rows) {
+      const data = row.data as {
+        data?: {
+          name?: string;
+          scopeProfileIds?: string[];
+        };
+        summary?: string;
+      } | null;
+      const inner = data?.data;
+      const name = inner?.name;
+      const scopes = inner?.scopeProfileIds ?? [];
+      if (name === opts.viewName && scopes.includes(opts.profileId)) {
+        return row.id;
+      }
+      // Fallback: summary form used by suggestViews
+      if (
+        typeof data?.summary === "string" &&
+        data.summary.includes(`"${opts.viewName}"`)
+      ) {
+        return row.id;
+      }
+    }
+    return null;
+  } catch (err) {
+    logger.warn(
+      { err, viewName: opts.viewName },
+      "import.suggestViews: pending-view lookup failed"
+    );
+    return null;
+  }
+}
+
+/**
  * After a successful import materialize, create PENDING view/create proposals
  * for useful profile-scoped views. Best-effort — never throws.
  *
- * @returns proposal ids that were created (may be empty).
+ * @returns proposal ids that were created or reused (may be empty).
  */
 export async function suggestViewsFromImportGraph(
   ctx: OrchestratorContext,
   operations: ReadonlyArray<CompositeProposalOperation>,
-  opts?: { agentUserId?: string | null; source?: string }
+  opts?: {
+    agentUserId?: string | null;
+    source?: string;
+    /**
+     * Entities newly created by this apply. When 0, skip filing views —
+     * idempotent re-apply / empty materialize must not spam the inbox.
+     */
+    createdCount?: number;
+  }
 ): Promise<string[]> {
   try {
+    if (opts?.createdCount !== undefined && opts.createdCount <= 0) {
+      logger.info(
+        { userId: ctx.userId, createdCount: opts.createdCount },
+        "import.suggestViews: skipped (no new entities materialized)"
+      );
+      return [];
+    }
+
     const counts = countCreateEntityByProfile(operations).filter(
       (c) => c.count >= minCountForSlug(c.profileSlug)
     );
@@ -169,7 +286,32 @@ export async function suggestViewsFromImportGraph(
         const displayName =
           profile.displayName?.trim() || candidate.profileSlug;
         const hint = chooseViewHint(candidate.profileSlug, displayName);
-        const targetId = randomUUID();
+
+        // Human + agent: collapse inbox spam when same view already pending.
+        const existingId = await findExistingPendingViewSuggestion({
+          workspaceId,
+          viewName: hint.name,
+          profileId: profile.id,
+          userId: ctx.userId,
+        });
+        if (existingId) {
+          proposalIds.push(existingId);
+          logger.info(
+            {
+              proposalId: existingId,
+              viewName: hint.name,
+              profileSlug: candidate.profileSlug,
+            },
+            "import.suggestViews: reusing pending view proposal"
+          );
+          continue;
+        }
+
+        const targetId = stableViewTargetId({
+          workspaceId,
+          profileId: profile.id,
+          viewName: hint.name,
+        });
         const summary = `Create ${hint.type} view "${hint.name}" for ${candidate.count} imported ${candidate.profileSlug}`;
 
         const { proposal } = await createEventBackedProposal({

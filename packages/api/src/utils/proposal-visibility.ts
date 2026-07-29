@@ -19,7 +19,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, eq, and } from "@synap/database";
-import { proposals, workspaceMembers } from "@synap/database/schema";
+import { proposals, workspaceMembers, users } from "@synap/database/schema";
 import { isPodAdmin } from "./workspace-role.js";
 
 type Database = typeof defaultDb;
@@ -38,7 +38,7 @@ export async function assertProposalVisibleTo(
 
   const proposal = await database.query.proposals.findFirst({
     where: eq(proposals.id, proposalId),
-    columns: { workspaceId: true, data: true },
+    columns: { workspaceId: true, data: true, agentUserId: true },
   });
 
   if (!proposal) {
@@ -75,10 +75,22 @@ export async function assertProposalVisibleTo(
 
   // Pod-wide proposal (no workspaceId) — only the proposer may see it.
   const proposalData = proposal.data as Record<string, unknown> | null;
-  if (proposalData?.sourceId !== userId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Not authorized to view this proposal",
+  if (proposalData?.sourceId === userId) return;
+
+  // An agent-authored proposal's `sourceId` is the AGENT's user row, never the
+  // human's — so the direct match above can never admit the human who OWNS
+  // that agent. Resolve the agent's creator (`users.createdByUserId`) and
+  // admit ONLY that one human — the sole widening here, never any other user.
+  if (proposal.agentUserId) {
+    const agent = await database.query.users.findFirst({
+      where: eq(users.id, proposal.agentUserId),
+      columns: { createdByUserId: true },
     });
+    if (agent?.createdByUserId === userId) return;
   }
+
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "Not authorized to view this proposal",
+  });
 }

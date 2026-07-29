@@ -182,6 +182,17 @@ export interface MergeProposalRevisionParams {
   reasoning?: string;
   /** The actor filing the revision — recorded as `by` on the history entry. */
   actorId?: string | null;
+  /**
+   * Re-target this pending proposal's destination workspace — the TOP-LEVEL
+   * `proposals.workspace_id` column, not `data.workspaceId`. Every visibility/
+   * approval gate and the approve materializer key off this column, so a
+   * `data`-only patch can never actually move a proposal between workspaces.
+   * `undefined` = leave unchanged; `null` = make it pod-wide.
+   */
+  workspaceId?: string | null;
+  /** Re-target this pending proposal's destination project (top-level
+   * `proposals.project_id` column). `undefined` = leave unchanged. */
+  projectId?: string | null;
 }
 
 /**
@@ -231,6 +242,12 @@ export async function mergeProposalRevision(
         data: merged as typeof proposals.$inferInsert.data,
         revisionHistory: drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([revision])}::jsonb`,
         updatedAt: new Date(),
+        ...(params.workspaceId !== undefined
+          ? { workspaceId: params.workspaceId }
+          : {}),
+        ...(params.projectId !== undefined
+          ? { projectId: params.projectId }
+          : {}),
       })
       .where(
         and(

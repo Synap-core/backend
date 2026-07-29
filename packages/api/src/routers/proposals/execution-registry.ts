@@ -26,6 +26,7 @@ import type {
   StoredProposalData,
   ProposalMaterializedRecord,
 } from "@synap-core/types";
+import type { PropertyDecisionMap } from "@synap/database";
 
 const logger = createLogger({ module: "proposal-execution-registry" });
 
@@ -87,7 +88,24 @@ export interface ProposalExecutorArgs {
   proposal: ProposalRow;
   payload: StoredProposalData | null | undefined;
   userId: string;
-  input: { proposalId: string; comment?: string };
+  input: {
+    proposalId: string;
+    comment?: string;
+    /**
+     * Optional per-field property-reconciliation decisions, keyed by proposed
+     * property key. Honored ONLY by the `entity/create` and `entity/update`
+     * executors (single-entity). Absent ⇒ defaults apply (matched→keep,
+     * high-confidence fuzzy→remap, otherwise→keep-as-new + create def).
+     */
+    propertyDecisions?: PropertyDecisionMap;
+    /**
+     * Approve-time FACET channel (single-entity path). `facets` is the
+     * caller-NAMED list of facets to attach to the created entity — attached
+     * verbatim, no default/eligibility logic. Honored by the `entity/create`
+     * executor; other executors ignore it.
+     */
+    facets?: Array<{ profileSlug: string; status?: string }>;
+  };
   ctx: Context;
   deps: ProposalExecutorDeps;
 }

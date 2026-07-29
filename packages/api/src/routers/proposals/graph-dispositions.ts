@@ -20,6 +20,9 @@ import {
   type CompositeCreateRelationOp,
   type ProposalItemDisposition,
 } from "@synap-core/types/proposals";
+// Type-only (erased at compile) — keeps this leaf DB-free at runtime while
+// letting the composite property-reconciliation wiring reuse the exact slice type.
+import type { PropertyDecisionMap } from "@synap/database";
 
 export type GraphDispositionMap = Record<string, ProposalItemDisposition>;
 
@@ -153,4 +156,110 @@ export function applyGraphDispositions(
   }
 
   return filtered;
+}
+
+/**
+ * Composite property reconciliation — resolve each SURVIVING (non-rejected)
+ * create_entity op to its item ref and its per-entity property-decision slice.
+ *
+ * The ref is `op.ref ?? opRef(index)` computed on the ORIGINAL `operations`, so
+ * it is IDENTICAL to the key `dispositions`, `buildProposalGraph`, and the
+ * review UI use — and it recovers the ref for ref-less (`$opN`) ops after the
+ * disposition filter drops their original index. The returned array is in the
+ * SAME order `applyGraphDispositions` emits surviving create_entity ops, so the
+ * approve site can zip it 1:1 against `operationsToMaterialize`'s entity ops.
+ *
+ * A refused entity is skipped entirely (never reconciled, no def created); an
+ * absent `propertyDecisionsByRef[ref]` slice yields `undefined` ⇒ the reconciler
+ * applies its defaults for that entity, exactly like the single-entity path.
+ *
+ * Pure / DB-free (the `PropertyDecisionMap` import is type-only) so the ref
+ * recovery — the one genuinely-new bit of composite honoring — is unit-testable.
+ */
+export function survivingEntityDecisionSlices(
+  operations: CompositeProposalOperation[],
+  dispositions: GraphDispositionMap | undefined,
+  propertyDecisionsByRef: Record<string, PropertyDecisionMap> | undefined
+): Array<{ ref: string; decisions: PropertyDecisionMap | undefined }> {
+  const slices: Array<{
+    ref: string;
+    decisions: PropertyDecisionMap | undefined;
+  }> = [];
+  operations.forEach((op, index) => {
+    if (op.op !== "create_entity") return;
+    const ref = (op as CompositeCreateEntityOp).ref ?? opRef(index);
+    if (dispositions?.[ref]?.status === "reject") return;
+    slices.push({ ref, decisions: propertyDecisionsByRef?.[ref] });
+  });
+  return slices;
+}
+
+// ---------------------------------------------------------------------------
+// Approve-time FACET channel (domain-agnostic). A caller may name the facets to
+// attach to the entities a proposal creates:
+//   - `facetsByRef` (composite) — a per-ref facet list, keyed by the SAME entity
+//     ref (`op.ref ?? opRef(index)`) `dispositions`/`propertyDecisionsByRef` use.
+//   - `facets` (single) — the flat list for a single `entity/create` approval.
+// This is pure "attach the facets the caller NAMED to the refs the caller
+// NAMED": no kind/relation knowledge, no defaults, no eligibility. The composite
+// path folds the named facets onto the surviving create_entity ops' `.facets`
+// before materialize (pass 1.5 does the attach); the single executor attaches
+// them directly.
+// ---------------------------------------------------------------------------
+
+/** A facet to attach — the subset of `CompositeCreateEntityOp.facets`. */
+export type FacetSpec = { profileSlug: string; status?: string };
+
+/**
+ * Per SURVIVING create_entity op, the caller-named facets to ADD — in the SAME
+ * order `applyGraphDispositions`/`survivingEntityDecisionSlices` emit surviving
+ * entity ops, so the approve site zips it 1:1 against `reconciledOperations`'
+ * create_entity ops (recovering the ref for ref-less `$opN` ops after the
+ * disposition filter dropped their original index). A rejected entity yields no
+ * slice. A facet slug the op already declares — or a duplicate within the
+ * caller's list — is dropped so it is never attached twice. Pure / DB-free.
+ */
+export function survivingEntityFacetSlices(
+  operations: CompositeProposalOperation[],
+  dispositions: GraphDispositionMap | undefined,
+  facetsByRef: Record<string, FacetSpec[]> | undefined
+): Array<{ ref: string; facets: FacetSpec[] }> {
+  const isRejected = (ref: string) => dispositions?.[ref]?.status === "reject";
+  const slices: Array<{ ref: string; facets: FacetSpec[] }> = [];
+  operations.forEach((op, index) => {
+    if (op.op !== "create_entity") return;
+    const e = op as CompositeCreateEntityOp;
+    const ref = e.ref ?? opRef(index);
+    if (isRejected(ref)) return;
+    const requested = facetsByRef?.[ref] ?? [];
+    const seen = new Set<string>((e.facets ?? []).map((f) => f.profileSlug));
+    const add = requested.filter((f) => {
+      if (seen.has(f.profileSlug)) return false;
+      seen.add(f.profileSlug);
+      return true;
+    });
+    slices.push({ ref, facets: add });
+  });
+  return slices;
+}
+
+/**
+ * Fold caller-named facets into surviving create_entity ops — zips `slices`
+ * (surviving-entity order from `survivingEntityFacetSlices`) 1:1 against
+ * `operations`' create_entity ops (also surviving order), appending each slice's
+ * facets to the op's `.facets`. Right before `materializeCompositeGraph` (its
+ * pass 1.5 attaches them via the wired facetCaller). Pure.
+ */
+export function foldFacetsIntoOps(
+  operations: CompositeProposalOperation[],
+  slices: Array<{ ref: string; facets: FacetSpec[] }>
+): CompositeProposalOperation[] {
+  let entityIdx = 0;
+  return operations.map((op) => {
+    if (op.op !== "create_entity") return op;
+    const add = slices[entityIdx++]?.facets ?? [];
+    if (add.length === 0) return op;
+    const e = op as CompositeCreateEntityOp;
+    return { ...e, facets: [...(e.facets ?? []), ...add] };
+  });
 }

@@ -23,6 +23,7 @@ export * from "./repositories/index.js";
 export * from "./services/profile-resolution-service.js";
 export * from "./services/facet-resolution-service.js";
 export * from "./services/property-validation-service.js";
+export * from "./services/property-reconciliation.js";
 export * from "./services/property-index-service.js";
 export * from "./services/view-filter-compiler.js";
 export * from "./services/property-merging-service.js";

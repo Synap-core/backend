@@ -40,9 +40,10 @@ import {
   isFacetVisibleForLens,
   unmergeEntities,
   assertUnmergeable,
+  ProfileResolutionService,
   type MergeMaterializedStamp,
 } from "@synap/database";
-import type { EventRecord } from "@synap/database";
+import type { EventRecord, PropertyDecisionMap } from "@synap/database";
 import {
   ProposalStatus,
   workspaces,
@@ -73,6 +74,7 @@ import type {
   UpdateRequest,
   ProposalReviewGraph,
   CompositeProposalData,
+  CompositeProposalOperation,
   CompositeCreateEntityOp,
   CompositeCreateRelationOp,
 } from "@synap-core/types/proposals";
@@ -85,10 +87,15 @@ import {
 import { registerApproveExecutors } from "./proposals/approve-executors.js";
 import {
   applyGraphDispositions,
+  survivingEntityDecisionSlices,
+  survivingEntityFacetSlices,
+  foldFacetsIntoOps,
   type GraphDispositionMap,
+  type FacetSpec,
 } from "./proposals/graph-dispositions.js";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -96,6 +103,7 @@ import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
+import { reconcileApprovedProperties } from "../services/proposals/reconcile-proposal-properties.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
@@ -379,7 +387,11 @@ function canReviewProposal(args: {
  * below, which serves the reject/reopen path and throws with a different verb.
  */
 async function computeCanReviewApproval(args: {
-  proposal: { workspaceId: string | null; data: unknown };
+  proposal: {
+    workspaceId: string | null;
+    data: unknown;
+    agentUserId?: string | null;
+  };
   userId: string;
 }): Promise<boolean> {
   const { proposal, userId } = args;
@@ -401,12 +413,79 @@ async function computeCanReviewApproval(args: {
     userId
   );
   const proposalData = proposal.data as Record<string, unknown> | null;
+  let isOwner = proposalData?.sourceId === userId;
+
+  // An agent-authored proposal carries `sourceId` = the acting agent's user
+  // row, never the human's — so the direct match above can never admit the
+  // human who OWNS that agent. Resolve the agent's creator (`users.createdByUserId`)
+  // and admit ONLY that one human as owner too — this is the sole widening;
+  // it never touches the role ladder or any other user. One extra query, only
+  // when the direct sourceId match already failed.
+  if (!isOwner && proposal.agentUserId) {
+    const [agent] = await db
+      .select({ createdByUserId: users.createdByUserId })
+      .from(users)
+      .where(eq(users.id, proposal.agentUserId))
+      .limit(1);
+    isOwner = agent?.createdByUserId === userId;
+  }
 
   return canReviewProposal({
     policy: policy as ProposalApprovalPolicy,
     memberRole: membership?.role,
-    isOwner: proposalData?.sourceId === userId,
+    isOwner,
   });
+}
+
+/**
+ * Authorize a `revise` re-target of `proposals.workspaceId` onto a NEW
+ * destination — closes the gap where `revise` only checked authority against
+ * the proposal's CURRENT workspace, so a workspace-W reviewer could move a
+ * proposal into a workspace they cannot access (queue injection), or clear
+ * `workspaceId` to `null` to widen it to pod-wide (a data-scope escalation).
+ *
+ * - destination = a real workspace → require the SAME reviewer-authority
+ *   ladder `computeCanReviewApproval` already enforces on the source side,
+ *   evaluated against the DESTINATION workspace's own policy/membership (a
+ *   plain member of the destination is not enough if its policy requires
+ *   admin, exactly as if the proposal had originated there).
+ * - destination = `null` (pod-wide downgrade) → require pod-admin
+ *   (`isPodAdmin`) — a workspace reviewer must never be able to widen a
+ *   proposal's visibility to the whole pod.
+ */
+async function assertCanRetargetProposalDestination(args: {
+  proposal: { data: unknown; agentUserId?: string | null };
+  destWorkspaceId: string | null;
+  userId: string;
+}): Promise<void> {
+  const { proposal, destWorkspaceId, userId } = args;
+
+  if (destWorkspaceId === null) {
+    if (!(await isPodAdmin(userId))) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Only pod administrators can widen a proposal to pod-wide (clear its workspace).",
+      });
+    }
+    return;
+  }
+
+  const canReviewDest = await computeCanReviewApproval({
+    proposal: {
+      workspaceId: destWorkspaceId,
+      data: proposal.data,
+      agentUserId: proposal.agentUserId,
+    },
+    userId,
+  });
+  if (!canReviewDest) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Not authorized to move this proposal into the destination workspace",
+    });
+  }
 }
 
 /**
@@ -423,7 +502,11 @@ async function computeCanReviewApproval(args: {
  * byte-identical (they already passed the same ladder).
  */
 async function assertCanReviewProposal(args: {
-  proposal: { workspaceId: string | null; data: unknown };
+  proposal: {
+    workspaceId: string | null;
+    data: unknown;
+    agentUserId?: string | null;
+  };
   userId: string;
   action: "reject" | "reopen";
 }): Promise<void> {
@@ -446,11 +529,25 @@ async function assertCanReviewProposal(args: {
     userId
   );
   const proposalData = proposal.data as Record<string, unknown> | null;
+  let isOwner = proposalData?.sourceId === userId;
+
+  // Same widening as `computeCanReviewApproval`: an agent-authored proposal's
+  // `sourceId` is the agent, never the human — admit ONLY the one human who
+  // owns that agent (`users.createdByUserId`), so they can reject/reopen their
+  // own agent's proposal too. One extra query, only on the failure path.
+  if (!isOwner && proposal.agentUserId) {
+    const [agent] = await db
+      .select({ createdByUserId: users.createdByUserId })
+      .from(users)
+      .where(eq(users.id, proposal.agentUserId))
+      .limit(1);
+    isOwner = agent?.createdByUserId === userId;
+  }
 
   const canReview = canReviewProposal({
     policy: policy as ProposalApprovalPolicy,
     memberRole: membership?.role,
-    isOwner: proposalData?.sourceId === userId,
+    isOwner,
   });
 
   if (!canReview) {
@@ -1667,6 +1764,24 @@ async function applyProposalApproval(args: {
     comment?: string;
     /** Composite-only per-item dispositions. Absent on the batch door. */
     dispositions?: GraphDispositionMap;
+    /** Single-entity per-field property reconciliation decisions (entity/create + entity/update). */
+    propertyDecisions?: PropertyDecisionMap;
+    /**
+     * Composite per-ENTITY property reconciliation, nested by the composite
+     * item's ref (`entities[].ref` — `$opN`/op `ref` — the SAME key
+     * `dispositions` uses). Each inner map is a single-entity `PropertyDecisionMap`.
+     * Honored only by the composite branch; absent ref-slice ⇒ defaults apply.
+     */
+    propertyDecisionsByRef?: Record<string, PropertyDecisionMap>;
+    /**
+     * Approve-time FACET channel (domain-agnostic). Caller-NAMED facets to
+     * attach to the entities this approval creates: `facetsByRef` (composite,
+     * keyed by the SAME entity ref `op.ref ?? "$op<index>"` `dispositions` uses)
+     * and `facets` (single `entity/create`). Attached verbatim — no defaults,
+     * no kind/relation eligibility. An absent ref ⇒ no facets for that entity.
+     */
+    facets?: FacetSpec[];
+    facetsByRef?: Record<string, FacetSpec[]>;
   };
   ctx: Context;
 }): Promise<ProposalExecutorResult> {
@@ -1758,6 +1873,97 @@ async function applyProposalApproval(args: {
         ? applyGraphDispositions(payload.operations, dispositions)
         : payload.operations;
 
+    // Per-ENTITY property reconciliation (composite path) — the SAME orchestrator
+    // the single-entity entity/create executor uses. For each ACCEPTED
+    // create_entity op, classify its proposed property keys against the target
+    // kind's def slugs: match → keep, high-confidence fuzzy → remap onto the def
+    // slug, otherwise → keep as a first-class field (a def is created so it is
+    // queryable/rendered) — honoring the reviewer's per-entity decision slice
+    // `propertyDecisionsByRef[ref]`. Best-effort / no-data-loss (verbatim
+    // fallback on def-create failure) is owned by reconcileApprovedProperties.
+    //
+    // REF IDENTITY: the outer key is the composite item's ref — `op.ref ??
+    // opRef(originalIndex)`, the SAME key `dispositions` and the review UI use.
+    // `operationsToMaterialize` preserves original order minus rejected ops, so
+    // the surviving create_entity ops zip 1:1 (in order) with the surviving refs
+    // recomputed on `payload.operations` — recovering the ref for ref-less
+    // (`$opN`) ops after the disposition filter dropped their original index.
+    // A refused item is already gone from `operationsToMaterialize` (never
+    // reconciled, no def created); propertyDecisions only refine an ACCEPTED
+    // item's fields.
+    // Surviving entity ops → (ref, per-entity decision slice), in the SAME order
+    // `applyGraphDispositions` emits them (pure/DB-free zip source; see helper).
+    const decisionSlices = survivingEntityDecisionSlices(
+      payload.operations,
+      dispositions,
+      input.propertyDecisionsByRef
+    );
+    let reconciledOperations: CompositeProposalOperation[] =
+      operationsToMaterialize;
+    if (operationsToMaterialize.some((op) => op.op === "create_entity")) {
+      const profileService = new ProfileResolutionService(db);
+      const rebuilt: CompositeProposalOperation[] = [];
+      let survivingIdx = 0;
+      for (const op of operationsToMaterialize) {
+        if (op.op !== "create_entity") {
+          rebuilt.push(op);
+          continue;
+        }
+        const entityOp = op as CompositeCreateEntityOp;
+        // Zip 1:1 with the surviving-entity slices (same order, rejects dropped
+        // identically) — this recovers the ref for ref-less ($opN) ops.
+        const { decisions } = decisionSlices[survivingIdx++] ?? {
+          decisions: undefined,
+        };
+        const props = entityOp.properties;
+        if (!props || Object.keys(props).length === 0) {
+          rebuilt.push(op);
+          continue;
+        }
+        // Def-creation lens for this op: a per-op workspace pin, else the
+        // proposal's workspace (null ⇒ pod-wide → reconcile skips def creation
+        // and stores new fields verbatim, exactly like the single-entity path).
+        const opWorkspaceId =
+          entityOp.targetWorkspaceId ?? compositeCtx.workspaceId;
+        const profile = await profileService.resolveProfile(
+          entityOp.profileSlug,
+          userId,
+          opWorkspaceId
+        );
+        const reconciled = await reconcileApprovedProperties({
+          properties: props,
+          profileId: profile?.id ?? entityOp.profileSlug,
+          workspaceId: opWorkspaceId,
+          userId,
+          decisions,
+        });
+        rebuilt.push({ ...entityOp, properties: reconciled.properties });
+      }
+      reconciledOperations = rebuilt;
+    }
+
+    // Approve-time FACET channel (domain-agnostic) — attach the caller-NAMED
+    // facets (`facetsByRef`, keyed by the SAME ref `dispositions`/
+    // `propertyDecisionsByRef` use) to the surviving create_entity ops. Folded
+    // into the ops' `.facets` right before materialize; pass 1.5 attaches them
+    // through the wired `facetCaller`. Best-effort by construction — a facet
+    // attach that fails is logged + skipped inside materialize, never aborting
+    // the approve (mirrors the property-reconcile no-abort contract). Slices are
+    // computed on the ORIGINAL ops + dispositions so a rejected entity yields no
+    // facets. No default/eligibility logic — the backend attaches only what the
+    // caller listed.
+    if (input.facetsByRef) {
+      const facetSlices = survivingEntityFacetSlices(
+        payload.operations,
+        dispositions,
+        input.facetsByRef
+      );
+      reconciledOperations = foldFacetsIntoOps(
+        reconciledOperations,
+        facetSlices
+      );
+    }
+
     // Shared materialization: N entities → ref map → M relations.
     // Same logic the user-import (/import/apply) path uses.
     const {
@@ -1767,7 +1973,7 @@ async function applyProposalApproval(args: {
       entities: createdEntities,
       refToRealId,
     } = await materializeCompositeGraph(
-      operationsToMaterialize,
+      reconciledOperations,
       entityCaller,
       relationCaller,
       (err, type) =>
@@ -2197,6 +2403,15 @@ async function applyProposalApproval(args: {
     }
   );
 }
+
+/**
+ * A facet to attach at approve time (approve-time FACET channel). The subset of
+ * `entities.attachFacet` input a caller may supply per entity — domain-agnostic.
+ */
+const facetSpecInput = z.object({
+  profileSlug: z.string(),
+  status: z.string().optional(),
+});
 
 export const proposalsRouter = router({
   /**
@@ -2902,6 +3117,63 @@ export const proposalsRouter = router({
             })
           )
           .optional(),
+        /**
+         * Per-field property reconciliation, keyed by the PROPOSED property key.
+         * Lets the reviewer accept/remap/refuse each free-form property an AI
+         * proposed that doesn't match the target kind's def slugs. Honored by the
+         * single-entity `entity/create` and `entity/update` executors; absent ⇒
+         * defaults apply (matched→keep, high-confidence fuzzy→remap onto the def
+         * slug, otherwise→keep-as-new and create a def so the field is queryable).
+         *   - keep   → take the key as its own field (create a def if genuinely new).
+         *   - remap  → store the value under `toSlug` (an existing or novel def slug).
+         *   - refuse → drop the key (reject ONE field without rejecting the proposal).
+         */
+        propertyDecisions: z
+          .record(
+            z.string(),
+            z.discriminatedUnion("action", [
+              z.object({ action: z.literal("keep") }),
+              z.object({ action: z.literal("remap"), toSlug: z.string() }),
+              z.object({ action: z.literal("refuse") }),
+            ])
+          )
+          .optional(),
+        /**
+         * COMPOSITE per-entity property reconciliation — the nested twin of
+         * `propertyDecisions`, keyed by the composite item's entity ref (the SAME
+         * `entities[].ref` / `$opN` key `dispositions` uses, so the frontend keys
+         * both maps identically). Each inner value is a single-entity decision
+         * map. Honored only by the composite branch; an absent ref-slice ⇒
+         * defaults apply for that entity, exactly like the single-entity path.
+         */
+        propertyDecisionsByRef: z
+          .record(
+            z.string(),
+            z.record(
+              z.string(),
+              z.discriminatedUnion("action", [
+                z.object({ action: z.literal("keep") }),
+                z.object({ action: z.literal("remap"), toSlug: z.string() }),
+                z.object({ action: z.literal("refuse") }),
+              ])
+            )
+          )
+          .optional(),
+        /**
+         * Approve-time FACET channel (domain-agnostic). Caller-NAMED facets to
+         * attach, verbatim, to the entities this approval creates — no default
+         * or eligibility logic. `facets` is the flat list for a single
+         * `entity/create` approval; ignored by the composite branch (use
+         * `facetsByRef`).
+         */
+        facets: z.array(facetSpecInput).optional(),
+        /**
+         * COMPOSITE per-entity facet list, keyed by the composite item's entity
+         * ref (the SAME `entities[].ref` / `$opN` key `dispositions` and
+         * `propertyDecisionsByRef` use). Attached to that entity on approval;
+         * absent ref ⇒ no facets. Honored only by the composite branch.
+         */
+        facetsByRef: z.record(z.string(), z.array(facetSpecInput)).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2950,6 +3222,18 @@ export const proposalsRouter = router({
         proposalId: z.string(),
         /** The corrected proposal payload (the merged draft the reviewer edited). */
         data: z.record(z.string(), z.unknown()),
+        /**
+         * Re-target this pending proposal's destination workspace/project
+         * WITHOUT rejecting it (e.g. the agent proposed to the wrong
+         * workspace) — applies to the top-level `proposals.workspaceId`/
+         * `projectId` columns (every gate + the materializer key off these,
+         * never `data.workspaceId`). Gated by the SAME reviewer-authority
+         * ladder as approve, computed against the proposal's CURRENT
+         * workspace — this is a re-scoping action, not a widening of who may
+         * act. `null` clears to pod-wide/no-project; omit to leave unchanged.
+         */
+        workspaceId: z.string().nullable().optional(),
+        projectId: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2976,6 +3260,20 @@ export const proposalsRouter = router({
         });
       }
 
+      // Destination authority — a re-target (`workspaceId` explicitly present
+      // in the input, including `null` to clear it) requires the actor be
+      // authorized on the DESTINATION too, not just the source workspace
+      // checked above. Without this a source-workspace reviewer could widen a
+      // proposal to pod-wide, or inject it into a workspace's review queue
+      // they cannot otherwise access. See `assertCanRetargetProposalDestination`.
+      if (input.workspaceId !== undefined) {
+        await assertCanRetargetProposalDestination({
+          proposal: { data: proposal.data, agentUserId: proposal.agentUserId },
+          destWorkspaceId: input.workspaceId,
+          userId,
+        });
+      }
+
       // Route through the ONE shared revise core. The Studio reviewer's
       // "Save & Approve" pre-wraps its edited inner as `{ data: inner }`, so the
       // deployed frontend already speaks envelope-language — pass it through as
@@ -2987,6 +3285,8 @@ export const proposalsRouter = router({
         proposalId: input.proposalId,
         actorId: userId,
         patch: { kind: "envelope", fields: input.data },
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
       });
 
       return { success: true };
@@ -3029,6 +3329,7 @@ export const proposalsRouter = router({
           proposal: {
             workspaceId: proposal.workspaceId,
             data: proposal.data,
+            agentUserId: proposal.agentUserId,
           },
           userId,
           action: "reject",
@@ -3116,7 +3417,12 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { workspaceId: true, data: true, correlationId: true },
+        columns: {
+          workspaceId: true,
+          data: true,
+          correlationId: true,
+          agentUserId: true,
+        },
       });
       if (!proposal)
         throw new TRPCError({
@@ -3124,7 +3430,11 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       await assertCanReviewProposal({
-        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        proposal: {
+          workspaceId: proposal.workspaceId,
+          data: proposal.data,
+          agentUserId: proposal.agentUserId,
+        },
         userId,
         action: "reject",
       });
@@ -3174,7 +3484,7 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { workspaceId: true, data: true },
+        columns: { workspaceId: true, data: true, agentUserId: true },
       });
       if (!proposal)
         throw new TRPCError({
@@ -3182,7 +3492,11 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       await assertCanReviewProposal({
-        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        proposal: {
+          workspaceId: proposal.workspaceId,
+          data: proposal.data,
+          agentUserId: proposal.agentUserId,
+        },
         userId,
         action: "reject",
       });
@@ -3217,7 +3531,12 @@ export const proposalsRouter = router({
 
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { status: true, workspaceId: true, data: true },
+        columns: {
+          status: true,
+          workspaceId: true,
+          data: true,
+          agentUserId: true,
+        },
       });
       if (!proposal) {
         throw new TRPCError({
@@ -3237,7 +3556,11 @@ export const proposalsRouter = router({
       // same review authority as approving/rejecting it. Pod-wide (no
       // workspace) proposals skip the check, mirroring approve/revert.
       await assertCanReviewProposal({
-        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        proposal: {
+          workspaceId: proposal.workspaceId,
+          data: proposal.data,
+          agentUserId: proposal.agentUserId,
+        },
         userId,
         action: "reopen",
       });
@@ -3354,6 +3677,15 @@ export const proposalsRouter = router({
       z.object({
         proposalId: z.string(),
         reason: z.string().optional(),
+        /**
+         * "Re-propose" — instead of flipping to the TERMINAL `reverted` status,
+         * return the proposal to the PENDING queue after the inverse is applied,
+         * so it can be re-accepted. `proposal.data` (the original payload) is
+         * kept intact, so a re-accept re-materializes everything. The
+         * `revertedBy`/`revertedAt` audit stamp is still recorded (it does not
+         * block re-acceptance). Default false = the historical terminal revert.
+         */
+        reopen: z.boolean().optional().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -3650,17 +3982,28 @@ export const proposalsRouter = router({
         revertReason: input.reason,
       };
 
-      // Flip to reverted, but only from an applied state — guards the
-      // double-revert race: two concurrent calls both pass the precheck, but
-      // the loser's UPDATE matches 0 rows (status is already `reverted`) and we
-      // treat that as "already reverted" rather than reverting twice.
+      // Flip status, but only from an applied state — guards the double-revert
+      // race: two concurrent calls both pass the precheck, but the loser's
+      // UPDATE matches 0 rows (status already moved off applied) and we treat
+      // that as "already reverted" rather than reverting twice.
+      //
+      // `reopen` (Re-propose): return to PENDING instead of the terminal
+      // REVERTED so the proposal can be re-accepted. The inverse was already
+      // applied above (created rows soft-deleted); we KEEP the original payload
+      // (`revertedPayload` retains `...existingData`, incl. `operations`) so a
+      // re-accept re-materializes everything, and clear the review stamp so it
+      // re-surfaces as actionable — while still recording revertedBy/revertedAt
+      // in `data` for audit (which does NOT block re-acceptance).
       const flipped = await db
         .update(proposals)
         .set({
-          status: ProposalStatus.REVERTED,
+          status: input.reopen
+            ? ProposalStatus.PENDING
+            : ProposalStatus.REVERTED,
           data: revertedPayload,
-          reviewedBy: userId,
-          reviewedAt: revertedAt,
+          ...(input.reopen
+            ? { reviewedBy: null, reviewedAt: null }
+            : { reviewedBy: userId, reviewedAt: revertedAt }),
           updatedAt: revertedAt,
         })
         .where(
@@ -3752,9 +4095,24 @@ export const proposalsRouter = router({
         });
       }
 
+      // Re-propose: the proposal is back in the PENDING queue — re-surface it
+      // the SAME way `reopen` (rejected → pending) does. `emitProposalReviewed`
+      // for "reopened" is a realtime-only refresh (no approve/reject side
+      // effects, no notification clear), moving the item back into the pending
+      // queue on every client so it is actionable again.
+      if (input.reopen) {
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "reopened",
+          userId
+        );
+      }
+
       return {
         success: true,
         reverted: deleted,
+        ...(input.reopen ? { reopened: true } : {}),
         ...(restoredEntityId ? { restoredEntityId } : {}),
         ...(failures.length > 0 ? { partialFailures: failures } : {}),
       };

@@ -455,6 +455,84 @@ describe("proposalsRouter.revert — restoring an approved delete proposal", () 
   });
 });
 
+describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", () => {
+  const proposalId = "99999999-9999-9999-9999-999999999999";
+  const entityId = "a1111111-1111-1111-1111-111111111111";
+
+  // Capture the LAST db.update(...).set(...) payload (the status flip) while
+  // satisfying `.where().returning()` with a resolved winning row.
+  function captureFlip() {
+    const setSpy = vi.fn(() => ({
+      where: vi.fn(() => {
+        const p = Promise.resolve(undefined) as Promise<unknown> & {
+          returning: () => Promise<Array<{ id: string }>>;
+        };
+        p.returning = vi.fn().mockResolvedValue([{ id: proposalId }]);
+        return p;
+      }),
+    }));
+    (db as any).update = vi.fn(() => ({ set: setSpy }));
+    return setSpy;
+  }
+
+  function setUpCompositeCreate() {
+    (db as any).query.proposals.findFirst = vi.fn().mockResolvedValue({
+      id: proposalId,
+      status: "approved",
+      targetType: "entity",
+      targetId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      proposalType: "create_composite",
+      workspaceId: null, // pod-wide → skips the workspace policy check
+      data: {
+        operations: [{ op: "create_entity", profileSlug: "note", title: "N" }],
+        materialized: { entityIds: [entityId] },
+      },
+    });
+  }
+
+  it("reopen:true → created entity soft-deleted, status PENDING, data (operations) intact", async () => {
+    setUpCompositeCreate();
+    const setSpy = captureFlip();
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    const result = await caller.revert({ proposalId, reopen: true });
+
+    expect(result.success).toBe(true);
+    expect((result as any).reopened).toBe(true);
+    // The materialized create was undone (soft-deleted via the canonical router).
+    expect((result as any).reverted.entityIds).toContain(entityId);
+
+    // The status flip returns the proposal to PENDING (re-listable), clears the
+    // review stamp, and PRESERVES the payload so re-accept re-materializes.
+    const flip = (setSpy.mock.calls.at(-1) as unknown[])[0] as any;
+    expect(flip.status).toBe("pending");
+    expect(flip.reviewedAt).toBeNull();
+    expect(flip.data.operations).toBeDefined();
+    expect(flip.data.revertedBy).toBe("user-1"); // audit stamp kept
+  });
+
+  it("no reopen → status REVERTED (unchanged terminal behavior)", async () => {
+    setUpCompositeCreate();
+    const setSpy = captureFlip();
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    const result = await caller.revert({ proposalId });
+
+    expect(result.success).toBe(true);
+    expect((result as any).reopened).toBeUndefined();
+    const flip = (setSpy.mock.calls.at(-1) as unknown[])[0] as any;
+    expect(flip.status).toBe("reverted");
+  });
+});
+
 describe("buildProposalChanges — generic non-entity fallback", () => {
   it("flat property_def create payload yields one change per non-infra field", () => {
     const changes = buildProposalChanges(

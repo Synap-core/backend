@@ -4201,6 +4201,14 @@ export interface CompositeCreateEntityOp {
 	profileSlug: string;
 	/** Existing project to file the created entity into at materialization. */
 	projectId?: string;
+	/**
+	 * Pin this entity to a specific workspace at materialization (multi-home
+	 * import graphs). When set, materializeCompositeGraph passes it through to
+	 * entities.create as `targetWorkspaceId` and forces `workspaceScoped: true`.
+	 * Ops without it keep the caller's ambient workspaceScoped flag (proposal
+	 * approve path unchanged). entities.create validates membership.
+	 */
+	targetWorkspaceId?: string;
 	title?: string;
 	description?: string;
 	properties?: Record<string, unknown>;
@@ -5757,6 +5765,62 @@ export interface CsvTablePlan {
 	/** Per-column routing. Headers absent here are dropped. */
 	columns: CsvColumnPlan[];
 }
+/**
+ * Per-op homes summary for an import graph — how create_entity ops are
+ * distributed across workspaces / projects. Consumed by analyze/analyzeLarge
+ * return payloads so the client can render multi-home placement before apply.
+ */
+export type ImportHomesSummary = {
+	/** targetWorkspaceId → create_entity count */
+	byWorkspace: Record<string, number>;
+	/** create_entity ops with no targetWorkspaceId (pod-wide) */
+	podWide: number;
+	/** projectId → create_entity count */
+	byProject: Record<string, number>;
+	/**
+	 * True when the graph spans more than one home:
+	 * >1 distinct workspace pins, OR mix of pod-wide + at least one pin.
+	 */
+	multiHome: boolean;
+};
+export type QualitySeverity = "info" | "warn" | "blocker";
+export type QualityFinding = {
+	id: string;
+	severity: QualitySeverity;
+	message: string;
+	/** Optional metric for dashboards */
+	metric?: number;
+};
+export type ImportQualityReport = {
+	/** 0–100 composite score (heuristic, not academic) */
+	score: number;
+	summary: string;
+	counts: {
+		filesProcessed?: number;
+		filesFailed?: number;
+		createEntities: number;
+		createRelations: number;
+		containers: number;
+		contentEntities: number;
+		linkedExisting: number;
+		byProfile: Record<string, number>;
+	};
+	hierarchy: {
+		containerCount: number;
+		parentOfEdges: number;
+		filesWithContainer?: number;
+		intentCounts?: Record<string, number>;
+	};
+	homes: {
+		multiHome: boolean;
+		byWorkspace: Record<string, number>;
+		podWide: number;
+		byProject: Record<string, number>;
+	};
+	findings: QualityFinding[];
+	/** Ordered upgrade suggestions for the refuse→improve loop */
+	nextUpgrades: string[];
+};
 export type ImportRevealSource = "obsidian" | "markdown" | "csv" | "bookmark" | "json" | "connector_sync";
 declare const IMPORT_SOURCE: "connector_sync";
 export type SyncConnectionToImportResult = {
@@ -5895,9 +5959,9 @@ export interface FunnelStep {
  * There is no unified `runs` table (a deliberate D3 decision: presentation-union,
  * no migration). Instead each existing ledger — `automation_runs`,
  * `playbook_runs`, the `capture.graph` proposal+events, standalone
- * `focus_sessions`, and the `capability.run` proposal+events — is mapped to
- * this one `UnifiedRun` so a single Runs/Activity view can render "what an AI
- * did" across every flow.
+ * `focus_sessions`, the `capability.run` proposal+events, and `chat_turns` —
+ * is mapped to this one `UnifiedRun` so a single Runs/Activity view can render
+ * "what an AI did" across every flow.
  *
  * The channel rule the model encodes (validated with the user):
  *   - automation → ONE channel for all its runs
@@ -5905,9 +5969,10 @@ export interface FunnelStep {
  *   - capture    → no channel (its story is its correlationId-keyed events)
  *   - capability → no channel (mirrors capture: correlationId-keyed events)
  *   - session    → its own channel
+ *   - chat       → the channel the turn ran in (browser chat / Discord bridge)
  */
 /** Which ledger a run came from. */
-export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session";
+export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
 /** Normalised lifecycle across all ledgers. */
 export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped";
 /** One run, ledger-agnostic. */
@@ -9503,6 +9568,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reason?: string | undefined;
 					edits?: Record<string, unknown> | undefined;
 				}> | undefined;
+				propertyDecisions?: Record<string, {
+					action: "keep";
+				} | {
+					action: "remap";
+					toSlug: string;
+				} | {
+					action: "refuse";
+				}> | undefined;
+				propertyDecisionsByRef?: Record<string, Record<string, {
+					action: "keep";
+				} | {
+					action: "remap";
+					toSlug: string;
+				} | {
+					action: "refuse";
+				}>> | undefined;
 			};
 			output: ProposalExecutorResult;
 			meta: object;
@@ -18785,6 +18866,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | null | undefined;
+				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -18800,19 +18882,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stats: Record<string, unknown>;
 				droppedReferences: number;
 				aiTyped: number;
+				homes: ImportHomesSummary;
+				quality: ImportQualityReport;
 			};
 			meta: object;
 		}>;
 		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				source: "obsidian" | "markdown" | "csv" | "bookmark";
-				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
+				operations?: Record<string, unknown>[] | undefined;
 				idempotencyKey?: string | undefined;
+				proposalId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | null | undefined;
 			};
 			output: {
+				viewProposalIds?: string[] | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
 				created: number;
@@ -18832,6 +18918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | null | undefined;
+				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -18855,9 +18942,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					byType: Record<string, number>;
 					wikilinkLinksResolved: number;
 					wikilinkLinksUnresolved: number;
+					homesByWorkspace: Record<string, number>;
 					chunks: number;
+					corpusMap: {
+						folders: number;
+						containers: number;
+						intentCounts: Record<string, number>;
+					};
 				};
 				aiTyped: number;
+				homes: ImportHomesSummary;
+				quality: ImportQualityReport;
 			};
 			meta: object;
 		}>;
@@ -18873,6 +18968,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | null | undefined;
+				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -18885,13 +18981,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				source: "obsidian" | "markdown" | "csv" | "bookmark";
-				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
+				proposalId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | null | undefined;
+				operations?: Record<string, unknown>[] | undefined;
 			};
 			output: {
+				viewProposalIds?: string[] | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
 				created: number;
@@ -22247,7 +22345,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType?: "session" | "playbook" | "automation" | "capture" | undefined;
+				flowType?: "session" | "capability" | "chat" | "playbook" | "automation" | "capture" | undefined;
 				flowId?: string | undefined;
 				scope?: {
 					workspaceId?: string | undefined;
@@ -22277,7 +22375,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType: "session" | "playbook" | "automation" | "capture";
+				flowType: "session" | "capability" | "chat" | "playbook" | "automation" | "capture";
 				id: string;
 			};
 			output: UnifiedRunDetail | null;

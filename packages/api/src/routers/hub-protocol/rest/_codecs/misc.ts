@@ -339,6 +339,11 @@ export const ImportRequestSchema = z
     projectId: z.string().uuid().nullish(),
     /** Force mint Import session even when N&lt;2. */
     forceSession: z.boolean().optional(),
+    /**
+     * Structure + quality only — do not persist import.graph proposal.
+     * CLI `--dry-run` and pure previews set this so the inbox is not spammed.
+     */
+    previewOnly: z.boolean().optional(),
   })
   .openapi("ImportRequest");
 

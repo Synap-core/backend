@@ -47,6 +47,11 @@ const AnalyzeImportSchema = z.object({
   // FK, instantiated_from link) instead of a bare Import session.
   playbookId: z.string().uuid().optional(),
   playbookParams: z.record(z.string(), z.string()).optional(),
+  /**
+   * Structure only — no durable import.graph proposal (CLI --dry-run).
+   * Prevents inbox spam from preview/analyze loops.
+   */
+  previewOnly: z.boolean().optional(),
 });
 
 const applyImportOpsOrProposal = (
@@ -149,6 +154,7 @@ export const importRouter = router({
         forceSession: input.forceSession,
         playbookId: input.playbookId ?? null,
         playbookParams: input.playbookParams,
+        previewOnly: input.previewOnly,
       });
     }),
 
@@ -203,6 +209,7 @@ export const importRouter = router({
         aiStructure: input.aiStructure,
         sessionId: input.sessionId ?? null,
         projectId: input.projectId ?? null,
+        previewOnly: input.previewOnly,
       });
     }),
 

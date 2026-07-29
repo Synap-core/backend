@@ -5,6 +5,7 @@ import {
   minCountForSlug,
   chooseViewHint,
   resolveViewWorkspaceId,
+  stableViewTargetId,
   MAX_VIEW_PROPOSALS_PER_IMPORT,
 } from "./suggest-views.js";
 
@@ -77,5 +78,30 @@ describe("resolveViewWorkspaceId", () => {
 describe("MAX_VIEW_PROPOSALS_PER_IMPORT", () => {
   it("caps at 5", () => {
     expect(MAX_VIEW_PROPOSALS_PER_IMPORT).toBe(5);
+  });
+});
+
+describe("stableViewTargetId", () => {
+  it("is deterministic for the same name/profile/workspace", () => {
+    const a = stableViewTargetId({
+      workspaceId: "ws-1",
+      profileId: "prof-1",
+      viewName: "To-dos",
+    });
+    const b = stableViewTargetId({
+      workspaceId: "ws-1",
+      profileId: "prof-1",
+      viewName: "To-dos",
+    });
+    const c = stableViewTargetId({
+      workspaceId: "ws-2",
+      profileId: "prof-1",
+      viewName: "To-dos",
+    });
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/
+    );
   });
 });

@@ -102,6 +102,70 @@
  *     resolved label) so a kind is addressable by NAME downstream. Until then,
  *     four honest hardcoded pairs beat a generic graph that silently reports the
  *     wrong workspace.
+ *   - EMBEDS ARE PARTLY BLOCKED, and the v9 text above this line said they were
+ *     ENTIRELY blocked. That was wrong, and the shape of the mistake is worth
+ *     recording because it is a cheap one to make twice: the investigation
+ *     established — correctly — that no `viewId` and no cell `instanceId` can
+ *     reach a prompt, and then GENERALIZED from the id-based embeds to ALL
+ *     embeds. But a chart cell needs no id. It is CONFIG-ONLY. One true premise
+ *     plus one unchecked leap banned a whole capability the report already had.
+ *
+ *     STILL BLOCKED, for the reason v9 gave, which survives re-verification:
+ *       · `executeQueryStep` is hardwired to ONE table. It selects
+ *         `.from(entities)` under `eq(entities.type, profileSlug)`
+ *         (`packages/jobs/src/workers/automation-executor.ts:2485-2557`), so
+ *         `profileSlug` names an entity KIND and nothing else. There is no
+ *         table parameter and no second read node.
+ *       · Views, cells and automations are NOT entity kinds — each is its own
+ *         top-level table: `views` (`schema/views.ts:18`), `cell_instances`
+ *         (`schema/cell-instances.ts:59`), `automations`
+ *         (`schema/automations.ts:538`). No `query` node can reach any of them.
+ *         So `:::synap-view{viewId}` and `:::synap-cell{instanceId}` stay
+ *         BANNED: the assembler is not refusing to embed them, it has nothing
+ *         to embed them WITH, and a made-up id is a permanent broken block.
+ *
+ *     NOT BLOCKED, and now allowed under a narrow allowlist — `chart-pie`,
+ *     `chart-bar` and `stat-card` (v10 also allowed `chart-gauge`; v11 removed
+ *     it, see the version history):
+ *       · CHART CELLS ARE SELF-QUERYING. The `chart-*` family and `stat-card`
+ *         take only short scalar config — `profileSlug`, `groupBy`,
+ *         `aggregation`, `field`, `label`, `timePeriod` — and run their OWN
+ *         `trpc.entities.list` at render time. They need no `viewId`, no
+ *         `instanceId`, and no data payload in the document. Everything the
+ *         assembler must know to emit one is a kind name it already has in
+ *         GATHERED_DATA.
+ *       · WHAT DECIDES MEMBERSHIP IS THE FAILURE MODE, NOT THE HAPPY PATH.
+ *         `cellRefFromLegacy` swallows a `cellProps` JSON parse error and
+ *         renders the cell with an EMPTY config (`cell-ref.ts:45-47`), and
+ *         these cells declare no `propsSchema`/`defaultProps`, so nothing
+ *         validates downstream. This prompt is the ONLY gate. A key may
+ *         therefore be prescribed only if its config-less render is VISIBLY
+ *         unconfigured (pie/bar: "Pick a group-by property") rather than a
+ *         plausible reading (gauge: a workspace-wide "completion" percentage).
+ *       · THE ATTRIBUTE CHANNEL IS WIDE ENOUGH. `cellProps` is a string
+ *         attribute that `cellRefFromLegacy` runs `JSON.parse` on
+ *         (`cell-runtime/src/cell-ref.ts:32-51`, malformed JSON degrades to an
+ *         empty config rather than throwing). Verified empirically against the
+ *         installed `micromark-extension-directive@4.0.0`: a SINGLE-quoted
+ *         attribute value preserves both `"` and `}`; only an UNQUOTED value
+ *         terminates early on `}`. The same mixed-quoting form is already the
+ *         documented one in `synap-backend/skills/synap/document-embeds.md`
+ *         (lines 37-40, 115-121). ASSEMBLE_SYSTEM rule 4 asserted the opposite
+ *         — "never inline JSON, never a value containing a double quote or a
+ *         `}`" — and that false rule is what made the ban look forced.
+ *       · `registerCoreCells` IS REACHED IN `browser/`. The v9 evidence
+ *         (`grep -rn "registerCoreCells" browser/` returns NOTHING) was true
+ *         and IRRELEVANT: the call is indirect —
+ *         `browser/electron/renderer/src/providers/SynapProvider.tsx:23` calls
+ *         `registerAllCells()`, which walks `builtinPackages.ts` whose core
+ *         package is `{ register: registerCoreCells }` (line 74), synchronously
+ *         at boot. `__entity-block` is registered by the same path. A grep for
+ *         a symbol is not a check for whether it RUNS.
+ *     WHAT WOULD UNBLOCK THE REST — the same engine change v9 named: a read
+ *     node that can address a table other than `entities` (a `source`/`table`
+ *     discriminator on `query`, or a sibling node type per table) with its own
+ *     visibility predicate, since `entityQueryVisibilityWhere` is written
+ *     against `entities` columns.
  */
 
 import { getDb } from "../client-pg.js";
@@ -208,12 +272,17 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * reasons, and the second is the load-bearing one. First, the user asked for the
  * generator to be ABLE to override, not for the default to move; scroll stays
  * the default and a no-payload run produces a report that renders exactly as it
- * did yesterday. Second, THE SLIDES CELL IS NOT REGISTERED YET — `grep` finds
- * `entity-detail-report` in `registerWorkspacePersonalizationCells.ts` and finds
- * NO `entity-detail-report-slides` anywhere. Seeding a cellKey into every
- * workspace's automation on the bet that a cell lands later is precisely how
- * this file earned its version history. A payload-driven key needs no bet: the
- * flow ships the mechanism, and whoever knows the cell exists names it.
+ * did yesterday. Second, AT THE TIME OF WRITING THE SLIDES CELL WAS NOT
+ * REGISTERED — `grep` found `entity-detail-report` in
+ * `registerWorkspacePersonalizationCells.ts` and found NO
+ * `entity-detail-report-slides` anywhere. (That is no longer true: both keys are
+ * registered now, and `entity-detail-report-slides` opens in the deck — so
+ * `renderer: "entity-detail-report-slides"` in the payload is a working stamp
+ * rather than a bet. The reasoning below is kept because it still explains why
+ * the key comes from the payload and not from a hardcode.) Seeding a cellKey
+ * into every workspace's automation on the bet that a cell lands later is
+ * precisely how this file earned its version history. A payload-driven key needs
+ * no bet: the flow ships the mechanism, and whoever knows the cell exists names it.
  * Safe by CONSTRUCTION, not by hope: with no payload the key resolves to "" and
  * `resolveEntityRendererOverride` returns null for a zero-length `cellKey`
  * (renderer-runtime/src/index.ts:355, covered by its own test), so the override
@@ -238,8 +307,149 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * NOT done, and stated so the next reader does not re-derive it: making the
  * gather stage kind-agnostic via a `loop`. It is expressible in the body and
  * unaddressable downstream — full evidence in KNOWN LIMITS at the top.
+ *
+ * v9 — THE REPORT WAS PURE PROSE. Verified in production against a 706-entity
+ * workspace: the flow gathered real data and wrote true, well-sourced prose that
+ * NAMED people, companies and tasks — and linked not one of them. Every id was
+ * in the prompt. Nothing was clickable. For a product whose whole claim is that
+ * a report is a live surface over your graph rather than a text file about it,
+ * that is not a polish gap; it is the differentiator missing.
+ *
+ * Three causes, all prompt-side, all fixed here.
+ *
+ * (a) THE ROUND THAT WRITES MOST OF THE BODY WAS NEVER TAUGHT THE SYNTAX.
+ * `ANALYZE_SYSTEM` said "Output PLAIN PROSE … no directives" and never mentioned
+ * chips. A `[[entity:id|label]]` marker is not a directive, but a model told
+ * "plain prose, no directives" has every reason to read it as "no markup" — and
+ * did. Only `relate` had a chip instruction, and it is the shorter round. The
+ * ban is now stated precisely (`no ::: directive blocks`) and the chip grammar
+ * is taught to both rounds through ONE shared `CHIP_RULE`.
+ *
+ * (b) THE ONE ROUND THAT WAS TAUGHT WAS TAUGHT A DEAD FORM. `RELATE_SYSTEM` said
+ * `[[<kind>:<id>|<label>]]`, which invites `[[task:…]]` and `[[company:…]]`.
+ * Those chips RENDER — the presentation pass in `message-parser/src/parser.ts`
+ * is kind-agnostic by design and rewrites any kind word to `<kind>://<id>` — but
+ * BOTH report renderers gate navigation on `kind === "entity"`
+ * (`ReportScrollRenderer.tsx:340`, `ReportSlidesRenderer.tsx:217`). So the
+ * instruction as written produced chips that look clickable and do nothing,
+ * which is worse than plain text: plain text does not lie about what it is.
+ * `CHIP_RULE` prescribes `entity` for all four gathered kinds — correct, not a
+ * workaround, since tasks/notes/people/companies are all rows in `entities` and
+ * the chip's job is to OPEN the record, not to announce its kind.
+ *
+ * (c) THE ASSEMBLER WOULD HAVE ERASED THEM ANYWAY. It is told "you add no new
+ * facts", and a formatter obeying that instruction has no reason to preserve
+ * markup it did not author — it tidies. Chips are now declared CONTENT, to be
+ * copied through verbatim, with the reason stated so the rule survives a reread.
+ *
+ * ALSO REMOVED: the invitation to embed. `ASSEMBLE_SYSTEM` taught the full
+ * `:::synap-view` / `:::synap-cell` syntax and was then handed nothing to put in
+ * one — a vocabulary with no nouns, whose only reachable outcome was an invented
+ * id and a permanently broken block. It is now told, in the same breath as the
+ * syntax, not to emit those two. This is a DOCUMENTED GAP, not a fix: views and
+ * cells are separate tables and the `query` node reads `entities` only, so no id
+ * for them can physically reach a prompt. Full evidence, and what the engine
+ * would need, in KNOWN LIMITS at the top. Stating the limit beats shipping a
+ * prompt that quietly hallucinates its way around it.
+ *
+ * The flow GRAPH is unchanged — no new nodes, no new edges, no new placeholders.
+ * v9 is prompts only, which is exactly why the seed version has to move: the
+ * prompts are the product here, and they are duplicated per workspace.
+ *
+ * v10 — v9's EMBED BAN RESTED ON A FALSE PREMISE, and this reverses it under an
+ * allowlist. Two of the three facts v9 used to justify "the report cannot embed
+ * anything" do not hold:
+ *
+ * (a) `ASSEMBLE_SYSTEM` rule 4 said attributes must be "short bare values,
+ * never inline JSON, never a value containing a double quote or a `}`". That is
+ * simply not what the parser does. Checked against the INSTALLED
+ * `micromark-extension-directive@4.0.0`: a single-quoted attribute value carries
+ * `"` and `}` through intact; only an UNQUOTED value ends at the first `}`. The
+ * rule stated a real constraint (unquoted values are fragile) as a universal
+ * one, and in doing so removed the ONLY channel a config-only cell has. It is
+ * now written as the constraint that actually exists, with a worked example.
+ *
+ * (b) The renderer evidence was a grep that answered the wrong question.
+ * "`grep -rn "registerCoreCells" browser/` returns NOTHING" is true, and the
+ * function still runs at boot: `SynapProvider.tsx:23` calls `registerAllCells()`
+ * → `builtinPackages.ts:74` → `registerCoreCells`. Absence of a symbol is not
+ * absence of a call path. Full correction in KNOWN LIMITS at the top.
+ *
+ * WHAT V10 ALLOWED (v11 drops `chart-gauge` — see below): `:::synap-cell` for
+ * `chart-pie`, `chart-bar`,
+ * `chart-gauge` and `stat-card` only, configured through `cellProps` over a kind
+ * this flow actually gathered. Those cells are SELF-QUERYING — they take scalar
+ * config and issue their own read at render time — so the report needs no id it
+ * cannot obtain and carries no stale data payload. This is the differentiator
+ * v9 went looking for and concluded was unreachable: a report that is a live
+ * surface over the graph rather than prose about it.
+ *
+ * WHY AN ALLOWLIST AND NOT THE CATALOG — stated so nobody reads the short list
+ * as an oversight. Twelve `chart-*` keys are registered, and the four here are
+ * the ones whose config is fully derivable from a kind plus at most one property
+ * name. The rest need a `valueField`, a `timePeriod` or a numeric axis the
+ * assembler would have to GUESS, and a guessed field renders an empty chart that
+ * looks authoritative — the same launder-the-emptiness failure INTEGRITY_RULE
+ * exists to catch. Separately, VERTICAL SIZING INSIDE THE MARKDOWN WRAPPER IS
+ * UNVERIFIED: nobody has yet looked at a rendered report containing one of these
+ * blocks, so a chart could come out zero-height or dominate the page. Four keys
+ * is a bet small enough to eyeball and reverse. Widen only after a real report
+ * has been looked at — and that check is the explicit prerequisite for a v11.
+ *
+ * The flow GRAPH is again unchanged — prompts only, no new nodes, no new edges,
+ * no new placeholders.
+ *
+ * v11 — V10'S ALLOWLIST WAS JUDGED ON THE HAPPY PATH. Both keys fixed here
+ * rendered a confident number that was not what it claimed, which is the same
+ * failure INTEGRITY_RULE was written for — arriving this time through the
+ * EMBEDS rather than through the prose.
+ *
+ * (a) THE "SAFE FALLBACK" WAS THE WRONG NUMBER. Rule 9(b) told the assembler
+ * that when it was unsure of a property it could fall back to `stat-card` with
+ * `aggregation: "count"`, "which needs nothing but profileSlug". That
+ * fallback was the most likely cell in any report, and it was wrong every time.
+ * `StatCardWidget` reads `config?.timePeriod ?? "week"` (:341) — ALWAYS truthy,
+ * there is no "all time" — and for a count it then filters to entities CREATED
+ * inside that window (:369-383). So the prescribed config rendered "tasks
+ * created in the last 7 days" under the label "Tasks". Nobody reading the
+ * report could tell; a number carries more authority than the sentence beside
+ * it, and this one was authoritative about a fact it had not measured.
+ * FIXED by making the prescription state its own window: `timePeriod` is now
+ * MANDATORY in the emitted config and the label must name the window. Removing
+ * `stat-card` was the alternative and was rejected — the honest version is
+ * expressible from the prompt alone, and a count-per-week is a real thing a
+ * report wants to show. "week" is the prescribed default because it is what the
+ * widget already computes (so this changes the LABEL, not the figure) and
+ * because the count runs over ONE `entities.list` page (limit 500, createdAt
+ * DESC): the shortest window is the one most likely to fit entirely inside that
+ * page and therefore to be exact.
+ *
+ * (b) `chart-gauge` IS OFF THE ALLOWLIST. Not because its happy path is wrong —
+ * it is fine — but because its FAILURE path is invisible. `cellRefFromLegacy`
+ * swallows a `cellProps` JSON parse error and hands the cell an empty config
+ * (`cell-ref.ts:45-47`), and none of these cells declare a `propsSchema` or
+ * `defaultProps`, so nothing downstream validates what the model emitted. With
+ * no config, `chart-pie`/`chart-bar` render "Pick a group-by property" — the
+ * reader SEES that nothing was measured. With no config, `chart-gauge` queries
+ * every entity in the workspace, defaults `aggregation` to "completion", and
+ * draws a percentage that looks exactly like a real reading.
+ *
+ * STANDING LESSON, and the reason this is a version bump rather than a tweak:
+ * THE READER HAS NO ALLOWLIST. This prompt is the only gate between a model's
+ * guess and a rendered figure, so a cell key earns its place by what it does
+ * when the model gets it WRONG — not by what it does when the model gets it
+ * right. Judge the failure mode. A missing chart is strictly better than a
+ * confident wrong number.
+ *
+ * The v10 note above said the rest of the catalog was excluded because those
+ * cells "need a valueField, a timePeriod or a numeric axis the assembler would
+ * have to GUESS". That test was right and was applied to the wrong list:
+ * `stat-card` needed a `timePeriod` too, and quietly guessed one for us.
+ *
+ * The flow GRAPH is again unchanged — prompts only, no new nodes, no new edges,
+ * no new placeholders.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 8;
+export const REPORT_AUTOMATION_SEED_VERSION = 11;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -312,6 +522,56 @@ const INTEGRITY_RULE =
   "workspace as empty because its data failed to arrive is the single worst " +
   "outcome of this report. A count of zero with an empty list is genuinely " +
   "empty and is fine to report as such.";
+
+/**
+ * How a round turns a gathered id into a CLICKABLE chip — shared, because the
+ * rule is identical for every round and the one round that had its own copy got
+ * it subtly wrong.
+ *
+ * THE DEFECT THIS FIXES (observed 2026-07-28 on a 706-entity workspace): the
+ * report came out as pure prose. It NAMED people, companies and tasks as plain
+ * text and linked none of them, even though every id was sitting in the prompt.
+ * Two causes, both here. `ANALYZE_SYSTEM` was never taught the syntax at all —
+ * it was told "no directives", which an honest model reads as "no markup" — and
+ * it is the round that produces most of the report's body. And `RELATE_SYSTEM`,
+ * the only round that WAS taught, was taught `[[<kind>:<id>|<label>]]`, which
+ * invites `[[task:…]]` / `[[company:…]]`. Those PARSE and RENDER — the
+ * presentation pass in `message-parser/src/parser.ts` is deliberately
+ * kind-agnostic and rewrites any kind word to `<kind>://<id>` — but both report
+ * renderers gate navigation on `kind === "entity"`
+ * (`browser/electron/renderer/src/cells/ReportScrollRenderer.tsx:340`,
+ * `ReportSlidesRenderer.tsx:217`). So a `task` chip looks live and does nothing.
+ * An affordance that renders as clickable and isn't is worse than plain text:
+ * plain text tells the reader the truth.
+ *
+ * Hence `entity` is prescribed for ALL FOUR gathered kinds, and it is CORRECT
+ * rather than a workaround: tasks, notes, people and companies are all rows in
+ * the `entities` table — `type` discriminates them, and the chip's job is to
+ * open the entity, not to name its kind. (`person` also resolves, since the
+ * parser aliases it to the `entity://` scheme at parser.ts:125; `entity` is
+ * prescribed anyway so there is ONE form to get right.)
+ *
+ * The id/label constraints are the parser's, not stylistic: the reference regex
+ * captures the id as `[^\]|:]+` and the label as `[^\]]*`, so a `:` or `|` in the
+ * id, or a `]` in the label, silently fails to match and the raw `[[…]]` renders
+ * as literal text.
+ */
+const CHIP_RULE =
+  "LINK THE RECORDS YOU NAME. Every line of GATHERED DATA is `<id> · <title>`. " +
+  "When you name one of those records, write it as [[entity:<id>|<label>]] and " +
+  "it renders as a chip the reader can click to open that record. Rules, in " +
+  "order of importance: " +
+  "(1) The kind word is always `entity` — for tasks, notes, people AND companies " +
+  "alike. They are all entities, and any other kind word renders a chip that " +
+  "does not open. " +
+  "(2) Use only an id that appears VERBATIM in the gathered data. Copy it; never " +
+  "construct, shorten, complete or guess one. " +
+  "(3) If you are unsure of an id, write the plain label with no brackets. A " +
+  "wrong id is a dead chip, and a dead chip is worse than plain text. " +
+  "(4) The label is free text but must not contain `]`; the id must not contain " +
+  "`:` or `|`. A marker breaking either rule renders as raw literal text. " +
+  "(5) Link a record the first time it carries weight, not every time it is " +
+  "mentioned. Chips are navigation, not decoration.";
 
 /** The gathered-data block every AI round receives, verbatim. */
 // PROJECTED, not raw. The FIRST real run (2026-07-26) failed at every AI round
@@ -434,8 +694,15 @@ const ANALYZE_SYSTEM = [
   INTEGRITY_RULE,
   EVIDENCE_RULE,
   STEER_RULE,
-  "Output PLAIN PROSE — short paragraphs and bullets. No markdown headings, no",
-  "directives, no code fences. Under 300 words. Another round will format this.",
+  CHIP_RULE,
+  // "No directives" used to be the whole formatting instruction here, and it is
+  // why this round emitted zero chips: a `[[entity:…]]` marker is not a
+  // directive, but a model told "no directives, plain prose" has every reason to
+  // read it as "no markup of any kind". The ban is now named precisely — it is
+  // about the `:::` container blocks, which belong to the assembler alone.
+  "Output PLAIN PROSE — short paragraphs and bullets, with [[entity:…]] chips",
+  "inline wherever you name a record. No markdown headings, no ::: directive",
+  "blocks, no code fences. Under 300 words. Another round will format this.",
 ].join("\n");
 
 const RELATE_SYSTEM = [
@@ -448,10 +715,12 @@ const RELATE_SYSTEM = [
   INTEGRITY_RULE,
   EVIDENCE_RULE,
   STEER_RULE,
-  "When you name a specific record, write it as [[<kind>:<id>|<label>]] using an id",
-  "that appears verbatim in the gathered data. If you are unsure of an id, use the",
-  "plain label instead — a wrong id is worse than no link.",
-  "Output PLAIN PROSE, under 250 words. No headings, no directives, no code fences.",
+  // Was a bespoke three-line copy of this rule teaching `[[<kind>:…]]`, which
+  // produced `[[task:…]]` / `[[company:…]]` chips that render and do not open.
+  // Now the shared fragment, so the two rounds cannot drift again.
+  CHIP_RULE,
+  "Output PLAIN PROSE, under 250 words, with [[entity:…]] chips inline. No",
+  "headings, no ::: directive blocks, no code fences.",
 ].join("\n");
 
 // The assembler is the ONLY round that emits Synap-flavoured markdown, and the only
@@ -480,15 +749,81 @@ const ASSEMBLE_SYSTEM = [
   "3. The outer container must always have STRICTLY MORE colons than anything nested",
   "   inside it. Four outside, three inside. If you ever nest a four-colon block in a",
   "   four-colon block the section closes early and the rest of the report leaks out.",
-  "4. Attributes are REFERENCE-ONLY: short bare values. Never inline JSON, never a",
-  "   value containing a double quote or a } character.",
+  "4. ATTRIBUTE VALUES MUST BE QUOTED. An UNQUOTED value ends at the first } it",
+  "   contains, which silently truncates the attribute — so always quote. Use",
+  "   DOUBLE quotes for a plain value, and SINGLE quotes when the value is itself",
+  "   a JSON object, so the JSON's own double quotes survive:",
+  '   :::synap-cell{cellKey="chart-pie" cellProps=\'{"profileSlug":"task","groupBy":"status"}\'}',
+  "   :::",
+  '   A single-quoted value may contain both " and } — those are only special to',
+  "   an unquoted value. Write the JSON compact, on one line, with no trailing",
+  "   comma; malformed JSON renders the cell with empty config.",
   "5. The ONLY section attributes that survive are: id, agent, round, skills,",
   "   confidence, stepRunId, nodeId, status. Anything else is silently dropped.",
   '6. confidence is a 0-1 ratio written as a decimal string, e.g. confidence="0.8".',
   "   Never a percentage.",
-  "7. Reference a record inline as [[<kind>:<id>|<label>]] — it renders as a chip.",
-  "   Only use ids that appear verbatim in the material you were given. This report",
-  "   is READ-ONLY prose: inventing an id produces a dead chip.",
+  "7. CHIPS ARE CONTENT — COPY THEM THROUGH VERBATIM. The round material you were",
+  "   given already contains [[entity:<id>|<label>]] markers. Reproduce every one",
+  "   EXACTLY as written: same brackets, same id, same label. Do NOT tidy them into",
+  "   plain text, do NOT rewrite or re-case an id, do NOT convert them to markdown",
+  "   links. You are told you add no new FACTS; a chip is not a fact, it is the",
+  "   earlier round's finding made navigable, and stripping it removes the only",
+  "   clickable thing in the report while leaving the prose looking fine.",
+  "   You may add a chip ONLY by copying a marker that already appears in the",
+  "   material. Never invent an id, and never use a kind word other than `entity` —",
+  "   this report is READ-ONLY prose, and either mistake produces a dead chip.",
+  "8. NEVER EMIT :::synap-view, AND NEVER EMIT :::synap-cell WITH AN instanceId.",
+  "   Both need an id you have not been given and cannot obtain, and a made-up",
+  "   reference produces a permanent broken block in a document a human reads.",
+  "9. YOU MAY EMIT A CHART :::synap-cell — from this allowlist ONLY, configured",
+  "   through cellProps. These cells fetch their own data at render time, so they",
+  "   need no id, and they make the report a live surface instead of a text file:",
+  // stat-card ALWAYS carries an explicit timePeriod, and the label ALWAYS names
+  // that window. Not defensive verbosity — the widget has no "all time" mode:
+  // `timePeriod` defaults to "week" and, for `aggregation: "count"`, it filters
+  // to entities CREATED inside that window (StatCardWidget.tsx:341, :369-383).
+  // So the old prescription — profileSlug + count + a bare kind label — rendered
+  // "tasks created in the last 7 days" under the word "Tasks". A figure that is
+  // not what it says is exactly what INTEGRITY_RULE exists to prevent, and it
+  // reads as MORE authoritative than prose because it is a number.
+  // "week" is the honest default rather than month/quarter for a second reason:
+  // the widget counts over ONE page of `entities.list` (limit 500, ordered
+  // createdAt DESC), so the shortest window is the one most likely to fit
+  // entirely inside that page and therefore to be exact.
+  '   - :::synap-cell{cellKey="stat-card" cellProps=\'{"profileSlug":"<kind>","aggregation":"count","timePeriod":"week","label":"<Kind> created this week"}\'}',
+  '   - :::synap-cell{cellKey="chart-pie" cellProps=\'{"profileSlug":"<kind>","groupBy":"<property>"}\'}',
+  '   - :::synap-cell{cellKey="chart-bar" cellProps=\'{"profileSlug":"<kind>","mode":"category","groupBy":"<property>"}\'}',
+  // chart-gauge WAS on this list in v10 and is deliberately off it now. The
+  // reader has NO allowlist of its own — `cellRefFromLegacy` swallows a JSON
+  // parse error and hands the cell an EMPTY config (cell-ref.ts:45-47), and
+  // these cells carry no propsSchema/defaultProps, so nothing validates. This
+  // prompt is the only gate, which means a key earns its place by its FAILURE
+  // mode, not by its happy path. Config-less, chart-pie/chart-bar render a
+  // visible "Pick a group-by property" placeholder — the reader can see that
+  // nothing was measured. Config-less, chart-gauge falls back to
+  // aggregation "completion" over EVERY entity in the workspace and draws a
+  // confident percentage that is indistinguishable from a real reading.
+  "   Rules, all mandatory:",
+  "   (a) profileSlug must be one of the kinds gathered for THIS report: task,",
+  "       note, person, company. A chart over any other kind is a claim this",
+  "       report cannot back — the data was never read.",
+  "   (b) groupBy / field must name a property that plausibly exists on that",
+  "       kind. If you are not confident one does, use the stat-card line above",
+  "       EXACTLY as written — profileSlug, aggregation, timePeriod AND a label",
+  "       naming the window. Never drop timePeriod and never label a windowed",
+  "       count with a bare kind name: the card counts records CREATED in that",
+  '       window, so "Tasks" over a weekly count is a false statement about',
+  "       the workspace.",
+  "   (c) Close EVERY embed with its own ::: line, per rule 2. An unclosed embed",
+  "       swallows the rest of the section.",
+  "   (d) EDITORIAL RULE — embed to SHOW what a sentence cannot: a distribution,",
+  "       a ratio, a count. Never to decorate. At most 2-3 in the whole report,",
+  "       placed inside the section whose prose they support. A chart that merely",
+  "       restates the sentence beside it is noise, and noise is worse than",
+  "       nothing here. If no gathered kind has a distribution worth showing,",
+  "       emit no cells at all — that is a correct report, not a lesser one.",
+  "   Everything else this report needs is ::::synap-section containers plus",
+  "   [[entity:…]] chips inline.",
   "",
   "STRUCTURE: one ::::synap-section per round, in order — analyze, then relate.",
   'Open with a single "# " title line ABOVE the first section.',
@@ -509,7 +844,9 @@ const ASSEMBLE_SYSTEM = [
   "# Workspace report — July 2026",
   "",
   '::::synap-section{agent="analyst" round="analyze" confidence="0.8"}',
-  "Twelve open tasks, most untouched since the sprint opened. Notes are thin.",
+  "Twelve open tasks, most untouched since the sprint opened — the oldest is",
+  "[[entity:3f2a91c4-7b10-4e55-9c02-8ad1f6e4b2d7|Migrate the billing worker]].",
+  "Notes are thin.",
   "::::",
   "",
   '::::synap-section{agent="analyst" round="relate" status="failed" confidence="0.2"}',
@@ -751,14 +1088,19 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
           //
           // The key comes from the PAYLOAD, and the default is deliberately
           // nothing: with no payload it resolves to "", the reader returns null
-          // for a zero-length cellKey, and the profile default (the scroll
-          // renderer `entity-detail-report`) wins exactly as before. Passing
+          // for a zero-length cellKey, and the profile default
+          // (`entity-detail-report`, which opens in scroll) wins exactly as
+          // before. Passing
           // `renderer: "<cellKey>"` when triggering makes THAT report render
           // through THAT cell — one report, one run, reversible through the
           // same door. Nothing is silently flipped for anyone.
           //
-          // NOT hardcoded to the slides cell, on purpose: that key is not
-          // registered anywhere in the tree yet, and seeding an unresolvable
+          // NOT hardcoded to the slides cell, on purpose. `entity-detail-report-slides`
+          // IS registered now (it was not when this was written), so the stamp
+          // resolves — but the default staying empty is still the right call:
+          // a hardcode would move the default reading for every report in every
+          // workspace, and that decision belongs to whoever binds the profile.
+          // Seeding an unresolvable
           // cellKey into every workspace is the kind of "it will land shortly"
           // bet the version history above is made of.
           systemData: {

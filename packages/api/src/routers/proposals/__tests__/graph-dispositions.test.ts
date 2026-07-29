@@ -9,8 +9,10 @@
 import { describe, it, expect } from "vitest";
 import { opRef } from "@synap-core/types/proposals";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import { reconcileProposedProperties } from "@synap/database";
 import {
   applyGraphDispositions,
+  survivingEntityDecisionSlices,
   type GraphDispositionMap,
 } from "../graph-dispositions.js";
 
@@ -147,5 +149,92 @@ describe("applyGraphDispositions", () => {
       [opRef(1)]: { status: "reject" },
     });
     expect(out.filter((o) => o.op === "create_relation")).toHaveLength(0);
+  });
+});
+
+describe("survivingEntityDecisionSlices (composite property reconciliation)", () => {
+  // Two ref'd entities, one relation between them.
+  function graph2(): CompositeProposalOperation[] {
+    return [
+      {
+        op: "create_entity",
+        profileSlug: "person",
+        title: "Ada",
+        ref: "p1",
+        properties: { geo: "EU", secretField: "x" },
+      },
+      {
+        op: "create_entity",
+        profileSlug: "company",
+        title: "Acme",
+        ref: "c1",
+        properties: { score: 5, vertical: "saas" },
+      },
+      {
+        op: "create_relation",
+        type: "works_at",
+        sourceRef: "p1",
+        targetRef: "c1",
+      },
+    ];
+  }
+
+  it("maps each surviving entity op to its ref + decision slice (only entity ops, in order)", () => {
+    const slices = survivingEntityDecisionSlices(graph2(), undefined, {
+      p1: { secretField: { action: "refuse" } },
+    });
+    expect(slices).toEqual([
+      { ref: "p1", decisions: { secretField: { action: "refuse" } } },
+      { ref: "c1", decisions: undefined }, // no slice ⇒ defaults downstream
+    ]);
+  });
+
+  it("recovers the positional $opN ref for a ref-LESS entity op", () => {
+    const ops: CompositeProposalOperation[] = [
+      { op: "create_entity", profileSlug: "person", title: "A" }, // no ref
+      { op: "create_entity", profileSlug: "company", title: "B", ref: "b" },
+    ];
+    const slices = survivingEntityDecisionSlices(ops, undefined, {
+      [opRef(0)]: { title: { action: "refuse" } },
+    });
+    expect(slices[0].ref).toBe(opRef(0));
+    expect(slices[0].decisions).toEqual({ title: { action: "refuse" } });
+    expect(slices[1].ref).toBe("b");
+  });
+
+  it("skips a REJECTED entity entirely (no slice ⇒ never reconciled, no def)", () => {
+    const slices = survivingEntityDecisionSlices(
+      graph2(),
+      { p1: { status: "reject" } },
+      { p1: { geo: { action: "refuse" } }, c1: {} }
+    );
+    // Rejected p1 gone; only the accepted c1 survives — its zip index is now 0,
+    // matching applyGraphDispositions dropping p1 from operationsToMaterialize.
+    expect(slices).toEqual([{ ref: "c1", decisions: {} }]);
+  });
+
+  it("HONORS per-entity decisions through reconcileProposedProperties: refuse drops only that key; no-slice entity keeps all", () => {
+    const slugs = ["geo", "score", "vertical"];
+    const slices = survivingEntityDecisionSlices(graph2(), undefined, {
+      p1: { secretField: { action: "refuse" } },
+    });
+
+    // Entity p1: refuse `secretField` → dropped; `geo` matches a def → kept.
+    const p1 = reconcileProposedProperties({
+      properties: { geo: "EU", secretField: "x" },
+      slugs,
+      decisions: slices[0].decisions,
+    });
+    expect(p1.properties).toEqual({ geo: "EU" });
+    expect(p1.properties).not.toHaveProperty("secretField");
+
+    // Entity c1: no slice ⇒ defaults ⇒ both matched keys kept verbatim.
+    const c1 = reconcileProposedProperties({
+      properties: { score: 5, vertical: "saas" },
+      slugs,
+      decisions: slices[1].decisions, // undefined
+    });
+    expect(c1.properties).toEqual({ score: 5, vertical: "saas" });
+    expect(c1.defsToCreate).toHaveLength(0);
   });
 });

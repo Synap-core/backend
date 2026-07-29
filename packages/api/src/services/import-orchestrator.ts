@@ -143,6 +143,12 @@ export type ImportAnalyzeInput = {
    * Default mint still runs for N≥2 (see resolveImportSession).
    */
   forceSession?: boolean;
+  /**
+   * Structure + quality only — do NOT persist an `import.graph` proposal.
+   * Used by CLI `--dry-run` and any preview that must not spam the inbox.
+   * Returns `proposalId: null`; ops/quality/homes are still fully populated.
+   */
+  previewOnly?: boolean;
 };
 
 export type ImportApplyInput = {
@@ -250,35 +256,37 @@ export async function resolveApplyOperations(
     .where(eq(proposals.id, input.proposalId))
     .limit(1);
 
-  if (row) {
-    const data = row.data as { operations?: unknown } | null;
-    const stored = Array.isArray(data?.operations)
-      ? (data!.operations as CompositeProposalOperation[])
-      : [];
-    if (stored.length > 0) {
-      // Proposal is SSOT — ignore client-supplied ops (preview = commit).
-      return stored;
-    }
-  }
-
-  // Back-compat: client ops when stored ops missing.
-  if (clientOps.length > 0) {
-    return clientOps;
-  }
-
-  // proposalId set but no usable ops.
   if (!row) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Import proposal ${input.proposalId} not found`,
     });
   }
+
+  // HITL: only a PENDING analyze proposal may be applied. Re-applying an
+  // approved/rejected id used to re-run materialize (idempotent) AND re-file
+  // view suggestions — flooding the inbox with To-dos / Note list clones.
   if (row.status !== ProposalStatus.PENDING) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Import proposal ${input.proposalId} is not pending (status: ${row.status})`,
     });
   }
+
+  const data = row.data as { operations?: unknown } | null;
+  const stored = Array.isArray(data?.operations)
+    ? (data!.operations as CompositeProposalOperation[])
+    : [];
+  if (stored.length > 0) {
+    // Proposal is SSOT — ignore client-supplied ops (preview = commit).
+    return stored;
+  }
+
+  // Back-compat: client ops when stored ops missing on a still-pending row.
+  if (clientOps.length > 0) {
+    return clientOps;
+  }
+
   throw new TRPCError({
     code: "BAD_REQUEST",
     message: `Import proposal ${input.proposalId} has no operations`,
@@ -604,12 +612,13 @@ export class ImportOrchestrator {
 
   /**
    * Preview-before-apply: structure the supplied items into a composite graph
-   * (deep for prose, shallow for structured), record it as a governed
+   * (deep for prose, shallow for structured), optionally record it as a governed
    * `import.graph` proposal, AND return the operations so the caller can render
-   * the reveal inline (CompositeProposalGraph) without a round-trip. Pure read +
-   * one proposal row; nothing materializes here. The caller then passes the SAME
-   * `operations` to `apply()` so what the user previewed is exactly what is
-   * created (no re-structuring drift).
+   * the reveal inline (CompositeProposalGraph) without a round-trip.
+   * When `previewOnly` is true (CLI `--dry-run`), no proposal/session is
+   * persisted — structure + quality only. Otherwise one proposal row; nothing
+   * materializes until `apply()`. The caller then passes the SAME `operations`
+   * (or proposalId SSOT) so what the user previewed is exactly what is created.
    */
   async analyze(input: ImportAnalyzeInput) {
     let { workspaceId } = this.ctx;
@@ -814,7 +823,10 @@ export class ImportOrchestrator {
     // under one goal. Reuse the supplied session, else (workspace-scoped only —
     // focusSessions.create requires a workspaceId) create an `Import …` session.
     // Best-effort: a session hiccup must never fail the import.
-    const sessionId = await resolveImportSession(this.ctx, input, tablePlan);
+    // previewOnly dry-runs: do not mint sessions either (no durable side effects).
+    const sessionId = input.previewOnly
+      ? (input.sessionId ?? this.ctx.sessionId ?? null)
+      : await resolveImportSession(this.ctx, input, tablePlan);
     // Thread minted/passed session onto orchestrator so a same-instance apply
     // (or apply that reuses this.ctx) stamps produced-links correctly.
     if (sessionId) this.ctx.sessionId = sessionId;
@@ -871,48 +883,68 @@ export class ImportOrchestrator {
       itemCount: input.items.length,
     });
 
-    const targetId = randomUUID();
-    const { proposal: created } = await createEventBackedProposal({
-      userId,
-      workspaceId,
-      targetType: "entity",
-      targetId,
-      proposalType: "import.graph",
-      action: "create",
-      source: "intelligence",
-      summary: `${summary} · ${quality.summary}`,
-      sessionId: sessionId ?? null,
-      data: buildImportGraphProposalData({
-        operations: ops,
-        source: input.source,
-        sourceId: targetId,
-        quality,
-        homes,
-        corpusMap: corpusMapMeta,
-      }),
-    });
-
-    logger.info(
-      {
+    // Dry-run / previewOnly: return the full graph + quality without filing a
+    // durable proposal. Dogfood showed every --dry-run left a pending
+    // import.graph clone in the inbox (WineSafe × N).
+    let proposalId: string | null = null;
+    if (input.previewOnly) {
+      logger.info(
+        {
+          userId,
+          workspaceId,
+          source: input.source,
+          mode,
+          sessionId,
+          previewOnly: true,
+          qualityScore: quality.score,
+          ...stats,
+        },
+        "import.analyze previewOnly (no proposal)"
+      );
+    } else {
+      const targetId = randomUUID();
+      const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
-        source: input.source,
-        mode,
-        proposalId: (created as { id?: string })?.id,
-        sessionId,
-        droppedReferences,
-        aiTyped,
-        multiHome: homes.multiHome,
-        qualityScore: quality.score,
-        ...stats,
-      },
-      "import.analyze"
-    );
+        targetType: "entity",
+        targetId,
+        proposalType: "import.graph",
+        action: "create",
+        source: "intelligence",
+        summary: `${summary} · ${quality.summary}`,
+        sessionId: sessionId ?? null,
+        data: buildImportGraphProposalData({
+          operations: ops,
+          source: input.source,
+          sourceId: targetId,
+          quality,
+          homes,
+          corpusMap: corpusMapMeta,
+        }),
+      });
+      proposalId = (created as { id?: string })?.id ?? null;
+      logger.info(
+        {
+          userId,
+          workspaceId,
+          source: input.source,
+          mode,
+          proposalId,
+          sessionId,
+          droppedReferences,
+          aiTyped,
+          multiHome: homes.multiHome,
+          qualityScore: quality.score,
+          ...stats,
+        },
+        "import.analyze"
+      );
+    }
     return {
       workspaceId,
       source: input.source,
       mode,
-      proposalId: (created as { id?: string })?.id ?? null,
+      proposalId,
       sessionId: sessionId ?? null,
       tablePlan,
       operations: ops,
@@ -996,10 +1028,11 @@ export class ImportOrchestrator {
 
     // HITL: suggest useful views from the imported profile mix. Best-effort —
     // never fails the import; human reviews proposals in the proposal UI.
-    // Use the same resolved ops that materialize used (proposal SSOT when present).
+    // Skip when nothing new was created (idempotent re-apply must not spam views).
     const viewProposalIds = await suggestViewsFromImportGraph(
       this.ctx,
-      operations
+      operations,
+      { createdCount: created }
     );
 
     logger.info(
@@ -1220,7 +1253,10 @@ export class ImportOrchestrator {
     };
 
     // Same session mint rules as analyze() (N≥2 / forceSession / playbook / pass-through).
-    const sessionId = await resolveImportSession(this.ctx, input, null);
+    // previewOnly: no durable session mint.
+    const sessionId = input.previewOnly
+      ? (input.sessionId ?? this.ctx.sessionId ?? null)
+      : await resolveImportSession(this.ctx, input, null);
     if (sessionId) this.ctx.sessionId = sessionId;
 
     // Homes / placement — same rules as analyze() (see comment there).
@@ -1254,46 +1290,64 @@ export class ImportOrchestrator {
       itemCount: input.items.length,
     });
 
-    const { proposal: created } = await createEventBackedProposal({
-      userId,
-      workspaceId,
-      targetType: "entity",
-      targetId: batchId,
-      proposalType: "import.graph",
-      action: "create",
-      source: "intelligence",
-      summary: `${summary} · ${quality.summary}`,
-      sessionId: sessionId ?? null,
-      data: buildImportGraphProposalData({
-        operations,
-        source: input.source,
-        sourceId: batchId,
-        quality,
-        homes,
-        corpusMap: stats.corpusMap,
-      }),
-    });
-
-    logger.info(
-      {
+    let proposalId: string | null = null;
+    if (input.previewOnly) {
+      logger.info(
+        {
+          userId,
+          workspaceId,
+          qualityScore: quality.score,
+          source: input.source,
+          mode: "deep",
+          previewOnly: true,
+          sessionId: sessionId ?? null,
+          multiHome: homes.multiHome,
+          ...stats,
+        },
+        "import.analyzeLarge previewOnly (no proposal)"
+      );
+    } else {
+      const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
-        qualityScore: quality.score,
-        source: input.source,
-        mode: "deep",
-        proposalId: (created as { id?: string })?.id,
+        targetType: "entity",
+        targetId: batchId,
+        proposalType: "import.graph",
+        action: "create",
+        source: "intelligence",
+        summary: `${summary} · ${quality.summary}`,
         sessionId: sessionId ?? null,
-        multiHome: homes.multiHome,
-        ...stats,
-      },
-      "import.analyzeLarge"
-    );
+        data: buildImportGraphProposalData({
+          operations,
+          source: input.source,
+          sourceId: batchId,
+          quality,
+          homes,
+          corpusMap: stats.corpusMap,
+        }),
+      });
+      proposalId = (created as { id?: string })?.id ?? null;
+      logger.info(
+        {
+          userId,
+          workspaceId,
+          qualityScore: quality.score,
+          source: input.source,
+          mode: "deep",
+          proposalId,
+          sessionId: sessionId ?? null,
+          multiHome: homes.multiHome,
+          ...stats,
+        },
+        "import.analyzeLarge"
+      );
+    }
 
     return {
       workspaceId,
       source: input.source,
       mode: "deep" as const,
-      proposalId: (created as { id?: string })?.id ?? null,
+      proposalId,
       sessionId: sessionId ?? null,
       operations,
       summary,
@@ -1413,12 +1467,11 @@ export class ImportOrchestrator {
     // materialize already succeeded; a close failure must never fail the import.
     await closeImportProposalOnApply(input.proposalId, userId);
 
-    // HITL: suggest useful views from the imported profile mix. Best-effort —
-    // never fails the import; human reviews proposals in the proposal UI.
-    // Use the same resolved ops that materialize used (proposal SSOT when present).
+    // HITL: suggest useful views — skip when created=0 (no inbox spam on retry).
     const viewProposalIds = await suggestViewsFromImportGraph(
       this.ctx,
-      operations
+      operations,
+      { createdCount: created }
     );
 
     logger.info(

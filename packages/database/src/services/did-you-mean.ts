@@ -70,3 +70,38 @@ export function suggestClosest(
 
   return best;
 }
+
+/**
+ * Like {@link suggestClosest}, but returns the closest candidate AND its
+ * case/separator-folded edit distance, so a caller can apply its OWN confidence
+ * threshold (e.g. "only auto-remap at distance ≤ 1"). `distance === 0` means the
+ * strings differ only in casing/separators (`Geo` vs `geo`, `dueDate` vs
+ * `due-date`) — an unambiguous label-vs-slug match. Scans within the SAME
+ * length-scaled budget as `suggestClosest` (~1 edit / 4 chars, min 1, max 3);
+ * returns `undefined` when nothing lands inside that budget.
+ */
+export function closestWithDistance(
+  input: string,
+  candidates: readonly string[]
+): { candidate: string; distance: number } | undefined {
+  const fold = (s: string) => s.toLowerCase().replace(/[-_\s]/g, "");
+  const target = fold(input);
+  if (!target) return undefined;
+
+  const budget = Math.max(1, Math.min(3, Math.floor(target.length / 4)));
+  let best: string | undefined;
+  let bestDistance = budget + 1;
+
+  for (const candidate of candidates) {
+    const distance = levenshtein(target, fold(candidate), bestDistance);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+      if (distance === 0) break;
+    }
+  }
+
+  return best === undefined
+    ? undefined
+    : { candidate: best, distance: bestDistance };
+}

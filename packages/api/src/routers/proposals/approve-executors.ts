@@ -54,6 +54,7 @@ import type { RendererRef } from "@synap/database";
 import { storage } from "@synap/storage";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
+import { reconcileApprovedProperties } from "../../services/proposals/reconcile-proposal-properties.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
@@ -672,6 +673,28 @@ export function registerApproveExecutors(): void {
         entityCallerCtx as unknown as Context
       );
       const storedEntityId = innerData.id as string | undefined;
+
+      // Property reconciliation (approve-side): match each proposed property key
+      // against the target kind's def slugs. Un-modeled free-form keys the AI
+      // invented (e.g. `Geo`, `Funding`) are remapped onto a close def slug,
+      // or promoted to a first-class def so they become queryable/rendered —
+      // instead of being stored verbatim and invisible. Honors the reviewer's
+      // per-field `propertyDecisions`. Best-effort: on def-create failure the
+      // value is still stored verbatim (no data loss). See
+      // services/proposals/reconcile-proposal-properties.ts.
+      const reconciledProfile = await profileService.resolveProfile(
+        profileSlug,
+        userId,
+        entityCallerCtx.workspaceId
+      );
+      const reconciledCreate = await reconcileApprovedProperties({
+        properties: innerData.properties as Record<string, unknown> | undefined,
+        profileId: reconciledProfile?.id ?? profileSlug,
+        workspaceId: entityCallerCtx.workspaceId,
+        userId,
+        decisions: input.propertyDecisions,
+      });
+
       // `proposedEntityId` is the id minted at PROPOSE time. `entities.create`
       // honors it when nothing matches, but its identity-first dedup may return
       // a DIFFERENT, pre-existing entity (strong email/phone/url match) with
@@ -682,7 +705,7 @@ export function registerApproveExecutors(): void {
         profileSlug,
         title: (innerData.title as string) || "Untitled",
         description: innerData.description as string | undefined,
-        properties: innerData.properties as Record<string, unknown> | undefined,
+        properties: reconciledCreate.properties,
         content: innerData.content as string | undefined,
         // `entities.create` persists `documentId` into the proposal data
         // (entities.ts) but this replay historically dropped it — so an approved
@@ -691,6 +714,39 @@ export function registerApproveExecutors(): void {
         documentId: innerData.documentId as string | undefined,
         source: "system",
       })) as { id?: string; deduplicated?: boolean };
+
+      // Approve-time FACET channel (single-entity twin of the composite path):
+      // attach the caller-NAMED facets (`input.facets`) to the created entity.
+      // Domain-agnostic — the backend attaches exactly what the caller listed,
+      // with no default/eligibility logic (duplicate slugs within the list are
+      // collapsed). Best-effort — a facet-attach failure is logged and NEVER
+      // aborts the approve (mirrors the composite pass-1.5 no-abort contract).
+      // `entityCaller` is the same human-approved ctx, so attachFacet lands
+      // directly rather than re-proposing.
+      if (createdEntity?.id && input.facets && input.facets.length > 0) {
+        const seen = new Set<string>();
+        for (const facet of input.facets) {
+          if (seen.has(facet.profileSlug)) continue;
+          seen.add(facet.profileSlug);
+          try {
+            await entityCaller.attachFacet({
+              entityId: createdEntity.id,
+              profileSlug: facet.profileSlug,
+              ...(facet.status ? { status: facet.status } : {}),
+              source: "system",
+            });
+          } catch (err) {
+            logger.warn(
+              {
+                err,
+                entityId: createdEntity.id,
+                profileSlug: facet.profileSlug,
+              },
+              "Skipping single-entity approve facet (entity kept)"
+            );
+          }
+        }
+      }
 
       // Did this approval MERGE onto an entity that already existed independently
       // of this proposal? `deduplicated` alone isn't enough: a retry (re-approve,
@@ -1951,11 +2007,39 @@ export function registerApproveExecutors(): void {
       const entityCaller = regularEntitiesRouter.createCaller(
         entityCallerCtx as unknown as Context
       );
+
+      // Property reconciliation (approve-side) — same contract as entity/create:
+      // resolve the entity's kind, then match/remap/promote each proposed property
+      // key against that kind's def slugs (honoring `propertyDecisions`). Best-effort;
+      // verbatim fallback on def-create failure. See entity/create for the rationale.
+      let reconciledUpdateProps = innerData.properties as
+        Record<string, unknown> | undefined;
+      if (
+        reconciledUpdateProps &&
+        Object.keys(reconciledUpdateProps).length > 0
+      ) {
+        const targetEntity = await db.query.entities.findFirst({
+          where: eq(entities.id, entityId),
+          columns: { profileId: true, workspaceId: true },
+        });
+        if (targetEntity?.profileId) {
+          const reconciled = await reconcileApprovedProperties({
+            properties: reconciledUpdateProps,
+            profileId: targetEntity.profileId,
+            workspaceId:
+              proposal.workspaceId ?? targetEntity.workspaceId ?? null,
+            userId,
+            decisions: input.propertyDecisions,
+          });
+          reconciledUpdateProps = reconciled.properties;
+        }
+      }
+
       await entityCaller.update({
         id: entityId,
         title: innerData.title as string | undefined,
         description: innerData.description as string | undefined,
-        properties: innerData.properties as Record<string, unknown> | undefined,
+        properties: reconciledUpdateProps,
         deleteProperties: innerData.deleteProperties as string[] | undefined,
         source: "system",
       });
