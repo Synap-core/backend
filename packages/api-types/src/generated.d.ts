@@ -9584,6 +9584,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | {
 					action: "refuse";
 				}>> | undefined;
+				facets?: {
+					profileSlug: string;
+					status?: string | undefined;
+				}[] | undefined;
+				facetsByRef?: Record<string, {
+					profileSlug: string;
+					status?: string | undefined;
+				}[]> | undefined;
 			};
 			output: ProposalExecutorResult;
 			meta: object;
@@ -9592,6 +9600,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalId: string;
 				data: Record<string, unknown>;
+				workspaceId?: string | null | undefined;
+				projectId?: string | null | undefined;
 			};
 			output: {
 				success: boolean;
@@ -9653,6 +9663,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalId: string;
 				reason?: string | undefined;
+				reopen?: boolean | undefined;
 			};
 			output: {
 				restoredEntityId?: string | undefined;
@@ -9662,6 +9673,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				partialFailures?: string[] | undefined;
 				restoredEntityId?: string | undefined;
+				reopened?: boolean | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
 			};
@@ -18869,6 +18881,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
+				previewOnly?: boolean | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -18921,6 +18934,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
+				previewOnly?: boolean | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -18971,6 +18985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				forceSession?: boolean | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
+				previewOnly?: boolean | undefined;
 			};
 			output: {
 				queued: true;
