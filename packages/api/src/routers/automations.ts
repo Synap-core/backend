@@ -16,7 +16,11 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
-import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
+import {
+  flowValidationErrorMessage,
+  type FlowValidationResolvers,
+} from "../services/automations/validate-flow.js";
+import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   getDb,
   eq,
@@ -30,6 +34,7 @@ import {
   automationRuns,
   automationStepRuns,
   channels,
+  playbooks,
   skills,
   ChannelRepository,
 } from "@synap/database";
@@ -50,14 +55,15 @@ import { TRPCError } from "@trpc/server";
  * automation that references it by its stable name, since the runtime id isn't
  * known at author time — mirrors `playbook_run`'s id-OR-name). Mutates the flow
  * in place BEFORE it is persisted (and before it is carried into an AI proposal),
- * so the runtime always sees a concrete `skillId`. Workspace-scoped with a
- * pod-wide (NULL workspace) fallback. Unresolved names are left as-is — the
- * validator already accepts `skillName` and the runtime surfaces "skill not found".
+ * so the runtime always sees a concrete `skillId`. It uses the runtime's active
+ * skill visibility predicate. Unresolved names are left as-is; the validation
+ * resolver rejects them before either persistence door reaches this helper.
  */
 async function injectSkillIdsFromNames(
   database: Awaited<ReturnType<typeof getDb>>,
   flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
-  workspaceId: string | null | undefined
+  workspaceId: string | null | undefined,
+  userId: string
 ): Promise<void> {
   for (const node of flow.nodes) {
     if (node?.type !== "skill") continue;
@@ -73,12 +79,8 @@ async function injectSkillIdsFromNames(
       .where(
         and(
           eq(skills.name, skillName),
-          workspaceId
-            ? or(
-                eq(skills.workspaceId, workspaceId),
-                isNull(skills.workspaceId)
-              )
-            : isNull(skills.workspaceId)
+          eq(skills.status, "active"),
+          visibleSkillsWhere(userId, workspaceId ?? undefined)
         )
       )
       .limit(1);
@@ -87,6 +89,126 @@ async function injectSkillIdsFromNames(
       node.data = data;
     }
   }
+}
+
+/**
+ * Load only the catalog references carried by one submitted flow, then expose
+ * them through the pure validator's synchronous resolver contract. This keeps
+ * validation at the author door without turning every create/update into an
+ * unbounded catalog scan.
+ *
+ * Skill and capability references use the same active, caller-visible skill
+ * predicate as the runtime capability dispatcher. Playbook references follow
+ * the runner's workspace-or-pod resolution (an id has priority over a name).
+ */
+async function loadFlowValidationResolvers(
+  database: Awaited<ReturnType<typeof getDb>>,
+  flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
+  workspaceId: string | null | undefined,
+  userId: string
+): Promise<FlowValidationResolvers> {
+  const verbIds = new Set<string>();
+  const skillIds = new Set<string>();
+  const skillNames = new Set<string>();
+  const playbookIds = new Set<string>();
+  const playbookNames = new Set<string>();
+
+  for (const node of flow.nodes) {
+    if (!node || typeof node !== "object") continue;
+    const data = node.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+    const nodeData = data as Record<string, unknown>;
+    const stringValue = (key: string) =>
+      typeof nodeData[key] === "string" && nodeData[key].trim().length > 0
+        ? (nodeData[key] as string)
+        : undefined;
+
+    if (node.type === "capability") {
+      const verbId = stringValue("verbId");
+      if (verbId) verbIds.add(verbId);
+    } else if (node.type === "skill") {
+      const skillId = stringValue("skillId");
+      const skillName = stringValue("skillName");
+      if (skillId) skillIds.add(skillId);
+      else if (skillName) skillNames.add(skillName);
+    } else if (node.type === "playbook_run") {
+      const playbookId = stringValue("playbookId");
+      const playbookName = stringValue("playbookName");
+      if (playbookId) playbookIds.add(playbookId);
+      else if (playbookName) playbookNames.add(playbookName);
+    }
+  }
+
+  const skillReferenceNames = [...new Set([...verbIds, ...skillNames])];
+  const skillReferenceIds = [...skillIds];
+  const playbookReferenceIds = [...playbookIds];
+  const playbookReferenceNames = [...playbookNames];
+
+  const skillRows =
+    skillReferenceIds.length > 0 || skillReferenceNames.length > 0
+      ? await database
+          .select({ id: skills.id, name: skills.name })
+          .from(skills)
+          .where(
+            and(
+              visibleSkillsWhere(userId, workspaceId ?? undefined),
+              eq(skills.status, "active"),
+              skillReferenceIds.length > 0 && skillReferenceNames.length > 0
+                ? or(
+                    inArray(skills.id, skillReferenceIds),
+                    inArray(skills.name, skillReferenceNames)
+                  )
+                : skillReferenceIds.length > 0
+                  ? inArray(skills.id, skillReferenceIds)
+                  : inArray(skills.name, skillReferenceNames)
+            )
+          )
+      : [];
+
+  const playbookRows =
+    playbookReferenceIds.length > 0 || playbookReferenceNames.length > 0
+      ? await database
+          .select({ id: playbooks.id, name: playbooks.name })
+          .from(playbooks)
+          .where(
+            and(
+              workspaceId
+                ? or(
+                    eq(playbooks.workspaceId, workspaceId),
+                    isNull(playbooks.workspaceId)
+                  )
+                : isNull(playbooks.workspaceId),
+              playbookReferenceIds.length > 0 &&
+                playbookReferenceNames.length > 0
+                ? or(
+                    inArray(playbooks.id, playbookReferenceIds),
+                    inArray(playbooks.name, playbookReferenceNames)
+                  )
+                : playbookReferenceIds.length > 0
+                  ? inArray(playbooks.id, playbookReferenceIds)
+                  : inArray(playbooks.name, playbookReferenceNames)
+            )
+          )
+      : [];
+
+  const foundSkillIds = new Set(skillRows.map((skill) => skill.id));
+  const foundSkillNames = new Set(skillRows.map((skill) => skill.name));
+  const foundPlaybookIds = new Set(playbookRows.map((playbook) => playbook.id));
+  const foundPlaybookNames = new Set(
+    playbookRows.map((playbook) => playbook.name)
+  );
+
+  return {
+    verbExists: (verbId) => foundSkillNames.has(verbId),
+    skillExists: ({ skillId, skillName }) =>
+      skillId
+        ? foundSkillIds.has(skillId)
+        : !!skillName && foundSkillNames.has(skillName),
+    playbookExists: ({ playbookId, playbookName }) =>
+      playbookId
+        ? foundPlaybookIds.has(playbookId)
+        : !!playbookName && foundPlaybookNames.has(playbookName),
+  };
 }
 
 /**
@@ -501,13 +623,19 @@ export const automationsRouter = router({
         }
       }
 
-      // Node-contract validation. Reject a semantically-broken flow (targetless
-      // channel_message, capability with no verbId, dangling edge, cycle, unknown
-      // node.type, bad outputType) at AUTHOR time rather than letting it persist
-      // and fail mid-run in the executor. Structural + contract checks only —
-      // catalog-existence (verbId/skillId/playbook) is resolver-gated and not
-      // wired here (would require async catalog loads at the door).
-      const createFlowError = flowValidationErrorMessage(input.flowDefinition);
+      // Node-contract + bounded catalog validation. The resolver only loads
+      // references carried by this submitted flow, so malformed catalog refs
+      // fail before either an operator insert or an AI proposal is created.
+      const createFlowResolvers = await loadFlowValidationResolvers(
+        database,
+        input.flowDefinition,
+        input.workspaceId,
+        createdBy
+      );
+      const createFlowError = flowValidationErrorMessage(
+        input.flowDefinition,
+        createFlowResolvers
+      );
       if (createFlowError) {
         throw new TRPCError({ code: "BAD_REQUEST", message: createFlowError });
       }
@@ -518,7 +646,8 @@ export const automationsRouter = router({
       await injectSkillIdsFromNames(
         database,
         input.flowDefinition,
-        input.workspaceId
+        input.workspaceId,
+        createdBy
       );
 
       // Governance membrane. AI agents (agentUserId set) route through
@@ -708,13 +837,19 @@ export const automationsRouter = router({
         }
       }
 
-      // Node-contract validation — only the NEW flow being submitted is checked
-      // (a no-op update that omits flowDefinition is untouched, so this never
-      // retroactively rejects an already-persisted automation). Same gate as
-      // `create`.
+      // Node-contract + catalog validation — only the NEW flow being submitted
+      // is checked (a no-op update that omits flowDefinition is untouched, so
+      // this never retroactively rejects an already-persisted automation).
       if (input.flowDefinition !== undefined) {
+        const updateFlowResolvers = await loadFlowValidationResolvers(
+          database,
+          input.flowDefinition,
+          existing.workspaceId,
+          existing.createdBy
+        );
         const updateFlowError = flowValidationErrorMessage(
-          input.flowDefinition
+          input.flowDefinition,
+          updateFlowResolvers
         );
         if (updateFlowError) {
           throw new TRPCError({
@@ -722,6 +857,15 @@ export const automationsRouter = router({
             message: updateFlowError,
           });
         }
+
+        // Keep the template-friendly skillName form executable on update too,
+        // matching create's pre-persist normalization.
+        await injectSkillIdsFromNames(
+          database,
+          input.flowDefinition,
+          existing.workspaceId,
+          existing.createdBy
+        );
       }
 
       const updates: Record<string, unknown> = {
