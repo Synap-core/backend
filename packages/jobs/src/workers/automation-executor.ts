@@ -3948,6 +3948,28 @@ async function executeAutomationFlow(params: {
         }
 
         try {
+          // LOOP-BINDING GUARD. `context.loop` exists ONLY while a loop
+          // dispatches its body (it is deleted right after), so a node that
+          // reaches THIS pass with a `{{loop.*}}` reference can never resolve
+          // it — it is outside every loop's body (no edge from the loop, a
+          // boundary node type between them, or an empty loop that leaked).
+          // Left unguarded that resolves to `undefined`: a Zod
+          // "expected string, received undefined" at best, and at worst a junk
+          // entity/relation written with empty ids. Fail the STEP with the
+          // actionable cause instead of letting undefined propagate.
+          if (!context.loop) {
+            const loopRefs = collectLoopBindingRefs(node.data);
+            if (loopRefs.length > 0) {
+              throw new Error(
+                `Node "${node.id}" (${node.type}) references ${loopRefs
+                  .map((r) => `\`${r}\``)
+                  .join(
+                    ", "
+                  )} but is not inside a loop body, so there is no item to bind. Connect it downstream of a loop node (with no switch/delay/nested-loop node in between), or stop referencing {{loop.*}}.`
+              );
+            }
+          }
+
           switch (node.type) {
             case "command": {
               const data = node.data as {
@@ -4164,21 +4186,25 @@ async function executeAutomationFlow(params: {
               // never silently dropping downstream branch/merge/post-loop logic.
               // Computed BEFORE the empty-collection check because both the empty
               // and non-empty paths must suppress these nodes from the main pass.
-              const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
-              const bodyNodeIds = new Set<string>();
-              {
-                const stack = getOutEdges(flow.edges, node.id).map(
-                  (e) => e.target
+              const bodyNodeIds = computeLoopBodyNodeIds(
+                flow.nodes,
+                flow.edges,
+                node.id
+              );
+
+              // A loop that owns NOTHING is authoring breakage, not a no-op: the
+              // per-item pass dispatches zero children (fast + green) while every
+              // node that was MEANT to be the body leaks into the main pass with
+              // no `context.loop`. Surfaced in the log and in the step output
+              // (`bodyNodeCount`) so a run that "succeeded in 2ms" is legible.
+              if (bodyNodeIds.size === 0) {
+                logger.warn(
+                  {
+                    nodeId: node.id,
+                    itemCount: items.length,
+                  },
+                  "loop: no body nodes reachable — the loop will dispatch nothing (check the loop's out-edges / that the body node types are loop-dispatchable)"
                 );
-                while (stack.length) {
-                  const id = stack.pop() as string;
-                  if (bodyNodeIds.has(id)) continue;
-                  const bn = nodeById.get(id);
-                  if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
-                  bodyNodeIds.add(id);
-                  for (const e of getOutEdges(flow.edges, id))
-                    stack.push(e.target);
-                }
               }
 
               // Empty collection: the loop dispatches nothing — but its body nodes
@@ -4193,7 +4219,11 @@ async function executeAutomationFlow(params: {
                 for (const childId of bodyNodeIds) {
                   skippedNodes.add(childId);
                 }
-                output = { status: "empty_collection", itemCount: 0 };
+                output = {
+                  status: "empty_collection",
+                  itemCount: 0,
+                  bodyNodeCount: bodyNodeIds.size,
+                };
                 break;
               }
               // Already topologically sorted — filter preserves the order so a
@@ -4420,6 +4450,7 @@ async function executeAutomationFlow(params: {
               output = {
                 status: "completed",
                 itemCount: items.length,
+                bodyNodeCount: bodyNodeIds.size,
                 results: iterationResults,
               };
               break;
@@ -5280,6 +5311,70 @@ const LOOP_BODY_NODE_TYPES = new Set<string>([
   "skill",
   "capability",
 ]);
+
+/**
+ * The node ids a loop OWNS as its per-item body: the CONTIGUOUS chain of
+ * LOOP_BODY_NODE_TYPES nodes reachable from the loop node, traversal stopping at
+ * any node type not in that set (those are boundaries — they run once in the
+ * main pass). Extracted from the `case "loop"` block so the exact ownership rule
+ * the executor applies can be unit-tested and mirrored by the author-time
+ * validator (`packages/api/src/services/automations/validate-flow.ts`).
+ *
+ * Pure. An empty result means the loop dispatches NOTHING — see the caller.
+ */
+export function computeLoopBodyNodeIds(
+  nodes: AutomationNode[],
+  edges: AutomationEdge[],
+  loopNodeId: string
+): Set<string> {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const bodyNodeIds = new Set<string>();
+  const stack = getOutEdges(edges, loopNodeId).map((e) => e.target);
+  while (stack.length) {
+    const id = stack.pop() as string;
+    if (bodyNodeIds.has(id)) continue;
+    const bn = nodeById.get(id);
+    if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
+    bodyNodeIds.add(id);
+    for (const e of getOutEdges(edges, id)) stack.push(e.target);
+  }
+  return bodyNodeIds;
+}
+
+/** Matches a `{{loop.…}}` binding reference. */
+const LOOP_BINDING_RE = /\{\{\s*loop\./;
+
+/**
+ * Every string inside a node's `data` that reads the per-item `{{loop.*}}`
+ * binding. Used by the main-pass guard: `context.loop` exists ONLY while a loop
+ * dispatches its body, so a node that reaches the main topological pass with a
+ * `{{loop.*}}` reference can NEVER resolve it (see the guard's comment).
+ *
+ * PRE-PIPE part only: an array pipe argument (`{{x | map:{{loop.item.id}}}}`)
+ * legitimately binds `loop` per item during resolution — that is a resolver-local
+ * scope, not the node's own, so it must not trip the guard.
+ *
+ * Pure and deep (walks objects/arrays), so nested `inputMapping` / `config`
+ * values are covered.
+ */
+export function collectLoopBindingRefs(data: unknown): string[] {
+  const found: string[] = [];
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      if (LOOP_BINDING_RE.test(v.split("|")[0])) found.push(v);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x);
+      return;
+    }
+    if (v && typeof v === "object") {
+      for (const x of Object.values(v)) walk(x);
+    }
+  };
+  walk(data);
+  return found;
+}
 
 /**
  * Parse a duration string to milliseconds.

@@ -18,6 +18,8 @@ import {
   getDb,
   intelligenceServices,
   automations,
+  playbooks,
+  playbookAutomations,
   skills,
   entities,
   capabilities as capabilitiesTable,
@@ -32,6 +34,7 @@ import {
   and,
   or,
   isNull,
+  inArray,
   drizzleSql,
 } from "@synap/database";
 import type { FlowDefinition } from "@synap/database";
@@ -1014,6 +1017,24 @@ export const capabilitiesRouter = router({
    * `type:"capability"` node with `data.verbId == verbId`, via a JSONB
    * containment query on the nodes array. Membership-scoped via the access layer
    * (mirrors automations.list) so a foreign workspaceId leaks nothing.
+   *
+   * ALSO surfaces playbooks that use the verb — TRANSITIVELY, via the
+   * automation(s) they're composed with. A playbook has no `flowDefinition`
+   * of its own (see `packages/database/src/schema/playbooks.ts`): its only
+   * link to a capability-verb node is through the automation it drives
+   * (`flowAutomationId`, the legacy single-automation link) or the automations
+   * it composes (`playbook_automations`, the first-class join table). So "a
+   * playbook uses this capability" means "a matching automation from above is
+   * that playbook's `flowAutomationId` OR is joined via `playbook_automations`" —
+   * never a direct verbId on the playbook row (there isn't one; a false direct
+   * backlink would be worse than this correct transitive one).
+   *
+   * Output-shape change: the array is now a discriminated union
+   * (`kind: "automation" | "playbook"`) instead of always
+   * `{ automationId, name, status }`. Existing consumers
+   * (`browser/.../CapabilityDetail.tsx`, `.../ToolDetailPage.tsx`) dedupe by
+   * `p.automationId` and only know how to open an automation surface — they
+   * need updating to branch on `kind` before playbook rows show up correctly.
    */
   usedInProcesses: protectedProcedure
     .input(
@@ -1024,7 +1045,7 @@ export const capabilitiesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const database = await getDb();
-      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+      const automationVisibility = scopedDb(AccessContext.from(ctx)).predicate(
         automations
       );
 
@@ -1032,7 +1053,7 @@ export const capabilitiesRouter = router({
         [{ type: "capability", data: { verbId: input.verbId } }]
       )}::jsonb`;
 
-      const rows = await database
+      const automationRows = await database
         .select({
           automationId: automations.id,
           name: automations.name,
@@ -1041,7 +1062,7 @@ export const capabilitiesRouter = router({
         .from(automations)
         .where(
           and(
-            visibility,
+            automationVisibility,
             // A specific workspace only NARROWS and still includes pod-wide
             // (NULL) automations; no workspace → no narrow (the user floor).
             input.workspaceId
@@ -1055,11 +1076,68 @@ export const capabilitiesRouter = router({
         )
         .orderBy(automations.name);
 
-      return rows.map((r) => ({
-        automationId: r.automationId,
-        name: r.name,
-        status: r.status,
-      }));
+      const matchedAutomationIds = automationRows.map((r) => r.automationId);
+
+      let playbookRows: Array<{
+        playbookId: string;
+        name: string;
+        status: string;
+      }> = [];
+      if (matchedAutomationIds.length > 0) {
+        const playbookVisibility = scopedDb(AccessContext.from(ctx)).predicate(
+          playbooks
+        );
+
+        // Two soft links can carry the match: the legacy single `flowAutomationId`
+        // and the first-class `playbook_automations` join table — hence the
+        // `leftJoin` + `or(...)` rather than a subquery. `inArray` (the drizzle
+        // helper, not a raw `sql` array bind) is required here: this pod's
+        // postgres.js driver faults on a JS array interpolated straight into a
+        // `sql` template (the same class of gotcha as `sql.json()` — see
+        // `matchForEntity` above and the driver notes in @synap/database).
+        playbookRows = await database
+          .selectDistinct({
+            playbookId: playbooks.id,
+            name: playbooks.name,
+            status: playbooks.status,
+          })
+          .from(playbooks)
+          .leftJoin(
+            playbookAutomations,
+            eq(playbookAutomations.playbookId, playbooks.id)
+          )
+          .where(
+            and(
+              playbookVisibility,
+              input.workspaceId
+                ? or(
+                    isNull(playbooks.workspaceId),
+                    eq(playbooks.workspaceId, input.workspaceId)
+                  )
+                : undefined,
+              or(
+                inArray(playbooks.flowAutomationId, matchedAutomationIds),
+                inArray(playbookAutomations.automationId, matchedAutomationIds)
+              )
+            )
+          )
+          .orderBy(playbooks.name);
+      }
+
+      return [
+        ...automationRows.map((r) => ({
+          kind: "automation" as const,
+          automationId: r.automationId,
+          name: r.name,
+          status: r.status,
+        })),
+        ...playbookRows.map((r) => ({
+          kind: "playbook" as const,
+          playbookId: r.playbookId,
+          name: r.name,
+          status: r.status,
+        })),
+      ];
     }),
 
   /**

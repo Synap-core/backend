@@ -28,6 +28,7 @@ import {
   or,
   gt,
   lt,
+  isNull,
   asc,
   desc,
   drizzleSql,
@@ -997,6 +998,80 @@ export const playbooksRouter = router({
         .where(
           and(
             visibility,
+            input?.status !== undefined
+              ? eq(playbooks.status, input.status)
+              : undefined,
+            cursor
+              ? or(
+                  lt(playbooks.createdAt, new Date(cursor.at)),
+                  and(
+                    eq(playbooks.createdAt, new Date(cursor.at)),
+                    gt(playbooks.id, cursor.id)
+                  )
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(playbooks.createdAt), asc(playbooks.id))
+        .limit(limit + 1);
+
+      const hasNextPage = rows.length > limit;
+      const page = hasNextPage ? rows.slice(0, limit) : rows;
+      const last = page.at(-1);
+      return {
+        playbooks: page,
+        nextCursor:
+          hasNextPage && last
+            ? encodeDefinitionCursor({ at: last.createdAt, id: last.id })
+            : null,
+      };
+    }),
+
+  /**
+   * Pod-wide sibling of `listPage`: same cursor contract, same output shape,
+   * but `protectedProcedure` — no `X-Workspace-Id` header required. Visibility
+   * is UNCHANGED (`scopedDb(AccessContext.from(ctx)).predicate(playbooks)` was
+   * already lens-free / pod-wide — `listPage`'s `workspaceProcedure` gate never
+   * narrowed the query, it only forced callers to have an active workspace
+   * before they could see ANY playbook, including pod-wide ones). This mirrors
+   * `automations.listPage` (routers/automations.ts), which is the pod-wide
+   * `protectedProcedure` for automations with the identical optional
+   * `workspaceId` narrow-only filter. Follows the `list` / `listAll` contract
+   * in `.claude/rules/backend-rules.md`.
+   */
+  listAllPage: protectedProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().nullable().optional(),
+          status: playbookStatusSchema.optional(),
+          limit: z.number().int().min(1).max(100).default(50),
+          cursor: z.string().min(1).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
+      const cursor = input?.cursor
+        ? decodeDefinitionCursor(input.cursor)
+        : undefined;
+      const limit = input?.limit ?? 50;
+
+      const rows = await database
+        .select()
+        .from(playbooks)
+        .where(
+          and(
+            visibility,
+            // Narrow-only: a specific workspace still includes pod-wide (NULL)
+            // rows, mirroring `automations.listPage`.
+            input?.workspaceId
+              ? or(
+                  isNull(playbooks.workspaceId),
+                  eq(playbooks.workspaceId, input.workspaceId)
+                )
+              : undefined,
             input?.status !== undefined
               ? eq(playbooks.status, input.status)
               : undefined,

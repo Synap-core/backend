@@ -9565,6 +9565,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				items: {
 					viewerCanReview: boolean;
+					viewerCanReviewReason: string;
 					revertable: boolean;
 					workspaceId: string | null;
 					projectId: string | null;
@@ -9609,6 +9610,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				proposals: {
 					viewerCanReview: boolean;
+					viewerCanReviewReason: string;
 					revertable: boolean;
 					workspaceId: string | null;
 					projectId: string | null;
@@ -9824,16 +9826,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reopen?: boolean | undefined;
 			};
 			output: {
+				success: boolean;
+				reopened: boolean;
+				alreadyReopened: boolean;
+			} | {
+				success: boolean;
+				reopened: boolean;
+				alreadyReopened?: undefined;
+			} | {
 				restoredEntityId?: string | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
 				alreadyReverted: boolean;
+				reopened?: undefined;
+				alreadyReopened?: undefined;
 			} | {
 				partialFailures?: string[] | undefined;
 				restoredEntityId?: string | undefined;
 				reopened?: boolean | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
+				alreadyReopened?: undefined;
 			};
 			meta: object;
 		}>;
@@ -13281,11 +13294,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				verbId: string;
 				workspaceId?: string | undefined;
 			};
-			output: {
+			output: ({
+				kind: "automation";
 				automationId: string;
 				name: string;
 				status: "error" | "active" | "paused" | "draft";
-			}[];
+			} | {
+				kind: "playbook";
+				playbookId: string;
+				name: string;
+				status: string;
+			})[];
 			meta: object;
 		}>;
 		checkHealth: import("@trpc/server").TRPCMutationProcedure<{
@@ -22128,6 +22147,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				status?: "active" | "paused" | "archived" | "draft" | undefined;
+				limit?: number | undefined;
+				cursor?: string | undefined;
+			} | undefined;
+			output: {
+				playbooks: {
+					id: string;
+					workspaceId: string | null;
+					createdBy: string;
+					name: string;
+					description: string | null;
+					goalTemplate: string;
+					params: unknown;
+					inputStrategy: unknown;
+					channelSpec: unknown;
+					expectedOutputs: unknown;
+					stages: unknown;
+					version: number;
+					schedule: unknown;
+					executor: PlaybookExecutorRef;
+					status: "active" | "paused" | "archived" | "draft";
+					flowAutomationId: string | null;
+					subjectProfile: unknown;
+					metadata: unknown;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
+		listAllPage: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
 				status?: "active" | "paused" | "archived" | "draft" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;

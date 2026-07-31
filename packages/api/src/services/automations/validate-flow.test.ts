@@ -669,6 +669,148 @@ describe("validateFlowDefinition — malformed flows", () => {
   });
 });
 
+describe("validateFlowDefinition — loop bindings", () => {
+  /**
+   * Pins the production failure: an automation whose capability step read
+   * `{{loop.item.id}}` while sitting OUTSIDE the loop's body. At runtime that
+   * ran once with no `context.loop` and failed with
+   * `entityId: Invalid input: expected string, received undefined`. This gate
+   * refuses that flow at the save door instead.
+   */
+  const loopFlow = (
+    edges: Array<{ id: string; source: string; target: string }>,
+    extraNodes: unknown[] = []
+  ) => ({
+    nodes: [
+      {
+        id: "q",
+        type: "query",
+        position: { x: 0, y: 0 },
+        data: { profileSlug: "client", limit: 20 },
+      },
+      {
+        id: "loop",
+        type: "loop",
+        position: { x: 0, y: 1 },
+        data: {
+          iteratorExpression: "steps.q.output.entities",
+          itemVariable: "item",
+        },
+      },
+      {
+        id: "cap",
+        type: "capability",
+        position: { x: 0, y: 2 },
+        data: {
+          verbId: "entity_facet.list",
+          inputMapping: { entityId: "{{loop.item.id}}" },
+        },
+      },
+      ...extraNodes,
+    ],
+    edges,
+  });
+
+  it("capability wired INSIDE the loop body → valid", () => {
+    const result = validateFlowDefinition(
+      loopFlow([
+        { id: "e1", source: "q", target: "loop" },
+        { id: "e2", source: "loop", target: "cap" },
+      ])
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("capability NOT wired to the loop → invalid (loop_ref_outside_loop_body)", () => {
+    const result = validateFlowDefinition(
+      loopFlow([
+        { id: "e1", source: "q", target: "loop" },
+        { id: "e2", source: "q", target: "cap" },
+      ])
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain(
+      "loop_ref_outside_loop_body"
+    );
+    expect(
+      result.errors.find((e) => e.code === "loop_ref_outside_loop_body")?.nodeId
+    ).toBe("cap");
+  });
+
+  it("loop reference behind a BOUNDARY node type → invalid (the executor cannot bind it there)", () => {
+    // loop → switch → cap. The executor's body walk stops at the switch, so the
+    // capability runs once in the main pass with no loop context.
+    const result = validateFlowDefinition(
+      loopFlow(
+        [
+          { id: "e1", source: "q", target: "loop" },
+          { id: "e2", source: "loop", target: "sw" },
+          { id: "e3", source: "sw", target: "cap" },
+        ],
+        [
+          {
+            id: "sw",
+            type: "switch",
+            position: { x: 0, y: 1.5 },
+            data: { expression: "x", cases: [{ value: "a" }] },
+          },
+        ]
+      )
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain(
+      "loop_ref_outside_loop_body"
+    );
+  });
+
+  it("a binding the loop does not provide → invalid (loop_ref_unknown_path)", () => {
+    const flow = loopFlow([
+      { id: "e1", source: "q", target: "loop" },
+      { id: "e2", source: "loop", target: "cap" },
+    ]);
+    (
+      flow.nodes[2] as { data: { inputMapping: Record<string, string> } }
+    ).data.inputMapping = { entityId: "{{loop.current.id}}" };
+    const result = validateFlowDefinition(flow);
+    expect(result.valid).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("loop_ref_unknown_path");
+  });
+
+  it("{{loop.index}} inside the body → valid", () => {
+    const flow = loopFlow([
+      { id: "e1", source: "q", target: "loop" },
+      { id: "e2", source: "loop", target: "cap" },
+    ]);
+    (
+      flow.nodes[2] as { data: { inputMapping: Record<string, string> } }
+    ).data.inputMapping = {
+      entityId: "{{loop.item.id}}",
+      note: "#{{loop.index}}",
+    };
+    expect(validateFlowDefinition(flow).valid).toBe(true);
+  });
+
+  it("a loop binding inside an array-pipe argument is NOT a loop-scope violation", () => {
+    // `map:`/`filter:` bind `loop` per item inside the resolver — valid with no
+    // loop node anywhere.
+    const result = validateFlowDefinition({
+      nodes: [
+        {
+          id: "t",
+          type: "transform",
+          position: { x: 0, y: 0 },
+          data: {
+            expression: "{{steps.q.output.rows | map:{{loop.item.id}}}}",
+          },
+        },
+      ],
+      edges: [],
+    });
+    expect(result.errors).toEqual([]);
+  });
+});
+
 describe("validateFlowDefinition — resolver-gated existence checks", () => {
   const capNode = {
     nodes: [

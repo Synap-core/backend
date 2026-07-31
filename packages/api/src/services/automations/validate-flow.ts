@@ -106,7 +106,43 @@ export const CHANNEL_MESSAGE_CHANNEL_TYPES = [
   "subjectEntity",
 ] as const;
 
+/**
+ * Node types a `loop` may dispatch PER ITEM. Mirrors `LOOP_BODY_NODE_TYPES` in
+ * `packages/jobs/src/workers/automation-executor.ts` (the runtime SSOT — the
+ * `switch (childNode.type)` inside the loop body). A loop OWNS the contiguous
+ * chain of these reachable from it; traversal STOPS at any other type
+ * (switch / delay / nested loop / sub_automation / entity_read / …), which runs
+ * ONCE in the main topological pass instead.
+ *
+ * Hand-mirrored: `@synap/api` does not depend on `@synap/jobs`, so there is no
+ * compile-time drift guard here — keep this array in sync with the executor by
+ * hand (same convention as CHANNEL_MESSAGE_CHANNEL_TYPES above).
+ */
+export const LOOP_BODY_NODE_TYPES = [
+  "command",
+  "output",
+  "playbook_run",
+  "messages_query",
+  "runs_query",
+  "proposals_query",
+  "query",
+  "fetch",
+  "transform",
+  "condition",
+  "skill",
+  "capability",
+] as const;
+
+/**
+ * What a loop actually PUTS in scope for its body: `context.loop = { item, index }`
+ * (automation-executor.ts, `case "loop"`). Any other `{{loop.<x>}}` segment
+ * resolves to undefined at runtime.
+ */
+export const LOOP_PROVIDED_BINDINGS = ["item", "index"] as const;
+
 const NODE_TYPE_SET = new Set<string>(FLOW_NODE_TYPES);
+const LOOP_BODY_TYPE_SET = new Set<string>(LOOP_BODY_NODE_TYPES);
+const LOOP_BINDING_SET = new Set<string>(LOOP_PROVIDED_BINDINGS);
 const OUTPUT_TYPE_SET = new Set<string>(FLOW_OUTPUT_TYPES);
 const CHANNEL_TYPE_SET = new Set<string>(CHANNEL_MESSAGE_CHANNEL_TYPES);
 
@@ -515,6 +551,54 @@ export function validateFlowDefinition(
     }
   }
 
+  // ── Loop bindings: `{{loop.*}}` only inside a loop body, only real paths ──────
+  // `context.loop` exists ONLY while a loop dispatches its body and is deleted
+  // right after, so a node OUTSIDE every loop body that reads `{{loop.item.id}}`
+  // resolves it to `undefined` at runtime — a Zod "expected string, received
+  // undefined" at best, a junk entity/relation written with an empty id at worst.
+  // The ownership walk below is the SAME rule the executor applies
+  // (`computeLoopBodyNodeIds`), so a node behind a boundary type (switch, delay,
+  // nested loop, …) or with no edge from the loop at all is correctly reported:
+  // those are exactly the shapes that leak into the main pass.
+  const loopBodyNodeIds = new Set<string>();
+  for (const node of nodes) {
+    if (!nonEmptyString(node.id) || node.type !== "loop") continue;
+    for (const id of collectLoopBody(node.id, nodesById, edges)) {
+      loopBodyNodeIds.add(id);
+    }
+  }
+  for (const node of nodes) {
+    if (!nonEmptyString(node.id)) continue;
+    const refs = collectLoopBindingRefs(node.data);
+    if (refs.length === 0) continue;
+    if (!loopBodyNodeIds.has(node.id)) {
+      errors.push({
+        nodeId: node.id,
+        code: "loop_ref_outside_loop_body",
+        message: `Node "${node.id}" references ${refs
+          .map((r) => `\`{{loop.${r}...}}\``)
+          .join(
+            ", "
+          )} but is not inside a loop body, so there is no item to bind — it would run once with an empty value. Connect it downstream of a loop node with no switch/delay/nested-loop/sub_automation node in between.`,
+      });
+      continue;
+    }
+    const unknown = refs.filter((r) => !LOOP_BINDING_SET.has(r));
+    if (unknown.length > 0) {
+      errors.push({
+        nodeId: node.id,
+        code: "loop_ref_unknown_path",
+        message: `Node "${node.id}" references ${unknown
+          .map((r) => `\`{{loop.${r}}}\``)
+          .join(
+            ", "
+          )}, which a loop does not provide. A loop binds only: ${LOOP_PROVIDED_BINDINGS.map(
+          (b) => `\`loop.${b}\``
+        ).join(", ")}.`,
+      });
+    }
+  }
+
   // ── Acyclic (Kahn's algorithm — mirrors topoSort in automation-executor.ts) ───
   // Only run when edges reference real nodes; dangling edges are already reported
   // and would corrupt the in-degree bookkeeping.
@@ -529,6 +613,73 @@ export function validateFlowDefinition(
   }
 
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * The node ids a loop OWNS as its per-item body — the contiguous chain of
+ * LOOP_BODY_NODE_TYPES nodes reachable from it, stopping at any other type.
+ * Mirrors `computeLoopBodyNodeIds` in automation-executor.ts exactly (all
+ * out-edges, handle-agnostic); the `seen` set makes a cyclic graph terminate
+ * (cycles are reported separately).
+ */
+function collectLoopBody(
+  loopNodeId: string,
+  nodesById: Map<string, LooseNode>,
+  edges: LooseEdge[]
+): Set<string> {
+  const body = new Set<string>();
+  const stack: string[] = [];
+  for (const edge of edges) {
+    if (edge.source === loopNodeId && nonEmptyString(edge.target))
+      stack.push(edge.target);
+  }
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (body.has(id)) continue;
+    const node = nodesById.get(id);
+    if (
+      !node ||
+      !nonEmptyString(node.type) ||
+      !LOOP_BODY_TYPE_SET.has(node.type)
+    )
+      continue; // boundary — runs once in the main pass, not per item
+    body.add(id);
+    for (const edge of edges) {
+      if (edge.source === id && nonEmptyString(edge.target))
+        stack.push(edge.target);
+    }
+  }
+  return body;
+}
+
+/**
+ * The FIRST path segment of every `{{loop.<segment>…}}` reference anywhere in a
+ * node's `data` (deep: objects + arrays), deduped. Mirrors
+ * `collectLoopBindingRefs` in automation-executor.ts — including the PRE-PIPE
+ * restriction: an array pipe argument (`{{x | map:{{loop.item.id}}}}`) binds
+ * `loop` per item inside the RESOLVER, a scope that is valid outside any loop
+ * node, so it must not be reported.
+ */
+function collectLoopBindingRefs(data: unknown): string[] {
+  const found = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      const head = v.split("|")[0];
+      const re = /\{\{\s*loop\.([A-Za-z0-9_$]+)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(head)) !== null) found.add(m[1]);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x);
+      return;
+    }
+    if (isRecord(v)) {
+      for (const x of Object.values(v)) walk(x);
+    }
+  };
+  walk(data);
+  return [...found];
 }
 
 /**

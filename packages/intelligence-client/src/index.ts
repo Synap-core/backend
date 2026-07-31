@@ -59,3 +59,14 @@ export type {
   HeadlessChatRequest,
   HeadlessTaskExecuteRequest,
 } from "./is-headless-transport.js";
+
+// IS call budgets + attributed failures — the SSOT every backend→IS fetch uses
+// for its timeout and its failure message (see is-call-budget.ts for the
+// 2026-07-31 incident that motivated it).
+export {
+  isCallBudgetMs,
+  describeISFailure,
+  describeISHttpError,
+} from "./is-call-budget.js";
+
+export type { ISCallKind, ISCallContext } from "./is-call-budget.js";
