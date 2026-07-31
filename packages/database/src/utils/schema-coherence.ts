@@ -1291,6 +1291,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "verdict",
     addedBy: "0215_governance_rules.sql",
   },
+  // Capability run receipts (0219) — at-most-once claim for a DIRECT-run
+  // WRITE/external capability verb. New table; checking one column confirms the
+  // migration ran (a missing table would fail the double-send guard silently).
+  {
+    table: "capability_run_receipts",
+    column: "idempotency_key",
+    addedBy: "0219_capability_run_receipts.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

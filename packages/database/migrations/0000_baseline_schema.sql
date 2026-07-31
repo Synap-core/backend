@@ -4080,3 +4080,38 @@ CREATE INDEX IF NOT EXISTS "governance_rules_agent_active_idx"
   WHERE "revoked_at" IS NULL;
 CREATE INDEX IF NOT EXISTS "governance_rules_source_proposal_idx"
   ON "governance_rules" ("source_proposal_id");
+
+-- capability_run_receipts — at-most-once claim for a DIRECT-run WRITE/external
+-- capability verb (0219). The DIRECT path's analog of proposals.external_dispatched_at
+-- (0209): a retry of a client-perceived-failure replays the stored result via the
+-- (idempotency_key, dedup_bucket) CAS claim instead of re-firing an irreversible
+-- send. Windowed (~10 min) like 0216. READ-only verbs never write a receipt.
+CREATE TABLE IF NOT EXISTS "capability_run_receipts" (
+  "id"              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "idempotency_key" text NOT NULL,
+  "dedup_bucket"    bigint DEFAULT floor(extract(epoch FROM now()) / 600),
+  "user_id"         text NOT NULL,
+  "workspace_id"    uuid,
+  "skill_id"        uuid NOT NULL,
+  "verb_id"         text,
+  "status"          text NOT NULL DEFAULT 'claimed',
+  "result"          jsonb,
+  "correlation_id"  uuid,
+  "created_at"      timestamptz NOT NULL DEFAULT now(),
+  "completed_at"    timestamptz
+);
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "idempotency_key" text;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint DEFAULT floor(extract(epoch FROM now()) / 600);
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "skill_id" uuid;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "verb_id" text;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'claimed';
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "result" jsonb;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "created_at" timestamptz DEFAULT now();
+ALTER TABLE "capability_run_receipts" ADD COLUMN IF NOT EXISTS "completed_at" timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS "capability_run_receipts_key_bucket_uq"
+  ON "capability_run_receipts" ("idempotency_key", "dedup_bucket");
+CREATE INDEX IF NOT EXISTS "capability_run_receipts_user_id_idx"
+  ON "capability_run_receipts" ("user_id");

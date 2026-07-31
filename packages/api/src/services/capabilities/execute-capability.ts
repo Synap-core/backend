@@ -15,19 +15,33 @@
  * first via `POST /skills/:id/approve`.
  *
  * ACK INTEGRITY (C1): the result carries `ackState` (`applied` for a run, `proposed`
- * for a queued run) so a caller can tell a fresh run from a governed queue. The
- * PROPOSAL path's external side effect is already at-most-once via
- * `dispatchExternalOnce` at approval. RESIDUAL GAP (documented, not yet closed): a
- * DIRECT owner/granted run of a WRITE verb that performs an external send has no
- * persisted run receipt, so a client-perceived-failure retry could double-send.
- * Closing it needs a small `capability_run_receipts` claim keyed by the idempotency
- * key (a schema addition, out of this file's lane) so the direct path can CAS a
- * one-time claim like the proposal path does. READ-only verbs are unaffected.
+ * for a queued run, `duplicate-ignored` for an idempotent replay) so a caller can
+ * tell a fresh run from a governed queue from a re-submit. BOTH irreversible paths
+ * are now at-most-once:
+ *   - the PROPOSAL path via `dispatchExternalOnce` (CAS on
+ *     `proposals.external_dispatched_at`) at approval;
+ *   - the DIRECT-run path (owner/granted, no proposal) via a `capability_run_receipts`
+ *     CAS claim (migration 0219) — a WRITE/external verb claims a windowed receipt
+ *     keyed on the idempotency key BEFORE the effect, so a client-perceived-failure
+ *     retry replays the stored result instead of firing a second real send. The
+ *     failure policy mirrors dispatchExternalOnce (release on definite-not-delivered,
+ *     keep-claim on an ambiguous throw). READ-only verbs skip the receipt entirely
+ *     (a repeated read is harmless + must not be blocked).
  */
 
-import { db, skills, eq, and, desc, knowledgeRepository } from "@synap/database";
+import {
+  db,
+  skills,
+  eq,
+  and,
+  desc,
+  knowledgeRepository,
+  capabilityRunReceipts,
+} from "@synap/database";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
+
+import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.js";
 
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
@@ -107,13 +121,15 @@ export async function executeCapability(input: {
    */
   suppressProposal?: boolean;
   /**
-   * Optional caller idempotency key (C1). Stamped onto a `capability.run` proposal
-   * so an approved run and any retry correlate to one logical invocation. NOTE: the
-   * DIRECT-run path (an owner/granted WRITE verb that performs an external send) has
-   * no persisted receipt to replay, so this key cannot yet make that path
-   * at-most-once — see the module note. Agent WRITE verbs without a grant route to
-   * the PROPOSAL path, whose external dispatch IS at-most-once via
-   * `dispatchExternalOnce` at approval.
+   * Optional caller idempotency key (C1). Correlates a logical invocation across
+   * retries on BOTH paths: it is stamped onto a `capability.run` proposal (approved
+   * run + retry), AND it keys the DIRECT-run path's `capability_run_receipts` CAS
+   * claim so an owner/granted WRITE verb that performs an external send is
+   * at-most-once — a retry replays the stored result instead of double-sending.
+   * When omitted, a stable content hash over (verb/skill + params + user +
+   * workspace + connection) is derived, so an unkeyed retry still collides; a
+   * genuinely different payload gets a different key. Pass an explicit key (or vary
+   * the params) when a byte-identical run within ~10 minutes is a real second intent.
    */
   idempotencyKey?: string;
 }): Promise<ExecuteCapabilityResult> {
@@ -234,6 +250,26 @@ export async function executeCapability(input: {
   // the capability.run proposal replay), so the door and an approved proposal can
   // never diverge on kind-routing. Stamp `ackState: "applied"` on a successful run
   // (deny/not_found carry no ack — they didn't write).
+  //
+  // AT-MOST-ONCE (0219): a WRITE/external verb on the DIRECT path performs an
+  // irreversible send with no proposal to carry a `dispatchExternalOnce` claim, so
+  // a client-perceived-failure RETRY would double-send. Route it through the
+  // receipt-guarded runner (CAS-claim → run → store/replay). READ-only verbs carry
+  // no such risk — a repeated read is harmless and must NOT be blocked — so they
+  // run unguarded through the shared path below.
+  if (capabilityVerbHasWriteEffect(skillRow)) {
+    return runDirectWriteVerbOnce({
+      skillRow,
+      parameters,
+      verbId: verbId ?? null,
+      userId,
+      workspaceId,
+      connectionSelector: input.connectionSelector ?? null,
+      agentUserId: input.agentUserId ?? null,
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+
   const ran = await runResolvedSkill(skillRow, parameters, {
     userId,
     workspaceId,
@@ -256,6 +292,210 @@ export async function executeCapability(input: {
     workspaceId,
     skillId: skillRow.id,
     verbId: verbId ?? null,
+    runResult: ran.result,
+  });
+  return { ...ran, ackState: "applied" as const, correlationId };
+}
+
+/**
+ * Does a DIRECT-run of this verb have a WRITE / external side effect? Only these
+ * need the at-most-once receipt: a READ replay is harmless, and blocking a
+ * legitimately-repeated read would be wrong. Fail-CLOSED — an unknown/absent
+ * provider method is treated as a write (a redundant receipt is far cheaper than
+ * an unguarded double-send).
+ *   - builtin      → write iff NOT in READ_ONLY_BUILTIN_VERBS.
+ *   - declarative  → write iff its provider method is NOT GET/HEAD (the SAME
+ *                    `isReadMethod` notion execute-provider-verb gates on).
+ *   - code / other → always a potential external send → write.
+ */
+export function capabilityVerbHasWriteEffect(
+  skill: Pick<ResolvedSkillRow, "kind" | "name" | "providerSpec">
+): boolean {
+  if (skill.kind === "builtin") {
+    return !READ_ONLY_BUILTIN_VERBS.has(skill.name);
+  }
+  if (skill.kind === "declarative") {
+    return !/^(GET|HEAD)$/i.test(String(skill.providerSpec?.method ?? ""));
+  }
+  return true;
+}
+
+/**
+ * Run a DIRECT WRITE/external verb AT MOST ONCE. The direct-path analog of the
+ * proposal path's `dispatchExternalOnce`, using a `capability_run_receipts` CAS
+ * claim instead of the `proposals.external_dispatched_at` column:
+ *
+ *   1. CLAIM — INSERT a receipt keyed on (idempotency_key, ~10-min dedup bucket)
+ *      via ON CONFLICT DO NOTHING. Won the claim → run. Lost it → a prior receipt
+ *      exists in this window: replay its stored result (COMPLETED → duplicate-
+ *      ignored) or refuse (still CLAIMED → an in-flight/ambiguous send; never
+ *      re-run — mirrors dispatchExternalOnce's CONFLICT).
+ *   2. RUN — execute via the shared post-gate `runResolvedSkill`.
+ *   3. RESOLVE — success: mark the receipt COMPLETED + store the result (a retry
+ *      replays it). Definite-not-delivered (error/deny/not_found): RELEASE the
+ *      claim so a retry re-runs. Ambiguous THROW (the effect may have reached the
+ *      far side): KEEP the claim (no resend) + rethrow.
+ *
+ * BEST-EFFORT: an idempotency-store hiccup DEGRADES to a plain guarded-less run —
+ * it must never block a real run. Observability (recordDirectCapabilityRun) is
+ * emitted on delivery exactly as the read/unguarded path does.
+ */
+async function runDirectWriteVerbOnce(opts: {
+  skillRow: ResolvedSkillRow;
+  parameters?: Record<string, unknown>;
+  verbId: string | null;
+  userId: string;
+  workspaceId: string | null;
+  connectionSelector: ConnectionSelector | null;
+  agentUserId: string | null;
+  idempotencyKey?: string;
+}): Promise<ExecuteCapabilityResult> {
+  const key = resolveWriteIdempotencyKey(
+    opts.idempotencyKey,
+    "capability.run.direct",
+    {
+      verbId: opts.verbId,
+      skillId: opts.skillRow.id,
+      parameters: opts.parameters,
+      userId: opts.userId,
+      workspaceId: opts.workspaceId,
+      connectionSelector: opts.connectionSelector,
+    }
+  );
+  const correlationId = randomUUID();
+
+  // ── 1. CLAIM (best-effort — a store hiccup degrades to an unguarded run) ──────
+  let claimId: string | null = null;
+  try {
+    const [claim] = await db
+      .insert(capabilityRunReceipts)
+      .values({
+        idempotencyKey: key,
+        userId: opts.userId,
+        workspaceId: opts.workspaceId,
+        skillId: opts.skillRow.id,
+        verbId: opts.verbId,
+        correlationId,
+        status: "claimed",
+      })
+      .onConflictDoNothing()
+      .returning({ id: capabilityRunReceipts.id });
+
+    if (claim) {
+      claimId = claim.id;
+    } else {
+      // Lost the claim → a receipt already exists in this window. The conflicting
+      // row is the newest for this key, so read that.
+      const [prior] = await db
+        .select({
+          status: capabilityRunReceipts.status,
+          result: capabilityRunReceipts.result,
+          correlationId: capabilityRunReceipts.correlationId,
+          skillId: capabilityRunReceipts.skillId,
+        })
+        .from(capabilityRunReceipts)
+        .where(eq(capabilityRunReceipts.idempotencyKey, key))
+        .orderBy(desc(capabilityRunReceipts.createdAt))
+        .limit(1);
+
+      if (prior?.status === "completed") {
+        // Idempotent replay — the effect already fired once; return its result
+        // with NO second side effect. The receipt carries the same correlationId
+        // so the caller lands on the same run handle (like a first run).
+        return {
+          kind: "run",
+          skillId: prior.skillId,
+          result: prior.result,
+          ackState: "duplicate-ignored",
+          ...(prior.correlationId
+            ? { correlationId: prior.correlationId }
+            : {}),
+        };
+      }
+      if (prior) {
+        // A claim exists but is not COMPLETED: a concurrent send is in flight, or
+        // a prior attempt died mid-send (ambiguous). At-most-once: do NOT re-run —
+        // refuse honestly rather than risk a double-send. Mirrors
+        // dispatchExternalOnce's CONFLICT. A retry after the window (a new bucket)
+        // re-runs cleanly.
+        return {
+          kind: "error",
+          message:
+            "This capability run is already in progress — nothing was re-sent. Retry in a moment if it did not complete.",
+        };
+      }
+      // No prior row (a rare race with a just-released claim): degrade to an
+      // unguarded run rather than dead-end a legitimate call.
+    }
+  } catch (err) {
+    logger.warn(
+      { err, skillId: opts.skillRow.id },
+      "capability direct-run receipt claim failed (running unguarded)"
+    );
+  }
+
+  // ── 2. RUN ────────────────────────────────────────────────────────────────────
+  let ran: Awaited<ReturnType<typeof runResolvedSkill>>;
+  try {
+    ran = await runResolvedSkill(opts.skillRow, opts.parameters, {
+      userId: opts.userId,
+      workspaceId: opts.workspaceId,
+      connectionSelector: opts.connectionSelector,
+      agentUserId: opts.agentUserId,
+    });
+  } catch (err) {
+    // Ambiguous throw (the side effect may have reached the far side): KEEP the
+    // claim so a retry within the window does NOT re-send. Rethrow.
+    throw err;
+  }
+
+  // ── 3. RESOLVE ──────────────────────────────────────────────────────────────
+  if (ran.kind !== "run") {
+    // DEFINITE not-delivered (the handler refused / a provider error envelope):
+    // RELEASE the claim so a retry re-runs cleanly. Mirrors dispatchExternalOnce's
+    // { delivered: false } release. Best-effort.
+    if (claimId) {
+      try {
+        await db
+          .delete(capabilityRunReceipts)
+          .where(eq(capabilityRunReceipts.id, claimId));
+      } catch (err) {
+        logger.warn(
+          { err, skillId: opts.skillRow.id, claimId },
+          "capability direct-run receipt release failed (retry may be blocked until the window rolls)"
+        );
+      }
+    }
+    return ran;
+  }
+
+  // Delivered → mark the receipt COMPLETED + store the result so a retry replays
+  // it instead of re-sending. Best-effort: a stamp failure leaves the receipt
+  // CLAIMED (a retry then refuses until the window rolls — safe, never a resend).
+  if (claimId) {
+    try {
+      await db
+        .update(capabilityRunReceipts)
+        .set({
+          status: "completed",
+          result: ran.result ?? null,
+          completedAt: new Date(),
+        })
+        .where(eq(capabilityRunReceipts.id, claimId));
+    } catch (err) {
+      logger.warn(
+        { err, skillId: opts.skillRow.id, claimId },
+        "capability direct-run receipt completion stamp failed (run kept delivered)"
+      );
+    }
+  }
+
+  await recordDirectCapabilityRun({
+    correlationId,
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
+    skillId: opts.skillRow.id,
+    verbId: opts.verbId,
     runResult: ran.result,
   });
   return { ...ran, ackState: "applied" as const, correlationId };
