@@ -50,7 +50,6 @@ import {
   createOrGetChatTurn,
   decideChatTurnClaimAction,
   finishChatTurn,
-  getChatTurnByRequest,
   isUsefulAssistantContent,
   reopenChatTurn,
   stableUuidFromSeed,
