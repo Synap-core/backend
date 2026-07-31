@@ -78,6 +78,21 @@ function balancedEnd(
   return -1;
 }
 
+/**
+ * True if a (comment-stripped) handler body reads `userId` off the request
+ * body — via member access (`body.userId`) OR destructuring
+ * (`const { userId } = body`). The destructuring form is a real evasion the
+ * member-access-only regex missed (POST /events/broadcast).
+ */
+function readsBodyUserId(clean: string): boolean {
+  return (
+    /\bbody(?:\?)?\.\s*userId\b/.test(clean) ||
+    /(?:const|let|var)\s*\{[^}]*\buserId\b[^}]*\}\s*=\s*(?:await\s+)?[\w.]*\bbody\b/.test(
+      clean
+    )
+  );
+}
+
 function stripComments(s: string): string {
   return s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
@@ -176,7 +191,24 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
     const handlers = findPostHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
     const clean = stripComments(handlers[0].bodyText);
-    expect(/\bbody(?:\?)?\.\s*userId\b/.test(clean)).toBe(true);
+    expect(readsBodyUserId(clean)).toBe(true);
+    expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
+  });
+
+  it("the offender check also bites on DESTRUCTURED body.userId (evasion class)", () => {
+    // POST /events/broadcast evaded the member-access regex by destructuring
+    // `const { userId } = body`; the detector must catch that shape too.
+    const fixture = `
+      app.post("/danger2", async (c) => {
+        const body = await c.req.json();
+        const { event, userId, workspaceId } = body as { userId?: string };
+        return c.json({ userId });
+      });
+    `;
+    const handlers = findPostHandlers(fixture, new Map());
+    expect(handlers.length).toBe(1);
+    const clean = stripComments(handlers[0].bodyText);
+    expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
 
@@ -202,7 +234,7 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
     const offenders: string[] = [];
     for (const h of allHandlers) {
       const clean = stripComments(h.bodyText);
-      const hasBodyUserId = /\bbody(?:\?)?\.\s*userId\b/.test(clean);
+      const hasBodyUserId = readsBodyUserId(clean);
       const hasActingContext = /resolveActingContext\s*\(/.test(clean);
       if (!hasBodyUserId || hasActingContext) continue;
       const key = `${h.file}::${h.label}`;

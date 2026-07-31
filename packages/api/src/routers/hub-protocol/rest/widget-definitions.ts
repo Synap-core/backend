@@ -19,6 +19,7 @@ import {
   hasScope,
   logger,
   resolveActingContext,
+  resolveActorId,
   type HubHono,
 } from "./_shared.js";
 
@@ -122,6 +123,17 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const userId = acting.userId;
     const workspaceId = acting.workspaceId;
+    // SECURITY — agentUserId is the GOVERNANCE actor for widget.register; it must
+    // be grant-checked, not trusted from the body. Without this, the `...body`
+    // spread carried a caller-supplied agentUserId straight into
+    // checkPermissionOrPropose — forging attribution onto another user's agent
+    // (assertMayActAs validates userId only). Mirrors cell-instances / commands.
+    const resolvedAgentUserId =
+      (body.agentUserId as string | undefined) ??
+      (c.get("agentUserId") as string | undefined);
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
     try {
       const caller = await getCaller(c, {
         userId,
@@ -132,6 +144,7 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
         ...body,
         userId,
         workspaceId,
+        agentUserId: resolvedAgentUserId,
       } as Parameters<typeof caller.widgetDefinitions.upsertWidgetDef>[0]);
       return c.json(result);
     } catch (err) {

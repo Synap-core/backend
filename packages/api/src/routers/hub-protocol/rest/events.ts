@@ -21,6 +21,7 @@ import {
   getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
+  resolveActingContext,
   type HubHono,
 } from "./_shared.js";
 
@@ -321,9 +322,7 @@ export function registerEventsRoutes(app: HubHono): void {
                 const wsId =
                   typeof evt.data === "object" && evt.data !== null
                     ? ((evt.data as Record<string, unknown>).workspaceId as
-                        | string
-                        | undefined
-                        | null)
+                        string | undefined | null)
                     : undefined;
                 if (wsId && !allowedWorkspaceIds.includes(wsId)) continue;
               }
@@ -581,16 +580,25 @@ export function registerEventsRoutes(app: HubHono): void {
     if (!body || typeof body.event !== "string") {
       return c.json({ error: "event (string) is required" }, 400);
     }
-    const { event, data, userId, workspaceId } = body as {
+    // SECURITY — the presence room to emit into MUST be derived from the
+    // verified auth context, never a body-supplied userId/workspaceId. Trusting
+    // the body let any hub-protocol.write holder inject arbitrary socket events
+    // into another user's presence room (same IDOR class as POST /profiles).
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(body.workspaceId ? { workspaceId: body.workspaceId as string } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { event, data } = body as {
       event: string;
-      data: Record<string, unknown>;
-      userId?: string;
-      workspaceId?: string;
+      data?: Record<string, unknown>;
     };
-    if (!userId && !workspaceId) {
-      return c.json({ error: "userId or workspaceId is required" }, 400);
-    }
-    emitChatEvent({ event, data: data ?? {}, userId, workspaceId });
+    emitChatEvent({
+      event,
+      data: data ?? {},
+      userId: acting.userId,
+      workspaceId: acting.workspaceId ?? undefined,
+    });
     return c.json({ ok: true });
   });
 }
