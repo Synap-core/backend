@@ -140,7 +140,7 @@ function isAbort(err: unknown): boolean {
  */
 export function describeISFailure(ctx: ISCallContext, err: unknown): Error {
   const elapsedMs = Date.now() - ctx.startedAt;
-  const side = "transport failure";
+  const side = isAbort(err) ? "pod-side abort" : "transport failure";
   const name = (err as { name?: unknown } | null)?.name;
   const message =
     err instanceof Error ? err.message : String(err ?? "unknown error");
