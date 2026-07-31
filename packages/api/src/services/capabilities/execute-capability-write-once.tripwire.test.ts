@@ -21,14 +21,23 @@ import { join } from "path";
 
 // ── Part A: the read/write classifier (pure) ───────────────────────────────────
 
-import { capabilityVerbHasWriteEffect } from "./execute-capability.js";
+import { capabilityVerbHasExternalEffect } from "./execute-capability.js";
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 
-describe("capabilityVerbHasWriteEffect — only WRITE/external verbs get a receipt", () => {
-  it("builtin: a READ_ONLY builtin is NOT a write (no receipt, never blocks a repeat read)", () => {
-    for (const name of READ_ONLY_BUILTIN_VERBS) {
+describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a receipt", () => {
+  it("builtin: NO builtin is an external send — reads AND local writes → false", () => {
+    // A local builtin write (entity.create/feed.post/graph.link) must NOT get the
+    // receipt: content-hash windowing would collapse two legitimately-identical
+    // local writes into one (silent data loss). Read-only builtins are false too.
+    for (const name of [
+      ...READ_ONLY_BUILTIN_VERBS,
+      "entity.create",
+      "feed.post",
+      "graph.link",
+      "document.create",
+    ]) {
       expect(
-        capabilityVerbHasWriteEffect({
+        capabilityVerbHasExternalEffect({
           kind: "builtin",
           name,
           providerSpec: null,
@@ -37,24 +46,10 @@ describe("capabilityVerbHasWriteEffect — only WRITE/external verbs get a recei
     }
   });
 
-  it("builtin: a WRITE builtin (not read-only) IS a write", () => {
-    // entity.create / feed.post / graph.link are writes — absent from the set.
-    for (const name of ["entity.create", "feed.post", "graph.link"]) {
-      expect(READ_ONLY_BUILTIN_VERBS.has(name)).toBe(false);
-      expect(
-        capabilityVerbHasWriteEffect({
-          kind: "builtin",
-          name,
-          providerSpec: null,
-        })
-      ).toBe(true);
-    }
-  });
-
   it("declarative: a GET/HEAD provider verb is a READ (no receipt)", () => {
     for (const method of ["GET", "get", "HEAD"]) {
       expect(
-        capabilityVerbHasWriteEffect({
+        capabilityVerbHasExternalEffect({
           kind: "declarative",
           name: "provider.read",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -64,10 +59,10 @@ describe("capabilityVerbHasWriteEffect — only WRITE/external verbs get a recei
     }
   });
 
-  it("declarative: a POST/PUT/DELETE provider verb IS a write", () => {
+  it("declarative: a POST/PUT/DELETE provider verb IS an external send", () => {
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       expect(
-        capabilityVerbHasWriteEffect({
+        capabilityVerbHasExternalEffect({
           kind: "declarative",
           name: "provider.write",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,9 +72,9 @@ describe("capabilityVerbHasWriteEffect — only WRITE/external verbs get a recei
     }
   });
 
-  it("declarative: an unknown/absent method fails CLOSED (treated as a write)", () => {
+  it("declarative: an unknown/absent method fails CLOSED (treated as external)", () => {
     expect(
-      capabilityVerbHasWriteEffect({
+      capabilityVerbHasExternalEffect({
         kind: "declarative",
         name: "provider.mystery",
         providerSpec: null,
@@ -87,10 +82,10 @@ describe("capabilityVerbHasWriteEffect — only WRITE/external verbs get a recei
     ).toBe(true);
   });
 
-  it("code / instruction: always a potential external send → write", () => {
+  it("code / instruction: may send externally → external", () => {
     for (const kind of ["code", "instruction", null]) {
       expect(
-        capabilityVerbHasWriteEffect({
+        capabilityVerbHasExternalEffect({
           kind,
           name: "some.skill",
           providerSpec: null,
@@ -108,8 +103,8 @@ describe("guard: the direct-run WRITE path persists an at-most-once receipt", ()
     "utf8"
   );
 
-  it("routes write verbs through the receipt-guarded runner", () => {
-    expect(src).toMatch(/capabilityVerbHasWriteEffect\(skillRow\)/);
+  it("routes external-send verbs through the receipt-guarded runner", () => {
+    expect(src).toMatch(/capabilityVerbHasExternalEffect\(skillRow\)/);
     expect(src).toContain("runDirectWriteVerbOnce");
   });
 
@@ -117,6 +112,13 @@ describe("guard: the direct-run WRITE path persists an at-most-once receipt", ()
     expect(src).toContain("resolveWriteIdempotencyKey");
     expect(src).toMatch(/insert\(capabilityRunReceipts\)/);
     expect(src).toContain("onConflictDoNothing()");
+  });
+
+  it("pins an EXPLICIT idempotency key to a strict (permanent) claim bucket", () => {
+    // D: a derived content-hash key stays windowed; an explicit key must be
+    // immune to the bucket-boundary straddle → dedupBucket pinned to 0.
+    expect(src).toContain("hasExplicitKey");
+    expect(src).toMatch(/hasExplicitKey\s*\?\s*\{\s*dedupBucket:\s*0\s*\}/);
   });
 
   it("RELEASES the claim on a definite not-delivered outcome (retry can re-run)", () => {

@@ -21,12 +21,15 @@
  *   - the PROPOSAL path via `dispatchExternalOnce` (CAS on
  *     `proposals.external_dispatched_at`) at approval;
  *   - the DIRECT-run path (owner/granted, no proposal) via a `capability_run_receipts`
- *     CAS claim (migration 0219) — a WRITE/external verb claims a windowed receipt
- *     keyed on the idempotency key BEFORE the effect, so a client-perceived-failure
- *     retry replays the stored result instead of firing a second real send. The
- *     failure policy mirrors dispatchExternalOnce (release on definite-not-delivered,
- *     keep-claim on an ambiguous throw). READ-only verbs skip the receipt entirely
- *     (a repeated read is harmless + must not be blocked).
+ *     CAS claim (migration 0219) — an EXTERNAL-send verb claims a receipt keyed on
+ *     the idempotency key BEFORE the effect, so a client-perceived-failure retry
+ *     replays the stored result instead of firing a second real send. The failure
+ *     policy mirrors dispatchExternalOnce (release on definite-not-delivered,
+ *     keep-claim on an ambiguous throw). READ-only verbs AND local builtin writes
+ *     skip the receipt (a repeated read is harmless; a local write must not be
+ *     content-hash-collapsed — see `capabilityVerbHasExternalEffect`). An explicit
+ *     idempotency key claims STRICTLY (permanent); a derived content-hash key
+ *     claims WINDOWED (so a later identical run is not blocked forever).
  */
 
 import {
@@ -254,10 +257,11 @@ export async function executeCapability(input: {
   // AT-MOST-ONCE (0219): a WRITE/external verb on the DIRECT path performs an
   // irreversible send with no proposal to carry a `dispatchExternalOnce` claim, so
   // a client-perceived-failure RETRY would double-send. Route it through the
-  // receipt-guarded runner (CAS-claim → run → store/replay). READ-only verbs carry
-  // no such risk — a repeated read is harmless and must NOT be blocked — so they
-  // run unguarded through the shared path below.
-  if (capabilityVerbHasWriteEffect(skillRow)) {
+  // receipt-guarded runner (CAS-claim → run → store/replay). Reads AND local
+  // builtin writes carry no external-double-send risk — and content-hash
+  // windowing must NOT collapse legit duplicate local writes — so they run
+  // unguarded through the shared path below.
+  if (capabilityVerbHasExternalEffect(skillRow)) {
     return runDirectWriteVerbOnce({
       skillRow,
       parameters,
@@ -298,21 +302,30 @@ export async function executeCapability(input: {
 }
 
 /**
- * Does a DIRECT-run of this verb have a WRITE / external side effect? Only these
- * need the at-most-once receipt: a READ replay is harmless, and blocking a
- * legitimately-repeated read would be wrong. Fail-CLOSED — an unknown/absent
- * provider method is treated as a write (a redundant receipt is far cheaper than
- * an unguarded double-send).
- *   - builtin      → write iff NOT in READ_ONLY_BUILTIN_VERBS.
- *   - declarative  → write iff its provider method is NOT GET/HEAD (the SAME
+ * Does a DIRECT-run of this verb fire an irreversible EXTERNAL effect (a send to
+ * a third party / provider) that needs the at-most-once receipt? Only external
+ * sends do.
+ *
+ * A LOCAL builtin write (entity.create, feed.post, graph.link, document.*, …) is
+ * deliberately EXCLUDED: none of the builtins send to a third party, and its
+ * retry produces at worst a recoverable duplicate — whereas the receipt's
+ * WINDOWED content-hash key would silently COLLAPSE two legitimately-identical
+ * local writes into one (e.g. two tasks both titled "Follow up with Acme" within
+ * 10 min → only one created, the second reporting the first's id). That silent
+ * data-loss is worse than the duplicate it was guarding against. Local-write
+ * idempotency, if ever wanted, belongs in an explicit-key mechanism, not this
+ * external-send guard. Fail-CLOSED — an unknown/absent provider method is treated
+ * as external (a redundant receipt is far cheaper than a double-send).
+ *   - builtin      → local hub op, never an external send → false.
+ *   - declarative  → external iff its provider method is NOT GET/HEAD (the SAME
  *                    `isReadMethod` notion execute-provider-verb gates on).
- *   - code / other → always a potential external send → write.
+ *   - code / other → may send externally → true.
  */
-export function capabilityVerbHasWriteEffect(
+export function capabilityVerbHasExternalEffect(
   skill: Pick<ResolvedSkillRow, "kind" | "name" | "providerSpec">
 ): boolean {
   if (skill.kind === "builtin") {
-    return !READ_ONLY_BUILTIN_VERBS.has(skill.name);
+    return false;
   }
   if (skill.kind === "declarative") {
     return !/^(GET|HEAD)$/i.test(String(skill.providerSpec?.method ?? ""));
@@ -362,6 +375,14 @@ async function runDirectWriteVerbOnce(opts: {
       connectionSelector: opts.connectionSelector,
     }
   );
+  // An EXPLICIT idempotency key is a caller's declaration that "this is one
+  // operation, never run it twice" (Stripe-style) — so it gets a STRICT,
+  // permanent claim (dedupBucket pinned to 0, making `(key, 0)` a forever-unique
+  // row), immune to the bucket-boundary straddle that would otherwise let a
+  // retry seconds after a window rollover double-send. A DERIVED content-hash key
+  // (no explicit key) keeps the DB-default WINDOWED bucket, so a genuinely
+  // repeated identical run in a later window is not blocked forever.
+  const hasExplicitKey = opts.idempotencyKey != null;
   const correlationId = randomUUID();
 
   // ── 1. CLAIM (best-effort — a store hiccup degrades to an unguarded run) ──────
@@ -377,6 +398,7 @@ async function runDirectWriteVerbOnce(opts: {
         verbId: opts.verbId,
         correlationId,
         status: "claimed",
+        ...(hasExplicitKey ? { dedupBucket: 0 } : {}),
       })
       .onConflictDoNothing()
       .returning({ id: capabilityRunReceipts.id });
