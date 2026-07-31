@@ -30,6 +30,7 @@ import {
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
 
@@ -272,6 +273,28 @@ export async function resolveObjectKind(
     if (typeof skillId === "string" && skillId)
       return { kind: "capability", id: skillId };
   }
+
+  // FALLBACK 3 — a completed EXTERNAL SEND (messaging.external.send / provider
+  // proxy call, `connectors/external-dispatch.ts`'s `recordExternalAction`) has
+  // no row of its own: its ONLY trace is the `correlationId`-keyed audit event
+  // that call stamps with `source: EXTERNAL_DISPATCH_SOURCE`. Without this,
+  // `diagnose(<send correlationId>)` dead-ended at "no diagnosable object" even
+  // though the send happened and its audit event exists — the exact
+  // unresolvable-by-diagnose gap this wave closes. User-floored on the event's
+  // own `userId` (the acting operator/agent-effective actor). Most recent wins.
+  const [byExternalSend] = await db
+    .select({ one: drizzleSql<number>`1` })
+    .from(events)
+    .where(
+      and(
+        eq(events.correlationId, id),
+        eq(events.source, EXTERNAL_DISPATCH_SOURCE),
+        eq(events.userId, userId)
+      )
+    )
+    .orderBy(drizzleSql`${events.timestamp} DESC`)
+    .limit(1);
+  if (byExternalSend) return { kind: "external_send", id };
 
   return null;
 }

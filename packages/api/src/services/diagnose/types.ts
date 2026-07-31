@@ -30,7 +30,14 @@ export type ObjectKind =
   | "agent"
   | "automation_run"
   | "playbook_run"
-  | "entity";
+  | "entity"
+  /**
+   * A completed external-dispatch send (messaging.external.send / provider
+   * proxy call) — resolved ONLY via its `correlationId` (there is no separate
+   * row; see resolve-object-kind.ts's correlationId fallback). Wave 2 of the
+   * universal-sink plan (`connectors/external-dispatch.ts`).
+   */
+  | "external_send";
 
 /** Default "stuck" boundary: a run still `running` past this age is flagged. */
 export const DEFAULT_STUCK_THRESHOLD_HOURS = 24;

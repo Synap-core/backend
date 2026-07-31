@@ -40,6 +40,7 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
+import { recordDomainMutation } from "../utils/domain-mutation.js";
 
 /**
  * Teach-in-response affordance for the no-credential/no-connection error
@@ -50,6 +51,66 @@ import { createPendingProposal } from "../utils/permission-check.js";
  */
 const CONNECT_AFFORDANCE =
   " Ask the user to connect it in Settings → Connectors.";
+
+// Re-exported so existing importers of `EXTERNAL_DISPATCH_SOURCE` from this
+// module keep working; the canonical definition lives in the dependency-free
+// leaf module below (see its docstring for why it's split out).
+export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+
+/**
+ * Record a completed external send to the run/event spine — the UNIVERSAL SINK
+ * this wave closes: every outbound messaging send / provider proxy call that
+ * reaches a real external system now leaves a `{channel}.{action}.completed`
+ * event (audit log + best-effort automation/webhook fan-out via
+ * `recordDomainMutation`), keyed by `correlationId` so `diagnose(correlationId)`
+ * resolves it (see resolve-object-kind.ts's correlationId fallback).
+ *
+ * GUARANTEE (un-audited-send discipline): this call is AWAITED — never
+ * fire-and-forget — and passes `throwOnError: true` through to the underlying
+ * `auditLog` append, so a send can never be reported "delivered" without its
+ * audit row landing. A true same-Postgres-transaction append isn't reachable
+ * from this module (the CAS `externalDispatchedAt` claim + the `auditLog`
+ * writer both live outside `connectors/*`), so this is the strongest guarantee
+ * obtainable at this chokepoint: if the append fails, THIS THROWS, which for
+ * the proposal-approval path (`dispatchExternalOnce`) lands as the documented
+ * "ambiguous" case — the at-most-once claim is KEPT (never a silent
+ * un-audited success) and the proposal surfaces APPROVAL_FAILED rather than a
+ * false APPROVED. The automation/webhook fan-out inside `recordDomainMutation`
+ * stays fire-and-forget (unchanged best-effort side-effect semantics).
+ */
+export async function recordExternalAction(opts: {
+  /** e.g. "gmail" / "stalwart" / "discord" / "unipile" / "nango" / "vault" / "mcp". */
+  channel: string;
+  /** e.g. "send" / "action". */
+  action: string;
+  userId: string;
+  workspaceId?: string | null;
+  agentUserId?: string | null;
+  /** Correlates this audit row to the caller's handle — `diagnose(correlationId)`. */
+  correlationId: string;
+  /** What the call targeted (threadId / provider+path / tool name). */
+  target: string;
+  status: "sent" | "failed";
+  data?: Record<string, unknown>;
+}): Promise<void> {
+  await recordDomainMutation({
+    subjectType: opts.channel,
+    action: opts.action,
+    subjectId: opts.correlationId,
+    userId: opts.userId,
+    workspaceId: opts.workspaceId ?? null,
+    agentUserId: opts.agentUserId ?? null,
+    correlationId: opts.correlationId,
+    source: EXTERNAL_DISPATCH_SOURCE,
+    data: {
+      target: opts.target,
+      status: opts.status,
+      ...opts.data,
+    },
+    throwOnError: true,
+  });
+}
 
 /**
  * Resolve the configured Nango connector (or undefined when unconfigured).
@@ -390,6 +451,12 @@ export interface SendExternalMessageResult {
   proposed?: boolean;
   /** The created `capability/run` proposal id when `proposed === true`. */
   proposalId?: string;
+  /**
+   * The correlationId stamped on this send's `{channel}.send.completed` audit
+   * event (see `recordExternalAction`) — pass to `diagnose(correlationId)` to
+   * resolve the send. Set only on an actually-dispatched (non-gated) send.
+   */
+  correlationId?: string;
 }
 
 /**
@@ -478,7 +545,27 @@ export async function sendExternalMessage(
     messageId = msg?.id;
   }
 
-  return { success: true, messageId };
+  // Universal-sink audit append (this wave): every confirmed dispatch (owner
+  // send OR an approved-proposal re-entry) now leaves a `{channel}.send.
+  // completed` event — the gap where an outbound message left no run/event
+  // and was unresolvable by `diagnose`. AWAITED + throws on failure (see
+  // `recordExternalAction`'s un-audited-send guarantee) — for a proposal
+  // re-entry a throw here lands as `dispatchExternalOnce`'s "ambiguous" case
+  // (claim kept, APPROVAL_FAILED), never a silently un-audited APPROVED.
+  const correlationId = randomUUID();
+  await recordExternalAction({
+    channel: provider ?? "messaging",
+    action: "send",
+    userId,
+    workspaceId: input.workspaceId ?? null,
+    agentUserId: input.agentUserId ?? null,
+    correlationId,
+    target: threadId,
+    status: "sent",
+    data: { accountId, messageId: messageId ?? null },
+  });
+
+  return { success: true, messageId, correlationId };
 }
 
 /**
@@ -727,6 +814,12 @@ export interface TriggerProviderActionResult {
   proposed?: boolean;
   /** The created `capability/run` proposal id when `proposed === true`. */
   proposalId?: string;
+  /**
+   * The correlationId stamped on this call's `{scheme}.action.completed` audit
+   * event (see `recordExternalAction`) — pass to `diagnose(correlationId)` to
+   * resolve the call. Set only on an actually-dispatched (non-gated) call.
+   */
+  correlationId?: string;
 }
 
 /** A resolved `tools` row, passed to each scheme handler. */
@@ -1849,5 +1942,40 @@ export async function triggerProviderAction(
             ? { accountHint: accountHintOverride }
             : {}),
         };
-  return handler({ input: dispatchInput, tool });
+  const result = await handler({ input: dispatchInput, tool });
+
+  // Universal-sink audit append (this wave): every actually-dispatched provider
+  // call (nango/vault/mcp — covers Nango-backed connectors, direct API-key
+  // providers, and MCP tool calls alike) that REACHED the external system
+  // leaves a `{scheme}.action.completed` event, closing the gap where a
+  // provider send/proxy call was unresolvable by `diagnose`. Only a
+  // successful call is audited here — a failed call never left the pod state
+  // this wave is closing (the caller's own error path is unchanged). AWAITED
+  // + throws on failure (see `recordExternalAction`'s un-audited-send
+  // guarantee): for the `capability/run` / `provider.action` proposal
+  // executors this lands as `dispatchExternalOnce`'s "ambiguous" case (claim
+  // kept, APPROVAL_FAILED) rather than a silently un-audited APPROVED.
+  if (result.success) {
+    const correlationId = randomUUID();
+    await recordExternalAction({
+      channel: scheme,
+      action: "action",
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      correlationId,
+      target: `${provider} ${input.method} ${input.path}`,
+      status: "sent",
+      data: {
+        provider,
+        tool: tool.name,
+        method: input.method,
+        path: input.path,
+        status: result.status,
+        sourceProposalId: input.sourceProposalId ?? null,
+      },
+    });
+    return { ...result, correlationId };
+  }
+  return result;
 }

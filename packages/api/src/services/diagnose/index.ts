@@ -31,8 +31,10 @@ import {
   users,
   skills,
   tools,
+  events,
   ProposalStatus,
 } from "@synap/database";
+import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import type { ProposalRevision } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
@@ -427,6 +429,39 @@ async function diagnoseObject(
           workspaceId: row.workspaceId,
         },
         why: null,
+      };
+    }
+
+    // A completed external-dispatch send — resolved by `resolveObjectKind`'s
+    // correlationId fallback (no row of its own; `id` here IS the
+    // correlationId). Re-read the SAME audit event to explain it.
+    case "external_send": {
+      const [row] = await db
+        .select({ type: events.type, data: events.data, timestamp: events.timestamp })
+        .from(events)
+        .where(
+          and(
+            eq(events.correlationId, id),
+            eq(events.source, EXTERNAL_DISPATCH_SOURCE),
+            eq(events.userId, userId)
+          )
+        )
+        .orderBy(desc(events.timestamp))
+        .limit(1);
+      if (!row) return { error: "External send not found" };
+      const data = (row.data ?? {}) as Record<string, unknown>;
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `${row.type} → ${data.status ?? "unknown"} (${data.target ?? "?"})`,
+        state: {
+          eventType: row.type,
+          status: data.status ?? null,
+          target: data.target ?? null,
+          timestamp: row.timestamp,
+        },
+        why: { data: boundDiagnoseValue(data) },
       };
     }
 
