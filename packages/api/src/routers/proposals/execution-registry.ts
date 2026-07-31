@@ -39,6 +39,7 @@ type ProposalRow = {
   sessionId: string | null;
   projectId: string | null;
   agentUserId: string | null;
+  createdBy?: string | null;
   sourceMessageId: string | null;
   data: unknown;
 };

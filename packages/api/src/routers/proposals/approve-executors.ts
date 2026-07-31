@@ -1410,14 +1410,13 @@ export function registerApproveExecutors(): void {
   // ── automation / create ──────────────────────────────────────────────────────
   // (object-proposal manifest W1) A gated automation create (agent-authored —
   // the automations router only gates the `agentUserId` path) lands here on
-  // approval. Materializes via the SAME automationsRouter.create the direct path
-  // uses — re-run as the APPROVER with NO agentUserId, which takes the operator
-  // branch (RBAC verify, then direct insert, never re-propose). The propose gate
-  // widened `data` to the full create input, so triggerConfig / flowDefinition /
-  // status / metadata / state all flow through (flowDefinition is required).
+  // approval. The canonical internal materializer re-validates the stored
+  // definition and data contract, preserves the originating agent as creator,
+  // and uses the proposal target id as the stable automation id. The propose
+  // gate widened `data` to the full create input, so triggerConfig /
+  // flowDefinition / status / metadata / state all flow through
+  // (flowDefinition is required).
   //
-  // targetId NOTE (decision B): automationsRouter.create does not accept a
-  // caller-supplied id (DB-generated) — adoption is a follow-up.
   registerProposalExecutor({
     key: "automation/create",
     async execute({ proposal, userId, input, deps }) {
@@ -1434,7 +1433,8 @@ export function registerApproveExecutors(): void {
         });
       }
 
-      // Idempotency: createCaller mints a fresh automation id each run.
+      // Fast retry guard; the stable target id below also closes the concurrent
+      // approval race before this status update becomes visible.
       const [alreadyDone] = await db
         .select({ status: proposals.status })
         .from(proposals)
@@ -1443,27 +1443,41 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { automationsRouter } = await import("../automations.js");
-      const automationCaller = automationsRouter.createCaller({
-        db,
-        authenticated: true as const,
-        userId,
-      } as unknown as Context);
-      const createArgs = {
-        workspaceId: proposal.workspaceId ?? undefined,
-        name,
-        description: innerData.description as string | undefined,
-        triggerType,
-        triggerConfig: innerData.triggerConfig as
-          Record<string, unknown> | undefined,
-        flowDefinition,
-        status: innerData.status as string | undefined,
-        metadata: innerData.metadata as Record<string, unknown> | undefined,
-        state: innerData.state as Record<string, unknown> | undefined,
-      };
-      await automationCaller.create(
-        createArgs as Parameters<typeof automationCaller.create>[0]
-      );
+      const automationAuthorId =
+        proposal.agentUserId ?? proposal.createdBy ?? undefined;
+      if (!automationAuthorId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Automation proposal is missing its author identity",
+        });
+      }
+
+      const { materializeApprovedAutomation } =
+        await import("../automations.js");
+      await materializeApprovedAutomation({
+        database: db,
+        agentUserId: automationAuthorId,
+        stableId: proposal.targetId,
+        definition: {
+          workspaceId: proposal.workspaceId ?? undefined,
+          name,
+          description: innerData.description as string | undefined,
+          triggerType: triggerType as "event" | "cron" | "webhook" | "manual",
+          triggerConfig:
+            (innerData.triggerConfig as Record<string, unknown> | undefined) ??
+            {},
+          flowDefinition: flowDefinition as {
+            nodes: Array<Record<string, unknown>>;
+            edges: Array<Record<string, unknown>>;
+          },
+          status:
+            (innerData.status as
+              "draft" | "active" | "paused" | "error" | undefined) ?? "draft",
+          metadata: innerData.metadata as Record<string, unknown> | undefined,
+          state: innerData.state as Record<string, unknown> | undefined,
+          source: "ai" as const,
+        },
+      });
 
       await db
         .update(proposals)

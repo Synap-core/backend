@@ -110,7 +110,7 @@ export const notifCenterRouter = router({
   /**
    * Mark a single notification as read.
    */
-  markRead: workspaceProcedure
+  markRead: protectedProcedure
     .input(z.object({ notificationId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await db
@@ -119,8 +119,9 @@ export const notifCenterRouter = router({
         .where(
           and(
             eq(notifications.id, input.notificationId),
-            eq(notifications.userId, ctx.userId),
-            eq(notifications.workspaceId, ctx.workspaceId)
+            // Inbox is user-wide. An item from another Space stays actionable
+            // after the active lens changes; user ownership is the security floor.
+            eq(notifications.userId, requireUserId(ctx.userId))
           )
         );
       return { success: true };

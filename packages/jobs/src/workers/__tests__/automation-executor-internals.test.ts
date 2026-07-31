@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { AutomationEdge, AutomationNode } from "@synap/database";
+import type {
+  AutomationEdge,
+  AutomationNode,
+  FlowDefinition,
+} from "@synap/database";
 import {
   resolveTemplate,
   deepResolveTemplates,
@@ -16,6 +20,7 @@ import {
   resolveQueryProfileSlug,
   parseQueryFilterConditions,
   parseQueryOrderBy,
+  buildRunDefinitionSnapshot,
   type StepContext,
   type LedgerStepRow,
 } from "../automation-executor.js";
@@ -643,6 +648,32 @@ describe("shouldRunFlow (Wave 4.V3 precondition early-exit)", () => {
 
   it("throws (fail-closed) on an unparseable precondition — never a silent run", () => {
     expect(() => shouldRunFlow("not a comparison", ctx())).toThrow();
+  });
+});
+
+describe("buildRunDefinitionSnapshot", () => {
+  it("records the exact version and flow evaluated by the executor", () => {
+    const flow: FlowDefinition = {
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger",
+          position: { x: 0, y: 0 },
+          data: {
+            triggerType: "manual",
+            label: "On demand",
+            config: {},
+          },
+        },
+      ],
+      edges: [],
+      precondition: "trigger.payload.ready === true",
+    };
+
+    expect(buildRunDefinitionSnapshot(9, flow)).toEqual({
+      version: 9,
+      flowDefinition: flow,
+    });
   });
 });
 

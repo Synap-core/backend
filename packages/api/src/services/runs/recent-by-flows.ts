@@ -73,17 +73,21 @@ async function loadAutomationHistory(
         ${automationRuns.status} AS "status",
         ${automationRuns.startedAt} AS "startedAt",
         ${automationRuns.completedAt} AS "completedAt",
-        row_number() OVER (
+        count(*) FILTER (
+          WHERE ${automationRuns.status} <> 'running'
+        ) OVER (
           PARTITION BY ${automationRuns.automationId}
           ORDER BY ${automationRuns.startedAt} DESC, ${automationRuns.id} ASC
-        ) AS row_number
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS terminal_row_number
       FROM ${automationRuns}
       WHERE ${inArray(automationRuns.automationId, flowIds)}
         AND ${userVisibleWhere(automationRuns.workspaceId, userId)}
         ${workspaceId ? drizzleSql`AND ${eq(automationRuns.workspaceId, workspaceId)}` : drizzleSql``}
     )
     SELECT * FROM ranked
-    WHERE row_number <= ${perFlowLimit}
+    WHERE "status" = 'running'
+       OR terminal_row_number <= ${perFlowLimit}
     ORDER BY "flowId" ASC, "startedAt" DESC, "id" ASC
   `);
   return rowsFromResult(result).map((row) => ({
@@ -107,17 +111,21 @@ async function loadPlaybookHistory(
         ${playbookRuns.status} AS "status",
         ${playbookRuns.startedAt} AS "startedAt",
         ${playbookRuns.completedAt} AS "completedAt",
-        row_number() OVER (
+        count(*) FILTER (
+          WHERE ${playbookRuns.status} <> 'running'
+        ) OVER (
           PARTITION BY ${playbookRuns.playbookId}
           ORDER BY ${playbookRuns.startedAt} DESC, ${playbookRuns.id} ASC
-        ) AS row_number
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS terminal_row_number
       FROM ${playbookRuns}
       WHERE ${inArray(playbookRuns.playbookId, flowIds)}
         AND ${userVisibleWhere(playbookRuns.workspaceId, userId)}
         ${workspaceId ? drizzleSql`AND ${eq(playbookRuns.workspaceId, workspaceId)}` : drizzleSql``}
     )
     SELECT * FROM ranked
-    WHERE row_number <= ${perFlowLimit}
+    WHERE "status" = 'running'
+       OR terminal_row_number <= ${perFlowLimit}
     ORDER BY "flowId" ASC, "startedAt" DESC, "id" ASC
   `);
   return rowsFromResult(result).map((row) => ({
@@ -127,11 +135,14 @@ async function loadPlaybookHistory(
 }
 
 /**
- * Last N executions for a bounded set of visible process definitions.
+ * Every active execution plus the last N terminal executions for a bounded set
+ * of visible process definitions.
  *
  * Exactly two ledger queries at most (one per kind), regardless of flow count.
- * `row_number() partition by flow_id` applies the cap per process in Postgres,
- * avoiding both the pod-wide sampling lie and an N+1 request pattern.
+ * The terminal-only window count applies the cap per process in Postgres while
+ * the explicit `status = running` branch keeps even an old long-running
+ * execution addressable. This avoids both the pod-wide sampling lie and the
+ * false "running with no run to inspect" state without an N+1 request pattern.
  */
 export async function listRecentRunsByFlows(
   input: RecentRunsByFlowsInput

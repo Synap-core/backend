@@ -354,4 +354,13 @@ describe("discord agent-turn stream wiring (tripwire)", () => {
     expect(source).toContain("reopenChatTurn");
     expect(source).toContain("reopen_and_run");
   });
+
+  it("applies D5 claim policy even on duplicate inbound (!recorded retries)", () => {
+    // Must not short-circuit retries with empty reply before claim policy.
+    // recorded ? claimed.created : false forces reopen path for gateway redelivery.
+    expect(source).toContain("recorded ? claimed.created : false");
+    expect(source).toContain("usefulAssistantContent");
+    // Partial/failed skips must stay partial so bridge does not post half-answers as success.
+    expect(source).toMatch(/isCleanComplete|action !== "skip_completed"/);
+  });
 });

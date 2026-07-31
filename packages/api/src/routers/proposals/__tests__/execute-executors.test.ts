@@ -56,6 +56,13 @@ const AUTOMATION_EXEC_BLOCK = (() => {
   return EXECUTORS.slice(start, end);
 })();
 
+/** The `automation/create` executor body (up to the next registration). */
+const AUTOMATION_CREATE_BLOCK = (() => {
+  const start = EXECUTORS.indexOf('key: "automation/create"');
+  const end = EXECUTORS.indexOf('key: "automation/execute"', start);
+  return EXECUTORS.slice(start, end);
+})();
+
 /**
  * AST view of the `automation/execute` executor.
  *
@@ -318,6 +325,20 @@ describe("(d) idempotency follows the prevailing already-APPROVED guard", () => 
     expect(await execute()).toEqual({ success: true });
     expect(await execute()).toEqual({ success: true, alreadyApproved: true });
     expect(runs).toBe(1);
+  });
+});
+
+describe("automation/create approval preserves governed provenance", () => {
+  it("re-enters the canonical create door as an AI-authored create", () => {
+    expect(AUTOMATION_CREATE_BLOCK).toContain('source: "ai" as const');
+    expect(AUTOMATION_CREATE_BLOCK).toContain("materializeApprovedAutomation");
+    expect(AUTOMATION_CREATE_BLOCK).toContain(
+      "agentUserId: automationAuthorId"
+    );
+    expect(AUTOMATION_CREATE_BLOCK).toContain("stableId: proposal.targetId");
+    expect(AUTOMATION_CREATE_BLOCK).toContain(
+      "metadata: innerData.metadata as Record<string, unknown> | undefined"
+    );
   });
 });
 

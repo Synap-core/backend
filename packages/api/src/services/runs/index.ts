@@ -701,9 +701,7 @@ async function listCapabilityRuns(
     ),
   ];
   merged.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
-  return merged
-    .slice(0, limit)
-    .filter((r) => !status || r.status === status);
+  return merged.slice(0, limit).filter((r) => !status || r.status === status);
 }
 
 async function listSessionRuns(
@@ -1337,10 +1335,7 @@ export async function getRun(
     if (runResult === undefined) {
       for (const e of rows) {
         const d = (e.data ?? {}) as Record<string, unknown>;
-        if (
-          d.kind === CAPABILITY_RUN_EVENT_KIND &&
-          d.runResult !== undefined
-        ) {
+        if (d.kind === CAPABILITY_RUN_EVENT_KIND && d.runResult !== undefined) {
           runResult = d.runResult;
           break;
         }
@@ -1973,6 +1968,8 @@ const AUTOMATION_NODE_TYPES: ReadonlySet<AutomationNode["type"]> = new Set([
   "fetch",
   "query",
   "messages_query",
+  "runs_query",
+  "proposals_query",
   "switch",
   "skill",
   "capability",

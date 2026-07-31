@@ -56,6 +56,147 @@ import {
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
 
+const automationDataContractItemBase = {
+  id: z.string().min(1),
+  label: z.string().min(1).max(200),
+  nodeIds: z.array(z.string().min(1)).min(1),
+};
+
+const automationDataContractSchema = z
+  .object({
+    version: z.literal(1),
+    mode: z.enum(["ingest", "react", "ingest_and_react"]),
+    gets: z
+      .array(
+        z.object({
+          ...automationDataContractItemBase,
+          origin: z.enum(["external", "synap", "schedule", "manual"]),
+          event: z.string().min(1).max(300),
+          provider: z.string().min(1).max(100).optional(),
+        })
+      )
+      .min(1),
+    stores: z.array(
+      z.object({
+        ...automationDataContractItemBase,
+        resource: z.string().min(1).max(200),
+      })
+    ),
+    reacts: z.array(
+      z.object({
+        ...automationDataContractItemBase,
+        kind: z.enum([
+          "synap_write",
+          "external_write",
+          "notification",
+          "agent",
+          "process",
+        ]),
+        destination: z.string().min(1).max(200).optional(),
+      })
+    ),
+  })
+  .superRefine((value, context) => {
+    const sectionsMatchMode =
+      (value.mode === "ingest" &&
+        value.stores.length > 0 &&
+        value.reacts.length === 0) ||
+      (value.mode === "react" &&
+        value.stores.length === 0 &&
+        value.reacts.length > 0) ||
+      (value.mode === "ingest_and_react" &&
+        value.stores.length > 0 &&
+        value.reacts.length > 0);
+    if (!sectionsMatchMode) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Data contract mode must match its Stores in Synap and Reacts & sends sections.",
+        path: ["mode"],
+      });
+    }
+  });
+
+function validateAiAutomationDataContract(
+  input: {
+    agentUserId?: string;
+    source?: "user" | "ai" | "intelligence" | "system" | "agent";
+    metadata?: Record<string, unknown>;
+    flowDefinition: { nodes: Array<Record<string, unknown>> };
+  },
+  context: z.RefinementCtx
+): void {
+  const isAiAuthored =
+    input.agentUserId != null ||
+    input.source === "ai" ||
+    input.source === "agent";
+  if (!isAiAuthored) return;
+
+  const parsed = automationDataContractSchema.safeParse(
+    input.metadata?.dataContract
+  );
+  if (!parsed.success) {
+    context.addIssue({
+      code: "custom",
+      path: ["metadata", "dataContract"],
+      message:
+        "AI-authored automations require an explicit Gets data / Stores in Synap / Reacts & sends contract.",
+    });
+    return;
+  }
+
+  for (const issue of findUnknownDataContractNodeReferences(
+    parsed.data,
+    input.flowDefinition
+  )) {
+    context.addIssue({
+      code: "custom",
+      path: [
+        "metadata",
+        "dataContract",
+        issue.section,
+        issue.itemIndex,
+        "nodeIds",
+        issue.nodeIndex,
+      ],
+      message: `Data contract references unknown flow node "${issue.nodeId}".`,
+    });
+  }
+}
+
+interface UnknownDataContractNodeReference {
+  section: "gets" | "stores" | "reacts";
+  itemIndex: number;
+  nodeIndex: number;
+  nodeId: string;
+}
+
+function findUnknownDataContractNodeReferences(
+  contract: z.infer<typeof automationDataContractSchema>,
+  flowDefinition: { nodes: Array<Record<string, unknown>> }
+): UnknownDataContractNodeReference[] {
+  const flowNodeIds = new Set(
+    flowDefinition.nodes.flatMap((node) =>
+      typeof node.id === "string" && node.id.length > 0 ? [node.id] : []
+    )
+  );
+  const unknownReferences: UnknownDataContractNodeReference[] = [];
+  for (const section of ["gets", "stores", "reacts"] as const) {
+    contract[section].forEach((item, itemIndex) => {
+      item.nodeIds.forEach((nodeId, nodeIndex) => {
+        if (flowNodeIds.has(nodeId)) return;
+        unknownReferences.push({
+          section,
+          itemIndex,
+          nodeIndex,
+          nodeId,
+        });
+      });
+    });
+  }
+  return unknownReferences;
+}
+
 /**
  * Resolve `skillName` → `skillId` on `skill` flow nodes that carry a name but no
  * id (the template-friendly authoring form: a capability seeds a skill + an
@@ -282,6 +423,151 @@ function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
 function summarizeEntityCreateTrigger(config: AutomationTriggerConfig): string {
   const slug = config.filters?.profileSlug as string | undefined;
   return slug ? `On ${slug} created` : "On any entity created";
+}
+
+type AutomationDatabase = Awaited<ReturnType<typeof getDb>>;
+
+interface AutomationMaterializationInput {
+  workspaceId?: string | null;
+  name: string;
+  description?: string;
+  triggerType: "event" | "cron" | "webhook" | "manual";
+  triggerConfig: Record<string, unknown>;
+  flowDefinition: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+  status: "draft" | "active" | "paused" | "error";
+  metadata?: Record<string, unknown>;
+  state?: Record<string, unknown>;
+  source?: "user" | "ai" | "intelligence" | "system" | "agent";
+}
+
+async function prepareAutomationForMaterialization(
+  database: AutomationDatabase,
+  input: AutomationMaterializationInput,
+  createdBy: string
+): Promise<void> {
+  if (input.source === "ai" || input.source === "agent") {
+    const contract = automationDataContractSchema.safeParse(
+      input.metadata?.dataContract
+    );
+    if (!contract.success) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "AI-authored automations require an explicit Gets data / Stores in Synap / Reacts & sends contract.",
+      });
+    }
+    const unknownReferences = findUnknownDataContractNodeReferences(
+      contract.data,
+      input.flowDefinition
+    );
+    if (unknownReferences.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Data contract references unknown flow node "${unknownReferences[0]?.nodeId}".`,
+      });
+    }
+  }
+
+  if (
+    input.triggerType === "event" &&
+    typeof input.triggerConfig.eventPattern === "string"
+  ) {
+    try {
+      validateEventPattern(input.triggerConfig.eventPattern);
+    } catch (error) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: (error as Error).message,
+      });
+    }
+  }
+
+  const resolvers = await loadFlowValidationResolvers(
+    database,
+    input.flowDefinition,
+    input.workspaceId,
+    createdBy
+  );
+  const flowError = flowValidationErrorMessage(input.flowDefinition, resolvers);
+  if (flowError) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
+  }
+
+  // Normalize template-friendly skill names before either proposal storage or
+  // final materialization, so every persisted flow dispatches by stable id.
+  await injectSkillIdsFromNames(
+    database,
+    input.flowDefinition,
+    input.workspaceId,
+    createdBy
+  );
+}
+
+async function insertAutomationAfterGovernance(
+  database: AutomationDatabase,
+  input: AutomationMaterializationInput,
+  createdBy: string,
+  stableId?: string
+): Promise<string | null> {
+  let nextRunAt: Date | null = null;
+  if (input.status === "active" && input.triggerType === "cron") {
+    const expression = input.triggerConfig.expression as string | undefined;
+    if (expression) nextRunAt = computeNextCronRunAt(expression, new Date());
+  }
+
+  const [row] = await database
+    .insert(automations)
+    .values({
+      ...(stableId ? { id: stableId } : {}),
+      workspaceId: input.workspaceId ?? null,
+      createdBy,
+      name: input.name,
+      description: input.description,
+      triggerType: input.triggerType,
+      triggerConfig: input.triggerConfig,
+      flowDefinition: input.flowDefinition as unknown as FlowDefinition,
+      status: input.status,
+      ...(nextRunAt ? { nextRunAt } : {}),
+      state: input.state ?? {},
+      metadata: {
+        ...(input.metadata ?? {}),
+        createdVia:
+          input.source === "agent" || input.source === "ai"
+            ? ("ai" as const)
+            : ("manual" as const),
+      },
+    })
+    .onConflictDoNothing({ target: automations.id })
+    .returning({ id: automations.id });
+
+  return row?.id ?? stableId ?? null;
+}
+
+/**
+ * Canonical materialization path for an already-approved AI proposal.
+ * It repeats current catalog validation, preserves the agent as runtime
+ * principal, and converges retries on the proposal's stable target id.
+ */
+export async function materializeApprovedAutomation(input: {
+  database: AutomationDatabase;
+  definition: AutomationMaterializationInput;
+  agentUserId: string;
+  stableId: string;
+}): Promise<string | null> {
+  await prepareAutomationForMaterialization(
+    input.database,
+    input.definition,
+    input.agentUserId
+  );
+  return insertAutomationAfterGovernance(
+    input.database,
+    input.definition,
+    input.agentUserId,
+    input.stableId
+  );
 }
 
 export const automationsRouter = router({
@@ -660,73 +946,36 @@ export const automationsRouter = router({
 
   create: protectedProcedure
     .input(
-      z.object({
-        workspaceId: z.string().uuid().nullable().optional(),
-        name: z.string().min(1).max(200),
-        description: z.string().optional(),
-        triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-        triggerConfig: z.record(z.string(), z.unknown()).default({}),
-        flowDefinition: z.object({
-          nodes: z.array(z.record(z.string(), z.unknown())),
-          edges: z.array(z.record(z.string(), z.unknown())),
-        }),
-        status: z.enum(["draft", "active", "paused", "error"]).default("draft"),
-        metadata: z.record(z.string(), z.unknown()).optional(),
-        /** Per-automation persistent config/state — resolves {{automation.state.*}}. */
-        state: z.record(z.string(), z.unknown()).optional(),
-        /** Explicit agent user ID for AI-created automations */
-        agentUserId: z.string().uuid().optional(),
-        source: z
-          .enum(["user", "ai", "intelligence", "system", "agent"])
-          .optional(),
-      })
+      z
+        .object({
+          workspaceId: z.string().uuid().nullable().optional(),
+          name: z.string().min(1).max(200),
+          description: z.string().optional(),
+          triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+          triggerConfig: z.record(z.string(), z.unknown()).default({}),
+          flowDefinition: z.object({
+            nodes: z.array(z.record(z.string(), z.unknown())),
+            edges: z.array(z.record(z.string(), z.unknown())),
+          }),
+          status: z
+            .enum(["draft", "active", "paused", "error"])
+            .default("draft"),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+          /** Per-automation persistent config/state — resolves {{automation.state.*}}. */
+          state: z.record(z.string(), z.unknown()).optional(),
+          /** Explicit agent user ID for AI-created automations */
+          agentUserId: z.string().uuid().optional(),
+          source: z
+            .enum(["user", "ai", "intelligence", "system", "agent"])
+            .optional(),
+        })
+        .superRefine(validateAiAutomationDataContract)
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
       const createdBy = input.agentUserId ?? ctx.userId!;
 
-      // Validate event pattern at API boundary so bad patterns are caught early
-      // rather than silently never matching at runtime.
-      if (
-        input.triggerType === "event" &&
-        typeof input.triggerConfig?.eventPattern === "string"
-      ) {
-        try {
-          validateEventPattern(input.triggerConfig.eventPattern);
-        } catch (err) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: (err as Error).message,
-          });
-        }
-      }
-
-      // Node-contract + bounded catalog validation. The resolver only loads
-      // references carried by this submitted flow, so malformed catalog refs
-      // fail before either an operator insert or an AI proposal is created.
-      const createFlowResolvers = await loadFlowValidationResolvers(
-        database,
-        input.flowDefinition,
-        input.workspaceId,
-        createdBy
-      );
-      const createFlowError = flowValidationErrorMessage(
-        input.flowDefinition,
-        createFlowResolvers
-      );
-      if (createFlowError) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: createFlowError });
-      }
-
-      // Resolve any `skill` node authored with `skillName` (no `skillId`) into a
-      // concrete id before this flow is persisted OR carried into an AI proposal,
-      // so the runtime always dispatches by id. Mutates input.flowDefinition.
-      await injectSkillIdsFromNames(
-        database,
-        input.flowDefinition,
-        input.workspaceId,
-        createdBy
-      );
+      await prepareAutomationForMaterialization(database, input, createdBy);
 
       // Governance membrane. AI agents (agentUserId set) route through
       // checkPermissionOrPropose; on "proposed" no row is written and the
@@ -734,9 +983,9 @@ export const automationsRouter = router({
       // DIRECT writes: an automation is operator configuration (a template /
       // workflow), not AI-authored content. Hub-protocol calls are all branded
       // source:"intelligence", so without this split an operator's own CLI
-      // install would be gated as AI and routed to a proposal — which the approve
-      // flow can't even materialize for automations. RBAC is still enforced on
-      // the operator path; we just never propose.
+      // install would otherwise be gated as AI and routed to a proposal. Approved
+      // AI creates are materialized separately with their original provenance;
+      // RBAC is still enforced on the operator path, which never proposes.
       if (input.agentUserId) {
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
@@ -797,49 +1046,15 @@ export const automationsRouter = router({
         }
       }
 
-      // A cron automation born `active` (direct operator create, OR an
-      // agent-proposed create materialized at approval time — the approve-executor
-      // re-runs THIS proc) must carry `nextRunAt`, or the cron scheduler's
-      // `status='active' AND nextRunAt <= now` filter (automation-cron-scheduler.ts)
-      // never selects it and it silently never fires. `activate` computes this for
-      // the activate-later path; compute it here for the born-active path too,
-      // reading `triggerConfig.expression` exactly like `activate` does. Only cron
-      // needs it — event/webhook/manual are dispatched by other paths.
-      let createNextRunAt: Date | null = null;
-      if (input.status === "active" && input.triggerType === "cron") {
-        const cronExpression = (input.triggerConfig as Record<string, unknown>)
-          ?.expression as string | undefined;
-        if (cronExpression) {
-          createNextRunAt = computeNextCronRunAt(cronExpression, new Date());
-        }
-      }
-
-      const [row] = await database
-        .insert(automations)
-        .values({
-          workspaceId: input.workspaceId ?? null,
-          createdBy,
-          name: input.name,
-          description: input.description,
-          triggerType: input.triggerType,
-          triggerConfig: input.triggerConfig,
-          flowDefinition: input.flowDefinition as unknown as FlowDefinition,
-          status: input.status,
-          ...(createNextRunAt ? { nextRunAt: createNextRunAt } : {}),
-          state: input.state ?? {},
-          metadata: {
-            ...(input.metadata ?? {}),
-            createdVia:
-              input.source === "agent" || input.source === "ai"
-                ? ("ai" as const)
-                : ("manual" as const),
-          },
-        })
-        .returning();
+      const automationId = await insertAutomationAfterGovernance(
+        database,
+        input,
+        createdBy
+      );
 
       return {
         status: "created" as const,
-        id: row.id as string | null,
+        id: automationId,
         message: `Automation "${input.name}" created as ${input.status}`,
         proposalId: null as string | null,
       };
@@ -883,6 +1098,7 @@ export const automationsRouter = router({
           flowDefinition: true,
           triggerType: true,
           triggerConfig: true,
+          metadata: true,
         },
       });
       if (!existing) {
@@ -946,6 +1162,59 @@ export const automationsRouter = router({
         );
       }
 
+      const existingMetadata =
+        existing.metadata &&
+        typeof existing.metadata === "object" &&
+        !Array.isArray(existing.metadata)
+          ? (existing.metadata as Record<string, unknown>)
+          : {};
+      const effectiveMetadata =
+        input.metadata === undefined
+          ? existingMetadata
+          : {
+              ...existingMetadata,
+              ...input.metadata,
+              ...(existingMetadata.createdVia !== undefined
+                ? { createdVia: existingMetadata.createdVia }
+                : {}),
+            };
+      const effectiveDataContract = effectiveMetadata.dataContract;
+      if (
+        existingMetadata.createdVia === "ai" &&
+        effectiveDataContract === undefined
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "AI-authored automations must keep an explicit Gets data / Stores in Synap / Reacts & sends contract.",
+        });
+      }
+
+      if (effectiveDataContract !== undefined) {
+        const submittedContract = automationDataContractSchema.safeParse(
+          effectiveDataContract
+        );
+        if (!submittedContract.success) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "The submitted Gets data / Stores in Synap / Reacts & sends contract is invalid.",
+          });
+        }
+        const contractIssues = findUnknownDataContractNodeReferences(
+          submittedContract.data,
+          (input.flowDefinition ?? existing.flowDefinition) as {
+            nodes: Array<Record<string, unknown>>;
+          }
+        );
+        if (contractIssues.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Data contract references unknown flow node "${contractIssues[0]?.nodeId}".`,
+          });
+        }
+      }
+
       const updates: Record<string, unknown> = {
         updatedAt: new Date(),
       };
@@ -959,7 +1228,7 @@ export const automationsRouter = router({
       if (input.flowDefinition !== undefined)
         updates.flowDefinition = input.flowDefinition;
       if (input.status !== undefined) updates.status = input.status;
-      if (input.metadata !== undefined) updates.metadata = input.metadata;
+      if (input.metadata !== undefined) updates.metadata = effectiveMetadata;
       if (input.state !== undefined) updates.state = input.state;
 
       // Bump the monotonic definition version when a definition-affecting

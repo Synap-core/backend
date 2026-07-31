@@ -2449,6 +2449,16 @@ export const proposalsRouter = router({
           ])
           .optional(),
         targetId: z.string().optional(),
+        /**
+         * Resolve a bounded notification batch through the normal list path.
+         * This remains a filter only: workspace/user visibility predicates are
+         * still applied below before any proposal can be returned.
+         */
+        proposalIds: z
+          .array(z.string().uuid())
+          .max(100)
+          .transform((ids) => [...new Set(ids)])
+          .optional(),
         /** Filter to proposals originating from a specific chat thread */
         threadId: z.string().uuid().optional(),
         /** Filter to proposals linked to a specific focus session via correlationId */
@@ -2491,6 +2501,10 @@ export const proposalsRouter = router({
 
       if (input.targetId) {
         conditions.push(eq(proposals.targetId, input.targetId));
+      }
+
+      if (input.proposalIds && input.proposalIds.length > 0) {
+        conditions.push(inArray(proposals.id, input.proposalIds));
       }
 
       if (input.agentUserId) {
@@ -2565,6 +2579,20 @@ export const proposalsRouter = router({
             message: "Editor or higher role required to view proposals",
           });
         }
+      }
+
+      // An explicitly empty batch is a valid no-results filter, rather than an
+      // unbounded list request. This intentionally happens AFTER the concrete
+      // workspace authorization check above, so it cannot turn an unauthorized
+      // workspace probe into a successful response.
+      if (input.proposalIds?.length === 0) {
+        const { items, pagination } = buildPaginatedResponse([], input);
+        return {
+          items,
+          pagination: { ...pagination, nextCursor: undefined },
+          /** @deprecated Use `items` instead */
+          proposals: items,
+        };
       }
 
       // Cursor-based pagination: when cursor is provided, add a createdAt < cursor
@@ -3702,10 +3730,20 @@ export const proposalsRouter = router({
         });
       }
 
-      // Only an applied proposal can be reverted.
+      // Recovery: a proposal already in the TERMINAL `reverted` status can be
+      // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`
+      // on a reverted proposal has nothing left to invert and stays rejected).
+      // This rescues proposals that were reverted (un-materialized) under the
+      // OLD backend and are now stranded in REVERTED. The inverse is NOT re-run
+      // (entities are already un-materialized); we skip straight to PENDING.
+      const isRevertedReopen =
+        proposal.status === ProposalStatus.REVERTED && input.reopen === true;
+
+      // Only an applied proposal can be reverted (or a reverted one re-proposed).
       if (
         proposal.status !== ProposalStatus.APPROVED &&
-        proposal.status !== ProposalStatus.AUTO_APPROVED
+        proposal.status !== ProposalStatus.AUTO_APPROVED &&
+        !isRevertedReopen
       ) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -3746,6 +3784,47 @@ export const proposalsRouter = router({
             message: "Not authorized to revert this proposal",
           });
         }
+      }
+
+      // Reverted → re-propose: the entities are ALREADY un-materialized (this
+      // backend's earlier revert, or the OLD backend that stranded the proposal
+      // in REVERTED). Do NOT run the inverse again — it would try to re-delete
+      // already-deleted rows. Skip straight to returning it to PENDING, keeping
+      // `data` (incl. `operations`) intact so a re-accept re-materializes, and
+      // clear the review stamp so it re-surfaces as actionable. Re-emit the
+      // pending notification exactly as the approved→reopen tail does. The CAS
+      // guards the double-reopen race by only matching a still-REVERTED row.
+      if (isRevertedReopen) {
+        const reopenedAt = new Date();
+        const flipped = await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.PENDING,
+            reviewedBy: null,
+            reviewedAt: null,
+            updatedAt: reopenedAt,
+          })
+          .where(
+            and(
+              eq(proposals.id, input.proposalId),
+              eq(proposals.status, ProposalStatus.REVERTED)
+            )
+          )
+          .returning({ id: proposals.id });
+
+        if (flipped.length === 0) {
+          // A concurrent reopen already moved it back to the queue — idempotent.
+          return { success: true, reopened: true, alreadyReopened: true };
+        }
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "reopened",
+          userId
+        );
+
+        return { success: true, reopened: true };
       }
 
       // Compute the inverse from the proposal's own data. Fail loud on anything

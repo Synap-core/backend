@@ -1089,6 +1089,42 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       facetSlug: "client",
       targetKey: "driveLink",
     },
+
+    // ─── Wave 8: company / person become pod-wide identity ─────────────────────
+    //
+    // `company` and `person` are the shared identity of the whole pod: ONE record
+    // per real-world company/person, visible from EVERY workspace — auto-appearing
+    // on the Ecosystem graph, and lensed onto a CRM only where the entity wears a
+    // role facet (lead/client/partner). The templates now declare them
+    // `entityScope: pod` (ecosystem/crm/life-os/project-management/agent-fleet),
+    // and both profiles are already pod-scope SYSTEM kinds on every pod
+    // (ensure-system-profiles.ts lists them in POD_WIDE_SLUGS and backfills
+    // `entity_scope = 'pod'` on boot).
+    //
+    // But existing company/person ENTITY rows still carry a stamped `workspace_id`
+    // (created before their kind was pod-wide, or after the global
+    // `w4.reconcile-entity-scope` op was already ledgered — a ledgered opKey never
+    // re-runs, so that global sweep cannot catch these). Re-null those rows so the
+    // pod-wide lens sees the SAME company/person in every workspace. Exactly the
+    // campaign precedent above (`w4.reconcile.campaign`): a slug-scoped reconcile
+    // added because the global one ran earlier and could not reach these rows.
+    //
+    // Fresh unique opKeys so they run once on the next boot; scoped to the slug so
+    // they only touch entities on the pod-scope company/person profiles. Pod→NULL
+    // only (advisory severity → auto-applies on boot), idempotent (a second run
+    // finds no pod-scope company/person entity with a non-null workspace_id), and
+    // NON-DESTRUCTIVE (no profile-row deactivation, no data deleted). No schema
+    // migration — the `entity_scope` column already exists.
+    {
+      op: "reconcileEntityScope",
+      opKey: "w8.reconcile.company",
+      slug: "company",
+    },
+    {
+      op: "reconcileEntityScope",
+      opKey: "w8.reconcile.person",
+      slug: "person",
+    },
   ],
 };
 

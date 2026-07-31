@@ -1264,7 +1264,7 @@ export interface AutomationTriggerConfig {
 }
 export interface AutomationNodeBase {
 	id: string;
-	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "messages_query" | "switch" | "skill" | "capability" | "sub_automation" | "playbook_run" | "entity_read" | "related_entities" | "compute" | "select" | "claim" | "guard";
+	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "messages_query" | "runs_query" | "proposals_query" | "switch" | "skill" | "capability" | "sub_automation" | "playbook_run" | "entity_read" | "related_entities" | "compute" | "select" | "claim" | "guard";
 	position: {
 		x: number;
 		y: number;
@@ -1502,6 +1502,88 @@ export interface MessagesQueryNodeDef extends AutomationNodeBase {
 		errorHandling?: NodeErrorHandling;
 	};
 }
+/**
+ * Source node that reads this pod's OWN automation run ledger
+ * (`automation_runs`), optionally with each run's `automation_step_runs`
+ * children. The point is self-narration: a report/ops flow that says "3 runs
+ * failed last night, here is what broke" needs to READ the ledger, and until
+ * this node existed the only source node over non-entity data was
+ * `messages_query` — `query` reads `entities` and nothing else.
+ *
+ * Output:
+ * `{ runs: [{ id, flowName, status, startedAt, completedAt, error,
+ *             stepsCompleted, stepsFailed, steps? }], count }`
+ * — deliberately the same projection `getRun` (packages/api services/runs)
+ * returns to RunDetailPanel, so a generated report and the browser tell the
+ * SAME story about the same run.
+ */
+export interface RunsQueryNodeDef extends AutomationNodeBase {
+	type: "runs_query";
+	data: {
+		label: string;
+		/** Only runs of this automation. Template-resolvable. */
+		automationId?: string;
+		/** Run status filter: one value or a comma-separated list. */
+		status?: string;
+		/** Only runs started at/after this instant (ISO-8601 / epoch ms). */
+		since?: string;
+		/** Only runs launched ABOUT this entity (`automation_runs.subject_entity_id`). */
+		subjectEntityId?: string;
+		/** Most-recent N runs (default 20, capped 100). */
+		limit?: number;
+		/**
+		 * Also load each returned run's `automation_step_runs` rows as `steps[]`.
+		 * `automation_step_runs` has NO visibility column of its own, so children
+		 * are ONLY ever fetched by the ids of runs this node already authorized —
+		 * never by a caller-supplied run id. See `executeRunsQueryStep`.
+		 */
+		includeSteps?: boolean;
+		/** Optional per-node error handling */
+		errorHandling?: NodeErrorHandling;
+	};
+}
+/**
+ * Source node that reads this pod's OWN proposal queue (`proposals`) — the
+ * governance twin of `runs_query`. Lets a flow NARRATE what the agents proposed
+ * ("5 pending proposals from last night's enrichment run, 3 of them creates")
+ * instead of a human having to open the review inbox.
+ *
+ * `correlationId` / `sessionId` are indexed columns and are how a GROUP of
+ * proposals is addressed — there is no proposal-group object in the schema, the
+ * grouping IS the shared correlation/session id.
+ *
+ * Output:
+ * `{ proposals: [{ id, status, targetType, targetId, changeType, summary,
+ *                  reasoning, correlationId, sessionId, createdAt }], count }`
+ */
+export interface ProposalsQueryNodeDef extends AutomationNodeBase {
+	type: "proposals_query";
+	data: {
+		label: string;
+		/** Proposal status filter: one value or a comma-separated list. */
+		status?: string;
+		/** `proposals.target_type` ("entity", "facet", "document", …). */
+		targetType?: string;
+		/**
+		 * The normalized change kind. Matched against `data->>'changeType'` OR the
+		 * `proposal_type` column, exactly as the review surfaces normalize it
+		 * (routers/proposals.ts: "Prefer changeType, fall back to proposalType").
+		 */
+		changeType?: string;
+		/** All proposals of one request chain. */
+		correlationId?: string;
+		/** All proposals produced in one agent session. */
+		sessionId?: string;
+		/** Explicit ids (comma-separated string or array). */
+		proposalIds?: string | string[];
+		/** Only proposals created at/after this instant (ISO-8601 / epoch ms). */
+		since?: string;
+		/** Most-recent N proposals (default 20, capped 100). */
+		limit?: number;
+		/** Optional per-node error handling */
+		errorHandling?: NodeErrorHandling;
+	};
+}
 export interface SwitchNodeDef extends AutomationNodeBase {
 	type: "switch";
 	data: {
@@ -1586,7 +1668,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		errorHandling?: NodeErrorHandling;
 	};
 }
-export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | EntityReadNodeDef | RelatedEntitiesNodeDef | ComputeNodeDef | SelectNodeDef | ClaimNodeDef | GuardNodeDef | MessagesQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
+export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | EntityReadNodeDef | RelatedEntitiesNodeDef | ComputeNodeDef | SelectNodeDef | ClaimNodeDef | GuardNodeDef | MessagesQueryNodeDef | RunsQueryNodeDef | ProposalsQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
 	id: string;
 	source: string;
@@ -5596,6 +5678,15 @@ export type ExecuteCapabilityResult = {
 	skillId: string;
 	result: unknown;
 	ackState: WriteAckState;
+	/**
+	 * Observability handle for a DIRECT run (owner-bypass / read-only builtin /
+	 * governance-auto-granted agent). The run emits a `capability_run`
+	 * ai_decision event keyed by this correlationId — the SAME join key the
+	 * `capability.run` approve-executor stamps — so a direct run is listable via
+	 * `listCapabilityRuns`, has a getRun timeline, and is `diagnose(id)`-able.
+	 * Best-effort: absent only if the (swallowed) emit could not produce one.
+	 */
+	correlationId?: string;
 } | {
 	kind: "dry-run";
 	skillId: string;
@@ -5681,6 +5772,14 @@ export interface GraphEnvelope {
 		byKind: Record<string, number>;
 		byVia: Record<string, number>;
 	};
+	/**
+	 * Whether the focal object was actually resolved. `false` = the id hydrated to
+	 * NOTHING and has no visible neighbours (a genuinely-unknown / invisible id) —
+	 * `object` is then a not-found placeholder, NOT a real node. `true` = either
+	 * hydrated, or a stub node corroborated by ≥1 visible edge. Callers surface a
+	 * "not found" instead of rendering the placeholder as a real entity.
+	 */
+	found: boolean;
 }
 /**
  * Outcome of seeding ONE dependency's post-workspace layers (capabilities +
@@ -5953,24 +6052,6 @@ export interface FunnelStep {
 	label: string;
 	count: number;
 }
-/**
- * Unified run view-model — ONE shape over the pod's several run ledgers.
- *
- * There is no unified `runs` table (a deliberate D3 decision: presentation-union,
- * no migration). Instead each existing ledger — `automation_runs`,
- * `playbook_runs`, the `capture.graph` proposal+events, standalone
- * `focus_sessions`, the `capability.run` proposal+events, and `chat_turns` —
- * is mapped to this one `UnifiedRun` so a single Runs/Activity view can render
- * "what an AI did" across every flow.
- *
- * The channel rule the model encodes (validated with the user):
- *   - automation → ONE channel for all its runs
- *   - playbook   → ONE channel per run (its session's channel)
- *   - capture    → no channel (its story is its correlationId-keyed events)
- *   - capability → no channel (mirrors capture: correlationId-keyed events)
- *   - session    → its own channel
- *   - chat       → the channel the turn ran in (browser chat / Discord bridge)
- */
 /** Which ledger a run came from. */
 export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
 /** Normalised lifecycle across all ledgers. */
@@ -6044,7 +6125,7 @@ export interface RunGroup {
  * capture events; playbook/session runs carry a `channelId` so the UI opens the
  * channel for their message-level story instead of duplicating it here.
  */
-export interface RunActivityItem {
+export interface GenericRunActivityItem {
 	id: string;
 	at: Date | null;
 	/** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
@@ -6055,7 +6136,42 @@ export interface RunActivityItem {
 	hint: string | null;
 	detail: Record<string, unknown> | null;
 }
-export interface UnifiedRunDetail {
+export type AutomationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+/**
+ * Stable per-node execution payload exposed to run-detail consumers.
+ *
+ * These fields mirror the automation step ledger so every UI does not have to
+ * reinterpret `Record<string, unknown>`. Nullable values are honest for old or
+ * in-flight rows that lack timing, labels, commands, or an error.
+ */
+export interface AutomationStepActivityDetail {
+	output: Record<string, unknown>;
+	resolvedInputs: Record<string, unknown>;
+	startedAt: Date | null;
+	completedAt: Date | null;
+	nodeId: string;
+	nodeLabel: string | null;
+	commandId: string | null;
+	errorMessage: string | null;
+	nodeType: AutomationNode["type"] | null;
+}
+export interface AutomationStepActivityItem {
+	id: string;
+	at: Date | null;
+	kind: "step";
+	status: AutomationStepStatus;
+	label: string;
+	hint: string | null;
+	detail: AutomationStepActivityDetail;
+}
+/** Timeline item across all ledgers. Automation steps use the precise variant. */
+export type RunActivityItem = AutomationStepActivityItem | GenericRunActivityItem;
+/** Immutable definition recorded at the start of an automation run. */
+export interface RunDefinitionSnapshot {
+	version: number;
+	flowDefinition: FlowDefinition;
+}
+export interface UnifiedRunDetailBase {
 	run: UnifiedRun;
 	activity: RunActivityItem[];
 	/** The trigger that started this run — its principal + full payload (automation only). */
@@ -6075,18 +6191,38 @@ export interface UnifiedRunDetail {
 	 * automation-specific block here.
 	 */
 	playbookDetail?: PlaybookRunDetail | null;
-	/** The flow definition this run executed (automation only); null for every other ledger. */
-	definitionSnapshot: unknown;
+}
+export interface AutomationRunDetail extends UnifiedRunDetailBase {
+	run: UnifiedRun & {
+		flowType: "automation";
+	};
+	activity: AutomationStepActivityItem[];
+	trigger: {
+		triggeredBy: string | null;
+		payload: Record<string, unknown>;
+	};
+	outputSummary: Record<string, unknown> | null;
+	playbookDetail: null;
+	/** The flow definition this run executed; null only for legacy runs. */
+	definitionSnapshot: RunDefinitionSnapshot | null;
 	/**
 	 * Which edges of `definitionSnapshot.flowDefinition` this run actually walked
-	 * (automation only) — `{ traversedEdgeIds, prunedEdgeIds }`, written by the
-	 * executor at the moment each branch decision was made. Null for every other
-	 * ledger AND for automation runs that predate the column or never executed:
+	 * — `{ traversedEdgeIds, prunedEdgeIds }`, written by the executor at the
+	 * moment each branch decision was made. Null for automation runs that predate
+	 * the column or never executed:
 	 * null means UNKNOWN, never "nothing was pruned". An edge in neither list is
 	 * undecided (its source never ran).
 	 */
-	pathTaken: unknown;
+	pathTaken: RunPathTaken | null;
 }
+export interface NonAutomationRunDetail extends UnifiedRunDetailBase {
+	run: UnifiedRun & {
+		flowType: Exclude<FlowType, "automation">;
+	};
+	definitionSnapshot: null;
+	pathTaken: null;
+}
+export type UnifiedRunDetail = AutomationRunDetail | NonAutomationRunDetail;
 /**
  * A playbook run's rich footprint. Every list is user-floored and capped; the
  * session is the run's ONE focus session (playbook → one session per run).
@@ -8258,7 +8394,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -8312,7 +8448,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -8959,7 +9095,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9013,7 +9149,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -9060,7 +9196,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9114,7 +9250,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -9171,7 +9307,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9225,7 +9361,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -9417,6 +9553,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				targetType?: "skill" | "profile" | "entity" | "view" | "document" | "playbook" | "automation" | "whiteboard" | undefined;
 				targetId?: string | undefined;
+				proposalIds?: string[] | undefined;
 				threadId?: string | undefined;
 				correlationId?: string | undefined;
 				sessionId?: string | undefined;

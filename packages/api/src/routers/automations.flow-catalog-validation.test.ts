@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
     flowDefinition: { nodes: [], edges: [] },
     triggerType: "manual",
     triggerConfig: {},
+    metadata: {},
   } as Record<string, unknown>,
 }));
 
@@ -41,7 +42,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       insert: vi.fn(() => ({
         values: vi.fn((values: Record<string, unknown>) => {
           h.insertValues.push(values);
-          return { returning: vi.fn(async () => [{ id: "auto-1" }]) };
+          return {
+            onConflictDoNothing: vi.fn(() => ({
+              returning: vi.fn(async () => [{ id: "auto-1" }]),
+            })),
+          };
         }),
       })),
       update: vi.fn(() => ({
@@ -102,11 +107,36 @@ const UNKNOWN_REFERENCES_FLOW = {
   edges: [],
 };
 
+const VALID_DATA_CONTRACT = {
+  version: 1 as const,
+  mode: "react" as const,
+  gets: [
+    {
+      id: "manual-input",
+      label: "Manual request",
+      nodeIds: ["capability-step"],
+      origin: "manual" as const,
+      event: "Operator starts the automation",
+    },
+  ],
+  stores: [],
+  reacts: [
+    {
+      id: "perform-capability",
+      label: "Run the selected capability",
+      nodeIds: ["capability-step"],
+      kind: "process" as const,
+    },
+  ],
+};
+
 beforeEach(() => {
   h.selectResults.length = 0;
   h.insertValues.length = 0;
   h.updateSets.length = 0;
   h.permissionCalls = 0;
+  h.existing.metadata = {};
+  h.existing.flowDefinition = { nodes: [], edges: [] };
 });
 
 describe("automations flow catalog validation", () => {
@@ -123,12 +153,84 @@ describe("automations flow catalog validation", () => {
         triggerConfig: {},
         flowDefinition: UNKNOWN_REFERENCES_FLOW,
         agentUserId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        metadata: { dataContract: VALID_DATA_CONTRACT },
       })
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
       message: expect.stringContaining("missing.verb"),
     });
 
+    expect(h.insertValues).toHaveLength(0);
+    expect(h.permissionCalls).toBe(0);
+  });
+
+  it("rejects AI-authored creates without a truthful data contract before database work", async () => {
+    await expect(
+      caller().create({
+        workspaceId: WORKSPACE_ID,
+        name: "Opaque agent automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: { nodes: [{ id: "step-1" }], edges: [] },
+        agentUserId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(h.selectResults).toHaveLength(0);
+    expect(h.insertValues).toHaveLength(0);
+    expect(h.permissionCalls).toBe(0);
+  });
+
+  it("rejects data-contract references that do not exist in the flow", async () => {
+    await expect(
+      caller().create({
+        workspaceId: WORKSPACE_ID,
+        name: "Untraceable agent automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: { nodes: [{ id: "step-1" }], edges: [] },
+        source: "ai",
+        metadata: {
+          dataContract: {
+            ...VALID_DATA_CONTRACT,
+            gets: [
+              {
+                ...VALID_DATA_CONTRACT.gets[0],
+                nodeIds: ["missing-step"],
+              },
+            ],
+          },
+        },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(h.selectResults).toHaveLength(0);
+    expect(h.insertValues).toHaveLength(0);
+    expect(h.permissionCalls).toBe(0);
+  });
+
+  it("rejects AI-authored contracts whose mode contradicts their sections", async () => {
+    await expect(
+      caller().create({
+        workspaceId: WORKSPACE_ID,
+        name: "Contradictory agent automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: {
+          nodes: [{ id: "capability-step", type: "output", data: {} }],
+          edges: [],
+        },
+        source: "ai",
+        metadata: {
+          dataContract: {
+            ...VALID_DATA_CONTRACT,
+            mode: "ingest",
+          },
+        },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(h.selectResults).toHaveLength(0);
     expect(h.insertValues).toHaveLength(0);
     expect(h.permissionCalls).toBe(0);
   });
@@ -147,6 +249,118 @@ describe("automations flow catalog validation", () => {
     });
 
     expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("rejects a flow edit that would make the persisted data contract stale", async () => {
+    h.existing.metadata = {
+      ownerTag: "keep-me",
+      dataContract: VALID_DATA_CONTRACT,
+    };
+
+    await expect(
+      caller().update({
+        id: h.existing.id as string,
+        flowDefinition: {
+          nodes: [
+            {
+              id: "new-trigger",
+              type: "trigger",
+              position: { x: 0, y: 0 },
+              data: {
+                triggerType: "manual",
+                label: "On demand",
+                config: {},
+              },
+            },
+          ],
+          edges: [],
+        },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("preserves a valid persisted contract across a compatible flow edit", async () => {
+    h.existing.metadata = {
+      ownerTag: "keep-me",
+      dataContract: VALID_DATA_CONTRACT,
+    };
+
+    await caller().update({
+      id: h.existing.id as string,
+      flowDefinition: {
+        nodes: [
+          {
+            id: "capability-step",
+            type: "trigger",
+            position: { x: 0, y: 0 },
+            data: {
+              triggerType: "manual",
+              label: "On demand",
+              config: {},
+            },
+          },
+        ],
+        edges: [],
+      },
+    });
+
+    expect(h.updateSets).toHaveLength(1);
+    expect(h.updateSets[0]).not.toHaveProperty("metadata");
+  });
+
+  it("rejects a metadata-only update with a mode-invalid data contract", async () => {
+    await expect(
+      caller().update({
+        id: h.existing.id as string,
+        metadata: {
+          dataContract: {
+            ...VALID_DATA_CONTRACT,
+            mode: "ingest",
+          },
+        },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("cannot relabel AI provenance or drop its contract through metadata replacement", async () => {
+    h.existing.flowDefinition = {
+      nodes: [
+        {
+          id: "capability-step",
+          type: "trigger",
+          position: { x: 0, y: 0 },
+          data: {
+            triggerType: "manual",
+            label: "On demand",
+            config: {},
+          },
+        },
+      ],
+      edges: [],
+    };
+    h.existing.metadata = {
+      createdVia: "ai",
+      ownerTag: "keep-me",
+      dataContract: VALID_DATA_CONTRACT,
+    };
+
+    await caller().update({
+      id: h.existing.id as string,
+      metadata: {
+        createdVia: "manual",
+        ownerTag: "changed",
+      },
+    });
+
+    expect(h.updateSets[0]?.metadata).toEqual({
+      createdVia: "ai",
+      ownerTag: "changed",
+      dataContract: VALID_DATA_CONTRACT,
+    });
   });
 
   it("allows references returned by the scoped catalog lookups", async () => {

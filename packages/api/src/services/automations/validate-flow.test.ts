@@ -76,6 +76,18 @@ function wellFormedFlow() {
         data: { label: "msgs", channelId: "ch-1" },
       },
       {
+        id: "rq",
+        type: "runs_query",
+        position: { x: 0, y: 8.5 },
+        data: { label: "runs", limit: 20 },
+      },
+      {
+        id: "pq",
+        type: "proposals_query",
+        position: { x: 0, y: 8.7 },
+        data: { label: "proposals", limit: 20 },
+      },
+      {
         id: "cond",
         type: "condition",
         position: { x: 0, y: 9 },
@@ -189,7 +201,7 @@ describe("validateFlowDefinition — valid flows", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("covers all 21 node types (well-formed flow exercises each type)", () => {
+  it("covers all 23 node types (well-formed flow exercises each type)", () => {
     const types = new Set(wellFormedFlow().nodes.map((n) => n.type));
     for (const t of FLOW_NODE_TYPES) {
       expect(types.has(t)).toBe(true);

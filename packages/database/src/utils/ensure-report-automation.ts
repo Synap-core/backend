@@ -448,8 +448,68 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  *
  * The flow GRAPH is again unchanged — prompts only, no new nodes, no new edges,
  * no new placeholders.
+ *
+ * v12 — THE REPORT HAD NO HEADLINE, AND NOBODY NOTICED BECAUSE THE DECK MADE
+ * ONE UP. Top finding of a UI review of the rendered output, and the cause is
+ * one line this file never wrote.
+ *
+ * (a) NO ROUND EMITTED A `##`, ANYWHERE. `ANALYZE_SYSTEM` and `RELATE_SYSTEM`
+ * forbid headings — correctly, the assembler is the only round that formats —
+ * and `ASSEMBLE_SYSTEM` was simply never asked for one. It was told to open
+ * with a `# ` title above the first section and nothing about the sections
+ * themselves. So every `::::synap-section` reached the readers untitled, and
+ * each degraded in its own way:
+ *   · THE DECK invented a title from the section ATTRIBUTES. `segmentSlides`
+ *     fell back to `titleFromSectionAttributes`, which returns
+ *     `Capitalize(round) · agent` — "Analyze · analyst" — and the deck set that
+ *     as the largest text on the slide, directly above a 12px attribution row
+ *     printing the SAME round chip and the SAME agent name. Headline and
+ *     metadata said one thing in two sizes, 12px apart, and neither said what
+ *     the section had found. The segmenter was not wrong; it was doing the best
+ *     possible job with the only strings it had.
+ *   · THE SCROLL READER had no section headings at all — one unbroken column of
+ *     prose with nothing to scan.
+ * FIXED at the source rather than in either renderer: new rule 10 requires every
+ * section to OPEN with a single `## <one-line claim>` stating WHAT IT FOUND —
+ * "Half the open tasks are blocked", never "Analysis" or "Analyze round", which
+ * is the same pipeline vocabulary the deck was already inventing and would have
+ * changed nothing. Under 10 words, no trailing period, no markup inside it. The
+ * worked example carries the `##` in BOTH sections, including the FAILED one —
+ * the case a model is most likely to read as exempt. The segmenter now PREFERS
+ * that heading and keeps the attribute-derived label as its fallback, so reports
+ * already written under seed ≤ v11 read exactly as they did
+ * (`markdown-engine/src/renderer/sections.ts`).
+ *
+ * (b) CHARTS WERE ALLOWED TO ARRIVE BEFORE THE CLAIM THEY EVIDENCE. v10/v11
+ * settled WHICH cells may be emitted and left WHERE and WHAT THEY SAY entirely
+ * open. Three rules close it: at most ONE per section and never at the top —
+ * a chart that opens a section makes the reader decode a graphic to learn what
+ * the section is about, which is the delay the new `##` exists to remove; the
+ * `label` must state the finding, because `ChartPieCell.tsx:15` defaults it to
+ * "Distribution" and `ChartBarCell.tsx:35` to "Breakdown", so an omitted label
+ * is a WRONG heading that looks deliberate rather than a missing one; and if
+ * the adjacent sentence already gives the number, the chart is dropped.
+ *
+ * (c) A CHART IS A LIVE VIEW AND THE PROSE IS A SNAPSHOT — now stated to the
+ * assembler, which had never been told. The very property that makes these
+ * cells embeddable at all (self-querying, no id, no data payload) means they
+ * re-measure when the report is OPENED, possibly weeks after the sentence
+ * beside them was written. So a quoted count and a chart of the same data WILL
+ * eventually disagree, and the reader cannot tell which is stale. Only the
+ * prose can be wrong — the chart is re-measured every render — so the prose is
+ * what stops quoting: the chart carries the number, the sentence carries the
+ * claim.
+ *
+ * STANDING LESSON: WHEN A READER INVENTS A TITLE, THE GENERATOR FORGOT TO WRITE
+ * ONE. The defect looked like a deck-layout problem — duplicated text, wrong
+ * type sizes — and two renderers could have been patched around it forever.
+ * Both symptoms came from a single absent `##`. Fix the surface that OWNS the
+ * artifact, not the ones that display it.
+ *
+ * The flow GRAPH is again unchanged — prompts only, no new nodes, no new edges,
+ * no new placeholders.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 11;
+export const REPORT_AUTOMATION_SEED_VERSION = 12;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -791,8 +851,11 @@ const ASSEMBLE_SYSTEM = [
   // createdAt DESC), so the shortest window is the one most likely to fit
   // entirely inside that page and therefore to be exact.
   '   - :::synap-cell{cellKey="stat-card" cellProps=\'{"profileSlug":"<kind>","aggregation":"count","timePeriod":"week","label":"<Kind> created this week"}\'}',
-  '   - :::synap-cell{cellKey="chart-pie" cellProps=\'{"profileSlug":"<kind>","groupBy":"<property>"}\'}',
-  '   - :::synap-cell{cellKey="chart-bar" cellProps=\'{"profileSlug":"<kind>","mode":"category","groupBy":"<property>"}\'}',
+  // `label` is in BOTH prescriptions, not optional: `ChartPieCell` defaults it
+  // to the word "Distribution" (see rule 9(f)), so an omitted label is not a
+  // missing heading — it is a wrong one that looks deliberate.
+  '   - :::synap-cell{cellKey="chart-pie" cellProps=\'{"profileSlug":"<kind>","groupBy":"<property>","label":"<the finding this shows>"}\'}',
+  '   - :::synap-cell{cellKey="chart-bar" cellProps=\'{"profileSlug":"<kind>","mode":"category","groupBy":"<property>","label":"<the finding this shows>"}\'}',
   // chart-gauge WAS on this list in v10 and is deliberately off it now. The
   // reader has NO allowlist of its own — `cellRefFromLegacy` swallows a JSON
   // parse error and hands the cell an EMPTY config (cell-ref.ts:45-47), and
@@ -822,11 +885,95 @@ const ASSEMBLE_SYSTEM = [
   "       restates the sentence beside it is noise, and noise is worse than",
   "       nothing here. If no gathered kind has a distribution worth showing,",
   "       emit no cells at all — that is a correct report, not a lesser one.",
+  // ── (e) PLACEMENT ───────────────────────────────────────────────────────────
+  // A chart at the top of a section is the first thing the reader meets, so
+  // they must decode a picture before they are told what it is for — the claim
+  // arrives last, if at all. AT MOST ONE per section is the same cap read from
+  // the reader's side rather than the report's: (d) budgets 2-3 for the whole
+  // document, but two charts inside ONE section still bury that section's
+  // single claim under a gallery.
+  "   (e) AT MOST ONE cell per section, and NEVER at the top of a section.",
+  "       Place it immediately AFTER the sentence making the claim it evidences,",
+  "       so the reader has the claim before the picture. A chart that opens a",
+  "       section makes the reader decode a graphic to find out what the section",
+  "       is about, which is the delay the ## heading and the claim sentence",
+  "       exist to remove.",
+  // ── (f) THE LABEL ───────────────────────────────────────────────────────────
+  // The defaults are the argument. `ChartPieCell.tsx:15` reads
+  // `(config?.label as string) ?? "Distribution"` and `ChartBarCell.tsx:35`
+  // reads `?? "Breakdown"` — so an omitted label is not a MISSING heading, it
+  // is a WRONG one that looks deliberate: a word true of every pie chart and
+  // every bar chart ever drawn, set in the same type a real finding would use.
+  // The dimension is already visible in the slices; the FINDING is the only
+  // thing the chart cannot say for itself.
+  "   (f) The label must state the FINDING, not the dimension. Write",
+  '       label:"Half the open tasks are blocked", never label:"Distribution",',
+  '       "Status" or "Tasks by status". Always set label explicitly: with none,',
+  '       a pie chart titles itself "Distribution" and a bar chart "Breakdown" —',
+  "       words true of every such chart ever drawn, which tell the reader",
+  "       nothing they cannot already see in the shapes.",
+  // ── (g) THE LIVE-DATA DISAGREEMENT ─────────────────────────────────────────
+  // The same self-querying property that makes these cells embeddable at all
+  // (no id, no data payload — see KNOWN LIMITS) makes them a LIVE view: they
+  // issue their own `entities.list` when the report is OPENED, which may be
+  // weeks after the prose was written and against a filtered window the prose
+  // never had. A sentence quoting "12 open tasks" beside a chart summing to 9
+  // is a report visibly contradicting itself, and the reader has no way to know
+  // which number is stale. Only the prose can be wrong here — the chart is
+  // re-measured every render — so the prose is what must stop quoting.
+  "   (g) A CHART IS A LIVE VIEW, THE PROSE IS A SNAPSHOT. These cells run",
+  "       their own query when the report is OPENED, which may be long after",
+  "       this text was written — so a sentence quoting a count and a chart",
+  "       measuring the same thing WILL eventually disagree, and the reader",
+  "       cannot tell which is stale. Never write a specific number in a",
+  "       sentence that sits beside a chart of the same data: let the chart",
+  "       carry the number and let the sentence carry the claim",
+  '       ("most open tasks are stalled at review", not "12 of 19 are stalled").',
+  "       And if the sentence already gives the number the chart would show,",
+  "       DROP THE CHART — one of them is redundant, and the sentence is the one",
+  "       that cannot go stale against itself.",
   "   Everything else this report needs is ::::synap-section containers plus",
   "   [[entity:…]] chips inline.",
+  // ── Rule 10: THE SECTION HEADLINE ───────────────────────────────────────────
+  // WHY THIS RULE EXISTS. Until v12 no round emitted a `##` anywhere: the two
+  // interpretation rounds are forbidden headings (correctly — the assembler is
+  // the only round that formats), and the assembler was never ASKED for one. So
+  // a section arrived at the readers with no title of its own, and both readers
+  // degraded in their own way:
+  //   · THE DECK invented one from the section ATTRIBUTES —
+  //     `Capitalize(round) · agent`, i.e. "Analyze · analyst" — and rendered it
+  //     as the largest text on the slide, directly above a 12px attribution row
+  //     printing the SAME round chip and the SAME agent name. The headline and
+  //     the metadata said one thing in two sizes, 12px apart, and neither said
+  //     what the section found.
+  //   · THE SCROLL READER had no section headings AT ALL — an unbroken column
+  //     of prose with nothing to scan or link to.
+  // One missing `##` caused both. A heading that states the FINDING fixes both
+  // at once, which is why the fix belongs here and not in either renderer.
+  //
+  // "What it found", never "what produced it": "Analysis" and "Analyze round"
+  // are the same pipeline vocabulary the deck was already inventing — moving
+  // that string from the segmenter into the generator would change nothing.
+  // The word count and the no-period rule are typographic: this line is set
+  // large in the deck, and a long claim wraps to three lines while a trailing
+  // period reads as a stray mark at that size.
+  "",
+  "10. EVERY ::::synap-section MUST OPEN WITH A ## CLAIM HEADING — its first",
+  "    line, before any prose. The heading states WHAT THE SECTION FOUND, not",
+  '    what produced it: "## Half the open tasks are blocked", never',
+  '    "## Analysis", "## Analyze round" or "## Findings". Under 10 words, no',
+  "    trailing period, no markdown or [[entity:…]] chip inside the heading",
+  "    itself — put the chip in the prose beneath it. Write exactly one ## per",
+  "    section. This heading is the section's title everywhere it is read: the",
+  "    slide deck sets it as the slide headline (with no heading it falls back",
+  "    to the round and agent names, which the slide already shows underneath),",
+  "    and the scrolling reader has no section titles at all without it. A",
+  "    section whose heading merely names the round tells the reader nothing",
+  "    they cannot already see.",
   "",
   "STRUCTURE: one ::::synap-section per round, in order — analyze, then relate.",
-  'Open with a single "# " title line ABOVE the first section.',
+  'Open with a single "# " title line ABOVE the first section, and open each',
+  "section with its own ## claim heading per rule 10.",
   "",
   // The assembler adds no facts, so its steer duty is narrower than the earlier
   // rounds': the STEER decides the TITLE and the ORDER, never new content.
@@ -838,18 +985,38 @@ const ASSEMBLE_SYSTEM = [
   'MISSING ROUNDS: if a round\'s material looks like {"error": "..."} or is empty,',
   'you MUST still emit its section, with status="failed", containing one visible',
   "sentence naming what is missing. NEVER silently produce a shorter report — a",
-  "reader must be able to see that a round did not run.",
+  "reader must be able to see that a round did not run. A failed section is NOT",
+  "exempt from rule 10: give it a ## heading that states what is missing",
+  '("## The patterns round produced nothing"), because it still occupies a slide',
+  "and still needs a headline.",
   "",
+  // The example carries the ## in BOTH sections — including the failed one,
+  // which is the case a model is most likely to treat as exempt. A failed
+  // section still occupies a slide and still needs a headline; "Analyze ·
+  // analyst" over an apology is the exact reading rule 10 exists to prevent.
+  // The chart sits AFTER the sentence it evidences, and its label repeats that
+  // sentence's claim rather than naming the dimension — the two placement rules
+  // 9(e)/9(f) state in prose, shown here so they are not read as advisory.
   "WORKED EXAMPLE of correct output:",
   "# Workspace report — July 2026",
   "",
   '::::synap-section{agent="analyst" round="analyze" confidence="0.8"}',
-  "Twelve open tasks, most untouched since the sprint opened — the oldest is",
+  "## Most open tasks are stalled at review",
+  "",
+  "Open tasks are piling up untouched since the sprint opened, and the great",
+  "majority are sitting in one status — the oldest is",
   "[[entity:3f2a91c4-7b10-4e55-9c02-8ad1f6e4b2d7|Migrate the billing worker]].",
   "Notes are thin.",
+  // The label is a NARROWER finding than the ## above it, deliberately — copying
+  // the heading verbatim into the label would teach duplication, which is the
+  // defect this whole version exists to remove, reintroduced one level down.
+  ':::synap-cell{cellKey="chart-pie" cellProps=\'{"profileSlug":"task","groupBy":"status","label":"Review is where open tasks accumulate"}\'}',
+  ":::",
   "::::",
   "",
   '::::synap-section{agent="analyst" round="relate" status="failed" confidence="0.2"}',
+  "## The patterns round produced nothing",
+  "",
   "This section is missing: the patterns round failed and produced no material.",
   "::::",
   "",

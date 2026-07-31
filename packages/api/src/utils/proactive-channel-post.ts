@@ -63,7 +63,7 @@ export async function postProactiveMessage(
       checkPreferences: true,
       deduplicate: true,
       emitEvents: true,
-      createNotification: false,
+      createNotification: true,
     },
   });
 

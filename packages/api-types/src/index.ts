@@ -7,8 +7,19 @@
  * and included in this package with no external dependencies.
  */
 
-// This will be generated during build from @synap/api
-export type { AppRouter } from "./generated.js";
+// Generated from @synap/api. The named run contracts let non-tRPC surfaces
+// (Browser graph adapters, CLI JSON output, tests) share the exact runtime truth
+// without re-declaring snapshots or step activity locally.
+export type {
+  AppRouter,
+  AutomationStepActivityDetail,
+  AutomationStepActivityItem,
+  AutomationStepStatus,
+  RunActivityItem,
+  RunDefinitionSnapshot,
+  RunPathTaken,
+  UnifiedRunDetail,
+} from "./generated.js";
 
 // External connect contracts are backend-owned and shared with clients.
 export type {

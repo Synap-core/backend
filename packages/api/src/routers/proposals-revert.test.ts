@@ -66,8 +66,11 @@ vi.mock("@synap/database/schema", async (importOriginal) => {
 vi.mock("@synap/storage", () => ({ storage: {} }));
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("./channels.js", () => ({ channelsRouter: {} }));
+// Shared spy on the entity delete caller so a test can assert whether the
+// revert inverse was (or was NOT) attempted.
+const { entityDeleteSpy } = vi.hoisted(() => ({ entityDeleteSpy: vi.fn() }));
 vi.mock("./entities.js", () => ({
-  entitiesRouter: { createCaller: () => ({ delete: vi.fn() }) },
+  entitiesRouter: { createCaller: () => ({ delete: entityDeleteSpy }) },
 }));
 vi.mock("./relations.js", () => ({
   relationsRouter: { createCaller: () => ({ delete: vi.fn() }) },
@@ -530,6 +533,74 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     expect((result as any).reopened).toBeUndefined();
     const flip = (setSpy.mock.calls.at(-1) as unknown[])[0] as any;
     expect(flip.status).toBe("reverted");
+  });
+
+  // A proposal already stranded in the TERMINAL `reverted` status (e.g. reverted
+  // under the OLD backend) — the entities are already un-materialized.
+  function setUpAlreadyReverted() {
+    (db as any).query.proposals.findFirst = vi.fn().mockResolvedValue({
+      id: proposalId,
+      status: "reverted",
+      targetType: "entity",
+      targetId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      proposalType: "create_composite",
+      workspaceId: null, // pod-wide → skips the workspace policy check
+      data: {
+        operations: [{ op: "create_entity", profileSlug: "note", title: "N" }],
+        materialized: { entityIds: [entityId] },
+        revertedBy: "user-1",
+        revertedAt: "2026-01-01T00:00:00Z",
+      },
+    });
+  }
+
+  it("REVERTED + reopen:true → status PENDING, data intact, NO second inverse attempted", async () => {
+    setUpAlreadyReverted();
+    const setSpy = captureFlip();
+    entityDeleteSpy.mockClear();
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    const result = await caller.revert({ proposalId, reopen: true });
+
+    expect(result.success).toBe(true);
+    expect((result as any).reopened).toBe(true);
+    // No `reverted` inverse payload — nothing was re-deleted.
+    expect((result as any).reverted).toBeUndefined();
+
+    // The inverse must NOT be re-run — the created entity is already gone.
+    expect(entityDeleteSpy).not.toHaveBeenCalled();
+
+    // Exactly one write: the status flip back to PENDING. It clears the review
+    // stamp and leaves `data` untouched (operations preserved for re-accept).
+    expect((db.update as any).mock.calls.length).toBe(1);
+    const flip = (setSpy.mock.calls.at(-1) as unknown[])[0] as any;
+    expect(flip.status).toBe("pending");
+    expect(flip.reviewedAt).toBeNull();
+    expect(flip.reviewedBy).toBeNull();
+    // `data` is NOT part of the flip payload → the stored operations are intact.
+    expect(flip.data).toBeUndefined();
+  });
+
+  it("REVERTED + plain revert({}) → still rejected (nothing left to invert)", async () => {
+    setUpAlreadyReverted();
+    captureFlip();
+    entityDeleteSpy.mockClear();
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    await expect(caller.revert({ proposalId })).rejects.toThrow(
+      /approved or auto-approved/i
+    );
+    // No inverse and no status write on the rejected path.
+    expect(entityDeleteSpy).not.toHaveBeenCalled();
+    expect((db.update as any).mock.calls.length).toBe(0);
   });
 });
 

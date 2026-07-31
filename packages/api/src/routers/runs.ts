@@ -82,9 +82,10 @@ export const runsRouter = router({
     }),
 
   /**
-   * Last N executions for each visible automation/playbook in a bounded batch.
-   * The service issues at most one window query per ledger, so process health
-   * strips are complete per requested flow without pod-wide sampling or N+1.
+   * Every active execution plus the last N terminal executions for each visible
+   * automation/playbook in a bounded batch. The service issues at most one
+   * window query per ledger, so process health stays inspectable even when a
+   * long-running execution falls behind newer terminal activity.
    */
   recentByFlows: protectedProcedure
     .input(

@@ -129,6 +129,8 @@ export interface AutomationNodeBase {
     | "fetch"
     | "query"
     | "messages_query"
+    | "runs_query"
+    | "proposals_query"
     | "switch"
     | "skill"
     | "capability"
@@ -399,6 +401,90 @@ export interface MessagesQueryNodeDef extends AutomationNodeBase {
   };
 }
 
+/**
+ * Source node that reads this pod's OWN automation run ledger
+ * (`automation_runs`), optionally with each run's `automation_step_runs`
+ * children. The point is self-narration: a report/ops flow that says "3 runs
+ * failed last night, here is what broke" needs to READ the ledger, and until
+ * this node existed the only source node over non-entity data was
+ * `messages_query` — `query` reads `entities` and nothing else.
+ *
+ * Output:
+ * `{ runs: [{ id, flowName, status, startedAt, completedAt, error,
+ *             stepsCompleted, stepsFailed, steps? }], count }`
+ * — deliberately the same projection `getRun` (packages/api services/runs)
+ * returns to RunDetailPanel, so a generated report and the browser tell the
+ * SAME story about the same run.
+ */
+export interface RunsQueryNodeDef extends AutomationNodeBase {
+  type: "runs_query";
+  data: {
+    label: string;
+    /** Only runs of this automation. Template-resolvable. */
+    automationId?: string;
+    /** Run status filter: one value or a comma-separated list. */
+    status?: string;
+    /** Only runs started at/after this instant (ISO-8601 / epoch ms). */
+    since?: string;
+    /** Only runs launched ABOUT this entity (`automation_runs.subject_entity_id`). */
+    subjectEntityId?: string;
+    /** Most-recent N runs (default 20, capped 100). */
+    limit?: number;
+    /**
+     * Also load each returned run's `automation_step_runs` rows as `steps[]`.
+     * `automation_step_runs` has NO visibility column of its own, so children
+     * are ONLY ever fetched by the ids of runs this node already authorized —
+     * never by a caller-supplied run id. See `executeRunsQueryStep`.
+     */
+    includeSteps?: boolean;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/**
+ * Source node that reads this pod's OWN proposal queue (`proposals`) — the
+ * governance twin of `runs_query`. Lets a flow NARRATE what the agents proposed
+ * ("5 pending proposals from last night's enrichment run, 3 of them creates")
+ * instead of a human having to open the review inbox.
+ *
+ * `correlationId` / `sessionId` are indexed columns and are how a GROUP of
+ * proposals is addressed — there is no proposal-group object in the schema, the
+ * grouping IS the shared correlation/session id.
+ *
+ * Output:
+ * `{ proposals: [{ id, status, targetType, targetId, changeType, summary,
+ *                  reasoning, correlationId, sessionId, createdAt }], count }`
+ */
+export interface ProposalsQueryNodeDef extends AutomationNodeBase {
+  type: "proposals_query";
+  data: {
+    label: string;
+    /** Proposal status filter: one value or a comma-separated list. */
+    status?: string;
+    /** `proposals.target_type` ("entity", "facet", "document", …). */
+    targetType?: string;
+    /**
+     * The normalized change kind. Matched against `data->>'changeType'` OR the
+     * `proposal_type` column, exactly as the review surfaces normalize it
+     * (routers/proposals.ts: "Prefer changeType, fall back to proposalType").
+     */
+    changeType?: string;
+    /** All proposals of one request chain. */
+    correlationId?: string;
+    /** All proposals produced in one agent session. */
+    sessionId?: string;
+    /** Explicit ids (comma-separated string or array). */
+    proposalIds?: string | string[];
+    /** Only proposals created at/after this instant (ISO-8601 / epoch ms). */
+    since?: string;
+    /** Most-recent N proposals (default 20, capped 100). */
+    limit?: number;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
 export interface SwitchNodeDef extends AutomationNodeBase {
   type: "switch";
   data: {
@@ -503,6 +589,8 @@ export type AutomationNode =
   | ClaimNodeDef
   | GuardNodeDef
   | MessagesQueryNodeDef
+  | RunsQueryNodeDef
+  | ProposalsQueryNodeDef
   | SwitchNodeDef
   | SkillNodeDef
   | CapabilityNodeDef

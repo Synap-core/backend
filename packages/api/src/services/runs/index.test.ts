@@ -57,8 +57,11 @@ vi.mock("../../utils/project-scope.js", () => ({
 import {
   buildNodeLabelMap,
   buildNodeTypeMap,
+  getRun,
   listRunGroups,
   listRunGroupsPage,
+  parseRunDefinitionSnapshot,
+  parseRunPathTaken,
 } from "./index.js";
 import { decodeRunGroupCursor } from "../../utils/keyset-cursor.js";
 
@@ -68,6 +71,7 @@ function selectChain(rows: unknown[]) {
   const chain = {
     from: vi.fn(),
     innerJoin: vi.fn(),
+    leftJoin: vi.fn(),
     where: vi.fn(),
     groupBy: vi.fn(),
     having: vi.fn(),
@@ -77,6 +81,7 @@ function selectChain(rows: unknown[]) {
   };
   chain.from.mockReturnValue(chain);
   chain.innerJoin.mockReturnValue(chain);
+  chain.leftJoin.mockReturnValue(chain);
   chain.where.mockImplementation((w: unknown) => {
     captured.where = w;
     return chain;
@@ -84,6 +89,16 @@ function selectChain(rows: unknown[]) {
   chain.groupBy.mockReturnValue(chain);
   chain.having.mockReturnValue(chain);
   chain.orderBy.mockReturnValue(chain);
+  return chain;
+}
+
+/** Select builder for the automation-step query, which resolves at `.where()`. */
+function selectWhereChain(rows: unknown[]) {
+  const chain = {
+    from: vi.fn(),
+    where: vi.fn().mockResolvedValue(rows),
+  };
+  chain.from.mockReturnValue(chain);
   return chain;
 }
 
@@ -278,6 +293,73 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
   });
 });
 
+describe("runs.getRun — exact lookup is independent from feed windows", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserVisibleWhere.mockReturnValue({ __userVisible: USER });
+  });
+
+  it("loads an authorized automation run by id even when it is older than the former newest-100 window", async () => {
+    const oldRunId = "run-older-than-feed-window";
+    const oldRun = {
+      id: oldRunId,
+      automationId: "automation-1",
+      flowName: "Long-lived automation",
+      status: "completed",
+      startedAt: new Date("2024-01-01T00:00:00.000Z"),
+      completedAt: new Date("2024-01-01T00:00:01.000Z"),
+      workspaceId: "workspace-1",
+      subjectEntityId: null,
+      error: null,
+      outputSummary: { summary: "Done" },
+      triggeredBy: "event",
+      stepsCompleted: 1,
+      stepsFailed: 0,
+      definitionVersion: 1,
+      channelId: null,
+      replayOf: null,
+    };
+    const exactRunQuery = selectChain([oldRun]);
+    mockDb.select
+      .mockReturnValueOnce(exactRunQuery)
+      .mockReturnValueOnce(selectWhereChain([]))
+      .mockReturnValueOnce(
+        selectChain([
+          {
+            triggerPayload: null,
+            outputSummary: { summary: "Done" },
+            definitionSnapshot: null,
+            pathTaken: null,
+          },
+        ])
+      );
+
+    const detail = await getRun({
+      userId: USER,
+      flowType: "automation",
+      id: oldRunId,
+    });
+
+    expect(detail?.run.id).toBe(oldRunId);
+    // The detail query is a direct by-id lookup, not "newest 100 then filter".
+    expect(exactRunQuery.limit).toHaveBeenCalledWith(1);
+    const where = exactRunQuery._captured.where as {
+      and: Array<{ eq?: [unknown, unknown] } | { __userVisible?: string }>;
+    };
+    expect(
+      where.and.some(
+        (condition) => "eq" in condition && condition.eq?.[1] === oldRunId
+      )
+    ).toBe(true);
+    // Direct lookup keeps the same user visibility floor as the list query.
+    expect(where).toEqual(
+      expect.objectContaining({
+        and: expect.arrayContaining([{ __userVisible: USER }]),
+      })
+    );
+  });
+});
+
 /**
  * `getRun`'s automation branch builds each step's `detail.errorMessage` /
  * `detail.nodeType` from `s.errorMessage` (the step row) and `buildNodeTypeMap`
@@ -290,11 +372,23 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
  */
 describe("buildNodeTypeMap / buildNodeLabelMap — automation step detail", () => {
   const snapshot = {
+    version: 3,
     flowDefinition: {
       nodes: [
-        { id: "node-1", type: "command", data: { label: "Send email" } },
-        { id: "node-2", type: "condition" },
+        {
+          id: "node-1",
+          type: "command",
+          position: { x: 0, y: 0 },
+          data: { label: "Send email" },
+        },
+        {
+          id: "node-2",
+          type: "condition",
+          position: { x: 240, y: 0 },
+          data: {},
+        },
       ],
+      edges: [],
     },
   };
 
@@ -328,5 +422,98 @@ describe("buildNodeTypeMap / buildNodeLabelMap — automation step detail", () =
       buildNodeTypeMap({ flowDefinition: { nodes: "not-an-array" } } as never)
         .size
     ).toBe(0);
+  });
+});
+
+describe("run snapshot/path parsers", () => {
+  it("preserves a valid immutable definition snapshot", () => {
+    const snapshot = {
+      version: 7,
+      flowDefinition: {
+        nodes: [
+          {
+            id: "trigger",
+            type: "trigger",
+            position: { x: 0, y: 0 },
+            data: {
+              triggerType: "manual",
+              label: "On demand",
+              config: {},
+            },
+          },
+        ],
+        edges: [],
+      },
+    };
+
+    expect(parseRunDefinitionSnapshot(snapshot)).toEqual(snapshot);
+  });
+
+  it("rejects malformed legacy snapshots instead of claiming a graph", () => {
+    expect(
+      parseRunDefinitionSnapshot({
+        version: 2,
+        flowDefinition: {
+          nodes: [{ id: "missing-position", type: "command", data: {} }],
+          edges: [],
+        },
+      })
+    ).toBeNull();
+    expect(
+      parseRunDefinitionSnapshot({
+        version: "2",
+        flowDefinition: { nodes: [], edges: [] },
+      })
+    ).toBeNull();
+  });
+
+  it("rejects snapshots with graph references that could not have executed truthfully", () => {
+    expect(
+      parseRunDefinitionSnapshot({
+        version: 3,
+        flowDefinition: {
+          nodes: [
+            {
+              id: "trigger",
+              type: "trigger",
+              position: { x: 0, y: 0 },
+              data: {
+                triggerType: "manual",
+                label: "On demand",
+                config: {},
+              },
+            },
+          ],
+          edges: [
+            {
+              id: "dangling",
+              source: "trigger",
+              target: "missing-node",
+            },
+          ],
+        },
+      })
+    ).toBeNull();
+  });
+
+  it("keeps an empty path meaningful and sanitises duplicate edge ids", () => {
+    expect(
+      parseRunPathTaken({ traversedEdgeIds: [], prunedEdgeIds: [] })
+    ).toEqual({ traversedEdgeIds: [], prunedEdgeIds: [] });
+    expect(
+      parseRunPathTaken({
+        traversedEdgeIds: ["e1", "e1"],
+        prunedEdgeIds: ["e2", "e2"],
+      })
+    ).toEqual({ traversedEdgeIds: ["e1"], prunedEdgeIds: ["e2"] });
+  });
+
+  it("returns unknown for a partially malformed path", () => {
+    expect(
+      parseRunPathTaken({
+        traversedEdgeIds: ["e1"],
+        prunedEdgeIds: [42],
+      })
+    ).toBeNull();
   });
 });

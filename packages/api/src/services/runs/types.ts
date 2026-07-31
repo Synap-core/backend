@@ -17,6 +17,12 @@
  *   - chat       → the channel the turn ran in (browser chat / Discord bridge)
  */
 
+import type {
+  AutomationNode,
+  FlowDefinition,
+  RunPathTaken,
+} from "@synap/database";
+
 /** Which ledger a run came from. */
 export type FlowType =
   "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
@@ -103,7 +109,7 @@ export interface RunGroup {
  * capture events; playbook/session runs carry a `channelId` so the UI opens the
  * channel for their message-level story instead of duplicating it here.
  */
-export interface RunActivityItem {
+export interface GenericRunActivityItem {
   id: string;
   at: Date | null;
   /** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
@@ -115,7 +121,49 @@ export interface RunActivityItem {
   detail: Record<string, unknown> | null;
 }
 
-export interface UnifiedRunDetail {
+export type AutomationStepStatus =
+  "pending" | "running" | "completed" | "failed" | "skipped";
+
+/**
+ * Stable per-node execution payload exposed to run-detail consumers.
+ *
+ * These fields mirror the automation step ledger so every UI does not have to
+ * reinterpret `Record<string, unknown>`. Nullable values are honest for old or
+ * in-flight rows that lack timing, labels, commands, or an error.
+ */
+export interface AutomationStepActivityDetail {
+  output: Record<string, unknown>;
+  resolvedInputs: Record<string, unknown>;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  nodeId: string;
+  nodeLabel: string | null;
+  commandId: string | null;
+  errorMessage: string | null;
+  nodeType: AutomationNode["type"] | null;
+}
+
+export interface AutomationStepActivityItem {
+  id: string;
+  at: Date | null;
+  kind: "step";
+  status: AutomationStepStatus;
+  label: string;
+  hint: string | null;
+  detail: AutomationStepActivityDetail;
+}
+
+/** Timeline item across all ledgers. Automation steps use the precise variant. */
+export type RunActivityItem =
+  AutomationStepActivityItem | GenericRunActivityItem;
+
+/** Immutable definition recorded at the start of an automation run. */
+export interface RunDefinitionSnapshot {
+  version: number;
+  flowDefinition: FlowDefinition;
+}
+
+interface UnifiedRunDetailBase {
   run: UnifiedRun;
   activity: RunActivityItem[];
   /** The trigger that started this run — its principal + full payload (automation only). */
@@ -132,18 +180,37 @@ export interface UnifiedRunDetail {
    * automation-specific block here.
    */
   playbookDetail?: PlaybookRunDetail | null;
-  /** The flow definition this run executed (automation only); null for every other ledger. */
-  definitionSnapshot: unknown;
+}
+
+export interface AutomationRunDetail extends UnifiedRunDetailBase {
+  run: UnifiedRun & { flowType: "automation" };
+  activity: AutomationStepActivityItem[];
+  trigger: {
+    triggeredBy: string | null;
+    payload: Record<string, unknown>;
+  };
+  outputSummary: Record<string, unknown> | null;
+  playbookDetail: null;
+  /** The flow definition this run executed; null only for legacy runs. */
+  definitionSnapshot: RunDefinitionSnapshot | null;
   /**
    * Which edges of `definitionSnapshot.flowDefinition` this run actually walked
-   * (automation only) — `{ traversedEdgeIds, prunedEdgeIds }`, written by the
-   * executor at the moment each branch decision was made. Null for every other
-   * ledger AND for automation runs that predate the column or never executed:
+   * — `{ traversedEdgeIds, prunedEdgeIds }`, written by the executor at the
+   * moment each branch decision was made. Null for automation runs that predate
+   * the column or never executed:
    * null means UNKNOWN, never "nothing was pruned". An edge in neither list is
    * undecided (its source never ran).
    */
-  pathTaken: unknown;
+  pathTaken: RunPathTaken | null;
 }
+
+export interface NonAutomationRunDetail extends UnifiedRunDetailBase {
+  run: UnifiedRun & { flowType: Exclude<FlowType, "automation"> };
+  definitionSnapshot: null;
+  pathTaken: null;
+}
+
+export type UnifiedRunDetail = AutomationRunDetail | NonAutomationRunDetail;
 
 /**
  * A playbook run's rich footprint. Every list is user-floored and capped; the

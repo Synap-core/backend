@@ -55,6 +55,7 @@ import {
   notifications,
   focusSessions,
   playbookEnrollments,
+  proposals,
   drizzleSql,
   EntityRepository,
   EntityBodyService,
@@ -96,6 +97,10 @@ import {
 } from "../utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { entityQueryVisibilityWhere } from "./entity-query-scope.js";
+import {
+  runsQueryVisibilityWhere,
+  proposalsQueryVisibilityWhere,
+} from "./ledger-query-scope.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -344,6 +349,14 @@ export function shouldRunFlow(
 ): boolean {
   if (!precondition || !precondition.trim()) return true;
   return evaluateCondition(precondition, context);
+}
+
+/** Build the immutable execution contract stamped onto every new run. */
+export function buildRunDefinitionSnapshot(
+  version: number,
+  flowDefinition: FlowDefinition
+): { version: number; flowDefinition: FlowDefinition } {
+  return { version, flowDefinition };
 }
 
 /**
@@ -3019,6 +3032,343 @@ async function executeMessagesQueryStep(
 }
 
 /**
+ * Split a comma-separated / array-valued node field into trimmed values.
+ * Shared by `runs_query`.status and `proposals_query`.{status,proposalIds}:
+ * the flow editor's text controls emit a single string, template resolution can
+ * yield a comma list, and hand-written JSON can carry a real array. An EMPTY
+ * result returns `undefined` so the caller DROPS the filter rather than emitting
+ * `IN ()` — an empty filter must never silently match zero rows (same rule as
+ * `workspaceLensWhere`'s empty-array lens).
+ */
+export function parseMultiValueField(
+  raw: unknown,
+  context: StepContext
+): string[] | undefined {
+  const parts: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v !== "string") return;
+    const resolved = resolveTemplate(v, context);
+    for (const piece of resolved.split(",")) {
+      const t = piece.trim();
+      if (t) parts.push(t);
+    }
+  };
+  if (Array.isArray(raw)) raw.forEach(push);
+  else push(raw);
+  return parts.length > 0 ? parts : undefined;
+}
+
+/**
+ * The `status` enums as runtime value sets. Both columns are plain `text` at the
+ * DB level but TS-typed unions in the schema, so a `string[]` cannot be passed
+ * to `inArray` — and more importantly an author's typo must not silently widen.
+ *
+ * SEMANTIC (copied from `listAutomationRuns`, packages/api services/runs): a
+ * status filter that resolves to NO known value returns an EMPTY result set, not
+ * every row. That is the correct reading of "show me the `faild` runs" — the
+ * author asked to narrow, so a bad narrow yields nothing rather than everything.
+ * It is the opposite rule from `since` (dropped when unparseable) because
+ * `since` failing open is visible in the output while a widened status filter
+ * would look like a plausible answer.
+ */
+export const RUN_STATUS_VALUES = [
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "skipped",
+] as const;
+type RunStatusValue = (typeof RUN_STATUS_VALUES)[number];
+
+export const PROPOSAL_STATUS_VALUES = [
+  "pending",
+  "approved",
+  "rejected",
+  "auto_approved",
+  "reverted",
+  "approval_failed",
+  "withdrawn",
+] as const;
+type ProposalStatusValue = (typeof PROPOSAL_STATUS_VALUES)[number];
+
+export function narrowStatuses<T extends string>(
+  raw: string[] | undefined,
+  known: readonly T[]
+): T[] | undefined {
+  if (!raw) return undefined;
+  return raw.filter((v): v is T => (known as readonly string[]).includes(v));
+}
+
+/**
+ * Resolve a node's `since` field to a bound-able Date, or `undefined`.
+ *
+ * Same discipline as `coerceDateFilterValue` in the `query` node, and for the
+ * same reason: an unparseable date is DROPPED (with a warning), never bound.
+ * Dropping WIDENS the result set, which is visible to the author; binding an
+ * `Invalid Date` NARROWS it to zero rows silently — a report that says "nothing
+ * happened last night" when in fact everything happened.
+ */
+export function resolveSinceFilter(
+  raw: unknown,
+  context: StepContext,
+  nodeType: string
+): Date | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const resolved =
+    typeof raw === "string" ? resolveTemplate(raw, context) : raw;
+  const date = coerceDateFilterValue(resolved);
+  if (!date) {
+    logger.warn(
+      { nodeType, since: raw, resolved },
+      `${nodeType} node: dropping 'since' filter — value is not a parseable date (ISO-8601 string, epoch millis or Date expected)`
+    );
+    return undefined;
+  }
+  return date;
+}
+
+/**
+ * Execute a `runs_query` SOURCE step: read this pod's own automation run ledger.
+ *
+ * VISIBILITY — `userVisibleWhere(automationRuns.workspaceId, ownerId)`, which is
+ * the EXACT predicate `listAutomationRuns` (packages/api services/runs/index.ts)
+ * applies to the same table. That consistency is the decision: a report built on
+ * this node and the Runs surface in the browser must never disagree about which
+ * runs exist. `ownerId` is the automation's `createdBy`, mirroring how
+ * `executeQueryStep` already derives the read identity. With NO owner we fail
+ * CLOSED to this workspace's own runs — an un-floored read of the ledger would
+ * hand every user every other user's runs.
+ *
+ * SECURITY — `automation_step_runs` has NO visibility column of its own (no
+ * `workspace_id`, no `user_id`; see schema/automations.ts). It is therefore only
+ * ever reachable as a CHILD of an already-authorized `automation_runs` row: the
+ * children query below is `inArray(runId, <ids of the rows the predicate above
+ * returned>)`. It never binds a template-resolved run id — a
+ * `WHERE run_id = {{trigger.payload.runId}}` would be a straight IDOR, since
+ * that value is caller-supplied. The structure (fetch parents first, then
+ * children BY PARENT ID) is what enforces this, not a comment.
+ */
+async function executeRunsQueryStep(
+  data: {
+    automationId?: string;
+    status?: string;
+    since?: string;
+    subjectEntityId?: string;
+    limit?: number;
+    includeSteps?: boolean;
+  },
+  context: StepContext,
+  workspaceId: string,
+  ownerId?: string
+): Promise<Record<string, unknown>> {
+  const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
+
+  const automationId = data.automationId
+    ? resolveTemplate(data.automationId, context) || undefined
+    : undefined;
+  const subjectEntityId = data.subjectEntityId
+    ? resolveTemplate(data.subjectEntityId, context) || undefined
+    : undefined;
+  const rawStatuses = parseMultiValueField(data.status, context);
+  const statuses: RunStatusValue[] | undefined = narrowStatuses(
+    rawStatuses,
+    RUN_STATUS_VALUES
+  );
+  // Author asked to narrow by a status nothing can ever equal → empty, never all.
+  if (statuses && statuses.length === 0) {
+    logger.warn(
+      { status: data.status, resolved: rawStatuses },
+      "runs_query node: no known run status in filter — returning an empty set rather than widening"
+    );
+    return { runs: [], count: 0 };
+  }
+  const since = resolveSinceFilter(data.since, context, "runs_query");
+
+  const conditions: SQL[] = [
+    // The user floor — identical to listAutomationRuns. Fail closed to this
+    // workspace when the run has no owner identity to floor on. See
+    // ledger-query-scope.ts for the full rationale + its unit proof.
+    runsQueryVisibilityWhere({ workspaceId, ownerId }),
+  ];
+  if (automationId)
+    conditions.push(eq(automationRuns.automationId, automationId));
+  if (subjectEntityId)
+    conditions.push(eq(automationRuns.subjectEntityId, subjectEntityId));
+  if (statuses) conditions.push(inArray(automationRuns.status, statuses));
+  // `gte()` (never a raw `drizzleSql` interpolation) — postgres.js cannot bind a
+  // JS Date inside a raw template fragment; see postgres-sql-json lesson.
+  if (since) conditions.push(gte(automationRuns.startedAt, since));
+
+  // Projection mirrors `getRun`'s run row (services/runs/index.ts) so the report
+  // and RunDetailPanel name the same fields.
+  const runs = await db
+    .select({
+      id: automationRuns.id,
+      flowName: automations.name,
+      status: automationRuns.status,
+      startedAt: automationRuns.startedAt,
+      completedAt: automationRuns.completedAt,
+      error: automationRuns.errorMessage,
+      stepsCompleted: automationRuns.stepsCompleted,
+      stepsFailed: automationRuns.stepsFailed,
+    })
+    .from(automationRuns)
+    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+    .where(and(...conditions))
+    .orderBy(desc(automationRuns.startedAt))
+    .limit(limit);
+
+  if (!data.includeSteps || runs.length === 0) {
+    return {
+      runs: runs.map((r) => ({ ...r, flowName: r.flowName ?? "Automation" })),
+      count: runs.length,
+    };
+  }
+
+  // CHILDREN — keyed ONLY by the ids of the runs the visibility predicate above
+  // already returned. This is the structural IDOR guard described in the header.
+  const runIds = runs.map((r) => r.id);
+  const stepRows = await db
+    .select({
+      id: automationStepRuns.id,
+      runId: automationStepRuns.runId,
+      nodeId: automationStepRuns.nodeId,
+      status: automationStepRuns.status,
+      errorMessage: automationStepRuns.errorMessage,
+      startedAt: automationStepRuns.startedAt,
+      completedAt: automationStepRuns.completedAt,
+    })
+    .from(automationStepRuns)
+    .where(inArray(automationStepRuns.runId, runIds))
+    .orderBy(asc(automationStepRuns.startedAt));
+
+  const stepsByRun = new Map<string, (typeof stepRows)[number][]>();
+  for (const s of stepRows) {
+    const list = stepsByRun.get(s.runId);
+    if (list) list.push(s);
+    else stepsByRun.set(s.runId, [s]);
+  }
+
+  return {
+    runs: runs.map((r) => ({
+      ...r,
+      flowName: r.flowName ?? "Automation",
+      steps: stepsByRun.get(r.id) ?? [],
+    })),
+    count: runs.length,
+  };
+}
+
+/**
+ * Execute a `proposals_query` SOURCE step: read this pod's own proposal queue.
+ *
+ * VISIBILITY — `userVisibleWhere(proposals.workspaceId, ownerId)`, the EXACT
+ * predicate `routers/proposals.ts` applies to its own listing. Pod-wide
+ * proposals (`workspace_id IS NULL`) therefore get the SAME handling here as
+ * anywhere else in the product — deliberately NOT a special narrower rule
+ * (product decision: "pod-wide proposals should have the same handling as any
+ * proposal, no need to overengineer"). Fails CLOSED to this workspace when there
+ * is no owner identity to floor on.
+ *
+ * `correlationId` / `sessionId` are the indexed columns that address a GROUP of
+ * proposals — there is no proposal-group row, the shared id IS the group.
+ */
+async function executeProposalsQueryStep(
+  data: {
+    status?: string;
+    targetType?: string;
+    changeType?: string;
+    correlationId?: string;
+    sessionId?: string;
+    proposalIds?: string | string[];
+    since?: string;
+    limit?: number;
+  },
+  context: StepContext,
+  workspaceId: string,
+  ownerId?: string
+): Promise<Record<string, unknown>> {
+  const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
+
+  const rawStatuses = parseMultiValueField(data.status, context);
+  const statuses: ProposalStatusValue[] | undefined = narrowStatuses(
+    rawStatuses,
+    PROPOSAL_STATUS_VALUES
+  );
+  if (statuses && statuses.length === 0) {
+    logger.warn(
+      { status: data.status, resolved: rawStatuses },
+      "proposals_query node: no known proposal status in filter — returning an empty set rather than widening"
+    );
+    return { proposals: [], count: 0 };
+  }
+  const ids = parseMultiValueField(data.proposalIds, context);
+  const targetType = data.targetType
+    ? resolveTemplate(data.targetType, context) || undefined
+    : undefined;
+  const changeType = data.changeType
+    ? resolveTemplate(data.changeType, context) || undefined
+    : undefined;
+  const correlationId = data.correlationId
+    ? resolveTemplate(data.correlationId, context) || undefined
+    : undefined;
+  const sessionId = data.sessionId
+    ? resolveTemplate(data.sessionId, context) || undefined
+    : undefined;
+  const since = resolveSinceFilter(data.since, context, "proposals_query");
+
+  const conditions: SQL[] = [
+    proposalsQueryVisibilityWhere({ workspaceId, ownerId }),
+  ];
+  if (statuses) conditions.push(inArray(proposals.status, statuses));
+  if (ids) conditions.push(inArray(proposals.id, ids));
+  if (targetType) conditions.push(eq(proposals.targetType, targetType));
+  if (correlationId)
+    conditions.push(eq(proposals.correlationId, correlationId));
+  if (sessionId) conditions.push(eq(proposals.sessionId, sessionId));
+  if (since) conditions.push(gte(proposals.createdAt, since));
+  if (changeType) {
+    // The change kind is normalized the SAME way every review surface does it
+    // (routers/proposals.ts: "Prefer changeType, fall back to proposalType") —
+    // request-shaped payloads carry `data.changeType`, older/other paths only
+    // have the `proposal_type` column. Matching one and not the other would make
+    // the filter silently miss half the queue.
+    conditions.push(
+      or(
+        drizzleSql`${proposals.data}->>'changeType' = ${changeType}`,
+        and(
+          drizzleSql`${proposals.data}->>'changeType' IS NULL`,
+          eq(proposals.proposalType, changeType)
+        )
+      )!
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      // Same COALESCE the review surfaces apply in TS.
+      changeType: drizzleSql<string>`COALESCE(${proposals.data}->>'changeType', ${proposals.proposalType})`,
+      // `data.summary` / `data.reasoning` are the request-shaped narration
+      // fields the proposal card renders; NULL on payloads that carry neither.
+      summary: drizzleSql<string | null>`${proposals.data}->>'summary'`,
+      reasoning: drizzleSql<string | null>`${proposals.data}->>'reasoning'`,
+      correlationId: proposals.correlationId,
+      sessionId: proposals.sessionId,
+      createdAt: proposals.createdAt,
+    })
+    .from(proposals)
+    .where(and(...conditions))
+    .orderBy(desc(proposals.createdAt))
+    .limit(limit);
+
+  return { proposals: rows, count: rows.length };
+}
+
+/**
  * Execute a playbook_run step — a THIN SHIM over the ONE playbook-run spine
  * (`runPlaybook`, @synap/api) reached through the `registerPlaybookRunner` IoC
  * slot (@synap/jobs can't statically import @synap/api — circular dep).
@@ -3214,11 +3564,10 @@ async function executeAutomationFlow(params: {
   // is the trigger payload + the automation's snapshot state — the same values a
   // `condition` node reads.
   //
-  // Ordering constraint: this gate MUST run before the snapshot stamp below —
-  // the stamp is what flips isFirstExecution off, so stamping first would let a
-  // crash in between skip the gate entirely on redelivery (the run would then
-  // execute steps its precondition said to skip). Gate-first means that crash
-  // window re-enters with isFirstExecution still true and re-evaluates.
+  // Ordering constraint: this gate MUST evaluate before the standalone snapshot
+  // stamp below. A false verdict writes the snapshot and terminal status in ONE
+  // update, so a skipped run still records what was evaluated without creating
+  // a crash window in which a later delivery could execute it.
   if (isFirstExecution && flow.precondition) {
     const preconditionContext: StepContext = {
       trigger: {
@@ -3239,21 +3588,32 @@ async function executeAutomationFlow(params: {
         "Automation precondition evaluated false — finalizing run as skipped"
       );
 
-      // Guarded on status='running' (same invariant the finalizer/reaper use) so
-      // a late writer can never overwrite the verdict.
-      await db
+      // Guarded on status='running' (same invariant the finalizer/reaper use).
+      // Snapshot + verdict are atomic: observability never has to substitute the
+      // automation's current definition for a skipped run.
+      const [skippedRun] = await db
         .update(automationRuns)
-        .set({ status: "skipped", completedAt: new Date() })
+        .set({
+          definitionSnapshot: buildRunDefinitionSnapshot(
+            automation.version,
+            flow
+          ),
+          status: "skipped",
+          completedAt: new Date(),
+        })
         .where(
           and(
             eq(automationRuns.id, runId),
-            eq(automationRuns.status, "running")
+            eq(automationRuns.status, "running"),
+            isNull(automationRuns.definitionSnapshot)
           )
-        );
+        )
+        .returning({ id: automationRuns.id });
       // Quiet narration: the `skipped` run row IS the record (surfaced in the
       // runs UI); postRunSummary short-circuits a skipped run (no chat summary).
-      // Idempotent + non-throwing.
-      await postRunSummary(runId);
+      // Only the invocation that atomically wrote the verdict may finalize it.
+      // A duplicate delivery that lost the first-write guard exits quietly.
+      if (skippedRun) await postRunSummary(runId);
       return {};
     }
   }
@@ -3266,12 +3626,17 @@ async function executeAutomationFlow(params: {
     await db
       .update(automationRuns)
       .set({
-        definitionSnapshot: {
-          version: automation.version,
-          flowDefinition: flow,
-        },
+        definitionSnapshot: buildRunDefinitionSnapshot(
+          automation.version,
+          flow
+        ),
       })
-      .where(eq(automationRuns.id, runId));
+      .where(
+        and(
+          eq(automationRuns.id, runId),
+          isNull(automationRuns.definitionSnapshot)
+        )
+      );
   }
 
   // ── Open (or resume) a focus session for this run ──────────────────────────
@@ -3786,11 +4151,6 @@ async function executeAutomationFlow(params: {
                 );
               }
 
-              if (items.length === 0) {
-                output = { status: "empty_collection", itemCount: 0 };
-                break;
-              }
-
               // The loop owns the CONTIGUOUS chain of SUPPORTED body nodes reachable
               // from it (LOOP_BODY_NODE_TYPES) — traversal STOPS at any node type
               // NOT in that set (switch, delay, a nested loop, sub_automation, …).
@@ -3802,6 +4162,8 @@ async function executeAutomationFlow(params: {
               // paid IS/provider fan-out). This keeps a per-item body (e.g.
               // messages_query → condition → skill → entity_create) working while
               // never silently dropping downstream branch/merge/post-loop logic.
+              // Computed BEFORE the empty-collection check because both the empty
+              // and non-empty paths must suppress these nodes from the main pass.
               const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
               const bodyNodeIds = new Set<string>();
               {
@@ -3817,6 +4179,22 @@ async function executeAutomationFlow(params: {
                   for (const e of getOutEdges(flow.edges, id))
                     stack.push(e.target);
                 }
+              }
+
+              // Empty collection: the loop dispatches nothing — but its body nodes
+              // must STILL be suppressed from the main topological pass, exactly as
+              // on the non-empty path (see the `skippedNodes` population after the
+              // per-item loop). Without this, an empty loop leaks each body node into
+              // the main pass, where it runs ONCE with no `context.loop` — resolving
+              // `loop.item.*` to undefined (Zod errors, and worse: junk entities /
+              // relations written with empty ids). Mark-then-break keeps the empty
+              // path consistent with the non-empty one.
+              if (items.length === 0) {
+                for (const childId of bodyNodeIds) {
+                  skippedNodes.add(childId);
+                }
+                output = { status: "empty_collection", itemCount: 0 };
+                break;
               }
               // Already topologically sorted — filter preserves the order so a
               // child's inputs (earlier nodes in the chain) run before it.
@@ -3924,6 +4302,38 @@ async function executeAutomationFlow(params: {
                           },
                           context,
                           workspaceId
+                        );
+                        break;
+                      case "runs_query":
+                        childOutput = await executeRunsQueryStep(
+                          childNode.data as {
+                            automationId?: string;
+                            status?: string;
+                            since?: string;
+                            subjectEntityId?: string;
+                            limit?: number;
+                            includeSteps?: boolean;
+                          },
+                          context,
+                          workspaceId,
+                          ownerId
+                        );
+                        break;
+                      case "proposals_query":
+                        childOutput = await executeProposalsQueryStep(
+                          childNode.data as {
+                            status?: string;
+                            targetType?: string;
+                            changeType?: string;
+                            correlationId?: string;
+                            sessionId?: string;
+                            proposalIds?: string | string[];
+                            since?: string;
+                            limit?: number;
+                          },
+                          context,
+                          workspaceId,
+                          ownerId
                         );
                         break;
                       case "query":
@@ -4136,6 +4546,42 @@ async function executeAutomationFlow(params: {
                 data,
                 context,
                 workspaceId
+              );
+              break;
+            }
+
+            case "runs_query": {
+              output = await executeRunsQueryStep(
+                node.data as {
+                  automationId?: string;
+                  status?: string;
+                  since?: string;
+                  subjectEntityId?: string;
+                  limit?: number;
+                  includeSteps?: boolean;
+                },
+                context,
+                workspaceId,
+                ownerId
+              );
+              break;
+            }
+
+            case "proposals_query": {
+              output = await executeProposalsQueryStep(
+                node.data as {
+                  status?: string;
+                  targetType?: string;
+                  changeType?: string;
+                  correlationId?: string;
+                  sessionId?: string;
+                  proposalIds?: string | string[];
+                  since?: string;
+                  limit?: number;
+                },
+                context,
+                workspaceId,
+                ownerId
               );
               break;
             }
@@ -4820,6 +5266,8 @@ const LOOP_BODY_NODE_TYPES = new Set<string>([
   "output",
   "playbook_run",
   "messages_query",
+  "runs_query",
+  "proposals_query",
   "query",
   "fetch",
   "transform",

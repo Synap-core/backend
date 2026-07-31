@@ -4,8 +4,8 @@
  * The cron scheduler (packages/jobs/src/workers/automation-cron-scheduler.ts)
  * only selects automations WHERE status='active' AND nextRunAt <= now. So a cron
  * automation born `active` (a direct operator create, OR an agent-proposed create
- * materialized at approval — the approve-executor re-runs THIS proc) MUST carry a
- * non-null `nextRunAt`, or it silently never fires. This test pins that:
+ * materialized through the shared preparation path) MUST carry a non-null
+ * `nextRunAt`, or it silently never fires. This test pins that:
  *   • create({status:'active', triggerType:'cron', triggerConfig:{expression}})
  *     inserts a NON-NULL nextRunAt (so the scheduler's WHERE would select it).
  *   • a non-cron active create leaves nextRunAt unset (only cron needs it).
@@ -29,16 +29,23 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
 
-import { automationsRouter } from "./automations.js";
+import {
+  automationsRouter,
+  materializeApprovedAutomation,
+} from "./automations.js";
 
-/** insert(...).values(capturedValues).returning() → [{ id }] */
-function insertChain(captured: { values?: Record<string, unknown> }) {
+/** insert(...).values(capturedValues).onConflictDoNothing().returning() → [{ id }] */
+function insertChain(
+  captured: { values?: Record<string, unknown> },
+  rows: Array<{ id: string }> = [{ id: "auto-created-1" }]
+) {
   const chain = {
     values: vi.fn((v: Record<string, unknown>) => {
       captured.values = v;
       return chain;
     }),
-    returning: vi.fn().mockResolvedValue([{ id: "auto-created-1" }]),
+    onConflictDoNothing: vi.fn(() => chain),
+    returning: vi.fn().mockResolvedValue(rows),
   };
   return chain;
 }
@@ -48,7 +55,14 @@ function callerCtx() {
 }
 
 const CRON_FLOW = {
-  nodes: [{ id: "n1" }],
+  nodes: [
+    {
+      id: "n1",
+      type: "trigger",
+      position: { x: 0, y: 0 },
+      data: { triggerType: "manual", label: "Manual", config: {} },
+    },
+  ],
   edges: [],
 };
 
@@ -109,5 +123,55 @@ describe("automations.create — cron nextRunAt", () => {
 
     // Not active yet → not scheduled; `activate` will compute nextRunAt later.
     expect(captured.values?.nextRunAt).toBeUndefined();
+  });
+
+  it("converges a replayed proposal create on its pre-minted automation id", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      insert: vi.fn(() => insertChain(captured, [])),
+    };
+    const proposedAutomationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    const result = await materializeApprovedAutomation({
+      database: database as never,
+      agentUserId: "agent-1",
+      stableId: proposedAutomationId,
+      definition: {
+        name: "Governed automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: CRON_FLOW,
+        status: "draft",
+        source: "ai",
+        metadata: {
+          dataContract: {
+            version: 1,
+            mode: "react",
+            gets: [
+              {
+                id: "manual-input",
+                label: "Manual request",
+                origin: "manual",
+                event: "Operator starts the automation",
+                nodeIds: ["n1"],
+              },
+            ],
+            stores: [],
+            reacts: [
+              {
+                id: "run-process",
+                label: "Run the process",
+                kind: "process",
+                nodeIds: ["n1"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(captured.values?.id).toBe(proposedAutomationId);
+    expect(captured.values?.createdBy).toBe("agent-1");
+    expect(result).toBe(proposedAutomationId);
   });
 });

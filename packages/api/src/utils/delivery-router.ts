@@ -179,7 +179,10 @@ async function deliverToFeed(
       checkPreferences: true,
       deduplicate: true,
       emitEvents: true,
-      createNotification: false,
+      // The feed is conversational context; the Inbox is the durable attention
+      // record. Creating both keeps AI insights reachable after a socket event
+      // or Space change without inventing a second message store.
+      createNotification: true,
     },
   });
 

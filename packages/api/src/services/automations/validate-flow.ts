@@ -12,7 +12,7 @@
  *
  * The node contract mirrored here is the SSOT in two files:
  *   - the NodeDef interfaces + `AutomationNodeBase.type` union in
- *     `@synap/database` `schema/automations.ts` (the 21 node types, the 11
+ *     `@synap/database` `schema/automations.ts` (the 23 node types, the 11
  *     output types, the field names), and
  *   - how `automation-executor.ts` HARD-requires those fields (each `throw` in a
  *     node case is a contract this validator front-runs). Where the executor
@@ -46,7 +46,7 @@ import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
 
 // ── Contract constants (mirror schema/automations.ts — keep in sync) ──────────
 
-/** The 21 node types — `AutomationNodeBase.type` union (schema/automations.ts). */
+/** The 23 node types — `AutomationNodeBase.type` union (schema/automations.ts). */
 export const FLOW_NODE_TYPES = [
   "trigger",
   "command",
@@ -64,6 +64,8 @@ export const FLOW_NODE_TYPES = [
   "select",
   "claim",
   "messages_query",
+  "runs_query",
+  "proposals_query",
   "switch",
   "skill",
   "capability",
