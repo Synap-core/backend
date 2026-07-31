@@ -68,6 +68,7 @@ const GraphEnvelopeSchema = z
       byKind: z.record(z.string(), z.number()),
       byVia: z.record(z.string(), z.number()),
     }),
+    found: z.boolean(),
   })
   .openapi("GraphEnvelope");
 
@@ -85,6 +86,7 @@ export function registerGraphRoutes(app: HubHono): void {
       200: { description: "Graph envelope", schema: GraphEnvelopeSchema },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Object not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -133,6 +135,10 @@ export function registerGraphRoutes(app: HubHono): void {
         extra,
         workspaceId ?? undefined
       );
+      // Genuinely-unknown / invisible id — never surface the placeholder node.
+      if (!envelope.found) {
+        return c.json({ error: `No ${type} with id '${id}'` }, 404);
+      }
       return c.json(envelope, 200);
     } catch (err) {
       logger.error({ err, type, id }, "graph fetch failed");

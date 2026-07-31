@@ -63,6 +63,19 @@ const CLASS_VALUES: DiagnoseClass[] = [
   "run",
 ];
 
+/** `proposals.proposalType` for the agnostic-capability last-mile executor —
+ * the one whose `data.runResult` carries the run output (approve-executors.ts). */
+const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+
+/** Bound a (possibly large) diagnose value for the response — pass small values
+ * through verbatim, truncate a huge payload to a preview so diagnose stays lean. */
+function boundDiagnoseValue(value: unknown): unknown {
+  if (value === undefined || value === null) return null;
+  const json = JSON.stringify(value);
+  if (json.length <= 8000) return value;
+  return { truncated: true, preview: json.slice(0, 8000) };
+}
+
 export interface DiagnoseInput {
   /** The caller's human user floor. */
   userId: string;
@@ -201,6 +214,7 @@ async function diagnoseObject(
           agentUserId: proposals.agentUserId,
           createdAt: proposals.createdAt,
           workspaceId: proposals.workspaceId,
+          data: proposals.data,
         })
         .from(proposals)
         .where(
@@ -214,6 +228,13 @@ async function diagnoseObject(
       const revisionCount = Array.isArray(row.revisionHistory)
         ? (row.revisionHistory as ProposalRevision[]).length
         : 0;
+      // A `capability.run` proposal stores its executed output in
+      // `data.runResult` (approve-executors.ts). Surface a bounded view so
+      // diagnose(proposalId) shows the RESULT, not just the proposal state.
+      const runResult =
+        row.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE
+          ? (row.data as Record<string, unknown> | null)?.runResult
+          : undefined;
       return {
         mode: "object",
         kind,
@@ -232,6 +253,9 @@ async function diagnoseObject(
           revisionCount,
           correlationId: row.correlationId,
           agentUserId: row.agentUserId,
+          ...(runResult !== undefined
+            ? { runResult: boundDiagnoseValue(runResult) }
+            : {}),
         },
       };
     }

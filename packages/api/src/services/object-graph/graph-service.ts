@@ -147,6 +147,14 @@ export interface GraphEnvelope {
     byKind: Record<string, number>;
     byVia: Record<string, number>;
   };
+  /**
+   * Whether the focal object was actually resolved. `false` = the id hydrated to
+   * NOTHING and has no visible neighbours (a genuinely-unknown / invisible id) —
+   * `object` is then a not-found placeholder, NOT a real node. `true` = either
+   * hydrated, or a stub node corroborated by ≥1 visible edge. Callers surface a
+   * "not found" instead of rendering the placeholder as a real entity.
+   */
+  found: boolean;
 }
 
 // ── Per-kind hydrator registry ───────────────────────────────────────────────
@@ -811,15 +819,6 @@ export async function getObjectGraph(
     getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
   ]);
 
-  const object: GraphNode = selfMap.get(`${kind}:${id}`) ?? {
-    kind,
-    id,
-    name: id,
-    subtype: null,
-    subtypes: [],
-    workspaceId: null,
-  };
-
   // Merge config + data graphs; de-dup on (kind, id, edgeType, via) so an object
   // linked twice the same way isn't double-counted.
   const seen = new Set<string>();
@@ -835,6 +834,24 @@ export async function getObjectGraph(
     neighbors.push(n);
   }
 
+  // Resolve the focal node. `hydrateNodes` already gives stub kinds
+  // (`participant`/`source` — no KIND_TABLE) a raw-id node, so a MISS here means
+  // a TABLE-BACKED id that hydrated to nothing: it genuinely doesn't exist, or
+  // isn't visible to this caller. Only fabricate a placeholder when ≥1 visible
+  // edge corroborates the node (a real graph citizen the user can partially see);
+  // otherwise signal not-found so callers don't render a phantom entity named by
+  // its own UUID.
+  const hydrated = selfMap.get(`${kind}:${id}`);
+  const found = hydrated !== undefined || neighbors.length > 0;
+  const object: GraphNode = hydrated ?? {
+    kind,
+    id,
+    name: found ? id : "(not found)",
+    subtype: null,
+    subtypes: [],
+    workspaceId: null,
+  };
+
   const byKind: Record<string, number> = {};
   const byVia: Record<string, number> = {};
   for (const n of neighbors) {
@@ -846,6 +863,7 @@ export async function getObjectGraph(
     object,
     neighbors,
     counts: { total: neighbors.length, byKind, byVia },
+    found,
   };
 }
 

@@ -59,17 +59,38 @@ import type {
   RunProposalItem,
   RunAgent,
   RunGroup,
+  RunDefinitionSnapshot,
+  AutomationStepActivityItem,
 } from "./types.js";
+import type {
+  AutomationNode,
+  FlowDefinition,
+  RunPathTaken,
+} from "@synap/database";
 import {
   decodeRunGroupCursor,
   encodeRunGroupCursor,
   type RunGroupCursor,
 } from "../../utils/keyset-cursor.js";
+import { validateFlowDefinition } from "../automations/validate-flow.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 /** `proposals.proposalType` for the agnostic-capability last-mile executor
  * (Workstream 1 — see approve-executors.ts's `capability.run` executor). */
 const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+
+/**
+ * A capability run's output (`proposal.data.runResult`) can be arbitrarily large
+ * (a provider list, a full API envelope). Pass it through the RunDetail's
+ * `outputSummary` verbatim when small; otherwise a truncated preview + a flag so
+ * a huge payload never bloats the detail response.
+ */
+function boundRunResult(runResult: unknown): unknown {
+  if (runResult === undefined || runResult === null) return null;
+  const json = JSON.stringify(runResult);
+  if (json.length <= 8000) return runResult;
+  return { truncated: true, preview: json.slice(0, 8000) };
+}
 
 /**
  * Server-side scope — narrows the feed to a lens WITHIN the user floor, so the
@@ -231,7 +252,8 @@ async function listAutomationRuns(
   flowId: string | undefined,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   const statusValues = status ? automationStatusValues(status) : null;
   if (statusValues && statusValues.length === 0) return [];
@@ -271,6 +293,7 @@ async function listAutomationRuns(
     .where(
       and(
         userVisibleWhere(automationRuns.workspaceId, userId),
+        exactRunId ? eq(automationRuns.id, exactRunId) : undefined,
         flowId ? eq(automationRuns.automationId, flowId) : undefined,
         scope.workspaceId
           ? eq(automationRuns.workspaceId, scope.workspaceId)
@@ -315,7 +338,8 @@ async function listPlaybookRuns(
   flowId: string | undefined,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   const statusValues = status ? playbookStatusValues(status) : null;
   if (statusValues && statusValues.length === 0) return [];
@@ -346,6 +370,7 @@ async function listPlaybookRuns(
     .where(
       and(
         userVisibleWhere(playbookRuns.workspaceId, userId),
+        exactRunId ? eq(playbookRuns.id, exactRunId) : undefined,
         flowId ? eq(playbookRuns.playbookId, flowId) : undefined,
         scope.workspaceId
           ? eq(playbookRuns.workspaceId, scope.workspaceId)
@@ -389,7 +414,8 @@ async function listCaptureRuns(
   userId: string,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   // Capture runs are always "completed"; any other status filter excludes them.
   if (status && status !== "completed") return [];
@@ -412,6 +438,12 @@ async function listCaptureRuns(
       and(
         eq(proposals.proposalType, CAPTURE_PROPOSAL_TYPE),
         userVisibleWhere(proposals.workspaceId, userId),
+        exactRunId
+          ? or(
+              eq(proposals.correlationId, exactRunId),
+              eq(proposals.id, exactRunId)
+            )
+          : undefined,
         scope.workspaceId
           ? eq(proposals.workspaceId, scope.workspaceId)
           : undefined,
@@ -495,7 +527,8 @@ async function listCapabilityRuns(
   userId: string,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   // No entity-subject linkage exists for a capability run (unlike capture's
   // materialized entityIds) — an entity-focused scope has nothing to match.
@@ -517,6 +550,15 @@ async function listCapabilityRuns(
       and(
         eq(proposals.proposalType, CAPABILITY_RUN_PROPOSAL_TYPE),
         userVisibleWhere(proposals.workspaceId, userId),
+        // Mirror listCaptureRuns: the executor stamps `correlationId` on approval
+        // and that is the id diagnose/getRun pass in. Match BOTH so a run is
+        // resolvable by its correlationId, not just the proposal row id.
+        exactRunId
+          ? or(
+              eq(proposals.correlationId, exactRunId),
+              eq(proposals.id, exactRunId)
+            )
+          : undefined,
         scope.workspaceId
           ? eq(proposals.workspaceId, scope.workspaceId)
           : undefined,
@@ -548,7 +590,13 @@ async function listCapabilityRuns(
         channelId: null,
         correlationId: r.correlationId ?? null,
         replayOf: null,
-        summary: null,
+        // The executor stores the run output in `data.runResult` on approval;
+        // surface a compact one-line form so the Activity feed shows the result
+        // (mirrors capture's `data.summary`), not a blank row.
+        summary:
+          data.runResult !== undefined
+            ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
+            : null,
         error: null,
         triggeredBy: null,
         stepsCompleted: null,
@@ -563,7 +611,8 @@ async function listSessionRuns(
   userId: string,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   const statusValues = status ? sessionStatusValues(status) : null;
   if (statusValues && statusValues.length === 0) return [];
@@ -598,6 +647,7 @@ async function listSessionRuns(
           focusSessions.userId,
           userId
         ),
+        exactRunId ? eq(focusSessions.id, exactRunId) : undefined,
         // No run row references this session → it is not double-counted by the
         // playbook ledger, so surface it here (see block comment above).
         isNull(playbookRuns.id),
@@ -656,7 +706,8 @@ async function listChatRuns(
   userId: string,
   scope: RunScope,
   limit: number,
-  status?: RunStatus
+  status?: RunStatus,
+  exactRunId?: string
 ): Promise<UnifiedRun[]> {
   if (scope.projectId || scope.subjectEntityId) return [];
   const statusValues = status ? chatStatusValues(status) : null;
@@ -678,6 +729,7 @@ async function listChatRuns(
     .where(
       and(
         eq(chatTurns.userId, userId),
+        exactRunId ? eq(chatTurns.id, exactRunId) : undefined,
         statusValues ? inArray(chatTurns.status, statusValues) : undefined,
         scope.workspaceId
           ? eq(channels.workspaceId, scope.workspaceId)
@@ -996,8 +1048,12 @@ export async function getRun(
   const { userId, flowType, id } = input;
 
   if (flowType === "automation") {
-    const [run] = await listRunsById(
-      () => listAutomationRuns(userId, undefined, {}, 100),
+    const [run] = await listAutomationRuns(
+      userId,
+      undefined,
+      {},
+      1,
+      undefined,
       id
     );
     if (!run) return null;
@@ -1021,15 +1077,19 @@ export async function getRun(
     // nodeId → human label / node type, from the snapshot the run executed (no
     // new query — the snapshot rides on the run row). Falls back to the nodeId
     // per step; nodeType is null where the snapshot has none.
-    const nodeLabelById = buildNodeLabelMap(meta?.definitionSnapshot);
-    const nodeTypeById = buildNodeTypeMap(meta?.definitionSnapshot);
-    const activity: RunActivityItem[] = steps
+    const definitionSnapshot = parseRunDefinitionSnapshot(
+      meta?.definitionSnapshot
+    );
+    const pathTaken = parseRunPathTaken(meta?.pathTaken);
+    const nodeLabelById = buildNodeLabelMap(definitionSnapshot);
+    const nodeTypeById = buildNodeTypeMap(definitionSnapshot);
+    const activity: AutomationStepActivityItem[] = steps
       .map((s) => {
         const nodeLabel = nodeLabelById.get(s.nodeId) ?? null;
         return {
           id: s.id,
           at: s.completedAt ?? s.startedAt ?? null,
-          kind: "step",
+          kind: "step" as const,
           status: s.status,
           // Human node name where the snapshot has one; the node id otherwise.
           label: nodeLabel ?? s.nodeId,
@@ -1053,7 +1113,7 @@ export async function getRun(
       })
       .sort(byAtAsc);
     return {
-      run,
+      run: { ...run, flowType: "automation" },
       activity,
       trigger: {
         triggeredBy: run.triggeredBy,
@@ -1062,22 +1122,19 @@ export async function getRun(
       outputSummary: meta?.outputSummary ?? null,
       playbookDetail: null,
       // The flow definition this run executed — lets the UI render the graph.
-      definitionSnapshot: meta?.definitionSnapshot ?? null,
+      definitionSnapshot,
       // Which edges of that graph the run actually walked. NULL = unknown
       // (pre-0214 run, or one that never executed a node) — not "nothing pruned".
-      pathTaken: meta?.pathTaken ?? null,
+      pathTaken,
     };
   }
 
   if (flowType === "capture") {
-    const [run] = await listRunsById(
-      () => listCaptureRuns(userId, {}, 200),
-      id
-    );
+    const [run] = await listCaptureRuns(userId, {}, 1, undefined, id);
     if (!run || !run.correlationId)
       return run
         ? {
-            run,
+            run: { ...run, flowType: "capture" },
             activity: [],
             trigger: null,
             outputSummary: null,
@@ -1121,7 +1178,7 @@ export async function getRun(
       })
       .sort(byAtAsc);
     return {
-      run,
+      run: { ...run, flowType: "capture" },
       activity,
       trigger: null,
       outputSummary: null,
@@ -1136,22 +1193,30 @@ export async function getRun(
   // emits an ai_decision on approval (see approve-executors.ts's
   // `capability.run` executor).
   if (flowType === "capability") {
-    const [run] = await listRunsById(
-      () => listCapabilityRuns(userId, {}, 200),
-      id
-    );
-    if (!run || !run.correlationId)
-      return run
-        ? {
-            run,
-            activity: [],
-            trigger: null,
-            outputSummary: null,
-            playbookDetail: null,
-            definitionSnapshot: null,
-            pathTaken: null,
-          }
-        : null;
+    const [run] = await listCapabilityRuns(userId, {}, 1, undefined, id);
+    if (!run) return null;
+    // The executor stores the run output in `data.runResult` on approval
+    // (approve-executors.ts's `capability.run` branch). `run.id` is always the
+    // proposal row id — fetch its data so the result is surfaced in outputSummary.
+    const [proposalRow] = await db
+      .select({ data: proposals.data })
+      .from(proposals)
+      .where(eq(proposals.id, run.id))
+      .limit(1);
+    const runResult = (proposalRow?.data as Record<string, unknown> | null)
+      ?.runResult;
+    const outputSummary =
+      runResult !== undefined ? boundRunResult(runResult) : null;
+    if (!run.correlationId)
+      return {
+        run: { ...run, flowType: "capability" },
+        activity: [],
+        trigger: null,
+        outputSummary,
+        playbookDetail: null,
+        definitionSnapshot: null,
+        pathTaken: null,
+      };
     const rows = await db
       .select({
         id: events.id,
@@ -1187,10 +1252,10 @@ export async function getRun(
       })
       .sort(byAtAsc);
     return {
-      run,
+      run: { ...run, flowType: "capability" },
       activity,
       trigger: null,
-      outputSummary: null,
+      outputSummary,
       playbookDetail: null,
       definitionSnapshot: null,
       pathTaken: null,
@@ -1198,7 +1263,7 @@ export async function getRun(
   }
 
   if (flowType === "chat") {
-    const [run] = await listRunsById(() => listChatRuns(userId, {}, 200), id);
+    const [run] = await listChatRuns(userId, {}, 1, undefined, id);
     if (!run) return null;
 
     // Prefer durable chat_turn_events when present; fall back to the assistant
@@ -1289,7 +1354,7 @@ export async function getRun(
     }
 
     return {
-      run,
+      run: { ...run, flowType: "chat" },
       activity,
       trigger: null,
       outputSummary: null,
@@ -1301,11 +1366,10 @@ export async function getRun(
 
   // playbook / session — the run's story is its channel; return the run with a
   // single lifecycle marker (the UI opens `run.channelId` for the messages).
-  const source =
+  const [run] =
     flowType === "playbook"
-      ? () => listPlaybookRuns(userId, undefined, {}, 200)
-      : () => listSessionRuns(userId, {}, 200);
-  const [run] = await listRunsById(source, id);
+      ? await listPlaybookRuns(userId, undefined, {}, 1, undefined, id)
+      : await listSessionRuns(userId, {}, 1, undefined, id);
   if (!run) return null;
   const activity: RunActivityItem[] = [
     {
@@ -1326,7 +1390,7 @@ export async function getRun(
       ? await loadPlaybookRunDetail(userId, run.id)
       : null;
   return {
-    run,
+    run: { ...run, flowType },
     activity,
     trigger: null,
     outputSummary: null,
@@ -1644,6 +1708,97 @@ function runAgentDisplayName(row: {
   return row.email || null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFinitePosition(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.x === "number" &&
+    Number.isFinite(value.x) &&
+    typeof value.y === "number" &&
+    Number.isFinite(value.y)
+  );
+}
+
+function isAutomationNode(value: unknown): value is AutomationNode {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    isAutomationNodeType(value.type) &&
+    isFinitePosition(value.position) &&
+    isRecord(value.data)
+  );
+}
+
+function isFlowDefinition(value: unknown): value is FlowDefinition {
+  if (!isRecord(value)) return false;
+  if (!Array.isArray(value.nodes) || !value.nodes.every(isAutomationNode)) {
+    return false;
+  }
+  if (
+    !Array.isArray(value.edges) ||
+    !value.edges.every(
+      (edge) =>
+        isRecord(edge) &&
+        typeof edge.id === "string" &&
+        typeof edge.source === "string" &&
+        typeof edge.target === "string"
+    )
+  ) {
+    return false;
+  }
+  return (
+    value.precondition === undefined || typeof value.precondition === "string"
+  );
+}
+
+/**
+ * Validate JSONB at the service boundary. Drizzle's `$type` is compile-time
+ * only, while old imports and direct database writes can still carry malformed
+ * shapes. Returning null keeps the UI honest: no trustworthy snapshot means no
+ * graph, rather than a crash or a graph of the current definition.
+ */
+export function parseRunDefinitionSnapshot(
+  value: unknown
+): RunDefinitionSnapshot | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.version !== "number" ||
+    !Number.isInteger(value.version) ||
+    value.version < 1 ||
+    !isFlowDefinition(value.flowDefinition) ||
+    !validateFlowDefinition(value.flowDefinition).valid
+  ) {
+    return null;
+  }
+  return {
+    version: value.version,
+    flowDefinition: value.flowDefinition,
+  };
+}
+
+/**
+ * Validate path evidence independently from the definition snapshot. `null`
+ * means unknown; empty arrays are meaningful and therefore preserved.
+ */
+export function parseRunPathTaken(value: unknown): RunPathTaken | null {
+  if (!isRecord(value)) return null;
+  if (
+    !Array.isArray(value.traversedEdgeIds) ||
+    !value.traversedEdgeIds.every((id) => typeof id === "string") ||
+    !Array.isArray(value.prunedEdgeIds) ||
+    !value.prunedEdgeIds.every((id) => typeof id === "string")
+  ) {
+    return null;
+  }
+  return {
+    traversedEdgeIds: [...new Set(value.traversedEdgeIds)],
+    prunedEdgeIds: [...new Set(value.prunedEdgeIds)],
+  };
+}
+
 /**
  * nodeId → human label from an automation run's definition snapshot. Tolerant of
  * a missing/partial snapshot (returns an empty map). Prefers `data.label`, then
@@ -1678,28 +1833,51 @@ export function buildNodeLabelMap(
  */
 export function buildNodeTypeMap(
   snapshot: { flowDefinition?: { nodes?: unknown } | null } | null | undefined
-): Map<string, string> {
-  const map = new Map<string, string>();
+): Map<string, AutomationNode["type"]> {
+  const map = new Map<string, AutomationNode["type"]>();
   const nodes = snapshot?.flowDefinition?.nodes;
   if (!Array.isArray(nodes)) return map;
   for (const n of nodes) {
     if (!n || typeof n !== "object") continue;
     const node = n as { id?: unknown; type?: unknown };
     if (typeof node.id !== "string") continue;
-    if (typeof node.type === "string") map.set(node.id, node.type);
+    if (isAutomationNodeType(node.type)) map.set(node.id, node.type);
   }
   return map;
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+const AUTOMATION_NODE_TYPES: ReadonlySet<AutomationNode["type"]> = new Set([
+  "trigger",
+  "command",
+  "condition",
+  "delay",
+  "output",
+  "loop",
+  "transform",
+  "fetch",
+  "query",
+  "messages_query",
+  "switch",
+  "skill",
+  "capability",
+  "sub_automation",
+  "playbook_run",
+  "entity_read",
+  "related_entities",
+  "compute",
+  "select",
+  "claim",
+  "guard",
+]);
 
-async function listRunsById(
-  source: () => Promise<UnifiedRun[]>,
-  id: string
-): Promise<UnifiedRun[]> {
-  const all = await source();
-  return all.filter((r) => r.id === id);
+function isAutomationNodeType(value: unknown): value is AutomationNode["type"] {
+  return (
+    typeof value === "string" &&
+    AUTOMATION_NODE_TYPES.has(value as AutomationNode["type"])
+  );
 }
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 function byAtAsc(a: { at: Date | null }, b: { at: Date | null }): number {
   return (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0);

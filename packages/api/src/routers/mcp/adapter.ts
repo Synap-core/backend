@@ -1502,6 +1502,12 @@ export async function executeMCPToolViaHubProtocol(
         gKind,
         gId
       );
+      // A table-backed id that hydrated to nothing with no visible edges — the id
+      // genuinely doesn't exist / isn't visible. Return not-found, never a shell
+      // node named by its own UUID (mirrors the name-not-found branch above).
+      if (!envelope.found) {
+        return ok({ error: `No ${gKind} with id '${gId}'` });
+      }
       return ok(envelope);
     }
 

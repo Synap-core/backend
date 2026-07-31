@@ -112,13 +112,23 @@ export const graphRouter = router({
         });
         extra = connectionsToNeighbors(conns.connections);
       }
-      return getObjectGraph(
+      const envelope = await getObjectGraph(
         ctx.userId,
         input.type as LinkEndpointType,
         input.id,
         extra,
         input.workspaceId
       );
+      // A table-backed id that hydrated to nothing with no visible edges is
+      // genuinely unknown / invisible — surface not-found instead of a phantom
+      // node named by its own UUID.
+      if (!envelope.found) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No ${input.type} with id '${input.id}'`,
+        });
+      }
+      return envelope;
     }),
 
   /**
