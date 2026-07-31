@@ -72,6 +72,8 @@
     "@synap/storage": "workspace:*",
     "@trpc/server": "^11.8.1",
     "@types/ws": "^8.18.1",
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
     "bcrypt": "^6.0.0",
     "csv-parse": "^5.6.0",
     "drizzle-orm": "^0.45.1",
