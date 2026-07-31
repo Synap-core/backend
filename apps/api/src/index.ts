@@ -438,9 +438,14 @@ app.get("/health", (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.25.1",
+    apiTypesVersion: "1.25.3",
     mode: "multi-user",
     auth: "ory-stack",
+    // Git SHA the running image was built from (see deploy/Dockerfile ARG
+    // GIT_SHA -> ENV SYNAP_GIT_SHA, already surfaced on /status/release as
+    // `buildStamp`). Repeated here so a single `curl /health` answers "is this
+    // build actually deployed?" without a second call. "unknown" when unset.
+    buildSha: process.env.SYNAP_GIT_SHA || "unknown",
   });
 });
 
