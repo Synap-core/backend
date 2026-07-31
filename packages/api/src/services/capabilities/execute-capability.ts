@@ -198,6 +198,10 @@ export async function executeCapability(input: {
     const proposal = await createPendingProposal({
       userId,
       workspaceId,
+      // Attribute the proposal to the acting agent so its OWNER can approve it
+      // (computeCanReviewApproval resolves agentUserId -> users.createdByUserId).
+      // Without this the row stored agentUserId:null and only admins could review.
+      agentUserId: input.agentUserId ?? undefined,
       targetType: "capability",
       targetId: skillRow.id,
       proposalType: "capability.run",
