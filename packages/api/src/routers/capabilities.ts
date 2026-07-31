@@ -21,6 +21,7 @@ import {
   playbooks,
   playbookAutomations,
   skills,
+  tools as toolsTable,
   entities,
   capabilities as capabilitiesTable,
   notifications,
@@ -47,6 +48,20 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { entitiesRouter } from "./entities.js";
+import { skillsRouter } from "./skills.js";
+import {
+  CreateVerbInput,
+  validateCreateVerbInput,
+} from "./mcp/validate-create-verb.js";
+import {
+  listCapabilities,
+  sectionCapabilities,
+} from "../services/capabilities/capability-registry.js";
+import {
+  buildProviderVerbSpec,
+  parentToolMissingMessage,
+  parentToolWhere,
+} from "../services/capabilities/create-declarative-verb.js";
 import {
   normalizeVerbResult,
   runEnrichmentVerb,
@@ -126,11 +141,207 @@ function titleFromLinkedinUrl(url: string): string {
   }
 }
 
+// ─── Capability registry (the BRICK catalogue) ────────────────────────────────
+
+/** The `CapabilityKind` discriminator, as a tRPC-facing enum. */
+const CAPABILITY_KINDS = [
+  "tool",
+  "skill",
+  "command",
+  "source-provider",
+  "builtin-tool",
+  "teaching-doc",
+] as const;
+
+/**
+ * Resolve the workspace LENS for a pod-altitude registry read.
+ *
+ * A caller-supplied `workspaceId` is untrusted input, so membership is verified
+ * here BEFORE it reaches the registry's `eq(workspaceId, …)` predicates — the
+ * `workspaceProcedure` middleware that normally does this is deliberately not in
+ * play (the catalogue must work with no workspace selected). Returns `null` for
+ * pod altitude, which the registry narrows to pod-wide rows only.
+ */
+async function resolveRegistryLens(
+  userId: string,
+  requested: string | null | undefined
+): Promise<string | null> {
+  if (!requested) return null;
+  const role = await getWorkspaceRole(userId, requested);
+  if (!role) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Access denied to workspace",
+    });
+  }
+  return requested;
+}
+
+const capabilityRegistryRouter = router({
+  /**
+   * The sectioned brick catalogue: integrations (with their verbs nested),
+   * standalone skills, and commands — server-side searchable.
+   *
+   * This is `sectionCapabilities` lifted to tRPC. Until now its ONLY call site
+   * was the MCP adapter, so the agent could see the deduped "what can I DO" view
+   * and no human surface could. Same projection, same `ListCapabilitiesOptions`
+   * (query/kind/limit) that were previously unreachable from tRPC.
+   *
+   * HONEST DEGRADATION, not empty results: with no workspace the catalogue
+   * returns pod-wide tools/commands + the caller's pod/user skills, and says so
+   * via `lens`. Grants and connections are resolved the same way at either
+   * altitude (they hang off the tool + the caller, not the lens), so a pod-level
+   * catalogue is genuinely useful — it just cannot show workspace-scoped bricks.
+   *
+   * `excluded` is passed through verbatim: a catalogue must be able to say "N
+   * builtins / M teaching docs are not shown here" rather than silently hiding
+   * them.
+   */
+  sections: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Workspace lens; omit/null for pod altitude. Membership is verified. */
+          workspaceId: z.string().uuid().nullish(),
+          /** Ranked tokenized substring match over name + verb labels + description. */
+          query: z.string().optional(),
+          kind: z.enum(CAPABILITY_KINDS).optional(),
+          limit: z.number().int().min(1).max(500).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const workspaceId = await resolveRegistryLens(userId, input?.workspaceId);
+
+      const caps = await listCapabilities(
+        { workspaceId, userId },
+        {
+          ...(input?.query ? { query: input.query } : {}),
+          ...(input?.kind ? { kind: input.kind } : {}),
+          ...(typeof input?.limit === "number" ? { limit: input.limit } : {}),
+        }
+      );
+
+      const sections = sectionCapabilities(caps);
+      return {
+        ...sections,
+        /**
+         * What this catalogue could see. `podOnly` is the honest signal a UI
+         * needs to say "select a workspace to also see its capabilities"
+         * instead of rendering an unexplained short list.
+         */
+        lens: { workspaceId, podOnly: workspaceId === null },
+      };
+    }),
+
+  /**
+   * Create a declarative provider verb — a new brick — on an ALREADY-installed
+   * tool. The human/UI counterpart of the `synap_create_verb` MCP tool.
+   *
+   * Same three steps, same helpers, no new business logic:
+   *   1. `validateCreateVerbInput` (declarative-only, never accepts `code`);
+   *   2. `parentToolWhere` — the parent tool must exist and be caller-visible;
+   *   3. `skillsRouter.create` — the ONE governed door. `checkPermissionOrPropose`
+   *      runs INSIDE it; no bypass flag, no direct insert here.
+   *
+   * `agentUserId` is deliberately NOT threaded: this door is the HUMAN caller,
+   * so governance evaluates the operator's own rights. An agent creating a verb
+   * goes through MCP, which attributes its agent identity.
+   *
+   * A `status:"proposed"` outcome is a SUCCESS (the write is queued for review),
+   * passed through verbatim — never converted into an error.
+   */
+  createVerb: protectedProcedure
+    .input(CreateVerbInput)
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const workspaceId = await resolveRegistryLens(userId, input.workspaceId);
+
+      // Step 1 — the SAME pure validator the MCP door uses. Redundant against
+      // the zod input above by construction (a strict object cannot carry
+      // `kind`/`code` through), and kept anyway so there is exactly ONE place
+      // that decides what a createable verb is.
+      const validated = validateCreateVerbInput(input);
+      if (!validated.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: validated.error });
+      }
+
+      // Step 2 — parent-tool precondition. This door only ADDS a verb to an
+      // existing tool; it never creates a tool or a connection as a side effect.
+      const database = await getDb();
+      const [parentTool] = await database
+        .select({ id: toolsTable.id, name: toolsTable.name })
+        .from(toolsTable)
+        .where(
+          parentToolWhere({ userId, toolName: input.toolName, workspaceId })
+        )
+        .limit(1);
+      if (!parentTool) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: parentToolMissingMessage(input.toolName, workspaceId),
+        });
+      }
+
+      // Step 3 — the governed create door, called exactly as MCP calls it.
+      const result = await skillsRouter
+        .createCaller({
+          ...ctx,
+          workspaceId,
+        } as unknown as Parameters<typeof skillsRouter.createCaller>[0])
+        .create({
+          ...(workspaceId ? { workspaceId } : {}),
+          kind: "declarative",
+          scope: workspaceId ? "workspace" : "pod",
+          name: input.verbName,
+          description: input.description,
+          providerSpec: buildProviderVerbSpec(
+            validated.data
+          ) as unknown as Record<string, unknown>,
+          parameters: input.parameters,
+          executionMode: "sync",
+          timeoutSeconds: 30,
+        });
+
+      // Identity of the thing just created, so a UI can select it inline
+      // (create-then-configure, never a wizard) — plus the brick's parent so the
+      // caller knows where it landed. `status` is `"created" | "proposed"`,
+      // verbatim from the governed door.
+      return {
+        ...result,
+        verbName: input.verbName,
+        toolId: parentTool.id,
+        toolName: parentTool.name,
+      };
+    }),
+});
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export const capabilitiesRouter = router({
   /** Capability CONTAINERS (the named bundles) — CRUD + part attach/detach. */
   containers: capabilityContainersRouter,
+
+  /**
+   * The capability-BRICK registry: browse the bricks, create a brick.
+   *
+   * WHY IT LIVES HERE. A capability verb is to a process what an entity is to
+   * the pod — a brick. You browse bricks in the brick's own router, exactly as
+   * you browse entities in `entities.*`. The pre-existing sectioned door sits at
+   * `playbooks.capabilityRegistry.list`, i.e. INSIDE one of the brick's
+   * consumers, which inverts the dependency (a catalogue hosted by a consumer
+   * can only ever be as wide as that consumer's altitude) — and it is built on
+   * `workspaceProcedure`, so it 400s pod-wide. Neither is fixable in place
+   * without breaking that door's live callers, so the brick catalogue is a NEW
+   * door in the brick's own home. `playbooks.capabilityRegistry.list` stays
+   * exactly as it is.
+   *
+   * ALTITUDE: `protectedProcedure`, workspace OPTIONAL — the Capabilities app is
+   * `defaultScope: {type:'pod'}` and a pod-level catalogue must not be gated on
+   * a selected workspace. Degradation is honest, not empty (see `sections`).
+   */
+  registry: capabilityRegistryRouter,
 
   /**
    * Capability CONNECTIONS (Wave 4) — CRUD over a capability's connections

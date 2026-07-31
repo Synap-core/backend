@@ -17,9 +17,10 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc && tsc --declaration false --declarationMap false --emitDeclarationOnly false --sourceMap false && cp src/generated.d.ts dist/generated.d.ts",
+    "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build",
     "release:check": "node scripts/check-and-bump.mjs --check",
     "release:bump": "node scripts/check-and-bump.mjs"
   },

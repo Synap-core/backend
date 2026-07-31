@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   // referenced entity exists (route to its channel); empty = unknown ref (fall
   // through to the default run channel, never dangle/throw).
   entityLookupRows: [] as Array<{ id: string }>,
+  // The row the explicit-`channelId` SCOPE re-validation resolves to. Defined =
+  // the channel is reachable from the automation's workspace; undefined = it is
+  // not (the executor must refuse to post). Row-level proof that the PREDICATE
+  // is the right one lives in channel-message-scope.test.ts.
+  channelScopeRow: undefined as { id: string } | undefined,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -41,6 +46,11 @@ vi.mock("@synap/database", async (importOriginal) => {
         }),
       }),
     }),
+    query: {
+      channels: {
+        findFirst: () => Promise.resolve(mocks.channelScopeRow),
+      },
+    },
   };
   return {
     ...actual,
@@ -95,6 +105,8 @@ describe("channel_message output — context-derived channel routing", () => {
     mocks.insertChannelMessage.mockResolvedValue({});
     // Default: the referenced entity EXISTS (channelEntityRef routes to it).
     mocks.entityLookupRows = [{ id: "found" }];
+    // Default: the explicit channel IS in scope for the automation's workspace.
+    mocks.channelScopeRow = { id: "in-scope" };
   });
 
   it("(a) explicit channelId wins — no resolver invoked", async () => {
@@ -108,6 +120,21 @@ describe("channel_message output — context-derived channel routing", () => {
       expect.objectContaining({ channelId: "ch-explicit", content: "hi" })
     );
     expect(result).toMatchObject({ status: "sent", channelId: "ch-explicit" });
+  });
+
+  // SECURITY: the explicit-channelId branch is the ONLY one that takes a
+  // caller-supplied destination verbatim, and the sink (insertChannelMessage) is
+  // a bare insert with no visibility check. Before the run-time re-validation, a
+  // flow definition naming ANY channel uuid posted into it under the owner's
+  // identity. The refusal must be LOUD — falling through to the run channel
+  // would still deliver the content, just somewhere the author did not name.
+  it("(a) SECURITY — an out-of-scope explicit channelId refuses to post (no insert, no silent fallback)", async () => {
+    mocks.channelScopeRow = undefined; // not reachable from WORKSPACE
+    await expect(
+      runChannelMessage({ channelId: "ch-foreign", content: "secret" })
+    ).rejects.toThrow(/ch-foreign is not reachable from workspace ws-1/);
+    expect(mocks.insertChannelMessage).not.toHaveBeenCalled();
+    expect(mocks.ensureAutomationRunChannel).not.toHaveBeenCalled();
   });
 
   it("(b) channelEntityRef (exact {{...}} → entity id) resolves via ensureEntityChannel", async () => {

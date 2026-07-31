@@ -23,7 +23,7 @@ import {
 } from "@synap/database";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
-  isTemplateDrifted,
+  templateHealthFor,
   resolveLatestVersionsBySlug,
 } from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
@@ -550,9 +550,14 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             typeof settings.packageVersion === "string"
               ? settings.packageVersion
               : null;
-          const latestVersion = pkgSlug
-            ? (latestBySlug.get(pkgSlug) ?? null)
-            : null;
+          // Compose the health axes through the ONE authority (template-health.ts)
+          // rather than re-deriving them here — so this door can never disagree
+          // with the MCP verb / the shared service on the same data.
+          const health = templateHealthFor(
+            pkgSlug,
+            installedVersion,
+            latestBySlug
+          );
           return {
             id: workspace.id,
             name: workspace.name,
@@ -569,18 +574,16 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             appId: settings.appId ?? null,
             packageSlug: pkgSlug,
             // CP content-hash stamp ("h-<hash>") of the version this workspace
-            // is CURRENTLY on. Kept for back-compat; drift is now computed
-            // server-side below so clients don't re-derive it.
+            // is CURRENTLY on. Kept for back-compat; drift is computed
+            // server-side (health.*) so clients don't re-derive it.
             packageVersion: installedVersion,
-            // ── TemplateHealth (computed server-side, plan Wave 1) ──
-            // `latestVersion` = the freshest catalog version for this slug;
-            // `drifted` = the single truthful "an update is available" signal
-            // (see `isTemplateDrifted`). `attached`/`stamped` make the tri-state
-            // the CLI already distinguishes explicit rather than client-derived.
-            latestVersion,
-            attached: pkgSlug != null,
-            stamped: installedVersion != null,
-            drifted: isTemplateDrifted(installedVersion, latestVersion),
+            // ── TemplateHealth (computed server-side via the ONE authority) ──
+            // `drifted` = the single truthful "an update is available" signal;
+            // `attached`/`stamped` make the tri-state explicit, not client-derived.
+            latestVersion: health.latestVersion,
+            attached: health.attached,
+            stamped: health.stamped,
+            drifted: health.drifted,
             // Additive-pack installs (profile/view/bento) never set
             // `packageSlug` — they carry their own identity here instead. The
             // CLI unions this with `packageSlug` to match the browser's

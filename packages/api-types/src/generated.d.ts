@@ -5192,6 +5192,211 @@ export interface AskResult {
 	pending?: AskPendingBlock;
 }
 /**
+ * @synap/playbooks — Playbooks & Capability Substrate contracts
+ *
+ * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
+ * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
+ *
+ * Contains NO database / event / proposal side effects — ONLY types + the
+ * Executor interface. Persistence ROW types live in @synap/database/schema
+ * (tools / playbooks / links); the interfaces here describe the behavioral
+ * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
+ * boundary. Small string-unions are intentionally re-declared here (rather than
+ * imported from @synap/database) so this package stays dependency-free — they
+ * must stay in lock-step with the `.$type<>()` unions in the schema files.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * The verb axis of a Tool — the structured, enumerable capability matrix. A
+ * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
+ * verb is one concrete operation the AI can invoke. This is the catalog the
+ * connector-capability-matrix is built over: one row per (connection × verb).
+ *
+ * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
+ * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
+ * the catalog can never drift from the skills actually created. Persisted as the
+ * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
+ * the schema's `capabilities` column).
+ */
+export type ToolVerbKind = "read" | "write" | "action";
+export interface ToolVerb {
+	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
+	id: string;
+	/** Human-facing label. */
+	label: string;
+	/**
+	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
+	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
+	 */
+	kind: ToolVerbKind;
+	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
+	argsSchema?: Record<string, unknown>;
+	/**
+	 * The governance default for this verb — aligns to the exec-mode the seeded
+	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
+	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
+	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
+	 */
+	govDefault: ExecMode;
+}
+/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
+export interface CredentialRequirement {
+	/** Logical name the tool/skill references (e.g. "apiKey"). */
+	name: string;
+	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
+	/** Human-facing reason, surfaced in the vault approval proposal. */
+	purpose?: string;
+}
+/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
+export type GrantableKind = "tool" | "skill" | "command";
+/**
+ * What happens when a grant is exercised — the governance / execMode axis. The
+ * same axis as `Capability.governance`; kept in lock-step with the
+ * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ *   - `auto`    — run the capability directly.
+ *   - `propose` — route the exercise through a reviewable proposal.
+ *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
+ */
+export type ExecMode = "auto" | "propose" | "dry-run";
+/**
+ * The normalized shape the Phase-1 adapters produce from builtin IS tools,
+ * code/instruction skills, intelligence_commands, and source providers — so a
+ * Playbook can grant capabilities uniformly and the AI can discover them.
+ */
+/** The full read-model kind set: grantables + the discoverable source systems. */
+export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
+/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
+ *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
+ *  don't have to special-case it to avoid offering it as an action. */
+ | "teaching-doc";
+export interface Capability {
+	kind: CapabilityKind;
+	id: string;
+	name: string;
+	description?: string | null;
+	inputSchema: Record<string, unknown>;
+	credentials?: CredentialRequirement[];
+	executor: ExecutorRef;
+	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
+	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
+	governance: "auto" | "propose" | "none";
+	/**
+	 * The connection's structured verb catalog WITH each verb's resolved
+	 * grant-state — the capability-matrix axis. Present for tools that carry a
+	 * `tools.capabilities` catalog; the grant-state is joined from the active
+	 * `vault_grants` row for the tool (one connection × verb × grant row each).
+	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
+	 * verb-less provider tools).
+	 */
+	verbs?: CapabilityVerbState[];
+	/**
+	 * True for a capability that is discoverable but NOT invokable through the
+	 * capability-execution door (e.g. an IS-native tool with no run_capability
+	 * bridge yet). Consumers building a "runnable" projection must exclude these.
+	 */
+	catalogOnly?: boolean;
+	/**
+	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
+	 * external connection is required and whether one is currently known for the
+	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
+	 * — a distinction the read-model previously omitted, leaving agents to infer it
+	 * from `governance`, which is an approval fact, not a connection fact.
+	 *
+	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
+	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
+	 * authoritative live state and the connect/disconnect actions live behind the
+	 * connectors door. Absent for capabilities that need no external connection
+	 * (builtins, skills, commands, verb-less non-provider tools).
+	 */
+	connection?: {
+		required: boolean;
+		connected: boolean;
+		provider: string;
+	};
+}
+/**
+ * One row of the connection × verb × grant matrix: a Tool's verb annotated with
+ * the live grant-state derived from `vault_grants`. The read-model joins each
+ * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
+ * the AI can see, per verb, whether it is granted and at what exec-mode.
+ */
+export interface CapabilityVerbState extends ToolVerb {
+	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
+	granted: boolean;
+	/**
+	 * The effective exec-mode for this verb: the active grant's exec-mode when
+	 * granted, else the verb's `govDefault`. This is what the gate would apply.
+	 */
+	effectiveExecMode: ExecMode;
+	/**
+	 * Honest, derivable parameter requirements for this verb — builtin verbs from
+	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
+	 * declarative skill's `providerSpec` template params. Undefined when nothing
+	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
+	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
+	 */
+	paramsSchema?: Record<string, {
+		required: boolean;
+		description?: string;
+	}>;
+}
+/**
+ * A verb read-model row PLUS the declarative subset's `responseShape` — the
+ * projection of what a provider verb RETURNS.
+ *
+ * WHY it is declared here and not on `CapabilityVerbState` (@synap/playbooks):
+ * `responseShape` only exists for verbs backed by a `declarative` skill (it is
+ * a `providerSpec` field, applied at execute time by `execute-provider-verb.ts`).
+ * The registry is the only place that joins a verb to its backing skill's spec,
+ * so it is the only place that can project it. Additive + optional: every
+ * existing consumer typed against `CapabilityVerbState` still compiles.
+ */
+export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbState {
+	/**
+	 * The declarative verb's output contract — which fields the shaped result
+	 * carries and where they come from in the raw HTTP response. Present ONLY for
+	 * a provider verb whose backing declarative skill declares one; absent for
+	 * builtin verbs, verbs with no backing spec, and specs with no `responseShape`.
+	 * A brick can therefore state what it returns, not just what it takes.
+	 */
+	responseShape?: ProviderVerbSpec["responseShape"];
+}
+/**
+ * The registry's own capability row: the shared `Capability` contract with the
+ * two fields this module actually emits but that the shared contract does not
+ * declare — the extended verb rows (above) and `runnable` (skill lifecycle).
+ * Assignable to `Capability` in both directions, so no consumer changes.
+ */
+export type RegistryCapability = Omit<Capability, "verbs"> & {
+	verbs?: CapabilityVerbStateWithResponseShape[];
+	/** Skill lifecycle: false for an inactive/errored skill (not launchable). */
+	runnable?: boolean;
+};
+/** The grantable kinds the vault_grants table discriminates over. */
+export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
+/** One grant row enriched with the joined capability's display name. */
+export interface CapabilityGrantRow {
+	grantId: string;
+	grantableType: CapabilityGrantKind;
+	grantableId: string;
+	/** Display name of the granted capability (secret/tool/skill/command), null if dead. */
+	capabilityName: string | null;
+	execMode: string;
+	scope: string;
+	grantedTo: string | null;
+	workspaceId: string | null;
+	proposalId: string | null;
+	expiresAt: string | null;
+	maxUses: number | null;
+	useCount: number;
+	revokedAt: string | null;
+	createdAt: string;
+	active: boolean;
+}
+/**
  * Capability-connection service — the SINGLE source of truth for CRUD over a
  * capability's connections (Wave 4).
  *
@@ -5374,158 +5579,6 @@ export interface AutomationCard {
 		kind: "add" | "run" | "none";
 		hint: string;
 	};
-}
-/**
- * @synap/playbooks — Playbooks & Capability Substrate contracts
- *
- * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
- * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
- *
- * Contains NO database / event / proposal side effects — ONLY types + the
- * Executor interface. Persistence ROW types live in @synap/database/schema
- * (tools / playbooks / links); the interfaces here describe the behavioral
- * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
- * boundary. Small string-unions are intentionally re-declared here (rather than
- * imported from @synap/database) so this package stays dependency-free — they
- * must stay in lock-step with the `.$type<>()` unions in the schema files.
- *
- * Design doc: team/platform/playbooks-capability-substrate.mdx
- */
-/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/**
- * The verb axis of a Tool — the structured, enumerable capability matrix. A
- * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
- * verb is one concrete operation the AI can invoke. This is the catalog the
- * connector-capability-matrix is built over: one row per (connection × verb).
- *
- * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
- * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
- * the catalog can never drift from the skills actually created. Persisted as the
- * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
- * the schema's `capabilities` column).
- */
-export type ToolVerbKind = "read" | "write" | "action";
-export interface ToolVerb {
-	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
-	id: string;
-	/** Human-facing label. */
-	label: string;
-	/**
-	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
-	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
-	 */
-	kind: ToolVerbKind;
-	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
-	argsSchema?: Record<string, unknown>;
-	/**
-	 * The governance default for this verb — aligns to the exec-mode the seeded
-	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
-	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
-	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
-	 */
-	govDefault: ExecMode;
-}
-/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
-export interface CredentialRequirement {
-	/** Logical name the tool/skill references (e.g. "apiKey"). */
-	name: string;
-	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
-	/** Human-facing reason, surfaced in the vault approval proposal. */
-	purpose?: string;
-}
-/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
-export type GrantableKind = "tool" | "skill" | "command";
-/**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
- *   - `auto`    — run the capability directly.
- *   - `propose` — route the exercise through a reviewable proposal.
- *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
- */
-export type ExecMode = "auto" | "propose" | "dry-run";
-/**
- * The normalized shape the Phase-1 adapters produce from builtin IS tools,
- * code/instruction skills, intelligence_commands, and source providers — so a
- * Playbook can grant capabilities uniformly and the AI can discover them.
- */
-/** The full read-model kind set: grantables + the discoverable source systems. */
-export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
-/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
- *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
- *  don't have to special-case it to avoid offering it as an action. */
- | "teaching-doc";
-export interface Capability {
-	kind: CapabilityKind;
-	id: string;
-	name: string;
-	description?: string | null;
-	inputSchema: Record<string, unknown>;
-	credentials?: CredentialRequirement[];
-	executor: ExecutorRef;
-	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
-	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
-	governance: "auto" | "propose" | "none";
-	/**
-	 * The connection's structured verb catalog WITH each verb's resolved
-	 * grant-state — the capability-matrix axis. Present for tools that carry a
-	 * `tools.capabilities` catalog; the grant-state is joined from the active
-	 * `vault_grants` row for the tool (one connection × verb × grant row each).
-	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
-	 * verb-less provider tools).
-	 */
-	verbs?: CapabilityVerbState[];
-	/**
-	 * True for a capability that is discoverable but NOT invokable through the
-	 * capability-execution door (e.g. an IS-native tool with no run_capability
-	 * bridge yet). Consumers building a "runnable" projection must exclude these.
-	 */
-	catalogOnly?: boolean;
-	/**
-	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
-	 * external connection is required and whether one is currently known for the
-	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
-	 * — a distinction the read-model previously omitted, leaving agents to infer it
-	 * from `governance`, which is an approval fact, not a connection fact.
-	 *
-	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
-	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
-	 * authoritative live state and the connect/disconnect actions live behind the
-	 * connectors door. Absent for capabilities that need no external connection
-	 * (builtins, skills, commands, verb-less non-provider tools).
-	 */
-	connection?: {
-		required: boolean;
-		connected: boolean;
-		provider: string;
-	};
-}
-/**
- * One row of the connection × verb × grant matrix: a Tool's verb annotated with
- * the live grant-state derived from `vault_grants`. The read-model joins each
- * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
- * the AI can see, per verb, whether it is granted and at what exec-mode.
- */
-export interface CapabilityVerbState extends ToolVerb {
-	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
-	granted: boolean;
-	/**
-	 * The effective exec-mode for this verb: the active grant's exec-mode when
-	 * granted, else the verb's `govDefault`. This is what the gate would apply.
-	 */
-	effectiveExecMode: ExecMode;
-	/**
-	 * Honest, derivable parameter requirements for this verb — builtin verbs from
-	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
-	 * declarative skill's `providerSpec` template params. Undefined when nothing
-	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
-	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
-	 */
-	paramsSchema?: Record<string, {
-		required: boolean;
-		description?: string;
-	}>;
 }
 export interface CreateCapabilityResult {
 	capabilityKey: string;
@@ -6014,27 +6067,6 @@ export interface ReactionEvent {
 	note?: string;
 	/** the fan-out */
 	reactions: Reaction[];
-}
-/** The grantable kinds the vault_grants table discriminates over. */
-export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
-/** One grant row enriched with the joined capability's display name. */
-export interface CapabilityGrantRow {
-	grantId: string;
-	grantableType: CapabilityGrantKind;
-	grantableId: string;
-	/** Display name of the granted capability (secret/tool/skill/command), null if dead. */
-	capabilityName: string | null;
-	execMode: string;
-	scope: string;
-	grantedTo: string | null;
-	workspaceId: string | null;
-	proposalId: string | null;
-	expiresAt: string | null;
-	maxUses: number | null;
-	useCount: number;
-	revokedAt: string | null;
-	createdAt: string;
-	active: boolean;
 }
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
@@ -12972,6 +13004,95 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				output: {
 					ok: true;
+				};
+				meta: object;
+			}>;
+		}>>;
+		registry: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			sections: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					workspaceId?: string | null | undefined;
+					query?: string | undefined;
+					kind?: "command" | "tool" | "skill" | "source-provider" | "builtin-tool" | "teaching-doc" | undefined;
+					limit?: number | undefined;
+				} | undefined;
+				output: {
+					lens: {
+						workspaceId: string | null;
+						podOnly: boolean;
+					};
+					integrations: Array<{
+						name: string;
+						kind: CapabilityKind;
+						description: string | null;
+						governance: "auto" | "propose" | "none";
+						connection?: {
+							required: boolean;
+							connected: boolean;
+							provider: string;
+						};
+						verbs: CapabilityVerbStateWithResponseShape[];
+					}>;
+					skills: Array<{
+						id: string;
+						name: string;
+						description: string | null;
+						governance: "auto" | "propose" | "none";
+					}>;
+					commands: Array<{
+						id: string;
+						name: string;
+						description: string | null;
+					}>;
+					excluded: {
+						builtinTools: number;
+						teachingDocs: number;
+					};
+				};
+				meta: object;
+			}>;
+			createVerb: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					toolName: string;
+					verbName: string;
+					method: "POST" | "GET" | "DELETE" | "PUT" | "PATCH";
+					pathTemplate: string;
+					description?: string | undefined;
+					query?: Record<string, string | string[]> | undefined;
+					body?: Record<string, unknown> | undefined;
+					responseShape?: {
+						collectionPath?: string | undefined;
+						collectionAs?: string | undefined;
+						item?: Record<string, string> | undefined;
+						scalar?: Record<string, string> | undefined;
+						headers?: Record<string, string> | undefined;
+					} | undefined;
+					parameters?: Record<string, unknown> | undefined;
+					workspaceId?: string | undefined;
+				};
+				output: {
+					verbName: string;
+					toolId: string;
+					toolName: string;
+					id: `${string}-${string}-${string}-${string}-${string}`;
+					status: "proposed";
+					proposalId: string;
+				} | {
+					verbName: string;
+					toolId: string;
+					toolName: string;
+					id: string;
+					status: "created";
+					proposalId?: undefined;
 				};
 				meta: object;
 			}>;
@@ -21959,7 +22080,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 			list: import("@trpc/server").TRPCQueryProcedure<{
 				input: void;
-				output: Capability[];
+				output: RegistryCapability[];
 				meta: object;
 			}>;
 		}>>;

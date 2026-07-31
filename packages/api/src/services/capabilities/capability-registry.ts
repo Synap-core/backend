@@ -55,7 +55,17 @@ import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface CapabilityRegistryContext {
-  workspaceId: string;
+  /**
+   * The workspace lens, or `null` for POD ALTITUDE — the brick catalogue read
+   * with no workspace selected. `null` narrows honestly rather than failing:
+   * pod-wide tools/commands (workspace_id IS NULL) plus the caller's own
+   * pod/user-scoped skills; workspace-scoped rows are simply not in view.
+   *
+   * IMPORTANT for callers: a non-null value is a LENS, not an authorization.
+   * Any door that lets the CALLER choose it must verify membership first
+   * (`getWorkspaceRole`) — the predicates below trust it.
+   */
+  workspaceId: string | null;
   userId: string;
 }
 
@@ -71,6 +81,40 @@ function toolKindToCapabilityKind(kind: string): CapabilityKind {
       return "tool";
   }
 }
+
+/**
+ * A verb read-model row PLUS the declarative subset's `responseShape` — the
+ * projection of what a provider verb RETURNS.
+ *
+ * WHY it is declared here and not on `CapabilityVerbState` (@synap/playbooks):
+ * `responseShape` only exists for verbs backed by a `declarative` skill (it is
+ * a `providerSpec` field, applied at execute time by `execute-provider-verb.ts`).
+ * The registry is the only place that joins a verb to its backing skill's spec,
+ * so it is the only place that can project it. Additive + optional: every
+ * existing consumer typed against `CapabilityVerbState` still compiles.
+ */
+export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbState {
+  /**
+   * The declarative verb's output contract — which fields the shaped result
+   * carries and where they come from in the raw HTTP response. Present ONLY for
+   * a provider verb whose backing declarative skill declares one; absent for
+   * builtin verbs, verbs with no backing spec, and specs with no `responseShape`.
+   * A brick can therefore state what it returns, not just what it takes.
+   */
+  responseShape?: ProviderVerbSpec["responseShape"];
+}
+
+/**
+ * The registry's own capability row: the shared `Capability` contract with the
+ * two fields this module actually emits but that the shared contract does not
+ * declare — the extended verb rows (above) and `runnable` (skill lifecycle).
+ * Assignable to `Capability` in both directions, so no consumer changes.
+ */
+export type RegistryCapability = Omit<Capability, "verbs"> & {
+  verbs?: CapabilityVerbStateWithResponseShape[];
+  /** Skill lifecycle: false for an inactive/errored skill (not launchable). */
+  runnable?: boolean;
+};
 
 /** Coerce a loosely-typed jsonb input schema into the contract shape. */
 function asInputSchema(value: unknown): Record<string, unknown> {
@@ -164,30 +208,32 @@ export function deriveProviderVerbParamsSchema(
  * from their Zod validator, provider verbs from the requiring declarative skill's
  * `providerSpec` (looked up by verb id = skill name in `providerSpecByName`).
  */
-function buildVerbStates(
+export function buildVerbStates(
   catalog: ToolVerbCatalogEntry[] | null | undefined,
   grant: { execMode: ExecMode } | undefined,
   toolKind: string,
   providerSpecByName: Map<string, ProviderVerbSpec>,
   backingSkillExecutableByName: Map<string, boolean>
-): CapabilityVerbState[] {
+): CapabilityVerbStateWithResponseShape[] {
   if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
   return catalog.map((v) => {
+    const spec =
+      toolKind === "provider" ? providerSpecByName.get(v.id) : undefined;
     const paramsSchema =
       toolKind === "builtin"
         ? deriveBuiltinVerbParamsSchema(v.id)
-        : toolKind === "provider"
-          ? (() => {
-              const spec = providerSpecByName.get(v.id);
-              return spec ? deriveProviderVerbParamsSchema(spec) : undefined;
-            })()
+        : spec
+          ? deriveProviderVerbParamsSchema(spec)
           : undefined;
     return {
       ...v,
       granted,
       effectiveExecMode: grant ? grant.execMode : v.govDefault,
       ...(paramsSchema ? { paramsSchema } : {}),
+      // What this verb RETURNS — read off the same declarative spec the executor
+      // applies (`execute-provider-verb.ts`), never re-derived or fabricated.
+      ...(spec?.responseShape ? { responseShape: spec.responseShape } : {}),
       // A tool verb is only a real action when its backing skill can clear the
       // execute door's lifecycle + approval gates. The tool row's own approval
       // is not enough: executeCapability resolves and gates this skill.
@@ -277,15 +323,19 @@ const DEFAULT_QUERY_LIMIT = 20;
 export async function listCapabilities(
   ctx: CapabilityRegistryContext,
   opts?: ListCapabilitiesOptions
-): Promise<Capability[]> {
+): Promise<RegistryCapability[]> {
   const db = await getDb();
 
   // ── Tools ──────────────────────────────────────────────────────────────────
+  // Pod altitude (workspaceId === null) sees pod-wide rows only — no workspace
+  // branch, so no chance of an unbound `eq(...)` against a missing lens.
   const toolRows = await db
     .select()
     .from(tools)
     .where(
-      or(isNull(tools.workspaceId), eq(tools.workspaceId, ctx.workspaceId))
+      ctx.workspaceId
+        ? or(isNull(tools.workspaceId), eq(tools.workspaceId, ctx.workspaceId))
+        : isNull(tools.workspaceId)
     );
 
   // Resolve each tool's active grant so the verb catalog can be surfaced WITH
@@ -330,7 +380,10 @@ export async function listCapabilities(
   const skillRows = await db
     .select()
     .from(skills)
-    .where(visibleSkillsWhere(ctx.userId, ctx.workspaceId));
+    // Owner-aware by construction: `visibleSkillsWhere` ANDs `skills.userId` on
+    // the user tier and re-ANDs the membership lens on the workspace tier. At
+    // pod altitude it degrades to `pod OR (user AND userId = caller)`.
+    .where(visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined));
 
   // verb id (= skill name) → providerSpec, for declarative skills only. A tool's
   // verb catalog entry id mirrors the requiring skill's name (see deriveToolVerbs
@@ -389,7 +442,7 @@ export async function listCapabilities(
     for (const r of rows) connectedProviderToolIds.add(r.toolId);
   }
 
-  const toolCaps: Capability[] = toolRows.map((row) => ({
+  const toolCaps: RegistryCapability[] = toolRows.map((row) => ({
     kind: toolKindToCapabilityKind(row.kind),
     id: row.id,
     name: row.name,
@@ -419,7 +472,7 @@ export async function listCapabilities(
   // runnable capability — map them to "teaching-doc" so flat-list consumers
   // (e.g. the MCP `runnable` verb projection) don't offer them as an action.
   // Still LISTED: discoverability is the point, just honestly typed.
-  const skillCaps: Capability[] = skillRows.map((row) =>
+  const skillCaps: RegistryCapability[] = skillRows.map((row) =>
     row.kind === "instruction"
       ? {
           kind: "teaching-doc",
@@ -450,10 +503,12 @@ export async function listCapabilities(
     .select()
     .from(intelligenceCommands)
     .where(
-      or(
-        isNull(intelligenceCommands.workspaceId),
-        eq(intelligenceCommands.workspaceId, ctx.workspaceId)
-      )
+      ctx.workspaceId
+        ? or(
+            isNull(intelligenceCommands.workspaceId),
+            eq(intelligenceCommands.workspaceId, ctx.workspaceId)
+          )
+        : isNull(intelligenceCommands.workspaceId)
     );
 
   const commandCaps: Capability[] = commandRows.map((row) => ({
@@ -474,7 +529,7 @@ export async function listCapabilities(
   // fetchISNativeCapabilities above. Graceful: [] when the IS is unreachable.
   const builtinCaps: Capability[] = await fetchISNativeCapabilities();
 
-  const all: Capability[] = [
+  const all: RegistryCapability[] = [
     ...builtinCaps,
     ...toolCaps,
     ...skillCaps,
@@ -525,7 +580,8 @@ export interface SectionedCapabilities {
     description: string | null;
     governance: "auto" | "propose" | "none";
     connection?: { required: boolean; connected: boolean; provider: string };
-    verbs: CapabilityVerbState[];
+    /** Verb rows incl. the declarative subset's `responseShape` (what it returns). */
+    verbs: CapabilityVerbStateWithResponseShape[];
   }>;
   /** Standalone runnable skills — a skill that BACKS a provider verb is shown
    *  under that integration instead, never duplicated here. */
@@ -545,7 +601,9 @@ export interface SectionedCapabilities {
  * Fold the flat `Capability[]` read-model into the agent-facing sectioned view.
  * Pure — no I/O — so it is unit-testable and reusable by any door.
  */
-export function sectionCapabilities(caps: Capability[]): SectionedCapabilities {
+export function sectionCapabilities(
+  caps: RegistryCapability[]
+): SectionedCapabilities {
   const integrations = new Map<
     string,
     SectionedCapabilities["integrations"][number]
@@ -608,8 +666,7 @@ export function sectionCapabilities(caps: Capability[]): SectionedCapabilities {
 
     if (c.kind === "skill") {
       // An unlaunchable skill (inactive/error) is management noise here.
-      if ((c as Capability & { runnable?: boolean }).runnable === false)
-        continue;
+      if (c.runnable === false) continue;
       if (!skillByName.has(c.name)) {
         skillByName.set(c.name, {
           id: c.id,

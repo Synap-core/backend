@@ -21,8 +21,14 @@ describe("capability registry skill visibility", () => {
   );
 
   it("does not list an owner's workspace-A skill under workspace B", () => {
-    expect(skillRead).toContain(
-      ".where(visibleSkillsWhere(ctx.userId, ctx.workspaceId))"
+    // The lens must be the CALLER's identity + the CALLER's selected workspace,
+    // threaded into the one shared predicate — never a hand-rolled owner check.
+    // `ctx.workspaceId` is now `string | null` (pod altitude), so the argument
+    // is normalized to `undefined`; `visibleSkillsWhere` then degrades to
+    // `pod OR (user AND userId = caller)` — still owner-aware, still no
+    // workspace-scoped rows.
+    expect(skillRead).toMatch(
+      /\.where\(\s*visibleSkillsWhere\(\s*ctx\.userId,\s*ctx\.workspaceId(\s*\?\?\s*undefined)?\s*\)\s*\)/
     );
     expect(skillRead).not.toContain("eq(skills.userId, ctx.userId)");
   });

@@ -98,4 +98,53 @@ describe("sectionCapabilities", () => {
     ]);
     expect(out.skills.map((s) => s.name)).toEqual(["ingest_message"]);
   });
+
+  /**
+   * A brick must be able to state what it RETURNS, not only what it takes.
+   * `responseShape` is projected onto declarative provider verbs by
+   * `buildVerbStates`; the sectioned view is the door a catalogue reads, so it
+   * must carry it through — including across the duplicate-integration merge,
+   * where verbs are rebuilt into a Map.
+   */
+  it("carries a verb's responseShape through to the sectioned view", () => {
+    const shaped = {
+      ...verb("linear_list_issues", true),
+      responseShape: {
+        collectionPath: "data.issues",
+        item: { title: "title" },
+      },
+    };
+    const out = sectionCapabilities([
+      cap({ kind: "tool", name: "linear", verbs: [shaped] }),
+    ]);
+    expect(out.integrations[0].verbs[0].responseShape).toEqual({
+      collectionPath: "data.issues",
+      item: { title: "title" },
+    });
+  });
+
+  it("keeps responseShape when deduping the same integration installed twice", () => {
+    const ungranted = verb("linear_list_issues", false);
+    const grantedWithShape = {
+      ...verb("linear_list_issues", true),
+      responseShape: { collectionPath: "data.issues" },
+    };
+    const out = sectionCapabilities([
+      cap({ kind: "tool", name: "linear", verbs: [ungranted] }),
+      cap({ kind: "tool", name: "linear", verbs: [grantedWithShape] }),
+    ]);
+    // The granted copy wins the merge — and brings its output contract with it.
+    expect(out.integrations[0].verbs).toHaveLength(1);
+    expect(out.integrations[0].verbs[0].granted).toBe(true);
+    expect(out.integrations[0].verbs[0].responseShape).toEqual({
+      collectionPath: "data.issues",
+    });
+  });
+
+  it("leaves responseShape undefined for a verb with no declared output contract", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "tool", name: "linear", verbs: [verb("linear_ping")] }),
+    ]);
+    expect(out.integrations[0].verbs[0].responseShape).toBeUndefined();
+  });
 });

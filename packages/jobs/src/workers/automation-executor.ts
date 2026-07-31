@@ -1421,7 +1421,9 @@ export async function executeOutputStep(
 
     case "channel_message": {
       // The output channel is CONTEXT-DERIVED, resolved in this precedence:
-      //   (a) explicit `config.channelId` → use it.
+      //   (a) explicit `config.channelId` → use it, but ONLY after re-validating
+      //       it is reachable from the automation's OWN workspace at RUN time
+      //       (see the scope check below).
       //   (b) `config.channelEntityRef` (a template expr deep-resolved above to an
       //       ENTITY ID) → the find-or-create INTERNAL channel bound to that entity
       //       (ensureEntityChannel EXCLUDES the external client-comms surface —
@@ -1439,6 +1441,58 @@ export async function executeOutputStep(
 
       if (!content) {
         throw new Error("channel_message requires content");
+      }
+
+      // (a) SCOPE RE-VALIDATION — the security boundary for the ONLY branch that
+      // takes a caller-supplied destination verbatim. Every other branch derives
+      // the channel from run context through a ChannelRepository resolver, and
+      // `channelEntityRef` already proves its entity is in scope before
+      // resolving; an explicit `config.channelId` skipped ALL of that and the
+      // sink (`insertChannelMessage`) is a bare insert with no visibility check,
+      // so a definition naming an arbitrary channel uuid posted into it at run
+      // time under the owner's identity — surviving lens changes, workspace
+      // moves and membership revocation, because nothing re-checked.
+      //
+      // The predicate is the WRITE twin of the `messages_query` READ check
+      // (`executeMessagesQueryStep`): the channel must live in the automation's
+      // own workspace or be pod-wide. POD-WIDE AUTOMATION (`workspaceId` null at
+      // run time — the cron scheduler dispatches `automation.workspaceId`
+      // verbatim, which the payload type under-declares as `string`) names no
+      // workspace, so NULL must NOT mean "anything goes": it is restricted to
+      // pod-wide channels only. Such a flow reaches a workspace channel via the
+      // context-derived paths (`channelEntityRef` / `channelType`), which
+      // resolve against the run's own scope.
+      //
+      // FAIL LOUD rather than falling through to the run channel: a destination
+      // the author cannot legitimately reach is a wiring fault, not a transient,
+      // and silently redirecting the content to a different channel would hide
+      // the misconfiguration while still delivering the payload somewhere the
+      // author did not name. This matches the two sibling cross-workspace
+      // guards in this file (`messages_query`, `session_update`), which both
+      // throw. The "targetless channel_message NEVER errors" contract is
+      // untouched — it is about the absence of a target, not an out-of-scope one.
+      if (channelId) {
+        const inScopeChannel = await db.query.channels.findFirst({
+          where: and(
+            eq(channels.id, channelId),
+            workspaceId
+              ? or(
+                  eq(channels.workspaceId, workspaceId),
+                  isNull(channels.workspaceId)
+                )
+              : isNull(channels.workspaceId)
+          ),
+          columns: { id: true },
+        });
+        if (!inScopeChannel) {
+          throw new Error(
+            `channel_message: channel ${channelId} is not reachable from ${
+              workspaceId
+                ? `workspace ${workspaceId}`
+                : "this pod-wide automation (pod-wide automations may only target pod-wide channels; use channelEntityRef or channelType instead)"
+            } — refusing to post. Re-select the destination channel on this automation.`
+          );
+        }
       }
 
       // (b) CONTEXT-DERIVED override: an entity ref (deep-resolved above to a
