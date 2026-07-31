@@ -7,6 +7,7 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { API_TYPES_SCHEMA_HASH } from "../../../generated-schema-hash.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import type { HubHono } from "./_shared.js";
 
@@ -21,7 +22,11 @@ export function registerHealthRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "OK",
-        schema: z.object({ status: z.string(), service: z.string() }),
+        schema: z.object({
+          status: z.string(),
+          service: z.string(),
+          schemaHash: z.string(),
+        }),
       },
     },
   });
@@ -29,5 +34,11 @@ export function registerHealthRoutes(app: HubHono): void {
   /**
    * GET /health (no auth)
    */
-  app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
+  app.get("/health", (c) =>
+    c.json({
+      status: "ok",
+      service: "hub-protocol",
+      schemaHash: API_TYPES_SCHEMA_HASH,
+    })
+  );
 }
