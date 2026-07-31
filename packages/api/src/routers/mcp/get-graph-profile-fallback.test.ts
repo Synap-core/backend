@@ -14,14 +14,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // vi.hoisted so these mock fns exist when the hoisted vi.mock factory runs
 // (vi.mock is lifted above plain const declarations → TDZ otherwise).
-const { resolveByName, resolveProfileByName } = vi.hoisted(() => ({
-  resolveByName: vi.fn(),
-  resolveProfileByName: vi.fn(),
-}));
+const { getObjectGraph, resolveByName, resolveProfileByName } = vi.hoisted(
+  () => ({
+    getObjectGraph: vi.fn(),
+    resolveByName: vi.fn(),
+    resolveProfileByName: vi.fn(),
+  })
+);
 
 // Stub the object-graph service so we drive the fallback branch directly.
 vi.mock("../../services/object-graph/graph-service.js", () => ({
-  getObjectGraph: vi.fn(),
+  getObjectGraph,
   resolveByName,
   resolveProfileByName,
 }));
@@ -94,5 +97,64 @@ describe("synap_get_graph — profile/role fallback", () => {
     expect(payload.error).toBe("No entity named 'zzznope'");
     expect(payload.candidates).toBeUndefined();
     expect(payload.hint).toBeUndefined();
+  });
+});
+
+describe("synap_get_graph — unknown id contract (found:false, never a phantom node)", () => {
+  // TRIPWIRE: `getObjectGraph` signals a genuinely-unknown/invisible id via
+  // `found: false` on its `GraphEnvelope` (graph-service.ts's `hydrated !==
+  // undefined || neighbors.length > 0` check) — the adapter's id-path branch
+  // for synap_get_graph must turn that into a plain "No <kind> with id '<id>'"
+  // error, exactly mirroring the name-not-found branch above. If this ever
+  // regresses (envelope returned as-is), the caller gets back a fabricated
+  // node named by its own UUID instead of an honest not-found.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("an id that resolves to found:false returns 'No <kind> with id' — not the raw envelope", async () => {
+    getObjectGraph.mockResolvedValue({
+      object: { kind: "capability", id: "missing-id", name: "(not found)" },
+      neighbors: [],
+      counts: { total: 0, byKind: {}, byVia: {} },
+      found: false,
+    });
+
+    const result = await executeMCPToolViaHubProtocol(
+      "synap_get_graph",
+      { type: "capability", id: "missing-id" },
+      "user-1",
+      ["mcp.read"]
+    );
+
+    const payload = parse(result);
+    expect(payload.error).toBe("No capability with id 'missing-id'");
+    expect(payload.object).toBeUndefined();
+    expect(payload.neighbors).toBeUndefined();
+  });
+
+  it("an id that resolves to found:true returns the envelope itself", async () => {
+    getObjectGraph.mockResolvedValue({
+      object: { kind: "capability", id: "real-id", name: "ExaSearch" },
+      neighbors: [],
+      counts: { total: 0, byKind: {}, byVia: {} },
+      found: true,
+    });
+
+    const result = await executeMCPToolViaHubProtocol(
+      "synap_get_graph",
+      { type: "capability", id: "real-id" },
+      "user-1",
+      ["mcp.read"]
+    );
+
+    const payload = parse(result);
+    expect(payload.error).toBeUndefined();
+    expect(payload.found).toBe(true);
+    expect(payload.object).toEqual({
+      kind: "capability",
+      id: "real-id",
+      name: "ExaSearch",
+    });
   });
 });
