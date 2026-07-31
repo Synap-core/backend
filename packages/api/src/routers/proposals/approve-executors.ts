@@ -140,7 +140,9 @@ function reportApproved(
  */
 export async function dispatchExternalOnce(
   proposalId: string,
-  send: () => Promise<{ delivered: boolean }>,
+  send: () => Promise<
+    { delivered: false; reason?: string } | { delivered: true }
+  >,
   executor: Pick<typeof db, "update"> = db
 ): Promise<void> {
   const [claim] = await executor
@@ -158,16 +160,16 @@ export async function dispatchExternalOnce(
     });
   }
 
-  const { delivered } = await send(); // ambiguous throw → claim kept, propagates
+  const result = await send(); // ambiguous throw → claim kept, propagates
 
-  if (!delivered) {
+  if (!result.delivered) {
     await executor
       .update(proposals)
       .set({ externalDispatchedAt: null })
       .where(eq(proposals.id, proposalId));
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: "Couldn't apply — the external action was not dispatched.",
+      message: `Couldn't apply — ${result.reason ?? "the external action was not dispatched"}.`,
     });
   }
 }
@@ -3427,7 +3429,7 @@ export function registerApproveExecutors(): void {
             },
             "capability.run executor: skill not found"
           );
-          return { delivered: false };
+          return { delivered: false, reason: runOutcome.message };
         }
         if (runOutcome.kind === "deny") {
           logger.warn(
@@ -3438,7 +3440,7 @@ export function registerApproveExecutors(): void {
             },
             "capability.run executor: run denied"
           );
-          return { delivered: false };
+          return { delivered: false, reason: runOutcome.reason };
         }
         if (runOutcome.kind === "error") {
           // The run REACHED its handler and FAILED (code sandbox success:false, or
@@ -3454,7 +3456,7 @@ export function registerApproveExecutors(): void {
             },
             "capability.run executor: run failed"
           );
-          return { delivered: false };
+          return { delivered: false, reason: runOutcome.message };
         }
         runResult = runOutcome.result;
         return { delivered: true };
@@ -3944,7 +3946,7 @@ export function registerApproveExecutors(): void {
               },
               "capability/run executor: skill/command run not delivered"
             );
-            return { delivered: false };
+            return { delivered: false, reason };
           }
           skillRunResult = runOutcome.result;
           return { delivered: true };
