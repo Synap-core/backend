@@ -60,6 +60,7 @@ import {
   type ProviderVerbSpec,
 } from "@synap/database";
 import {
+  getUserAccessibleWorkspaceIds,
   getUserMemberWorkspaceIds,
   logger,
   verifyWorkspaceAccess,
@@ -880,6 +881,23 @@ export async function executeMCPToolViaHubProtocol(
         limit: (args.limit as number) || undefined,
       });
       return ok(result);
+    }
+
+    case "synap_template_health": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const { listWorkspaceTemplateHealth } =
+        await import("../../services/template-health.js");
+      // Access-scope FIRST (same predicate the Hub `/workspaces` projection
+      // uses), then let the service report health only for what it's handed —
+      // it never widens the lens, so a foreign workspace can't leak.
+      const wsIds = await getUserAccessibleWorkspaceIds(userId);
+      const all = await listWorkspaceTemplateHealth(wsIds);
+      const rows = args.driftedOnly ? all.filter((w) => w.drifted) : all;
+      return ok({
+        workspaces: rows,
+        driftedCount: all.filter((w) => w.drifted).length,
+        total: all.length,
+      });
     }
 
     case "synap_diagnose": {

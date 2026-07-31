@@ -22,6 +22,10 @@ import {
   type AgentMetadata,
 } from "@synap/database";
 import { sql as drizzleSql } from "drizzle-orm";
+import {
+  isTemplateDrifted,
+  resolveLatestVersionsBySlug,
+} from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
 
@@ -519,6 +523,17 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         countRows.map((row) => [row.workspaceId, row.count])
       );
       const podEntityCount = podCountRows[0]?.count ?? 0;
+
+      // TEMPLATE HEALTH — resolve the latest catalog version for every installed
+      // slug ONCE, then compute drift via the shared `template-health` authority
+      // (so the CLI/MCP/browser all agree). Cache-cold slug → `drifted:false`.
+      const latestBySlug = await resolveLatestVersionsBySlug(
+        rows.map(
+          (w) =>
+            (w.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
+        )
+      );
+
       const list = rows
         .filter((workspace) => workspace.archivedAt == null)
         .map((workspace) => {
@@ -527,6 +542,17 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             unknown
           >;
           const membership = membershipByWorkspace.get(workspace.id);
+          const pkgSlug =
+            typeof settings.packageSlug === "string"
+              ? settings.packageSlug
+              : null;
+          const installedVersion =
+            typeof settings.packageVersion === "string"
+              ? settings.packageVersion
+              : null;
+          const latestVersion = pkgSlug
+            ? (latestBySlug.get(pkgSlug) ?? null)
+            : null;
           return {
             id: workspace.id,
             name: workspace.name,
@@ -541,11 +567,20 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             sourceRoles: settings.sourceRoles ?? {},
             defaultSources: settings.defaultSources ?? {},
             appId: settings.appId ?? null,
-            packageSlug: settings.packageSlug ?? null,
-            // CP content-hash stamp ("h-<hash>") — the CLI/agent install door
-            // (Hub `/packages/apply`) needs this to detect template drift
-            // client-side, mirroring `packageSlug`'s projection above.
-            packageVersion: settings.packageVersion ?? null,
+            packageSlug: pkgSlug,
+            // CP content-hash stamp ("h-<hash>") of the version this workspace
+            // is CURRENTLY on. Kept for back-compat; drift is now computed
+            // server-side below so clients don't re-derive it.
+            packageVersion: installedVersion,
+            // ── TemplateHealth (computed server-side, plan Wave 1) ──
+            // `latestVersion` = the freshest catalog version for this slug;
+            // `drifted` = the single truthful "an update is available" signal
+            // (see `isTemplateDrifted`). `attached`/`stamped` make the tri-state
+            // the CLI already distinguishes explicit rather than client-derived.
+            latestVersion,
+            attached: pkgSlug != null,
+            stamped: installedVersion != null,
+            drifted: isTemplateDrifted(installedVersion, latestVersion),
             // Additive-pack installs (profile/view/bento) never set
             // `packageSlug` — they carry their own identity here instead. The
             // CLI unions this with `packageSlug` to match the browser's

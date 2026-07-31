@@ -62,7 +62,14 @@ const automationDataContractItemBase = {
   nodeIds: z.array(z.string().min(1)).min(1),
 };
 
-const automationDataContractSchema = z
+/**
+ * The ONE definition of the "Gets data / Stores in Synap / Reacts & sends"
+ * contract every AI-authored automation must carry on `metadata.dataContract`.
+ * Exported so the MCP tool surface can DERIVE its published JSON Schema from it
+ * (`routers/mcp/tools/index.ts`) instead of hand-copying a second shape that
+ * would silently drift from the gate that rejects it.
+ */
+export const automationDataContractSchema = z
   .object({
     version: z.literal(1),
     mode: z.enum(["ingest", "react", "ingest_and_react"]),
@@ -117,6 +124,28 @@ const automationDataContractSchema = z
     }
   });
 
+/**
+ * Flatten a contract parse failure into one actionable sentence.
+ *
+ * The mode↔sections rule lives in a `.superRefine`, which JSON Schema cannot
+ * express — so the schema the MCP tool publishes accepts payloads this parse
+ * rejects. That is tolerable ONLY if the rejection says which rule was broken;
+ * otherwise the agent is told it omitted the thing it provided.
+ */
+function describeContractIssues(error: z.ZodError): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const issue of error.issues) {
+    const where = issue.path.length > 0 ? issue.path.join(".") : "contract";
+    const line = `${where}: ${issue.message}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    parts.push(line);
+    if (parts.length === 4) break; // enough to act on; not a wall of text
+  }
+  return parts.join("; ");
+}
+
 function validateAiAutomationDataContract(
   input: {
     agentUserId?: string;
@@ -139,8 +168,15 @@ function validateAiAutomationDataContract(
     context.addIssue({
       code: "custom",
       path: ["metadata", "dataContract"],
+      // ABSENT and INVALID are different failures and must read differently.
+      // Saying "requires an explicit contract" to an agent that SENT one — it
+      // merely tripped the mode↔sections rule, which the published JSON Schema
+      // cannot express — makes it retry the identical payload forever. Carry the
+      // real reasons through.
       message:
-        "AI-authored automations require an explicit Gets data / Stores in Synap / Reacts & sends contract.",
+        input.metadata?.dataContract === undefined
+          ? "AI-authored automations require an explicit Gets data / Stores in Synap / Reacts & sends contract."
+          : `The Gets data / Stores in Synap / Reacts & sends contract is invalid: ${describeContractIssues(parsed.error)}`,
     });
     return;
   }
@@ -1197,8 +1233,11 @@ export const automationsRouter = router({
         if (!submittedContract.success) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message:
-              "The submitted Gets data / Stores in Synap / Reacts & sends contract is invalid.",
+            // Name the broken rule — see `describeContractIssues`. "is invalid"
+            // alone gives an agent nothing to correct.
+            message: `The submitted Gets data / Stores in Synap / Reacts & sends contract is invalid: ${describeContractIssues(
+              submittedContract.error
+            )}`,
           });
         }
         const contractIssues = findUnknownDataContractNodeReferences(

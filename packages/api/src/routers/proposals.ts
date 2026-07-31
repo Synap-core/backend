@@ -95,6 +95,7 @@ import {
 } from "./proposals/graph-dispositions.js";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
+import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -381,12 +382,7 @@ function canReviewProposal(args: {
  * the UI can render "You can approve because…" instead of a bare checkmark.
  */
 export type ReviewAuthorityReason =
-  | "pod-wide"
-  | "owner"
-  | "agent-owner"
-  | "admin"
-  | "editor"
-  | "not-authorized";
+  "pod-wide" | "owner" | "agent-owner" | "admin" | "editor" | "not-authorized";
 
 /**
  * Format the reviewer-authority reason from the EXACT inputs `canReviewProposal`
@@ -446,8 +442,7 @@ async function computeCanReviewApproval(args: {
   userId: string;
 }): Promise<{ allowed: boolean; reason: ReviewAuthorityReason }> {
   const { proposal, userId } = args;
-  if (!proposal.workspaceId)
-    return { allowed: true, reason: "pod-wide" };
+  if (!proposal.workspaceId) return { allowed: true, reason: "pod-wide" };
 
   const [ws] = await db
     .select({ settings: workspaces.settings })
@@ -2730,11 +2725,15 @@ export const proposalsRouter = router({
       // human owner sees "admin"/"editor" here rather than "agent-owner" — a
       // known, additive-only gap (display never disagrees with the `viewerCanReview`
       // boolean, which has the same limitation today).
-      const viewerCanReviewReasonById = new Map<string, ReviewAuthorityReason>();
+      const viewerCanReviewReasonById = new Map<
+        string,
+        ReviewAuthorityReason
+      >();
       for (const r of rows) {
         const data = r.data as Record<string, unknown> | null;
         const hasWorkspace = !!r.workspaceId;
-        const policy = policyByWs.get(r.workspaceId ?? "") ?? "owner_and_admins";
+        const policy =
+          policyByWs.get(r.workspaceId ?? "") ?? "owner_and_admins";
         const memberRole = roleByWs.get(r.workspaceId ?? "");
         const isOwner = data?.sourceId === reviewerId;
         const allowed = !hasWorkspace
@@ -2781,7 +2780,8 @@ export const proposalsRouter = router({
       const itemsWithPermission = items.map((it) => {
         const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
         const revertable = revertableById.get(it.id) ?? false;
-        const reasonCode = viewerCanReviewReasonById.get(it.id) ?? "not-authorized";
+        const reasonCode =
+          viewerCanReviewReasonById.get(it.id) ?? "not-authorized";
         // "not-authorized: requires admin" — the enum code plus which authority
         // would satisfy this workspace's policy, spelled out for a display string
         // that doesn't need its own lookup table on the frontend.
@@ -3223,6 +3223,14 @@ export const proposalsRouter = router({
         proposalId: z.string(),
         comment: z.string().optional(),
         /**
+         * Slice 5 — approval bound to the reviewed version. The
+         * `revisionHistory.length` the reviewer's client last saw. When present
+         * and it no longer matches the stored proposal (a concurrent revise
+         * landed after they looked), approve throws CONFLICT before any
+         * mutation. Omit ⇒ today's behavior (no version assertion).
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
+        /**
          * Phase 2 — per-item accept/edit/reject on a COMPOSITE (graph) proposal.
          * Keyed by item ref: an entity's `entities[].ref` ($opN / op `ref`) or a
          * relation's `$relN` ordinal. Optional — absent ⇒ apply-all (today's
@@ -3312,6 +3320,12 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       }
+
+      // Slice 5: approval bound to the reviewed version. If the client passed
+      // the revision count it last saw, reject (CONFLICT) when a concurrent
+      // revise has since changed the proposal — BEFORE any mutation, so a stale
+      // approval never materializes. Omitted ⇒ no-op (backward-compatible).
+      assertReviewedRevision(input.expectedRevision, proposal.revisionHistory);
 
       // Ownership check: who can approve this proposal? (Shared computation;
       // this door's failure behavior — throw FORBIDDEN — is unchanged.)

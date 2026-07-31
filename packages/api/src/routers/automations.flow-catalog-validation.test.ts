@@ -384,4 +384,35 @@ describe("automations flow catalog validation", () => {
     expect(result.status).toBe("created");
     expect(h.insertValues).toHaveLength(1);
   });
+
+  // A payload that is VALID per the published MCP JSON Schema but breaks the
+  // mode↔sections `.superRefine` (JSON Schema cannot express that rule). The old
+  // message told the agent it had omitted the contract it had just sent, so it
+  // would retry the identical shape forever. The rejection must name the rule
+  // and must NOT claim the contract is absent.
+  it("names the broken rule when an agent sends a present-but-invalid contract", async () => {
+    let message = "";
+    try {
+      await caller().create({
+        workspaceId: WORKSPACE_ID,
+        name: "Mode mismatch",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: UNKNOWN_REFERENCES_FLOW,
+        agentUserId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        metadata: {
+          // `ingest` requires stores > 0 AND reacts === 0; this carries the
+          // reverse, so it parses structurally and fails only the refinement.
+          dataContract: { ...VALID_DATA_CONTRACT, mode: "ingest" as const },
+        },
+      });
+      throw new Error("expected the create to reject");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("mode");
+    expect(message).not.toContain("require an explicit");
+    expect(h.insertValues).toHaveLength(0);
+  });
 });

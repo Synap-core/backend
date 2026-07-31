@@ -9722,6 +9722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalId: string;
 				comment?: string | undefined;
+				expectedRevision?: number | undefined;
 				dispositions?: Record<string, {
 					status: "reject" | "accept" | "edit";
 					reasonCode?: "other" | "wrong_entity" | "duplicate" | "wrong_kind_or_facet" | "wrong_link_type" | "wrong_workspace" | "bad_data" | "not_relevant" | undefined;

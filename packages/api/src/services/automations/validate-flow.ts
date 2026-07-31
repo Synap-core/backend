@@ -667,7 +667,18 @@ function collectLoopBindingRefs(data: unknown): string[] {
       const head = v.split("|")[0];
       const re = /\{\{\s*loop\.([A-Za-z0-9_$]+)/g;
       let m: RegExpExecArray | null;
-      while ((m = re.exec(head)) !== null) found.add(m[1]);
+      let matched = false;
+      while ((m = re.exec(head)) !== null) {
+        found.add(m[1]);
+        matched = true;
+      }
+      // The executor's own detector is the LOOSER `/\{\{\s*loop\./` — it fires on
+      // `{{loop.}}` or `{{loop.-x}}`, which this stricter segment pattern does
+      // not. Without this fallback a malformed reference passes save-time
+      // validation and then throws at RUN time, which is exactly the class of
+      // failure the loop rules were added to eliminate. Report it under the
+      // empty segment so it surfaces as `loop_ref_unknown_path`.
+      if (!matched && /\{\{\s*loop\./.test(head)) found.add("");
       return;
     }
     if (Array.isArray(v)) {

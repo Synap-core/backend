@@ -9,6 +9,7 @@
  */
 
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import {
   composeCapabilityBrief,
   MAIN_CAPABILITY_TOOLS,
@@ -16,6 +17,66 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { automationDataContractSchema } from "../../automations.js";
+
+/**
+ * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
+ * `automationDataContractSchema` — the very schema `automations.create` runs to
+ * reject an AI-authored automation that lacks a contract. Deriving (rather than
+ * hand-copying a second shape here) is the point: the published tool surface and
+ * the gate that rejects it cannot drift apart.
+ *
+ * Prose descriptions are layered on top — they carry meaning the Zod shape can't,
+ * and prose is not what drifts. `$schema` is stripped: MCP `inputSchema` property
+ * entries are plain sub-schemas, and gen-manifest.ts needs a deterministic
+ * committed diff.
+ */
+function buildAutomationDataContractJsonSchema(): Record<string, unknown> {
+  const derived = z.toJSONSchema(automationDataContractSchema, {
+    io: "input",
+  }) as Record<string, unknown>;
+  delete derived.$schema;
+
+  const properties = derived.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const describeItems = (section: string, description: string): void => {
+    const items = (properties[section] as { items?: Record<string, unknown> })
+      .items;
+    const nodeIds = (
+      items?.properties as Record<string, Record<string, unknown>> | undefined
+    )?.nodeIds;
+    if (nodeIds) {
+      nodeIds.description =
+        "Ids of the nodes in THIS submission's flowDefinition that implement this line. Every id MUST match a node you are sending in flowDefinition.nodes — an unknown id is rejected. Reference the trigger node by its own id.";
+    }
+    properties[section].description = description;
+  };
+
+  derived.description =
+    "REQUIRED for every agent-authored automation (this tool always is): the explicit user-facing promise behind the flow. The create door validates it and REJECTS the automation without it. Declare what enters the process (gets), what is written into Synap (stores), and what reacts or sends afterward (reacts) — and wire each line to the flow nodes that implement it.";
+  (properties.mode as Record<string, unknown>).description =
+    "Must match which sections are populated: 'ingest' → stores non-empty and reacts EMPTY; 'react' → reacts non-empty and stores EMPTY; 'ingest_and_react' → BOTH non-empty.";
+  (properties.version as Record<string, unknown>).description =
+    "Contract format version. Always 1.";
+  describeItems(
+    "gets",
+    "Gets data — what ENTERS the process. At least one entry. `origin` says where it comes from ('external' = a connected third party, 'synap' = a pod event, 'schedule' = a cron tick, 'manual' = an on-demand trigger); `event` names it (e.g. 'entity.create.completed', 'gmail.message.received'); `provider` names the third party when origin is 'external'. Never claim external intake unless that inbound connection actually exists."
+  );
+  describeItems(
+    "stores",
+    "Stores in Synap — what this automation WRITES into the pod. `resource` names what is stored (e.g. 'entity:contact', 'knowledge'). Empty array when the automation stores nothing."
+  );
+  describeItems(
+    "reacts",
+    "Reacts & sends — what happens AFTER, beyond storing. `kind` is 'synap_write' | 'external_write' | 'notification' | 'agent' | 'process'; `destination` names the target (channel, provider, agent). Empty array when the automation only ingests."
+  );
+  return derived;
+}
+
+const AUTOMATION_DATA_CONTRACT_JSON_SCHEMA =
+  buildAutomationDataContractJsonSchema();
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
@@ -173,6 +234,28 @@ export const tools = {
               default: "pending",
             },
             limit: { type: "number", default: 20 },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "synap_template_health",
+        annotations: {
+          title: "Template health",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "See which workspaces are behind their template — the pod's template-update radar. Returns, per workspace: `attached` (installed from a template), `stamped` (has a recorded version), `installedVersion`, `latestVersion` (freshest in the catalog), and `drifted` (an update is available). Use it to answer \"do any of my workspaces have template updates?\" then apply one with the `market.install`/update door for that slug. Read-only; scoped to the caller's own workspaces.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            driftedOnly: {
+              type: "boolean",
+              description:
+                "When true, return only workspaces with an available update (drifted). Default false = every workspace with its health.",
+              default: false,
+            },
           },
           required: [],
         },
@@ -1951,7 +2034,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger and a flowDefinition ({ nodes, edges }). For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1994,14 +2077,19 @@ export const tools = {
             },
             metadata: {
               type: "object",
-              description: "Optional extra metadata bag.",
+              description:
+                "Metadata bag. REQUIRED here: `dataContract` — this tool is always agent-authored, and automations.create REJECTS an agent-authored automation whose metadata carries no valid contract. Any other keys you add are kept as-is.",
+              properties: {
+                dataContract: AUTOMATION_DATA_CONTRACT_JSON_SCHEMA,
+              },
+              required: ["dataContract"],
             },
             workspaceId: {
               type: "string",
               description: "Optional workspace to scope to (default pod-wide).",
             },
           },
-          required: ["name", "triggerType", "flowDefinition"],
+          required: ["name", "triggerType", "flowDefinition", "metadata"],
         },
       },
       {

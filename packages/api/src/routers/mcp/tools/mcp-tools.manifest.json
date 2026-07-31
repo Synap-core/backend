@@ -144,6 +144,26 @@
       }
     },
     {
+      "name": "synap_template_health",
+      "annotations": {
+        "title": "Template health",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "See which workspaces are behind their template — the pod's template-update radar. Returns, per workspace: `attached` (installed from a template), `stamped` (has a recorded version), `installedVersion`, `latestVersion` (freshest in the catalog), and `drifted` (an update is available). Use it to answer \"do any of my workspaces have template updates?\" then apply one with the `market.install`/update door for that slug. Read-only; scoped to the caller's own workspaces.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "driftedOnly": {
+            "type": "boolean",
+            "description": "When true, return only workspaces with an available update (drifted). Default false = every workspace with its health.",
+            "default": false
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "synap_diagnose",
       "annotations": {
         "title": "Diagnose",
@@ -1837,7 +1857,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger and a flowDefinition ({ nodes, edges }). For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
+      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1889,14 +1909,153 @@
           },
           "metadata": {
             "type": "object",
-            "description": "Optional extra metadata bag."
+            "description": "Metadata bag. REQUIRED here: `dataContract` — this tool is always agent-authored, and automations.create REJECTS an agent-authored automation whose metadata carries no valid contract. Any other keys you add are kept as-is.",
+            "properties": {
+              "dataContract": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1,
+                    "description": "Contract format version. Always 1."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["ingest", "react", "ingest_and_react"],
+                    "description": "Must match which sections are populated: 'ingest' → stores non-empty and reacts EMPTY; 'react' → reacts non-empty and stores EMPTY; 'ingest_and_react' → BOTH non-empty."
+                  },
+                  "gets": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "nodeIds": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": "Ids of the nodes in THIS submission's flowDefinition that implement this line. Every id MUST match a node you are sending in flowDefinition.nodes — an unknown id is rejected. Reference the trigger node by its own id."
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": ["external", "synap", "schedule", "manual"]
+                        },
+                        "event": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        },
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        }
+                      },
+                      "required": ["id", "label", "nodeIds", "origin", "event"]
+                    },
+                    "description": "Gets data — what ENTERS the process. At least one entry. `origin` says where it comes from ('external' = a connected third party, 'synap' = a pod event, 'schedule' = a cron tick, 'manual' = an on-demand trigger); `event` names it (e.g. 'entity.create.completed', 'gmail.message.received'); `provider` names the third party when origin is 'external'. Never claim external intake unless that inbound connection actually exists."
+                  },
+                  "stores": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "nodeIds": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": "Ids of the nodes in THIS submission's flowDefinition that implement this line. Every id MUST match a node you are sending in flowDefinition.nodes — an unknown id is rejected. Reference the trigger node by its own id."
+                        },
+                        "resource": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["id", "label", "nodeIds", "resource"]
+                    },
+                    "description": "Stores in Synap — what this automation WRITES into the pod. `resource` names what is stored (e.g. 'entity:contact', 'knowledge'). Empty array when the automation stores nothing."
+                  },
+                  "reacts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "nodeIds": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": "Ids of the nodes in THIS submission's flowDefinition that implement this line. Every id MUST match a node you are sending in flowDefinition.nodes — an unknown id is rejected. Reference the trigger node by its own id."
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "synap_write",
+                            "external_write",
+                            "notification",
+                            "agent",
+                            "process"
+                          ]
+                        },
+                        "destination": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["id", "label", "nodeIds", "kind"]
+                    },
+                    "description": "Reacts & sends — what happens AFTER, beyond storing. `kind` is 'synap_write' | 'external_write' | 'notification' | 'agent' | 'process'; `destination` names the target (channel, provider, agent). Empty array when the automation only ingests."
+                  }
+                },
+                "required": ["version", "mode", "gets", "stores", "reacts"],
+                "description": "REQUIRED for every agent-authored automation (this tool always is): the explicit user-facing promise behind the flow. The create door validates it and REJECTS the automation without it. Declare what enters the process (gets), what is written into Synap (stores), and what reacts or sends afterward (reacts) — and wire each line to the flow nodes that implement it."
+              }
+            },
+            "required": ["dataContract"]
           },
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace to scope to (default pod-wide)."
           }
         },
-        "required": ["name", "triggerType", "flowDefinition"]
+        "required": ["name", "triggerType", "flowDefinition", "metadata"]
       }
     },
     {

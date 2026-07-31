@@ -231,7 +231,25 @@ async function saveDraftAutomation(
       flowDefinition as (typeof automations.$inferInsert)["flowDefinition"],
     status: "draft",
     metadata: {
-      createdVia: "ai" as const,
+      // NO `createdVia: "ai"`. That stamp is not a "an LLM touched this" label —
+      // it is set ONLY by `automations.create` when the create ran the
+      // AI-authorship gate and VALIDATED a `metadata.dataContract`
+      // (routers/automations.ts). `automations.update` relies on that:
+      // it refuses any update to a `createdVia:"ai"` row that has no contract.
+      //
+      // This worker is a raw insert — `createdBy: "system"`, no agentUserId, no
+      // proposal, no gate — and it has no contract to write: the IS
+      // `/api/automations/detect-patterns` response (PatternProposal) carries
+      // none, and synthesizing one here would fabricate exactly the user-facing
+      // promise the contract exists to state honestly (the flow can even be
+      // empty, so its `nodeIds` would reference nothing). So stamping "ai" forged
+      // an invariant this row cannot satisfy, and made every row this worker has
+      // ever written permanently un-updatable — including the activation the
+      // draft exists for.
+      //
+      // `suggestedByPattern` + `patternConfidence` below are the honest,
+      // dedicated signal for "the nightly detector suggested this"; surfaces
+      // wanting an AI badge should read those, not `createdVia`.
       suggestedByPattern: true,
       patternConfidence: proposal.confidence,
       description: proposal.description,
