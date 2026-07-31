@@ -14,7 +14,14 @@ import {
   WireAutomationSchema,
 } from "./_codecs/automation.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  resolveActingContext,
+  resolveActorId,
+  type HubHono,
+} from "./_shared.js";
 import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { TRPCError } from "@trpc/server";
@@ -171,12 +178,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     > | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
-    // reaches getCaller OR the re-supplied createAutomation input (input wins).
-    let workspaceId: string | null | undefined;
+    // reaches resolveActingContext, getCaller, OR the re-supplied
+    // createAutomation input (input wins).
+    let clampedWorkspaceId: string | null | undefined;
     try {
-      workspaceId = getConfinedWorkspace(
+      clampedWorkspaceId = getConfinedWorkspace(
         c,
         (body.workspaceId as string | null | undefined) ?? null
       );
@@ -192,16 +199,35 @@ export function registerAutomationsRoutes(app: HubHono): void {
       return c.json({ error: "triggerType is required" }, 400);
     }
 
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const resolvedAgentUserId =
+      (body.agentUserId as string | undefined) ?? ctxAgentUserId;
+    const actorResolution = await resolveActorId(
+      resolvedAgentUserId,
+      acting.userId
+    );
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+
     try {
       const caller = await getCaller(c, {
-        userId,
-        workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         sourceMessageId: (body.sourceMessageId as string) ?? null,
       });
       const result = await caller.automations.createAutomation({
-        userId,
-        agentUserId: body.agentUserId as string | undefined,
-        workspaceId,
+        userId: acting.userId,
+        agentUserId: resolvedAgentUserId,
+        workspaceId: acting.workspaceId,
         sourceMessageId: body.sourceMessageId as string | undefined,
         name: body.name as string,
         description: body.description as string | undefined,
@@ -330,12 +356,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
       string,
       unknown
     >;
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
-    // reaches getCaller OR the re-supplied triggerAutomation input.
-    let workspaceId: string | null | undefined;
+    // reaches resolveActingContext, getCaller, OR the re-supplied
+    // triggerAutomation input.
+    let clampedWorkspaceId: string | null | undefined;
     try {
-      workspaceId = getConfinedWorkspace(
+      clampedWorkspaceId = getConfinedWorkspace(
         c,
         (body.workspaceId as string | null | undefined) ?? null
       );
@@ -344,21 +370,37 @@ export function registerAutomationsRoutes(app: HubHono): void {
         return c.json({ error: err.message }, 403);
       throw err;
     }
-    if (!userId) {
-      return c.json({ error: "userId is required" }, 400);
-    }
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
     // body.agentUserId wins; fall back to the auto-injected context value so
     // an IS call that authenticates as the agent (rather than passing the
     // field explicitly) still routes through the governance gate.
     const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-    const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+    const resolvedAgentUserId =
+      (body.agentUserId as string | undefined) ?? ctxAgentUserId;
+    const actorResolution = await resolveActorId(
+      resolvedAgentUserId,
+      acting.userId
+    );
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
 
     try {
-      const caller = await getCaller(c, { userId, workspaceId });
+      const caller = await getCaller(c, {
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
+      });
       const result = await caller.automations.triggerAutomation({
-        userId,
-        workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         id: c.req.param("automationId"),
         payload: body.payload as Record<string, unknown> | undefined,
         ...(resolvedAgentUserId
@@ -452,12 +494,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
       string,
       unknown
     >;
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
-    // reaches getCaller OR the re-supplied activateAutomation input.
-    let workspaceId: string | null | undefined;
+    // reaches resolveActingContext, getCaller, OR the re-supplied
+    // activateAutomation input.
+    let clampedWorkspaceId: string | null | undefined;
     try {
-      workspaceId = getConfinedWorkspace(
+      clampedWorkspaceId = getConfinedWorkspace(
         c,
         body.workspaceId as string | undefined
       );
@@ -466,15 +508,27 @@ export function registerAutomationsRoutes(app: HubHono): void {
         return c.json({ error: err.message }, 403);
       throw err;
     }
-    if (!userId || !workspaceId) {
-      return c.json({ error: "userId and workspaceId are required" }, 400);
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
     }
 
     try {
-      const caller = await getCaller(c, { userId, workspaceId });
+      const caller = await getCaller(c, {
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
+      });
       const result = await caller.automations.activateAutomation({
-        userId,
-        workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         id: c.req.param("automationId"),
       });
       return c.json(result);
@@ -498,12 +552,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
       string,
       unknown
     >;
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
-    // reaches getCaller OR the re-supplied pauseAutomation input.
-    let workspaceId: string | null | undefined;
+    // reaches resolveActingContext, getCaller, OR the re-supplied
+    // pauseAutomation input.
+    let clampedWorkspaceId: string | null | undefined;
     try {
-      workspaceId = getConfinedWorkspace(
+      clampedWorkspaceId = getConfinedWorkspace(
         c,
         body.workspaceId as string | undefined
       );
@@ -512,15 +566,27 @@ export function registerAutomationsRoutes(app: HubHono): void {
         return c.json({ error: err.message }, 403);
       throw err;
     }
-    if (!userId || !workspaceId) {
-      return c.json({ error: "userId and workspaceId are required" }, 400);
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
     }
 
     try {
-      const caller = await getCaller(c, { userId, workspaceId });
+      const caller = await getCaller(c, {
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
+      });
       const result = await caller.automations.pauseAutomation({
-        userId,
-        workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         id: c.req.param("automationId"),
       });
       return c.json(result);

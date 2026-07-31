@@ -59,50 +59,6 @@ const ALLOWLIST: Record<string, string> = {
     "SAFE — inlines the same session/service-key identity pin as attachEntityRoute; predates the helper.",
   "entities.ts::/files":
     "SAFE — both the multipart and JSON branches inline the same session/service-key identity pin before use; predates the helper.",
-
-  // ── VULN — pre-existing, SAME bug class as the profiles.ts fix ────────────
-  // Verified by direct read: `const userId = (body.userId as string) ?? (c.get("userId") as string)`
-  // (or equivalent) — body.userId is preferred OVER the authenticated identity,
-  // so ANY caller can attribute the write to an arbitrary userId. Inventoried at
-  // the time this tripwire was added; NOT fixed here (out of firewall for the
-  // profiles.ts security wave). Needs its own follow-up fix, not a permanent
-  // exemption — remove the entry once resolveActingContext is wired in.
-  "automations.ts::/automations/create":
-    "VULN (pre-existing, same class) — `body.userId ?? ctx.userId` lets a caller attribute automation-create to any userId. Needs follow-up fix.",
-  "automations.ts::/automations/:automationId/trigger":
-    "VULN (pre-existing, same class) — same body.userId-over-ctx pattern on trigger. Needs follow-up fix.",
-  "automations.ts::/automations/:automationId/activate":
-    "VULN (pre-existing, same class) — same pattern on activate. Needs follow-up fix.",
-  "automations.ts::/automations/:automationId/pause":
-    "VULN (pre-existing, same class) — same pattern on pause. Needs follow-up fix.",
-  "cell-instances.ts::/cell-instances":
-    "VULN (pre-existing, same class) — `body.userId ?? ctx.userId`. Needs follow-up fix.",
-  "cell-instances.ts::/cell-instances/html":
-    "VULN (pre-existing, same class) — `body.userId ?? ctx.userId`. Needs follow-up fix.",
-  "channels.ts::/channels/by-context":
-    "VULN (pre-existing, same class) — body.userId threaded into the write without acting-context resolution. Needs follow-up fix.",
-  "channels.ts::/channels/trigger-ai":
-    "VULN (pre-existing, same class) — body.userId required field trusted directly. Needs follow-up fix.",
-  "channels.ts::/channels/:channelId/bind":
-    "VULN (pre-existing, same class) — body.userId trusted directly. Needs follow-up fix.",
-  "commands.ts::/commands/execute":
-    "VULN (pre-existing, same class) — `body.userId ?? ctx.userId`. Needs follow-up fix.",
-  "notifications.ts::/notifications":
-    "VULN (pre-existing, same class) — body.userId required + trusted directly. Needs follow-up fix.",
-  "proactive.ts::/proactive/post":
-    "VULN (pre-existing, same class) — body.userId trusted directly. Needs follow-up fix.",
-  "relation-defs.ts::/relation-defs":
-    "VULN (pre-existing, same class) — `body.userId as string`, no ctx fallback check at all. Needs follow-up fix.",
-  "threads.ts::linkEntityRoute":
-    "VULN (pre-existing, same class) — body.userId trusted directly. Needs follow-up fix.",
-  "threads.ts::linkDocumentRoute":
-    "VULN (pre-existing, same class) — body.userId trusted directly. Needs follow-up fix.",
-  "threads.ts::createThreadRoute":
-    "VULN (pre-existing, same class) — body.userId trusted directly (channels.userId comparison + write attribution). Needs follow-up fix.",
-  "threads.ts::postMessageRoute":
-    "VULN (pre-existing, same class) — body.userId trusted directly (sourceUserId). Needs follow-up fix.",
-  "widget-definitions.ts::/widget-definitions":
-    "VULN (pre-existing, same class) — `body.userId ?? ctx.userId`. Needs follow-up fix.",
 };
 
 function balancedEnd(

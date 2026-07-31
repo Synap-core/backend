@@ -359,11 +359,13 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
     }
     const body = parsed.data;
-    // Item 3 Part 3: positively pin a bound service key to its workspace.
-    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
-    let workspaceId: string | undefined;
+    // Item 3 Part 3: positively pin a bound service key to its workspace
+    // BEFORE it reaches resolveActingContext. A mismatching bound key throws
+    // FORBIDDEN → surface 403, not a blanket 500.
+    let clampedWorkspaceId: string | undefined;
     try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? undefined;
+      clampedWorkspaceId =
+        getConfinedWorkspace(c, body.workspaceId) ?? undefined;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -372,13 +374,22 @@ export function registerChannelsRoutes(app: HubHono): void {
         );
       throw err;
     }
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const workspaceId = acting.workspaceId ?? undefined;
     try {
       const caller = await getCaller(c, {
         workspaceId,
-        userId: body.userId,
+        userId: acting.userId,
       });
       const result = await caller.channels.resolveOrCreateChannel({
-        userId: body.userId,
+        userId: acting.userId,
         workspaceId,
         channelType: "thread",
         contextObjectId: body.contextObjectId,
@@ -477,12 +488,13 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
     }
 
-    // Item 3 Part 3: positively pin a bound service key to its workspace.
-    // body.workspaceId is a required non-null string here (guarded above).
-    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
-    let workspaceId: string;
+    // Item 3 Part 3: positively pin a bound service key to its workspace
+    // BEFORE it reaches resolveActingContext. body.workspaceId is a required
+    // non-null string here (guarded above). A mismatching bound key throws
+    // FORBIDDEN → surface 403, not a blanket 500.
+    let clampedWorkspaceId: string;
     try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+      clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -491,14 +503,26 @@ export function registerChannelsRoutes(app: HubHono): void {
         );
       throw err;
     }
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+    const workspaceId = acting.workspaceId;
     try {
       const caller = await getCaller(c, {
         workspaceId,
-        userId: body.userId,
+        userId: acting.userId,
       });
       const result = await caller.channels.triggerAI({
         channelId: body.channelId,
-        userId: body.userId,
+        userId: acting.userId,
         workspaceId,
         systemPromptOverride: body.systemPromptOverride,
         skillId: body.skillId,
@@ -715,14 +739,15 @@ export function registerChannelsRoutes(app: HubHono): void {
         400
       );
     }
-    // Confine the workspace to the bound service key (Item 3 — mismatch → 403).
-    let workspaceId: string;
+    // Confine the workspace to the bound service key (Item 3 — mismatch → 403)
+    // BEFORE it reaches resolveActingContext.
+    let clampedWorkspaceId: string;
     try {
       const confined = getConfinedWorkspace(c, body.workspaceId);
       if (!confined) {
         return c.json({ error: "workspaceId is required" }, 400);
       }
-      workspaceId = confined;
+      clampedWorkspaceId = confined;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN") {
         return c.json(
@@ -732,9 +757,21 @@ export function registerChannelsRoutes(app: HubHono): void {
       }
       throw err;
     }
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+    const workspaceId = acting.workspaceId;
     try {
       const result = await proposeChannelBind({
-        userId: body.userId,
+        userId: acting.userId,
         workspaceId,
         channelId,
         contextObjectType: body.contextObjectType ?? "entity",

@@ -13,7 +13,14 @@ import {
 } from "./_codecs/widget.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import { TRPCError } from "@trpc/server";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerWidgetDefinitionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -89,16 +96,32 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
       unknown
     > | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // SERVICE-KEY CONFINEMENT (Item 3): inner `widgetDefinitions.upsertWidgetDef`
     // is a scopedProcedure that reads `input.workspaceId` (NOT ctx) — positive-pin
-    // the value BEFORE it flows to the caller ctx and the input (mismatching body
-    // → 403). The input is re-supplied via the `...body` spread below, so the
-    // clamped value must OVERRIDE `body.workspaceId` there.
-    const workspaceId = getConfinedWorkspace(
-      c,
-      (body.workspaceId as string | null | undefined) ?? null
-    );
+    // the value BEFORE it flows to resolveActingContext, the caller ctx, and the
+    // input (mismatching body → 403). The input is re-supplied via the `...body`
+    // spread below, so the clamped value must OVERRIDE `body.workspaceId` there.
+    let clampedWorkspaceId: string | null | undefined;
+    try {
+      clampedWorkspaceId = getConfinedWorkspace(
+        c,
+        (body.workspaceId as string | null | undefined) ?? null
+      );
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId;
     try {
       const caller = await getCaller(c, {
         userId,

@@ -32,6 +32,7 @@ import { randomUUID } from "crypto";
 import {
   hasScope,
   logger,
+  resolveActingContext,
   resolveActorId,
   verifyWorkspaceAccess,
   verifyWorkspaceReadAccess,
@@ -186,13 +187,17 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
-    const userId = (body.userId ?? (c.get("userId") as string)) as string;
-    // Item 3 Part 3: positively pin a bound service key to its workspace.
-    // The body schema requires workspaceId (z.string().uuid()).
-    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
-    let workspaceId: string;
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    //
+    // Item 3 Part 3: positively pin a bound service key to its workspace
+    // BEFORE it reaches resolveActingContext. The body schema requires
+    // workspaceId (z.string().uuid()). A mismatching bound key throws
+    // FORBIDDEN → surface 403, not a blanket 500.
+    let clampedWorkspaceId: string;
     try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+      clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -201,9 +206,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         );
       throw err;
     }
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
-      return c.json({ error: "Access denied to workspace" }, 403);
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
     }
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId;
     const actorResolution = await resolveActorId(body.agentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
@@ -293,13 +305,17 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
-    const userId = (body.userId ?? (c.get("userId") as string)) as string;
-    // Item 3 Part 3: positively pin a bound service key to its workspace.
-    // The body schema requires workspaceId (z.string().uuid()).
-    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
-    let workspaceId: string;
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    //
+    // Item 3 Part 3: positively pin a bound service key to its workspace
+    // BEFORE it reaches resolveActingContext. The body schema requires
+    // workspaceId (z.string().uuid()). A mismatching bound key throws
+    // FORBIDDEN → surface 403, not a blanket 500.
+    let clampedWorkspaceId: string;
     try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+      clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -308,9 +324,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         );
       throw err;
     }
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
-      return c.json({ error: "Access denied to workspace" }, 403);
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
     }
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId;
     const actorResolution = await resolveActorId(body.agentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);

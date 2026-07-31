@@ -57,6 +57,8 @@ import {
   getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
+  resolveActingContext,
+  resolveActorId,
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -289,6 +291,10 @@ export function registerThreadsRoutes(app: HubHono): void {
         description: "Link result",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
         content: { "application/json": { schema: ErrorSchema } },
@@ -314,9 +320,20 @@ export function registerThreadsRoutes(app: HubHono): void {
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
     try {
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (governed-agent-write → ungoverned-
+      // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+      const acting = await resolveActingContext(c, { userId: body.userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const actorResolution = await resolveActorId(
+        body.agentUserId,
+        acting.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
       const caller = await getCaller(c);
       const result = await caller.linking.linkEntity({
-        userId: body.userId,
+        userId: acting.userId,
         ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
         threadId,
         entityId: body.entityId,
@@ -358,6 +375,10 @@ export function registerThreadsRoutes(app: HubHono): void {
         description: "Link result",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
         content: { "application/json": { schema: ErrorSchema } },
@@ -383,9 +404,20 @@ export function registerThreadsRoutes(app: HubHono): void {
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
     try {
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (governed-agent-write → ungoverned-
+      // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+      const acting = await resolveActingContext(c, { userId: body.userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const actorResolution = await resolveActorId(
+        body.agentUserId,
+        acting.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
       const caller = await getCaller(c);
       const result = await caller.linking.linkDocument({
-        userId: body.userId,
+        userId: acting.userId,
         ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
         threadId,
         documentId: body.documentId,
@@ -443,6 +475,10 @@ export function registerThreadsRoutes(app: HubHono): void {
           "application/json": { schema: CreateThreadResponseSchema },
         },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
         content: { "application/json": { schema: ErrorSchema } },
@@ -462,12 +498,13 @@ export function registerThreadsRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
-    // Item 3 Part 3: positively pin a bound service key to its workspace.
-    // CreateThreadRequestSchema requires workspaceId (z.string()).
-    // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
-    let workspaceId: string;
+    // Item 3 Part 3: positively pin a bound service key to its workspace
+    // BEFORE it reaches resolveActingContext. CreateThreadRequestSchema
+    // requires workspaceId (z.string()). A mismatching bound key throws
+    // FORBIDDEN → surface 403, not a blanket 500.
+    let clampedWorkspaceId: string;
     try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
+      clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId) as string;
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -476,6 +513,19 @@ export function registerThreadsRoutes(app: HubHono): void {
         );
       throw err;
     }
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId;
 
     const hasExternalKey =
       typeof body.externalSource === "string" &&
@@ -490,7 +540,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           where: and(
             eq(channels.externalSource, body.externalSource as string),
             eq(channels.externalId, body.externalId as string),
-            eq(channels.userId, body.userId)
+            eq(channels.userId, userId)
           ),
           columns: { id: true, title: true },
         });
@@ -513,7 +563,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           .insert(channels)
           .values({
             id: threadId,
-            userId: body.userId,
+            userId,
             workspaceId,
             title: body.title ?? "New Thread",
             parentChannelId: body.parentChannelId ?? null,
@@ -872,6 +922,13 @@ export function registerThreadsRoutes(app: HubHono): void {
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
     try {
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (governed-agent-write → ungoverned-
+      // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+      const acting = await resolveActingContext(c, { userId: body.userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const userId = acting.userId;
+
       const { randomUUID } = await import("crypto");
       const msgId = randomUUID();
       // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
@@ -882,7 +939,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         channelId: threadId,
         role: body.role as MessageRole,
         content: body.content,
-        userId: body.userId,
+        userId,
         hash,
         ...(body.metadata ? { metadata: body.metadata } : {}),
       });
@@ -897,7 +954,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           channelId: threadId,
           userMessageId: msgId,
           content: body.content,
-          sourceUserId: body.userId,
+          sourceUserId: userId,
           agentType: dispatchAgentType,
         });
       }

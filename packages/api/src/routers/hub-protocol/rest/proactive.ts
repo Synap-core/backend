@@ -2,6 +2,7 @@
  * Hub Protocol REST — proactive (IS → user's proactive feed channel)
  */
 
+import { TRPCError } from "@trpc/server";
 import { db, messages, eq, and, gte } from "@synap/database";
 
 import { routeSignal } from "../../../utils/delivery-router.js";
@@ -14,7 +15,12 @@ import {
   ProactivePostResponseSchema,
 } from "./_codecs/proactive.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerProactiveRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -81,14 +87,36 @@ export function registerProactiveRoutes(app: HubHono): void {
       );
     }
 
-    // Item 3 Part 3: confine a bound service key to its workspace. Routed
-    // through both sinks below (feed channel + signal router) and the event
-    // metadata, so a confined key can never post into another workspace.
-    // body.workspaceId is a required string (guarded above); the clamp returns
-    // the bound ws or the value (never null/undefined for a non-null input), so
-    // the `?? body.workspaceId` fallback only preserves the `string` type.
-    const workspaceId =
-      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+    // Item 3 Part 3: confine a bound service key to its workspace BEFORE it
+    // reaches resolveActingContext. Routed through both sinks below (feed
+    // channel + signal router) and the event metadata, so a confined key can
+    // never post into another workspace. body.workspaceId is a required
+    // string (guarded above); the clamp returns the bound ws or the value
+    // (never null/undefined for a non-null input), so the `?? body.workspaceId`
+    // fallback only preserves the `string` type.
+    let clampedWorkspaceId: string;
+    try {
+      clampedWorkspaceId =
+        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "FORBIDDEN")
+        return c.json({ error: err.message }, 403);
+      throw err;
+    }
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: clampedWorkspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId;
 
     const VALID_PROACTIVE_TYPES = [
       "insight",
@@ -119,10 +147,7 @@ export function registerProactiveRoutes(app: HubHono): void {
       // ── Rate limiting (DB-backed) ───────────────────────────────────────────
       const { ensureProactiveFeedChannel } =
         await import("../../../utils/personal-channel.js");
-      const channel = await ensureProactiveFeedChannel(
-        body.userId,
-        workspaceId
-      );
+      const channel = await ensureProactiveFeedChannel(userId, workspaceId);
 
       const now = new Date();
       const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -168,7 +193,7 @@ export function registerProactiveRoutes(app: HubHono): void {
       const result = await routeSignal({
         domain: "ai_insight",
         content: body.content,
-        userId: body.userId,
+        userId,
         workspaceId,
         proactiveType: body.proactiveType as ProactiveMessageType,
         metadata: {
@@ -185,7 +210,7 @@ export function registerProactiveRoutes(app: HubHono): void {
         try {
           const { logEvent } = await import("../../../lib/event-helpers.js");
           await logEvent(
-            body.userId,
+            userId,
             "ai.nudge.posted",
             {
               channelId: channel.id,
@@ -206,10 +231,7 @@ export function registerProactiveRoutes(app: HubHono): void {
 
       return c.json({ posted: result.delivered, ...result });
     } catch (err) {
-      logger.error(
-        { err, userId: body.userId, workspaceId },
-        "proactive/post failed"
-      );
+      logger.error({ err, userId, workspaceId }, "proactive/post failed");
       return c.json(
         {
           posted: false,

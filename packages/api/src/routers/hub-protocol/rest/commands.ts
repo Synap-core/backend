@@ -19,7 +19,13 @@ import {
   WireCommandSchema,
 } from "./_codecs/command.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  resolveActorId,
+  type HubHono,
+} from "./_shared.js";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
 const _commandRateLimiter = new Map<
@@ -357,10 +363,10 @@ export function registerCommandsRoutes(app: HubHono): void {
     // Rate limit: 10 commands per workspace per minute.
     // Item 3 Part 3: confine a bound service key to its workspace first, so the
     // rate-limit key and the downstream permission check both use the pinned ws.
-    const workspaceId =
+    const clampedWorkspaceId =
       getConfinedWorkspace(c, body.workspaceId as string | undefined) ??
       undefined;
-    if (workspaceId && !checkCommandRateLimit(workspaceId)) {
+    if (clampedWorkspaceId && !checkCommandRateLimit(clampedWorkspaceId)) {
       return c.json(
         {
           error:
@@ -374,14 +380,31 @@ export function registerCommandsRoutes(app: HubHono): void {
     const command = body.command as string;
     const workingDir = (body.workingDir as string) || undefined;
     const timeoutMs = Math.min(Number(body.timeoutMs) || 30_000, 300_000);
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
-    const agentUserId = body.agentUserId as string | undefined;
     const sourceMessageId = body.sourceMessageId as string | undefined;
     const reason = body.reason as string | undefined;
 
-    if (!command || !userId) {
-      return c.json({ error: "command and userId are required" }, 400);
+    if (!command) {
+      return c.json({ error: "command is required" }, 400);
     }
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const userId = acting.userId;
+    const workspaceId = acting.workspaceId ?? undefined;
+
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const resolvedAgentUserId =
+      (body.agentUserId as string | undefined) ?? ctxAgentUserId;
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const agentUserId = resolvedAgentUserId;
 
     // Reject commands with shell metacharacters that could bypass checks
     if (/`[^`]*`/.test(command) || /\$\(/.test(command)) {

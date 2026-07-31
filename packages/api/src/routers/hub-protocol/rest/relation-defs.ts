@@ -4,7 +4,13 @@
 
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerRelationDefsRoutes(app: HubHono): void {
   /**
@@ -43,9 +49,7 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       unknown
     > | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
-    const userId = (body.userId as string) ?? "";
-    const workspaceId = (body.workspaceId as string) ?? "";
-    if (!workspaceId || !body.slug || !body.displayName) {
+    if (!body.workspaceId || !body.slug || !body.displayName) {
       return c.json(
         { error: "workspaceId, slug, and displayName are required" },
         400
@@ -56,16 +60,30 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       // scopedProcedure that reads `input.workspaceId` and rebuilds its OWN
       // (unconfined) caller ctx from it — the getCaller ctx-clamp does not reach
       // it. Positive-pin the value fed to BOTH the caller ctx and the input
-      // (mismatching body → 403).
+      // (mismatching body → 403), BEFORE it reaches resolveActingContext.
       const confinedWorkspaceId =
-        getConfinedWorkspace(c, workspaceId) ?? workspaceId;
+        getConfinedWorkspace(c, body.workspaceId as string) ??
+        (body.workspaceId as string);
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (governed-agent-write → ungoverned-
+      // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+      const acting = await resolveActingContext(c, {
+        userId: body.userId as string | undefined,
+        workspaceId: confinedWorkspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (!acting.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
+      const userId = acting.userId;
+      const workspaceId = acting.workspaceId;
       const caller = await getCaller(c, {
         userId,
-        workspaceId: confinedWorkspaceId,
+        workspaceId,
       });
       const result = await caller.relationDefs.create({
         userId,
-        workspaceId: confinedWorkspaceId,
+        workspaceId,
         slug: body.slug as string,
         displayName: body.displayName as string,
         description: body.description as string | undefined,
