@@ -375,16 +375,67 @@ function canReviewProposal(args: {
 }
 
 /**
+ * A short, DISPLAY-ONLY code (+ the enum it's drawn from) explaining WHY
+ * `canReviewProposal`'s verdict came out the way it did. Never a decision
+ * input — purely narrates the SAME boolean the ladder already computed, so
+ * the UI can render "You can approve because…" instead of a bare checkmark.
+ */
+export type ReviewAuthorityReason =
+  | "pod-wide"
+  | "owner"
+  | "agent-owner"
+  | "admin"
+  | "editor"
+  | "not-authorized";
+
+/**
+ * Format the reviewer-authority reason from the EXACT inputs `canReviewProposal`
+ * gates on, plus its own verdict — so the explanation can never disagree with
+ * the decision. `isAgentOwner` distinguishes "you proposed this yourself"
+ * (owner) from "you own the agent that proposed this" (agent-owner); callers
+ * that don't resolve agent ownership (e.g. the batched `list` computation)
+ * simply omit it and get "owner" for both.
+ */
+function formatReviewAuthorityReason(args: {
+  hasWorkspace: boolean;
+  policy: ProposalApprovalPolicy;
+  memberRole: string | undefined;
+  isOwner: boolean;
+  isAgentOwner?: boolean;
+  allowed: boolean;
+}): ReviewAuthorityReason {
+  if (!args.hasWorkspace) return "pod-wide";
+  if (!args.allowed) return "not-authorized";
+  if (args.isAgentOwner) return "agent-owner";
+  if (args.isOwner) return "owner";
+  const isAdmin = args.memberRole === "admin" || args.memberRole === "owner";
+  if (isAdmin) return "admin";
+  return "editor";
+}
+
+/**
+ * Human-readable suffix for a "not-authorized" verdict (which authority WOULD
+ * satisfy this workspace's policy) — the "requires admin" half of the spec'd
+ * `"not-authorized: requires admin"` display string.
+ */
+function reviewAuthorityRequirement(policy: ProposalApprovalPolicy): string {
+  return policy === "any_editor" ? "editor" : "admin";
+}
+
+/**
  * "May this user APPROVE this proposal?" — the shared, byte-identical
  * authorization COMPUTATION that `approve` and `batchApprove` used to inline
- * verbatim (settings → policy → membership → `canReviewProposal`). Returns a
- * boolean; each caller keeps its OWN failure behavior — `approve` throws
- * FORBIDDEN, `batchApprove` records `{success:false}` and continues the batch —
- * so this only removes the duplicated computation and changes NO observable
- * denial behavior. Pod-wide proposals (no workspaceId) are decided by the
- * caller, so this returns `true` (mirrors the inline `if (proposal.workspaceId)`
- * guard skipping the check entirely). NOT the same as `assertCanReviewProposal`
- * below, which serves the reject/reopen path and throws with a different verb.
+ * verbatim (settings → policy → membership → `canReviewProposal`). Returns
+ * `{ allowed, reason }`: `allowed` is the SAME boolean as before (each caller
+ * keeps its OWN failure behavior — `approve` throws FORBIDDEN, `batchApprove`
+ * records `{success:false}` and continues the batch — so this changes NO
+ * observable denial behavior); `reason` is purely additive, narrating WHY, for
+ * a caller that wants to surface it (e.g. an error message or the AuthorityRow
+ * once threaded through `proposals.list`). Pod-wide proposals (no workspaceId)
+ * are decided by the caller, so this returns `{allowed:true, reason:"pod-wide"}`
+ * (mirrors the inline `if (proposal.workspaceId)` guard skipping the check
+ * entirely). NOT the same as `assertCanReviewProposal` below, which serves the
+ * reject/reopen path and throws with a different verb.
  */
 async function computeCanReviewApproval(args: {
   proposal: {
@@ -393,9 +444,10 @@ async function computeCanReviewApproval(args: {
     agentUserId?: string | null;
   };
   userId: string;
-}): Promise<boolean> {
+}): Promise<{ allowed: boolean; reason: ReviewAuthorityReason }> {
   const { proposal, userId } = args;
-  if (!proposal.workspaceId) return true;
+  if (!proposal.workspaceId)
+    return { allowed: true, reason: "pod-wide" };
 
   const [ws] = await db
     .select({ settings: workspaces.settings })
@@ -414,6 +466,7 @@ async function computeCanReviewApproval(args: {
   );
   const proposalData = proposal.data as Record<string, unknown> | null;
   let isOwner = proposalData?.sourceId === userId;
+  let isAgentOwner = false;
 
   // An agent-authored proposal carries `sourceId` = the acting agent's user
   // row, never the human's — so the direct match above can never admit the
@@ -428,13 +481,24 @@ async function computeCanReviewApproval(args: {
       .where(eq(users.id, proposal.agentUserId))
       .limit(1);
     isOwner = agent?.createdByUserId === userId;
+    isAgentOwner = isOwner;
   }
 
-  return canReviewProposal({
-    policy: policy as ProposalApprovalPolicy,
+  const resolvedPolicy = policy as ProposalApprovalPolicy;
+  const allowed = canReviewProposal({
+    policy: resolvedPolicy,
     memberRole: membership?.role,
     isOwner,
   });
+  const reason = formatReviewAuthorityReason({
+    hasWorkspace: true,
+    policy: resolvedPolicy,
+    memberRole: membership?.role,
+    isOwner,
+    isAgentOwner,
+    allowed,
+  });
+  return { allowed, reason };
 }
 
 /**
@@ -471,7 +535,7 @@ async function assertCanRetargetProposalDestination(args: {
     return;
   }
 
-  const canReviewDest = await computeCanReviewApproval({
+  const { allowed: canReviewDest } = await computeCanReviewApproval({
     proposal: {
       workspaceId: destWorkspaceId,
       data: proposal.data,
@@ -2654,17 +2718,38 @@ export const proposalsRouter = router({
       // workspaceId/data reads are compiler-checked and can't silently break if
       // enrichment ever reshapes the display payload.
       const viewerCanReviewById = new Map<string, boolean>();
+      // viewerCanReviewReason — WHY, alongside the boolean above: a short enum
+      // string (see `ReviewAuthorityReason`) an AuthorityRow can render as
+      // "You can approve because…" / "Requires a workspace admin". Derived from
+      // the EXACT SAME inputs `viewerCanReviewById` already computed per row (no
+      // extra query), via the shared `formatReviewAuthorityReason` helper the
+      // mutation-side `computeCanReviewApproval` also uses — so the reason can
+      // never disagree with the boolean. NOTE: unlike `computeCanReviewApproval`,
+      // this batched per-row pass does not resolve agent-ownership (would need an
+      // extra query per distinct `agentUserId`), so an agent-authored proposal's
+      // human owner sees "admin"/"editor" here rather than "agent-owner" — a
+      // known, additive-only gap (display never disagrees with the `viewerCanReview`
+      // boolean, which has the same limitation today).
+      const viewerCanReviewReasonById = new Map<string, ReviewAuthorityReason>();
       for (const r of rows) {
         const data = r.data as Record<string, unknown> | null;
-        viewerCanReviewById.set(
+        const hasWorkspace = !!r.workspaceId;
+        const policy = policyByWs.get(r.workspaceId ?? "") ?? "owner_and_admins";
+        const memberRole = roleByWs.get(r.workspaceId ?? "");
+        const isOwner = data?.sourceId === reviewerId;
+        const allowed = !hasWorkspace
+          ? true
+          : canReviewProposal({ policy, memberRole, isOwner });
+        viewerCanReviewById.set(r.id, allowed);
+        viewerCanReviewReasonById.set(
           r.id,
-          !r.workspaceId
-            ? true
-            : canReviewProposal({
-                policy: policyByWs.get(r.workspaceId) ?? "owner_and_admins",
-                memberRole: roleByWs.get(r.workspaceId),
-                isOwner: data?.sourceId === reviewerId,
-              })
+          formatReviewAuthorityReason({
+            hasWorkspace,
+            policy,
+            memberRole,
+            isOwner,
+            allowed,
+          })
         );
       }
       // revertable — per proposal, "would `revert` succeed for this row?"
@@ -2696,7 +2781,17 @@ export const proposalsRouter = router({
       const itemsWithPermission = items.map((it) => {
         const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
         const revertable = revertableById.get(it.id) ?? false;
-        return { ...it, viewerCanReview, revertable };
+        const reasonCode = viewerCanReviewReasonById.get(it.id) ?? "not-authorized";
+        // "not-authorized: requires admin" — the enum code plus which authority
+        // would satisfy this workspace's policy, spelled out for a display string
+        // that doesn't need its own lookup table on the frontend.
+        const viewerCanReviewReason =
+          reasonCode === "not-authorized"
+            ? `not-authorized: requires ${reviewAuthorityRequirement(
+                policyByWs.get(it.workspaceId ?? "") ?? "owner_and_admins"
+              )}`
+            : reasonCode;
+        return { ...it, viewerCanReview, viewerCanReviewReason, revertable };
       });
 
       const nextCursor =
@@ -3220,7 +3315,10 @@ export const proposalsRouter = router({
 
       // Ownership check: who can approve this proposal? (Shared computation;
       // this door's failure behavior — throw FORBIDDEN — is unchanged.)
-      const canApprove = await computeCanReviewApproval({ proposal, userId });
+      const { allowed: canApprove } = await computeCanReviewApproval({
+        proposal,
+        userId,
+      });
       if (!canApprove) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -3280,7 +3378,10 @@ export const proposalsRouter = router({
 
       // Authority — SAME ladder `approve` enforces (a revise is a pre-approval
       // edit, so it requires review authority). Pod-wide proposals skip the check.
-      const canReview = await computeCanReviewApproval({ proposal, userId });
+      const { allowed: canReview } = await computeCanReviewApproval({
+        proposal,
+        userId,
+      });
       if (!canReview) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -4245,7 +4346,7 @@ export const proposalsRouter = router({
 
           // Ownership check — SAME computation as single `approve`; this door's
           // failure behavior (record the item + continue the batch) is unchanged.
-          const canApprove = await computeCanReviewApproval({
+          const { allowed: canApprove } = await computeCanReviewApproval({
             proposal,
             userId,
           });
