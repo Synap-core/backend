@@ -41,6 +41,9 @@ import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "external-dispatch" });
 
 /**
  * Teach-in-response affordance for the no-credential/no-connection error
@@ -66,18 +69,21 @@ import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
  * `recordDomainMutation`), keyed by `correlationId` so `diagnose(correlationId)`
  * resolves it (see resolve-object-kind.ts's correlationId fallback).
  *
- * GUARANTEE (un-audited-send discipline): this call is AWAITED — never
- * fire-and-forget — and passes `throwOnError: true` through to the underlying
- * `auditLog` append, so a send can never be reported "delivered" without its
- * audit row landing. A true same-Postgres-transaction append isn't reachable
- * from this module (the CAS `externalDispatchedAt` claim + the `auditLog`
- * writer both live outside `connectors/*`), so this is the strongest guarantee
- * obtainable at this chokepoint: if the append fails, THIS THROWS, which for
- * the proposal-approval path (`dispatchExternalOnce`) lands as the documented
- * "ambiguous" case — the at-most-once claim is KEPT (never a silent
- * un-audited success) and the proposal surfaces APPROVAL_FAILED rather than a
- * false APPROVED. The automation/webhook fan-out inside `recordDomainMutation`
- * stays fire-and-forget (unchanged best-effort side-effect semantics).
+ * GUARANTEE (audit-is-best-effort discipline): this call is AWAITED — never
+ * fire-and-forget — but its callers in this module catch a failed append and
+ * log it loudly rather than letting it throw. A send this module already
+ * performed is IRREVERSIBLE; some callers (`routers/hub-protocol/rest/
+ * messaging.ts`, `utils/delivery-router.ts`) have NO at-most-once claim
+ * around it, so a throw here would turn a completed send into a 500 that the
+ * client retries — a real double-send. Only the proposal-approval path
+ * (`dispatchExternalOnce`) holds a CAS `externalDispatchedAt` claim taken
+ * BEFORE the send, so that path alone could safely treat an audit failure as
+ * "ambiguous, keep the claim, surface APPROVAL_FAILED" — but this function is
+ * shared by both, so it cannot assume the claim exists. A missing audit row
+ * is recoverable (logged here, still visible via `recordDomainMutation`'s
+ * caller-side error); a duplicate outbound message is not. The automation/
+ * webhook fan-out inside `recordDomainMutation` stays fire-and-forget
+ * (unchanged best-effort side-effect semantics).
  */
 export async function recordExternalAction(opts: {
   /** e.g. "gmail" / "stalwart" / "discord" / "unipile" / "nango" / "vault" / "mcp". */
@@ -548,22 +554,28 @@ export async function sendExternalMessage(
   // Universal-sink audit append (this wave): every confirmed dispatch (owner
   // send OR an approved-proposal re-entry) now leaves a `{channel}.send.
   // completed` event — the gap where an outbound message left no run/event
-  // and was unresolvable by `diagnose`. AWAITED + throws on failure (see
-  // `recordExternalAction`'s un-audited-send guarantee) — for a proposal
-  // re-entry a throw here lands as `dispatchExternalOnce`'s "ambiguous" case
-  // (claim kept, APPROVAL_FAILED), never a silently un-audited APPROVED.
+  // and was unresolvable by `diagnose`.
+  // audit is best-effort: append failure is logged, never fails a completed send
+  // (see `recordExternalAction`'s docstring).
   const correlationId = randomUUID();
-  await recordExternalAction({
-    channel: provider ?? "messaging",
-    action: "send",
-    userId,
-    workspaceId: input.workspaceId ?? null,
-    agentUserId: input.agentUserId ?? null,
-    correlationId,
-    target: threadId,
-    status: "sent",
-    data: { accountId, messageId: messageId ?? null },
-  });
+  try {
+    await recordExternalAction({
+      channel: provider ?? "messaging",
+      action: "send",
+      userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      correlationId,
+      target: threadId,
+      status: "sent",
+      data: { accountId, messageId: messageId ?? null },
+    });
+  } catch (err) {
+    logger.error(
+      { err, channel: provider ?? "messaging", action: "send", correlationId, target: threadId },
+      "recordExternalAction failed after a completed sendMessage — audit row missing, send was NOT retried"
+    );
+  }
 
   return { success: true, messageId, correlationId };
 }
@@ -1950,31 +1962,36 @@ export async function triggerProviderAction(
   // leaves a `{scheme}.action.completed` event, closing the gap where a
   // provider send/proxy call was unresolvable by `diagnose`. Only a
   // successful call is audited here — a failed call never left the pod state
-  // this wave is closing (the caller's own error path is unchanged). AWAITED
-  // + throws on failure (see `recordExternalAction`'s un-audited-send
-  // guarantee): for the `capability/run` / `provider.action` proposal
-  // executors this lands as `dispatchExternalOnce`'s "ambiguous" case (claim
-  // kept, APPROVAL_FAILED) rather than a silently un-audited APPROVED.
+  // this wave is closing (the caller's own error path is unchanged).
+  // audit is best-effort: append failure is logged, never fails a completed send
+  // (see `recordExternalAction`'s docstring).
   if (result.success) {
     const correlationId = randomUUID();
-    await recordExternalAction({
-      channel: scheme,
-      action: "action",
-      userId: input.userId,
-      workspaceId: input.workspaceId ?? null,
-      agentUserId: input.agentUserId ?? null,
-      correlationId,
-      target: `${provider} ${input.method} ${input.path}`,
-      status: "sent",
-      data: {
-        provider,
-        tool: tool.name,
-        method: input.method,
-        path: input.path,
-        status: result.status,
-        sourceProposalId: input.sourceProposalId ?? null,
-      },
-    });
+    try {
+      await recordExternalAction({
+        channel: scheme,
+        action: "action",
+        userId: input.userId,
+        workspaceId: input.workspaceId ?? null,
+        agentUserId: input.agentUserId ?? null,
+        correlationId,
+        target: `${provider} ${input.method} ${input.path}`,
+        status: "sent",
+        data: {
+          provider,
+          tool: tool.name,
+          method: input.method,
+          path: input.path,
+          status: result.status,
+          sourceProposalId: input.sourceProposalId ?? null,
+        },
+      });
+    } catch (err) {
+      logger.error(
+        { err, channel: scheme, action: "action", correlationId, provider, tool: tool.name },
+        "recordExternalAction failed after a completed triggerProviderAction — audit row missing, send was NOT retried"
+      );
+    }
     return { ...result, correlationId };
   }
   return result;
