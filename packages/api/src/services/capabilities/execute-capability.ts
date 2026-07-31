@@ -25,8 +25,11 @@
  * one-time claim like the proposal path does. READ-only verbs are unaffected.
  */
 
-import { db, skills, eq, and, desc } from "@synap/database";
+import { db, skills, eq, and, desc, knowledgeRepository } from "@synap/database";
+import { randomUUID } from "crypto";
+import { createLogger } from "@synap-core/core";
 
+import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
@@ -38,8 +41,24 @@ import { visibleSkillsWhere } from "../skills/visibility.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
+const logger = createLogger({ module: "execute-capability" });
+
 export type ExecuteCapabilityResult =
-  | { kind: "run"; skillId: string; result: unknown; ackState: WriteAckState }
+  | {
+      kind: "run";
+      skillId: string;
+      result: unknown;
+      ackState: WriteAckState;
+      /**
+       * Observability handle for a DIRECT run (owner-bypass / read-only builtin /
+       * governance-auto-granted agent). The run emits a `capability_run`
+       * ai_decision event keyed by this correlationId — the SAME join key the
+       * `capability.run` approve-executor stamps — so a direct run is listable via
+       * `listCapabilityRuns`, has a getRun timeline, and is `diagnose(id)`-able.
+       * Best-effort: absent only if the (swallowed) emit could not produce one.
+       */
+      correlationId?: string;
+    }
   | { kind: "dry-run"; skillId: string }
   | {
       kind: "proposed";
@@ -217,7 +236,98 @@ export async function executeCapability(input: {
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
   });
-  return ran.kind === "run" ? { ...ran, ackState: "applied" as const } : ran;
+  if (ran.kind !== "run") return ran;
+
+  // OBSERVABILITY (additive, best-effort). Until now a direct run returned
+  // INLINE with no correlationId / event / recall — invisible to the runs feed
+  // and to `diagnose` ("Run not found"). Mirror the `capability.run`
+  // approve-executor VERBATIM: stamp a correlationId, emit its ONE
+  // `capability_run` ai_decision timeline entry keyed by it, and deposit the
+  // result into recall. A telemetry failure NEVER breaks the already-executed
+  // run — it only drops the handle.
+  const correlationId = randomUUID();
+  await recordDirectCapabilityRun({
+    correlationId,
+    userId,
+    workspaceId,
+    skillId: skillRow.id,
+    verbId: verbId ?? null,
+    runResult: ran.result,
+  });
+  return { ...ran, ackState: "applied" as const, correlationId };
+}
+
+/**
+ * Cap a direct run's result before it rides inside the `capability_run` event's
+ * `data` (getRun reads it back for the run's `outputSummary`). A provider list /
+ * full API envelope can be arbitrarily large; bound it so one event never bloats.
+ */
+function boundEventRunResult(runResult: unknown): unknown {
+  if (runResult === undefined || runResult === null) return null;
+  const json = JSON.stringify(runResult);
+  if (json.length <= 8000) return runResult;
+  return { truncated: true, preview: json.slice(0, 8000) };
+}
+
+/**
+ * Make a DIRECT capability run observable — the SAME two side-effects the
+ * `capability.run` approve-executor performs (emit + recall deposit), so the
+ * direct-run and proposed→approved paths converge on ONE observability shape.
+ * The event's `data.kind`/`action` are `"capability_run"` (verbatim the
+ * approve-executor's) so the runs read-layer catches BOTH from one filter.
+ * Best-effort throughout: never throws — the run already succeeded.
+ */
+async function recordDirectCapabilityRun(opts: {
+  correlationId: string;
+  userId: string;
+  workspaceId: string | null;
+  skillId: string;
+  verbId: string | null;
+  runResult: unknown;
+}): Promise<void> {
+  const label = opts.verbId ?? opts.skillId;
+
+  // emitAiDecision is itself best-effort (swallows + logs, never throws), so the
+  // event is safe to await directly.
+  await emitAiDecision({
+    action: "capability_run",
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
+    correlationId: opts.correlationId,
+    data: {
+      kind: "capability_run",
+      skillId: opts.skillId,
+      verbId: opts.verbId,
+      // A direct run has NO proposal to carry the output — stash a bounded copy
+      // on the event so getRun's "capability" branch can surface it.
+      runResult: boundEventRunResult(opts.runResult),
+    },
+  });
+
+  // Recall deposit — the SAME door `remember_fact` uses (knowledgeRepository
+  // .saveFact), so a direct run's result is recallable like every other fact.
+  // Best-effort: an embedding/index failure must not undo the delivered run.
+  try {
+    const fact = `Ran capability "${label}" → ${JSON.stringify(opts.runResult).slice(0, 1000)}`;
+    let embedding: number[];
+    try {
+      const { generateEmbedding } = await import("@synap/ai-embeddings");
+      embedding = await generateEmbedding(fact);
+    } catch {
+      embedding = new Array(1536).fill(0);
+    }
+    await knowledgeRepository.saveFact({
+      userId: opts.userId,
+      fact,
+      confidence: 0.9,
+      embedding,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, skillId: opts.skillId, correlationId: opts.correlationId },
+      "direct capability run: recall deposit failed (run kept delivered)"
+    );
+  }
 }
 
 /** The gate-approved skill row shape `runResolvedSkill` operates on. */

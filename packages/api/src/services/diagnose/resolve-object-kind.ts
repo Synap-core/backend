@@ -26,10 +26,15 @@ import {
   entities,
   skills,
   tools,
+  events,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
+
+/** `events.data.kind` for a capability run's ai_decision event (see runs/index.ts). */
+const CAPABILITY_RUN_EVENT_KIND = "capability_run";
 
 export interface ResolvedObject {
   kind: ObjectKind;
@@ -239,6 +244,34 @@ export async function resolveObjectKind(
     .orderBy(drizzleSql`${proposals.createdAt} DESC`)
     .limit(1);
   if (byCorrelation) return { kind: "proposal", id: byCorrelation.id };
+
+  // FALLBACK 2 — a DIRECT capability run (owner-bypass / read-only builtin /
+  // governance-auto-granted agent) has NO proposal: its correlationId lives only
+  // on the `capability_run` ai_decision event (executeCapability). Without this,
+  // `diagnose(<direct-run correlationId>)` dead-ends at "no diagnosable object"
+  // even though the run executed. Resolve it to the backing skill under the SAME
+  // "capability" kind the skill/tool probes use — `diagnoseObject`'s capability
+  // branch then explains the skill (and getRun({flowType:"capability"}) still
+  // renders the run's own timeline for a caller that passes the flow). User-
+  // floored on `events.userId` (the acting operator). Most recent wins.
+  const [byEvent] = await db
+    .select({ data: events.data })
+    .from(events)
+    .where(
+      and(
+        eq(events.correlationId, id),
+        eq(events.subjectType, AI_DECISION),
+        eq(events.userId, userId),
+        drizzleSql`${events.data}->>'kind' = ${CAPABILITY_RUN_EVENT_KIND}`
+      )
+    )
+    .orderBy(drizzleSql`${events.timestamp} DESC`)
+    .limit(1);
+  if (byEvent) {
+    const skillId = (byEvent.data as Record<string, unknown> | null)?.skillId;
+    if (typeof skillId === "string" && skillId)
+      return { kind: "capability", id: skillId };
+  }
 
   return null;
 }

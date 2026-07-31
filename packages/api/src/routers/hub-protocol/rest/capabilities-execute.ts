@@ -70,6 +70,8 @@ const ExecuteCapabilityResultSchema = z
     skillId: z.string(),
     result: z.unknown().optional(),
     dryRun: z.boolean().optional(),
+    /** Observability handle for a direct run — pass to diagnose / getRun. */
+    correlationId: z.string().optional(),
   })
   .openapi("ExecuteCapabilityResult");
 
@@ -189,6 +191,9 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
               status: "run" as const,
               skillId: outcome.skillId,
               result: outcome.result,
+              // The direct-run observability handle (best-effort — see
+              // executeCapability): lets the caller diagnose/getRun the run.
+              correlationId: outcome.correlationId,
             },
             200
           );

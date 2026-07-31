@@ -78,6 +78,14 @@ const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 /** `proposals.proposalType` for the agnostic-capability last-mile executor
  * (Workstream 1 — see approve-executors.ts's `capability.run` executor). */
 const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+/**
+ * `events.data.kind` (and `action`) for a capability run's ai_decision event —
+ * the literal BOTH the `capability.run` approve-executor AND the direct-run door
+ * (`executeCapability`) emit. A DIRECT run (owner-bypass / read-only builtin /
+ * governance-auto-granted agent) has this event but NO proposal, so the run read
+ * layer must synthesise it from the event to make direct runs observable too.
+ */
+const CAPABILITY_RUN_EVENT_KIND = "capability_run";
 
 /**
  * A capability run's output (`proposal.data.runResult`) can be arbitrarily large
@@ -568,42 +576,133 @@ async function listCapabilityRuns(
     .orderBy(desc(proposals.createdAt))
     .limit(limit);
 
-  return rows
-    .map((r) => {
-      const data = (r.data ?? {}) as Record<string, unknown>;
-      return {
-        id: r.id,
-        flowType: "capability" as const,
-        flowId: null,
-        flowName:
-          typeof data.verbId === "string" && data.verbId
-            ? data.verbId
-            : typeof data.skillId === "string"
-              ? data.skillId
-              : "Capability",
-        status: capabilityRunStatus(r.status),
-        startedAt: r.createdAt,
-        completedAt: r.reviewedAt ?? null,
-        workspaceId: r.workspaceId ?? null,
-        projectId: r.projectId ?? null,
-        subjectEntityId: null,
-        channelId: null,
-        correlationId: r.correlationId ?? null,
-        replayOf: null,
-        // The executor stores the run output in `data.runResult` on approval;
-        // surface a compact one-line form so the Activity feed shows the result
-        // (mirrors capture's `data.summary`), not a blank row.
-        summary:
-          data.runResult !== undefined
-            ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
-            : null,
-        error: null,
-        triggeredBy: null,
-        stepsCompleted: null,
-        stepsFailed: null,
-        definitionVersion: null,
-      };
-    })
+  const proposalRuns: UnifiedRun[] = rows.map((r) => {
+    const data = (r.data ?? {}) as Record<string, unknown>;
+    return {
+      id: r.id,
+      flowType: "capability" as const,
+      flowId: null,
+      flowName:
+        typeof data.verbId === "string" && data.verbId
+          ? data.verbId
+          : typeof data.skillId === "string"
+            ? data.skillId
+            : "Capability",
+      status: capabilityRunStatus(r.status),
+      startedAt: r.createdAt,
+      completedAt: r.reviewedAt ?? null,
+      workspaceId: r.workspaceId ?? null,
+      projectId: r.projectId ?? null,
+      subjectEntityId: null,
+      channelId: null,
+      correlationId: r.correlationId ?? null,
+      replayOf: null,
+      // The executor stores the run output in `data.runResult` on approval;
+      // surface a compact one-line form so the Activity feed shows the result
+      // (mirrors capture's `data.summary`), not a blank row.
+      summary:
+        data.runResult !== undefined
+          ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
+          : null,
+      error: null,
+      triggeredBy: null,
+      stepsCompleted: null,
+      stepsFailed: null,
+      definitionVersion: null,
+    };
+  });
+
+  // DIRECT runs — a capability executed via the door WITHOUT a proposal
+  // (owner-bypass / read-only builtin / governance-auto-granted agent) emits a
+  // `capability_run` ai_decision event keyed by correlationId but has NO
+  // proposal row. Synthesise a run from that event so direct runs are observable
+  // too. Events carry no project column (workspace lives in `data.workspaceId`),
+  // so a project-scoped feed excludes them; user-floored on `events.userId`.
+  const eventRuns: UnifiedRun[] = scope.projectId
+    ? []
+    : await (async () => {
+        const eventRows = await db
+          .select({
+            id: events.id,
+            correlationId: events.correlationId,
+            timestamp: events.timestamp,
+            data: events.data,
+          })
+          .from(events)
+          .where(
+            and(
+              eq(events.subjectType, AI_DECISION),
+              drizzleSql`${events.data}->>'kind' = ${CAPABILITY_RUN_EVENT_KIND}`,
+              // A direct run's identity IS its correlationId — required so it is
+              // listable + diagnosable by that key.
+              drizzleSql`${events.correlationId} IS NOT NULL`,
+              eq(events.userId, userId),
+              exactRunId ? eq(events.correlationId, exactRunId) : undefined,
+              scope.workspaceId
+                ? drizzleSql`${events.data}->>'workspaceId' = ${scope.workspaceId}`
+                : undefined
+            )
+          )
+          .orderBy(desc(events.timestamp))
+          .limit(limit);
+        return eventRows.map((e) => {
+          const data = (e.data ?? {}) as Record<string, unknown>;
+          const runResult = data.runResult;
+          return {
+            // A direct run has no proposal row — its correlationId is its id
+            // (mirrors capture's `correlationId ?? id`).
+            id: e.correlationId ?? e.id,
+            flowType: "capability" as const,
+            flowId: null,
+            flowName:
+              typeof data.verbId === "string" && data.verbId
+                ? data.verbId
+                : typeof data.skillId === "string"
+                  ? data.skillId
+                  : "Capability",
+            // An emitted direct run reached its handler and returned → completed.
+            status: "completed" as const,
+            startedAt: e.timestamp,
+            completedAt: e.timestamp,
+            workspaceId:
+              typeof data.workspaceId === "string" ? data.workspaceId : null,
+            projectId: null,
+            subjectEntityId: null,
+            channelId: null,
+            correlationId: e.correlationId ?? null,
+            replayOf: null,
+            summary:
+              runResult !== undefined
+                ? `Result: ${JSON.stringify(runResult).slice(0, 200)}`
+                : null,
+            error: null,
+            triggeredBy: null,
+            stepsCompleted: null,
+            stepsFailed: null,
+            definitionVersion: null,
+          };
+        });
+      })();
+
+  // Union + dedupe by correlationId. A proposed→approved run has BOTH a proposal
+  // (correlationId stamped on approval) AND a `capability_run` event with the
+  // same key — it must appear ONCE, proposal-backed winning (it carries the
+  // richer lifecycle status + reviewedAt). PENDING proposals have a null
+  // correlationId and collide with nothing.
+  const seenCorrelation = new Set(
+    proposalRuns
+      .map((r) => r.correlationId)
+      .filter((c): c is string => typeof c === "string")
+  );
+  const merged = [
+    ...proposalRuns,
+    ...eventRuns.filter(
+      (r) => !r.correlationId || !seenCorrelation.has(r.correlationId)
+    ),
+  ];
+  merged.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  return merged
+    .slice(0, limit)
     .filter((r) => !status || r.status === status);
 }
 
@@ -1195,24 +1294,24 @@ export async function getRun(
   if (flowType === "capability") {
     const [run] = await listCapabilityRuns(userId, {}, 1, undefined, id);
     if (!run) return null;
-    // The executor stores the run output in `data.runResult` on approval
-    // (approve-executors.ts's `capability.run` branch). `run.id` is always the
-    // proposal row id — fetch its data so the result is surfaced in outputSummary.
+    // A PROPOSAL-backed run stores its output in `data.runResult` on approval
+    // (approve-executors.ts) — its `run.id` is the proposal row id. A DIRECT run
+    // has NO proposal (`run.id` is its correlationId), and carries its output in
+    // the `capability_run` event's `data.runResult` instead — read below.
     const [proposalRow] = await db
       .select({ data: proposals.data })
       .from(proposals)
       .where(eq(proposals.id, run.id))
       .limit(1);
-    const runResult = (proposalRow?.data as Record<string, unknown> | null)
+    let runResult = (proposalRow?.data as Record<string, unknown> | null)
       ?.runResult;
-    const outputSummary =
-      runResult !== undefined ? boundRunResult(runResult) : null;
     if (!run.correlationId)
       return {
         run: { ...run, flowType: "capability" },
         activity: [],
         trigger: null,
-        outputSummary,
+        outputSummary:
+          runResult !== undefined ? boundRunResult(runResult) : null,
         playbookDetail: null,
         definitionSnapshot: null,
         pathTaken: null,
@@ -1232,6 +1331,23 @@ export async function getRun(
           inArray(events.subjectType, [AI_DECISION, AI_PROCESSING])
         )
       );
+    // DIRECT-run fallback: no proposal carried the output, so pull it off the
+    // `capability_run` ai_decision event (executeCapability stamps a bounded copy
+    // there). Proposal-backed runs keep the proposal value already read above.
+    if (runResult === undefined) {
+      for (const e of rows) {
+        const d = (e.data ?? {}) as Record<string, unknown>;
+        if (
+          d.kind === CAPABILITY_RUN_EVENT_KIND &&
+          d.runResult !== undefined
+        ) {
+          runResult = d.runResult;
+          break;
+        }
+      }
+    }
+    const outputSummary =
+      runResult !== undefined ? boundRunResult(runResult) : null;
     const activity: RunActivityItem[] = rows
       .map((e) => {
         const data = (e.data ?? {}) as Record<string, unknown>;
