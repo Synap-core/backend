@@ -78,7 +78,7 @@ vi.mock("@synap/database", () => ({
       focusSessions: { findFirst: () => Promise.resolve(null) },
       links: { findMany: () => Promise.resolve([]) },
     },
-    select: (...args: unknown[]) => selectSpy(...args),
+    select: selectSpy,
     insert: () => makeThenable(claimReturning),
     update: () => makeThenable(undefined),
   },
