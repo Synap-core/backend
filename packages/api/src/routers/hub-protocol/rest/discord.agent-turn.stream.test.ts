@@ -348,4 +348,10 @@ describe("discord agent-turn stream wiring (tripwire)", () => {
     expect(source).toContain("stableUuidFromSeed");
     expect(source).toMatch(/turnId:\s*durableTurn\.id|turnId:\s*priorTurn\.id/);
   });
+
+  it("reopens failed turns under same requestId when no useful assistant (D5)", () => {
+    expect(source).toContain("decideChatTurnClaimAction");
+    expect(source).toContain("reopenChatTurn");
+    expect(source).toContain("reopen_and_run");
+  });
 });

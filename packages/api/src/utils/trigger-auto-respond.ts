@@ -33,6 +33,12 @@ export async function triggerAutoRespond(params: {
   /** Active focus session ID for this channel — forwarded so the IS wakes up
    *  session-aware and tags all hub calls with X-Session-Id automatically. */
   focusSessionId?: string | null;
+  /**
+   * Specialist agent type for the A2AI/IS turn (e.g. workspace-builder).
+   * Defaults to "meta" (orchestrator). Parallel dispatch_agent posts this in
+   * message metadata so the background job is not always orchestrator.
+   */
+  agentType?: string | null;
 }): Promise<boolean> {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),
@@ -77,7 +83,10 @@ export async function triggerAutoRespond(params: {
         content: params.content,
         userId: channel.userId,
         workspaceId: channel.workspaceId,
-        agentType: "meta",
+        agentType:
+          typeof params.agentType === "string" && params.agentType.trim()
+            ? params.agentType.trim()
+            : "meta",
         sourceAgentUserId: params.sourceUserId ?? null,
         focusSessionId: resolvedFocusSessionId,
         serviceUrl: resolvedService.endpoint,
@@ -85,7 +94,12 @@ export async function triggerAutoRespond(params: {
         serviceId: resolvedService.serviceId,
         agentUserId: resolvedService.agentUserId,
       },
-      A2AI_TRIGGER_JOB_OPTIONS
+      {
+        ...A2AI_TRIGGER_JOB_OPTIONS,
+        // One in-flight/queued job per user message — concurrent double-enqueue
+        // collapses to a single IS turn (pod chat_turns also key on this id).
+        singletonKey: params.userMessageId,
+      }
     );
     return true;
   } catch (err) {

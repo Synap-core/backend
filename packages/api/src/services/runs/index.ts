@@ -14,8 +14,12 @@
 import {
   db,
   and,
+  or,
   eq,
   isNull,
+  gt,
+  lt,
+  asc,
   desc,
   inArray,
   drizzleSql,
@@ -56,6 +60,11 @@ import type {
   RunAgent,
   RunGroup,
 } from "./types.js";
+import {
+  decodeRunGroupCursor,
+  encodeRunGroupCursor,
+  type RunGroupCursor,
+} from "../../utils/keyset-cursor.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 /** `proposals.proposalType` for the agnostic-capability last-mile executor
@@ -662,6 +671,7 @@ async function listChatRuns(
       channelId: chatTurns.channelId,
       error: chatTurns.error,
       workspaceId: channels.workspaceId,
+      channelTitle: channels.title,
     })
     .from(chatTurns)
     .innerJoin(channels, eq(channels.id, chatTurns.channelId))
@@ -677,27 +687,43 @@ async function listChatRuns(
     .orderBy(desc(chatTurns.startedAt))
     .limit(limit);
 
-  return rows.map((r) => ({
-    id: r.id,
-    flowType: "chat" as const,
-    flowId: null,
-    flowName: "Chat",
-    status: chatRunStatus(r.status),
-    startedAt: r.startedAt,
-    completedAt: r.completedAt ?? null,
-    workspaceId: r.workspaceId ?? null,
-    projectId: null,
-    subjectEntityId: null,
-    channelId: r.channelId,
-    correlationId: null,
-    replayOf: null,
-    summary: null,
-    error: r.error ?? null,
-    triggeredBy: userId,
-    stepsCompleted: null,
-    stepsFailed: null,
-    definitionVersion: null,
-  }));
+  return rows.map((r) => {
+    const turnShort = r.id.slice(0, 8);
+    const room = (r.channelTitle || "").trim();
+    // Primary label: channel title when present, else "AI turn · ab12cd34"
+    // so Failed lists are not a wall of identical "Chat" rows.
+    const flowName = room
+      ? room.length > 48
+        ? `${room.slice(0, 45)}…`
+        : room
+      : `AI turn · ${turnShort}`;
+    const err = r.error?.trim() || null;
+    return {
+      id: r.id,
+      flowType: "chat" as const,
+      flowId: null,
+      flowName,
+      status: chatRunStatus(r.status),
+      startedAt: r.startedAt,
+      completedAt: r.completedAt ?? null,
+      workspaceId: r.workspaceId ?? null,
+      projectId: null,
+      subjectEntityId: null,
+      channelId: r.channelId,
+      correlationId: null,
+      replayOf: null,
+      summary: err
+        ? err.length > 120
+          ? `${err.slice(0, 117)}…`
+          : err
+        : `Chat turn ${turnShort}`,
+      error: err,
+      triggeredBy: userId,
+      stepsCompleted: null,
+      stepsFailed: null,
+      definitionVersion: null,
+    };
+  });
 }
 
 // ── Public: list (merged cross-flow feed) ────────────────────────────────────
@@ -762,6 +788,8 @@ export interface ListRunGroupsInput {
   scope?: { workspaceId?: string };
   /** Cap on groups returned (newest-active first). */
   limit?: number;
+  /** Opaque keyset cursor returned by `listRunGroupsPage`. */
+  cursor?: string;
 }
 
 /**
@@ -775,28 +803,75 @@ export interface ListRunGroupsInput {
 export async function listRunGroups(
   input: ListRunGroupsInput
 ): Promise<RunGroup[]> {
+  return (await listRunGroupsPage(input)).groups;
+}
+
+export interface RunGroupsPage {
+  groups: RunGroup[];
+  nextCursor: string | null;
+}
+
+/**
+ * Keyset-paginated variant of `listRunGroups`. Sort is deterministic across the
+ * two ledgers: latest start descending, then flow kind and flow id ascending.
+ */
+export async function listRunGroupsPage(
+  input: ListRunGroupsInput
+): Promise<RunGroupsPage> {
   const { userId, flowType } = input;
   const scope = input.scope ?? {};
   const limit = Math.min(input.limit ?? 50, 100);
+  const cursor = input.cursor ? decodeRunGroupCursor(input.cursor) : undefined;
 
   const jobs: Array<Promise<RunGroup[]>> = [];
   if (!flowType || flowType === "automation")
-    jobs.push(groupAutomationRuns(userId, scope.workspaceId, limit));
+    jobs.push(
+      groupAutomationRuns(userId, scope.workspaceId, limit + 1, cursor)
+    );
   if (!flowType || flowType === "playbook")
-    jobs.push(groupPlaybookRuns(userId, scope.workspaceId, limit));
+    jobs.push(groupPlaybookRuns(userId, scope.workspaceId, limit + 1, cursor));
 
   const merged = (await Promise.all(jobs)).flat();
-  merged.sort(
-    (a, b) => b.latestStartedAt.getTime() - a.latestStartedAt.getTime()
-  );
-  return merged.slice(0, limit);
+  merged.sort((a, b) => {
+    const time = b.latestStartedAt.getTime() - a.latestStartedAt.getTime();
+    if (time !== 0) return time;
+    const kind = a.flowType.localeCompare(b.flowType);
+    return kind !== 0 ? kind : a.flowId.localeCompare(b.flowId);
+  });
+  const hasNextPage = merged.length > limit;
+  const groups = hasNextPage ? merged.slice(0, limit) : merged;
+  const last = groups.at(-1);
+  return {
+    groups,
+    nextCursor:
+      hasNextPage && last
+        ? encodeRunGroupCursor({
+            at: last.latestStartedAt,
+            flowType: last.flowType,
+            id: last.flowId,
+          })
+        : null,
+  };
 }
 
 async function groupAutomationRuns(
   userId: string,
   workspaceId: string | undefined,
-  limit: number
+  limit: number,
+  cursor?: RunGroupCursor
 ): Promise<RunGroup[]> {
+  const latest = drizzleSql<Date>`max(${automationRuns.startedAt})`;
+  const afterCursor = cursor
+    ? cursor.flowType === "automation"
+      ? or(
+          lt(latest, new Date(cursor.at)),
+          and(
+            eq(latest, new Date(cursor.at)),
+            gt(automationRuns.automationId, cursor.id)
+          )
+        )
+      : lt(latest, new Date(cursor.at))
+    : undefined;
   const rows = await db
     .select({
       flowId: automationRuns.automationId,
@@ -806,8 +881,8 @@ async function groupAutomationRuns(
       failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'failed'))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       latestStartedAt: drizzleSql<Date>`max(${automationRuns.startedAt})`,
-      latestRunId: drizzleSql<string>`(array_agg(${automationRuns.id} order by ${automationRuns.startedAt} desc))[1]`,
-      latestStatus: drizzleSql<string>`(array_agg(${automationRuns.status} order by ${automationRuns.startedAt} desc))[1]`,
+      latestRunId: drizzleSql<string>`(array_agg(${automationRuns.id} order by ${automationRuns.startedAt} desc, ${automationRuns.id} asc))[1]`,
+      latestStatus: drizzleSql<string>`(array_agg(${automationRuns.status} order by ${automationRuns.startedAt} desc, ${automationRuns.id} asc))[1]`,
     })
     .from(automationRuns)
     .innerJoin(automations, eq(automations.id, automationRuns.automationId))
@@ -818,7 +893,8 @@ async function groupAutomationRuns(
       )
     )
     .groupBy(automationRuns.automationId, automations.name)
-    .orderBy(desc(drizzleSql`max(${automationRuns.startedAt})`))
+    .having(afterCursor)
+    .orderBy(desc(latest), asc(automationRuns.automationId))
     .limit(limit);
 
   return rows.map((r) => ({
@@ -842,8 +918,21 @@ async function groupAutomationRuns(
 async function groupPlaybookRuns(
   userId: string,
   workspaceId: string | undefined,
-  limit: number
+  limit: number,
+  cursor?: RunGroupCursor
 ): Promise<RunGroup[]> {
+  const latest = drizzleSql<Date>`max(${playbookRuns.startedAt})`;
+  const afterCursor = cursor
+    ? cursor.flowType === "playbook"
+      ? or(
+          lt(latest, new Date(cursor.at)),
+          and(
+            eq(latest, new Date(cursor.at)),
+            gt(playbookRuns.playbookId, cursor.id)
+          )
+        )
+      : or(lt(latest, new Date(cursor.at)), eq(latest, new Date(cursor.at)))
+    : undefined;
   const rows = await db
     .select({
       flowId: playbookRuns.playbookId,
@@ -853,8 +942,8 @@ async function groupPlaybookRuns(
       failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
       latestStartedAt: drizzleSql<Date>`max(${playbookRuns.startedAt})`,
-      latestRunId: drizzleSql<string>`(array_agg(${playbookRuns.id} order by ${playbookRuns.startedAt} desc))[1]`,
-      latestStatus: drizzleSql<string>`(array_agg(${playbookRuns.status} order by ${playbookRuns.startedAt} desc))[1]`,
+      latestRunId: drizzleSql<string>`(array_agg(${playbookRuns.id} order by ${playbookRuns.startedAt} desc, ${playbookRuns.id} asc))[1]`,
+      latestStatus: drizzleSql<string>`(array_agg(${playbookRuns.status} order by ${playbookRuns.startedAt} desc, ${playbookRuns.id} asc))[1]`,
     })
     .from(playbookRuns)
     .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
@@ -865,7 +954,8 @@ async function groupPlaybookRuns(
       )
     )
     .groupBy(playbookRuns.playbookId, playbooks.name)
-    .orderBy(desc(drizzleSql`max(${playbookRuns.startedAt})`))
+    .having(afterCursor)
+    .orderBy(desc(latest), asc(playbookRuns.playbookId))
     .limit(limit);
 
   return rows.map((r) => ({

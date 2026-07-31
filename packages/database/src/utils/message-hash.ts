@@ -9,6 +9,12 @@ import { createHash } from "crypto";
  * every message writer (persistAssistantReply, the proactive-post feed/chat
  * writers, …) derives its `hash` from here so the chain can never silently drift
  * between producers.
+ *
+ * Dual-use of `messages.hash` (D5 / migration 0218):
+ * - Tamper writers use this function (UUID id is in the preimage → unique per row).
+ * - Inbound-recorder stores sha256(provider:idempotencySeed) for delivery dedup.
+ * Global UNIQUE(hash) is intentional for both: concurrent inbound claims
+ * ON CONFLICT DO NOTHING; cross-domain collision is 2^-256.
  */
 export function computeMessageHash(
   id: string,

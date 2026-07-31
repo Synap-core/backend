@@ -36,7 +36,12 @@ import {
   SYNAP_TURN_ID_HEADER,
   type ExternalTurnSource,
 } from "../../services/chat-turns/external-durable-turn.js";
-import type { DurableChatTurn } from "../../services/chat-turns/chat-turn-store.js";
+import {
+  decideChatTurnClaimAction,
+  hasUsefulAssistantForTurn,
+  reopenChatTurn,
+  type DurableChatTurn,
+} from "../../services/chat-turns/chat-turn-store.js";
 
 const logger = createLogger({ module: "openai-compat" });
 
@@ -562,14 +567,70 @@ openaiCompatApp.post(
       [SYNAP_TURN_ID_HEADER]: durableTurn.id,
     };
 
-    // Idempotent retry: never re-invoke the model for the same requestId.
+    // Idempotent claim policy under the same requestId (D5):
+    // completed → skip; running → in_progress; failed + no assistant → reopen.
     if (!turnCreated) {
-      if (input.stream) {
+      const hasUsefulAssistant = await hasUsefulAssistantForTurn(
+        durableTurn.assistantMessageId
+      );
+      const action = decideChatTurnClaimAction({
+        created: false,
+        status: durableTurn.status,
+        hasUsefulAssistant,
+      });
+
+      if (action === "reopen_and_run") {
+        const claimedReopen = await reopenChatTurn(durableTurn.id);
+        if (!claimedReopen) {
+          // Lost CAS race — another worker reopened first; do not double-bill.
+          if (input.stream) {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                Connection: "keep-alive",
+                ...turnHeaders,
+              },
+            });
+          }
+          return c.json(
+            {
+              id: completionId,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model: input.model ?? "synap",
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "" },
+                  finish_reason: "stop",
+                },
+              ],
+            },
+            200,
+            turnHeaders
+          );
+        }
+        durableTurn = {
+          ...durableTurn,
+          status: "running",
+          error: null,
+          completedAt: null,
+        };
+        // Fall through to IS / custom provider.
+      } else if (input.stream) {
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             // Stay OpenAI-compatible: no non-OAI frames. Header carries turnId.
-            if (durableTurn.status === "completed") {
+            if (action === "skip_completed") {
               const finalChunk = {
                 id: completionId,
                 object: "chat.completion.chunk",
@@ -585,7 +646,7 @@ openaiCompatApp.post(
               const errChunk = {
                 error: {
                   message:
-                    durableTurn.status === "running"
+                    action === "in_progress"
                       ? "Turn already in progress for this requestId"
                       : (durableTurn.error ?? "Turn already finished"),
                   type: "invalid_request_error",
@@ -609,9 +670,7 @@ openaiCompatApp.post(
           "X-Synap-Model-Tier": tierLabel,
           ...turnHeaders,
         });
-      }
-
-      if (durableTurn.status === "completed") {
+      } else if (action === "skip_completed") {
         return c.json(
           {
             id: completionId,
@@ -636,22 +695,22 @@ openaiCompatApp.post(
           200,
           { "X-Synap-Model-Tier": tierLabel, ...turnHeaders }
         );
+      } else {
+        return c.json(
+          {
+            ...oaiErrorBody(
+              action === "in_progress"
+                ? "Turn already in progress for this requestId"
+                : (durableTurn.error ?? "Turn already finished"),
+              "invalid_request_error",
+              "turn_reused"
+            ),
+            turnId: durableTurn.id,
+          },
+          action === "in_progress" ? 409 : 400,
+          turnHeaders
+        );
       }
-
-      return c.json(
-        {
-          ...oaiErrorBody(
-            durableTurn.status === "running"
-              ? "Turn already in progress for this requestId"
-              : (durableTurn.error ?? "Turn already finished"),
-            "invalid_request_error",
-            "turn_reused"
-          ),
-          turnId: durableTurn.id,
-        },
-        durableTurn.status === "running" ? 409 : 400,
-        turnHeaders
-      );
     }
 
     // ── Custom provider: bypass IS entirely ──────────────────────────────────

@@ -80,6 +80,14 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "chat-turn-reaper",
+    name: "Chat Turn Reaper",
+    description:
+      "Every 15min, fails chat_turns still status=running past CHAT_TURN_STUCK_HOURS (default 2h) with error='stuck_timeout'. Failsafe for mid-stream process crashes so the durable turn ledger never stays running forever; diagnose GLOBAL then sees them as failed (and as stuck while still running past its own threshold).",
+    triggers: ["cron:*/15 * * * *"],
+    category: "shared",
+  },
+  {
     id: "proactive-intelligence",
     name: "Proactive Intelligence (scan)",
     description:

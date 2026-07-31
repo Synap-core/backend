@@ -12,11 +12,13 @@
  * it sparingly — header icons, key indicators, primary CTAs only.
  *
  * Sections:
+ *   0. AI provider registry
  *   1. Provider health  — per-provider configured/health (responsive grid)
  *   2. Default models   — pod-wide model defaults
  *   3. IS instances     — `intelligenceRegistry.list`
- *   4. Proactive AI     — pod-wide proactive defaults (stub today)
- *   5. OpenClaw summary — thin card with "Manage in OpenClaw" link
+ *   4. Proactive AI     — pod-wide proactive defaults
+ *   5. Failed AI turns  — thin list from runs.list(flowType=chat, status=failed)
+ *   6. OpenClaw summary — thin card with "Manage in OpenClaw" link
  */
 
 import {
@@ -43,6 +45,7 @@ import {
   Gauge,
   Key,
   Layers,
+  MessagesSquare,
   Pencil,
   Plug,
   Plus,
@@ -98,6 +101,7 @@ export default function IntelligencePage() {
         <DefaultModelsSection />
         <IntelligenceServicesSection />
         <ProactiveDefaultsSection />
+        <FailedAiTurnsSection />
         <OpenClawSummarySection />
       </div>
     </div>
@@ -1368,7 +1372,91 @@ function ProactiveDefaultsSection() {
   );
 }
 
-// ─── 5. OpenClaw summary ─────────────────────────────────────────────
+// ─── 5. Failed AI turns (chat_turns ledger via unified runs) ──────────
+
+/**
+ * Thin operator surface for failed Companion / Discord / external agent turns.
+ * Reuses `runs.list({ flowType: "chat", status: "failed" })` — same ledger as
+ * browser Runs (Failed filter). No redesign: SectionCard + ResourceRow only.
+ */
+function FailedAiTurnsSection() {
+  const query = trpc.runs.list.useQuery(
+    { flowType: "chat", status: "failed", limit: 15 },
+    { staleTime: 15_000, refetchOnWindowFocus: true }
+  );
+  const runs = query.data?.runs ?? [];
+
+  return (
+    <SectionCard
+      title="Failed AI turns"
+      hint="Recent failed chat turns (Companion, Discord, external agents)"
+      actions={
+        runs.length > 0 ? (
+          <span className="text-[11px] tabular text-foreground/55">
+            {runs.length}
+            {runs.length >= 15 ? "+" : ""} shown
+          </span>
+        ) : null
+      }
+    >
+      {query.isLoading ? (
+        <ResourceRowSkeleton count={3} />
+      ) : query.isError ? (
+        <ErrorBanner
+          message={query.error?.message ?? "Couldn't load failed AI turns."}
+        />
+      ) : runs.length === 0 ? (
+        <ResourceRowEmpty message="No failed AI turns." />
+      ) : (
+        <div className="-mx-2">
+          {runs.map((run) => {
+            const when = formatRelativeTime(run.startedAt);
+            const err =
+              typeof run.error === "string" && run.error.trim()
+                ? run.error.trim()
+                : "Failed";
+            // listChatRuns hardcodes flowName "Chat" — surface short turn id so
+            // rows are distinguishable / copyable for dogfood correlation.
+            const turnShort =
+              typeof run.id === "string" && run.id.length >= 8
+                ? run.id.slice(0, 8)
+                : run.id;
+            const secondary = [when, turnShort, err]
+              .filter(Boolean)
+              .join(" · ");
+            return (
+              <ResourceRow
+                key={run.id}
+                Icon={MessagesSquare}
+                primary={run.flowName || "Chat"}
+                secondary={secondary}
+                status={{ kind: "down", label: "Failed" }}
+              />
+            );
+          })}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function formatRelativeTime(iso: string | Date | null | undefined): string {
+  if (!iso) return "—";
+  const d = iso instanceof Date ? iso : new Date(iso);
+  const ms = d.getTime();
+  if (!Number.isFinite(ms)) return "—";
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return d.toLocaleDateString();
+}
+
+// ─── 6. OpenClaw summary ─────────────────────────────────────────────
 
 function OpenClawSummarySection() {
   const query = trpc.intelligenceRegistry.getOpenClawOverview.useQuery(

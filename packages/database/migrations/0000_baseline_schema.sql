@@ -1587,6 +1587,12 @@ CREATE INDEX IF NOT EXISTS "messages_session_id_idx"
 CREATE INDEX IF NOT EXISTS "messages_channel_timestamp_idx"
   ON "messages" ("channel_id", "timestamp");
 
+-- 0218: global unique on hash — race-safe inbound claim + tamper uniqueness.
+-- Dual-use (inbound dedup vs computeMessageHash) is OK: both are sha256 hex;
+-- tamper includes UUID id so legitimate rows never collide intentionally.
+CREATE UNIQUE INDEX IF NOT EXISTS "messages_hash_unique"
+  ON "messages" ("hash");
+
 -- Add FK from channel_context_items → messages (now that messages table exists)
 DO $$ BEGIN
   IF NOT EXISTS (

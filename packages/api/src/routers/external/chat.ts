@@ -38,6 +38,11 @@ import {
   SYNAP_TURN_ID_HEADER,
   wrapUpstreamStreamWithTurnLifecycle,
 } from "../../services/chat-turns/external-durable-turn.js";
+import {
+  decideChatTurnClaimAction,
+  hasUsefulAssistantForTurn,
+  reopenChatTurn,
+} from "../../services/chat-turns/chat-turn-store.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -245,62 +250,109 @@ externalChatApp.post(
       return c.json({ error: "Failed to start chat turn" }, 500);
     }
 
-    // Idempotent retry: never re-invoke the model for the same requestId.
+    // Idempotent claim policy under the same requestId (D5):
+    // completed → skip; running → in_progress; failed + no assistant → reopen.
     if (!turnCreated) {
-      const encoder = new TextEncoder();
-      const leading = `data: ${JSON.stringify({
-        type: "turn",
-        turnId: durableTurn.id,
-        requestId: durableTurn.requestId,
+      const hasUsefulAssistant = await hasUsefulAssistantForTurn(
+        durableTurn.assistantMessageId
+      );
+      const action = decideChatTurnClaimAction({
+        created: false,
         status: durableTurn.status,
-        reused: true,
-      })}\n\n`;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(leading));
-          if (durableTurn.status === "completed") {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "complete", turnId: durableTurn.id, reused: true })}\n\n`
-              )
-            );
-          } else if (
-            durableTurn.status === "failed" ||
-            durableTurn.status === "cancelled"
-          ) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({
-                  type: "error",
-                  turnId: durableTurn.id,
-                  message: durableTurn.error ?? "Turn already finished",
-                  reused: true,
-                })}\n\n`
-              )
-            );
-          } else {
-            // Still running from a concurrent request — surface without double-call.
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({
-                  type: "error",
-                  turnId: durableTurn.id,
-                  message: "Turn already in progress for this requestId",
-                  reused: true,
-                })}\n\n`
-              )
-            );
-          }
-          controller.close();
-        },
+        hasUsefulAssistant,
       });
-      return c.newResponse(stream, 200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-        [SYNAP_TURN_ID_HEADER]: durableTurn.id,
-      });
+
+      if (action === "reopen_and_run") {
+        const claimedReopen = await reopenChatTurn(durableTurn.id);
+        if (!claimedReopen) {
+          // Lost CAS race — another worker reopened first.
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: "turn",
+                    turnId: durableTurn!.id,
+                    requestId: durableTurn!.requestId,
+                    status: "running",
+                    reused: true,
+                    error: "turn_in_progress",
+                  })}\n\n`
+                )
+              );
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          });
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+              [SYNAP_TURN_ID_HEADER]: durableTurn.id,
+            },
+          });
+        }
+        durableTurn = {
+          ...durableTurn,
+          status: "running",
+          error: null,
+          completedAt: null,
+        };
+        // Fall through to IS — same requestId, fresh attempt.
+      } else {
+        const encoder = new TextEncoder();
+        const leading = `data: ${JSON.stringify({
+          type: "turn",
+          turnId: durableTurn.id,
+          requestId: durableTurn.requestId,
+          status: durableTurn.status,
+          reused: true,
+        })}\n\n`;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(leading));
+            if (action === "skip_completed") {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "complete", turnId: durableTurn.id, reused: true })}\n\n`
+                )
+              );
+            } else if (action === "in_progress") {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: "error",
+                    turnId: durableTurn.id,
+                    message: "Turn already in progress for this requestId",
+                    reused: true,
+                  })}\n\n`
+                )
+              );
+            } else {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: "error",
+                    turnId: durableTurn.id,
+                    message: durableTurn.error ?? "Turn already finished",
+                    reused: true,
+                  })}\n\n`
+                )
+              );
+            }
+            controller.close();
+          },
+        });
+        return c.newResponse(stream, 200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+          [SYNAP_TURN_ID_HEADER]: durableTurn.id,
+        });
+      }
     }
 
     // ── Step 4: Resolve IS endpoint ──────────────────────────────────────────

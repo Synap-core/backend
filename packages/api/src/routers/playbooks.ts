@@ -26,6 +26,8 @@ import {
   eq,
   and,
   or,
+  gt,
+  lt,
   asc,
   desc,
   drizzleSql,
@@ -68,6 +70,10 @@ import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
 import { findUnresolvedGoalReferences } from "../services/playbooks/goal-references.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
+import {
+  decodeDefinitionCursor,
+  encodeDefinitionCursor,
+} from "../utils/keyset-cursor.js";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -958,8 +964,66 @@ export const playbooksRouter = router({
               : undefined
           )
         )
-        .orderBy(desc(playbooks.createdAt))
+        .orderBy(desc(playbooks.createdAt), asc(playbooks.id))
         .limit(input?.limit ?? 50);
+    }),
+
+  /**
+   * Cursor-paginated definition list. The additive procedure avoids changing
+   * `list`'s array response while allowing operational inventories to load all
+   * visible playbooks without a misleading 100-row ceiling.
+   */
+  listPage: workspaceProcedure
+    .input(
+      z
+        .object({
+          status: playbookStatusSchema.optional(),
+          limit: z.number().int().min(1).max(100).default(50),
+          cursor: z.string().min(1).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
+      const cursor = input?.cursor
+        ? decodeDefinitionCursor(input.cursor)
+        : undefined;
+      const limit = input?.limit ?? 50;
+
+      const rows = await database
+        .select()
+        .from(playbooks)
+        .where(
+          and(
+            visibility,
+            input?.status !== undefined
+              ? eq(playbooks.status, input.status)
+              : undefined,
+            cursor
+              ? or(
+                  lt(playbooks.createdAt, new Date(cursor.at)),
+                  and(
+                    eq(playbooks.createdAt, new Date(cursor.at)),
+                    gt(playbooks.id, cursor.id)
+                  )
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(playbooks.createdAt), asc(playbooks.id))
+        .limit(limit + 1);
+
+      const hasNextPage = rows.length > limit;
+      const page = hasNextPage ? rows.slice(0, limit) : rows;
+      const last = page.at(-1);
+      return {
+        playbooks: page,
+        nextCursor:
+          hasNextPage && last
+            ? encodeDefinitionCursor({ at: last.createdAt, id: last.id })
+            : null,
+      };
     }),
 
   /**

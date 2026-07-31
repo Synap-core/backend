@@ -11,6 +11,7 @@
  * 4. If no automationContext, chainDepth starts at 0 (user-originated event)
  */
 
+import { createHash } from "node:crypto";
 import {
   db,
   eq,
@@ -21,6 +22,7 @@ import {
   drizzleSql,
   automations,
   automationRuns,
+  automationClaims,
   playbookAutomations,
   workspaceMembers,
   workspaces,
@@ -33,6 +35,70 @@ import { deriveEventSubjectEntityId } from "../utils/run-subject.js";
 const logger = createLogger({ module: "automation-trigger-matcher" });
 
 const MAX_CHAIN_DEPTH = 3;
+
+/** Claim namespace for exactly-once event→automation fire (D5). */
+export const AUTOMATION_EVENT_CLAIM_NAMESPACE = "automation-event";
+
+/**
+ * Prefer a stable id from the event payload when present (messageId from
+ * Discord/Unipile inbound, explicit eventId, subject-ish ids). Falls back to a
+ * deterministic hash of eventType+subjectId+data so redeliveries without a
+ * native id still collapse.
+ */
+export function resolveAutomationEventFingerprintId(input: {
+  eventType: string;
+  subjectId: string;
+  data?: Record<string, unknown>;
+}): string {
+  const data = input.data ?? {};
+  const candidates: unknown[] = [
+    data.eventId,
+    data.messageId,
+    data.id,
+    // Webhook redelivery often repeats the same body under the same subscription.
+    data.subscriptionId && data.payload != null
+      ? `${String(data.subscriptionId)}:${stableJsonHash(data.payload)}`
+      : null,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim().length > 0) return c.trim();
+  }
+  return stableJsonHash({
+    eventType: input.eventType,
+    subjectId: input.subjectId,
+    data,
+  });
+}
+
+export function buildAutomationEventClaimKey(input: {
+  automationId: string;
+  eventType: string;
+  subjectEntityId?: string | null;
+  eventFingerprintId: string;
+}): string {
+  const subject = input.subjectEntityId?.trim() || "none";
+  return `${input.automationId}:${input.eventType}:${subject}:${input.eventFingerprintId}`;
+}
+
+function stableJsonHash(value: unknown): string {
+  return createHash("sha256")
+    .update(stableStringify(value))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/** Deterministic JSON for fingerprint hashing (sorted object keys). */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
 
 interface TriggerMatchPayload {
   eventType: string;
@@ -638,6 +704,22 @@ export async function handleAutomationTriggerMatch(job: {
       return;
     }
 
+    // D5 event fingerprint: claim before side effects (enqueue). owner_run_id
+    // FK requires a run row first — insert run, then claim; loser marks the
+    // run skipped and does NOT enqueue. Unique index on automation_claims is
+    // the concurrency boundary (namespace=automation-event).
+    const eventFingerprintId = resolveAutomationEventFingerprintId({
+      eventType,
+      subjectId,
+      data,
+    });
+    const claimKey = buildAutomationEventClaimKey({
+      automationId,
+      eventType,
+      subjectEntityId: runSubjectEntityId,
+      eventFingerprintId,
+    });
+
     const [run] = await db
       .insert(automationRuns)
       .values({
@@ -649,6 +731,38 @@ export async function handleAutomationTriggerMatch(job: {
         status: "running",
       })
       .returning({ id: automationRuns.id });
+
+    const [claimed] = await db
+      .insert(automationClaims)
+      .values({
+        workspaceId: runWorkspaceId,
+        namespace: AUTOMATION_EVENT_CLAIM_NAMESPACE,
+        claimKey,
+        ownerRunId: run.id,
+      })
+      .onConflictDoNothing()
+      .returning({ id: automationClaims.id });
+
+    if (!claimed) {
+      await db
+        .update(automationRuns)
+        .set({
+          status: "skipped",
+          errorMessage: "event_claim_already_held",
+          completedAt: new Date(),
+        })
+        .where(eq(automationRuns.id, run.id));
+      logger.info(
+        {
+          automationId,
+          eventType,
+          claimKey,
+          runId: run.id,
+        },
+        "Skipping automation fire — event fingerprint claim already held"
+      );
+      return;
+    }
 
     // ── Enqueue execution ──────────────────────────────────────────────
     await boss.send("automation-execute", {

@@ -24,6 +24,7 @@ import {
   jsonb,
   boolean,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { channels } from "./channels.js";
 import { inboxItems } from "./inbox-items.js";
@@ -206,6 +207,9 @@ export const messages = pgTable(
       table.channelId,
       table.timestamp
     ),
+    // D5: race-safe inbound claim (ON CONFLICT hash DO NOTHING). Also covers
+    // tamper-hash uniqueness — see migration 0218 dual-use note.
+    hashUnique: uniqueIndex("messages_hash_unique").on(table.hash),
     routedTeammateIdx: index("messages_routed_teammate_idx")
       .on(table.routedTeammateId)
       .where(isNotNull(table.routedTeammateId)),

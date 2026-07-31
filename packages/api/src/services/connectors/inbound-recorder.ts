@@ -403,19 +403,14 @@ export async function recordInboundMessage(
       typeof args.sentAt === "string" ? args.sentAt : sentAt.toISOString(),
   });
 
+  // Dual-use note: this is an inbound *delivery* fingerprint
+  // (sha256(provider:seed)), NOT computeMessageHash(id, content). Both live in
+  // messages.hash; global UNIQUE (0218) makes the insert below race-safe for
+  // both domains (tamper hashes include UUID id so they never collide with
+  // intentional inbound seeds in practice).
   const inboundHash = createHash("sha256")
     .update(`${args.provider}:${args.idempotencySeed}`)
     .digest("hex");
-
-  // Idempotency guard: if this inbound was already recorded, report it as a
-  // duplicate so the caller can skip re-doing downstream work.
-  const already = await db.query.messages.findFirst({
-    where: eq(messages.hash, inboundHash),
-    columns: { id: true },
-  });
-  if (already) {
-    return { channelId, contextObjectId, inboundHash, recorded: false };
-  }
 
   // Resolve sender attribution (best-effort — never blocks recording).
   let senderMetadata: Record<string, unknown> | undefined;
@@ -439,7 +434,10 @@ export async function recordInboundMessage(
     }
   }
 
-  await db
+  // Race-safe claim: UNIQUE(messages.hash) + ON CONFLICT DO NOTHING is the
+  // concurrency boundary. Loser re-SELECTs and reports recorded:false so
+  // callers skip a second IS turn / side-effect fan-out.
+  const [inserted] = await db
     .insert(messages)
     .values({
       channelId,
@@ -473,7 +471,22 @@ export async function recordInboundMessage(
           }
         : {}),
     })
-    .onConflictDoNothing(); // idempotent — webhook may fire more than once
+    .onConflictDoNothing({ target: messages.hash })
+    .returning({ id: messages.id });
+
+  if (!inserted) {
+    // Lost the race or exact replay — hash already claimed.
+    const existing = await db.query.messages.findFirst({
+      where: eq(messages.hash, inboundHash),
+      columns: { id: true },
+    });
+    if (!existing) {
+      throw new Error(
+        `inbound-recorder: hash conflict for ${args.provider} but no row found on reselect`
+      );
+    }
+    return { channelId, contextObjectId, inboundHash, recorded: false };
+  }
 
   logger.info(
     { channelId, provider: args.provider, externalId: args.externalId },

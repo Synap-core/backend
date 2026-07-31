@@ -28,6 +28,9 @@ import {
   or,
   isNull,
   inArray,
+  gt,
+  lt,
+  asc,
   desc,
   drizzleSql,
   automations,
@@ -48,6 +51,10 @@ import {
 } from "@synap/jobs/utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { TRPCError } from "@trpc/server";
+import {
+  decodeDefinitionCursor,
+  encodeDefinitionCursor,
+} from "../utils/keyset-cursor.js";
 
 /**
  * Resolve `skillName` → `skillId` on `skill` flow nodes that carry a name but no
@@ -320,10 +327,81 @@ export const automationsRouter = router({
               : undefined
           )
         )
-        .orderBy(desc(automations.updatedAt))
+        .orderBy(desc(automations.updatedAt), asc(automations.id))
         .limit(input?.limit ?? 50);
 
       return { automations: rows };
+    }),
+
+  /**
+   * Cursor-paginated definition list. Kept separate from `list` so existing
+   * consumers retain their response shape while completeness-sensitive
+   * surfaces can traverse every visible definition.
+   */
+  listPage: protectedProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().nullable().optional(),
+          status: z.enum(["draft", "active", "paused", "error"]).optional(),
+          triggerType: z
+            .enum(["event", "cron", "webhook", "manual"])
+            .optional(),
+          limit: z.number().int().min(1).max(100).default(50),
+          cursor: z.string().min(1).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        automations
+      );
+      const cursor = input?.cursor
+        ? decodeDefinitionCursor(input.cursor)
+        : undefined;
+      const limit = input?.limit ?? 50;
+
+      const rows = await database
+        .select()
+        .from(automations)
+        .where(
+          and(
+            visibility,
+            input?.workspaceId
+              ? or(
+                  isNull(automations.workspaceId),
+                  eq(automations.workspaceId, input.workspaceId)
+                )
+              : undefined,
+            input?.status ? eq(automations.status, input.status) : undefined,
+            input?.triggerType
+              ? eq(automations.triggerType, input.triggerType)
+              : undefined,
+            cursor
+              ? or(
+                  lt(automations.updatedAt, new Date(cursor.at)),
+                  and(
+                    eq(automations.updatedAt, new Date(cursor.at)),
+                    gt(automations.id, cursor.id)
+                  )
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(automations.updatedAt), asc(automations.id))
+        .limit(limit + 1);
+
+      const hasNextPage = rows.length > limit;
+      const page = hasNextPage ? rows.slice(0, limit) : rows;
+      const last = page.at(-1);
+      return {
+        automations: page,
+        nextCursor:
+          hasNextPage && last
+            ? encodeDefinitionCursor({ at: last.updatedAt, id: last.id })
+            : null,
+      };
     }),
 
   // ── Feed targets — the static "automation → where its runs land" resolver ────

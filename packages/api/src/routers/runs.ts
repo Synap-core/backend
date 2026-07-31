@@ -14,7 +14,8 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { listRuns, getRun, listRunGroups } from "../services/runs/index.js";
+import { listRuns, getRun, listRunGroupsPage } from "../services/runs/index.js";
+import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
 
 const flowType = z.enum([
   "automation",
@@ -72,12 +73,41 @@ export const runsRouter = router({
           .object({ workspaceId: z.string().uuid().optional() })
           .optional(),
         limit: z.number().min(1).max(100).optional(),
+        cursor: z.string().min(1).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const groups = await listRunGroups({ userId, ...input });
-      return { groups };
+      return listRunGroupsPage({ userId, ...input });
+    }),
+
+  /**
+   * Last N executions for each visible automation/playbook in a bounded batch.
+   * The service issues at most one window query per ledger, so process health
+   * strips are complete per requested flow without pod-wide sampling or N+1.
+   */
+  recentByFlows: protectedProcedure
+    .input(
+      z.object({
+        flows: z
+          .array(
+            z.object({
+              flowType: z.enum(["automation", "playbook"]),
+              flowId: z.string().uuid(),
+            })
+          )
+          .min(1)
+          .max(100),
+        scope: z
+          .object({ workspaceId: z.string().uuid().optional() })
+          .optional(),
+        perFlowLimit: z.number().int().min(1).max(20).default(20),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const histories = await listRecentRunsByFlows({ userId, ...input });
+      return { histories };
     }),
 
   /** One run + its flow-agnostic activity timeline. */

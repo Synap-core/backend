@@ -83,7 +83,15 @@ vi.mock("@synap/database", () => ({
       set: (values: Record<string, unknown>) => {
         mocks.updateSets.push(values);
         return {
-          where: async () => undefined,
+          // finish: await where(); reopen CAS: where().returning()
+          where: () => {
+            const p = Promise.resolve(undefined) as Promise<undefined> & {
+              returning: () => Promise<Array<{ id: string }>>;
+            };
+            p.returning = async () =>
+              values.status === ChatTurnStatus.RUNNING ? [{ id: turnId }] : [];
+            return p;
+          },
         };
       },
     }),

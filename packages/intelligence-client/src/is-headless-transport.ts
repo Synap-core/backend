@@ -39,6 +39,8 @@ export interface HeadlessChatRequest {
    * interactive slots. Omitted = IS default (interactive).
    */
   priority?: "interactive" | "background";
+  /** Optional customer email for IS LLM tier resolution (owner/pricing). */
+  customerEmail?: string;
   /**
    * When true, collect `step` frames into the result (for metadata.aiSteps).
    * Default false — session-recap and other text-only callers stay unchanged.
@@ -78,6 +80,7 @@ export async function requestHeadlessChatText(
     stream: true,
     // Background headless work yields FairSemaphore slots to live chat when set.
     ...(payload.priority ? { priority: payload.priority } : {}),
+    ...(payload.customerEmail ? { customerEmail: payload.customerEmail } : {}),
   });
 
   const headers: Record<string, string> = {

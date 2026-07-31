@@ -51,6 +51,10 @@ import {
   handleFocusSessionReaper,
   FOCUS_SESSION_REAPER_QUEUE,
 } from "./focus-session-reaper.js";
+import {
+  handleChatTurnReaper,
+  CHAT_TURN_REAPER_QUEUE,
+} from "./chat-turn-reaper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleVaultGrantExpiry,
@@ -184,6 +188,7 @@ const ALL_QUEUES = [
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
+  CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
@@ -405,6 +410,11 @@ export async function registerAllWorkers(): Promise<void> {
     handleFocusSessionReaper()
   );
   logger.info("Registered worker: focus-session-reaper");
+
+  // Chat turn reaper (cron: every ~15min — fails chat_turns stuck in "running"
+  // after a mid-stream crash; threshold via CHAT_TURN_STUCK_HOURS, default 2h)
+  await boss.work(CHAT_TURN_REAPER_QUEUE, async () => handleChatTurnReaper());
+  logger.info("Registered worker: chat-turn-reaper");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

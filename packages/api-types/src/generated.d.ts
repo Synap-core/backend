@@ -6161,6 +6161,27 @@ export interface RunAgent {
 	/** Where the actor was observed. */
 	source: "proposal" | "message" | "both";
 }
+export interface RunGroupsPage {
+	groups: RunGroup[];
+	nextCursor: string | null;
+}
+export interface RecentFlowRef {
+	flowType: "automation" | "playbook";
+	flowId: string;
+}
+/**
+ * Deliberately lean: these are interactive health-strip marks, not partially
+ * populated `UnifiedRun`s. The exact run detail is loaded through `runs.get`.
+ */
+export interface RecentFlowRun {
+	id: string;
+	status: RunStatus;
+	startedAt: Date;
+	completedAt: Date | null;
+}
+export interface RecentFlowHistory extends RecentFlowRef {
+	runs: RecentFlowRun[];
+}
 /** Which workflow kind this place aggregates. */
 export type WorkflowKind = "automation" | "playbook";
 /**
@@ -20393,6 +20414,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listPage: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				status?: "error" | "active" | "paused" | "draft" | undefined;
+				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
+				limit?: number | undefined;
+				cursor?: string | undefined;
+			} | undefined;
+			output: {
+				automations: {
+					id: string;
+					workspaceId: string | null;
+					createdBy: string;
+					name: string;
+					description: string | null;
+					triggerType: "event" | "cron" | "webhook" | "manual";
+					triggerConfig: AutomationTriggerConfig;
+					flowDefinition: FlowDefinition;
+					status: "error" | "active" | "paused" | "draft";
+					errorMessage: string | null;
+					version: number;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					runCount: number;
+					successCount: number;
+					failureCount: number;
+					state: Record<string, unknown>;
+					metadata: {
+						[key: string]: unknown;
+						tags?: string[];
+						version?: number;
+						createdVia?: "ai" | "manual" | "template";
+						averageExecutionTime?: number;
+						suggestedByPattern?: boolean;
+						patternConfidence?: number;
+						description?: string;
+					};
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
 		feedTargets: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
@@ -21924,6 +21989,39 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		listPage: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				status?: "active" | "paused" | "archived" | "draft" | undefined;
+				limit?: number | undefined;
+				cursor?: string | undefined;
+			} | undefined;
+			output: {
+				playbooks: {
+					id: string;
+					workspaceId: string | null;
+					createdBy: string;
+					name: string;
+					description: string | null;
+					goalTemplate: string;
+					params: unknown;
+					inputStrategy: unknown;
+					channelSpec: unknown;
+					expectedOutputs: unknown;
+					stages: unknown;
+					version: number;
+					schedule: unknown;
+					executor: PlaybookExecutorRef;
+					status: "active" | "paused" | "archived" | "draft";
+					flowAutomationId: string | null;
+					subjectProfile: unknown;
+					metadata: unknown;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
 		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug: string;
@@ -22382,9 +22480,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId?: string | undefined;
 				} | undefined;
 				limit?: number | undefined;
+				cursor?: string | undefined;
+			};
+			output: RunGroupsPage;
+			meta: object;
+		}>;
+		recentByFlows: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				flows: {
+					flowType: "playbook" | "automation";
+					flowId: string;
+				}[];
+				scope?: {
+					workspaceId?: string | undefined;
+				} | undefined;
+				perFlowLimit?: number | undefined;
 			};
 			output: {
-				groups: RunGroup[];
+				histories: RecentFlowHistory[];
 			};
 			meta: object;
 		}>;

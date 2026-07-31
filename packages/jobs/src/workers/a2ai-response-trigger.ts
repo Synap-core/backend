@@ -60,7 +60,11 @@ export interface A2AIResponseTriggerData {
   agentUserId?: string;
 }
 
-/** pg-boss job options for A2AI response trigger */
+/**
+ * pg-boss job options for A2AI response trigger.
+ * `singletonKey` is set per-send to userMessageId (see trigger-auto-respond)
+ * so concurrent double-enqueue cannot schedule two IS calls for one message.
+ */
 export const A2AI_TRIGGER_JOB_OPTIONS: PgBoss.SendOptions = {
   retryLimit: 3,
   retryDelay: 10,
@@ -141,11 +145,14 @@ async function finishHeadlessChatTurn(input: {
 }
 
 /**
- * Mark a previously-failed (or interrupted running) turn as running again so a
- * pg-boss retry can re-invoke the model and finish cleanly.
+ * CAS-claim a previously-failed turn as running again so a pg-boss retry can
+ * re-invoke the model. Returns true only if THIS worker won the claim.
+ *
+ * Mirrors `reopenChatTurn` in api/services/chat-turns/chat-turn-store.ts (D5).
+ * Kept local: @synap/jobs must not import @synap/api (api → jobs dependency).
  */
-async function reopenHeadlessChatTurn(turnId: string): Promise<void> {
-  await db
+async function reopenHeadlessChatTurn(turnId: string): Promise<boolean> {
+  const [row] = await db
     .update(chatTurns)
     .set({
       status: ChatTurnStatus.RUNNING,
@@ -153,7 +160,11 @@ async function reopenHeadlessChatTurn(turnId: string): Promise<void> {
       completedAt: null,
       updatedAt: new Date(),
     })
-    .where(eq(chatTurns.id, turnId));
+    .where(
+      and(eq(chatTurns.id, turnId), eq(chatTurns.status, ChatTurnStatus.FAILED))
+    )
+    .returning({ id: chatTurns.id });
+  return row != null;
 }
 
 /**
@@ -244,8 +255,8 @@ export async function handleA2AIResponseTrigger(
     return;
   }
 
-  // Crash recovery: assistant may already be durable while the turn never
-  // finished (persist succeeded, finish failed). Don't re-call the model.
+  // Crash recovery first: assistant may already be durable while the turn
+  // never finished (persist succeeded, finish failed). Covers running + failed.
   if (!created) {
     const existingAssistant = await db.query.messages.findFirst({
       where: eq(messages.id, turn.assistantMessageId),
@@ -262,8 +273,26 @@ export async function handleA2AIResponseTrigger(
       );
       return;
     }
-    if (turn.status !== ChatTurnStatus.RUNNING) {
-      await reopenHeadlessChatTurn(turn.id);
+
+    // Concurrent job while turn is still running with no assistant yet —
+    // do not double-call IS (singletonKey usually prevents; ledger guard).
+    if (turn.status === ChatTurnStatus.RUNNING) {
+      logger.info(
+        { channelId, userMessageId, turnId: turn.id },
+        "A2AI turn already running — skipping"
+      );
+      return;
+    }
+
+    if (turn.status === ChatTurnStatus.FAILED) {
+      const claimed = await reopenHeadlessChatTurn(turn.id);
+      if (!claimed) {
+        logger.info(
+          { channelId, userMessageId, turnId: turn.id },
+          "A2AI reopen lost CAS race — skipping"
+        );
+        return;
+      }
     }
   }
 

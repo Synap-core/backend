@@ -139,6 +139,11 @@ export interface IntelligenceHubRequest {
    * Forwarded on the wire so background work yields slots to live chat.
    */
   priority?: "interactive" | "background";
+  /**
+   * Optional customer email for IS LLM tier resolution (owner allowlist / pricing).
+   * When set, multi-tenant IS can apply owner ×5 without LLM_TIER_MULTIPLIER=5.
+   */
+  customerEmail?: string;
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
   billingChannel?: "browser" | "api" | "relay";
   /** Channel kind: pm = private message / personal, group = workspace-shared channel */
@@ -245,6 +250,7 @@ export function buildChatRequestBody(
         ? { forcedSkillName: request.forcedSkillName }
         : {}),
     ...(request.priority ? { priority: request.priority } : {}),
+    ...(request.customerEmail ? { customerEmail: request.customerEmail } : {}),
   };
 }
 

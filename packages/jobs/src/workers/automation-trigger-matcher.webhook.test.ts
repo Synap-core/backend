@@ -45,6 +45,7 @@ function makeThenable(result: unknown) {
     insertValues(v);
     return p;
   };
+  p.onConflictDoNothing = () => p;
   p.returning = () => Promise.resolve(result);
   p.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
     Promise.resolve(result).then(res, rej);
@@ -88,6 +89,7 @@ vi.mock("@synap/database", () => ({
   drizzleSql: () => ({}),
   automations: { id: "id", workspaceId: "workspace_id", runCount: 0 },
   automationRuns: {},
+  automationClaims: { id: "id" },
   playbookAutomations: {},
   workspaceMembers: {},
   workspaces: {},

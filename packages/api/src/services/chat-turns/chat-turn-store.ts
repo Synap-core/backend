@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
 import {
   ChatTurnStatus,
@@ -8,22 +8,13 @@ import {
   messages,
 } from "@synap/database";
 
+// Re-export for call-site convenience; UUID shaping lives in a sibling module
+// so raw hash construction is not co-located with messages inserts
+// (message-hash-one-formula tripwire).
+export { stableUuidFromSeed } from "./stable-uuid-from-seed.js";
+
 export type DurableChatTurn = typeof chatTurns.$inferSelect;
 export type DurableChatTurnEvent = typeof chatTurnEvents.$inferSelect;
-
-/**
- * Deterministic UUID from an arbitrary seed (e.g. Discord
- * `${channelId}:${messageId}`). `chat_turns.request_id` is a UUID column; non-
- * UUID client seeds (snowflakes) still need a stable idempotency key.
- */
-export function stableUuidFromSeed(seed: string): string {
-  const h = createHash("sha256").update(seed).digest();
-  // RFC 4122 version-5 style nibble + variant so Postgres uuid accepts it.
-  h[6] = (h[6]! & 0x0f) | 0x50;
-  h[8] = (h[8]! & 0x3f) | 0x80;
-  const hex = Buffer.from(h.subarray(0, 16)).toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
 
 /**
  * Reserve an idempotent chat turn WITHOUT inserting a user message.
@@ -205,6 +196,86 @@ export async function finishChatTurn(input: {
       updatedAt: new Date(),
     })
     .where(eq(chatTurns.id, input.turnId));
+}
+
+/**
+ * CAS-claim a previously-failed turn back to running so the same requestId can
+ * re-invoke the model. Clears error + completedAt.
+ *
+ * Returns true only if THIS caller won the claim (row was still `failed`).
+ * Concurrent retries that lose must treat the turn as in_progress — not re-run IS.
+ * Shared by Discord agent-turn, external chat, openai-compat, and (mirrors)
+ * headless A2AI retries.
+ */
+export async function reopenChatTurn(turnId: string): Promise<boolean> {
+  const [row] = await db
+    .update(chatTurns)
+    .set({
+      status: ChatTurnStatus.RUNNING,
+      error: null,
+      completedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(chatTurns.id, turnId), eq(chatTurns.status, ChatTurnStatus.FAILED))
+    )
+    .returning({ id: chatTurns.id });
+  return row != null;
+}
+
+/**
+ * Pure claim policy for durable turns under the same requestId (D5).
+ *
+ * - completed → skip (idempotent success)
+ * - running → in_progress (another worker owns it)
+ * - failed with no useful assistant → reopen_and_run
+ * - failed/cancelled with useful assistant → skip_with_assistant
+ * - cancelled without assistant → skip (intentional abort; do not auto-reopen)
+ * - newly created → run
+ */
+export type ChatTurnClaimAction =
+  | "run"
+  | "skip_completed"
+  | "in_progress"
+  | "reopen_and_run"
+  | "skip_with_assistant"
+  | "skip_cancelled";
+
+export function decideChatTurnClaimAction(input: {
+  created: boolean;
+  status: string;
+  hasUsefulAssistant: boolean;
+}): ChatTurnClaimAction {
+  if (input.created) return "run";
+  if (input.status === ChatTurnStatus.COMPLETED) return "skip_completed";
+  if (input.status === ChatTurnStatus.RUNNING) return "in_progress";
+  if (input.status === ChatTurnStatus.CANCELLED) {
+    return input.hasUsefulAssistant ? "skip_with_assistant" : "skip_cancelled";
+  }
+  // failed (or any unexpected terminal)
+  if (input.hasUsefulAssistant) return "skip_with_assistant";
+  return "reopen_and_run";
+}
+
+/** Non-empty assistant body counts as useful (partial apology text still useful). */
+export function isUsefulAssistantContent(
+  content: string | null | undefined
+): boolean {
+  return typeof content === "string" && content.trim().length > 0;
+}
+
+/**
+ * Look up whether the turn's allocated assistant message already has useful
+ * content. Best-effort: missing row → false.
+ */
+export async function hasUsefulAssistantForTurn(
+  assistantMessageId: string
+): Promise<boolean> {
+  const row = await db.query.messages.findFirst({
+    where: eq(messages.id, assistantMessageId),
+    columns: { content: true },
+  });
+  return isUsefulAssistantContent(row?.content);
 }
 
 export async function requestChatTurnCancellation(input: {

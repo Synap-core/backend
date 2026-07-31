@@ -30,6 +30,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       and: conditions.filter((c) => c !== undefined),
     })),
     eq: vi.fn((column: unknown, value: unknown) => ({ eq: [column, value] })),
+    gt: vi.fn((column: unknown, value: unknown) => ({ gt: [column, value] })),
+    lt: vi.fn((column: unknown, value: unknown) => ({ lt: [column, value] })),
+    or: vi.fn((...conditions: unknown[]) => ({
+      or: conditions.filter((c) => c !== undefined),
+    })),
+    asc: vi.fn((column: unknown) => ({ asc: column })),
     desc: vi.fn((column: unknown) => ({ desc: column })),
     drizzleSql: Object.assign(
       vi.fn((strings: TemplateStringsArray) => ({ sql: strings.join("?") })),
@@ -48,7 +54,13 @@ vi.mock("../../utils/project-scope.js", () => ({
   accessScopeWhere: vi.fn(() => ({ accessScope: true })),
 }));
 
-import { buildNodeLabelMap, buildNodeTypeMap, listRunGroups } from "./index.js";
+import {
+  buildNodeLabelMap,
+  buildNodeTypeMap,
+  listRunGroups,
+  listRunGroupsPage,
+} from "./index.js";
+import { decodeRunGroupCursor } from "../../utils/keyset-cursor.js";
 
 /** Chainable select() builder — supports the automation/playbook groupBy shape. */
 function selectChain(rows: unknown[]) {
@@ -58,6 +70,7 @@ function selectChain(rows: unknown[]) {
     innerJoin: vi.fn(),
     where: vi.fn(),
     groupBy: vi.fn(),
+    having: vi.fn(),
     orderBy: vi.fn(),
     limit: vi.fn().mockResolvedValue(rows),
     _captured: captured,
@@ -69,6 +82,7 @@ function selectChain(rows: unknown[]) {
     return chain;
   });
   chain.groupBy.mockReturnValue(chain);
+  chain.having.mockReturnValue(chain);
   chain.orderBy.mockReturnValue(chain);
   return chain;
 }
@@ -216,6 +230,51 @@ describe("runs.listRunGroups — user-floor parity with listRuns", () => {
     expect(groups.map((g) => g.flowId)).toEqual(["pb-1", "auto-1"]);
     // Coerced to a real Date so every downstream Date consumer is honored.
     expect(groups[0]!.latestStartedAt).toBeInstanceOf(Date);
+  });
+
+  it("uses flow kind and id as deterministic ties and returns a continuation cursor", async () => {
+    const tiedAt = "2026-03-05T00:00:00.000Z";
+    mockDb.select
+      .mockReturnValueOnce(
+        selectChain([
+          {
+            flowId: "00000000-0000-4000-8000-000000000001",
+            flowName: "Automation",
+            runCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            hasRunning: false,
+            latestStartedAt: tiedAt,
+            latestRunId: "run-a",
+            latestStatus: "completed",
+          },
+        ])
+      )
+      .mockReturnValueOnce(
+        selectChain([
+          {
+            flowId: "00000000-0000-4000-8000-000000000002",
+            flowName: "Playbook",
+            runCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            hasRunning: false,
+            latestStartedAt: tiedAt,
+            latestRunId: "run-b",
+            latestStatus: "completed",
+          },
+        ])
+      );
+
+    const page = await listRunGroupsPage({ userId: USER, limit: 1 });
+
+    expect(page.groups.map((group) => group.flowType)).toEqual(["automation"]);
+    expect(page.nextCursor).not.toBeNull();
+    expect(decodeRunGroupCursor(page.nextCursor!)).toEqual({
+      at: tiedAt,
+      flowType: "automation",
+      id: "00000000-0000-4000-8000-000000000001",
+    });
   });
 });
 

@@ -800,11 +800,15 @@ export function registerThreadsRoutes(app: HubHono): void {
         if (lastUserIdx >= 0) {
           const lastUser = items[lastUserIdx];
           const lastUserMsgId = messageIds[lastUserIdx];
+          const meta = lastUser.metadata as Record<string, unknown> | undefined;
+          const dispatchAgentType =
+            typeof meta?.agentType === "string" ? meta.agentType : undefined;
           await triggerAutoRespond({
             channelId: threadId,
             userMessageId: lastUserMsgId,
             content: lastUser.content,
             sourceUserId: lastUser.userId,
+            agentType: dispatchAgentType,
           });
         }
       }
@@ -884,11 +888,17 @@ export function registerThreadsRoutes(app: HubHono): void {
       });
 
       if (body.autoRespond === true && body.role === "user") {
+        // Parallel dispatch_agent stamps metadata.agentType so A2AI runs the
+        // specialist — not always orchestrator/meta.
+        const meta = body.metadata as Record<string, unknown> | undefined;
+        const dispatchAgentType =
+          typeof meta?.agentType === "string" ? meta.agentType : undefined;
         await triggerAutoRespond({
           channelId: threadId,
           userMessageId: msgId,
           content: body.content,
           sourceUserId: body.userId,
+          agentType: dispatchAgentType,
         });
       }
 

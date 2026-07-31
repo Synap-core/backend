@@ -44,6 +44,15 @@ describe("external durable chat_turns wiring (tripwire)", () => {
     expect(fetchIdx).toBeGreaterThan(beginIdx);
   });
 
+  it("external doors reopen failed turns under same requestId (D5)", () => {
+    expect(chatSource).toContain("decideChatTurnClaimAction");
+    expect(chatSource).toContain("reopenChatTurn");
+    expect(chatSource).toContain("reopen_and_run");
+    expect(oaiSource).toContain("decideChatTurnClaimAction");
+    expect(oaiSource).toContain("reopenChatTurn");
+    expect(oaiSource).toContain("reopen_and_run");
+  });
+
   it("openai-compat returns turnId and wires finish on all paths", () => {
     expect(oaiSource).toContain("beginExternalDurableTurn");
     expect(oaiSource).toContain("safeFinishExternalTurn");

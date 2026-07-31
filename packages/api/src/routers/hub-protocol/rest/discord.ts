@@ -48,8 +48,11 @@ import type { AIStep } from "@synap-core/types";
 import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
 import {
   createOrGetChatTurn,
+  decideChatTurnClaimAction,
   finishChatTurn,
   getChatTurnByRequest,
+  isUsefulAssistantContent,
+  reopenChatTurn,
   stableUuidFromSeed,
   type DurableChatTurn,
 } from "../../../services/chat-turns/chat-turn-store.js";
@@ -455,33 +458,11 @@ export function registerDiscordRoutes(app: HubHono): void {
         `${body.discordChannelId}:${body.messageId}`
       );
 
-      if (!recorded) {
-        // Duplicate delivery. Return the prior assistant reply if it exists;
-        // otherwise the first turn is still in flight — return an empty reply so
-        // the bot posts nothing twice. Surface the prior chat turn when present.
-        const priorReply = await db.query.messages.findFirst({
-          where: and(
-            eq(messages.previousHash, inboundHash),
-            eq(messages.role, MessageRole.ASSISTANT)
-          ),
-          columns: { content: true },
-        });
-        const priorTurn = await getChatTurnByRequest({
-          userId: actingUserId,
-          requestId: turnRequestId,
-        });
-        return c.json(
-          {
-            reply: priorReply?.content ?? "",
-            ...(priorTurn ? { turnId: priorTurn.id } : {}),
-          },
-          200
-        );
-      }
-
-      // ── 2b. Reserve a durable chat turn (lifecycle ledger for UnifiedRun /
-      // diagnose). Inbound user message is already stored — do NOT re-insert.
-      // Best-effort: a ledger failure must not block the agent turn.
+      // ── 2b. Durable chat turn claim (works for first delivery AND retries).
+      // Gateway retries re-POST the same messageId → recorded:false, but we must
+      // still apply D5 claim policy: completed/skip with useful assistant, running
+      // → in_progress, failed + no useful assistant → CAS reopen + re-run IS.
+      // Best-effort: a ledger failure must not block a first-time agent turn.
       try {
         const inboundMsg = await db.query.messages.findFirst({
           where: eq(messages.hash, inboundHash),
@@ -495,7 +476,106 @@ export function registerDiscordRoutes(app: HubHono): void {
           assistantMessageId: randomUUID(),
         });
         durableTurn = claimed.turn;
+
+        // Useful assistant = inbound-chained reply OR the turn's allocated row.
+        const priorReply = await db.query.messages.findFirst({
+          where: and(
+            eq(messages.previousHash, inboundHash),
+            eq(messages.role, MessageRole.ASSISTANT)
+          ),
+          columns: { content: true, id: true },
+        });
+        let usefulAssistantContent = isUsefulAssistantContent(
+          priorReply?.content
+        )
+          ? (priorReply!.content as string)
+          : "";
+        if (!usefulAssistantContent) {
+          const allocated = await db.query.messages.findFirst({
+            where: eq(messages.id, durableTurn.assistantMessageId),
+            columns: { content: true },
+          });
+          if (isUsefulAssistantContent(allocated?.content)) {
+            usefulAssistantContent = allocated!.content as string;
+          }
+        }
+        const hasUsefulAssistant = usefulAssistantContent.length > 0;
+
+        const action = decideChatTurnClaimAction({
+          // On duplicate inbound, the turn already exists — never treat as "created".
+          created: recorded ? claimed.created : false,
+          status: durableTurn.status,
+          hasUsefulAssistant,
+        });
+
+        if (action === "in_progress") {
+          return c.json(
+            {
+              reply: "",
+              partial: true,
+              error: "turn_in_progress",
+              turnId: durableTurn.id,
+            },
+            200
+          );
+        }
+
+        if (
+          action === "skip_completed" ||
+          action === "skip_with_assistant" ||
+          action === "skip_cancelled"
+        ) {
+          // Replays of partial/failed turns must stay marked partial so the
+          // bridge does not present a half-answer as a clean success.
+          const isCleanComplete = action === "skip_completed";
+          return c.json(
+            {
+              reply: usefulAssistantContent,
+              turnId: durableTurn.id,
+              ...(isCleanComplete
+                ? {}
+                : {
+                    partial: true,
+                    error: durableTurn.error ?? durableTurn.status,
+                  }),
+            },
+            200
+          );
+        }
+
+        // failed + no useful assistant → CAS-reopen and fall through to IS.
+        if (action === "reopen_and_run") {
+          const claimedReopen = await reopenChatTurn(durableTurn.id);
+          if (!claimedReopen) {
+            return c.json(
+              {
+                reply: "",
+                partial: true,
+                error: "turn_in_progress",
+                turnId: durableTurn.id,
+              },
+              200
+            );
+          }
+          durableTurn = { ...durableTurn, status: "running", error: null };
+        }
+        // action === "run" (first claim) falls through to IS below.
       } catch (err) {
+        if (!recorded) {
+          // Retry path with no ledger: do not double-run IS without a claim.
+          logger.warn(
+            { err, channelId, discordChannelId: body.discordChannelId },
+            "Discord agent turn: retry claim failed — not re-running IS"
+          );
+          return c.json(
+            {
+              reply: "",
+              partial: true,
+              error: "turn_claim_failed",
+            },
+            200
+          );
+        }
         logger.warn(
           { err, channelId, discordChannelId: body.discordChannelId },
           "Discord agent turn: chat turn reserve failed — continuing without ledger"
