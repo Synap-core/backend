@@ -35,13 +35,23 @@ function timeoutError(): Error {
 
 describe("IS call budget", () => {
   const origFetch = globalThis.fetch;
+  // All THREE keys, not just the generation one: the defaults test below asserts
+  // agentTurn and command too, so an ambient SYNAP_IS_AGENT_TURN_TIMEOUT_MS in
+  // the developer's or CI's environment would fail a test it has nothing to do
+  // with. Clearing only the key a test sets is how env-order flakes are born.
+  const BUDGET_ENV_KEYS = [
+    "SYNAP_IS_GENERATION_TIMEOUT_MS",
+    "SYNAP_IS_AGENT_TURN_TIMEOUT_MS",
+    "SYNAP_IS_COMMAND_TIMEOUT_MS",
+  ] as const;
+  const clearBudgetEnv = () => {
+    for (const k of BUDGET_ENV_KEYS) delete process.env[k];
+  };
   afterEach(() => {
     globalThis.fetch = origFetch;
-    delete process.env.SYNAP_IS_GENERATION_TIMEOUT_MS;
+    clearBudgetEnv();
   });
-  beforeEach(() => {
-    delete process.env.SYNAP_IS_GENERATION_TIMEOUT_MS;
-  });
+  beforeEach(clearBudgetEnv);
 
   it("defaults generation to 180s — deliberately above the 60s that failed", () => {
     expect(isCallBudgetMs("generation")).toBe(180_000);
@@ -130,17 +140,22 @@ describe("IS call budget", () => {
     );
   });
 
-  it("generateViaIS uses the configured budget as its abort signal", async () => {
+  it("generateViaIS passes the CONFIGURED budget to AbortSignal.timeout — not a literal", async () => {
+    // An earlier version of this test asserted only `init.signal ? 1 : 0` and
+    // re-checked isCallBudgetMs(). Both pass unchanged if generateViaIS were
+    // still hardcoded to AbortSignal.timeout(60_000) — it proved nothing about
+    // the call site, which is the ONLY thing this test exists to prove. Spy on
+    // the constructor and assert the actual millisecond argument.
     process.env.SYNAP_IS_GENERATION_TIMEOUT_MS = "111000";
-    let seen: number | undefined;
-    globalThis.fetch = vi.fn(async (_u: unknown, init: RequestInit) => {
-      // AbortSignal.timeout exposes no deadline; assert via a real race instead:
-      // the signal must NOT already be aborted, and the call must carry one.
-      seen = init.signal ? 1 : 0;
-      return new Response(JSON.stringify({ output: "ok" }), { status: 200 });
-    }) as unknown as typeof fetch;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: "ok" }), { status: 200 })
+    ) as unknown as typeof fetch;
+
     await expect(generateViaIS({ prompt: "hi" })).resolves.toBe("ok");
-    expect(seen).toBe(1);
-    expect(isCallBudgetMs("generation")).toBe(111_000);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(111_000);
+    timeoutSpy.mockRestore();
   });
 });

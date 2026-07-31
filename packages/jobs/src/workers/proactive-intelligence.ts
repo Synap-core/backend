@@ -17,6 +17,9 @@
 import type PgBoss from "pg-boss";
 import { db, eq, and, gte, desc, isNull, entities } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+// Type-only: the VALUE side of @synap/intelligence-client is loaded via dynamic
+// import below (this module's existing pattern), and a type import is erased.
+import type { ISCallContext } from "@synap/intelligence-client";
 
 const logger = createLogger({ module: "proactive-intelligence" });
 
@@ -37,10 +40,7 @@ const CLUSTER_LIMIT = 25;
  * ProactiveAiTriggers in the workspace schema.
  */
 type TriggerType =
-  | "captureCluster"
-  | "taskCompleted"
-  | "questionCreated"
-  | "decisionCreated";
+  "captureCluster" | "taskCompleted" | "questionCreated" | "decisionCreated";
 
 // ── Job payload ──────────────────────────────────────────────────────────────
 
@@ -148,8 +148,14 @@ async function callProactiveScanBrain(args: {
 }): Promise<void> {
   const { workspaceId, triggerType, seedEntityId, userId, candidates } = args;
 
+  // Set just before the fetch so the catch below can attribute a failure
+  // (side / elapsed / budget / endpoint / payload size) instead of logging a
+  // bare "aborted due to timeout" with no way to tell a pod-side abort from an
+  // IS crash. Null while we are still resolving the service.
+  let callCtx: ISCallContext | null = null;
+
   try {
-    const { resolveIntelligenceService } =
+    const { resolveIntelligenceService, isCallBudgetMs } =
       await import("@synap/intelligence-client");
 
     const service = await resolveIntelligenceService({
@@ -173,23 +179,34 @@ async function callProactiveScanBrain(args: {
       headers["Authorization"] = `Bearer ${service.serviceApiKey}`;
     }
 
-    const res = await fetch(
-      `${service.endpoint.replace(/\/$/, "")}/api/proactive-scan`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          workspaceId,
-          triggerType,
-          seedEntityId,
-          candidates,
-          userId,
-          // Agent-user authorship for any proposal the IS creates (optional).
-          agentUserId: service.agentUserId,
-        }),
-        signal: AbortSignal.timeout(60_000),
-      }
-    );
+    const endpoint = `${service.endpoint.replace(/\/$/, "")}/api/proactive-scan`;
+    const body = JSON.stringify({
+      workspaceId,
+      triggerType,
+      seedEntityId,
+      candidates,
+      userId,
+      // Agent-user authorship for any proposal the IS creates (optional).
+      agentUserId: service.agentUserId,
+    });
+    // `generation` budget, not a literal: /api/proactive-scan invokes a model,
+    // so it has the same reasoning-model exposure that made the bare 60_000
+    // here bite in the 2026-07-31 incident. See is-call-budget.ts.
+    const budgetMs = isCallBudgetMs("generation");
+    callCtx = {
+      kind: "generation",
+      endpoint,
+      budgetMs,
+      payloadChars: body.length,
+      startedAt: Date.now(),
+    };
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(budgetMs),
+    });
 
     if (!res.ok) {
       logger.warn(
@@ -204,9 +221,22 @@ async function callProactiveScanBrain(args: {
       "proactive.scan: brain invoked"
     );
   } catch (err) {
-    // Non-fatal: a proactive miss must never crash the worker.
+    // Non-fatal: a proactive miss must never crash the worker. But non-fatal is
+    // not the same as unattributed — this path swallowed the 2026-07-31 incident
+    // shape (a bare 60s abort) into a warn that named neither side nor elapsed.
+    // If we got as far as the fetch, describe it in the same one-line format the
+    // executor writes to `automation_step_runs.error_message`, so ONE grep finds
+    // an IS timeout regardless of which surface it happened on.
+    const { describeISFailure } = await import("@synap/intelligence-client");
     logger.warn(
-      { err, workspaceId, triggerType },
+      {
+        err,
+        workspaceId,
+        triggerType,
+        attribution: callCtx
+          ? describeISFailure(callCtx, err).message
+          : undefined,
+      },
       "proactive.scan: brain call failed (non-fatal)"
     );
   }

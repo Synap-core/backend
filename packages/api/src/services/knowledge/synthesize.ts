@@ -14,6 +14,7 @@
 import type { AskAnswer } from "./ask.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { isCallBudgetMs } from "@synap/intelligence-client";
 
 const logger = createLogger({ module: "knowledge-synthesize" });
 
@@ -178,7 +179,11 @@ export async function synthesizeAnswer(
         context,
         workspaceId: workspaceId ?? undefined,
       }),
-      signal: AbortSignal.timeout(60_000),
+      // `generation` budget, not a literal. This is a model call (the IS
+      // synthesizes an answer over retrieved context), so it carries the same
+      // reasoning-model exposure as the 2026-07-31 incident — and its `context`
+      // grows with corpus size, exactly the variable that made 60s bite there.
+      signal: AbortSignal.timeout(isCallBudgetMs("generation")),
     });
     if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
     const data = (await res.json()) as { answer?: string };

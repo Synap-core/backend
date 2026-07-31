@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import { count } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
+import { isCallBudgetMs } from "@synap/intelligence-client";
 import { getDefaultActiveService } from "@synap/intelligence-client";
 
 const logger = createLogger({ module: "automation-pattern-detector" });
@@ -51,9 +52,6 @@ const MIN_ACTIVITY_THRESHOLD = 10;
 
 /** Minimum confidence from IS to save a draft automation */
 const MIN_CONFIDENCE = 0.75;
-
-/** IS timeout for pattern detection call */
-const IS_TIMEOUT_MS = 30_000;
 
 interface PatternProposal {
   name: string;
@@ -152,7 +150,15 @@ async function callDetectPatterns(
   const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), IS_TIMEOUT_MS);
+  // `generation` budget, not a literal. `/api/automations/detect-patterns` asks
+  // a model to read a workspace's recent activity and propose flows — a
+  // generation-shaped call, on a prompt that grows with workspace activity. The
+  // old bare 30_000 here was HALF the ceiling that already proved too short in
+  // the 2026-07-31 incident. See is-call-budget.ts.
+  const timer = setTimeout(
+    () => controller.abort(),
+    isCallBudgetMs("generation")
+  );
 
   try {
     const response = await fetch(`${isUrl}/api/automations/detect-patterns`, {

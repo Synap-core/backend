@@ -149,10 +149,6 @@ import {
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
 import {
-  handlePackageVersionBackfill,
-  PACKAGE_VERSION_BACKFILL_QUEUE,
-} from "./package-version-backfill.js";
-import {
   handleContextCardRefresh,
   CONTEXT_CARD_REFRESH_QUEUE,
 } from "./context-card-refresh.js";
@@ -223,8 +219,22 @@ const ALL_QUEUES = [
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
   LIBRARIAN_ARCHIVER_QUEUE,
-  PACKAGE_VERSION_BACKFILL_QUEUE,
   CONTEXT_CARD_REFRESH_QUEUE,
+];
+
+/**
+ * Queues whose worker has been DELETED from the code. pg-boss doesn't prune
+ * these on its own, so we explicitly unschedule + delete them on boot (see the
+ * retirement loop in `registerAllWorkers`). Keep the name here even long after
+ * removal — it stays a cheap idempotent no-op once the queue is gone.
+ */
+const RETIRED_QUEUES: string[] = [
+  // Removed 2026-07: stamped `settings.packageVersion` WITHOUT reconciling
+  // content (so it lied) AND keyed on the vestigial `package_slug` column
+  // (near-always NULL) instead of the JSONB the drift surfaces read — it never
+  // healed the workspaces it was meant to. The boot-sweep stamp-on-reconcile
+  // (`reconcile-workspaces-to-templates.ts`) is now the single truthful stamp.
+  "package-version-backfill",
 ];
 
 /**
@@ -243,6 +253,56 @@ const ALL_QUEUES = [
 const NO_RETRY_QUEUES = new Set<string>([]);
 
 /**
+ * Queues whose handler is a LONG, NON-IDEMPOTENT walk that must never be
+ * redelivered while it is still executing.
+ *
+ * THE BUG THIS CLOSES (2026-07-31). pg-boss 10.4.2 gives every queue a default
+ * `expire_in` of 15 minutes (`src/plans.js:192`). When that elapses,
+ * `failJobsByTimeout` (`src/plans.js:566`) DELETEs the active row and re-INSERTs
+ * it as a retry — while the Node handler is still running. With the boss.ts
+ * default `retryLimit: 3`, a walk over 15 minutes therefore executes up to FOUR
+ * times, concurrently.
+ *
+ * Nothing downstream caught it:
+ *   - The executor's redelivery guard (`automation-executor.ts`, the
+ *     `run.status !== "running"` check) cannot help: a run that is STILL
+ *     EXECUTING is `running`, so the guard passes and the DAG re-walks from an
+ *     empty `completedNodeIds`.
+ *   - Only `notification` and `channel_message` steps carry an `outputIdemId`.
+ *     `entity_create` does NOT — so entity writes, document materialization and
+ *     governance proposals duplicate on every redelivery.
+ *   - The run reaper fires at 45 minutes (REAPER_STALE_MINUTES), three times
+ *     LATER than the 15-minute reclaim. It never gets there first.
+ *
+ * The walk got longer in the same wave that found this: `is-call-budget.ts`
+ * raised the per-call `generation` budget to 180s, and the executor's per-step
+ * retry loop allows 3 retries — so ONE `ai.generate` step is now up to
+ * 4 × 180s = 12 minutes. Two AI steps, or one loop node with an AI call inside,
+ * clears 900s trivially. The defect was latent before that change; it is
+ * reachable after it.
+ *
+ * The policy (decision "C"): retryLimit 0 AND an explicit expiry BELOW the
+ * reaper's 45-minute threshold.
+ *   - `retryLimit: 0` closes duplicate execution BY CONSTRUCTION, at any walk
+ *     length — not by a number staying larger than the longest walk forever.
+ *     Every future budget raise would otherwise re-open this.
+ *   - `expireInSeconds: 2400` (40 min) bounds the job's lifetime instead of
+ *     inheriting 900s, and sitting UNDER 2700s keeps the ordering sane: pg-boss
+ *     marks the job failed first, THEN the reaper finalizes the run row and
+ *     posts the summary. Above 2700s the reaper would mark a still-executing run
+ *     `failed` and report a completed run as a failure.
+ *
+ * THE COST, stated plainly: a hard worker death (redeploy SIGTERM, OOM) no
+ * longer auto-retries. The run stays `running` until the reaper sweeps it —
+ * 45-minute threshold plus up to 5 minutes of cron latency, so up to ~50 minutes
+ * before the user sees `failed`. That is the deliberate trade: crash-recovery
+ * latency in exchange for never double-writing entities.
+ */
+const LONG_WALK_QUEUES = new Map<string, number>([
+  ["automation-execute", 2400],
+]);
+
+/**
  * Register all pg-boss workers.
  * Must be called after startBoss().
  */
@@ -251,20 +311,46 @@ export async function registerAllWorkers(): Promise<void> {
 
   // Create all queues first (pg-boss v10 requires this before work/schedule)
   for (const name of ALL_QUEUES) {
-    await boss.createQueue(
-      name,
-      NO_RETRY_QUEUES.has(name) ? { name, retryLimit: 0 } : undefined
-    );
+    const longWalkExpiry = LONG_WALK_QUEUES.get(name);
+    const policy =
+      longWalkExpiry !== undefined
+        ? { name, retryLimit: 0, expireInSeconds: longWalkExpiry }
+        : NO_RETRY_QUEUES.has(name)
+          ? { name, retryLimit: 0 }
+          : undefined;
+    await boss.createQueue(name, policy);
     // createQueue is `ON CONFLICT DO NOTHING`, so a queue that already exists on
     // the pod keeps its old policy. updateQueue forces the retry-free policy for
     // the census queues on redeploy too (pg-boss resolves a job's retry as
     // COALESCE(jobRetry, queueRetry, ctorDefault) — a queue policy of 0 wins over
     // the boss.ts default of 3 for any send that doesn't set retryLimit itself).
-    if (NO_RETRY_QUEUES.has(name)) {
-      await boss.updateQueue(name, { name, retryLimit: 0 });
+    // WITHOUT this updateQueue the fix would be a no-op on every existing pod:
+    // `automation-execute` already exists there with the inherited 15-min/retry-3
+    // policy, so createQueue silently does nothing.
+    if (policy) {
+      await boss.updateQueue(name, policy);
     }
   }
   logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
+
+  // Retire queues whose worker was removed from the code. pg-boss NEVER prunes
+  // queues or schedules on its own (ALL_QUEUES is create-only, `schedule()` only
+  // upserts), so a deleted cron leaves an orphaned schedule that keeps minting
+  // jobs into a queue nothing consumes — they pile up forever. Explicitly
+  // unschedule THEN delete each retired queue. Idempotent + non-fatal: both are
+  // no-ops once the queue is gone, so this is safe to keep across redeploys.
+  for (const name of RETIRED_QUEUES) {
+    try {
+      await boss.unschedule(name);
+      await boss.deleteQueue(name);
+      logger.info({ queue: name }, "Retired orphaned pg-boss queue");
+    } catch (err) {
+      logger.warn(
+        { err, queue: name },
+        "Retired-queue cleanup failed (non-fatal)"
+      );
+    }
+  }
 
   // Ensure Typesense collections exist before registering search workers.
   // Non-fatal: if Typesense is not running the search feature degrades gracefully.
@@ -625,14 +711,6 @@ export async function registerAllWorkers(): Promise<void> {
     handleLibrarianArchiver()
   );
   logger.info("Registered worker: librarian.project-archiver");
-
-  // Package version backfill (cron: every 30min + on startup — self-heals
-  // pre-version-stamping workspaces so they stop showing "can't check for
-  // updates"; see the worker's header comment).
-  await boss.work(PACKAGE_VERSION_BACKFILL_QUEUE, async () =>
-    handlePackageVersionBackfill()
-  );
-  logger.info("Registered worker: package-version-backfill");
 
   // Context-card refresh (cron: daily 06:10 UTC — enqueues one
   // refresh_context_card egress per Discord client TEAM thread so the bridge

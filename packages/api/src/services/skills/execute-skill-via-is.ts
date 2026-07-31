@@ -18,6 +18,7 @@
  */
 
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { isCallBudgetMs } from "@synap/intelligence-client";
 
 /** Mirrors the Intelligence Hub `SkillExecutionResult`. */
 export interface SkillExecutionResult {
@@ -48,7 +49,14 @@ export async function executeSkillViaIS(args: {
   const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), args.timeoutMs ?? 60_000);
+  // An explicit caller-supplied timeoutMs still wins; only the FALLBACK moves
+  // off the 60s literal. `command` (a bounded IS action that may invoke a model)
+  // rather than `generation` — /api/skills/execute runs one skill, it does not
+  // loop like an agent turn. See is-call-budget.ts.
+  const timer = setTimeout(
+    () => controller.abort(),
+    args.timeoutMs ?? isCallBudgetMs("command")
+  );
   try {
     const res = await fetch(`${isUrl}/api/skills/execute`, {
       method: "POST",

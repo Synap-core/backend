@@ -125,10 +125,13 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
       // STAMP-ON-WRITE: pass the slug+version this pass is converging TO, so
       // `settings.packageVersion` advances in lockstep with the content it
       // reconciled. Before this, the boot sweep reconciled content but left the
-      // stamp untouched, while `package-version-backfill` stamped a version it
-      // never reconciled — so the stamp lied (a workspace could read
-      // "stale/unknown" while its content was current, or vice-versa). `subtype`
-      // is the resolved template slug this pass operates on (its own contract);
+      // stamp untouched — so `settings.packageVersion` lied (a workspace could
+      // read "stale/unknown" while its content was current). This is now the
+      // SINGLE stamp-on-reconcile authority for the JSONB `settings.packageSlug`
+      // /`packageVersion` the drift surfaces (Hub `/workspaces`, CLI, browser)
+      // read; the old column-keyed `package-version-backfill` worker (which
+      // stamped a version it never reconciled) has been removed. `subtype` is
+      // the resolved template slug this pass operates on (its own contract);
       // `reconcileWorkspaceFromDefinition` only writes these when present.
       const report = await reconcileWorkspaceFromDefinition({
         workspaceId: ws.id,

@@ -6,11 +6,21 @@
  * failed after exactly 60.011s with `errorMessage: "The operation was aborted
  * due to timeout"` and `output: {}`. Three things were wrong at once:
  *
- *   1. The 60s ceiling was a copy-pasted literal in THREE places
- *      (is-headless-transport ×2, mail-feed/generate) with no owner and no way
- *      to raise it without a deploy. It had never been exercised while the
- *      upstream gather was returning nothing; the moment a data bug was fixed
- *      the prompt grew to ~6KB and the ceiling bit.
+ *   1. The 60s ceiling was a copy-pasted literal with no owner and no way to
+ *      raise it without a deploy. It had never been exercised while the upstream
+ *      gather was returning nothing; the moment a data bug was fixed the prompt
+ *      grew to ~6KB and the ceiling bit.
+ *
+ *      An earlier revision of this comment claimed the literal lived in "THREE
+ *      places" and that all three were migrated. That was wrong, and the wrong
+ *      number is worth preserving as a lesson: a review found TWO more IS call
+ *      sites still on hardcoded ceilings — proactive-intelligence.ts (the same
+ *      bare 60_000, with its failure swallowed into a logger.warn that named
+ *      neither side nor elapsed) and automation-pattern-detector.ts (30_000, on
+ *      a generation-shaped call whose prompt grows with workspace activity).
+ *      Both now take a budget. If you add an IS call site, add it here — grep
+ *      `AbortSignal.timeout` and `setTimeout(.*abort` across jobs + api before
+ *      claiming this list is complete.
  *   2. 60s is simply the wrong number for a reasoning model. A reasoning model
  *      emits hidden reasoning tokens BEFORE the visible completion, and the IS
  *      FairSemaphore may queue the request behind interactive traffic. The
