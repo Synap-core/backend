@@ -21,6 +21,7 @@ import {
   drizzleSql,
   getWorkspaceMembership,
 } from "@synap/database";
+import { apiKeys } from "@synap/database/schema";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -317,8 +318,20 @@ export async function resolveActingContext(
 /**
  * Resolve the actor ID for a hub protocol write request.
  *
- * If `agentUserId` is provided, verify it refers to a real agent user
- * (userType = "agent") before trusting it.
+ * If `agentUserId` is provided, verify BOTH:
+ *   1. it refers to a real agent user (userType = "agent"), AND
+ *   2. the VERIFIED acting `userId` (from `resolveActingContext` / the auth
+ *      middleware — never a body-supplied value) is authorized to act as that
+ *      agent — i.e. an active `api_keys` row links the agent
+ *      (`api_keys.userId = agentUserId`) to this user
+ *      (`api_keys.linkedUserId = userId`, the "act-as" grant minted by
+ *      `POST /setup/agent`).
+ *
+ * SECURITY: without check (2), any caller could pass an arbitrary
+ * `agentUserId` belonging to someone else's agent and have every write
+ * attributed to (and governed as) that agent — a governed-agent-write →
+ * ungoverned-operator-write IDOR. Reject if the caller cannot act as the
+ * named agent.
  */
 export async function resolveActorId(
   agentUserId: string | undefined,
@@ -339,6 +352,29 @@ export async function resolveActorId(
     return {
       error: "Invalid agentUserId — must be a user with userType='agent'",
     };
+  }
+
+  // Acting as your OWN agent identity is always allowed (agentUserId === the
+  // verified acting userId — e.g. an agent key calling on its own behalf).
+  if (agentUserId !== userId) {
+    const grant = await db.query.apiKeys.findFirst({
+      where: and(
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.linkedUserId, userId),
+        eq(apiKeys.isActive, true)
+      ),
+      columns: { id: true },
+    });
+    if (!grant) {
+      logger.warn(
+        { agentUserId, userId },
+        "Hub request rejected: caller is not authorized to act as this agent"
+      );
+      return {
+        error:
+          "Not authorized to act as this agentUserId — no active key links it to the authenticated caller",
+      };
+    }
   }
 
   return { actorId: agentUserId };

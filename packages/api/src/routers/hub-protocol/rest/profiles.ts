@@ -21,6 +21,7 @@ import {
   getCaller,
   hasScope,
   logger,
+  resolveActingContext,
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
@@ -215,28 +216,41 @@ export function registerProfilesRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (that was a governed-agent-write →
+      // ungoverned-operator-write IDOR: any caller could attribute a profile
+      // create to an arbitrary userId). Mirrors POST /views / PATCH /views.
+      //
+      // SERVICE-KEY CONFINEMENT (Item 3): the inner `profiles.createProfile` is a
+      // scopedProcedure that reads `input.workspaceId` (NOT ctx) — the getCaller
+      // ctx-clamp does not reach it. Positive-pin the value BEFORE it reaches
+      // resolveActingContext (and thus the re-supplied createProfile input).
+      const clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (!acting.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
         resolvedAgentUserId,
-        body.userId
+        acting.userId
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
-      // SERVICE-KEY CONFINEMENT (Item 3): the inner `profiles.createProfile` is a
-      // scopedProcedure that reads `input.workspaceId` (NOT ctx) — the getCaller
-      // ctx-clamp does not reach it. Positive-pin the value we feed to BOTH the
-      // caller ctx and the input (a mismatching body → 403).
-      const workspaceId =
-        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+      const workspaceId = acting.workspaceId;
       const caller = await getCaller(c, {
         userId: actorId,
         workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.createProfile({
-        userId: body.userId,
+        userId: acting.userId,
         workspaceId,
         slug: body.slug,
         displayName: body.displayName,
@@ -404,27 +418,40 @@ export function registerProfilesRoutes(app: HubHono): void {
       displayOrder?: number;
     };
     try {
+      // SECURITY — acting identity MUST come from the verified auth context,
+      // never `body.userId` directly (governed-agent-write → ungoverned-
+      // operator-write IDOR). Mirrors POST /views / PATCH /views / POST /profiles.
+      //
+      // SERVICE-KEY CONFINEMENT (Item 3): inner `profiles.createPropertyDef` is a
+      // scopedProcedure reading `input.workspaceId` (NOT ctx) — positive-pin the
+      // value BEFORE it reaches resolveActingContext (and thus the re-supplied
+      // createPropertyDef input).
+      const clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (!acting.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
         resolvedAgentUserId,
-        body.userId
+        acting.userId
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
-      // SERVICE-KEY CONFINEMENT (Item 3): inner `profiles.createPropertyDef` is a
-      // scopedProcedure reading `input.workspaceId` (NOT ctx) — positive-pin the
-      // value fed to BOTH the caller ctx and the input (mismatching body → 403).
-      const workspaceId =
-        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
+      const workspaceId = acting.workspaceId;
       const caller = await getCaller(c, {
         userId: actorId,
         workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.createPropertyDef({
-        userId: body.userId,
+        userId: acting.userId,
         workspaceId,
         profileId: body.profileId,
         slug: body.slug,
