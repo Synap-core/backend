@@ -47,6 +47,12 @@ import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
+import {
+  AccessContext,
+  makeRequestProvenance,
+  makeWriteEnvelope,
+  type WriteEnvelope,
+} from "../access/context.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -450,6 +456,31 @@ export async function checkPermissionOrPropose(
     channelCapabilities,
   } = opts;
 
+  // ATTRIBUTION + PROVENANCE stamped ONCE into a frozen, boundary-minted
+  // envelope, then threaded read-only into createProposal. This replaces the
+  // field-by-field re-threading across the stacked proposal doors that let
+  // `agentUserId` (and its provenance siblings) silently drop at a call-site
+  // spread. `AccessContext.agent` is chosen iff a confirmed agentUserId is
+  // present (matching the AI-governance ladder's own "is this an agent action?"
+  // bit); otherwise the write is operator-attributed. Building it here — the ONE
+  // door every gate caller funnels through — gives every caller the immutable
+  // envelope, not just the MCP path.
+  const writeEnvelope: WriteEnvelope = makeWriteEnvelope(
+    agentUserId
+      ? AccessContext.agent({ userId, agentUserId })
+      : AccessContext.operator({ userId }),
+    makeRequestProvenance({
+      source,
+      correlationId,
+      requestedEventId,
+      threadId,
+      commandRunId,
+      sourceMessageId,
+      sessionId,
+      projectId,
+    })
+  );
+
   // 1. Pod/owner scope (no workspace lens).
   //
   // A write with NO workspace is pod-scoped: the authenticated bearer owns the
@@ -548,23 +579,14 @@ export async function checkPermissionOrPropose(
             .limit(1);
           if (actorRow?.userType === "agent") {
             return createProposal({
-              userId,
-              agentUserId,
+              envelope: writeEnvelope,
               workspaceId,
               subjectType,
               action,
-              source,
               data,
-              correlationId,
-              requestedEventId,
               reasoning:
                 opts.reasoning ??
                 `${action} ${subjectType} exceeds the agent's workspace role (${result.role ?? "member"}) — proposed for your approval`,
-              threadId,
-              commandRunId,
-              sourceMessageId,
-              sessionId,
-              projectId,
             });
           }
         }
@@ -622,23 +644,15 @@ export async function checkPermissionOrPropose(
 
           if (reviewerExists) {
             return createProposal({
-              userId,
+              envelope: writeEnvelope,
               proposedByUserId: userId,
               workspaceId,
               subjectType,
               action,
-              source,
               data,
-              correlationId,
-              requestedEventId,
               reasoning:
                 opts.reasoning ??
                 `${action} ${subjectType} exceeds your workspace role (${result.role}) — proposed for a reviewer's approval`,
-              threadId,
-              commandRunId,
-              sourceMessageId,
-              sessionId,
-              projectId,
             });
           }
         }
@@ -664,21 +678,12 @@ export async function checkPermissionOrPropose(
     // reviewable proposal. Absent `issuer` preserves legacy behavior.
     if (opts.issuer && opts.issuer.trusted === false) {
       return createProposal({
-        userId,
-        agentUserId,
+        envelope: writeEnvelope,
         workspaceId,
         subjectType,
         action,
-        source,
         data,
-        correlationId,
-        requestedEventId,
         reasoning: opts.reasoning,
-        threadId,
-        commandRunId,
-        sourceMessageId,
-        sessionId,
-        projectId,
       });
     }
 
@@ -784,24 +789,15 @@ export async function checkPermissionOrPropose(
 
       if (gov.decision === "propose") {
         return createProposal({
-          userId,
-          agentUserId,
+          envelope: writeEnvelope,
           workspaceId,
           subjectType,
           action,
-          source,
           data,
-          correlationId,
-          requestedEventId,
           // gov.reason carries the per-branch default reasoning; it is undefined
           // for the plain default-propose case, preserving the prior behavior of
           // passing the caller's reasoning through unchanged.
           reasoning: opts.reasoning ?? gov.reason,
-          threadId,
-          commandRunId,
-          sourceMessageId,
-          sessionId,
-          projectId,
         });
       }
 
@@ -940,21 +936,12 @@ export async function checkPermissionOrPropose(
         isUnvalidatedUserObservation
       ) {
         return createProposal({
-          userId,
-          agentUserId,
+          envelope: writeEnvelope,
           workspaceId,
           subjectType,
           action,
-          source,
           data,
-          correlationId,
-          requestedEventId,
           reasoning: opts.reasoning,
-          threadId,
-          commandRunId,
-          sourceMessageId,
-          sessionId,
-          projectId,
         });
       }
     }
@@ -1286,50 +1273,52 @@ export async function agentDailyProposalCap(
   return AGENT_PROPOSALS_PER_USER_PER_DAY;
 }
 
-async function createProposal(opts: {
-  userId: string;
-  agentUserId?: string;
+async function createProposal(args: {
+  /**
+   * The immutable attribution+provenance envelope, stamped ONCE at the write-gate
+   * boundary. Identity (userId / agentUserId) is READ off `envelope.access`; the
+   * per-request provenance (source / correlation / thread / command run / source
+   * message / session / project) off `envelope.provenance`. This replaces the
+   * field-by-field re-threading that let `agentUserId` silently drop between doors.
+   */
+  envelope: WriteEnvelope;
   /**
    * The HUMAN userId that filed this proposal. Set ONLY on the human-proposer
    * path (an insufficient-role member proposing) so the row records who
    * proposed it, distinct from `createdBy`. Left undefined for agent proposals
-   * (they carry `agentUserId` instead).
+   * (they carry `agentUserId` on the envelope's access instead).
    */
   proposedByUserId?: string;
   workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
-  source?: string;
   data: Record<string, unknown>;
-  correlationId?: string;
-  requestedEventId?: string;
   reasoning?: string;
-  threadId?: string;
-  commandRunId?: string;
-  sourceMessageId?: string;
-  sessionId?: string;
-  projectId?: string | null;
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
   const {
-    userId,
-    agentUserId,
+    envelope,
     proposedByUserId,
     workspaceId,
     subjectType,
     action,
-    source,
     data,
+    reasoning,
+  } = args;
+  // Identity off the boundary-minted AccessContext; provenance off the frozen
+  // per-request slice. Same values as the old loose params — now single-sourced.
+  const { userId, agentUserId } = envelope.access;
+  const {
+    source,
     correlationId,
     requestedEventId,
-    reasoning,
     threadId,
     commandRunId,
     sourceMessageId,
     sessionId,
     projectId,
-  } = opts;
+  } = envelope.provenance;
 
   const targetId = (data.documentId ||
     data.entityId ||

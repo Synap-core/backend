@@ -14,17 +14,19 @@
  * authenticated context into one object. They do NOT merge the two auth
  * mechanisms (cookie vs API key) — those stay entirely separate upstream.
  *
- * SCOPE TODAY: the read path (ScopedDb) consumes only `userId` — operator and
- * agent are scoped identically (workspaces are lenses; filter by user). The
- * `actor` / `agentUserId` discriminator below is therefore PROVISIONAL: it
- * exists so the AI write gate can one day take an AccessContext and trust the
- * "is this an AI action?" bit. That integration does NOT exist yet
- * (checkPermissionOrPropose still takes its own opts bag). Until it lands, keep
- * the discriminator minimal — don't grow it without a consumer.
- * TODO(write-gate): route checkPermissionOrPropose through AccessContext so the
- * discriminator is consumed, and thread agentUserId into the hub caller context
- * (createHubProtocolCallerContext) — today the delegated hub ctx sets
- * isHubProtocol but not agentUserId, so a hub read resolves actor="operator".
+ * SCOPE: the read path (ScopedDb) consumes only `userId` — operator and agent
+ * are scoped identically (workspaces are lenses; filter by user). The `actor` /
+ * `agentUserId` discriminator now carries the identity slice of a WRITE, too:
+ * the AI write gate stamps it — plus the per-request `RequestProvenance` slice
+ * (see the bottom of this file) — into an immutable `WriteEnvelope` ONCE at the
+ * gate boundary and threads THAT, not ten hand-spread fields, into
+ * `createProposal`. That is what closes the agentUserId-drop class: attribution
+ * can no longer be forgotten at a call-site spread because there is no per-door
+ * spread left to forget.
+ *
+ * Delegated hub reads already resolve `actor:"agent"` correctly:
+ * `createHubProtocolCallerContext` stamps `agentUserId` onto the caller ctx and
+ * `AccessContext.from(ctx)` consumes it.
  */
 
 import { db, eq } from "@synap/database";
@@ -265,4 +267,81 @@ export function accessFor(ctx: {
   return AccessContext.from(ctx)
     .withLens(ctx.workspaceId ?? null)
     .withProjectLens(ctx.projectId ?? undefined);
+}
+
+/**
+ * RequestProvenance — the immutable per-REQUEST provenance slice that rides
+ * alongside the identity (AccessContext) through the AI write gate.
+ *
+ * Separation of concerns, three axes of a write:
+ *   - WHO issued it  → `AccessContext` (userId / agentUserId / actor).
+ *   - WHERE it came from (this slice) → the thread / session / message / command
+ *     run / correlation / project lens that produced it — audit provenance, NOT
+ *     authorization inputs. It must NOT change what governance decides.
+ *   - WHAT it does   → subjectType / action / data — stay explicit gate args.
+ *
+ * Stamped ONCE at the gate boundary (see `makeRequestProvenance` +
+ * `makeWriteEnvelope`) and never re-declared field-by-field again — that hand
+ * re-threading between the stacked proposal doors is exactly where `agentUserId`
+ * got silently dropped. Every field is optional: partial-provenance callers
+ * (most non-MCP gate callers) simply omit what they don't have.
+ */
+export interface RequestProvenance {
+  /** Audit-only provenance tag ("ai" | "intelligence" | "api" | …). */
+  readonly source?: string;
+  /** Correlation id linking the write to its `.requested` spine event. */
+  readonly correlationId?: string;
+  /** Concrete `.requested` event id when the caller already appended one. */
+  readonly requestedEventId?: string;
+  /** Chat thread that triggered the write. */
+  readonly threadId?: string;
+  /** Command run that generated the write. */
+  readonly commandRunId?: string;
+  /** Specific message that triggered the write. */
+  readonly sourceMessageId?: string;
+  /** Active focus session the write belongs to. */
+  readonly sessionId?: string;
+  /** Active project lens → `proposals.project_id` at materialize. */
+  readonly projectId?: string | null;
+}
+
+/**
+ * Mint a FROZEN `RequestProvenance`. `Object.freeze` is the runtime guarantee
+ * behind the compile-time `readonly` fields: once stamped at the boundary the
+ * slice cannot be mutated as it flows read-only through the write gate.
+ */
+export function makeRequestProvenance(
+  fields: RequestProvenance
+): RequestProvenance {
+  return Object.freeze({
+    source: fields.source,
+    correlationId: fields.correlationId,
+    requestedEventId: fields.requestedEventId,
+    threadId: fields.threadId,
+    commandRunId: fields.commandRunId,
+    sourceMessageId: fields.sourceMessageId,
+    sessionId: fields.sessionId,
+    projectId: fields.projectId,
+  });
+}
+
+/**
+ * WriteEnvelope — the immutable attribution+provenance envelope stamped ONCE at
+ * the write-gate boundary and threaded read-only into the proposal doors. It
+ * pairs the normalized identity (`AccessContext`, already boundary-minted with a
+ * private constructor) with the per-request `RequestProvenance` slice, so a door
+ * READS `envelope.access.agentUserId` / `envelope.provenance.correlationId`
+ * rather than re-declaring ten loose params it can forget to forward.
+ */
+export interface WriteEnvelope {
+  readonly access: AccessContext;
+  readonly provenance: RequestProvenance;
+}
+
+/** Mint a FROZEN `WriteEnvelope` from a boundary identity + provenance slice. */
+export function makeWriteEnvelope(
+  access: AccessContext,
+  provenance: RequestProvenance
+): WriteEnvelope {
+  return Object.freeze({ access, provenance });
 }
