@@ -1586,7 +1586,9 @@ async function resolveInstalledFlag(
 
 const marketSearchParams = z.object({
   query: z.string().max(200).optional(),
-  kind: z.enum(["capability", "automation", "template", "cell"]).optional(),
+  kind: z
+    .enum(["capability", "automation", "template", "cell", "skill", "view"])
+    .optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
@@ -1624,7 +1626,14 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
 
 const marketInstallParams = z.object({
   slug: z.string().min(1).max(200),
-  kind: z.enum(["capability", "automation", "template", "cell"]),
+  kind: z.enum([
+    "capability",
+    "automation",
+    "template",
+    "cell",
+    "skill",
+    "view",
+  ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
 });

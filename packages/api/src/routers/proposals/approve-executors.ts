@@ -65,6 +65,7 @@ import {
 } from "../entities.js";
 import { projectsRouter } from "../projects.js";
 import { viewsRouter } from "../views.js";
+import { profilesRouter } from "../profiles.js";
 import {
   sendExternalMessage,
   triggerProviderAction,
@@ -1304,6 +1305,122 @@ export function registerApproveExecutors(): void {
       await viewCaller.create(
         createArgs as Parameters<typeof viewCaller.create>[0]
       );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── profile / create ─────────────────────────────────────────────────────────
+  // A gated createProfile (agent-authored, or a member whose role lacks
+  // `create`) lands here on approval. Without this executor the `*/*` catch-all
+  // threw NOT_IMPLEMENTED (the flat profile payload is not request-shaped) and
+  // the proposal could never materialize. Materializes via the SAME
+  // profilesRouter.create the direct path uses — re-run as the APPROVER (no
+  // agentUserId ⇒ the re-entrant gate auto-grants for the operator authority),
+  // so audit / events / the workspace bento + sidebar side-effects match the
+  // direct create exactly. Mirrors view/create's caller construction +
+  // idempotency guard. profiles.create is idempotent on slug, so a re-approve
+  // returns the existing profile rather than a second row.
+  //
+  // CONSERVATIVE NOTE: the propose gate (profiles.create) stores only
+  // { id, slug, displayName, parentProfileId, uiHints, defaultValues, scope,
+  // entityScope, profileKind, applicableKinds } — so `allowedWorkspaceIds` (the
+  // extra shared-scope grants) is NOT carried through and defaults to none here.
+  // Widening it would require widening that gate `data` (flagged for review).
+  registerProposalExecutor({
+    key: "profile/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const slug = innerData.slug as string | undefined;
+      const displayName = innerData.displayName as string | undefined;
+      if (!slug || !displayName) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Profile proposal is missing slug/displayName",
+        });
+      }
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Profile creation proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, so skip if
+      // this proposal was already materialized (createCaller mints a fresh id
+      // each run — profiles.create is slug-idempotent, but the status guard
+      // avoids re-running the workspace side-effects on a re-approve).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const profileCaller = profilesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+      const result = await profileCaller.create({
+        slug,
+        displayName,
+        parentProfileId: innerData.parentProfileId as string | undefined,
+        uiHints: innerData.uiHints as Record<string, unknown> | undefined,
+        defaultValues: innerData.defaultValues as
+          Record<string, unknown> | undefined,
+        scope: innerData.scope as
+          "system" | "shared" | "workspace" | "user" | undefined,
+        entityScope: innerData.entityScope as "pod" | "workspace" | undefined,
+        profileKind: innerData.profileKind as "kind" | "role" | undefined,
+        applicableKinds: innerData.applicableKinds as string[] | undefined,
+      });
+      // The approver IS the authority — the re-entrant gate should auto-grant.
+      // A nested proposal means the approver lacks profile.create rights; surface
+      // it rather than silently flipping the proposal APPROVED with nothing built
+      // (mirrors the skill/create executor's guard below).
+      if (
+        result &&
+        typeof result === "object" &&
+        "status" in result &&
+        result.status === "proposed"
+      ) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Profile approval unexpectedly re-proposed",
+        });
+      }
 
       await db
         .update(proposals)

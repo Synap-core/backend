@@ -508,8 +508,100 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  *
  * The flow GRAPH is again unchanged — prompts only, no new nodes, no new edges,
  * no new placeholders.
+ *
+ * v13 — THE CONTRACT PASS. Four defects, all proven from ONE real run
+ * (1ec13e8d-d92c-4446-a909-1f433b2ed368, status `completed`) by reading the
+ * node inputs and outputs rather than the rendered report. Every one of them
+ * shipped GREEN: nothing errored, every step succeeded, and the artifact was
+ * wrong anyway. This version changes what the rounds are CONTRACTUALLY given
+ * and forbidden, not how eloquent they are told to be.
+ *
+ * (a) EVERY COUNT IN THE REPORT WAS FABRICATED. The gathers returned
+ * `count: 25` (tasks), `15` (notes), `15` (people), `15` (companies). The prose
+ * claimed "23 tasks", "Ten notes", "Sixteen people", "Fourteen companies" —
+ * four for four wrong, in both directions, including one number LARGER than
+ * anything gathered. The cause is structural, not a lapse: the exact counts sat
+ * mid-line inside a prose paragraph ("Tasks — 25 found: <150 lines>"), so the
+ * cheapest way for a model to answer "how many people?" was to eyeball the list
+ * it had just read. A model asked to count will count.
+ * FIXED by making the counts a SEPARATE, LABELLED, AUTHORITATIVE block that
+ * arrives BEFORE the data (`COUNTS_BLOCK`), plus `COUNT_RULE` — every number in
+ * the output must be COPIED from that block, never derived. Structure first,
+ * instruction second: the instruction alone was already implied by
+ * EVIDENCE_RULE ("never invent counts") and did not hold.
+ *
+ * (b) `analyze` WAS HANDED NO QUESTION, AND SAID SO IN THE REPORT. Its prompt
+ * opened with three blank STEER lines and its output literally began "The STEER
+ * lines are empty, so I will produce a broad general read covering all gathered
+ * kinds evenly." That sentence is the pipeline's internal vocabulary printed in
+ * a document a human reads. The cause is this file's own copy: the user prompt
+ * carried "(may be empty — an empty line means no steer was given)" and "Time
+ * window (may be empty — an empty value means NO time bound was applied…)".
+ * Those are INSTRUCTIONS about the input, and they were placed in the CONTENT
+ * channel, so the model treated them as material to account for.
+ * FIXED by moving both explanations out of the user prompt and into the system
+ * side (`SILENCE_RULE`), leaving the user prompt carrying VALUES only. An empty
+ * default is now silent by construction rather than by request.
+ * STANDING LESSON: anything in the prompt that explains the prompt will end up
+ * in the output. Explanations belong in `system`; the user turn holds data.
+ *
+ * (c) `relate` RECEIVED A BYTE-IDENTICAL PROMPT TO `analyze` AND RETURNED "".
+ * The two system prompts differ, but the USER prompts were the same STEER block
+ * and the same GATHERED DATA, and the only thing distinguishing the round was a
+ * bare "ANALYST'S READ:" header. It ran 6.1s, produced an empty string, and the
+ * report rendered "This section is missing" at 20% confidence — a whole section
+ * of every report, empty.
+ * The round is KEPT rather than removed, because the distinct task is real and
+ * expressible: `analyze` reads each kind, `relate` reads ACROSS kinds. What was
+ * missing was ever saying so. Three changes: the user prompt now carries an
+ * explicit TASK block naming the cross-kind job (so the two prompts can no
+ * longer be identical), `RELATE_SYSTEM` forbids re-describing volume and status
+ * (the analyst's job) and requires at least one sentence naming what was
+ * checked when no pattern is found — an empty output is no longer a permitted
+ * outcome — and `maxTokens` goes 600 → 700 to match `analyze`, the round that
+ * demonstrably emits. That last one is evidence, not superstition: v2 recorded
+ * that `ai.generate` returns an EMPTY STRING when the budget is consumed before
+ * the first visible token, and 600 is the only round budget below the one that
+ * worked in the same run.
+ *
+ * (d) THE DATA WAS NAMES ONLY, AND WAS DESCRIBED AS UNTRUSTWORTHY. Every record
+ * reached the rounds as `<id> · <title>` — no status, no dates, no properties —
+ * while the copy above it said "this is a SAMPLE, not an ordered or exhaustive
+ * listing", UNCONDITIONALLY, even when the gather had returned everything there
+ * was. A round given only names and told its input is a sample has exactly one
+ * honest output available: a census. That is what it wrote, and it was blamed on
+ * the model.
+ * FIXED on both halves. The projections now carry KIND-SPECIFIC FIELDS chosen
+ * from the profile's real property defs (`ensure-system-profiles.ts`) —
+ * status/priority/due for tasks, email/last-interaction for people,
+ * industry/location for companies, `updatedAt` for all four. An unset field
+ * renders as an empty value, which is a finding the rounds are told they may
+ * report. And truncation is now DERIVED rather than asserted: `count` is
+ * `results.length` (automation-executor.ts:2624), so `count === limit` is the
+ * only truncation signal that exists — the caps are stated beside the counts
+ * (from ONE `GATHER_LIMITS` map, so the prompt cannot claim a cap the node does
+ * not use) and the rounds are told that below-cap means COMPLETE.
+ *
+ * (e) ENTITY REFERENCES — verified, already satisfied, strengthened by one word.
+ * Checked what the renderer supports before writing anything: the inline
+ * `[[entity:<id>|<label>]]` chip is the form both report renderers navigate on
+ * (they gate on `kind === "entity"`), and `:::synap-entity{id="…"}` is ALSO
+ * real — registered in `markdown-engine/src/renderer/directive-registry.ts:11`
+ * and handled at `renderer/index.tsx:96` (`EntityCardEmbed`). The chip form was
+ * already required by `CHIP_RULE` (v9) and is what makes a named record live,
+ * so (e) needed no new syntax; `CHIP_RULE` (5) is tightened from "link a record
+ * the first time it carries weight" to a MUST on first mention.
+ * `:::synap-entity` is deliberately NOT prescribed: its failure mode is the one
+ * this file keeps paying for — an unclosed `:::` swallows the remainder of the
+ * section (rule 2), so a mis-emitted card silently DELETES prose, whereas a
+ * mis-emitted chip degrades to literal text the reader can see. No new markup
+ * for a capability the chips already deliver.
+ *
+ * The flow GRAPH is once again unchanged — no new nodes, no new edges. The
+ * projection EXPRESSIONS changed (they carry fields now) and `relate` gained an
+ * instruction and 100 tokens; no new placeholders reach a new step.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 12;
+export const REPORT_AUTOMATION_SEED_VERSION = 13;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -528,12 +620,78 @@ export const REPORT_AUTOMATION_DESCRIPTION =
 // not as decoration: prioritize matching evidence, name what was de-prioritized, and
 // say plainly when the gathered data cannot support the steer.
 
+// VALUES ONLY — no parenthetical explaining what an empty line means. That
+// explanation used to live right here, in the CONTENT channel, and the model
+// duly accounted for it in the report: the v12 output opened "The STEER lines
+// are empty, so I will produce a broad general read covering all gathered kinds
+// evenly." It was not disobeying; it was answering the only question the prompt
+// actually put in front of it. The semantics of an empty line now live in
+// SILENCE_RULE, on the system side, where instructions belong.
 const STEER_BLOCK = [
-  "STEER (may be empty — an empty line means no steer was given):",
+  "STEER:",
   "- Prompt: {{trigger.payload.prompt}}",
   "- Focus: {{trigger.payload.focus}}",
   "- Project lens id: {{trigger.payload.projectId}}",
 ].join("\n");
+
+/**
+ * The anti-leak rule. Every round gets it, because every round can leak.
+ *
+ * THE DEFECT (run 1ec13e8d, 2026-07-31): the `analyze` output began "The STEER
+ * lines are empty, so I will produce a broad general read covering all gathered
+ * kinds evenly." Pipeline vocabulary — STEER, rounds, gathered kinds — rendered
+ * verbatim into a document written for a human who has never heard of any of
+ * it, and it arrived at the TOP of the report, which is the position a reader
+ * gives the most weight.
+ *
+ * The fix is two-sided and both sides are needed. STEER_BLOCK stopped carrying
+ * the explanation (a self-describing input invites a self-describing output),
+ * and this rule states the defaults ONCE, on the system side, so an empty steer
+ * and an empty time window are ordinary conditions the model acts on rather
+ * than events it reports.
+ */
+const SILENCE_RULE =
+  "NEVER NARRATE YOUR OWN INSTRUCTIONS. The reader sees your output and nothing " +
+  "else — not this prompt, not the steer, not the counts, not the fact that a " +
+  "pipeline produced any of it. Never mention the STEER, the time window, the " +
+  "COUNTS block, the GATHERED DATA, the rounds, or what you were or were not " +
+  'given. Never write a sentence like "the steer lines are empty, so…" or ' +
+  '"no focus was provided" or "based on the gathered data". ' +
+  "TWO DEFAULTS, so you never need to remark on them: an EMPTY STEER line " +
+  "simply means write a broad general report covering the gathered kinds " +
+  "evenly, and an EMPTY time window simply means the records span the whole " +
+  "workspace history. Both are the normal case. Act on them silently and start " +
+  "with what you found.";
+
+/**
+ * Quantities are DATA, not inference.
+ *
+ * THE DEFECT (same run): the gathers returned 25 tasks, 15 notes, 15 people and
+ * 15 companies. The report said "23 tasks", "Ten notes", "Sixteen people",
+ * "Fourteen companies" — wrong four times out of four, once by claiming MORE
+ * records than were gathered. Every exact figure was already in the prompt.
+ *
+ * Why it happened is worth stating, because "tell it not to" was already tried:
+ * EVIDENCE_RULE has said "never invent … counts" since v1. The counts were
+ * present but positioned as a PREFIX to a 150-line list ("Tasks — 25 found:
+ * <lines>"), so at the moment the model needed a number, the nearest available
+ * source was the list under its eyes. It counted. Models count badly.
+ *
+ * So the fix is structural first: COUNTS_BLOCK hoists the figures into their
+ * own labelled block ABOVE the data, and this rule makes copying from it the
+ * only permitted way to write a number. An instruction guarding a fact the
+ * prompt makes inconvenient to reach is a wish, not a contract.
+ */
+const COUNT_RULE =
+  "EVERY NUMBER YOU WRITE MUST BE COPIED FROM THE COUNTS BLOCK. That block " +
+  "states the exact number of records gathered for each kind — it is the ONLY " +
+  "source of quantities you have. Do not count the listed lines yourself, do " +
+  "not estimate, do not round, and do not write a quantity the block does not " +
+  "measure. Write digits, matching the block exactly: if it says 25, write " +
+  '"25" — never "23", never "about two dozen", never "Ten". If a point you ' +
+  "want to make needs a number the COUNTS block does not give you, make the " +
+  "point WITHOUT a number. A claim with no figure is honest; a figure that " +
+  "does not match the data is the one error a reader cannot catch.";
 
 const STEER_RULE =
   "STEER HANDLING — non-negotiable. If every STEER line is empty, produce a BROAD " +
@@ -630,41 +788,94 @@ const CHIP_RULE =
   "wrong id is a dead chip, and a dead chip is worse than plain text. " +
   "(4) The label is free text but must not contain `]`; the id must not contain " +
   "`:` or `|`. A marker breaking either rule renders as raw literal text. " +
-  "(5) Link a record the first time it carries weight, not every time it is " +
-  "mentioned. Chips are navigation, not decoration.";
+  "(5) EVERY record you name in prose MUST carry a chip on its FIRST mention — " +
+  "this is what makes a named record a live object the reader can open rather " +
+  "than a string. Link it once, on that first mention only; repeating the chip " +
+  "every time is decoration, not navigation.";
 
-/** The gathered-data block every AI round receives, verbatim. */
+// ── The gathered-data block every AI round receives, verbatim ────────────────
 // PROJECTED, not raw. The FIRST real run (2026-07-26) failed at every AI round
 // with `400 prompt: String must contain at most 8000 character(s)` — the raw
 // `query` output is full entity JSON (id, type, all properties, timestamps,
 // provenance), so ~70 sampled rows blow any sane prompt cap on their own. This
 // is not a chaining problem and raising the cap does not fix it; a bigger
 // workspace would simply blow the bigger cap.
-// So each gather is projected through a `transform` node to one compact
-// `<id> · <title>` line per row. That keeps the ids the rounds need in order to
-// emit `[[kind:id|label]]` chips, drops everything they never read, and makes
-// prompt size scale with ROW COUNT instead of with property count.
+// So each gather is projected through a `transform` node to one compact line
+// per row. That keeps the ids the rounds need in order to emit
+// `[[kind:id|label]]` chips, drops everything they never read, and makes prompt
+// size scale with ROW COUNT instead of with property count.
+// v13 widened the line from `<id> · <title>` to a FIXED, kind-specific set of
+// fields (see `projectionNode`). The bound is preserved because the field list
+// is enumerated per kind rather than being the whole `properties` bag — the
+// line grows by a known constant, not by whatever the entity happens to carry,
+// which is the distinction the 8000-char failure above turned on.
 // The COUNT comes from the `query` step and the LIST from the `project` step —
 // deliberately two different steps, so the pair can disagree. That disagreement
 // is the only in-band signal a round has that its data was lost in transit; see
 // INTEGRITY_RULE. Reading both from the projection would make them agree even
 // when both are wrong, which is exactly the failure that shipped.
+
+/**
+ * Per-kind row caps, in ONE place because the number is now stated TWICE — to
+ * the `query` node as `limit`, and to the rounds as the cap beside the count.
+ *
+ * The two must agree, and this is not bookkeeping pedantry: `count` is
+ * `results.length` (`automation-executor.ts:2624`), so `count === limit` is the
+ * ONLY signal in the whole pipeline that a gather was truncated. If the prompt
+ * claims a cap the node does not use, that signal inverts — a complete gather
+ * gets described as truncated, or worse, a truncated one gets described as
+ * complete. Two hand-kept copies of a number that must be equal is how that
+ * happens, so there is one copy.
+ */
+const GATHER_LIMITS = {
+  tasks: 25,
+  notes: 15,
+  people: 15,
+  companies: 15,
+} as const;
+
+/**
+ * The authoritative quantities, hoisted ABOVE the data and labelled as the only
+ * source of numbers. See COUNT_RULE for the defect: these figures were already
+ * in the prompt in v12 and were wrong in the output four times out of four,
+ * because they sat as a prefix to a long list and the list was the easier
+ * thing to count.
+ *
+ * The cap is stated beside each count so TRUNCATION IS DERIVABLE rather than
+ * asserted. v12 told every round, unconditionally, that its input was "a
+ * SAMPLE, not an ordered or exhaustive listing" — which was FALSE whenever a
+ * kind returned fewer rows than its cap, i.e. most of the time. Telling a model
+ * its evidence is untrustworthy when it is in fact complete does not make the
+ * model careful; it removes every claim it could honestly make except a census,
+ * which is exactly the report that came back.
+ */
+const COUNTS_BLOCK = [
+  "COUNTS — the exact number of records gathered for each kind. These figures",
+  "are measured, not estimated, and they are the ONLY quantities available to",
+  "you. Each line also gives the cap the gather was limited to.",
+  `- Tasks: {{steps.gather-tasks.output.count}} gathered (cap ${GATHER_LIMITS.tasks})`,
+  `- Notes: {{steps.gather-notes.output.count}} gathered (cap ${GATHER_LIMITS.notes})`,
+  `- People: {{steps.gather-people.output.count}} gathered (cap ${GATHER_LIMITS.people})`,
+  `- Companies: {{steps.gather-companies.output.count}} gathered (cap ${GATHER_LIMITS.companies})`,
+  "READING A COUNT AGAINST ITS CAP: a count BELOW the cap means every record of",
+  "that kind is listed below — the set is COMPLETE and you may describe it as",
+  "such. A count EQUAL to the cap means the gather stopped at the cap and more",
+  'records exist that you cannot see — describe that kind as "at least N" and',
+  "never as complete, and never claim something does not exist merely because",
+  "it is absent from the list.",
+].join("\n");
+
 const GATHERED_DATA = [
-  "GATHERED DATA — one line per record, formatted `<id> · <title>`.",
-  "These are the MOST RECENTLY UPDATED records of each kind, newest first,",
-  "capped per kind. Recent does not mean important, and this is not exhaustive —",
-  "older records exist and are not shown. Never claim something does not exist",
-  "just because it is absent here.",
-  // The rounds are TOLD their window, because it is now real. When a `since`
-  // payload is given the gathers are bounded in SQL, and a round that does not
-  // know that would read "few tasks" as "a quiet workspace" rather than "a
-  // narrow window". Empty line = no bound was applied, which is the default and
-  // is what the next line says out loud. Same discipline as the v7 copy change:
-  // a prompt that misdescribes its own evidence is how an honest model reaches
-  // a wrong conclusion.
-  "Time window (may be empty — an empty value means NO time bound was applied",
-  "and the records span the whole workspace history): only records updated on or",
-  "after {{trigger.payload.since}}",
+  COUNTS_BLOCK,
+  "",
+  "Time window: only records updated on or after {{trigger.payload.since}}",
+  "",
+  "GATHERED DATA — one line per record, MOST RECENTLY UPDATED first. Each line",
+  "is `<id> · <title>` followed by ` · <field>=<value>` pairs carrying that",
+  "record's real state. An EMPTY value means the field is not set on that",
+  "record — that is a fact you may report (an unset status or a missing due",
+  "date is a finding), and never a value to guess at. Recent does not mean",
+  "important.",
   "Tasks — {{steps.gather-tasks.output.count}} found: {{steps.project-tasks.output.result}}",
   "Notes — {{steps.gather-notes.output.count}} found: {{steps.project-notes.output.result}}",
   "People — {{steps.gather-people.output.count}} found: {{steps.project-people.output.result}}",
@@ -710,11 +921,14 @@ const SINCE_FILTER = '{"updatedAt": {"$gte": "{{trigger.payload.since}}"}}';
  * run — the assembler is instructed to render the gap.
  */
 function gatherNode(
-  kind: string,
+  kind: keyof typeof GATHER_LIMITS,
   profileSlug: string,
-  limit: number,
   y: number
 ) {
+  // From the SAME map the COUNTS block quotes. See GATHER_LIMITS: `count ===
+  // limit` is the only truncation signal that exists, so a cap stated to the
+  // rounds that differs from the cap applied to the query inverts it.
+  const limit = GATHER_LIMITS[kind];
   return {
     id: `gather-${kind}`,
     type: "query" as const,
@@ -731,15 +945,48 @@ function gatherNode(
   };
 }
 
-/** One projection node per gather — `entities[] → ["<id> · <title>", …]`. */
-function projectionNode(kind: string, x: number, y: number) {
+/**
+ * One projection node per gather —
+ * `entities[] → ["<id> · <title> · <field>=<value> …", …]`.
+ *
+ * WHY THE FIELDS (v13). Until now every record reached the rounds as `<id> ·
+ * <title>` and nothing else. A round handed a list of names can say how many
+ * there are and what they are called; it cannot say what is stalled, what is
+ * overdue, or which of two kinds is moving — so it wrote a census, and the
+ * census was read as the model being uninsightful. It was the only true thing
+ * it had the evidence to write.
+ *
+ * WHY A FIXED LIST PER KIND, and not the whole `properties` bag: the bag is
+ * what blew the 8000-char prompt cap in v4, and it would blow it again on any
+ * workspace whose entities carry a `description` or a `rawData`. A named list
+ * grows the line by a known constant. The slugs come from the profile's real
+ * property defs (`ensure-system-profiles.ts`: task 1227-1243, person 1304-1324,
+ * company 1340-1350) rather than being guessed — a guessed slug resolves to ""
+ * and would read as "this field is unset on every record", which is a false
+ * finding rather than a missing one.
+ *
+ * An ABSENT key is safe by construction: `resolveTemplate` renders a missing
+ * path as "" (automation-executor.ts:376-379), so a record without a due date
+ * renders `due=` rather than failing. The rounds are told in GATHERED_DATA that
+ * an empty value means unset — which is real information, not noise: a task
+ * with no status is exactly the kind of thing this report exists to surface.
+ *
+ * `{{item.updatedAt}}` is a Date and renders as a full ISO string (:383). Ugly
+ * and exact — the same call this file has made since v8 on `reportPeriod`,
+ * since no node in the engine can format a date and inventing a format in an AI
+ * round makes it non-deterministic.
+ */
+function projectionNode(kind: string, fields: string, x: number, y: number) {
   return {
     id: `project-${kind}`,
     type: "transform" as const,
     position: { x, y },
     data: {
       label: `Project ${kind}`,
-      expression: `{{steps.gather-${kind}.output.entities}} | map: {{item.id}} · {{item.title}}`,
+      // NB the pipe grammar: `executeTransformStep` splits the expression on the
+      // FIRST " | " and then splits the remainder on every "|", so no field
+      // fragment may contain a pipe character. All of them are `k={{path}}`.
+      expression: `{{steps.gather-${kind}.output.entities}} | map: {{item.id}} · {{item.title}} · ${fields}`,
       errorHandling: { continueOnError: true },
     },
   };
@@ -751,8 +998,19 @@ const ANALYZE_SYSTEM = [
   "You are the ANALYST round of a Synap workspace report.",
   "Read the gathered workspace data and say what it MEANS: volume and shape of work,",
   "what is in flight versus stalled, what is well-covered versus thin.",
+  // Each record now carries its real state (status, priority, due date, last
+  // update), so "what is stalled" is finally answerable from the evidence. In
+  // v12 this round was asked that question and given only names, and it did the
+  // one thing names support: it counted them. Naming the fields here is what
+  // turns the ask into something the data can back.
+  "Work from the FIELDS on each record, not just its name: status, priority and",
+  "due dates are what distinguish moving work from stalled work, and an unset",
+  "field is itself worth reporting. Listing or counting what exists is NOT a",
+  "finding — say what the state of it means.",
   INTEGRITY_RULE,
   EVIDENCE_RULE,
+  COUNT_RULE,
+  SILENCE_RULE,
   STEER_RULE,
   CHIP_RULE,
   // "No directives" used to be the whole formatting instruction here, and it is
@@ -765,6 +1023,18 @@ const ANALYZE_SYSTEM = [
   "blocks, no code fences. Under 300 words. Another round will format this.",
 ].join("\n");
 
+// WHY THIS ROUND STILL EXISTS (v13). In run 1ec13e8d it received a user prompt
+// byte-identical to the analyst's — same STEER, same GATHERED DATA, no task of
+// its own beyond a bare "ANALYST'S READ:" header — ran 6.1s and returned "".
+// Every report shipped with a dead section at 20% confidence.
+// Removing the round was the alternative and was rejected: the distinct job is
+// real and stateable in one line — the analyst reads WITHIN each kind, this
+// round reads ACROSS them — and nothing else in the flow connects a person to a
+// company to a task. What was missing was ever telling it that. So the
+// distinction is now enforced in three places at once: this prompt forbids the
+// analyst's job, the user prompt carries an explicit cross-kind TASK block (so
+// the two prompts can no longer be identical), and "no pattern found" must be
+// written out rather than returned as silence.
 const RELATE_SYSTEM = [
   "You are the PATTERNS round of a Synap workspace report.",
   "You receive the raw gathered data AND the analyst's read of it. Your job is what",
@@ -772,8 +1042,21 @@ const RELATE_SYSTEM = [
   "clusters, repeated themes, people or companies that recur across kinds, gaps",
   "where a kind is conspicuously empty, and anything that looks like it needs a",
   "decision. Prefer three sharp observations over ten shallow ones.",
+  "YOUR SCOPE IS WHAT CONNECTS RECORDS, not what they individually are. Every",
+  "observation you write must involve TWO OR MORE records, or TWO OR MORE kinds:",
+  "a name that appears in both a task and a company, work clustered on one",
+  "person, a due date that lines up with an event, a kind that is empty while a",
+  "related kind is busy. Do NOT re-describe volume, status distribution or how",
+  "busy the workspace is — that is the analyst's section and repeating it makes",
+  "yours redundant. Do not summarise or restate the analyst's read.",
+  "NEVER RETURN AN EMPTY ANSWER. If you genuinely find no cross-kind pattern,",
+  "write one or two sentences naming what you looked for and did not find (for",
+  "example: no person recurs across the tasks and companies gathered). That is a",
+  "real finding and the reader needs it. Silence is not an available outcome.",
   INTEGRITY_RULE,
   EVIDENCE_RULE,
+  COUNT_RULE,
+  SILENCE_RULE,
   STEER_RULE,
   // Was a bespoke three-line copy of this rule teaching `[[<kind>:…]]`, which
   // produced `[[task:…]]` / `[[company:…]]` chips that render and do not open.
@@ -790,6 +1073,18 @@ const ASSEMBLE_SYSTEM = [
   "You are the ASSEMBLER round of a Synap workspace report. You compose the FINAL",
   "document body in Synap-flavoured markdown. You add no new facts — you arrange,",
   "title, and format what the earlier rounds produced.",
+  "",
+  // The assembler leaks and mis-counts for the same reasons the other rounds do
+  // — it sees the same STEER block, and it writes the title and the section
+  // headings, which is where a made-up number is most authoritative. It is the
+  // LAST round, so anything it invents ships unchecked.
+  SILENCE_RULE,
+  "",
+  "NUMBERS: you were given no COUNTS block, so you may not originate a quantity",
+  "at all. Reproduce a figure ONLY by copying one that already appears in the",
+  "round material, digit for digit. Never total, re-count, convert to words, or",
+  "put a number in the title or in a ## heading that is not already in the",
+  "material beneath it.",
   "",
   "SYNAP MARKDOWN SYNTAX — these rules are absolute:",
   "1. A section is a FOUR-COLON container that must be opened and closed:",
@@ -1063,17 +1358,40 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
     // Four independent reads of real workspace state. Four, and HARDCODED —
     // a `loop` over `trigger.payload.kinds` is expressible in the body and
     // unaddressable downstream; see KNOWN LIMITS at the top of this file.
-    gatherNode("tasks", "task", 25, 20),
-    gatherNode("notes", "note", 15, 140),
-    gatherNode("people", "person", 15, 260),
-    gatherNode("companies", "company", 15, 380),
-    // ── Projection: raw entity JSON → compact `<id> · <title>` lines ─────────
+    gatherNode("tasks", "task", 20),
+    gatherNode("notes", "note", 140),
+    gatherNode("people", "person", 260),
+    gatherNode("companies", "company", 380),
+    // ── Projection: raw entity JSON → compact per-record lines ───────────────
     // Without these the AI rounds receive full entity JSON and every round 400s
     // on the prompt cap. See the note on GATHERED_DATA.
-    projectionNode("tasks", 540, 20),
-    projectionNode("notes", 540, 140),
-    projectionNode("people", 540, 260),
-    projectionNode("companies", 540, 380),
+    // The FIELDS per kind are the profile's own property slugs (v13) — a report
+    // that knows only names can only take a census, which is the report v12
+    // produced. Slugs verified against `ensure-system-profiles.ts`; a slug that
+    // does not exist on the profile renders "" on every row and would read as
+    // "unset everywhere", a false finding rather than a missing one.
+    projectionNode(
+      "tasks",
+      "status={{item.properties.status}} · priority={{item.properties.priority}} · due={{item.properties.dueDate}} · updated={{item.updatedAt}}",
+      540,
+      20
+    ),
+    // `note` carries only title/content/tags, and `content` is unbounded prose —
+    // the exact thing the projection exists to keep out of the prompt. So a note
+    // contributes its recency and nothing else.
+    projectionNode("notes", "updated={{item.updatedAt}}", 540, 140),
+    projectionNode(
+      "people",
+      "email={{item.properties.email}} · lastInteraction={{item.properties.lastInteractionAt}} · updated={{item.updatedAt}}",
+      540,
+      260
+    ),
+    projectionNode(
+      "companies",
+      "industry={{item.properties.industry}} · location={{item.properties.location}} · updated={{item.updatedAt}}",
+      540,
+      380
+    ),
 
     // ── Round 2: ANALYZE ──────────────────────────────────────────────────────
     {
@@ -1105,15 +1423,33 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         verbKind: "read",
         inputMapping: {
           system: RELATE_SYSTEM,
+          // The TASK block is what makes this prompt different from the
+          // analyst's. In run 1ec13e8d the two user prompts were byte-identical
+          // apart from the "ANALYST'S READ" header, and this round returned "".
+          // A round given the same input and no different question has no
+          // different answer to give.
           prompt: [
             STEER_BLOCK,
             "",
             GATHERED_DATA,
             "",
-            "ANALYST'S READ:",
+            "ANALYST'S READ — already written and already in the report. Do NOT",
+            "restate, summarise or re-analyse it. It is here so you do not repeat it:",
             "{{steps.analyze.output}}",
+            "",
+            "YOUR TASK — cross-kind patterns ONLY. Look for what connects the lists",
+            "above: a person who recurs in tasks and companies, work clustered on one",
+            "name, due dates that line up, a kind that is empty while a related kind",
+            "is busy, a company with people but no tasks. Write only observations",
+            "that span TWO OR MORE records or kinds. If there are none, say what you",
+            "checked and did not find — never answer with nothing.",
           ].join("\n"),
-          maxTokens: "600",
+          // 700, not 600 — matching `analyze`, the round that demonstrably
+          // emitted in the same run where this one returned "" after 6.1s. v2
+          // established that `ai.generate` yields an EMPTY STRING when the
+          // budget is spent before the first visible token, and 600 was the only
+          // round budget below the one that worked.
+          maxTokens: "700",
         },
         errorHandling: { continueOnError: true },
       },

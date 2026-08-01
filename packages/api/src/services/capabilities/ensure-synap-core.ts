@@ -443,14 +443,21 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to capturing the gap. Read-only.",
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to capturing the gap. Read-only.",
       parameters: {
         type: "object",
         properties: {
           query: { type: "string" },
           kind: {
             type: "string",
-            enum: ["capability", "automation", "template", "cell"],
+            enum: [
+              "capability",
+              "automation",
+              "template",
+              "cell",
+              "skill",
+              "view",
+            ],
           },
           limit: { type: "number", minimum: 1, maximum: 50 },
         },
@@ -469,7 +476,14 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           slug: { type: "string" },
           kind: {
             type: "string",
-            enum: ["capability", "automation", "template", "cell"],
+            enum: [
+              "capability",
+              "automation",
+              "template",
+              "cell",
+              "skill",
+              "view",
+            ],
           },
           version: { type: "string" },
           params: { type: "object" },

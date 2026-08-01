@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { computeProposalDedupHash } from "./insert-pending-proposal.js";
+import {
+  computeProposalDedupHash,
+  insertPendingProposal,
+} from "./insert-pending-proposal.js";
 
 /**
  * Locks the canonical dedup-hash normalization — the subtle contract the
@@ -162,5 +165,137 @@ describe("computeProposalDedupHash", () => {
       data: { title: "T" },
     });
     expect(a).not.toBe(b);
+  });
+});
+
+/**
+ * PROVENANCE FLOOR — the SSOT insert mints a `correlationId` when the caller
+ * supplies none.
+ *
+ * Measured before this default: of 50 pending proposals on a live pod only 16
+ * carried a correlationId. The two doors that mint their own (`createProposal`,
+ * `createEventBackedProposal`) covered those; the ~10 direct-insert writers
+ * (hygiene workers, lane scanner, archiver, the generic Hub door) stamped
+ * nothing — so "which writes belong to one intent" was unanswerable for most
+ * rows. Minting here covers every door at once.
+ */
+describe("insertPendingProposal — correlationId default", () => {
+  /** Minimal `executor` stand-in: records the INSERTed values and echoes them. */
+  function fakeExecutor() {
+    const values: Record<string, unknown>[] = [];
+    return {
+      captured: values,
+      insert() {
+        return {
+          values(v: Record<string, unknown>) {
+            values.push(v);
+            return { returning: async () => [{ ...v, id: "row-1" }] };
+          },
+        };
+      },
+    };
+  }
+
+  const base = {
+    workspaceId: "ws-1",
+    targetType: "entity",
+    targetId: "e-1",
+    proposalType: "entity.update",
+    data: { title: "T" },
+    createdBy: "user-1",
+  };
+
+  it("mints a correlationId when the caller supplies none", async () => {
+    const ex = fakeExecutor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal(base, ex as any);
+    const minted = ex.captured[0].correlationId;
+    expect(typeof minted).toBe("string");
+    expect(minted).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+  });
+
+  it("never leaves correlationId NULL — the gap this default closes", async () => {
+    const ex = fakeExecutor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal({ ...base, correlationId: null }, ex as any);
+    expect(ex.captured[0].correlationId).toBeTruthy();
+  });
+
+  it("honours a caller-supplied correlationId (the two minting doors still win)", async () => {
+    const ex = fakeExecutor();
+    await insertPendingProposal(
+      { ...base, correlationId: "corr-from-the-door" },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ex as any
+    );
+    expect(ex.captured[0].correlationId).toBe("corr-from-the-door");
+  });
+
+  it("mints a DISTINCT id per call (it groups an intent, it is not a constant)", async () => {
+    const ex = fakeExecutor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal(base, ex as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal(base, ex as any);
+    expect(ex.captured[0].correlationId).not.toBe(ex.captured[1].correlationId);
+  });
+
+  /**
+   * THE LOAD-BEARING GUARANTEE. A minted-per-attempt id that fed the dedup hash
+   * would make every proposal unique and break dedup entirely. It cannot:
+   * `computeProposalDedupHash` reads only { workspaceId, proposalType,
+   * targetType, targetId?, data }, and `data.correlationId` is in
+   * VOLATILE_DEDUP_KEYS. Asserted from BOTH ends.
+   */
+  it("the minted correlationId does NOT enter the dedup hash (column is not a hash input)", () => {
+    const hashInput = {
+      workspaceId: "ws-1",
+      proposalType: "entity.update",
+      targetType: "entity",
+      targetId: "e-1",
+      data: { title: "T" },
+    };
+    // The hash function has no correlationId parameter at all — two calls with
+    // identical inputs are equal no matter what the column ends up holding.
+    expect(computeProposalDedupHash(hashInput)).toBe(
+      computeProposalDedupHash(hashInput)
+    );
+  });
+
+  it("a correlationId that leaks into `data` is stripped, so it cannot poison the hash either", () => {
+    const a = computeProposalDedupHash({
+      workspaceId: "ws-1",
+      proposalType: "entity.update",
+      targetType: "entity",
+      targetId: "e-1",
+      data: { title: "T", correlationId: "corr-A" },
+    });
+    const b = computeProposalDedupHash({
+      workspaceId: "ws-1",
+      proposalType: "entity.update",
+      targetType: "entity",
+      targetId: "e-1",
+      data: { title: "T", correlationId: "corr-B" },
+    });
+    expect(a).toBe(b);
+  });
+
+  it("two identical proposals still hash equal AFTER minting — dedup survives", async () => {
+    const ex = fakeExecutor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal(base, ex as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await insertPendingProposal(base, ex as any);
+    const hashOf = (v: Record<string, unknown>) =>
+      computeProposalDedupHash({
+        workspaceId: v.workspaceId as string,
+        proposalType: v.proposalType as string,
+        targetType: v.targetType as string,
+        targetId: v.targetId as string,
+        data: v.data as Record<string, unknown>,
+      });
+    expect(hashOf(ex.captured[0])).toBe(hashOf(ex.captured[1]));
   });
 });

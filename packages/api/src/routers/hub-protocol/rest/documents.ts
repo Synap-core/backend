@@ -128,7 +128,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       // resolveActorId kept for its validation side-effect; return value unused.
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
         workspaceId,
         userId: acting.userId,
@@ -327,8 +327,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         );
       }
 
-      const sessionId =
-        body.data.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.data.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
         userId: acting.userId,
         sourceMessageId,
@@ -401,7 +400,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
         sourceMessageId: body.sourceMessageId,
         sessionId,

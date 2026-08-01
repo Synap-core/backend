@@ -186,14 +186,21 @@ export const intelligenceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       // Workspace lens: focused → that workspace's commands only (== prior
-      // eq(ws)); no workspace → pod-wide commands (globals) instead of the old
-      // empty list, per the "globals in the pod-wide view" decision.
-      const list = await scopedDb(accessFor(ctx)).findMany<
-        typeof intelligenceCommands.$inferSelect
-      >(intelligenceCommands, {
-        orderBy: desc(intelligenceCommands.updatedAt),
-        limit: input.limit,
-      });
+      // eq(ws)). No workspace → the caller's FULL floor
+      // (`workspacelessFloor: "user"`): every command they can see across their
+      // workspaces, plus pod-wide ones and their own `sharedScope='user'`
+      // privates. Globals-only was right when a workspace was always active;
+      // with pod-altitude boot it renders the command palette near-empty until
+      // the user enters a Space. Narrowing removed, floor unchanged.
+      const list = await scopedDb(
+        accessFor(ctx, { workspacelessFloor: "user" })
+      ).findMany<typeof intelligenceCommands.$inferSelect>(
+        intelligenceCommands,
+        {
+          orderBy: desc(intelligenceCommands.updatedAt),
+          limit: input.limit,
+        }
+      );
       return { commands: list };
     }),
 
@@ -205,6 +212,9 @@ export const intelligenceRouter = router({
       // command must be in the active workspace; a user-scoped (private) command
       // is visible only to its creator — so a teammate can't read another user's
       // private command by id.
+      // Plain `accessFor` (globals-only workspaceless default) on purpose:
+      // workspaceProcedure guarantees `ctx.workspaceId`, so the default never
+      // fires — and widening a load-for-authz is the mirror-image bug.
       const cmd = await scopedDb(accessFor(ctx)).findFirst<
         typeof intelligenceCommands.$inferSelect
       >(intelligenceCommands, {
@@ -287,6 +297,8 @@ export const intelligenceRouter = router({
     .mutation(async ({ ctx, input }) => {
       // Load-for-authz through the sharedScope-aware rule so a user cannot mutate
       // another user's private (sharedScope='user') command.
+      // Plain `accessFor`: workspaceProcedure guarantees `ctx.workspaceId`, and
+      // a write-authz load must never take the wider workspaceless floor.
       const cmd = await scopedDb(accessFor(ctx)).findFirst<
         typeof intelligenceCommands.$inferSelect
       >(intelligenceCommands, {
@@ -345,6 +357,8 @@ export const intelligenceRouter = router({
     .mutation(async ({ ctx, input }) => {
       // Load-for-authz through the sharedScope-aware rule so a user cannot delete
       // another user's private (sharedScope='user') command.
+      // Plain `accessFor`: workspaceProcedure guarantees `ctx.workspaceId`, and
+      // a delete-authz load must never take the wider workspaceless floor.
       const cmd = await scopedDb(accessFor(ctx)).findFirst<
         typeof intelligenceCommands.$inferSelect
       >(intelligenceCommands, {
@@ -378,6 +392,8 @@ export const intelligenceRouter = router({
 
       // Load-for-authz through the sharedScope-aware rule: a teammate cannot run
       // another user's private (sharedScope='user') command by id.
+      // Plain `accessFor`: workspaceProcedure guarantees `ctx.workspaceId`, and
+      // a run-authz load must never take the wider workspaceless floor.
       const cmd = await scopedDb(accessFor(ctx)).findFirst<
         typeof intelligenceCommands.$inferSelect
       >(intelligenceCommands, {

@@ -550,7 +550,12 @@ async function materializeProfile(
       defaultValues:
         (data.defaultValues as Record<string, unknown>) || undefined,
       scope: scope as ProfileScope,
-      entityScope: (data.entityScope as "pod" | "workspace") || "workspace",
+      // Pass through `undefined` when unspecified — do NOT default to
+      // "workspace" here. `ProfileRepository.resolveEntityScope()` is the one
+      // door that resolves the doctrine default from `profileKind` (kind ⇒ pod,
+      // role ⇒ workspace). Forcing "workspace" at this call site silently
+      // bypassed it and made every materialized kind workspace-scoped.
+      entityScope: (data.entityScope as "pod" | "workspace") || undefined,
       profileKind: (data.profileKind as "kind" | "role") || "kind",
       applicableKinds: Array.isArray(data.applicableKinds)
         ? data.applicableKinds.filter(

@@ -5,6 +5,12 @@
  */
 
 import { eq, and, or, sql, isNotNull, inArray } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/pg-core";
+import {
+  memberWorkspaceIds as memberWorkspaceIdsQuery,
+  ownedWorkspaceIds as ownedWorkspaceIdsQuery,
+  podVisibleWorkspaceIds as podVisibleWorkspaceIdsQuery,
+} from "../utils/user-visible-where.js";
 import {
   profiles,
   profileWorkspaceAccess,
@@ -13,7 +19,6 @@ import {
   type AiPosture,
   ProfileScope,
 } from "../schema/profiles.js";
-import { workspaceMembers } from "../schema/workspaces.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
@@ -26,7 +31,17 @@ export interface CreateProfileInput {
   /** Default property values applied when creating a new entity of this type. */
   defaultValues?: Record<string, unknown>;
   scope?: ProfileScope;
-  /** Whether entities of this profile are pod-wide or workspace-scoped */
+  /**
+   * Whether entities of this profile are pod-wide or workspace-scoped.
+   *
+   * OMIT to get the doctrine default resolved from `profileKind`:
+   *   - `profileKind: 'kind'` (or omitted) ⇒ `"pod"`
+   *   - `profileKind: 'role'`              ⇒ `"workspace"`
+   *
+   * Pass a value only to deviate — a workspace-scoped KIND (Deal, Pipeline,
+   * devplane types) is legitimate but must now be explicit. `'pod'` on a role
+   * is a contradiction and throws.
+   */
   entityScope?: "pod" | "workspace";
   userId?: string;
   workspaceId?: string;
@@ -67,6 +82,73 @@ export interface CreateProfileInput {
   aiPosture?: AiPosture | null;
 }
 
+/**
+ * THE ONE DOOR for "what entity_scope does this profile get?".
+ *
+ * Doctrine (APP-DOCK-MENTAL-MODEL-PLAN.md §1b, ratified 2026-08-01):
+ *
+ *   KIND = POD-WIDE.  It is the entity's identity — one `person`, one
+ *                     `company`, shared by the whole pod.
+ *   ROLE = WORKSPACE-SCOPED. The space that created the role is the space that
+ *                     sees it. Role *instances* live in `entity_facets` and
+ *                     carry their own per-row `workspaceId`; the role PROFILE's
+ *                     `entityScope` must never claim pod-wide reach.
+ *
+ * Why this lives here and not in a column default or a CHECK constraint:
+ *
+ *  - A Postgres column DEFAULT cannot read a sibling column, so it cannot
+ *    express "role ⇒ workspace". Migration 0220 flips the default to `'pod'`,
+ *    which is only a floor for writers that omit the column entirely (raw SQL,
+ *    psql, future migrations) — the Drizzle write path never reached it,
+ *    because the repository always supplied a value.
+ *  - A CHECK constraint cannot be used either: `profileKind='kind' ⇒
+ *    entity_scope='pod'` is NOT a true invariant. Workspace-scoped kinds are
+ *    legitimate and deliberate (Deal, Pipeline, the devplane types seeded by
+ *    `ensureSystemProfiles`). A CHECK would refuse rows the product wants.
+ *  - Only this layer can distinguish "the caller OMITTED entityScope" from
+ *    "the caller explicitly asked for workspace" — which is the entire
+ *    difference between a silent-wrong default and a deliberate choice.
+ *
+ * Throws on `role` + `pod`, which is a contradiction with no legitimate use:
+ * a role that claims pod-wide entity reach would make one space's role
+ * definition govern visibility in every other space.
+ */
+export function resolveEntityScope(
+  slug: string,
+  profileKind: "kind" | "role" | undefined,
+  entityScope: "pod" | "workspace" | undefined
+): "pod" | "workspace" {
+  const kind = profileKind ?? "kind";
+
+  if (kind === "role" && entityScope === "pod") {
+    throw new Error(
+      `Profile '${slug}': profileKind='role' cannot declare entityScope='pod'. ` +
+        `A role is workspace-scoped by definition — the space that creates the ` +
+        `role is the space that sees it, and role instances carry their own ` +
+        `workspaceId on entity_facets. Drop entityScope (it resolves to ` +
+        `'workspace') or declare the profile as profileKind='kind'.`
+    );
+  }
+
+  if (entityScope !== undefined) return entityScope;
+
+  if (kind === "role") return "workspace";
+
+  // A kind with no declared entityScope now lands POD-WIDE — the doctrine
+  // default, and the inverse of the pre-0220 behaviour. Surfaced so an operator
+  // can see which writer is relying on the default; it is NOT an error, and it
+  // must NOT throw: the template-install path
+  // (`reconcile-workspace-from-definition.ts`) and the entity auto-create paths
+  // legitimately omit it, and throwing would block every template package
+  // published before this doctrine existed.
+  console.warn(
+    `[profiles] '${slug}': profileKind='kind' declared no entityScope — ` +
+      `defaulting to 'pod' (kinds are pod-wide). Declare ` +
+      `entityScope: 'workspace' explicitly if this kind is app-specific.`
+  );
+  return "pod";
+}
+
 /** Optional narrowing for callers that already resolved profile identity. */
 export interface AccessibleProfileFilters {
   ids?: string[];
@@ -93,6 +175,12 @@ export class ProfileRepository {
     const resolvedSemanticSlug =
       input.semanticSlug !== undefined ? input.semanticSlug : input.slug;
 
+    const resolvedEntityScope = resolveEntityScope(
+      input.slug,
+      input.profileKind,
+      input.entityScope
+    );
+
     const [profile] = await this.db
       .insert(profiles)
       .values({
@@ -103,7 +191,7 @@ export class ProfileRepository {
         uiHints: input.uiHints || {},
         defaultValues: input.defaultValues || {},
         scope: input.scope || ProfileScope.WORKSPACE,
-        entityScope: input.entityScope || "workspace",
+        entityScope: resolvedEntityScope,
         userId: input.userId || null,
         workspaceId: input.workspaceId || null,
         semanticSlug: resolvedSemanticSlug,
@@ -146,10 +234,15 @@ export class ProfileRepository {
       eq(profiles.scope, ProfileScope.SHARED),
     ];
     if (userId) {
-      const memberWorkspaceIds = this.db
-        .select({ id: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, userId));
+      // Same floor as getAccessibleProfiles' workspace-less branch — member ∪
+      // OWNED ∪ POD-VISIBLE — which is what the comment above promises. It used
+      // to be membership-only here too, so a sovereign pod owner with no member
+      // row resolved a DIFFERENT (smaller) set from `get` than from `list`.
+      const visibleWorkspaceIds = unionAll(
+        memberWorkspaceIdsQuery(userId),
+        ownedWorkspaceIdsQuery(userId),
+        podVisibleWorkspaceIdsQuery()
+      );
       scopeBranches.push(
         and(
           eq(profiles.scope, ProfileScope.USER),
@@ -157,7 +250,7 @@ export class ProfileRepository {
         )!,
         and(
           eq(profiles.scope, ProfileScope.WORKSPACE),
-          inArray(profiles.workspaceId, memberWorkspaceIds)
+          inArray(profiles.workspaceId, visibleWorkspaceIds)
         )!
       );
     }
@@ -402,14 +495,19 @@ export class ProfileRepository {
         )
       : eq(profileWorkspaceAccess.profileId, profiles.id);
 
-    // The caller's REAL floor of workspaces: the ones they're a MEMBER of.
-    // Used to broaden the workspace-less branch to member-scoped WORKSPACE +
-    // SHARED profiles (member workspaces only — never other users'/non-member
-    // private profiles), reproducing the union listMulti already computes.
-    const memberWorkspaceIds = this.db
-      .select({ id: workspaceMembers.workspaceId })
-      .from(workspaceMembers)
-      .where(eq(workspaceMembers.userId, userId));
+    // The caller's REAL floor of workspaces. This MUST be the same floor
+    // `userVisibleWhere` uses — member ∪ OWNED ∪ POD-VISIBLE — not membership
+    // alone. `workspaces.owner_id` is a first-class column separate from
+    // `workspace_members`, and on a sovereign single-user pod the owner often
+    // has NO member row; flooring on membership alone silently returned
+    // SYSTEM + USER profiles only, i.e. a truncated vocabulary at pod altitude
+    // (kinds/roles simply missing from pickers). Composed from the shared
+    // branch builders so there is one definition of the floor, not a fourth copy.
+    const visibleWorkspaceIds = unionAll(
+      memberWorkspaceIdsQuery(userId),
+      ownedWorkspaceIdsQuery(userId),
+      podVisibleWorkspaceIdsQuery()
+    );
 
     const scopeBranches = [
       eq(profiles.scope, ProfileScope.SYSTEM),
@@ -434,14 +532,14 @@ export class ProfileRepository {
       scopeBranches.push(
         and(
           eq(profiles.scope, ProfileScope.WORKSPACE),
-          inArray(profiles.workspaceId, memberWorkspaceIds)
+          inArray(profiles.workspaceId, visibleWorkspaceIds)
         ),
         and(
           eq(profiles.scope, ProfileScope.SHARED),
           sql`EXISTS (
             SELECT 1 FROM ${profileWorkspaceAccess}
             WHERE ${profileWorkspaceAccess.profileId} = ${profiles.id}
-              AND ${profileWorkspaceAccess.workspaceId} IN (${memberWorkspaceIds})
+              AND ${profileWorkspaceAccess.workspaceId} IN (${visibleWorkspaceIds})
           )`
         )
       );
@@ -544,6 +642,17 @@ export class ProfileRepository {
     const current = await this.getById(id);
     if (current) {
       updateData.version = current.version + 1;
+    }
+
+    // Same doctrine floor as create(): an UPDATE must not be the back door that
+    // makes a role pod-wide. `update()` never writes profile_kind, so the live
+    // row is the authority on which kind this is.
+    if (input.entityScope !== undefined && current) {
+      resolveEntityScope(
+        current.slug,
+        current.profileKind as "kind" | "role",
+        input.entityScope
+      );
     }
 
     updateData.updatedAt = new Date();

@@ -23,6 +23,7 @@ import {
 } from "../services/external-user-mapping.js";
 import { authErrorResponse, shortenKeyId } from "../utils/auth-error.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
+import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
 import {
@@ -490,6 +491,19 @@ app.use("/*", async (c, next) => {
 
   return authErrorResponse(c, "no_auth");
 });
+
+// ── Focus-session middleware ───────────────────────────────────────────────
+//
+// Reads the client-supplied `X-Session-Id` ONCE, VALIDATES that it names a
+// focus session owned by the just-authenticated principal, and lands it on
+// `c.set("sessionId")` (see `./hub-protocol/_middleware/session.ts` for the
+// full security contract). Every route then inherits it through `getCaller`,
+// instead of the four route files that used to read the raw header by hand.
+//
+// Mounted AFTER auth (it needs the resolved, remapped `userId`) and BEFORE
+// idempotency — a replayed response is served without running the routes, and
+// resolving a session for it would be a wasted round-trip.
+app.use("*", sessionMiddleware);
 
 // ── Idempotency middleware ─────────────────────────────────────────────────
 //

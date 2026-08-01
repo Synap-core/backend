@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
@@ -46,6 +46,29 @@ export interface InsertPendingProposalInput {
   threadId?: string | null;
   commandRunId?: string | null;
   sourceMessageId?: string | null;
+  /**
+   * Groups every row produced by ONE originating intent (the request chain).
+   * Optional for the CALLER — when omitted or null, this door MINTS one, so
+   * every proposal carries a correlation id regardless of which of the ~10
+   * writers filed it. Before that default only the two doors that mint their
+   * own (`createProposal` in permission-check, `createEventBackedProposal`)
+   * ever set it, and the direct-insert writers left it NULL — which made
+   * "which writes belong to one intent" unanswerable for most rows.
+   *
+   * ⚠️ SCOPE OF THE FLOOR — do NOT read it as "every proposal row, ever".
+   * This door writes `status: PENDING` unconditionally (see the insert below),
+   * so the floor covers PENDING rows ONLY. The AUTO_APPROVED path is a
+   * SEPARATE insert (`permission-check.ts`, the `_autoApprove` branch) which
+   * still sets `correlationId` conditionally. A consumer that treats a
+   * non-null `correlationId` as universal — or, worse, treats a NULL one as a
+   * meaningful signal — will be wrong for the auto-approved population, which
+   * is the majority of capture and governed-execute traffic.
+   *
+   * NOT part of the dedup hash: `computeProposalDedupHash` reads only
+   * { workspaceId, proposalType, targetType, targetId?, data }, and `data`
+   * has `correlationId` stripped by VOLATILE_DEDUP_KEYS — so a freshly minted
+   * per-attempt id can never make two identical proposals hash differently.
+   */
   correlationId?: string | null;
   requestedEventId?: string | null;
   sessionId?: string | null;
@@ -247,6 +270,14 @@ export async function insertPendingProposal(
       })
     : null;
 
+  // PROVENANCE FLOOR: every proposal gets a correlationId. Minted here (the
+  // SSOT insert) rather than at each door, so the ~10 direct-insert writers —
+  // hygiene workers, the lane scanner, the archiver, the generic Hub door —
+  // stop producing NULL-provenance rows. Deliberately AFTER the dedup peek and
+  // outside the hash inputs (see the field doc above): a dedup hit returns the
+  // FIRST attempt's correlation id, which is the correct grouping.
+  const correlationId = input.correlationId ?? randomUUID();
+
   try {
     const [proposal] = await executor
       .insert(proposals)
@@ -277,7 +308,7 @@ export async function insertPendingProposal(
         ...(input.sourceMessageId
           ? { sourceMessageId: input.sourceMessageId }
           : {}),
-        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        correlationId,
         ...(input.requestedEventId
           ? { requestedEventId: input.requestedEventId }
           : {}),

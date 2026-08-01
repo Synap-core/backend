@@ -111,13 +111,19 @@ export const widgetDefinitionsRouter = router({
    * Returns system-wide builtins first, then workspace-specific custom widgets.
    */
   // Workspace is a LENS: active workspace → that workspace's defs + pod-wide
-  // builtins (NULL); no workspace → builtins only (lens=null). Scoping is the
-  // registered `workspace` rule applied by scopedDb — behaviour-identical to the
-  // prior hand-rolled `or(isNull, eq(ws))` / `isNull` branch.
+  // builtins (NULL). Scoping is the registered `workspace` rule applied by
+  // scopedDb.
+  //
+  // NO workspace → the caller's FULL floor (`workspacelessFloor: "user"`), not
+  // builtins-only. The browser boots at pod altitude, and this is a boot read:
+  // with the globals-only default a user's own custom widget definitions vanish
+  // until they enter a Space, so every bento cell backed by one fails to
+  // resolve. Failing NARROW is worse than failing closed here, and the floor is
+  // unchanged — `workspaceLensWhere(undefined)` is `userVisibleWhere`.
   list: podProcedure.query(async ({ ctx }) => {
-    const rows = await scopedDb(accessFor(ctx)).findMany<
-      typeof widgetDefinitions.$inferSelect
-    >(widgetDefinitions, {
+    const rows = await scopedDb(
+      accessFor(ctx, { workspacelessFloor: "user" })
+    ).findMany<typeof widgetDefinitions.$inferSelect>(widgetDefinitions, {
       where: eq(widgetDefinitions.isActive, true),
       orderBy: [
         // Builtins first (workspaceId null sorts before UUIDs)
@@ -141,7 +147,9 @@ export const widgetDefinitionsRouter = router({
    * derived without shipping compiled cell source. Studio still uses `list`.
    */
   listMeta: podProcedure.query(async ({ ctx }) => {
-    const rows = await scopedDb(accessFor(ctx)).findMany<
+    const rows = await scopedDb(
+      accessFor(ctx, { workspacelessFloor: "user" })
+    ).findMany<
       Pick<
         typeof widgetDefinitions.$inferSelect,
         | "typeKey"

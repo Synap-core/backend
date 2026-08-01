@@ -273,6 +273,10 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "entity_scope",
     addedBy: "0060_entity_scope_column.sql",
   },
+  // NOTE: this list checks column EXISTENCE only. `profiles.entity_scope` also
+  // has a required DEFAULT ('pod', migration 0220) — a wrong default silently
+  // INVERTS the kind/role doctrine rather than failing, so it is checked
+  // separately in `validateSchemaCoherence()` below.
   {
     table: "profiles",
     column: "default_values",
@@ -1367,6 +1371,32 @@ export async function validateSchemaCoherence(): Promise<void> {
       "SCHEMA COHERENCE CHECK FAILED — firewall trigger " +
         "'trg_channels_branch_purpose_immutable' is missing (migration 0169). " +
         "The client-comms immutability floor is down; the pod refuses to start."
+    );
+  }
+
+  // Doctrine floor (0220): a KIND is pod-wide. `profiles.entity_scope` must
+  // default to 'pod'. Checked as a DEFAULT (not just column existence) because
+  // the failure mode here is not an error — it is a silent INVERSION: with the
+  // old 'workspace' default, every kind a template or an agent creates without
+  // an explicit entityScope lands workspace-scoped, and nothing ever complains.
+  // See APP-DOCK-MENTAL-MODEL-PLAN.md §1b.
+  const entityScopeDefault = await sql<
+    Array<{ column_default: string | null }>
+  >`
+    SELECT column_default
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'profiles'
+       AND column_name = 'entity_scope'
+  `;
+  const defaultExpr = entityScopeDefault[0]?.column_default ?? null;
+  if (defaultExpr !== null && !defaultExpr.startsWith("'pod'")) {
+    throw new Error(
+      "SCHEMA COHERENCE CHECK FAILED — profiles.entity_scope defaults to " +
+        `${defaultExpr} instead of 'pod' (migration ` +
+        "0220_profiles_entity_scope_pod_default.sql). Kinds are pod-wide; with " +
+        "the old default every kind created without an explicit entityScope " +
+        "silently lands workspace-scoped. The pod refuses to start."
     );
   }
 

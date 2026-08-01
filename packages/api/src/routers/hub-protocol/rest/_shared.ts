@@ -81,6 +81,18 @@ export type HubVariables = {
    * a `service` key this is the confinement boundary applied at the shared door.
    */
   keyWorkspaceId?: string | null;
+  /**
+   * The caller's active focus session, resolved ONCE by the session middleware
+   * in `hub-protocol-rest.ts` from the client-supplied `X-Session-Id` header.
+   *
+   * SECURITY: this is only ever set after the middleware has VERIFIED that the
+   * session row exists AND belongs to `userId` (the post-remap authenticated
+   * principal). An unowned / unknown / malformed header is dropped to
+   * `undefined` — never thrown, so a stale header from a closed session cannot
+   * break an unrelated write. Route handlers must read THIS, not
+   * `c.req.header("x-session-id")`, which is unvalidated client input.
+   */
+  sessionId?: string;
 };
 
 /**
@@ -514,7 +526,13 @@ export async function getCaller(
     scopes,
     options?.workspaceId,
     options?.sourceMessageId,
-    options?.sessionId,
+    // PROVENANCE: fall back to the VERIFIED `X-Session-Id` resolved once by the
+    // session middleware. An explicit option still wins (a route that resolved
+    // its own session — e.g. from the request body — knows better), but every
+    // other route now inherits the caller's focus session instead of dropping
+    // it. Never read the raw header here: `c.get("sessionId")` is only set
+    // after the ownership check.
+    options?.sessionId ?? (c.get("sessionId") as string | undefined) ?? null,
     // agentUserId — getCaller deliberately never sets it (reads ride the auth
     // middleware's identity floor); pass undefined to reach the confinement args.
     undefined,

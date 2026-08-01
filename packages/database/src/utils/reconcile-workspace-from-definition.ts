@@ -339,8 +339,12 @@ export async function reconcileWorkspaceFromDefinition(
           // `workspace` on a deferred promotion, where a `shared` create would
           // collide with the same-slug pod-wide row that blocked the promotion.
           scope: resolution.createScope as ProfileScope,
-          // Template-declared entity visibility. `undefined` ⇒ repo default
-          // `"workspace"` (unchanged for templates that don't declare it).
+          // Template-declared entity visibility. `undefined` ⇒ the repository
+          // resolves the DOCTRINE default from `profileKind`: a **kind** lands
+          // pod-wide, a **role** lands workspace-scoped. (This used to fall back
+          // to "workspace" for everything, which is why "kinds are pod-wide" was
+          // never true for template-installed profiles.) A template that wants an
+          // app-specific, workspace-scoped kind must now say so explicitly.
           entityScope: profile.entityScope,
           workspaceId,
           userId,

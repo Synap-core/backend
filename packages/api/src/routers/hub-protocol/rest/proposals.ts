@@ -527,7 +527,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       const userId = resolvedAgentUserId ?? (c.get("userId") as string);
       const action = inferProposalAction(body.proposalType);
       // sessionId resolution: explicit body field > X-Session-Id header > null
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const isRequestShaped =
         typeof body.data.requestId === "string" &&
         typeof body.data.targetType === "string" &&

@@ -83,10 +83,7 @@ export interface ProfileApplyResolution {
    *                        slug, so no row can be flipped to `shared`.
    */
   deferredReason:
-    | "cross-user"
-    | "not-promotable"
-    | "slug-taken-pod-wide"
-    | null;
+    "cross-user" | "not-promotable" | "slug-taken-pod-wide" | null;
   /**
    * The scope the caller MUST use if it creates the profile (i.e. when
    * `profile` and `conflict` are both null). Normally the template's declared
@@ -174,7 +171,9 @@ export async function resolveProfileForApply(
   const scopeDivergence = (
     resolved: Profile
   ): ProfileApplyResolution["scopeConflict"] => {
-    const existingEntityScope = resolved.entityScope ?? "workspace";
+    // `entity_scope` is NOT NULL, so this fallback is unreachable — but it must
+    // not encode the pre-doctrine default. Kind ⇒ pod is the rule now.
+    const existingEntityScope = resolved.entityScope ?? "pod";
     const scopeDiffers =
       opts.declaredScopeExplicit === true &&
       opts.declaredScope !== resolved.scope;

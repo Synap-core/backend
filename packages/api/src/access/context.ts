@@ -252,20 +252,46 @@ export class AccessContext {
  *     project narrowing).
  *
  * Both only narrow within the user floor (see `withLens` / `withProjectLens`), so
- * this is purely a convenience seam — no widening. DATA-table readers that want
- * the FULL floor when no workspace is active (all member workspaces, not just
- * globals) should narrow with `ctx.workspaceId ?? undefined` themselves rather
- * than this helper.
+ * this is purely a convenience seam — no widening.
+ *
+ * WHAT AN ABSENT WORKSPACE MEANS is the one thing this seam cannot guess, so it
+ * is an EXPLICIT opt-in (`opts.workspacelessFloor`) rather than a silent default
+ * flip. Since the browser boots at POD altitude (`clearActiveWorkspace()` on
+ * first membership resolution) `ctx.workspaceId` is legitimately null on most
+ * boot reads, and the two readings diverge sharply:
+ *
+ *   - `"globals"` (DEFAULT, unchanged) → lens `null`: pod-global config rows
+ *     ONLY. Right for a reader whose workspace-less answer is genuinely "the
+ *     substrate defaults", and for any load-for-authz.
+ *   - `"user"` → lens `undefined`: the caller's FULL floor — every workspace
+ *     they can see, plus globals. Right for a CONFIG/DATA listing that must
+ *     still show the user their OWN rows at pod altitude, where `null` fails
+ *     NARROW (a silently short list) instead of failing closed.
+ *
+ * `"user"` is NOT a widening past the floor: `workspaceLensWhere(undefined)`
+ * IS `userVisibleWhere` — member/owner/pod-visible workspaces + globals.
+ * Removing the lens removes a NARROWING, it never adds an access source.
+ *
+ * Deliberately kept opt-in per call site: flipping the default would widen every
+ * caller at once — the mirror-image of the bug it fixes.
  */
-export function accessFor(ctx: {
-  userId?: string | null;
-  agentUserId?: string | null;
-  isHubProtocol?: boolean;
-  workspaceId?: string | null;
-  projectId?: string | null;
-}): AccessContext {
+export function accessFor(
+  ctx: {
+    userId?: string | null;
+    agentUserId?: string | null;
+    isHubProtocol?: boolean;
+    workspaceId?: string | null;
+    projectId?: string | null;
+  },
+  opts?: {
+    /** What an ABSENT `ctx.workspaceId` means. Default `"globals"`. */
+    workspacelessFloor?: "globals" | "user";
+  }
+): AccessContext {
+  const workspaceLens =
+    ctx.workspaceId ?? (opts?.workspacelessFloor === "user" ? undefined : null);
   return AccessContext.from(ctx)
-    .withLens(ctx.workspaceId ?? null)
+    .withLens(workspaceLens)
     .withProjectLens(ctx.projectId ?? undefined);
 }
 

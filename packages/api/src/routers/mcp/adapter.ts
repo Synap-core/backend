@@ -321,32 +321,47 @@ async function buildGraphEnvelope(
 // ── Focus-session handle resolution (server-side, never a tool schema) ────────
 
 /**
- * The tools whose writes are worth GROUPING under a focus session (proposal
- * grouping + `produced` links), plus the session tools themselves. Resolving a
- * handle costs a DB round-trip, so a tool that would never use one — every read
- * door, orient, diagnose — must not pay for it. Keep this list in sync when a
- * new governed write door is added here.
+ * READ-ONLY tools that skip focus-session resolution — the INVERSE of the
+ * allow-list this used to be.
+ *
+ * Resolving a handle costs a DB round-trip, so a tool that could never use one
+ * (every read door: get/list/ask/orient/diagnose) still must not pay for it.
+ * But an ALLOW-list fails CLOSED against itself: it has to be extended by hand
+ * for every new governed write door, and it wasn't — `synap_create_workspace`,
+ * `synap_create_skill`, `synap_create_automation`, `synap_run_capability`,
+ * `synap_post_message`, `synap_create_cell`, `synap_define_role`,
+ * `synap_trigger_automation` and others all wrote `sessionId: undefined` even
+ * with an open session, so their proposals carried no session provenance.
+ *
+ * Inverted, the default is "a write belongs to the session that produced it"
+ * and a NEW write door is attributed automatically. The failure mode of a miss
+ * flips from "silently loses provenance" to "one extra indexed SELECT on a
+ * read" — and a read that resolves a handle is harmless: it is only ever passed
+ * to the hub caller as a grouping hint.
+ *
+ * A prefix rule covers the bulk (`synap_get_*` / `synap_list_*`); the rest are
+ * named. Ownership is still enforced downstream (`ownsFocusSession`), so this
+ * list is a performance boundary, never an authorization one.
  */
-const SESSION_LINKED_TOOLS = new Set([
-  "synap_create_entity",
-  "synap_update_entity",
-  "synap_create_document",
-  "synap_store_file",
-  "synap_remember_fact",
-  "synap_link_entities",
-  "synap_attach_facet",
-  "synap_detach_facet",
-  "synap_capture",
-  "synap_capture_graph",
-  "synap_create_project",
-  "synap_create_playbook",
-  "synap_create_view",
-  "synap_create_verb",
-  "synap_start_session",
-  "synap_update_session",
-  "synap_complete_session",
-  "synap_promote_session_to_playbook",
+const READ_ONLY_TOOL_PREFIXES = ["synap_get_", "synap_list_"] as const;
+
+const READ_ONLY_TOOLS = new Set([
+  "synap_ask",
+  "synap_orient",
+  "synap_diagnose",
+  "synap_load_skill",
+  "synap_match_playbooks",
+  "synap_resolve_identity",
+  "synap_template_health",
 ]);
+
+/** True when the tool only reads — no write to group under a session. */
+export function isReadOnlyTool(toolName: string): boolean {
+  return (
+    READ_ONLY_TOOLS.has(toolName) ||
+    READ_ONLY_TOOL_PREFIXES.some((p) => toolName.startsWith(p))
+  );
+}
 
 /** Non-terminal statuses — a session still "in flight" for its owner. */
 const OPEN_SESSION_STATUSES = [
@@ -455,7 +470,7 @@ async function resolveSessionHandle(
   userId: string,
   ambientSessionId?: string
 ): Promise<string | undefined> {
-  if (!SESSION_LINKED_TOOLS.has(toolName)) return undefined;
+  if (isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
   // dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
   // still rejected downstream by the mutation inputs' zod `.uuid()` schemas.)

@@ -1030,7 +1030,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // resolveActorId is kept for its validation side-effect above; the entity
       // is attributed via resolvedAgentUserId below, so its return is unused.
 
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
         userId,
@@ -1765,7 +1765,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // never falsified as human.
         agentUserId,
         scopes: c.get("scopes") as string[],
-        sessionId: c.req.header("x-session-id") ?? null,
+        sessionId: c.get("sessionId") ?? null,
         keyType: c.get("keyType") as string | undefined,
         keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
       });
@@ -1922,7 +1922,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         return c.json({ error: actorResolution.error }, 400);
       // resolveActorId is kept for its validation side-effect above; the entity
       // is attributed via resolvedAgentUserId below, so its return is unused.
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
         userId,

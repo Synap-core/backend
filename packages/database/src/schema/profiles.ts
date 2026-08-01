@@ -101,13 +101,29 @@ export const profiles = pgTable(
 
     // Entity scoping — determines whether entities of this profile type
     // are pod-wide (visible in all workspaces) or workspace-scoped.
+    //
+    // DEFAULT = 'pod' (migration 0220). Doctrine, ratified 2026-08-01 in
+    // APP-DOCK-MENTAL-MODEL-PLAN.md §1b: **a KIND is pod-wide** — it is the
+    // entity's identity, one `person` / one `company` shared by the whole pod.
+    // The workspace-scoped half of the model is the ROLE (`profileKind='role'`,
+    // instances in `entity_facets`, visibility per-facet-row `workspaceId`).
+    // The old `'workspace'` default silently inverted that for every kind a
+    // template or an agent created without saying otherwise.
+    //
+    // A DB column default cannot read another column, so it cannot encode the
+    // "role ⇒ workspace" half. That rule lives at the write door —
+    // `ProfileRepository.create()` resolves the value from `profileKind` and
+    // always writes it explicitly. This default only covers writers that omit
+    // the column entirely (raw SQL, psql, future migrations).
+    //
     // Pod-wide: Person, Company, Note, Task (core types shared everywhere)
-    // Workspace-scoped: Deal, Pipeline, custom types (app-specific)
+    // Workspace-scoped kinds still exist and are legitimate (Deal, Pipeline,
+    // devplane types) — they must now say `entityScope: "workspace"` explicitly.
     entityScope: text("entity_scope", {
       enum: ["pod", "workspace"],
     })
       .notNull()
-      .default("workspace"),
+      .default("pod"),
 
     // ─── Profile Renderer North Star ─────────────────────────────────────────
     // System-default renderer choice per slot.

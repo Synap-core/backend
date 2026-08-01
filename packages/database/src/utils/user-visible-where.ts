@@ -78,6 +78,47 @@ export type WorkspaceLens = string | string[] | null | undefined;
  *   ];
  *   const rows = await db.query.entities.findMany({ where: and(...conditions) });
  */
+/**
+ * The THREE branches of the workspace floor, each as a reusable id subquery.
+ *
+ * These exist so the floor has exactly ONE definition. `userVisibleWhere` needs
+ * it as a predicate over a column; `ProfileRepository.getAccessibleProfiles`
+ * needs it as an id set for its workspace-less branch. Before this split, the
+ * profile path re-derived only the MEMBER branch, which meant a sovereign
+ * single-user pod's owner — who legitimately has no `workspace_members` row —
+ * saw a truncated vocabulary (SYSTEM + USER profiles only) at pod altitude.
+ * Anything that needs "which workspaces can this user see" composes these;
+ * nothing re-derives them.
+ */
+export function memberWorkspaceIds(userId: string) {
+  return db
+    .select({ id: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+}
+
+/**
+ * OWNED is separate from membership on purpose: `workspaces.owner_id` is a
+ * first-class column and a sovereign/single-user pod's owner may have no member
+ * row at all. Membership alone would hide their own data.
+ */
+export function ownedWorkspaceIds(userId: string) {
+  return db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.ownerId, userId));
+}
+
+/** Workspaces readable pod-wide by design. */
+export function podVisibleWorkspaceIds() {
+  return db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible','pod_joinable')`
+    );
+}
+
 export function userVisibleWhere(
   workspaceIdColumn: AnyPgColumn,
   userId: string
@@ -87,20 +128,9 @@ export function userVisibleWhere(
   // sovereign/single-user pod's owner may not have a member row, so membership
   // alone would hide their own data), or it is POD-VISIBLE (readable pod-wide by
   // design). This mirrors getUserAccessibleWorkspaceIds so reads are consistent.
-  const memberWs = db
-    .select({ id: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
-  const ownedWs = db
-    .select({ id: workspaces.id })
-    .from(workspaces)
-    .where(eq(workspaces.ownerId, userId));
-  const podVisibleWs = db
-    .select({ id: workspaces.id })
-    .from(workspaces)
-    .where(
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible','pod_joinable')`
-    );
+  const memberWs = memberWorkspaceIds(userId);
+  const ownedWs = ownedWorkspaceIds(userId);
+  const podVisibleWs = podVisibleWorkspaceIds();
 
   // `proposals.workspace_id` is TEXT while `workspaces.id` /
   // `workspace_members.workspace_id` are UUID — cast the column to uuid so the

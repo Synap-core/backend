@@ -143,11 +143,22 @@ export const profilesRouter = router({
 
       // podProcedure tolerates a workspace-less caller (pod-wide / cross-workspace
       // surfaces, onboarding). `?? ""` routes through getAccessibleProfiles'
-      // workspace-less branch (SYSTEM + USER profiles) instead of binding null
-      // into a uuid column. NOTE: this pod-wide path does NOT yet union the
-      // caller's member-workspace / shared profiles (that broader floor is what
-      // `listMulti` does) — broadening it is a deliberate follow-up, kept out
-      // here so the documented workspace-less contract is unchanged.
+      // workspace-less branch instead of binding null into a uuid column.
+      //
+      // That branch is NO LONGER "SYSTEM + USER only": it unions the caller's
+      // member-workspace WORKSPACE + SHARED profiles as correlated semi-joins
+      // (profile-repository.ts, `hasWorkspace === false`) — ONE query, and the
+      // same union `listMulti` fans out per workspace. The predicate lives there
+      // and is deliberately NOT re-derived here; `profiles` is intentionally
+      // absent from the access registry (registry.ts) and reads through
+      // ProfileRepository, not scopedDb.
+      //
+      // That branch now floors on the FULL canonical floor — member ∪ OWNED
+      // (`workspaces.owner_id`) ∪ pod-visible — composed from the shared branch
+      // builders exported by `user-visible-where.ts`, so there is one definition
+      // of the floor rather than a re-derivation here. It used to be membership
+      // alone, which hid a sovereign/single-user pod owner's own vocabulary at
+      // pod altitude (that owner legitimately has no `workspace_members` row).
       let profiles = await profileRepo.getAccessibleProfiles(
         ctx.userId,
         ctx.workspaceId ?? "",

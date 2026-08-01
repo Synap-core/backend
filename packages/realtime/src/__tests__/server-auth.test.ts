@@ -295,6 +295,12 @@ describe("Handshake principal resolution — Phase 3A", () => {
 //     join this for Phase 3A to work.
 //   • Always join `user:${userId}` — bridge per-user emits
 
+// ⚠️ REPLICA of the join logic in `server.ts`'s connection handler — it is not
+// imported, so it can DRIFT. It already did: this helper kept returning `[]` for
+// a workspace-less socket (asserting a disconnect branch that no longer exists)
+// and the suite stayed green, catching nothing. If you change the join order or
+// conditions in `server.ts`, change them here too, or extract the real function
+// and import it.
 function computeRoomsToJoin(args: {
   viewId: string | null;
   workspaceId: string | null;
@@ -302,11 +308,13 @@ function computeRoomsToJoin(args: {
 }): string[] {
   const effectiveViewId =
     args.viewId || (args.workspaceId ? `workspace:${args.workspaceId}` : null);
-  if (!effectiveViewId) return [];
 
-  const rooms = [`view:${effectiveViewId}`];
+  // POD ALTITUDE: a socket with neither a view nor a workspace is no longer
+  // disconnected. It is fully authenticated (Kratos token matched to auth.userId,
+  // a check that never depended on a workspace) and holds its self-scoped room.
+  const rooms = [`user:${args.userId}`];
+  if (effectiveViewId) rooms.push(`view:${effectiveViewId}`);
   if (args.workspaceId) rooms.push(`workspace:${args.workspaceId}`);
-  rooms.push(`user:${args.userId}`);
   return rooms;
 }
 
@@ -324,14 +332,23 @@ describe("Service-account room joins — Phase 3A", () => {
     expect(rooms).toContain("user:agent-eve");
   });
 
-  it("a service account with no workspaceId or viewId is rejected (no rooms)", () => {
+  it("a socket with no workspaceId or viewId connects at POD ALTITUDE (not rejected)", () => {
     const rooms = computeRoomsToJoin({
       viewId: null,
       workspaceId: null,
       userId: "agent-eve",
     });
-    // Empty result triggers the disconnect branch in the real handler.
-    expect(rooms).toEqual([]);
+    // Regression guard for the production defect: the Browser boots with no
+    // active Space (SynapProvider clears the remembered workspace on first
+    // membership resolution), so this is the FIRST connect for every user. It
+    // used to hit a disconnect branch, so realtime never established until the
+    // user entered a Space. It must now hold the connection.
+    expect(rooms).toEqual(["user:agent-eve"]);
+    expect(rooms).not.toEqual([]);
+    // Pod-wide events reach this socket via `user:` — there is deliberately no
+    // separate `pod:` room (it would hold the same single principal, have no
+    // producer, and cost a pod_members lookup per connection).
+    expect(rooms.some((r) => r.startsWith("pod:"))).toBe(false);
   });
 
   it("a service account with only viewId joins that view room (not workspace)", () => {

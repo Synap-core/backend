@@ -419,7 +419,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       // Event-mode scoping: forward the active focus session (X-Session-Id) so
       // captured entities link to it via `session --produced--> entity`. Same
       // header the entities door reads; absent = unchanged behavior.
-      const sessionId = c.req.header("x-session-id") || undefined;
+      const sessionId = c.get("sessionId") || undefined;
 
       const result = await caller.execute({
         entities: body.entities,

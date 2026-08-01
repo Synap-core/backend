@@ -77,7 +77,15 @@ $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE
 
 # ─── Step 2: Run migrations (old backend still serving) ───────────────────────
 log "Running migrations (old backend still serving)..."
-$COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration exited non-zero"
+# FATAL, not a warning — same reasoning that fixed kratos-migrate below.
+# The API refuses to start when `validateSchemaCoherence()` fails
+# (apps/api/src/index.ts), and migration 0220 is exactly that kind of change: it
+# sets `profiles.entity_scope DEFAULT 'pod'` and the coherence check asserts it.
+# So a swallowed migration failure no longer degrades — the old backend is
+# stopped, the new one boots, coherence rejects it, and the pod is DOWN while the
+# operator reads a coherence error instead of the migration error that caused it.
+# Aborting here leaves the old backend serving, which is the recoverable state.
+$COMPOSE run --rm backend-migrate 2>&1 || die "backend-migrate failed — aborting update; the OLD backend is still serving. Inspect with: cd $CD && $COMPOSE run --rm backend-migrate"
 
 # ─── Step 2b: Conversions DRY-RUN report (read-only, non-fatal) ────────────────
 # Prints per-op counts from the Kind+Facets disposition manifest so the operator

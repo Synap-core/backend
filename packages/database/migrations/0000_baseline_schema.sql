@@ -300,7 +300,11 @@ CREATE TABLE IF NOT EXISTS "profiles" (
   "scope"            text    NOT NULL DEFAULT 'workspace',
   "user_id"          text,
   "workspace_id"     uuid    REFERENCES "workspaces"("id") ON DELETE CASCADE,
-  "entity_scope"     text    NOT NULL DEFAULT 'workspace',
+  -- DEFAULT 'pod' since 0220 — kinds are pod-wide (APP-DOCK-MENTAL-MODEL-PLAN
+  -- §1b). The "role => workspace" half is enforced at the write door
+  -- (resolveEntityScope in profile-repository.ts); a column default cannot read
+  -- a sibling column.
+  "entity_scope"     text    NOT NULL DEFAULT 'pod',
   "is_active"        boolean NOT NULL DEFAULT true,
   "version"          integer NOT NULL DEFAULT 1,
   "created_at"       timestamp with time zone NOT NULL DEFAULT now(),
@@ -316,7 +320,11 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "semantic_slug" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'workspace';
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
-ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "entity_scope" text DEFAULT 'workspace';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "entity_scope" text DEFAULT 'pod';
+-- Idempotent for pre-existing tables where the column already carried the old
+-- 'workspace' default (0060). ADD COLUMN IF NOT EXISTS is a no-op there, so the
+-- default must be set separately. Existing ROWS are never touched — see 0220.
+ALTER TABLE "profiles" ALTER COLUMN "entity_scope" SET DEFAULT 'pod';
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_dashboard_renderer" jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;

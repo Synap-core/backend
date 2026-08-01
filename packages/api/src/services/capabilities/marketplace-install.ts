@@ -433,6 +433,132 @@ export async function applyMarketInstall(
       }
       return { kind: "automation", automations: results };
     }
+
+    case "skill": {
+      // A standalone `skill` package installs into the caller's context via the
+      // SAME governed door the direct create + MCP `synap_create_skill` use —
+      // `skillsRouter.create` (its checkPermissionOrPropose gate handles
+      // approval; a `code` skill is born unapproved, an `instruction` skill
+      // born approved). Cache row present → resolve inline/by-slug; row MISSING
+      // → by-key re-resolve from the CP (opt-in / just-authored skill package),
+      // mirroring the automation/template kinds. workspaceId is optional (a
+      // skill is pod-wide when the caller has no acting workspace).
+      const definition = (
+        entry
+          ? await resolveDefinition(entry, input.version)
+          : await resolveDefinitionByKey(input.slug, input.version)
+      ) as {
+        name?: string;
+        displayName?: string;
+        description?: string;
+        kind?: "instruction" | "code" | "declarative" | "builtin";
+        scope?: "pod" | "user" | "workspace";
+        agentTypes?: string[];
+        body?: string;
+        code?: string;
+        providerSpec?: Record<string, unknown>;
+        parameters?: Record<string, unknown>;
+        category?: string;
+        executionMode?: "sync" | "async";
+        timeoutSeconds?: number;
+      };
+      const workspaceRole = input.workspaceId
+        ? (await getWorkspaceMembership(db, input.workspaceId, input.userId))
+            ?.role
+        : "owner";
+      const ctx = {
+        db,
+        authenticated: true as const,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole,
+      } as unknown as Context;
+      const { skillsRouter } = await import("../../routers/skills.js");
+      const result = await skillsRouter.createCaller(ctx).create({
+        workspaceId: input.workspaceId ?? undefined,
+        name:
+          definition.name ??
+          definition.displayName ??
+          entry?.name ??
+          input.slug,
+        description: definition.description ?? entry?.description ?? undefined,
+        kind: definition.kind,
+        scope: definition.scope ?? "pod",
+        agentTypes: definition.agentTypes,
+        body: definition.body,
+        code: definition.code,
+        providerSpec: definition.providerSpec,
+        parameters: definition.parameters,
+        category: definition.category,
+        executionMode: definition.executionMode ?? "sync",
+        timeoutSeconds: definition.timeoutSeconds ?? 30,
+      });
+      return { kind: "skill", ...result };
+    }
+
+    case "view": {
+      // A standalone `view` package installs via the SAME governed door the
+      // direct create + MCP `synap_create_view` use — `viewsRouter.create`.
+      // Cache row present → resolve inline/by-slug; row MISSING → by-key
+      // re-resolve from the CP (opt-in / just-authored view package), mirroring
+      // automation/template. workspaceId is optional (a pod-wide view when the
+      // caller has no acting workspace); a STRUCTURED view still requires the
+      // definition to carry `scopeProfileIds` (per-pod profile UUIDs) — the
+      // door rejects a structured view without them, surfaced as a clear error.
+      const definition = (
+        entry
+          ? await resolveDefinition(entry, input.version)
+          : await resolveDefinitionByKey(input.slug, input.version)
+      ) as {
+        name?: string;
+        displayName?: string;
+        description?: string;
+        type?: string;
+        scopeProfileIds?: string[];
+        config?: Record<string, unknown>;
+        query?: Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+      };
+      if (!definition.type) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `View package "${input.slug}" is missing a view \`type\` in its definition — nothing to install.`,
+        });
+      }
+      const workspaceRole = input.workspaceId
+        ? (await getWorkspaceMembership(db, input.workspaceId, input.userId))
+            ?.role
+        : "owner";
+      const ctx = {
+        db,
+        authenticated: true as const,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole,
+      } as unknown as Context;
+      const { viewsRouter } = await import("../../routers/views.js");
+      const viewCaller = viewsRouter.createCaller(ctx);
+      // `type` is validated at runtime by the door's ViewTypeEnum; cast the
+      // args to the caller's input type (an invalid type is rejected by zod),
+      // mirroring the `view/create` approve-executor.
+      const createArgs = {
+        workspaceId: input.workspaceId ?? undefined,
+        name:
+          definition.name ??
+          definition.displayName ??
+          entry?.name ??
+          input.slug,
+        description: definition.description ?? entry?.description ?? undefined,
+        type: definition.type,
+        scopeProfileIds: definition.scopeProfileIds,
+        config: definition.config,
+        metadata: definition.metadata,
+      };
+      const result = await viewCaller.create(
+        createArgs as Parameters<typeof viewCaller.create>[0]
+      );
+      return { kind: "view", ...result };
+    }
   }
 }
 

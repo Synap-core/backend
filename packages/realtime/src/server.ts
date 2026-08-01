@@ -380,56 +380,86 @@ presenceNamespace.on("connection", (socket) => {
       ? socket.handshake.auth.workspaceId
       : null;
 
-  // Use viewId if provided, otherwise use workspaceId as fallback for workspace-level presence
+  // Use viewId if provided, otherwise use workspaceId as fallback for workspace-level presence.
+  // NULL is now a legitimate state — see the pod-altitude note below.
   const effectiveViewId =
     viewId || (workspaceId ? `workspace:${workspaceId}` : null);
 
-  if (!effectiveViewId) {
-    console.error("[Presence] Missing viewId or workspaceId, disconnecting");
-    socket.disconnect();
-    return;
-  }
-
-  // Join room for this view (or workspace)
-  socket.join(`view:${effectiveViewId}`);
-  // Also join workspace room so bridge emissions to workspace:${workspaceId} reach this client
-  if (workspaceId) {
-    socket.join(`workspace:${workspaceId}`);
-  }
+  // ── Self-scoped rooms — joined at EVERY altitude ────────────────────────
   // Join user-specific room so bridge emissions to user:${userId} reach this client.
   // Service accounts get their own user room too — keeps direct-to-key
   // emits possible in the future without a special-case branch.
   socket.join(`user:${userId}`);
 
-  // Register user in collaboration manager. Service-account sessions are
-  // tracked too, so presence indicators in the dashboard reflect "Eve is
-  // watching." (UX layer can choose to hide them if undesirable.)
-  // NOTE: the `as` cast preserves pre-existing behavior — the runtime has
-  // always allowed `"workspace"` as a viewType for workspace-level sockets,
-  // but the literal isn't in the type union in presence-manager.ts. Fixing
-  // that union is out of scope for this Phase 3A change.
-  const session = collaborationManager.userJoined({
-    viewId: effectiveViewId,
-    viewType: (viewType || (workspaceId ? "workspace" : "document")) as
-      "whiteboard" | "document" | "timeline" | "kanban" | "ai-chat",
-    userId,
-    userName: userName || (isServiceAccount ? "Service" : "Anonymous"),
-    socketId: socket.id,
-  });
+  // POD ALTITUDE. The Browser boots with NO active Space (SynapProvider clears
+  // the remembered workspace on first membership resolution), so `workspaceId`
+  // is null on the very first connect. This handler used to disconnect such a
+  // socket outright ("Missing viewId or workspaceId"), which meant the realtime
+  // connection never established until the user entered a Space.
+  //
+  // The socket is nevertheless FULLY authenticated: the handshake middleware
+  // validated the Kratos session token and matched it to `auth.userId` (that
+  // check does not depend on a workspace). So we hold the connection and give
+  // it its self-scoped rooms — no auth was weakened to get here.
+  //
+  // No separate `pod:` room: pod-wide events already route to `user:${userId}`
+  // (see `domain-event-bridge.ts` — no workspaceId ⇒ the owner's user room), and
+  // the socket joins that unconditionally below. A pod room keyed on the user's
+  // own id would hold the same single principal and have no producer, while
+  // costing a `pod_members` lookup on EVERY connection. A *shared* pod room is
+  // not an option either: `pod-membership.ts:24-31` is explicit that "an
+  // un-faceted pod-wide entity stays owner-private", so pod-wide ≠ visible to
+  // all pod members, and fanning one out would leak owner-private rows.
+  if (effectiveViewId) {
+    // Join room for this view (or workspace)
+    socket.join(`view:${effectiveViewId}`);
+  }
+  // Also join workspace room so bridge emissions to workspace:${workspaceId} reach this client
+  if (workspaceId) {
+    socket.join(`workspace:${workspaceId}`);
+  }
 
-  console.log(
-    `[Presence] ${isServiceAccount ? "Service" : "User"} ${userName || userId} (${userId}) joined ${effectiveViewId}`
-  );
+  // Presence is defined RELATIVE TO A VIEW — a pod-altitude socket has nothing
+  // to be present in, so it registers no presence session (and no stale
+  // `view:null` room shows up in the stats). It still gets `presence:init` so
+  // the client's ready-state handshake completes identically at both altitudes.
+  if (effectiveViewId) {
+    // Register user in collaboration manager. Service-account sessions are
+    // tracked too, so presence indicators in the dashboard reflect "Eve is
+    // watching." (UX layer can choose to hide them if undesirable.)
+    // NOTE: the `as` cast preserves pre-existing behavior — the runtime has
+    // always allowed `"workspace"` as a viewType for workspace-level sockets,
+    // but the literal isn't in the type union in presence-manager.ts. Fixing
+    // that union is out of scope for this Phase 3A change.
+    const session = collaborationManager.userJoined({
+      viewId: effectiveViewId,
+      viewType: (viewType || (workspaceId ? "workspace" : "document")) as
+        "whiteboard" | "document" | "timeline" | "kanban" | "ai-chat",
+      userId,
+      userName: userName || (isServiceAccount ? "Service" : "Anonymous"),
+      socketId: socket.id,
+    });
 
-  // Send current active users to the new joiner
-  const activeUsers = collaborationManager.getActiveUsers(effectiveViewId);
-  socket.emit("presence:init", {
-    users: activeUsers,
-    yourColor: session.color,
-  });
+    console.log(
+      `[Presence] ${isServiceAccount ? "Service" : "User"} ${userName || userId} (${userId}) joined ${effectiveViewId}`
+    );
+
+    // Send current active users to the new joiner
+    const activeUsers = collaborationManager.getActiveUsers(effectiveViewId);
+    socket.emit("presence:init", {
+      users: activeUsers,
+      yourColor: session.color,
+    });
+  } else {
+    console.log(
+      `[Presence] ${isServiceAccount ? "Service" : "User"} ${userName || userId} (${userId}) connected at pod altitude (no view/workspace)`
+    );
+    socket.emit("presence:init", { users: [], yourColor: null });
+  }
 
   // Event: Cursor movement (for non-Yjs views)
   socket.on("cursor:move", (cursor: { x: number; y: number }) => {
+    if (!effectiveViewId) return; // pod altitude — no view to broadcast into
     collaborationManager.updateCursor({
       socketId: socket.id,
       viewId: effectiveViewId,
@@ -441,6 +471,7 @@ presenceNamespace.on("connection", (socket) => {
   socket.on(
     "typing",
     (payload: boolean | { isTyping?: boolean; documentId?: string }) => {
+      if (!effectiveViewId) return; // pod altitude — no view to broadcast into
       const isTyping =
         typeof payload === "boolean" ? payload : payload?.isTyping === true;
       const documentId =
@@ -468,6 +499,7 @@ presenceNamespace.on("connection", (socket) => {
 
   // Event: Custom collaboration event
   socket.on("collaboration:event", (event: any) => {
+    if (!effectiveViewId) return; // pod altitude — no view to broadcast into
     collaborationManager.broadcastEvent({
       type: event.type,
       viewId: effectiveViewId,
@@ -479,7 +511,9 @@ presenceNamespace.on("connection", (socket) => {
 
   // Event: Request presence update
   socket.on("presence:request", () => {
-    const activeUsers = collaborationManager.getActiveUsers(effectiveViewId);
+    const activeUsers = effectiveViewId
+      ? collaborationManager.getActiveUsers(effectiveViewId)
+      : [];
     socket.emit("presence:update", activeUsers);
   });
 

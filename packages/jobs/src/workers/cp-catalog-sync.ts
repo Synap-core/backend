@@ -63,12 +63,15 @@ export const CP_CATALOG_SYNC_CRON = "*/10 * * * *";
 // TODO(control-plane-types): adopt MarketplaceCatalogKind/MarketplaceCatalogEntry
 // from @synap-core/control-plane-types@1.1.0 once published — this inline shape
 // duplicates that contract (P2.10.3) and must not drift from it.
-export type CatalogKind = "capability" | "automation" | "template" | "cell";
+export type CatalogKind =
+  "capability" | "automation" | "template" | "cell" | "skill" | "view";
 const CATALOG_KINDS: CatalogKind[] = [
   "capability",
   "automation",
   "template",
   "cell",
+  "skill",
+  "view",
 ];
 
 interface CatalogEntry {
@@ -250,7 +253,7 @@ async function fetchCapabilities(
  */
 async function fetchPackages(
   source: string,
-  category: "workspace" | "workflow"
+  category: "workspace" | "workflow" | "skill" | "view"
 ): Promise<SourceFetch<CatalogFetch>> {
   return fetchAllPages(async (limit, offset) => {
     const result = await safeFetchJson(
@@ -356,6 +359,17 @@ async function fetchKind(
       return fetchPackages(source, "workflow");
     case "template":
       return fetchPackages(source, "workspace");
+    // skill/view are FIRST-CLASS CP categories (PACKAGE_TYPES after migration
+    // 0049: workspace|capability|skill|workflow|view|cell) — the pod `kind` IS
+    // the CP `category` (no alias, unlike automation→workflow / template→
+    // workspace). Same paginated `/api/packages?category=` list route + list-
+    // view shape as workspace/workflow packages; the `definition` body is
+    // omitted from the list (fetched per-slug at install time — see
+    // marketplace-install.ts), exactly like automation/template.
+    case "skill":
+      return fetchPackages(source, "skill");
+    case "view":
+      return fetchPackages(source, "view");
     case "cell":
       return fetchCells(source);
   }
