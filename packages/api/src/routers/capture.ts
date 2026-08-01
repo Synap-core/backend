@@ -376,6 +376,14 @@ function typedPropertyHint(
   return `${prop.slug}:${type}${prop.required ? "*" : ""}`;
 }
 
+/**
+ * Cap on how many property hints one profile contributes to the structuring
+ * prompt. Required props are emitted FIRST (see `buildAvailableProfiles`) so a
+ * wide profile can never push its required fields out of the window — the
+ * model would then silently omit them and the entity would be un-materializable.
+ */
+const MAX_PROPERTY_HINTS_PER_PROFILE = 30;
+
 export function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
   const slugByProfileId = new Map<string, string>();
   for (const p of profiles) if (p.id) slugByProfileId.set(p.id, p.slug);
@@ -390,9 +398,64 @@ export function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
         undefined,
       propertyHints:
         p.effectiveProperties
-          ?.map((prop) => typedPropertyHint(prop, slugByProfileId))
+          // Required first: the hint list is capped, and a dropped REQUIRED
+          // prop is the difference between an entity that materializes and one
+          // that fails validation at apply.
+          ?.slice()
+          .sort(
+            (a, b) => Number(b.required ?? false) - Number(a.required ?? false)
+          )
+          .slice(0, MAX_PROPERTY_HINTS_PER_PROFILE)
+          .map((prop) => typedPropertyHint(prop, slugByProfileId))
           .join(", ") || undefined,
     }));
+}
+
+/**
+ * Attach each profile's REAL effective property schema so
+ * `buildAvailableProfiles` can emit `propertyHints`.
+ *
+ * WHY THIS EXISTS: `ProfileResolutionService.getAccessibleProfiles` returns bare
+ * `profiles` rows — it has never carried an `effectiveProperties` field. Every
+ * call site cast those rows to `AccessibleProfileLike` (`as unknown as`), which
+ * type-checks clean while `p.effectiveProperties` is always `undefined`, so
+ * `propertyHints` was always `undefined` and the structuring model was told which
+ * profile SLUGS exist but never which PROPERTIES they require. It then returned
+ * titles with `properties: {}` — hollow entities that fail required-property
+ * validation at materialize (`EntityRepository.create`). This is the one door
+ * that closes that gap; the property vocabulary comes from the REAL schema
+ * (`getEffectiveProperties`, workspace-lensed), never a hardcoded list.
+ *
+ * Best-effort per profile: a resolution failure yields no hints for THAT profile
+ * rather than failing the capture/import.
+ */
+export async function withEffectiveProperties(
+  profileService: ProfileResolutionService,
+  profiles: AccessibleProfileLike[],
+  workspaceId?: string | null
+): Promise<AccessibleProfileLike[]> {
+  return Promise.all(
+    profiles.map(async (p) => {
+      if (!p.id) return p;
+      try {
+        const effectiveProperties = await profileService.getEffectiveProperties(
+          p.id,
+          workspaceId ?? null
+        );
+        return {
+          ...p,
+          effectiveProperties:
+            effectiveProperties as unknown as RawEffectiveProperty[],
+        };
+      } catch (err) {
+        logger.warn(
+          { err, profileSlug: p.slug },
+          "buildAvailableProfiles: effective-property resolution failed — profile contributes no property hints"
+        );
+        return p;
+      }
+    })
+  );
 }
 
 /**
@@ -461,7 +524,11 @@ export const captureRouter = router({
           workspaceId ?? ""
         );
         const availableProfiles = buildAvailableProfiles(
-          accessibleProfiles as unknown as AccessibleProfileLike[]
+          await withEffectiveProperties(
+            profileService,
+            accessibleProfiles as unknown as AccessibleProfileLike[],
+            workspaceId
+          )
         );
 
         const { client } = await resolveIntelligenceService({
@@ -803,7 +870,11 @@ export const captureRouter = router({
         workspaceId ?? ""
       );
       const availableProfiles = buildAvailableProfiles(
-        accessibleProfiles as unknown as AccessibleProfileLike[]
+        await withEffectiveProperties(
+          profileService,
+          accessibleProfiles as unknown as AccessibleProfileLike[],
+          workspaceId ?? null
+        )
       );
 
       // 1b. Anchor context ("Capture updates on this entity"). When the caller

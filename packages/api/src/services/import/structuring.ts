@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import {
   getDb,
   ProfileResolutionService,
+  PropertyValidationService,
   eq,
   workspaces,
   workspaceMembers,
@@ -9,6 +10,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import {
   buildAvailableProfiles,
+  withEffectiveProperties,
   type AccessibleProfileLike,
 } from "../../routers/capture.js";
 import {
@@ -187,7 +189,97 @@ export type ProfileHints = {
     name: string;
     description?: string;
   }>;
+  /**
+   * Preflight against the REAL profile schema. Deep structuring calls this for
+   * every entity it is about to emit as a `create_entity` op; an op that would
+   * fail `EntityRepository.create`'s required-property validation at apply is
+   * degraded to a `note` (title + body preserved) instead of being queued as a
+   * hollow shell that hard-fails the whole proposal. Never a hardcoded list —
+   * this is `getEffectiveProperties` through the same door the materializer uses.
+   */
+  validateEntity: EntitySchemaValidator;
 };
+
+/**
+ * Validate the properties an extracted entity would materialize with, against
+ * the profile's effective schema in this workspace lens.
+ * Returns `{ valid: true }` for an unknown slug (typing is gated separately by
+ * `validSlugs`) and for any resolution failure — this gate must never REJECT
+ * more than the materializer would.
+ */
+export type EntitySchemaValidator = (input: {
+  profileSlug: string;
+  title?: string;
+  properties?: Record<string, unknown>;
+  content?: string;
+}) => Promise<{ valid: boolean; errors: string[] }>;
+
+/**
+ * Build the preflight validator over a live `ProfileResolutionService`.
+ * Mirrors `submit-capture-graph.ts`'s PREFLIGHT block (the capture-graph twin of
+ * this gate): same `validateEntityCreateForProposal` door, same `content`
+ * folding, same profile-defaults merge — so import and capture agree on what
+ * "materializable" means. Per-profile resolution is memoized for the batch.
+ */
+export function makeEntitySchemaValidator(
+  profileService: ProfileResolutionService,
+  propertyValidation: PropertyValidationService,
+  ctx: { userId: string; workspaceId: string | null }
+): EntitySchemaValidator {
+  const profileMemo = new Map<
+    string,
+    Promise<{ id: string; defaultValues: Record<string, unknown> } | null>
+  >();
+  const resolve = (slug: string) => {
+    let hit = profileMemo.get(slug);
+    if (!hit) {
+      hit = profileService
+        .resolveProfile(slug, ctx.userId, ctx.workspaceId)
+        .then((p) =>
+          p
+            ? {
+                id: p.id,
+                defaultValues:
+                  (p.defaultValues as Record<string, unknown>) ?? {},
+              }
+            : null
+        )
+        .catch(() => null);
+      profileMemo.set(slug, hit);
+    }
+    return hit;
+  };
+
+  return async ({ profileSlug, title, properties, content }) => {
+    const profile = await resolve(profileSlug);
+    // Unknown profile ⇒ nothing to validate against. Slug typing is already
+    // gated by `validSlugs`; failing open here keeps this gate no stricter than
+    // the materializer.
+    if (!profile) return { valid: true, errors: [] };
+    const propsToCheck: Record<string, unknown> = { ...(properties ?? {}) };
+    // A body materializes as a linked document / inline `content` property —
+    // fold it in exactly as the materializer does so a profile that REQUIRES
+    // `content` isn't falsely flagged when prose was supplied.
+    if (content) propsToCheck.content = content;
+    try {
+      return await propertyValidation.validateEntityCreateForProposal(
+        propsToCheck,
+        profile.id,
+        ctx.workspaceId,
+        {
+          ...(title !== undefined ? { title } : {}),
+          profileDefaults: profile.defaultValues,
+        }
+      );
+    } catch (err) {
+      logger.warn(
+        { err, profileSlug },
+        "import preflight: property validation threw — treating entity as valid (no stricter than materialize)"
+      );
+      return { valid: true, errors: [] };
+    }
+  };
+}
 
 /**
  * Resolve the target workspace's REAL profiles → typed hints for the
@@ -200,11 +292,20 @@ export async function resolveProfileHints(
 ): Promise<ProfileHints> {
   const { workspaceId, userId } = ctx;
   const db2 = await getDb();
-  const accessible = await new ProfileResolutionService(
-    db2
-  ).getAccessibleProfiles(userId, workspaceId);
+  const profileService = new ProfileResolutionService(db2);
+  const accessible = await profileService.getAccessibleProfiles(
+    userId,
+    workspaceId
+  );
+  // The REAL property schema per profile — without this the structuring model
+  // is told the slugs but not the properties, and returns titles with
+  // `properties: {}` (hollow entities). See `withEffectiveProperties`.
   const availableProfiles = buildAvailableProfiles(
-    accessible as unknown as AccessibleProfileLike[]
+    await withEffectiveProperties(
+      profileService,
+      accessible as unknown as AccessibleProfileLike[],
+      workspaceId
+    )
   );
   // The user's workspaces — lets the structuring model suggest where notes belong.
   const wsRows = await db2
@@ -228,6 +329,11 @@ export async function resolveProfileHints(
       name: w.name,
       description: w.description ?? undefined,
     })),
+    validateEntity: makeEntitySchemaValidator(
+      profileService,
+      new PropertyValidationService(profileService),
+      { userId, workspaceId: workspaceId ?? null }
+    ),
   };
 }
 

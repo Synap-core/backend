@@ -73,6 +73,57 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   let skipped = 0;
   let failed = 0;
 
+  // ── Universal first-party defaults (the `base` template) ────────────────────
+  // BEFORE the domain (subtype) pass below: reconcile EVERY workspace to the
+  // first-party `base` template — the report automation + default commands +
+  // relation defs. The subtype pass only reaches workspaces WITH a canonical
+  // template (bare "personal" workspaces `continue` past it), so universal
+  // operational defaults must ride their OWN subtype-independent pass. The
+  // automation step is version-aware (a content-hash over base's flow), so this
+  // converges a workspace frozen at an old seed version to base's CURRENT prompts
+  // on the next boot, and is a cheap no-op once converged. This is what fixes the
+  // seed-version freeze at deploy time (every boot syncs every workspace).
+  const baseTemplate = await resolveWorkspaceTemplate("base");
+  if (baseTemplate) {
+    // ONLY base's operational carriers cross into existing workspaces — never its
+    // workspace-shell fields. base declares `workspaceVisibility: "pod_visible"`
+    // and the door's settings step OVERWRITES visibility/subtype unconditionally,
+    // so its full definition would flip every workspace pod-visible and clobber
+    // domain workspaces' template stamps. base is an operational OVERLAY (empty
+    // profiles/views/home). No packageSlug/packageVersion: base is not any
+    // workspace's template identity (the subtype pass below owns that stamp).
+    const bd = baseTemplate.workspaceDefinition;
+    const baseOperationalDefinition = {
+      flowAutomations: bd.flowAutomations ?? [],
+      commands: bd.commands ?? [],
+      relationDefs: bd.relationDefs ?? [],
+    } as unknown as WorkspaceDefinitionInput;
+    let baseReconciled = 0;
+    for (const ws of rows) {
+      try {
+        await reconcileWorkspaceFromDefinition({
+          workspaceId: ws.id,
+          userId: ws.ownerId,
+          definition: baseOperationalDefinition,
+        });
+        baseReconciled++;
+      } catch (err) {
+        logger.warn(
+          { err, workspaceId: ws.id },
+          "Base-defaults reconcile failed (non-fatal)"
+        );
+      }
+    }
+    logger.info(
+      { baseReconciled, total: rows.length, version: baseTemplate.version },
+      "Universal base-defaults reconcile pass complete"
+    );
+  } else {
+    logger.warn(
+      "Base template unresolved — universal operational defaults NOT reconciled this boot"
+    );
+  }
+
   // Resolve each DISTINCT subtype ONCE through the cache-first resolver (CP
   // catalog cache → frozen bundle). Async, so it can't run inside the pure
   // synchronous `orderWorkspacesByTemplateDependencies` lookup — pre-resolve

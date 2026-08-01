@@ -623,60 +623,67 @@ export const workspacesRouter = router({
       // `views.resolveScopedSurface` ({ type: 'whiteboard' }, no scope) on first
       // open. Per-workspace auto-created boards produced a graveyard of empty
       // `isMain` boards the canonical door never reached.
-      const {
-        ensureDefaultCommands,
-        ensureDefaultRelationDefs,
-        ensureReportAutomation,
-      } = await import("@synap/database");
-
-      const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);
-      console.log(
-        `[workspaces.get] ensureDefaultCommands:`,
-        commandsResult.status,
-        commandsResult.message
-      );
-      if (commandsResult.status === "error") {
-        console.error(
-          `[workspaces.get] Failed to ensure default commands:`,
-          commandsResult.message,
-          commandsResult.error
-        );
-      }
-
-      const relDefsResult = await ensureDefaultRelationDefs(
-        input.id,
-        ctx.userId
-      );
-      console.log(
-        `[workspaces.get] ensureDefaultRelationDefs:`,
-        relDefsResult.status,
-        relDefsResult.message
-      );
-      if (relDefsResult.status === "error") {
-        console.error(
-          `[workspaces.get] Failed to ensure default relation defs:`,
-          relDefsResult.message,
-          relDefsResult.error
-        );
-      }
-
-      // THE report automation. Seeded here too (not only in workspace-init) so
-      // workspaces created BEFORE it existed get it — same backfill contract as
-      // the two ensure* calls above. Manual trigger, so it never runs unasked.
-      const reportAutomationResult = await ensureReportAutomation(
-        input.id,
-        ctx.userId
-      );
-      console.log(
-        `[workspaces.get] ensureReportAutomation:`,
-        reportAutomationResult.status,
-        reportAutomationResult.message
-      );
-      if (reportAutomationResult.status === "error") {
-        console.error(
-          `[workspaces.get] Failed to ensure report automation:`,
-          reportAutomationResult.message,
-          reportAutomationResult.error
+      // Universal operational defaults — the report automation, default commands
+      // and relation defs — come from the first-party `base` template through the
+      // ONE reconcile door. The automation step is VERSION-AWARE (a content-hash
+      // over base's flow): a prompt change to base overwrites the stale row on the
+      // next read, which self-heals the seed-version freeze the old hardcoded
+      // seeder suffered (a workspace only reconciled when someone opened Settings).
+      // Legacy `ensure*` seeders are the fallback ONLY if `base` is somehow
+      // unresolvable (should not happen with the bundled 0.10.0 template).
+      const { reconcileWorkspaceFromDefinition } =
+        await import("@synap/database");
+      const { resolveWorkspaceTemplate } =
+        await import("../services/capabilities/resolve-workspace-template.js");
+      const baseTemplate = await resolveWorkspaceTemplate("base");
+      if (baseTemplate) {
+        try {
+          // Pass ONLY base's operational carriers — never its workspace-shell
+          // fields. base declares `workspaceVisibility: "pod_visible"` (+ name
+          // "Base"), and the door's settings step OVERWRITES visibility/subtype
+          // unconditionally — so handing it base's full definition would flip
+          // every reconciled workspace pod-visible and clobber a domain
+          // workspace's template stamp. base is an operational OVERLAY (its
+          // profiles/views/home are empty by design), so only the automation +
+          // commands + relation defs may cross into an existing workspace. No
+          // packageSlug/packageVersion either: base is not the workspace's
+          // template identity.
+          const baseDef = baseTemplate.workspaceDefinition;
+          const baseReport = await reconcileWorkspaceFromDefinition({
+            workspaceId: input.id,
+            userId: ctx.userId,
+            definition: {
+              flowAutomations: baseDef.flowAutomations ?? [],
+              commands: baseDef.commands ?? [],
+              relationDefs: baseDef.relationDefs ?? [],
+            } as unknown as Parameters<
+              typeof reconcileWorkspaceFromDefinition
+            >[0]["definition"],
+          });
+          console.log(
+            `[workspaces.get] base reconcile:`,
+            "automations",
+            baseReport.automations,
+            "commands",
+            baseReport.commands,
+            "relationDefs",
+            baseReport.relationDefs
+          );
+        } catch (err) {
+          console.error(`[workspaces.get] base reconcile failed:`, err);
+        }
+      } else {
+        // Fallback: `base` unresolvable — seed via the legacy hardcoded utilities.
+        const {
+          ensureDefaultCommands,
+          ensureDefaultRelationDefs,
+          ensureReportAutomation,
+        } = await import("@synap/database");
+        await ensureDefaultCommands(input.id, ctx.userId);
+        await ensureDefaultRelationDefs(input.id, ctx.userId);
+        await ensureReportAutomation(input.id, ctx.userId);
+        console.warn(
+          `[workspaces.get] base template unresolved — used legacy seeders`
         );
       }
 

@@ -53,6 +53,13 @@ export interface StructureCapableClient {
       profileSlug: string;
       title: string;
       description?: string;
+      /**
+       * Long-form body the IS emits per entity (`StructureOutputSchema.content`,
+       * prompt rule 12). The import mapper materializes it as the entity's
+       * linked document. Previously absent from this interface, so every
+       * model-supplied body was silently discarded on the import path.
+       */
+      content?: string;
       properties?: Record<string, unknown>;
       confidence: number;
     }>;
@@ -82,6 +89,16 @@ export interface DeepStructureStats {
   /** Entities linked to a pre-existing graph entity instead of created. */
   linkedToExisting: number;
   documentCount: number;
+  /**
+   * Entities the schema preflight would NOT have been able to materialize under
+   * their extracted profile (missing/invalid required properties) and which were
+   * therefore emitted as a `note` carrying the same title + body instead. A
+   * non-zero count means the extraction is under-filling that profile's schema —
+   * surfaced in the quality report rather than silently absorbed.
+   */
+  degradedToNote: number;
+  /** `profileSlug` → count of entities degraded away from it (diagnostics). */
+  degradedByProfile: Record<string, number>;
   /** Source-note provenance entities created (one per processed note). */
   sourceDocCount: number;
   /** The workspace the model most often suggested these notes belong in. */
@@ -140,6 +157,25 @@ interface DeepStructureOptions {
     profileSlug: string,
     title: string
   ) => Promise<string | null>;
+  /**
+   * Preflight an entity against its profile's REAL effective schema before it
+   * is emitted as a `create_entity` op. Required-property validation otherwise
+   * runs for the first time at APPLY (`EntityRepository.create`), where a throw
+   * aborts the whole composite proposal — so an extraction that under-fills a
+   * required-property profile (e.g. `knowledge` needs `ek_type` + `ek_claim`)
+   * turned the entire import into a hard failure at approve time.
+   *
+   * A failing entity is NOT created under its extracted profile and is NOT
+   * fabricated into one: it is emitted as a `note` with the same title and body,
+   * which is honest (a note IS a note) and keeps the prose retrievable. Omitted
+   * → no preflight (prior behaviour).
+   */
+  validateEntity?: (input: {
+    profileSlug: string;
+    title?: string;
+    properties?: Record<string, unknown>;
+    content?: string;
+  }) => Promise<{ valid: boolean; errors: string[] }>;
   /**
    * Entity names found in EARLIER chunks of a larger import, pre-seeded into the
    * `existingEntityNames` hint so this chunk unifies entities it has not itself
@@ -437,6 +473,8 @@ export async function deepStructureImportItems(
   let duplicatesMerged = 0;
   let linkedToExisting = 0;
   let documentCount = 0;
+  let degradedToNote = 0;
+  const degradedByProfile: Record<string, number> = {};
   let sourceDocCount = 0;
   let itemsProcessed = 0;
   let itemsFailed = 0;
@@ -527,33 +565,71 @@ export async function deepStructureImportItems(
         continue;
       }
 
+      // Body precedence: the model's own `content` field (prompt rule 12 — the
+      // entity's long-form prose) FIRST; then a "whole note" fallback title;
+      // then a description long enough to deserve a document. Without the first
+      // arm every model-supplied body was dropped and typed entities carried no
+      // prose at all.
+      const longBody =
+        typeof e.content === "string" && e.content.trim()
+          ? e.content
+          : titleIsBody
+            ? rawTitle
+            : typeof e.description === "string" &&
+                shouldMaterializeAsDocument(e.description)
+              ? e.description
+              : undefined;
+      const shortDescription =
+        !longBody && e.description
+          ? String(e.description).slice(0, 2000)
+          : undefined;
+
+      // PREFLIGHT: required-property validation runs for the first time at
+      // materialize, where a throw aborts the WHOLE proposal. Check here against
+      // the real effective schema; an entity that cannot materialize under its
+      // extracted profile becomes a `note` (same title + body) rather than a
+      // hollow shell or a fabricated claim.
+      let effectiveSlug = slug;
+      if (opts.validateEntity && slug !== "note") {
+        const { valid, errors } = await opts.validateEntity({
+          profileSlug: slug,
+          title,
+          properties: e.properties ?? {},
+          ...(longBody ? { content: longBody } : {}),
+        });
+        if (!valid) {
+          deps.logger.warn(
+            { profileSlug: slug, title, errors },
+            "deep import: extracted entity fails its profile schema — emitting as note instead (would abort the proposal at apply)"
+          );
+          effectiveSlug = "note";
+          degradedToNote++;
+          degradedByProfile[slug] = (degradedByProfile[slug] ?? 0) + 1;
+        }
+      }
+
       const op: Extract<CompositeProposalOperation, { op: "create_entity" }> =
         applyHomeFields(
           {
             op: "create_entity",
             ref,
-            profileSlug: slug,
+            profileSlug: effectiveSlug,
             title,
-            properties: e.properties ?? {},
+            // A degraded entity keeps its title + body but NOT the partial
+            // properties that failed validation under the original profile —
+            // they would land as unmodeled keys on a note.
+            properties: effectiveSlug === slug ? (e.properties ?? {}) : {},
           },
           itemHome
         );
-      // Long body (a list/note that didn't decompose) → versioned document;
-      // otherwise keep the short description on the entity.
-      const longBody = titleIsBody
-        ? rawTitle
-        : typeof e.description === "string" &&
-            shouldMaterializeAsDocument(e.description)
-          ? e.description
-          : undefined;
       if (longBody) {
         op.content = longBody;
         documentCount++;
-      } else if (e.description) {
-        op.description = String(e.description).slice(0, 2000);
+      } else if (shortDescription) {
+        op.description = shortDescription;
       }
       operations.push(op);
-      byType[slug] = (byType[slug] ?? 0) + 1;
+      byType[effectiveSlug] = (byType[effectiveSlug] ?? 0) + 1;
     }
 
     // Provenance links: source note → each entity extracted from it. A
@@ -689,6 +765,8 @@ export async function deepStructureImportItems(
       duplicatesMerged,
       linkedToExisting,
       documentCount,
+      degradedToNote,
+      degradedByProfile,
       sourceDocCount,
       suggestedWorkspaceId,
       byType,

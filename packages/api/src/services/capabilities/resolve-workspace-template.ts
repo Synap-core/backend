@@ -113,6 +113,16 @@ function toWorkspaceDefinitionInput(
     defaultSources: pkg.defaultSources,
     onboarding: pkg.onboarding,
     dependencies: pkg.dependencies,
+    // Universal operational defaults (report automation / commands / relation
+    // defs). The BUNDLE path (`fromBundle` → `toWorkspaceDefinition`) already
+    // carries these; this CP-CACHE path maps them off the package body too, so a
+    // `base` template served from `cp_catalog_cache` doesn't silently drop them.
+    // `pkg.automations` is the wire shape the reconcile door reads as
+    // `flowAutomations` (version-aware); `commands`/`relationDefs` are seeded
+    // create-if-missing.
+    flowAutomations: pkg.automations ?? [],
+    commands: pkg.commands ?? [],
+    relationDefs: pkg.relationDefs ?? [],
   };
 }
 

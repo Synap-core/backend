@@ -626,8 +626,12 @@ export class ImportOrchestrator {
     // Optional workspaceId for IS routing + the live-search resolver — a pod-wide
     // analyze (null) resolves the user-default service and an unscoped search.
     const wsId = workspaceId ?? undefined;
-    const { availableProfiles, validSlugs, availableWorkspaces } =
-      await this.resolveProfileHints();
+    const {
+      availableProfiles,
+      validSlugs,
+      availableWorkspaces,
+      validateEntity,
+    } = await this.resolveProfileHints();
 
     // CSV is a TABLE: infer ONE profile + a column→property routing plan for the
     // whole file (so a CSV of people → `person` entities, not flat `note`s), and
@@ -723,6 +727,7 @@ export class ImportOrchestrator {
               userId,
               workspaceId: wsId,
             }),
+            validateEntity,
           },
           { logger }
         );
@@ -1079,8 +1084,12 @@ export class ImportOrchestrator {
     // analyze (null) resolves the user-default service and an unscoped search.
     const wsId = workspaceId ?? undefined;
     const chunkSize = Math.max(1, opts?.analyzeChunkSize ?? ANALYZE_CHUNK_SIZE);
-    const { availableProfiles, validSlugs, availableWorkspaces } =
-      await this.resolveProfileHints();
+    const {
+      availableProfiles,
+      validSlugs,
+      availableWorkspaces,
+      validateEntity,
+    } = await this.resolveProfileHints();
     let items = adaptItems(input.source as ImportAdapterSource, input.items);
 
     // Phase 0 corpus map — containers first (same as analyze).
@@ -1119,6 +1128,8 @@ export class ImportOrchestrator {
     let duplicatesMerged = 0;
     let linkedToExisting = 0;
     let documentCount = 0;
+    let degradedToNote = 0;
+    const degradedByProfile: Record<string, number> = {};
     let sourceDocCount = 0;
     let itemsProcessed = 0;
     let itemsFailed = 0;
@@ -1150,6 +1161,7 @@ export class ImportOrchestrator {
           availableWorkspaces,
           resolveExisting: (slug, title) => shared.resolveExisting(slug, title),
           seedExistingNames: shared.getExistingEntityNames(),
+          validateEntity,
         },
         { logger }
       );
@@ -1184,6 +1196,9 @@ export class ImportOrchestrator {
       duplicatesMerged += deep.stats.duplicatesMerged;
       linkedToExisting += deep.stats.linkedToExisting;
       documentCount += deep.stats.documentCount;
+      degradedToNote += deep.stats.degradedToNote;
+      for (const [t, n] of Object.entries(deep.stats.degradedByProfile ?? {}))
+        degradedByProfile[t] = (degradedByProfile[t] ?? 0) + n;
       sourceDocCount += deep.stats.sourceDocCount;
       itemsProcessed += deep.stats.itemsProcessed;
       itemsFailed += deep.stats.itemsFailed;
@@ -1239,6 +1254,8 @@ export class ImportOrchestrator {
       duplicatesMerged,
       linkedToExisting,
       documentCount,
+      degradedToNote,
+      degradedByProfile,
       sourceDocCount,
       byType,
       wikilinkLinksResolved,

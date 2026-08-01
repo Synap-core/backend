@@ -34,6 +34,16 @@ export type ImportQualityReport = {
     contentEntities: number;
     linkedExisting: number;
     byProfile: Record<string, number>;
+    /**
+     * Entities the schema preflight could not materialize under their extracted
+     * profile and which were emitted as notes instead. >0 means the extraction
+     * under-filled a profile's required properties.
+     */
+    degradedToNote?: number;
+    /** Entities that carry a long-form body (a linked document on materialize). */
+    withContent: number;
+    /** Non-container entities that carry at least one property. */
+    withProperties: number;
   };
   hierarchy: {
     containerCount: number;
@@ -88,6 +98,8 @@ export function buildImportQualityReport(
   let containers = 0;
   let contentEntities = 0;
   let linkedExisting = 0;
+  let withContent = 0;
+  let withProperties = 0;
 
   for (const op of creates) {
     byProfile[op.profileSlug] = (byProfile[op.profileSlug] ?? 0) + 1;
@@ -95,7 +107,14 @@ export function buildImportQualityReport(
       op.properties?.isContainer === true ||
       typeof op.properties?.corpusIntent === "string";
     if (isCont) containers++;
-    else contentEntities++;
+    else {
+      contentEntities++;
+      // Fill measured on CONTENT entities only — a corpus-map container's
+      // properties are structural bookkeeping, not extracted knowledge.
+      if (op.content && op.content.trim().length > 0) withContent++;
+      if (op.properties && Object.keys(op.properties).length > 0)
+        withProperties++;
+    }
     if (op.existingEntityId) linkedExisting++;
   }
 
@@ -195,6 +214,46 @@ export function buildImportQualityReport(
     );
   }
 
+  const degradedToNote =
+    typeof stats.degradedToNote === "number" ? stats.degradedToNote : undefined;
+  if (degradedToNote && degradedToNote > 0) {
+    const byProfileDetail =
+      stats.degradedByProfile && typeof stats.degradedByProfile === "object"
+        ? Object.entries(stats.degradedByProfile as Record<string, number>)
+            .map(([slug, n]) => `${slug}×${n}`)
+            .join(", ")
+        : "";
+    findings.push({
+      id: "schema-degraded-to-note",
+      severity: "warn",
+      message: `${degradedToNote} entity(ies) could not satisfy their profile's required properties and were filed as notes${byProfileDetail ? ` (${byProfileDetail})` : ""}. Title + body are preserved; the typing is not.`,
+      metric: degradedToNote,
+    });
+    nextUpgrades.push(
+      "Check that those profiles' required properties are extractable from the source prose (or relax `required` on the profile) — nothing is fabricated to satisfy a schema."
+    );
+  }
+
+  // Fill honesty: entities with neither properties nor a body are titles with
+  // nothing behind them — `synap ask` would retrieve a headline and no content.
+  const emptyContentEntities = contentEntities - Math.max(withContent, 0);
+  if (
+    contentEntities > 0 &&
+    withProperties === 0 &&
+    withContent === 0 &&
+    emptyContentEntities > 0
+  ) {
+    findings.push({
+      id: "no-entity-fill",
+      severity: "warn",
+      message: `${contentEntities} content entity(ies) carry neither properties nor a body — titles with nothing behind them.`,
+      metric: contentEntities,
+    });
+    nextUpgrades.push(
+      "Verify the structuring model received property hints (profiles resolved with their effective schema) before applying."
+    );
+  }
+
   if (linkedExisting > 0) {
     findings.push({
       id: "linked-existing",
@@ -249,6 +308,9 @@ export function buildImportQualityReport(
       contentEntities,
       linkedExisting,
       byProfile,
+      ...(degradedToNote !== undefined ? { degradedToNote } : {}),
+      withContent,
+      withProperties,
     },
     hierarchy: {
       containerCount: containers,
