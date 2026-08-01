@@ -51,7 +51,10 @@ import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
-import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
+import type {
+  ConnectionSelector,
+  FailureErrorClass,
+} from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
@@ -88,7 +91,14 @@ export type ExecuteCapabilityResult =
   // success:false, or a declarative provider verb returned an error envelope).
   // The ONE failure channel: callers must NOT dig a success:false envelope out of
   // a `kind:"run"` result — a failed run is `kind:"error"`, never `kind:"run"`.
-  | { kind: "error"; message: string }
+  // P1: `errorClass`/`providerRef` ride ALONGSIDE the human message (set when the
+  // failure came from a provider dispatch; absent for sandbox/config failures).
+  | {
+      kind: "error";
+      message: string;
+      errorClass?: FailureErrorClass;
+      providerRef?: string;
+    }
   | { kind: "not_found"; message: string };
 
 export async function executeCapability(input: {
@@ -630,7 +640,12 @@ export async function runResolvedSkill(
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
-  | { kind: "error"; message: string }
+  | {
+      kind: "error";
+      message: string;
+      errorClass?: FailureErrorClass;
+      providerRef?: string;
+    }
   | { kind: "not_found"; message: string }
   | { kind: "deny"; reason: string }
 > {
@@ -677,7 +692,18 @@ export async function runResolvedSkill(
     if (!isProposed) {
       const errMessage = capErrorMessage({ kind: "run", result });
       if (errMessage !== undefined) {
-        return { kind: "error", message: errMessage };
+        // P1: carry the structured scalars stamped at the dispatcher (they ride on
+        // the flattened envelope executeProviderVerb returned) alongside the message.
+        const env = (result ?? {}) as {
+          errorClass?: FailureErrorClass;
+          providerRef?: string;
+        };
+        return {
+          kind: "error",
+          message: errMessage,
+          errorClass: env.errorClass,
+          providerRef: env.providerRef,
+        };
       }
     }
     return { kind: "run", skillId: skill.id, result };

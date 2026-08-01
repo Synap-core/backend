@@ -498,9 +498,12 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     // still logged server-side and re-thrown to the caller unchanged (asserted
     // by the rejects.toThrow above).
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
+    // P1: onApprovalFailed now takes a 3rd `failure` arg (structured scalars). A
+    // non-provider throw carries none, so it is `undefined` here.
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
-      "Couldn't apply — an internal error occurred."
+      "Couldn't apply — an internal error occurred.",
+      undefined
     );
     expect(reportProposalOutcome).not.toHaveBeenCalled();
   });
@@ -527,9 +530,11 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     ).rejects.toThrow("Couldn't apply — target no longer exists");
 
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
+    // P1: 3rd `failure` arg is undefined for a plain (non-provider) TRPCError.
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
-      "Couldn't apply — target no longer exists"
+      "Couldn't apply — target no longer exists",
+      undefined
     );
   });
 });

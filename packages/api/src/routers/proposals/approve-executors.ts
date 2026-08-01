@@ -78,10 +78,12 @@ import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
+  attachFailureMeta,
   type StoredProposalData,
   type ProposalExecutorDeps,
   type ProposalRow,
 } from "./execution-registry.js";
+import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
 // the value paths below avoid via dynamic `import("../skills.js")`.
 import type { InsertSkillGovernedInput } from "../skills.js";
@@ -142,7 +144,15 @@ function reportApproved(
 export async function dispatchExternalOnce(
   proposalId: string,
   send: () => Promise<
-    { delivered: false; reason?: string } | { delivered: true }
+    // P1: a not-delivered result MAY carry structured failure scalars (from the
+    // dispatch envelope) so the thrown error can propagate a next action.
+    | {
+        delivered: false;
+        reason?: string;
+        errorClass?: FailureErrorClass;
+        providerRef?: string;
+      }
+    | { delivered: true }
   >,
   executor: Pick<typeof db, "update"> = db
 ): Promise<void> {
@@ -168,10 +178,15 @@ export async function dispatchExternalOnce(
       .update(proposals)
       .set({ externalDispatchedAt: null })
       .where(eq(proposals.id, proposalId));
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: `Couldn't apply — ${result.reason ?? "the external action was not dispatched"}.`,
-    });
+    // P1: attach the structured failure scalars so `dispatchProposalApproval`'s
+    // catch can persist a next action alongside the human message (unchanged).
+    throw attachFailureMeta(
+      new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Couldn't apply — ${result.reason ?? "the external action was not dispatched"}.`,
+      }),
+      { errorClass: result.errorClass, providerRef: result.providerRef }
+    );
   }
 }
 
@@ -3431,7 +3446,11 @@ export function registerApproveExecutors(): void {
         // BYPASS the capability gate: this send is already past governance (the
         // proposal was approved). `alreadyApproved` makes sendExternalMessage
         // dispatch directly, exactly once — no double-gate on re-entry.
-        const { success: sent } = await sendExternalMessage({
+        const {
+          success: sent,
+          errorClass,
+          providerRef,
+        } = await sendExternalMessage({
           threadId,
           accountId,
           body,
@@ -3443,8 +3462,9 @@ export function registerApproveExecutors(): void {
             { proposalId: input.proposalId, threadId, platform },
             "messaging.external.send: connector reported not-sent"
           );
+          return { delivered: false, errorClass, providerRef };
         }
-        return { delivered: sent };
+        return { delivered: true };
       });
 
       const materializedPayload = {
@@ -3573,7 +3593,12 @@ export function registerApproveExecutors(): void {
             },
             "capability.run executor: run failed"
           );
-          return { delivered: false, reason: runOutcome.message };
+          return {
+            delivered: false,
+            reason: runOutcome.message,
+            errorClass: runOutcome.errorClass,
+            providerRef: runOutcome.providerRef,
+          };
         }
         runResult = runOutcome.result;
         return { delivered: true };
@@ -3840,6 +3865,8 @@ export function registerApproveExecutors(): void {
           body,
           status,
           error: providerError,
+          errorClass,
+          providerRef,
         } = await triggerProviderAction({
           userId,
           provider,
@@ -3866,7 +3893,7 @@ export function registerApproveExecutors(): void {
             },
             "provider.action executor failed"
           );
-          return { delivered: false };
+          return { delivered: false, reason: providerError, errorClass, providerRef };
         }
         providerBody = body;
         providerStatus = status;
@@ -3972,8 +3999,12 @@ export function registerApproveExecutors(): void {
 
         // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
         await dispatchExternalOnce(input.proposalId, async () => {
-          const { success: executed, error: providerError } =
-            await triggerProviderAction({
+          const {
+            success: executed,
+            error: providerError,
+            errorClass,
+            providerRef,
+          } = await triggerProviderAction({
               userId,
               provider,
               method,
@@ -4009,7 +4040,7 @@ export function registerApproveExecutors(): void {
               },
               "capability/run executor failed"
             );
-            return { delivered: false };
+            return { delivered: false, reason: providerError, errorClass, providerRef };
           }
           return { delivered: true };
         });
@@ -4063,7 +4094,15 @@ export function registerApproveExecutors(): void {
               },
               "capability/run executor: skill/command run not delivered"
             );
-            return { delivered: false, reason };
+            return {
+              delivered: false,
+              reason,
+              // P1: an `error` outcome from a provider verb carries the scalars.
+              errorClass:
+                runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
+              providerRef:
+                runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
+            };
           }
           skillRunResult = runOutcome.result;
           return { delivered: true };

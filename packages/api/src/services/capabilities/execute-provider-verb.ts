@@ -25,6 +25,7 @@ import type { ProviderVerbSpec } from "@synap/database/schema";
 import {
   triggerProviderAction,
   type ConnectionSelector,
+  type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { interpolateString, interpolateDeep } from "../_shared/interpolate.js";
 
@@ -256,7 +257,15 @@ export function buildProviderRequest(
 type SingleOutcome =
   | { kind: "shaped"; value: unknown }
   | { kind: "proposed"; result: unknown }
-  | { kind: "error"; message: string; result: unknown };
+  | {
+      kind: "error";
+      message: string;
+      result: unknown;
+      // P1: structured failure scalars carried ALONGSIDE the human message, read
+      // off the dispatch envelope so the caller can derive a next action.
+      errorClass?: FailureErrorClass;
+      providerRef?: string;
+    };
 
 async function executeSingleCall(
   spec: DetailSpec,
@@ -301,6 +310,10 @@ async function executeSingleCall(
       kind: "error",
       message: result.error ?? `provider call failed (status ${result.status})`,
       result,
+      // Carry the scalars stamped at the dispatcher (external-dispatch.ts) up the
+      // failure chain, alongside the message — never re-derived here.
+      errorClass: result.errorClass,
+      providerRef: result.providerRef,
     };
   }
   return {

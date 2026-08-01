@@ -41,9 +41,83 @@ import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
+import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "external-dispatch" });
+
+/**
+ * P1 "every failure carries a next action" — the machine-readable failure class a
+ * dispatch failure is stamped with (alongside the human `error` string), so the
+ * browser can derive a one-click action ("Reconnect Google", "Retry", "Connect X")
+ * without re-parsing prose. Persisted on a failed proposal at
+ * `proposal.data.failure = { errorClass, providerRef }`.
+ *
+ *   auth           — credential/token failure (expired, invalid_grant, 401) → RECONNECT
+ *   no_connection  — enabled but never connected (no connection found)       → CONNECT
+ *   transient      — timeout / rate-limit / upstream 5xx                     → RETRY
+ *   permission     — an explicit grant/approval denial (vault grant, MCP approve)
+ *   target_missing — a NOT_FOUND that is not a connection issue (tool/secret/endpoint)
+ *   provider       — a genuine provider-side failure (business 4xx, malformed request)
+ */
+export type FailureErrorClass =
+  | "auth"
+  | "no_connection"
+  | "transient"
+  | "permission"
+  | "target_missing"
+  | "provider";
+
+/**
+ * SINGLE CLASSIFIER — map an already-known dispatch failure ({status, message,
+ * errorCode}) to a `FailureErrorClass`. The AUTH decision reuses the SAME
+ * `isConnectionAuthError` predicate the connection-health cron uses (never a
+ * parallel regex), so "should this reconnect?" has ONE source of truth.
+ *
+ * Precedence is deliberate (isConnectionAuthError also matches the "no connection
+ * found" affordance, so no_connection is split out FIRST; transient outranks auth
+ * so a 5xx whose body mentions a token is a Retry, not a Reconnect).
+ */
+export function classifyDispatchFailure(args: {
+  status: number;
+  message?: string;
+  errorCode?: string;
+}): FailureErrorClass {
+  const { status } = args;
+  const message = args.message ?? "";
+
+  // no_connection — the "enabled but never connected" affordance (a 404 whose
+  // message is the connect nudge). Split out BEFORE the auth check because
+  // isConnectionAuthError ALSO matches "no connection found".
+  if (/no (?:nango )?connection found|connect it via/i.test(message)) {
+    return "no_connection";
+  }
+
+  // permission — an explicit grant/approval denial (vault grant check, MCP server
+  // not approved). A 403, but distinct from a provider auth 401/403 — so it must
+  // precede the auth check (which also fires on 403).
+  if (
+    status === 403 &&
+    /grant check failed|is not approved|must approve/i.test(message)
+  ) {
+    return "permission";
+  }
+
+  // transient — timeout / rate-limit / upstream server error → retryable. Outranks
+  // auth so a 5xx/429 with an incidental credential word is not mis-read as reconnect.
+  if (status === 408 || status === 429 || status >= 500) return "transient";
+
+  // auth — credential/token failure. THE auth decision = isConnectionAuthError
+  // (message-driven, status-agnostic by design — the live dead-connection shapes
+  // arrive as 400/424, not only 401/403).
+  if (isConnectionAuthError(message)) return "auth";
+
+  // target_missing — a NOT_FOUND that is not a connection issue.
+  if (status === 404 || args.errorCode === "not_found") return "target_missing";
+
+  // provider — a genuine provider-side failure.
+  return "provider";
+}
 
 /**
  * Teach-in-response affordance for the no-credential/no-connection error
@@ -463,6 +537,14 @@ export interface SendExternalMessageResult {
    * resolve the send. Set only on an actually-dispatched (non-gated) send.
    */
   correlationId?: string;
+  /**
+   * P1: machine-readable failure class, stamped alongside the human error on a
+   * `success:false` result so the caller can derive a next action. Absent on
+   * success / propose.
+   */
+  errorClass?: FailureErrorClass;
+  /** P1: the provider/platform the failed send targeted (for the action label). */
+  providerRef?: string;
 }
 
 /**
@@ -489,7 +571,9 @@ export async function sendExternalMessage(
   const provider = linkedChannel?.externalSource ?? undefined;
   const connector = await getMessagingConnector(provider);
   if (!connector) {
-    return { success: false };
+    // No messaging connector resolved for this platform — the account is not
+    // connected. P1: a `no_connection` next action ("Connect <provider>").
+    return { success: false, errorClass: "no_connection", providerRef: provider };
   }
 
   // ── Capability-execution gate (W3b: messaging-send under the ONE gate) ────────
@@ -832,6 +916,18 @@ export interface TriggerProviderActionResult {
    * resolve the call. Set only on an actually-dispatched (non-gated) call.
    */
   correlationId?: string;
+  /**
+   * P1: machine-readable failure class, stamped alongside the human `error` on a
+   * `success:false` result so the caller can derive a next action ("Reconnect
+   * Google"). Absent on success / propose / dry-run.
+   */
+  errorClass?: FailureErrorClass;
+  /**
+   * P1: the provider/config-key the failed call targeted (from the tool's
+   * `providerConfigKey` or the scheme-stripped credentialRef) — the action label's
+   * subject. Absent on success.
+   */
+  providerRef?: string;
 }
 
 /** A resolved `tools` row, passed to each scheme handler. */
@@ -1955,6 +2051,29 @@ export async function triggerProviderAction(
             : {}),
         };
   const result = await handler({ input: dispatchInput, tool });
+
+  // P1 — stamp the structured failure scalars at the SINGLE dispatcher exit, from
+  // data already in scope: the classifier maps the result's own {status, error,
+  // errorCode}; providerRef is the tool's providerConfigKey (else the scheme-
+  // stripped credentialRef). One place, so every scheme handler's failure return
+  // (nango/vault/mcp) carries them without touching each of its ~25 return sites.
+  if (!result.success) {
+    if (result.errorClass === undefined) {
+      result.errorClass = classifyDispatchFailure({
+        status: result.status,
+        message: result.error,
+        errorCode: result.errorCode,
+      });
+    }
+    if (result.providerRef === undefined) {
+      const cfgKey = (tool.config as Record<string, unknown> | null | undefined)
+        ?.providerConfigKey;
+      result.providerRef =
+        typeof cfgKey === "string" && cfgKey
+          ? cfgKey
+          : credentialRef.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "") || undefined;
+    }
+  }
 
   // Universal-sink audit append (this wave): every actually-dispatched provider
   // call (nango/vault/mcp — covers Nango-backed connectors, direct API-key

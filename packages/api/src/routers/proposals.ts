@@ -2440,15 +2440,39 @@ async function applyProposalApproval(args: {
       ctx,
       deps: approveDeps,
     },
-    async (proposalId, errorMessage) => {
+    async (proposalId, errorMessage, failure) => {
       // Guard against a concurrent winner: if another approval attempt already
       // flipped this proposal to APPROVED (a confirmed external dispatch), do NOT
       // clobber it back to APPROVAL_FAILED. Only non-approved rows record failure.
+      //
+      // P1 "every failure carries a next action": stash the structured failure
+      // scalars (errorClass/providerRef) into the proposal's existing `data` JSONB
+      // under a `failure` key so the browser can derive a one-click action
+      // ("Reconnect Google"). `rejectionReason` (the human string) is UNCHANGED —
+      // this rides ALONGSIDE it. Free-form JSONB, no migration. Only written when a
+      // scalar was actually classified (a governance/config failure carries none).
+      const hasFailureMeta =
+        !!failure &&
+        (failure.errorClass !== undefined || failure.providerRef !== undefined);
+      const nextData = hasFailureMeta
+        ? {
+            ...((proposal.data as Record<string, unknown> | null) ?? {}),
+            failure: {
+              ...(failure!.errorClass !== undefined
+                ? { errorClass: failure!.errorClass }
+                : {}),
+              ...(failure!.providerRef !== undefined
+                ? { providerRef: failure!.providerRef }
+                : {}),
+            },
+          }
+        : undefined;
       await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVAL_FAILED,
           rejectionReason: errorMessage,
+          ...(nextData !== undefined ? { data: nextData as never } : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

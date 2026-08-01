@@ -27,8 +27,44 @@ import type {
   ProposalMaterializedRecord,
 } from "@synap-core/types";
 import type { PropertyDecisionMap } from "@synap/database";
+import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
 
 const logger = createLogger({ module: "proposal-execution-registry" });
+
+/**
+ * P1 "every failure carries a next action" — the structured failure scalars an
+ * approval failure carries, so `onApprovalFailed` can persist them on the proposal
+ * (`data.failure`) for the browser to derive a one-click action. Threaded from
+ * `dispatchExternalOnce`'s `{delivered:false, …}` through the thrown error's
+ * carrier (attach/readFailureMeta) — the human `rejectionReason` string is
+ * UNCHANGED; these ride alongside it.
+ */
+export interface ProposalFailureMeta {
+  errorClass?: FailureErrorClass;
+  providerRef?: string;
+}
+
+const FAILURE_META_KEY = "__synapFailureMeta";
+
+/** Attach structured failure scalars to an error so the catch site can read them. */
+export function attachFailureMeta<E extends object>(
+  err: E,
+  meta: ProposalFailureMeta
+): E {
+  if (meta.errorClass !== undefined || meta.providerRef !== undefined) {
+    (err as Record<string, unknown>)[FAILURE_META_KEY] = meta;
+  }
+  return err;
+}
+
+/** Read failure scalars off a caught error (undefined when none were attached). */
+export function readFailureMeta(err: unknown): ProposalFailureMeta | undefined {
+  if (err && typeof err === "object" && FAILURE_META_KEY in err) {
+    const m = (err as Record<string, unknown>)[FAILURE_META_KEY];
+    if (m && typeof m === "object") return m as ProposalFailureMeta;
+  }
+  return undefined;
+}
 
 type ProposalRow = {
   id: string;
@@ -232,7 +268,13 @@ export function registerProposalExecutor(ref: ProposalExecutor): void {
  */
 export async function dispatchProposalApproval(
   args: ProposalExecutorArgs,
-  onApprovalFailed: (proposalId: string, errorMessage: string) => Promise<void>
+  onApprovalFailed: (
+    proposalId: string,
+    errorMessage: string,
+    // P1: structured failure scalars (when the terminal failure carried them) so
+    // the caller can persist a next action alongside the human `errorMessage`.
+    failure?: ProposalFailureMeta
+  ) => Promise<void>
 ): Promise<ProposalExecutorResult> {
   const executor = proposalExecRegistry.resolve(
     `${args.proposal.targetType}/${args.proposal.proposalType}`,
@@ -263,7 +305,7 @@ export async function dispatchProposalApproval(
       err instanceof TRPCError
         ? err.message
         : "Couldn't apply — an internal error occurred.";
-    await onApprovalFailed(args.input.proposalId, safe);
+    await onApprovalFailed(args.input.proposalId, safe, readFailureMeta(err));
     throw err;
   }
 }
