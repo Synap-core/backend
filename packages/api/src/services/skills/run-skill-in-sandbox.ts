@@ -34,7 +34,9 @@
  * `execute-capability.ts` still calls `executeSkillViaIS` unless it is "1".
  */
 
-import ivm from "isolated-vm";
+// NOT a static import — see `loadIvm()` below. `isolated-vm` is a NATIVE addon,
+// and importing it at module scope crashed the pod on boot.
+import type IvmModule from "isolated-vm";
 import {
   db,
   eq,
@@ -195,6 +197,51 @@ export async function runSkillInSandbox(args: {
   }
 }
 
+/**
+ * Load `isolated-vm` LAZILY — the fix for a production boot crash.
+ *
+ * `isolated-vm` is a native addon with no musl prebuild. A static
+ * `import ivm from "isolated-vm"` at module scope executed on every boot,
+ * because `execute-capability.ts` imports THIS module statically. The
+ * `SANDBOX_LOCAL === "1"` check there gates the CALL, never the module graph —
+ * so on Alpine the pod crash-looped with:
+ *
+ *   No native build was found for … libc=musl … loaded from: …/isolated-vm
+ *
+ * `deploy/Dockerfile.api` states the dep is "inert … nothing loads it while the
+ * flag is OFF". That was FALSE: inert for BUILDING (pnpm skips its build script
+ * since it is not in `onlyBuiltDependencies`) but very much LOADED at import.
+ * A flag that gates a call cannot gate a static import — only a dynamic one can.
+ *
+ * Deferring to first CALL makes the flag mean what it says: with SANDBOX_LOCAL
+ * off the addon is never touched, so it never has to exist. With the flag ON,
+ * the addon must genuinely be compiled for the target platform — follow the
+ * FLAG-FLIP PREREQUISITE steps in `deploy/Dockerfile.api`.
+ *
+ * The failure is deliberately NOT swallowed: a skill asked to run in the local
+ * sandbox must fail loudly if the sandbox is unavailable. Silently falling back
+ * to another executor would run untrusted code somewhere the caller did not ask
+ * for. Boot stays healthy; the individual call fails with a legible reason.
+ */
+let ivmModulePromise: Promise<typeof IvmModule> | null = null;
+async function loadIvm(): Promise<typeof IvmModule> {
+  if (!ivmModulePromise) {
+    ivmModulePromise = import("isolated-vm")
+      .then((m) => m.default ?? (m as unknown as typeof IvmModule))
+      .catch((err: unknown) => {
+        ivmModulePromise = null; // never cache a failure — a redeploy may fix it
+        throw new Error(
+          `SANDBOX_LOCAL is enabled but the isolated-vm native addon could not be loaded ` +
+            `(${err instanceof Error ? err.message : String(err)}). ` +
+            `See the FLAG-FLIP PREREQUISITE block in deploy/Dockerfile.api — on Alpine/musl ` +
+            `it must be compiled from source. Unset SANDBOX_LOCAL to route code skills to the ` +
+            `Intelligence Service sandbox instead.`
+        );
+      });
+  }
+  return ivmModulePromise;
+}
+
 async function runIsolate(params: {
   code: string;
   args: Record<string, unknown>;
@@ -222,6 +269,7 @@ async function runIsolate(params: {
     caller,
   } = params;
 
+  const ivm = await loadIvm();
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
 
   try {
