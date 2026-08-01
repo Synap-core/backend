@@ -293,7 +293,9 @@ export function scanSkillGlobals(code: string): {
  * Throw a TRPCError with an actionable message if `code` references a global the
  * skill runtime does not provide. No-op for empty/whitespace code.
  */
-function assertSkillGlobalsAllowed(code: string | undefined | null): void {
+export function assertSkillGlobalsAllowed(
+  code: string | undefined | null
+): void {
   const trimmed = code?.trim();
   if (!trimmed) return;
   const scan = scanSkillGlobals(trimmed);
@@ -355,6 +357,17 @@ export async function insertSkillGoverned(
     ...values
   } = input;
   const skillId = randomUUID();
+
+  // Save-time global-reference scan (B1) — the shared BACKSTOP for every door
+  // that funnels through this governed insert (`installFromUrl`, the Hub
+  // `/agent-skills/import` door, and any future caller). `create`/`update`
+  // already scan earlier (before their own perm check + direct insert, which
+  // do NOT call this function) — this is not a double-scan of the same code
+  // path, it closes the gap for callers that construct a `kind: "code"` skill
+  // without going through those two mutations.
+  if (values.kind === "code") {
+    assertSkillGlobalsAllowed(values.code);
+  }
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,

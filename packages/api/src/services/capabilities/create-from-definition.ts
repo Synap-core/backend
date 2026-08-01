@@ -57,7 +57,10 @@ import { createLogger } from "@synap-core/core";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
-import { skillsRouter } from "../../routers/skills.js";
+import {
+  skillsRouter,
+  assertSkillGlobalsAllowed,
+} from "../../routers/skills.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -628,6 +631,17 @@ export async function createCapabilityFromDefinition(
         (s.code ?? null) !== existingSkill.code ||
         JSON.stringify(s.providerSpec ?? null) !==
           JSON.stringify(existingSkill.providerSpec ?? null);
+
+      // Save-time global-reference scan (B1) — this reconcile branch is a
+      // DIRECT db.update (not the governed `skillsCaller.create` a few lines
+      // below), so it's the one seeding path that bypassed the scan: a
+      // re-applied/drifted CP template could silently persist code that
+      // references an unprovided global. Only scan when the reconciled row is
+      // actually a code skill.
+      if ((s.kind ?? "code") === "code") {
+        assertSkillGlobalsAllowed(s.code);
+      }
+
       await db
         .update(skillsTable)
         .set({
