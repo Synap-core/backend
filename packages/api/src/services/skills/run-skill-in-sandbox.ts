@@ -45,7 +45,7 @@ import {
   VaultGrantError,
 } from "@synap/database";
 import { skills, secrets } from "@synap/database/schema";
-import { validateExternalUrl } from "@synap/shared-utils";
+import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import { createHubProtocolCallerContext } from "../../routers/hub-protocol/utils.js";
 import { triggerProviderAction } from "../../connectors/external-dispatch.js";
@@ -289,9 +289,14 @@ async function runIsolate(params: {
     const searchRef = new ivm.Reference(
       async (query: unknown, opts: unknown) => {
         const result = await caller.search.search({
+          // Identity LAST — a skill-controlled `opts` spread before it can
+          // never override the operator floor, regardless of what
+          // `search.search` reads in the future (today it ignores
+          // `input.userId` and uses `ctx.userId`, but that's a downstream
+          // invariant this bridge should not depend on).
+          ...((opts as object | null) ?? {}),
           userId: operatorUserId,
           query: String(query),
-          ...((opts as object | null) ?? {}),
         });
         return new ivm.ExternalCopy(result).copyInto();
       }
@@ -371,7 +376,15 @@ async function runIsolate(params: {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 30_000);
           try {
-            const response = await fetch(url, {
+            // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
+            // `maxRedirects` left at its default of 0, REJECTS any redirect
+            // outright — `check.url`/`allowedHosts` above only vetted the
+            // INITIAL URL, so a raw `fetch()` here would follow a same-host-
+            // approved response straight through a `302 Location:
+            // http://169.254.169.254/...` (or any internal service) with no
+            // re-check. Rejecting redirects keeps the initial `allowedHosts`
+            // gate sufficient — there is no second hop to smuggle through it.
+            const response = await safeExternalFetch(url, {
               ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
               signal: controller.signal,
             });
