@@ -70,17 +70,6 @@ const ALLOWLIST: Record<string, string> = {
     "SAFE (PATCH) — inlines the same session/service-key identity pin (authUserId + isServiceKey guard, body.userId rejected unless it matches the session or the caller is a service key) as attachEntityRoute; predates the helper.",
   "entities.ts::updateFacetRoute":
     "SAFE (PATCH) — inlines the same session/service-key identity pin as updateEntityRoute/attachFacetRoute; predates the helper.",
-
-  // ── VULN — same class as fd68e134, not yet fixed ───────────────────────────
-  // Surfaced by the 2026-08-01 PATCH/PUT/DELETE coverage-gap fix. Both trust
-  // `body.userId` unconditionally with a session-userId fallback — there is
-  // no `isServiceKey` (or equivalent) gate stopping a plain session caller
-  // from attributing the update to an arbitrary userId. Genuinely the same
-  // IDOR class the POST wave fixed; pending a follow-up wave, NOT fine.
-  "automations.ts::/automations/:automationId":
-    "VULN — TODO fix (same class as fd68e134). `userId = body.userId ?? c.get('userId')` with no isServiceKey/session-match guard: a session caller can attribute the update to any userId.",
-  "cell-instances.ts::/cell-instances/:id/config":
-    "VULN — TODO fix (same class as fd68e134). `userId = body.userId ?? c.get('userId')` with no isServiceKey/session-match guard: a session caller can attribute the config update to any userId.",
 };
 
 function balancedEnd(

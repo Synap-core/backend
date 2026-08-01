@@ -433,12 +433,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     > | null;
     if (!body) return c.json({ error: "Invalid JSON" }, 400);
 
-    const userId = (body.userId as string) ?? (c.get("userId") as string);
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
-    // reaches getCaller OR the re-supplied updateAutomation input.
-    let workspaceId: string | null | undefined;
+    // reaches resolveActingContext, getCaller, OR the re-supplied
+    // updateAutomation input.
+    let clampedWorkspaceId: string | null | undefined;
     try {
-      workspaceId = getConfinedWorkspace(
+      clampedWorkspaceId = getConfinedWorkspace(
         c,
         body.workspaceId as string | undefined
       );
@@ -447,15 +447,27 @@ export function registerAutomationsRoutes(app: HubHono): void {
         return c.json({ error: err.message }, 403);
       throw err;
     }
-    if (!userId || !workspaceId) {
-      return c.json({ error: "userId and workspaceId are required" }, 400);
+
+    // SECURITY — acting identity MUST come from the verified auth context,
+    // never `body.userId` directly (governed-agent-write → ungoverned-
+    // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId as string | undefined,
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
     }
 
     try {
-      const caller = await getCaller(c, { userId, workspaceId });
+      const caller = await getCaller(c, {
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
+      });
       const result = await caller.automations.updateAutomation({
-        userId,
-        workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         id: c.req.param("automationId"),
         name: body.name as string | undefined,
         description: body.description as string | undefined,
