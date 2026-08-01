@@ -174,6 +174,20 @@ export function rejectAgentReviewer(
 
 const PROPOSAL_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Is `raw` a syntactically valid uuid?
+ *
+ * Exported because the 500-on-bad-uuid trap `resolveProposalId` documents below
+ * is NOT unique to proposal ids: any query param that reaches a `uuid` column
+ * unvalidated makes Postgres throw invalid-uuid-syntax, which the route catch
+ * blocks map to 500 — reporting a CLIENT input error as a SERVER fault. Filter
+ * params (`sessionId`, `workspaceId`, …) need the same shape check before they
+ * are forwarded, so callers get a 400 that names the bad value.
+ */
+export function isUuid(raw: string): boolean {
+  return PROPOSAL_UUID_RE.test(raw);
+}
 /** A bare hex prefix (git-style short id) — the CLI shows `id.slice(0, 8)`. */
 const PROPOSAL_PREFIX_RE = /^[0-9a-f]{4,35}$/i;
 

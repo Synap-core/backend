@@ -70,7 +70,12 @@ describe("long-walk queue policy (automation-execute)", () => {
     // walk; every budget raise would silently re-open the defect. retryLimit 0
     // means a reclaim can never redeliver, at any walk length.
     expect(indexSrc).toMatch(
-      /longWalkExpiry !== undefined[\s\S]*?retryLimit:\s*0[\s\S]*?expireInSeconds/
+      // The IDENTIFIER, not the key name. An earlier version of this regex ended
+      // at `expireInSeconds` and therefore passed against
+      // `expireInSeconds: 900` — the exact defect this file exists to catch. It
+      // proved the map is READ; it never proved the map REACHES the queue.
+      // Binding to `longWalkExpiry` is what closes that gap.
+      /longWalkExpiry !== undefined[\s\S]*?retryLimit:\s*0[\s\S]*?expireInSeconds:\s*longWalkExpiry/
     );
   });
 

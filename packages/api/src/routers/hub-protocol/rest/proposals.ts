@@ -11,6 +11,8 @@ import {
   CreateProposalRequestSchema,
   CreateProposalResponseSchema,
   ListProposalsQuerySchema,
+  PROPOSAL_STATUS_FILTERS,
+  type ProposalStatusFilter,
   UpdateProposalRequestSchema,
   WireProposalSchema,
 } from "./_codecs/proposal.js";
@@ -18,6 +20,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   getCaller,
   hasScope,
+  isUuid,
   logger,
   rejectAgentReviewer,
   resolveProposalId,
@@ -35,7 +38,8 @@ export function registerProposalsRoutes(app: HubHono): void {
     tags: ["Proposals"],
     summary: "List proposals",
     description:
-      "Returns proposals for the authenticated user / a workspace. Default status filter is `pending`.",
+      "Returns proposals for the authenticated user / a workspace. Default status filter is `pending`; " +
+      "`auto_approved` lists the audit receipts of agent writes that executed immediately under governance.",
     request: {
       query: ListProposalsQuerySchema,
     },
@@ -43,6 +47,10 @@ export function registerProposalsRoutes(app: HubHono): void {
       200: {
         description: "Array of proposals",
         schema: z.array(WireProposalSchema),
+      },
+      400: {
+        description: "Malformed sessionId/workspaceId, or unknown status",
+        schema: ErrorSchema,
       },
       403: { description: "Missing scope", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -205,9 +213,39 @@ export function registerProposalsRoutes(app: HubHono): void {
     const userId = c.req.query("userId") || (c.get("userId") as string);
     const workspaceId = c.req.query("workspaceId");
     const sessionId = c.req.query("sessionId");
-    const status =
-      (c.req.query("status") as "pending" | "approved" | "rejected" | "all") ||
-      "pending";
+    // Shape-check the uuid FILTERS before forwarding. Both reach `uuid` columns;
+    // a malformed value makes Postgres throw invalid-uuid-syntax, which the
+    // catch below maps to 500 — so a client typo reported as a server fault.
+    // (Same trap `resolveProposalId` exists to close for proposal ids.) A
+    // well-formed id that matches nothing is NOT an error: it correctly returns
+    // an empty queue.
+    for (const [name, value] of [
+      ["sessionId", sessionId],
+      ["workspaceId", workspaceId],
+    ] as const) {
+      if (value && !isUuid(value)) {
+        return c.json(
+          { error: `Invalid ${name}: "${value}" is not a uuid` },
+          400
+        );
+      }
+    }
+    // Mirrors the tRPC `listProposals` enum EXACTLY — including `auto_approved`
+    // (the audit receipt every auto-approved agent write leaves) and the other
+    // terminal states the `proposals.status` column can hold. Validated here
+    // rather than blind-cast: an unknown value used to slip past the cast, get
+    // rejected by the zod enum downstream, and surface through the catch below
+    // as a 500 for what is a client typo.
+    const rawStatus = c.req.query("status") || "pending";
+    const status = rawStatus as ProposalStatusFilter;
+    if (!(PROPOSAL_STATUS_FILTERS as readonly string[]).includes(rawStatus)) {
+      return c.json(
+        {
+          error: `Invalid status: "${rawStatus}". Expected one of ${PROPOSAL_STATUS_FILTERS.join(", ")}`,
+        },
+        400
+      );
+    }
     try {
       // No workspaceId = the USER-WIDE queue (the user floor), NOT an arbitrary
       // first workspace. listProposals always applies userVisibleWhere; a

@@ -914,11 +914,23 @@ export class HubRestClient {
   // ─── Proposals ────────────────────────────────────────────────────────────
 
   /**
-   * List proposals — pending AI writes awaiting human review.
-   * Filter by status: "pending" (needs review), "approved", "rejected".
+   * List proposals — the audit trail of AI writes.
+   *
+   * Filter by status: "pending" (needs review), "approved", "rejected",
+   * "auto_approved" (the write EXECUTED immediately under governance and filed
+   * this row as its audit receipt), "reverted", "approval_failed",
+   * "withdrawn", or "all". Mirrors the server-side `PROPOSAL_STATUS_FILTERS`.
    */
   async listProposals(options?: {
-    status?: "pending" | "approved" | "rejected";
+    status?:
+      | "pending"
+      | "approved"
+      | "rejected"
+      | "auto_approved"
+      | "reverted"
+      | "approval_failed"
+      | "withdrawn"
+      | "all";
     workspaceId?: string;
     /**
      * "workspace" (default) — applies the client workspaceId filter.

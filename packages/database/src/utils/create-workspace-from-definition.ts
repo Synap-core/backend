@@ -117,6 +117,46 @@ function buildDefaultProfileBentoBlocks(profile: {
  * The `createWorkspaceFromDefinition` function normalizes both formats transparently
  * before processing (see the profile loop in the implementation).
  */
+/**
+ * A flow automation as the reconcile door consumes it. Structurally mirrors
+ * `PackageAutomationWire` (@synap-core/workspace-templates `define.ts`) — the
+ * exact shape `toWorkspaceDefinition` already emits onto `flowAutomations` —
+ * declared LOCALLY because `@synap/database` must not depend on the synap-app
+ * template package (layering). Keep in sync with `PackageAutomationWire`:
+ * `flowDefinition` is the loose `{ nodes; edges; precondition? }` the wire
+ * carries (cast to `FlowDefinition` at the DB boundary in the door).
+ */
+export interface WorkspaceAutomationInput {
+  /** Stable template identity; names may be edited without orphaning the flow. */
+  key?: string;
+  name: string;
+  description?: string;
+  triggerType: "event" | "cron" | "webhook" | "manual";
+  triggerConfig?: Record<string, unknown>;
+  flowDefinition?: {
+    nodes: unknown[];
+    edges: unknown[];
+    precondition?: string;
+  };
+  status?: "draft" | "active" | "paused";
+}
+
+/**
+ * A default intelligence command as the reconcile door consumes it. Mirrors
+ * `DefaultCommandDef` (ensure-default-commands.ts) — create-if-`title`-missing,
+ * no version. `outputMode`/`permissionsProfile`/`derivedInputs[].type` are
+ * typed loosely here (string) to match the template wire and are narrowed to
+ * their DB enums at the insert boundary in the door.
+ */
+export interface WorkspaceCommandInput {
+  title: string;
+  promptTemplate: string;
+  derivedInputs?: Array<{ name: string; label: string; type: string }>;
+  outputMode?: string;
+  canCreateViews?: boolean;
+  permissionsProfile?: string;
+}
+
 export interface WorkspaceDefinitionInput {
   workspaceName?: string;
   description?: string;
@@ -327,6 +367,39 @@ export interface WorkspaceDefinitionInput {
     targetProfileSlug: string;
     type: string;
     label?: string;
+  }>;
+
+  /**
+   * Flow automations reconciled version-aware by the door, keyed on
+   * `(workspaceId, name)`. Populated by `toWorkspaceDefinition` from a
+   * template's `automations[]`. Reconciled by `reconcileWorkspaceFromDefinition`
+   * only (the create door does NOT materialize these — automations arrive via
+   * the reconcile pass on `workspaces.get` / boot sweep).
+   */
+  flowAutomations?: WorkspaceAutomationInput[];
+
+  /**
+   * Default intelligence commands seeded create-if-`title`-missing by the door.
+   * No version — a command is owned by the user after first seed. Reconciled by
+   * `reconcileWorkspaceFromDefinition` only.
+   */
+  commands?: WorkspaceCommandInput[];
+
+  /**
+   * Full relation-def metadata seeded create-if-`slug`-missing by the door.
+   * DISTINCT from `entityLinks`: that step mints a bare relation_def (slug +
+   * displayName) as a side effect of a profile→profile edge and DROPS
+   * description/isDirectional/uiHints — so a template shipping the full
+   * `DefaultRelationDef` set (see `default-relation-defs.ts`) must carry it here.
+   * No version — user-owned after first seed. Reconciled by
+   * `reconcileWorkspaceFromDefinition` only.
+   */
+  relationDefs?: Array<{
+    slug: string;
+    displayName: string;
+    description?: string;
+    isDirectional?: boolean;
+    uiHints?: { category?: string; inverseLabel?: string };
   }>;
 }
 

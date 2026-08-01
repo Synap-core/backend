@@ -895,7 +895,41 @@ export async function executeMCPToolViaHubProtocol(
         status: args.status as string | undefined,
         limit: (args.limit as number) || undefined,
       });
-      return ok(result);
+      // A LIST must be readable. Unprojected, this returned every row's full
+      // `data` payload: 33 pending proposals measured at 283,737 characters
+      // (~6k chars/row, largest single row 36k) — past the tool-result ceiling,
+      // so the caller got an error instead of a list and could not enumerate
+      // its own proposals at all. `detail: "full"` still returns everything,
+      // so no capability is removed — only the default changes.
+      if ((args.detail as string) === "full") return ok(result);
+      const rows = Array.isArray(result)
+        ? result
+        : ((result as { proposals?: unknown[] })?.proposals ?? []);
+      const summarized = (rows as Record<string, unknown>[]).map((p) => {
+        const data = (p.data ?? {}) as Record<string, unknown>;
+        const quality = (data.quality ?? {}) as Record<string, unknown>;
+        // Prefer a summary the writer actually authored; never invent one.
+        const summary = quality.summary ?? data.summary ?? undefined;
+        return {
+          id: p.id,
+          proposalType: p.proposalType,
+          targetType: p.targetType,
+          targetId: p.targetId,
+          status: p.status,
+          workspaceId: p.workspaceId,
+          createdAt: p.createdAt,
+          // Provenance — the columns that answer "which run produced this".
+          correlationId: p.correlationId ?? null,
+          sessionId: p.sessionId ?? null,
+          agentUserId: p.agentUserId ?? null,
+          ...(summary ? { summary } : {}),
+        };
+      });
+      return ok({
+        proposals: summarized,
+        detail: "summary",
+        note: "Compact rows. Call again with detail:'full' (and a small limit) to inspect a proposal's full payload.",
+      });
     }
 
     case "synap_template_health": {

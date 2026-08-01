@@ -16,8 +16,13 @@
  *                    query). >1 → those become candidates for a later tie-break.
  *   3. Context     — a bound channel's workspace, else the active focus session.
  *   4. Relational  — the shared lens of the entities this one links to.
- *   5. AI tie-break — ONLY over the reduced candidate set (or, absent candidates,
- *                    the member set); may abstain → ASK, never a silent guess.
+ *   5. AI tie-break — PROPOSES, never ACTS (ratified). Consulted ONLY over the
+ *                    reduced candidate set (or, absent candidates, the member
+ *                    set). Rungs 1–4 are deterministic and place data outright;
+ *                    rung 5 is a guess, so it always returns `ask: true` with
+ *                    the data left in the ambient workspace and the suggestion
+ *                    in `candidates[0]` for the caller to confirm. It can never
+ *                    move data on its own.
  *   6. Default     — the entity-scope K1 precedence (pod → null, workspace →
  *                    ambient). Absorbs `resolveEntityWorkspacePlacement` so there
  *                    is ONE implementation of that precedence.
@@ -149,9 +154,17 @@ export interface WorkspacePlacement {
   reason: string;
   /** 1.0 for deterministic rungs (1–4, 6); the hint's confidence for rung 5. */
   confidence: number;
-  /** The reduced set surfaced when a rung couldn't pick a single winner. */
+  /**
+   * The reduced set surfaced when a rung couldn't pick a single winner.
+   * When `ask` is true, `candidates[0]` IS the suggested workspace.
+   */
   candidates: WorkspaceCandidate[];
-  /** ASK mode surfaced a suggestion the caller must confirm before moving. */
+  /**
+   * A suggestion the caller must confirm before moving. Set by EVERY rung-5
+   * resolution (a rung-5 AI guess proposes, it never acts), regardless of
+   * routing mode. `workspaceId` stays on the ambient workspace when this is
+   * true, so ignoring it is safe — it means "didn't move", never "didn't write".
+   */
   ask: boolean;
 }
 
@@ -525,31 +538,64 @@ export async function resolveWorkspacePlacement(
       memberWorkspaceIds: allowedIds,
       minConfidence: input.minConfidence,
     });
-    if (routing.movedToWorkspace) {
-      return {
-        workspaceId: routing.movedToWorkspace,
-        rung: 5,
-        reason: input.aiHint.reason ?? "AI tie-break selected this workspace",
-        confidence: input.aiHint.confidence ?? BYOA_DEFAULT_ROUTE_CONFIDENCE,
-        candidates,
-        ask: false,
-      };
-    }
-    if (routing.pendingWorkspaceSwitch) {
-      const suggested = routing.pendingWorkspaceSwitch.suggestedWorkspaceId;
+    // RATIFIED: rung 5 PROPOSES, it never ACTS.
+    //
+    // Rungs 1–4 are deterministic (explicit id, ontology, context, relational)
+    // and still place data outright. Rung 5 is an AI GUESS, and a guess must
+    // not silently relocate a user's data into another lens. No comparable tool
+    // lets a heuristic act as a scope — kubectl, gcloud, AWS, Azure, Pulumi,
+    // Terraform, Vercel and gh all require the scope to be explicit or
+    // configured, and Terraform documents this exact failure mode for
+    // TF_WORKSPACE. Heuristics may PROPOSE a pin; they never ARE one.
+    //
+    // So AUTO (above-gate) and ASK now converge on ONE outcome: `ask: true`,
+    // the data STAYS PUT in `ambient`, and the suggestion is surfaced for
+    // confirmation. Callers already handling `pendingWorkspaceSwitch` need no
+    // change, and a caller that ignores `ask` still cannot drop or misplace the
+    // write — it reads `workspaceId` and gets `ambient`, exactly where the data
+    // would have landed had the AI never offered a hint. That is why this is
+    // safe to ship: the failure mode of ignoring the proposal is "no move",
+    // never "no write" and never "wrong lens".
+    //
+    // The confidence gate above (`resolveCaptureRouting`, auto-tuned per target
+    // workspace from correction history) is deliberately PRESERVED — it no
+    // longer decides "is this guess good enough to ACT on" but "is it good
+    // enough to OFFER". Below-gate / non-member / LOCKED still fall through to
+    // rung 6 unchanged, so a weak guess is not even surfaced.
+    const suggested =
+      routing.movedToWorkspace ??
+      routing.pendingWorkspaceSwitch?.suggestedWorkspaceId;
+    if (suggested) {
       // Give the ASK chip a real name when we can — load the member floor only
       // if a prior rung didn't already build candidates.
       const map = candidates.length ? null : await getMemberMap();
+      const suggestedName =
+        candidates.find((c) => c.id === suggested)?.name ??
+        map?.get(suggested)?.name ??
+        "";
+      // CONTRACT: `candidates[0]` IS the suggested workspace. The one consumer
+      // (capture's `pendingWorkspaceSwitch` mapping) reads `candidates[0].id`
+      // as the suggestion, so a candidate set that merely CONTAINS the
+      // suggestion elsewhere in the list would surface the wrong workspace to
+      // the user. Hoist it to the front rather than relying on set order.
+      const ordered = candidates.length
+        ? [
+            { id: suggested, name: suggestedName },
+            ...candidates.filter((c) => c.id !== suggested),
+          ]
+        : [{ id: suggested, name: suggestedName }];
       return {
         workspaceId: ambient,
         rung: 5,
         reason:
-          routing.pendingWorkspaceSwitch.reason ??
+          input.aiHint.reason ??
+          routing.pendingWorkspaceSwitch?.reason ??
           "AI suggests a different workspace (awaiting confirmation)",
-        confidence: routing.pendingWorkspaceSwitch.confidence ?? 0,
-        candidates: candidates.length
-          ? candidates
-          : [{ id: suggested, name: map?.get(suggested)?.name ?? "" }],
+        confidence:
+          input.aiHint.confidence ??
+          routing.pendingWorkspaceSwitch?.confidence ??
+          BYOA_DEFAULT_ROUTE_CONFIDENCE,
+        candidates: ordered,
         ask: true,
       };
     }

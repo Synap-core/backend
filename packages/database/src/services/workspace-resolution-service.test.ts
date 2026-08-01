@@ -17,6 +17,8 @@ import { ProfileResolutionService } from "./profile-resolution-service.js";
 const USER = "user-1";
 const WS_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+/** A workspace the caller is NOT a member of — the I2 floor must never surface it. */
+const WS_OTHER = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 
 interface Seed {
   members?: string[];
@@ -354,7 +356,10 @@ describe("resolveWorkspacePlacement — rung 5 (AI tie-break)", () => {
       ],
     });
 
-  it("confident hint over candidates → moves (rung 5)", async () => {
+  // RATIFIED: rungs 1–4 ACT, rung 5 PROPOSES. A confident AI hint is a
+  // suggestion, never a placement — no comparable tool (kubectl, gcloud, AWS,
+  // Azure, Pulumi, Terraform, Vercel, gh) lets a heuristic act as a scope.
+  it("confident hint over candidates → PROPOSES, does not move (rung 5)", async () => {
     const r = await resolveWorkspacePlacement(twoCandidateDb(), {
       userId: USER,
       kindSlug: "client",
@@ -362,7 +367,55 @@ describe("resolveWorkspacePlacement — rung 5 (AI tie-break)", () => {
       aiHint: { workspaceId: WS_B, confidence: 0.9 },
       mode: "auto",
     });
-    expect(r).toMatchObject({ workspaceId: WS_B, rung: 5 });
+    expect(r.rung).toBe(5);
+    expect(r.ask).toBe(true);
+    // The data STAYS PUT — a caller that ignores `ask` gets the ambient
+    // workspace, i.e. where it would have landed with no AI hint at all.
+    expect(r.workspaceId).toBe(WS_A);
+    // CONTRACT: candidates[0] IS the suggestion (capture reads exactly this).
+    expect(r.candidates[0]?.id).toBe(WS_B);
+  });
+
+  it("auto and ask now converge on the same rung-5 outcome", async () => {
+    const forMode = (mode: "auto" | "ask") =>
+      resolveWorkspacePlacement(twoCandidateDb(), {
+        userId: USER,
+        kindSlug: "client",
+        ambientWorkspaceId: WS_A,
+        aiHint: { workspaceId: WS_B, confidence: 0.9 },
+        mode,
+      });
+    const auto = await forMode("auto");
+    const ask = await forMode("ask");
+    expect(auto.workspaceId).toBe(ask.workspaceId);
+    expect(auto.ask).toBe(ask.ask);
+    expect(auto.candidates[0]?.id).toBe(ask.candidates[0]?.id);
+  });
+
+  it("locked still never moves and never asks", async () => {
+    const r = await resolveWorkspacePlacement(twoCandidateDb(), {
+      userId: USER,
+      kindSlug: "client",
+      ambientWorkspaceId: WS_A,
+      aiHint: { workspaceId: WS_B, confidence: 0.9 },
+      mode: "locked",
+    });
+    expect(r.workspaceId).toBe(WS_A);
+    expect(r.ask).toBe(false);
+    expect(r.rung).toBe(6);
+  });
+
+  it("a non-member hint is never proposed (I2 floor holds)", async () => {
+    const r = await resolveWorkspacePlacement(twoCandidateDb(), {
+      userId: USER,
+      kindSlug: "client",
+      ambientWorkspaceId: WS_A,
+      aiHint: { workspaceId: WS_OTHER, confidence: 0.99 },
+      mode: "auto",
+    });
+    expect(r.ask).toBe(false);
+    expect(r.rung).toBe(6);
+    expect(r.candidates.map((c) => c.id)).not.toContain(WS_OTHER);
   });
 
   it("below-gate hint → abstains, falls to rung 6, candidates preserved", async () => {

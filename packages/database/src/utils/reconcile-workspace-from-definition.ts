@@ -28,8 +28,14 @@
  * `dryRun: true` computes the full diff without writing — use it to preview.
  */
 
+import { createHash } from "crypto";
 import { getDb, sql } from "../client-pg.js";
 import { eq, and } from "drizzle-orm";
+import { automations, type FlowDefinition } from "../schema/automations.js";
+import {
+  intelligenceCommands,
+  type DerivedInput,
+} from "../schema/intelligence-commands.js";
 import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
@@ -187,6 +193,31 @@ export interface ReconcileReport {
    * the live value, null clears to workspace home, and a descriptor replaces it.
    */
   layout: { sidebarItemsAdded: string[]; primarySurfaceChanged: boolean };
+  /**
+   * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
+   *   `created` = no row for that name → inserted.
+   *   `updated` = a row existed but its stored `metadata.seedVersion` (content
+   *               hash, or a legacy int) differed from the definition's hash →
+   *               `flowDefinition`+`description` overwritten, hash re-stamped,
+   *               `automations.version` bumped.
+   *   `skipped` = stored hash equals the definition hash → no-op.
+   * Values are automation names.
+   */
+  automations: { created: string[]; updated: string[]; skipped: string[] };
+  /**
+   * Default intelligence commands seeded create-if-missing (keyed on `title`).
+   * `created` = title absent → inserted; `skipped` = title already present
+   * (left untouched — a seeded command is owned by the user after first seed).
+   */
+  commands: { created: string[]; skipped: string[] };
+  /**
+   * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
+   * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
+   * which mints bare (slug+displayName) defs as a side effect of profile edges.
+   * `created` = slug absent → inserted; `skipped` = slug already present
+   * (workspace-scoped or pod-wide) → left untouched.
+   */
+  relationDefs: { created: string[]; skipped: string[] };
 }
 
 export async function reconcileWorkspaceFromDefinition(
@@ -236,6 +267,9 @@ export async function reconcileWorkspaceFromDefinition(
     entityLinks: { added: [], skipped: [], unresolved: [] },
     home: { created: false, blocksAdded: [], skipped: true },
     layout: { sidebarItemsAdded: [], primarySurfaceChanged: false },
+    automations: { created: [], updated: [], skipped: [] },
+    commands: { created: [], skipped: [] },
+    relationDefs: { created: [], skipped: [] },
   };
 
   // ── 1. Settings merge (capabilities / subtype / visibility) ────────────────
@@ -948,10 +982,170 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
+  // ── 7. Automations — version-aware reconcile (create / overwrite-on-drift) ──
+  //
+  // Generalizes `ensureReportAutomation` (ensure-report-automation.ts:1704-1757)
+  // off the hardcoded seed-int and onto a CONTENT HASH of the definition entry,
+  // keyed on `(workspaceId, name)`. The int→hash comparison self-heals the v5
+  // freeze structurally: a stored `metadata.seedVersion: 5` (number) is `!==`
+  // any hex hash string, so the first reconcile detects drift and overwrites.
+  for (const auto of definition.flowAutomations ?? []) {
+    const flowDefinition = (auto.flowDefinition ?? {
+      nodes: [],
+      edges: [],
+    }) as unknown as FlowDefinition;
+
+    // Stable content key of the definition's flow + description. The definition
+    // entry is constructed deterministically (same object shape every apply), so
+    // `JSON.stringify` is a stable hash input — the same drift model the skill /
+    // package substrate uses (`contentHash(body)`, ensure-system-skills.ts:43).
+    const defHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          flowDefinition,
+          description: auto.description ?? null,
+        })
+      )
+      .digest("hex");
+
+    const existing = await dbConn.query.automations.findFirst({
+      where: and(
+        eq(automations.workspaceId, workspaceId),
+        eq(automations.name, auto.name)
+      ),
+      columns: { id: true, metadata: true, version: true },
+    });
+
+    if (!existing) {
+      report.automations.created.push(auto.name);
+      if (!dryRun) {
+        await dbConn.insert(automations).values({
+          workspaceId,
+          createdBy: userId,
+          name: auto.name,
+          description: auto.description,
+          triggerType: auto.triggerType,
+          triggerConfig: auto.triggerConfig ?? {},
+          flowDefinition,
+          // `active` so the trigger door will actually run it (matches
+          // ensureReportAutomation); a manual automation with no schedule costs
+          // nothing until a human runs it. Honor a declared status if present.
+          status: auto.status ?? "active",
+          metadata: { seedVersion: defHash },
+        });
+      }
+      continue;
+    }
+
+    const storedSeed = (existing.metadata as { seedVersion?: unknown } | null)
+      ?.seedVersion;
+    if (storedSeed === defHash) {
+      report.automations.skipped.push(auto.name);
+      continue;
+    }
+
+    // Drift (or a legacy int `seedVersion`) → overwrite flow + description,
+    // MERGE-stamp the new hash (NEVER clobber the rest of the metadata bag —
+    // `tags`/`createdVia`/`averageExecutionTime` live there; see
+    // ensure-report-automation.ts:1738), and bump the monotonic `version` so a
+    // run's `definitionSnapshot` reports the right number.
+    report.automations.updated.push(auto.name);
+    if (!dryRun) {
+      await dbConn
+        .update(automations)
+        .set({
+          description: auto.description,
+          flowDefinition,
+          metadata: {
+            ...((existing.metadata as Record<string, unknown> | null) ?? {}),
+            seedVersion: defHash,
+          },
+          version: (existing.version ?? 1) + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(automations.id, existing.id));
+    }
+  }
+
+  // ── 8. Commands — create-if-missing (keyed on title, no version) ────────────
+  //
+  // Mirrors `ensureDefaultCommands` (ensure-default-commands.ts:157-193): a
+  // command is seeded once and thereafter owned by the user — its edits are
+  // never overwritten (no drift/version concept here, unlike automations).
+  if ((definition.commands ?? []).length > 0) {
+    const existingCmds = await dbConn.query.intelligenceCommands.findMany({
+      where: eq(intelligenceCommands.workspaceId, workspaceId),
+      columns: { title: true },
+    });
+    const existingTitles = new Set(existingCmds.map((c) => c.title));
+    for (const cmd of definition.commands ?? []) {
+      if (existingTitles.has(cmd.title)) {
+        report.commands.skipped.push(cmd.title);
+        continue;
+      }
+      report.commands.created.push(cmd.title);
+      existingTitles.add(cmd.title); // guard against duplicate titles in one def
+      if (!dryRun) {
+        await dbConn.insert(intelligenceCommands).values({
+          workspaceId,
+          createdBy: userId,
+          title: cmd.title,
+          promptTemplate: cmd.promptTemplate,
+          compiledTemplateAst: null,
+          derivedInputs: (cmd.derivedInputs ?? []) as DerivedInput[],
+          canCreateViews: cmd.canCreateViews ?? false,
+          outputMode: (cmd.outputMode ?? "text") as
+            "text" | "proposal" | "view",
+          permissionsProfile: (cmd.permissionsProfile ?? "propose_writes") as
+            "read_only" | "propose_writes",
+          sharedScope: "workspace",
+        });
+      }
+    }
+  }
+
+  // ── 9. Relation defs — create-if-missing (keyed on slug, no version) ────────
+  //
+  // DISTINCT from the entityLinks step (step 4): entityLinks mint a BARE
+  // relation_def (slug + displayName only) as a side effect of wiring a
+  // profile→profile edge, DROPPING description/isDirectional/uiHints. A template
+  // shipping the full `DefaultRelationDef` metadata (see default-relation-defs.ts)
+  // must carry it HERE so those fields survive. Mirrors `ensureDefaultRelationDefs`
+  // (create-if-missing, no version — user-owned after first seed). `relDefRepo`
+  // is the same instance step 4 uses; `.list()` returns workspace-scoped defs
+  // AND pod-wide globals, so a slug already seeded pod-wide is a skip, not a dup.
+  if ((definition.relationDefs ?? []).length > 0) {
+    const existingDefs = await relDefRepo.list(workspaceId);
+    const existingRelSlugs = new Set(existingDefs.map((d) => d.slug));
+    for (const rd of definition.relationDefs ?? []) {
+      if (existingRelSlugs.has(rd.slug)) {
+        report.relationDefs.skipped.push(rd.slug);
+        continue;
+      }
+      report.relationDefs.created.push(rd.slug);
+      existingRelSlugs.add(rd.slug); // guard against duplicate slugs in one def
+      if (!dryRun) {
+        await relDefRepo.create({
+          slug: rd.slug,
+          displayName: rd.displayName,
+          description: rd.description,
+          workspaceId,
+          userId,
+          uiHints: rd.uiHints,
+          isDirectional: rd.isDirectional,
+        });
+      }
+    }
+  }
+
   logger.info(
     {
       workspaceId,
       dryRun,
+      automationsCreated: report.automations.created.length,
+      automationsUpdated: report.automations.updated.length,
+      commandsCreated: report.commands.created.length,
+      relationDefsCreated: report.relationDefs.created.length,
       profilesAdded: report.profiles.added.length,
       profilesReused: report.profiles.reused.length,
       profilesPromoted: report.profiles.promoted.length,

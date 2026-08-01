@@ -1693,26 +1693,28 @@ export const captureRouter = router({
         workspaceId = placement.workspaceId;
         placementRung = placement.rung;
         placementReason = placement.reason;
-        // Map the door decision back to the surface's routing shape (movedTo /
-        // pendingWorkspaceSwitch) the response + telemetry already consume.
+        // Map the door decision back to the surface's routing shape the
+        // response + telemetry already consume.
+        //
+        // There is no longer a `movedToWorkspace` branch here: rung 5 PROPOSES,
+        // it never ACTS (see `resolveWorkspacePlacement`), so a rung-5
+        // resolution ALWAYS carries `ask: true` and leaves `workspaceId` on the
+        // ambient workspace. `placement.rung === 5 && !placement.ask` is
+        // therefore unreachable — the old branch that mapped it to
+        // `movedToWorkspace` was dead once the door stopped moving data on a
+        // guess. Rungs 1–4 still place data outright, and land in the `else`
+        // below exactly as before (they never set `movedToWorkspace` either —
+        // that field only ever described the rung-5 AI move).
         if (placement.ask) {
           routing = {
             workspaceId: placement.workspaceId ?? ctx.workspaceId,
             pendingWorkspaceSwitch: {
+              // The door guarantees `candidates[0]` IS the suggestion.
               suggestedWorkspaceId:
                 placement.candidates[0]?.id ?? input.aiWorkspaceId,
               reason: input.aiWorkspaceReason ?? null,
               confidence: input.aiWorkspaceConfidence ?? null,
             },
-          };
-        } else if (
-          placement.rung === 5 &&
-          placement.workspaceId &&
-          placement.workspaceId !== ctx.workspaceId
-        ) {
-          routing = {
-            workspaceId: placement.workspaceId,
-            movedToWorkspace: placement.workspaceId,
           };
         } else {
           routing = { workspaceId: placement.workspaceId ?? ctx.workspaceId };
@@ -2585,7 +2587,21 @@ export const captureRouter = router({
               correlationId,
               data: {
                 kind: AI_KIND.ROUTE,
-                chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
+                // What the AI CHOSE — not necessarily where the data landed.
+                // `applied` below carries that distinction. Since rung 5 now
+                // proposes instead of acting, `movedToWorkspace` is never set,
+                // so without the `pendingWorkspaceSwitch` fallback every
+                // decision would be recorded against the AMBIENT workspace.
+                // `fetchWorkspaceRoutingThreshold` keys its volume + correction
+                // rate on `chosenWorkspaceId`, so that would starve the
+                // auto-tuned gate for the suggested workspace (volume drops
+                // under MIN_TUNING_VOLUME → falls back to the flat gate
+                // forever). Recording the suggestion keeps the tuner fed with
+                // exactly the volume it saw before this change.
+                chosenWorkspaceId:
+                  routing?.movedToWorkspace ??
+                  routing?.pendingWorkspaceSwitch?.suggestedWorkspaceId ??
+                  workspaceId,
                 confidence: input.aiWorkspaceConfidence ?? null,
                 reason: input.aiWorkspaceReason ?? null,
                 // I6: which ladder rung decided + its code-generated reason

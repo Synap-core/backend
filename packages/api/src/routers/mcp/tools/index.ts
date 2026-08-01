@@ -218,7 +218,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List proposals — pending AI writes awaiting human review. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected'. Use to show the user their pending changes. userId is auto-injected from the API key if not provided.",
+          "List proposals — the audit trail of AI writes. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected', 'auto_approved' (the write EXECUTED immediately under governance and filed this row as its receipt — use this to show the user what you did without asking), 'reverted', 'approval_failed', 'withdrawn'. Use to show the user their pending changes, or to account for the ones that went through automatically. userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
@@ -230,10 +230,26 @@ export const tools = {
             workspaceId: { type: "string" },
             status: {
               type: "string",
-              enum: ["pending", "approved", "rejected"],
+              enum: [
+                "pending",
+                "approved",
+                "rejected",
+                "auto_approved",
+                "reverted",
+                "approval_failed",
+                "withdrawn",
+                "all",
+              ],
               default: "pending",
             },
             limit: { type: "number", default: 20 },
+            detail: {
+              type: "string",
+              enum: ["summary", "full"],
+              default: "summary",
+              description:
+                "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`.",
+            },
           },
           required: [],
         },

@@ -23,8 +23,15 @@ import { isNestedEnvelope } from "@synap-core/types/proposals";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
- * newest first. `status` accepts the MCP arg strings — anything other than the
- * three known states (or "all") maps to PENDING, and "all" skips the filter.
+ * newest first. `status` accepts the MCP arg strings — anything other than a
+ * known state (or "all") maps to PENDING, and "all" skips the filter.
+ *
+ * Every value the `proposals.status` column can hold is selectable. Notably
+ * `auto_approved`: an auto-approved agent write executes immediately and files
+ * a proposal row purely as an audit receipt ("audited here for traceability" —
+ * schema/proposals.ts). While this map held only three states, those receipts
+ * were unlistable — and worse, asking for `auto_approved` silently fell through
+ * to PENDING and returned a confidently wrong list.
  */
 export async function listCreatedProposals(params: {
   createdBy: string;
@@ -37,6 +44,10 @@ export async function listCreatedProposals(params: {
     pending: ProposalStatus.PENDING,
     approved: ProposalStatus.APPROVED,
     rejected: ProposalStatus.REJECTED,
+    auto_approved: ProposalStatus.AUTO_APPROVED,
+    reverted: ProposalStatus.REVERTED,
+    approval_failed: ProposalStatus.APPROVAL_FAILED,
+    withdrawn: ProposalStatus.WITHDRAWN,
   };
   const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
 

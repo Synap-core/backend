@@ -13,6 +13,24 @@ import { db, proposals, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
+import {
+  PROPOSAL_STATUS_FILTERS,
+  type ProposalStatusFilter,
+} from "./rest/_codecs/proposal.js";
+
+/** Filter string → the stored `proposals.status` value ("all" = no filter). */
+export const PROPOSAL_STATUS_BY_FILTER = {
+  pending: ProposalStatus.PENDING,
+  approved: ProposalStatus.APPROVED,
+  rejected: ProposalStatus.REJECTED,
+  auto_approved: ProposalStatus.AUTO_APPROVED,
+  reverted: ProposalStatus.REVERTED,
+  approval_failed: ProposalStatus.APPROVAL_FAILED,
+  withdrawn: ProposalStatus.WITHDRAWN,
+} as const satisfies Record<
+  Exclude<ProposalStatusFilter, "all">,
+  ProposalStatus
+>;
 
 export const proposalsRouter = router({
   /**
@@ -27,9 +45,7 @@ export const proposalsRouter = router({
         targetType: z
           .enum(["document", "entity", "relation", "workspace", "view"])
           .optional(),
-        status: z
-          .enum(["pending", "approved", "rejected", "all"])
-          .default("pending"),
+        status: z.enum(PROPOSAL_STATUS_FILTERS).default("pending"),
         // Filter to a single focus session's proposals — the REST mirror of the
         // tRPC `proposals.list` sessionId filter, so external/BYOA agents can ask
         // "what has the AI proposed inside this session" without a tRPC client.
@@ -55,12 +71,9 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.sessionId, input.sessionId));
       }
       if (input.status !== "all") {
-        const statusMap = {
-          pending: ProposalStatus.PENDING,
-          approved: ProposalStatus.APPROVED,
-          rejected: ProposalStatus.REJECTED,
-        } as const;
-        conditions.push(eq(proposals.status, statusMap[input.status]));
+        conditions.push(
+          eq(proposals.status, PROPOSAL_STATUS_BY_FILTER[input.status])
+        );
       }
 
       const items = await db.query.proposals.findMany({

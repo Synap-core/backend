@@ -8,9 +8,39 @@
 
 import { z } from "@hono/zod-openapi";
 
+/**
+ * The selectable `status` filters for a proposal listing — the SSOT every
+ * surface over the proposals queue reuses (the OpenAPI query schema below, the
+ * tRPC `listProposals` input enum, the REST `GET /proposals` handler's 400
+ * guard, and the `synap_list_proposals` MCP tool schema) so those four can't
+ * drift apart.
+ *
+ * Covers EVERY value the `proposals.status` column can hold, plus "all".
+ * `auto_approved` is the load-bearing entry: an auto-approved agent write
+ * executes immediately and files a proposal row purely as an audit receipt
+ * ("executed immediately, audited here for traceability" —
+ * `database/schema/proposals.ts`). While this list held only three states those
+ * receipts existed but no surface could list them.
+ *
+ * Lives in this codec module because it is a zod-only leaf — the tRPC router
+ * and the REST handler both import it without pulling each other in.
+ */
+export const PROPOSAL_STATUS_FILTERS = [
+  "pending",
+  "approved",
+  "rejected",
+  "auto_approved",
+  "reverted",
+  "approval_failed",
+  "withdrawn",
+  "all",
+] as const;
+
+export type ProposalStatusFilter = (typeof PROPOSAL_STATUS_FILTERS)[number];
+
 /** Canonical proposal status values. */
 export const ProposalStatusSchema = z
-  .enum(["pending", "approved", "rejected", "all"])
+  .enum(PROPOSAL_STATUS_FILTERS)
   .openapi("ProposalStatus");
 
 /** Wire shape of a proposal row. */
@@ -39,7 +69,9 @@ export const ListProposalsQuerySchema = z
     userId: z.string().optional(),
     workspaceId: z.string().optional(),
     status: ProposalStatusSchema.optional().describe(
-      "Defaults to `pending`. Use `all` to return every status."
+      "Defaults to `pending`. Use `all` to return every status. " +
+        "`auto_approved` returns the audit receipts of agent writes that were " +
+        "executed immediately under governance rather than queued for review."
     ),
   })
   .openapi("ListProposalsQuery");
