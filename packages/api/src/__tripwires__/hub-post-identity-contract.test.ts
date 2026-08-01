@@ -147,7 +147,7 @@ function findMutatingHandlers(
   const handlers: Handler[] = [];
 
   const directRe =
-    /app\.(post|patch|put|delete)\(\s*(["'`])([^"'`]*)\2\s*,\s*(?:async\s*)?\(c\)/g;
+    /app\.(post|patch|put|delete)\(\s*(["'`])([^"'`]*)\2\s*,\s*(?:async\s*)?\(c(?:\s*:\s*[A-Za-z0-9_.<>[\]| ]+)?\)/g;
   let m: RegExpExecArray | null;
   while ((m = directRe.exec(src))) {
     const method = m[1] as MutatingMethod;
@@ -277,6 +277,27 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     const openapiClean = stripComments(openapiHandlers[0].bodyText);
     expect(readsBodyUserId(openapiClean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(openapiClean)).toBe(false);
+  });
+
+  it("the offender check also bites on a TYPED handler param, e.g. `(c: Context)` (typed-param evasion class)", () => {
+    // The gap this fix closed: the direct-handler regex only matched an
+    // untyped arrow param `(c) =>`. A handler written `async (c: Context) =>`
+    // (see rest/routing.ts POST /routing/resolve) was invisible to the
+    // scanner — a future PATCH/PUT/DELETE handler typed that way and reading
+    // body.userId would have evaded detection entirely.
+    const fixture = `
+      app.put("/danger4/:id", async (c: Context) => {
+        const body = await c.req.json();
+        const userId = body.userId;
+        return c.json({ userId });
+      });
+    `;
+    const handlers = findMutatingHandlers(fixture, new Map());
+    expect(handlers.length).toBe(1);
+    expect(handlers[0].method).toBe("put");
+    const clean = stripComments(handlers[0].bodyText);
+    expect(readsBodyUserId(clean)).toBe(true);
+    expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
 
   it("a GET/HEAD handler is never scanned (mutating-methods-only guard)", () => {

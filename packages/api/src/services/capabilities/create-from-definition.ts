@@ -637,8 +637,13 @@ export async function createCapabilityFromDefinition(
       // below), so it's the one seeding path that bypassed the scan: a
       // re-applied/drifted CP template could silently persist code that
       // references an unprovided global. Only scan when the reconciled row is
-      // actually a code skill.
-      if ((s.kind ?? "code") === "code") {
+      // actually a code skill AND the code is actually changing — same gate
+      // `skillsRouter.update` uses (`input.code?.trim()`), via the
+      // `execContentChanged` flag computed above. Without this gate, a skill
+      // grandfathered with a disallowed global before this scan existed would
+      // hard-fail on every future metadata-only reconcile (description/
+      // parameters/scope/category), even though its code never changed.
+      if ((s.kind ?? "code") === "code" && execContentChanged) {
         assertSkillGlobalsAllowed(s.code);
       }
 
