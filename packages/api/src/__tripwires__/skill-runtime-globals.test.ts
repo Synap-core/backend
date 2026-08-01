@@ -114,7 +114,21 @@ describe("skill runtime global scan — tripwire", () => {
 
   it("(3) allow-list matches the IS runtime SSOT (when sibling checked out)", () => {
     if (!existsSync(IS_STDLIB_PATH)) {
-      // IS repo not present in this checkout — invariant (1)+(2) still hold.
+      // IS repo not present in this checkout. In a plain backend-only
+      // checkout that's expected — invariants (1)+(2) still hold, so skip
+      // gracefully. But a CI signal opting into the cross-repo check means
+      // the sibling was SUPPOSED to be present (both repos checked out) —
+      // silently skipping there would defeat the whole point of this
+      // tripwire (drift never gets caught). Fail loudly instead.
+      if (process.env.SYNAP_CHECK_CROSS_REPO_SSOT) {
+        throw new Error(
+          `SYNAP_CHECK_CROSS_REPO_SSOT is set but the intelligence-service sibling ` +
+            `was not found at ${IS_STDLIB_PATH}. This check REQUIRES both ` +
+            `synap-backend and synap-intelligence-service checked out side by side ` +
+            `(as siblings) — check out both repos, or unset ` +
+            `SYNAP_CHECK_CROSS_REPO_SSOT to skip this check locally.`
+        );
+      }
       return;
     }
     const src = readFileSync(IS_STDLIB_PATH, "utf8");
