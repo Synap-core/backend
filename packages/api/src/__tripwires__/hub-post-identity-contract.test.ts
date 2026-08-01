@@ -3,11 +3,11 @@ import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 
 /**
- * TRIPWIRE — every hub-protocol REST POST route must resolve its acting
- * identity through `resolveActingContext` (rest/_shared.ts), never trust a
- * body-supplied `userId` directly.
+ * TRIPWIRE — every hub-protocol REST mutating route (POST/PATCH/PUT/DELETE)
+ * must resolve its acting identity through `resolveActingContext`
+ * (rest/_shared.ts), never trust a body-supplied `userId` directly.
  *
- * THE BUG THIS GUARDS: a Hub REST POST handler that reads `body.userId`
+ * THE BUG THIS GUARDS: a Hub REST mutating handler that reads `body.userId`
  * (or feeds it straight into `resolveActorId`) without first running it
  * through `resolveActingContext` lets ANY caller attribute a write to an
  * arbitrary `userId` — the exact "governed agent write becomes ungoverned
@@ -17,10 +17,16 @@ import { join } from "path";
  * on-behalf-of value, but it still flows through the same door). See
  * `rest/views.identity-contract.test.ts` for the behavioral (mocked) version
  * of this contract on the `/views/*` routes — this file is the source-level,
- * hub-wide generalization: it scans every `rest/*.ts` route file for POST
- * handlers (both `app.post(path, handler)` and `app.openapi(route, handler)`
- * where `route`'s `createRoute({ method: "post" })`) and fails any handler
- * that reads `body.userId` without also calling `resolveActingContext(`.
+ * hub-wide generalization: it scans every `rest/*.ts` route file for
+ * POST/PATCH/PUT/DELETE handlers (both `app.<method>(path, handler)` and
+ * `app.openapi(route, handler)` where `route`'s `createRoute({ method: ... })`
+ * is one of post/patch/put/delete) and fails any handler that reads
+ * `body.userId` without also calling `resolveActingContext(`.
+ *
+ * COVERAGE HISTORY: originally POST-only (2026-07-31). Generalized to also
+ * scan PATCH/PUT/DELETE (2026-08-01) after review flagged that the same IDOR
+ * class can live in an update/delete handler just as easily as a create
+ * handler — a scanner limited to POST let those evade entirely.
  *
  * If this fails on a NEW route: call `resolveActingContext(c, { userId:
  * body.userId, workspaceId })` and use the returned `acting.userId` /
@@ -32,9 +38,10 @@ import { join } from "path";
  * reason: do NOT add it to the allowlist as a workaround — fix it the same
  * way. The allowlist below is SHRINK-ONLY pre-existing debt inventoried at
  * the time this tripwire was added (2026-07-31 security wave that fixed
- * POST /profiles + POST /property-defs). Every entry has a reason. Entries
- * marked VULN are the SAME bug class, not yet fixed — pending a follow-up
- * wave — and must never be treated as "fine, it's allowlisted".
+ * POST /profiles + POST /property-defs) and extended (2026-08-01 PATCH/PUT/
+ * DELETE coverage wave). Every entry has a reason. Entries marked VULN are
+ * the SAME bug class, not yet fixed — pending a follow-up wave — and must
+ * never be treated as "fine, it's allowlisted".
  */
 
 const REST_DIR = join(process.cwd(), "src/routers/hub-protocol/rest");
@@ -59,6 +66,21 @@ const ALLOWLIST: Record<string, string> = {
     "SAFE — inlines the same session/service-key identity pin as attachEntityRoute; predates the helper.",
   "entities.ts::/files":
     "SAFE — both the multipart and JSON branches inline the same session/service-key identity pin before use; predates the helper.",
+  "entities.ts::updateEntityRoute":
+    "SAFE (PATCH) — inlines the same session/service-key identity pin (authUserId + isServiceKey guard, body.userId rejected unless it matches the session or the caller is a service key) as attachEntityRoute; predates the helper.",
+  "entities.ts::updateFacetRoute":
+    "SAFE (PATCH) — inlines the same session/service-key identity pin as updateEntityRoute/attachFacetRoute; predates the helper.",
+
+  // ── VULN — same class as fd68e134, not yet fixed ───────────────────────────
+  // Surfaced by the 2026-08-01 PATCH/PUT/DELETE coverage-gap fix. Both trust
+  // `body.userId` unconditionally with a session-userId fallback — there is
+  // no `isServiceKey` (or equivalent) gate stopping a plain session caller
+  // from attributing the update to an arbitrary userId. Genuinely the same
+  // IDOR class the POST wave fixed; pending a follow-up wave, NOT fine.
+  "automations.ts::/automations/:automationId":
+    "VULN — TODO fix (same class as fd68e134). `userId = body.userId ?? c.get('userId')` with no isServiceKey/session-match guard: a session caller can attribute the update to any userId.",
+  "cell-instances.ts::/cell-instances/:id/config":
+    "VULN — TODO fix (same class as fd68e134). `userId = body.userId ?? c.get('userId')` with no isServiceKey/session-match guard: a session caller can attribute the config update to any userId.",
 };
 
 function balancedEnd(
@@ -113,30 +135,48 @@ function findRouteMethodMap(src: string): Map<string, string | null> {
   return map;
 }
 
+/** Mutating HTTP methods this tripwire scans. GET/HEAD never mutate identity. */
+const MUTATING_METHODS = ["post", "patch", "put", "delete"] as const;
+type MutatingMethod = (typeof MUTATING_METHODS)[number];
+
 interface Handler {
+  method: MutatingMethod;
   label: string;
   bodyText: string;
 }
 
-function findPostHandlers(
+/**
+ * Finds every POST/PATCH/PUT/DELETE handler in a route file: direct
+ * `app.<method>(path, handler)` calls, and `app.openapi(routeVar, handler)`
+ * calls where `routeVar`'s `createRoute({ method })` is one of the mutating
+ * methods (resolved via `routeMethodMap`).
+ */
+function findMutatingHandlers(
   src: string,
   routeMethodMap: Map<string, string | null>
 ): Handler[] {
   const handlers: Handler[] = [];
 
-  const postRe = /app\.post\(\s*(["'`])([^"'`]*)\1\s*,\s*(?:async\s*)?\(c\)/g;
+  const directRe =
+    /app\.(post|patch|put|delete)\(\s*(["'`])([^"'`]*)\2\s*,\s*(?:async\s*)?\(c\)/g;
   let m: RegExpExecArray | null;
-  while ((m = postRe.exec(src))) {
+  while ((m = directRe.exec(src))) {
+    const method = m[1] as MutatingMethod;
     const body = extractHandlerBody(src, m.index);
-    if (body) handlers.push({ label: m[2], bodyText: body });
+    if (body) handlers.push({ method, label: m[3], bodyText: body });
   }
 
   const openapiRe = /app\.openapi\(\s*(\w+)\s*,\s*(?:async\s*)?\(c\)/g;
   while ((m = openapiRe.exec(src))) {
     const routeName = m[1];
-    if (routeMethodMap.get(routeName) !== "post") continue;
+    const method = routeMethodMap.get(routeName);
+    if (!method || !MUTATING_METHODS.includes(method as MutatingMethod)) {
+      continue;
+    }
     const body = extractHandlerBody(src, m.index);
-    if (body) handlers.push({ label: routeName, bodyText: body });
+    if (body) {
+      handlers.push({ method: method as MutatingMethod, label: routeName, bodyText: body });
+    }
   }
 
   return handlers;
@@ -164,7 +204,7 @@ function tsRouteFiles(dir: string): string[] {
     .map((e) => e.name);
 }
 
-describe("tripwire: hub REST POST routes bind identity via resolveActingContext", () => {
+describe("tripwire: hub REST mutating routes bind identity via resolveActingContext", () => {
   it("extractHandlerBody / findRouteMethodMap are alive (fixture sanity)", () => {
     const fixture = `
       const fooRoute = createRoute({ method: "post", path: "/foo" });
@@ -175,12 +215,12 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
     `;
     const map = findRouteMethodMap(fixture);
     expect(map.get("fooRoute")).toBe("post");
-    const handlers = findPostHandlers(fixture, map);
+    const handlers = findMutatingHandlers(fixture, map);
     expect(handlers.length).toBe(1);
     expect(handlers[0].bodyText).toContain("const body = { a: 1 }");
   });
 
-  it("the offender check actually bites (fails on an unguarded fixture)", () => {
+  it("the offender check actually bites (fails on an unguarded POST fixture)", () => {
     const fixture = `
       app.post("/danger", async (c) => {
         const body = await c.req.json();
@@ -188,8 +228,9 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
         return c.json({ userId });
       });
     `;
-    const handlers = findPostHandlers(fixture, new Map());
+    const handlers = findMutatingHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
+    expect(handlers[0].method).toBe("post");
     const clean = stripComments(handlers[0].bodyText);
     expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
@@ -205,32 +246,94 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
         return c.json({ userId });
       });
     `;
-    const handlers = findPostHandlers(fixture, new Map());
+    const handlers = findMutatingHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
     const clean = stripComments(handlers[0].bodyText);
     expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
 
+  it("the offender check bites on non-POST methods too (PATCH/PUT/DELETE evasion class)", () => {
+    // The gap this coverage wave closed: a scanner limited to app.post(...)
+    // let an identical body.userId trust bug live in app.patch/put/delete
+    // (and in an app.openapi(route) whose createRoute method is one of
+    // those) evade detection entirely.
+    const directFixture = `
+      app.patch("/danger3/:id", async (c) => {
+        const body = await c.req.json();
+        const userId = body.userId;
+        return c.json({ userId });
+      });
+    `;
+    const directHandlers = findMutatingHandlers(directFixture, new Map());
+    expect(directHandlers.length).toBe(1);
+    expect(directHandlers[0].method).toBe("patch");
+    const directClean = stripComments(directHandlers[0].bodyText);
+    expect(readsBodyUserId(directClean)).toBe(true);
+    expect(/resolveActingContext\s*\(/.test(directClean)).toBe(false);
+
+    const openapiFixture = `
+      const deleteThingRoute = createRoute({ method: "delete", path: "/things/{id}" });
+      app.openapi(deleteThingRoute, async (c) => {
+        const body = await c.req.json();
+        const { userId } = body;
+        return c.json({ userId });
+      });
+    `;
+    const map = findRouteMethodMap(openapiFixture);
+    expect(map.get("deleteThingRoute")).toBe("delete");
+    const openapiHandlers = findMutatingHandlers(openapiFixture, map);
+    expect(openapiHandlers.length).toBe(1);
+    expect(openapiHandlers[0].method).toBe("delete");
+    const openapiClean = stripComments(openapiHandlers[0].bodyText);
+    expect(readsBodyUserId(openapiClean)).toBe(true);
+    expect(/resolveActingContext\s*\(/.test(openapiClean)).toBe(false);
+  });
+
+  it("a GET/HEAD handler is never scanned (mutating-methods-only guard)", () => {
+    const fixture = `
+      app.get("/safe", async (c) => {
+        const body = await c.req.json();
+        const userId = body.userId;
+        return c.json({ userId });
+      });
+    `;
+    expect(findMutatingHandlers(fixture, new Map()).length).toBe(0);
+  });
+
   const files = tsRouteFiles(REST_DIR);
-  const allHandlers: Array<{ file: string; label: string; bodyText: string }> =
-    [];
+  const allHandlers: Array<{
+    file: string;
+    method: MutatingMethod;
+    label: string;
+    bodyText: string;
+  }> = [];
   for (const file of files) {
     const src = readFileSync(join(REST_DIR, file), "utf8");
     const routeMap = findRouteMethodMap(src);
-    for (const h of findPostHandlers(src, routeMap)) {
+    for (const h of findMutatingHandlers(src, routeMap)) {
       allHandlers.push({ file, ...h });
     }
   }
+  const postHandlers = allHandlers.filter((h) => h.method === "post");
+  const nonPostHandlers = allHandlers.filter((h) => h.method !== "post");
 
   it("scanned a substantial number of POST handlers (regex is alive)", () => {
     // Self-guard: if the extraction regexes silently break (e.g. a Hono API
     // change), this catches the count collapsing to ~0 instead of passing
     // vacuously. There were 100+ POST handlers under rest/ at authoring time.
-    expect(allHandlers.length).toBeGreaterThan(100);
+    expect(postHandlers.length).toBeGreaterThan(100);
   });
 
-  it("no un-allowlisted hub REST POST handler reads body.userId without resolveActingContext", () => {
+  it("scanned a substantial number of PATCH/PUT/DELETE handlers (regex is alive)", () => {
+    // Self-guard for the 2026-08-01 coverage-gap fix: if the non-POST
+    // extraction silently breaks, this catches the count collapsing to ~0
+    // instead of passing vacuously. There were 30+ PATCH/PUT/DELETE handlers
+    // under rest/ at the time this coverage was added.
+    expect(nonPostHandlers.length).toBeGreaterThan(30);
+  });
+
+  it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext", () => {
     const offenders: string[] = [];
     for (const h of allHandlers) {
       const clean = stripComments(h.bodyText);
@@ -239,7 +342,7 @@ describe("tripwire: hub REST POST routes bind identity via resolveActingContext"
       if (!hasBodyUserId || hasActingContext) continue;
       const key = `${h.file}::${h.label}`;
       if (ALLOWLIST[key]) continue;
-      offenders.push(key);
+      offenders.push(`${key} (${h.method})`);
     }
     expect(offenders).toEqual([]);
   });
