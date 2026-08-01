@@ -4008,6 +4008,41 @@ export interface ReconcileReport {
 		sidebarItemsAdded: string[];
 		primarySurfaceChanged: boolean;
 	};
+	/**
+	 * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
+	 *   `created` = no row for that name → inserted.
+	 *   `updated` = a row existed but its stored `metadata.seedVersion` (content
+	 *               hash, or a legacy int) differed from the definition's hash →
+	 *               `flowDefinition`+`description` overwritten, hash re-stamped,
+	 *               `automations.version` bumped.
+	 *   `skipped` = stored hash equals the definition hash → no-op.
+	 * Values are automation names.
+	 */
+	automations: {
+		created: string[];
+		updated: string[];
+		skipped: string[];
+	};
+	/**
+	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
+	 * `created` = title absent → inserted; `skipped` = title already present
+	 * (left untouched — a seeded command is owned by the user after first seed).
+	 */
+	commands: {
+		created: string[];
+		skipped: string[];
+	};
+	/**
+	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
+	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
+	 * which mints bare (slug+displayName) defs as a side effect of profile edges.
+	 * `created` = slug absent → inserted; `skipped` = slug already present
+	 * (workspace-scoped or pod-wide) → left untouched.
+	 */
+	relationDefs: {
+		created: string[];
+		skipped: string[];
+	};
 }
 /**
  * View Query Types
@@ -4650,6 +4685,30 @@ export interface ProposalCluster {
 	/** Distinct workspaces the cluster's proposals span. */
 	workspaceIds: string[];
 }
+/**
+ * Shared external-action dispatcher — ONE implementation, two entry doors:
+ *   1. Human-direct (immediate REST — operator IS the approval)
+ *   2. Agent-approved (proposals.ts approve branch — proposal already past governance)
+ *
+ * Extracted here so the immediate hub paths and the proposal-approval path call
+ * the SAME connector.sendMessage / connector.triggerAction — no duplicate sends,
+ * no implementation drift.
+ */
+/**
+ * P1 "every failure carries a next action" — the machine-readable failure class a
+ * dispatch failure is stamped with (alongside the human `error` string), so the
+ * browser can derive a one-click action ("Reconnect Google", "Retry", "Connect X")
+ * without re-parsing prose. Persisted on a failed proposal at
+ * `proposal.data.failure = { errorClass, providerRef }`.
+ *
+ *   auth           — credential/token failure (expired, invalid_grant, 401) → RECONNECT
+ *   no_connection  — enabled but never connected (no connection found)       → CONNECT
+ *   transient      — timeout / rate-limit / upstream 5xx                     → RETRY
+ *   permission     — an explicit grant/approval denial (vault grant, MCP approve)
+ *   target_missing — a NOT_FOUND that is not a connection issue (tool/secret/endpoint)
+ *   provider       — a genuine provider-side failure (business 4xx, malformed request)
+ */
+export type FailureErrorClass = "auth" | "no_connection" | "transient" | "permission" | "target_missing" | "provider";
 /** The shape every approve branch returns today (superset — branches set a subset). */
 export interface ProposalExecutorResult {
 	success: boolean;
@@ -5754,6 +5813,8 @@ export type ExecuteCapabilityResult = {
 } | {
 	kind: "error";
 	message: string;
+	errorClass?: FailureErrorClass;
+	providerRef?: string;
 } | {
 	kind: "not_found";
 	message: string;
@@ -16310,7 +16371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
-								appearance?: "compact" | "detailed" | "cards" | undefined;
+								appearance?: "detailed" | "compact" | "cards" | undefined;
 							} | undefined;
 							label?: string | undefined;
 							showLabel?: boolean | undefined;
@@ -16424,7 +16485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
-								appearance?: "compact" | "detailed" | "cards" | undefined;
+								appearance?: "detailed" | "compact" | "cards" | undefined;
 							} | undefined;
 							label?: string | undefined;
 							showLabel?: boolean | undefined;
