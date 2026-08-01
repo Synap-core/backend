@@ -9,6 +9,20 @@ FROM base AS builder
 
 # Build tools for native addons (e.g. node-pty via node-gyp)
 RUN apk add --no-cache python3 make g++
+# ── FLAG-FLIP PREREQUISITE (SANDBOX_LOCAL=1, in-backend code-skill sandbox) ──
+# When the SANDBOX_LOCAL flag is turned ON, `isolated-vm` must compile a native
+# addon here (it is currently an inert dep — not in `onlyBuiltDependencies`, so
+# pnpm skips its build script and nothing loads it while the flag is OFF).
+# To enable, mirror the Intelligence Service Dockerfile EXACTLY:
+#   1. Bump BOTH `FROM node:20-alpine` stages (base + runner) to `node:22-alpine`
+#      — isolated-vm 6.x's prebuilt binaries target glibc, so Alpine/musl must
+#      compile from source against node 22's V8 headers (node 20 mismatches).
+#   2. Add node-gyp to this builder stage:  `&& npm install -g node-gyp`
+#   3. After the `pnpm deploy … /app/deploy` step below, add an explicit rebuild
+#      (pnpm deploy --legacy copies source but NOT the compiled .node in out/):
+#        RUN --mount=type=cache,id=node-gyp-api,target=/root/.cache/node-gyp \
+#            cd /app/deploy/node_modules/isolated-vm && node-gyp rebuild
+#   4. Add `libstdc++` to the runner `apk add` (the .node binary links it).
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./

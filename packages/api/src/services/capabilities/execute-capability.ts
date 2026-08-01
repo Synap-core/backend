@@ -49,6 +49,7 @@ import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.j
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
+import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import type {
@@ -724,17 +725,30 @@ export async function runResolvedSkill(
     };
   }
 
-  // TIER 2 (code/instruction): execute the backing skill in the IS sandbox.
-  // executeSkillViaIS ALWAYS returns the `SkillExecutionResult` envelope
+  // TIER 2 (code/instruction): execute the backing skill in an isolated-vm
+  // sandbox. Default (flag unset) = the IS sandbox over Hub Protocol HTTP
+  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the in-process
+  // backend sandbox (`runSkillInSandbox`) — same bridges, no IS hop. The flag
+  // defaults OFF so production behaviour is unchanged until it is flipped.
+  // Both return the identical `SkillExecutionResult` envelope
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
   // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
   // failure — a success:false must never ride through as a `kind:"run"` result.
-  const envelope = await executeSkillViaIS({
-    skillId: skill.id,
-    userId: ctx.userId,
-    parameters,
-    workspaceId: ctx.workspaceId,
-  });
+  const envelope =
+    process.env.SANDBOX_LOCAL === "1"
+      ? await runSkillInSandbox({
+          skillId: skill.id,
+          userId: ctx.userId,
+          parameters,
+          workspaceId: ctx.workspaceId,
+          agentUserId: ctx.agentUserId ?? null,
+        })
+      : await executeSkillViaIS({
+          skillId: skill.id,
+          userId: ctx.userId,
+          parameters,
+          workspaceId: ctx.workspaceId,
+        });
   if (!envelope.success) {
     return {
       kind: "error",

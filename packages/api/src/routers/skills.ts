@@ -34,121 +34,37 @@ import { parseSkillToml } from "../skills/skill-toml-parser.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import * as acorn from "acorn";
 import * as acornWalk from "acorn-walk";
+import {
+  SKILL_RUNTIME_VERSION as STDLIB_RUNTIME_VERSION,
+  SKILL_WEB_GLOBALS,
+  SKILL_HOST_BRIDGES,
+  SKILL_ALLOWED_GLOBALS,
+} from "../services/skills/skill-stdlib.js";
 
 /**
  * Save-time global-reference scan for code skills (B1).
  *
- * A code skill runs in the Intelligence Service inside an isolated-vm isolate
- * whose ONLY globals are pure-ECMAScript built-ins + the versioned skill stdlib
- * (host bridges + web polyfills). A skill that references any OTHER global (e.g.
- * `fetch`, `crypto`) throws a ReferenceError at run time — the exact class of
- * failure the `URLSearchParams` polyfill patched reactively. This scan makes the
- * AUTHOR/AI learn the gap at CREATE time instead.
+ * A code skill runs inside an isolated-vm isolate whose ONLY globals are
+ * pure-ECMAScript built-ins + the versioned skill stdlib (host bridges + web
+ * polyfills). A skill that references any OTHER global (e.g. `fetch`, `crypto`)
+ * throws a ReferenceError at run time — the exact class of failure the
+ * `URLSearchParams` polyfill patched reactively. This scan makes the AUTHOR/AI
+ * learn the gap at CREATE time instead.
  *
- * SSOT: this allow-list MIRRORS
- * `synap-intelligence-service/apps/intelligence-hub/src/executors/skill-stdlib.ts`
- * (`SKILL_ALLOWED_GLOBALS` = ECMAScript natives ∪ web polyfills ∪ host bridges ∪
- * wrapper params). The two live in separate repos; a cross-repo shared package
- * is the follow-up. `skill-runtime-globals.test.ts` guards the critical
- * invariants (web globals + bridges present, forbidden globals absent) and, when
- * the IS sibling is checked out, asserts equality against the runtime SSOT.
+ * SSOT: the allow-list is IMPORTED from the co-located backend runtime module
+ * (`services/skills/skill-stdlib.ts`) — the SAME module the in-process sandbox
+ * (`run-skill-in-sandbox.ts`) boots with — so the scan and the isolate can never
+ * disagree within the backend. That backend module is itself a verbatim port of
+ * the IS SSOT; `skill-runtime-globals.test.ts` still asserts byte-equality
+ * against the IS sibling (until the IS copy is retired) so cross-repo drift is
+ * caught.
  */
-export const SKILL_RUNTIME_VERSION = 1 as const;
-
-/** Pure-ECMAScript globals a fresh isolated-vm isolate exposes natively. */
-const SKILL_ECMASCRIPT_GLOBALS = [
-  "globalThis",
-  "undefined",
-  "NaN",
-  "Infinity",
-  "eval",
-  "isFinite",
-  "isNaN",
-  "parseFloat",
-  "parseInt",
-  "decodeURI",
-  "decodeURIComponent",
-  "encodeURI",
-  "encodeURIComponent",
-  "escape",
-  "unescape",
-  "Object",
-  "Function",
-  "Boolean",
-  "Symbol",
-  "Error",
-  "AggregateError",
-  "EvalError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "TypeError",
-  "URIError",
-  "Number",
-  "BigInt",
-  "Math",
-  "Date",
-  "String",
-  "RegExp",
-  "Array",
-  "Int8Array",
-  "Uint8Array",
-  "Uint8ClampedArray",
-  "Int16Array",
-  "Uint16Array",
-  "Int32Array",
-  "Uint32Array",
-  "BigInt64Array",
-  "BigUint64Array",
-  "Float32Array",
-  "Float64Array",
-  "Map",
-  "Set",
-  "WeakMap",
-  "WeakSet",
-  "WeakRef",
-  "FinalizationRegistry",
-  "ArrayBuffer",
-  "SharedArrayBuffer",
-  "DataView",
-  "Atomics",
-  "JSON",
-  "Promise",
-  "Reflect",
-  "Proxy",
-  "Intl",
-  "Iterator",
-  "WebAssembly",
-];
-/** Web-standard globals the stdlib bootstrap polyfills. */
-const SKILL_WEB_GLOBALS = [
-  "URLSearchParams",
-  "URL",
-  "TextEncoder",
-  "TextDecoder",
-  "btoa",
-  "atob",
-  "structuredClone",
-];
-/** Host bridges the stdlib bootstrap installs. */
-const SKILL_HOST_BRIDGES = [
-  "console",
-  "hubProtocol",
-  "secrets",
-  "host",
-  "callProvider",
-  "propose",
-];
-/** The `execute(args, context)` wrapper parameters. */
-const SKILL_WRAPPER_PARAMS = ["args", "context"];
+export const SKILL_RUNTIME_VERSION = STDLIB_RUNTIME_VERSION;
 
 /** The derived allow-list — every identifier a skill may reference. */
-export const SKILL_RUNTIME_ALLOWED_GLOBALS: ReadonlySet<string> = new Set([
-  ...SKILL_ECMASCRIPT_GLOBALS,
-  ...SKILL_WEB_GLOBALS,
-  ...SKILL_HOST_BRIDGES,
-  ...SKILL_WRAPPER_PARAMS,
-]);
+export const SKILL_RUNTIME_ALLOWED_GLOBALS: ReadonlySet<string> = new Set(
+  SKILL_ALLOWED_GLOBALS
+);
 
 /** Collect every binding name a pattern node introduces (destructuring-aware). */
 function collectPatternNames(

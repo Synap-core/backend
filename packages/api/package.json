@@ -80,6 +80,7 @@
     "drizzle-zod": "0.8.3",
     "esbuild": "^0.25.0",
     "gray-matter": "^4.0.3",
+    "isolated-vm": "^6.0.2",
     "hono": "^4.12.10",
     "jsonwebtoken": "^9.0.2",
     "postgres": "^3.4.8",
