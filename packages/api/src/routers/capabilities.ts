@@ -22,6 +22,8 @@ import {
   playbookAutomations,
   skills,
   tools as toolsTable,
+  vaultGrants,
+  entityExternalLinks,
   entities,
   capabilities as capabilitiesTable,
   notifications,
@@ -193,9 +195,13 @@ const capabilityRegistryRouter = router({
    * altitude (they hang off the tool + the caller, not the lens), so a pod-level
    * catalogue is genuinely useful — it just cannot show workspace-scoped bricks.
    *
-   * `excluded` is passed through verbatim: a catalogue must be able to say "N
-   * builtins / M teaching docs are not shown here" rather than silently hiding
-   * them.
+   * Built-ins come back as REAL ROWS in their own `builtins` section (a UI
+   * renders it collapsed), each carrying `runnableHere` — so a browser can
+   * inspect a built-in brick while a flow-node picker still refuses to offer a
+   * catalog-only one as a step. `excluded` is passed through verbatim and now
+   * counts teaching docs only: a catalogue must be able to say "M teaching docs
+   * are not shown here" rather than silently hiding them, and counting built-ins
+   * there would be a lie now that they ARE shown.
    */
   sections: protectedProcedure
     .input(
@@ -316,6 +322,108 @@ const capabilityRegistryRouter = router({
       };
     }),
 });
+
+// ─── Dependent-process lookup (shared by usedInProcesses + blastRadius) ───────
+
+/**
+ * THE one place that answers "which automations/playbooks reference this
+ * capability node?". Both `usedInProcesses` (per-VERB backlinks) and
+ * `blastRadius` (per-TOOL disconnect pre-flight) call it, so the access
+ * predicate can never fork between them.
+ *
+ * The access construction is load-bearing and is the recurring defect class on
+ * this surface: `scopedDb(...).predicate(automations)` is ANDed FIRST as the
+ * floor, and the workspace filter is only a NARROWING inside that AND. A bare
+ * `isNull(automations.workspaceId)` floor would match only pod-wide automations,
+ * hide every workspace-scoped dependent, and make a revoke dialog say "nothing
+ * depends on this" immediately before it breaks six live automations.
+ *
+ * The select is wider than `usedInProcesses` needs (`triggerType`/`nextRunAt`)
+ * — those are free on the same scan and let a caller say which dependents are
+ * actively scheduled rather than merely enabled.
+ */
+async function findDependentProcesses(
+  ctx: Parameters<typeof AccessContext.from>[0],
+  containment: ReturnType<typeof drizzleSql>,
+  workspaceId?: string
+) {
+  const database = await getDb();
+  const automationVisibility = scopedDb(AccessContext.from(ctx)).predicate(
+    automations
+  );
+
+  const automationRows = await database
+    .select({
+      automationId: automations.id,
+      name: automations.name,
+      status: automations.status,
+      triggerType: automations.triggerType,
+      nextRunAt: automations.nextRunAt,
+    })
+    .from(automations)
+    .where(
+      and(
+        automationVisibility,
+        // A specific workspace only NARROWS and still includes pod-wide
+        // (NULL) automations; no workspace → no narrow (the user floor).
+        workspaceId
+          ? or(
+              isNull(automations.workspaceId),
+              eq(automations.workspaceId, workspaceId)
+            )
+          : undefined,
+        containment
+      )
+    )
+    .orderBy(automations.name);
+
+  const matchedAutomationIds = automationRows.map((r) => r.automationId);
+
+  // Playbooks are TRANSITIVE only — a playbook row carries no capability node of
+  // its own, so it can only be reached through a matched automation. Skip the
+  // whole query when nothing matched (an empty `inArray` is both wasteful and a
+  // driver footgun here).
+  let playbookRows: Array<{
+    playbookId: string;
+    name: string;
+    status: string;
+  }> = [];
+  if (matchedAutomationIds.length > 0) {
+    const playbookVisibility = scopedDb(AccessContext.from(ctx)).predicate(
+      playbooks
+    );
+
+    playbookRows = await database
+      .selectDistinct({
+        playbookId: playbooks.id,
+        name: playbooks.name,
+        status: playbooks.status,
+      })
+      .from(playbooks)
+      .leftJoin(
+        playbookAutomations,
+        eq(playbookAutomations.playbookId, playbooks.id)
+      )
+      .where(
+        and(
+          playbookVisibility,
+          workspaceId
+            ? or(
+                isNull(playbooks.workspaceId),
+                eq(playbooks.workspaceId, workspaceId)
+              )
+            : undefined,
+          or(
+            inArray(playbooks.flowAutomationId, matchedAutomationIds),
+            inArray(playbookAutomations.automationId, matchedAutomationIds)
+          )
+        )
+      )
+      .orderBy(playbooks.name);
+  }
+
+  return { automationRows, playbookRows };
+}
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -1255,85 +1363,17 @@ export const capabilitiesRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const database = await getDb();
-      const automationVisibility = scopedDb(AccessContext.from(ctx)).predicate(
-        automations
+      // Two soft links can carry a playbook match: the legacy single
+      // `flowAutomationId` and the first-class `playbook_automations` join table.
+      // Both, plus the access floor, live in `findDependentProcesses` — the ONE
+      // implementation this door and `blastRadius` share.
+      const { automationRows, playbookRows } = await findDependentProcesses(
+        ctx,
+        drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
+          [{ type: "capability", data: { verbId: input.verbId } }]
+        )}::jsonb`,
+        input.workspaceId
       );
-
-      const containment = drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
-        [{ type: "capability", data: { verbId: input.verbId } }]
-      )}::jsonb`;
-
-      const automationRows = await database
-        .select({
-          automationId: automations.id,
-          name: automations.name,
-          status: automations.status,
-        })
-        .from(automations)
-        .where(
-          and(
-            automationVisibility,
-            // A specific workspace only NARROWS and still includes pod-wide
-            // (NULL) automations; no workspace → no narrow (the user floor).
-            input.workspaceId
-              ? or(
-                  isNull(automations.workspaceId),
-                  eq(automations.workspaceId, input.workspaceId)
-                )
-              : undefined,
-            containment
-          )
-        )
-        .orderBy(automations.name);
-
-      const matchedAutomationIds = automationRows.map((r) => r.automationId);
-
-      let playbookRows: Array<{
-        playbookId: string;
-        name: string;
-        status: string;
-      }> = [];
-      if (matchedAutomationIds.length > 0) {
-        const playbookVisibility = scopedDb(AccessContext.from(ctx)).predicate(
-          playbooks
-        );
-
-        // Two soft links can carry the match: the legacy single `flowAutomationId`
-        // and the first-class `playbook_automations` join table — hence the
-        // `leftJoin` + `or(...)` rather than a subquery. `inArray` (the drizzle
-        // helper, not a raw `sql` array bind) is required here: this pod's
-        // postgres.js driver faults on a JS array interpolated straight into a
-        // `sql` template (the same class of gotcha as `sql.json()` — see
-        // `matchForEntity` above and the driver notes in @synap/database).
-        playbookRows = await database
-          .selectDistinct({
-            playbookId: playbooks.id,
-            name: playbooks.name,
-            status: playbooks.status,
-          })
-          .from(playbooks)
-          .leftJoin(
-            playbookAutomations,
-            eq(playbookAutomations.playbookId, playbooks.id)
-          )
-          .where(
-            and(
-              playbookVisibility,
-              input.workspaceId
-                ? or(
-                    isNull(playbooks.workspaceId),
-                    eq(playbooks.workspaceId, input.workspaceId)
-                  )
-                : undefined,
-              or(
-                inArray(playbooks.flowAutomationId, matchedAutomationIds),
-                inArray(playbookAutomations.automationId, matchedAutomationIds)
-              )
-            )
-          )
-          .orderBy(playbooks.name);
-      }
 
       return [
         ...automationRows.map((r) => ({
@@ -1349,6 +1389,128 @@ export const capabilitiesRouter = router({
           status: r.status,
         })),
       ];
+    }),
+
+  /**
+   * "What breaks if I disconnect this?" — the ONE read door every revoke
+   * surface calls before severing a tool or a connection. Today eight UI
+   * surfaces sever connections with no warning at all.
+   *
+   * PER-TOOL vs PER-CONNECTION — the asymmetry that shapes this whole door:
+   * `CapabilityNodeDef` (packages/database/src/schema/automations.ts) carries
+   * `capabilityId` (the tool row id) and `verbId` and NO connectionId/secretId/
+   * account selector — the connection is resolved at RUN time from `secrets`.
+   * So a per-CONNECTION automation count is structurally unbackable and is
+   * never produced here. `automations`/`playbooks`/`grants` are always
+   * per-TOOL; `sourcedEntityCount` is the one honest per-connection number.
+   *
+   * One JSONB containment scan covers the whole tool, replacing the N parallel
+   * per-verb queries the UI does today.
+   */
+  blastRadius: protectedProcedure
+    .input(
+      z.object({
+        toolId: z.string(),
+        /** Only narrows `sourcedEntityCount` — never the automation counts. */
+        connectionId: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // Subject gate. The dependent-process query is access-scoped on its own,
+      // but grants and sourced-entity counts are not workspace-scoped tables —
+      // so the caller must be able to see the TOOL before we report anything
+      // about it. Same shape as the vault's "own the secret, then list its
+      // grants" pattern.
+      const [tool] = await database
+        .select({ id: toolsTable.id })
+        .from(toolsTable)
+        .where(
+          and(
+            scopedDb(AccessContext.from(ctx)).predicate(toolsTable),
+            eq(toolsTable.id, input.toolId)
+          )
+        )
+        .limit(1);
+      if (!tool) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      }
+
+      const { automationRows, playbookRows } = await findDependentProcesses(
+        ctx,
+        drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
+          [{ type: "capability", data: { capabilityId: input.toolId } }]
+        )}::jsonb`,
+        input.workspaceId
+      );
+
+      // Grants on the tool itself. Indexed by
+      // (grantable_type, grantable_id, revoked_at) — the hot-path index.
+      const grantRows = await database
+        .select({
+          grantId: vaultGrants.id,
+          grantedTo: vaultGrants.grantedTo,
+          scope: vaultGrants.scope,
+          execMode: vaultGrants.execMode,
+          expiresAt: vaultGrants.expiresAt,
+        })
+        .from(vaultGrants)
+        .where(
+          and(
+            eq(vaultGrants.grantableType, "tool"),
+            eq(vaultGrants.grantableId, input.toolId),
+            isNull(vaultGrants.revokedAt)
+          )
+        )
+        .orderBy(vaultGrants.createdAt);
+
+      // The ONE honest per-connection number: literally the rows the detach
+      // path flips to "disconnected" (capability-nango-sync.ts). `null` (not 0)
+      // when no connectionId was passed — "not asked" must never render as
+      // "nothing would be affected".
+      let sourcedEntityCount: number | null = null;
+      if (input.connectionId) {
+        const [row] = await database
+          .select({ count: drizzleSql<number>`count(*)::int` })
+          .from(entityExternalLinks)
+          .where(
+            and(
+              eq(entityExternalLinks.nangoConnectionId, input.connectionId),
+              eq(entityExternalLinks.status, "active")
+            )
+          );
+        sourcedEntityCount = row?.count ?? 0;
+      }
+
+      return {
+        automations: automationRows,
+        playbooks: playbookRows,
+        grants: grantRows,
+        sourcedEntityCount,
+
+        /**
+         * ALWAYS TRUE — a hardcoded constant, never computed, never `false`.
+         *
+         * These counts are a FLOOR, never a total. The containment match sees
+         * `type:"capability"` nodes only, so it structurally MISSES:
+         *   - `skill` nodes — a verb resolves to a backing skill, so a skill
+         *     node invokes the very same tool invisibly to this query;
+         *   - `sub_automation` nodes — the child's nodes are never scanned;
+         *   - `playbook_run` nodes — same, one level down;
+         *   - tools an agent chooses at RUN time (unknowable before the run);
+         *   - usage in workspaces the caller cannot see (correctly filtered out
+         *     by the access floor, but still real breakage for someone else);
+         *   - stale node ids pointing at already-deleted tools.
+         * No transitive traversal exists anywhere in this codebase, so none of
+         * the above can be closed by widening this query alone.
+         *
+         * Callers MUST render this as "at least N" / "N or more" — never as an
+         * exhaustive total, and never as "nothing depends on this" when N is 0.
+         */
+        incomplete: true as const,
+      };
     }),
 
   /**

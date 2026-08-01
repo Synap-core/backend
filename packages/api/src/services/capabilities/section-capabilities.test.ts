@@ -3,10 +3,15 @@ import { sectionCapabilities } from "./capability-registry.js";
 import type { Capability, CapabilityVerbState } from "@synap/playbooks";
 
 /**
- * `sectionCapabilities` is the agent-facing projection: it drops the two
- * non-actionable kinds (built-in MCP tools + teaching prose), de-duplicates the
+ * `sectionCapabilities` is the agent-facing projection: it de-duplicates the
  * management read-model's repeated rows, nests verbs under their integration,
  * and never lists a provider's backing skill twice.
+ *
+ * Built-ins are SECTIONED, not dropped — a built-in is a brick, so it must stay
+ * browsable even where it is not pickable; each row carries `runnableHere` so a
+ * picker filters on a fact rather than on the section's name. Only teaching
+ * prose is still folded out, and it is COUNTED: the point of `excluded` is that
+ * the catalogue states what it does not show instead of hiding it silently.
  */
 
 function verb(id: string, granted = false): CapabilityVerbState {
@@ -32,15 +37,26 @@ function cap(
 }
 
 describe("sectionCapabilities", () => {
-  it("excludes builtin-tool and teaching-doc, counting them honestly", () => {
+  it("surfaces builtin-tool as rows and excludes only teaching-doc, counting it honestly", () => {
     const out = sectionCapabilities([
       cap({ kind: "builtin-tool", name: "create_entity", catalogOnly: true }),
       cap({ kind: "builtin-tool", name: "update_entity", catalogOnly: true }),
       cap({ kind: "teaching-doc", name: "how-to-x", governance: "none" }),
       cap({ kind: "command", name: "digest" }),
     ]);
-    expect(out.excluded).toEqual({ builtinTools: 2, teachingDocs: 1 });
+    // Shown, not hidden — with the marker that keeps them out of a step picker.
+    expect(out.builtins.map((b) => b.name)).toEqual([
+      "create_entity",
+      "update_entity",
+    ]);
+    expect(out.builtins.every((b) => b.runnableHere === false)).toBe(true);
+    // Prose is still folded out — and still COUNTED, so the catalogue can say
+    // "1 not shown here". Counting a VISIBLE built-in here would be the lie.
+    expect(out.excluded).toEqual({ teachingDocs: 1 });
+    expect(out.excluded).not.toHaveProperty("builtinTools");
+    // A built-in is never smuggled into an actionable section.
     expect(out.integrations).toHaveLength(0);
+    expect(out.skills).toHaveLength(0);
     expect(out.commands.map((c) => c.name)).toEqual(["digest"]);
   });
 

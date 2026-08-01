@@ -6017,6 +6017,16 @@ export type ImportQualityReport = {
 		contentEntities: number;
 		linkedExisting: number;
 		byProfile: Record<string, number>;
+		/**
+		 * Entities the schema preflight could not materialize under their extracted
+		 * profile and which were emitted as notes instead. >0 means the extraction
+		 * under-filled a profile's required properties.
+		 */
+		degradedToNote?: number;
+		/** Entities that carry a long-form body (a linked document on materialize). */
+		withContent: number;
+		/** Non-container entities that carry at least one property. */
+		withProperties: number;
 	};
 	hierarchy: {
 		containerCount: number;
@@ -13114,8 +13124,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 						description: string | null;
 					}>;
+					builtins: Array<{
+						id: string;
+						name: string;
+						description: string | null;
+						governance: "auto" | "propose" | "none";
+						runnableHere: boolean;
+						verbs: CapabilityVerbStateWithResponseShape[];
+					}>;
 					excluded: {
-						builtinTools: number;
 						teachingDocs: number;
 					};
 				};
@@ -13488,6 +13505,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				status: string;
 			})[];
+			meta: object;
+		}>;
+		blastRadius: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				toolId: string;
+				connectionId?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				automations: {
+					automationId: string;
+					name: string;
+					status: "error" | "active" | "paused" | "draft";
+					triggerType: "event" | "cron" | "webhook" | "manual";
+					nextRunAt: Date | null;
+				}[];
+				playbooks: {
+					playbookId: string;
+					name: string;
+					status: string;
+				}[];
+				grants: {
+					grantId: string;
+					grantedTo: string | null;
+					scope: "session" | "once" | "permanent";
+					execMode: "auto" | "propose" | "dry-run";
+					expiresAt: Date | null;
+				}[];
+				sourcedEntityCount: number | null;
+				incomplete: true;
+			};
 			meta: object;
 		}>;
 		checkHealth: import("@trpc/server").TRPCMutationProcedure<{
@@ -19312,6 +19360,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					duplicatesMerged: number;
 					linkedToExisting: number;
 					documentCount: number;
+					degradedToNote: number;
+					degradedByProfile: Record<string, number>;
 					sourceDocCount: number;
 					byType: Record<string, number>;
 					wikilinkLinksResolved: number;

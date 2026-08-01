@@ -569,8 +569,15 @@ export async function listCapabilities(
  * `teaching-doc`s (prompt prose, not actions), plus duplicate rows (a provider
  * installed twice, N backing-skill copies of one verb). Handing all of that to
  * an agent as "your capabilities" buries the ~20 things it can actually do. This
- * view drops the two non-actionable kinds, de-duplicates, and nests verbs under
- * their integration so the shape reads like "a package and the verbs inside it".
+ * view de-duplicates and nests verbs under their integration so the shape reads
+ * like "a package and the verbs inside it".
+ *
+ * Built-ins are a SECTION, not an exclusion. A capability verb is to a process
+ * what an entity is to the pod — a brick — so a built-in must be browsable and
+ * inspectable even when it cannot be picked as a step. It therefore gets its own
+ * section (a UI renders it collapsed), each row carrying `runnableHere` so a
+ * flow-node picker can filter on a fact instead of on the section's name. Only
+ * `teaching-doc`s are still folded out — prompt prose is not a brick at all.
  */
 export interface SectionedCapabilities {
   /** Integrations (Nango providers + API/MCP tools), one per name, verbs nested. */
@@ -593,8 +600,38 @@ export interface SectionedCapabilities {
   }>;
   /** Intelligence commands. */
   commands: Array<{ id: string; name: string; description: string | null }>;
-  /** Honest accounting of what was folded out of this actionable view. */
-  excluded: { builtinTools: number; teachingDocs: number };
+  /**
+   * Built-in capabilities — browsable bricks, rendered as a collapsed section.
+   * De-duplicated by name like every other section (the IS manifest and the
+   * `tools` table can both describe the same built-in).
+   */
+  builtins: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    governance: "auto" | "propose" | "none";
+    /**
+     * Whether the shared capability-execution door can invoke this brick.
+     *
+     * DERIVED, never hardcoded: it is `catalogOnly !== true`, the same fact the
+     * runnable projection (`action-projection.ts`) already gates on. The
+     * distinction is real PER ROW, not per kind — an IS-native manifest tool is
+     * emitted with `catalogOnly: true` (recon-verified: no `run_capability`
+     * bridge to the IS's in-process registry, those calls 404), while a
+     * `tools.kind='builtin'` row carries a verb catalog and no such flag. So
+     * stamping every built-in `false` would assert something the data does not
+     * back. A picker must offer a built-in as a step only when this is `true`.
+     */
+    runnableHere: boolean;
+    /** Verb catalog where the row carries one; `[]` for IS-native manifest tools. */
+    verbs: CapabilityVerbStateWithResponseShape[];
+  }>;
+  /**
+   * Honest accounting of what was folded out of this view. Built-ins are NOT
+   * counted here any more — they are shown, so listing them as excluded would be
+   * a lie. Teaching docs stay: prompt prose is not a capability.
+   */
+  excluded: { teachingDocs: number };
 }
 
 /**
@@ -614,13 +651,39 @@ export function sectionCapabilities(
     SectionedCapabilities["skills"][number]
   >();
   const commands: SectionedCapabilities["commands"] = [];
-  let builtinTools = 0;
+  const builtinByName = new Map<
+    string,
+    SectionedCapabilities["builtins"][number]
+  >();
   let teachingDocs = 0;
 
   for (const c of caps) {
-    // Already MCP tools / not runnable through this door → not an "action".
+    // Browsable, but usually not launchable through this door — carried as a row
+    // with the fact attached rather than dropped and counted (a count cannot
+    // render a collapsed section).
     if (c.kind === "builtin-tool") {
-      builtinTools += 1;
+      const existing = builtinByName.get(c.name);
+      if (!existing) {
+        builtinByName.set(c.name, {
+          id: c.id,
+          name: c.name,
+          description: c.description ?? null,
+          governance: c.governance,
+          runnableHere: c.catalogOnly !== true,
+          verbs: [...(c.verbs ?? [])],
+        });
+      } else {
+        // Same built-in described twice: union the verbs and let the runnable
+        // copy win — the merge must never DOWNGRADE a launchable brick, and
+        // never UPGRADE a catalog-only one.
+        const vmap = new Map(existing.verbs.map((v) => [v.id, v]));
+        for (const v of c.verbs ?? []) if (!vmap.has(v.id)) vmap.set(v.id, v);
+        existing.verbs = [...vmap.values()];
+        existing.runnableHere = existing.runnableHere || c.catalogOnly !== true;
+        if (!existing.description && c.description) {
+          existing.description = c.description;
+        }
+      }
       continue;
     }
     // Prompt prose, not a capability.
@@ -700,7 +763,8 @@ export function sectionCapabilities(
     integrations: [...integrations.values()],
     skills,
     commands,
-    excluded: { builtinTools, teachingDocs },
+    builtins: [...builtinByName.values()],
+    excluded: { teachingDocs },
   };
 }
 

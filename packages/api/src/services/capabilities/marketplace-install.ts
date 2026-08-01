@@ -44,10 +44,13 @@ import {
   db,
   and,
   eq,
+  or,
+  isNull,
+  inArray,
   getWorkspaceMembership,
   automations as automationsTable,
 } from "@synap/database";
-import { cpCatalogCache } from "@synap/database/schema";
+import { cpCatalogCache, profiles } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import type { WorkspaceDefinitionInput } from "@synap/database";
@@ -497,14 +500,14 @@ export async function applyMarketInstall(
     }
 
     case "view": {
-      // A standalone `view` package installs via the SAME governed door the
-      // direct create + MCP `synap_create_view` use — `viewsRouter.create`.
-      // Cache row present → resolve inline/by-slug; row MISSING → by-key
-      // re-resolve from the CP (opt-in / just-authored view package), mirroring
-      // automation/template. workspaceId is optional (a pod-wide view when the
-      // caller has no acting workspace); a STRUCTURED view still requires the
-      // definition to carry `scopeProfileIds` (per-pod profile UUIDs) — the
-      // door rejects a structured view without them, surfaced as a clear error.
+      // A `view` package bundles ONE OR MORE views (e.g. task-views-pack ships a
+      // Kanban board, priority matrix, calendar and table). The CP shape is
+      // `{ views: PackageViewDefinition[], profiles?, … }` — each view carries
+      // its render `type` + `config`, and its scope as profile SLUGS
+      // (`scopeProfileSlugs`), NOT the per-pod profile UUIDs `viewsRouter.create`
+      // needs. So: normalize to a list of views → resolve each view's scope slugs
+      // to THIS pod's profile ids → create each through the SAME governed door
+      // the direct create + MCP `synap_create_view` use.
       const definition = (
         entry
           ? await resolveDefinition(entry, input.version)
@@ -512,23 +515,87 @@ export async function applyMarketInstall(
       ) as {
         name?: string;
         displayName?: string;
+        views?: Array<{
+          slug?: string;
+          name?: string;
+          displayName?: string;
+          description?: string;
+          type?: string;
+          config?: Record<string, unknown>;
+          query?: Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+          scopeProfileSlugs?: string[];
+          scopeProfileIds?: string[];
+        }>;
+        // Legacy single-view shape (top-level view fields).
+        slug?: string;
         description?: string;
         type?: string;
-        scopeProfileIds?: string[];
         config?: Record<string, unknown>;
         query?: Record<string, unknown>;
         metadata?: Record<string, unknown>;
+        scopeProfileSlugs?: string[];
+        scopeProfileIds?: string[];
       };
-      if (!definition.type) {
+
+      // Multi-view package `views[]`, else a single top-level view.
+      const viewDefs =
+        definition.views && definition.views.length > 0
+          ? definition.views
+          : definition.type
+            ? [definition]
+            : [];
+      if (viewDefs.length === 0) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `View package "${input.slug}" is missing a view \`type\` in its definition — nothing to install.`,
+          message: `View package "${input.slug}" declares no views (no \`views[]\` and no top-level \`type\`) — nothing to install.`,
         });
       }
-      const workspaceRole = input.workspaceId
-        ? (await getWorkspaceMembership(db, input.workspaceId, input.userId))
-            ?.role
-        : "owner";
+      if (!input.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Installing the view package "${input.slug}" requires an acting workspace (workspaceId) to place its views in.`,
+        });
+      }
+
+      // Resolve scope profile SLUGS → this pod's profile UUIDs. Views ship slugs
+      // (portable across pods); the create door needs ids. Match pod-wide (system)
+      // profiles or ones in the acting workspace, preferring the workspace-scoped
+      // row for a slug that exists at both levels.
+      const scopeSlugs = Array.from(
+        new Set(viewDefs.flatMap((v) => v.scopeProfileSlugs ?? []))
+      );
+      const slugToProfileId = new Map<string, string>();
+      if (scopeSlugs.length > 0) {
+        const profileRows = await db
+          .select({
+            id: profiles.id,
+            slug: profiles.slug,
+            workspaceId: profiles.workspaceId,
+          })
+          .from(profiles)
+          .where(
+            and(
+              inArray(profiles.slug, scopeSlugs),
+              or(
+                isNull(profiles.workspaceId),
+                eq(profiles.workspaceId, input.workspaceId)
+              )
+            )
+          );
+        for (const r of profileRows) {
+          if (
+            !slugToProfileId.has(r.slug) ||
+            r.workspaceId === input.workspaceId
+          ) {
+            slugToProfileId.set(r.slug, r.id);
+          }
+        }
+      }
+
+      const workspaceRole =
+        (await getWorkspaceMembership(db, input.workspaceId, input.userId))
+          ?.role ?? "owner";
       const ctx = {
         db,
         authenticated: true as const,
@@ -538,26 +605,51 @@ export async function applyMarketInstall(
       } as unknown as Context;
       const { viewsRouter } = await import("../../routers/views.js");
       const viewCaller = viewsRouter.createCaller(ctx);
-      // `type` is validated at runtime by the door's ViewTypeEnum; cast the
-      // args to the caller's input type (an invalid type is rejected by zod),
-      // mirroring the `view/create` approve-executor.
-      const createArgs = {
-        workspaceId: input.workspaceId ?? undefined,
-        name:
-          definition.name ??
-          definition.displayName ??
-          entry?.name ??
-          input.slug,
-        description: definition.description ?? entry?.description ?? undefined,
-        type: definition.type,
-        scopeProfileIds: definition.scopeProfileIds,
-        config: definition.config,
-        metadata: definition.metadata,
-      };
-      const result = await viewCaller.create(
-        createArgs as Parameters<typeof viewCaller.create>[0]
-      );
-      return { kind: "view", ...result };
+
+      const created: string[] = [];
+      const failed: Array<{ name: string; error: string }> = [];
+      for (const v of viewDefs) {
+        const name =
+          v.name ?? v.displayName ?? v.slug ?? entry?.name ?? input.slug;
+        const scopeProfileIds =
+          v.scopeProfileIds && v.scopeProfileIds.length > 0
+            ? v.scopeProfileIds
+            : (v.scopeProfileSlugs ?? [])
+                .map((s) => slugToProfileId.get(s))
+                .filter((id): id is string => Boolean(id));
+        try {
+          // `type` is runtime-validated by the door's ViewTypeEnum; cast to the
+          // caller's input shape (an invalid type is rejected by zod there).
+          await viewCaller.create({
+            workspaceId: input.workspaceId,
+            name,
+            description: v.description,
+            type: v.type,
+            scopeProfileIds,
+            query: v.query,
+            config: v.config,
+            metadata: v.metadata,
+          } as Parameters<typeof viewCaller.create>[0]);
+          created.push(name);
+        } catch (err) {
+          failed.push({
+            name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // If NOTHING installed, surface why (most often: a scope profile absent on
+      // this pod). A partial success returns both lists so the caller can see it.
+      if (created.length === 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `View package "${input.slug}" installed no views: ${failed
+            .map((f) => `${f.name} (${f.error})`)
+            .join("; ")}`,
+        });
+      }
+      return { kind: "view", created, failed };
     }
   }
 }

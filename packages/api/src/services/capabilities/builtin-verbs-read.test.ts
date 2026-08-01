@@ -57,6 +57,12 @@ vi.mock("@synap/database", () => {
     messages: mk("messages"),
     getWorkspaceMembership: vi.fn(),
     insertChannelMessage: vi.fn(),
+    // entity.query's Kind+Facets scoping condition — stubbed to a marker value;
+    // these tests assert the AccessContext lens, not the resulting SQL shape.
+    profileSlugScopeConditionFromRows: vi.fn(() => ({
+      op: "eq",
+      val: "profile-scope",
+    })),
   };
 });
 
@@ -67,6 +73,19 @@ vi.mock("./place-artboard-deck.js", async (importOriginal) => {
   return { ...actual, placeArtboardDeck: vi.fn() };
 });
 vi.mock("../mail-feed/triage.js", () => ({ triageEmails: vi.fn() }));
+// entity.query's facet-visibility + vocabulary-validation doors — real
+// implementations hit `db.query.*` (the Drizzle relational API), which this
+// file's minimal `@synap/database` mock does not model. Stub them so these
+// tests exercise what they actually assert (the AccessContext lens the
+// entities READ is scoped to), not the facet-resolution machinery.
+vi.mock("../../utils/workspace-membership.js", () => ({
+  resolveFacetVisibilityScope: vi.fn().mockResolvedValue({ userId: "u1" }),
+}));
+vi.mock("../../utils/assert-known-profile-slug.js", () => ({
+  assertKnownProfileSlug: vi
+    .fn()
+    .mockResolvedValue([{ id: "profile-1", profileKind: "kind" }]),
+}));
 vi.mock("../../utils/resolve-or-create-channel.js", () => ({
   resolveOrCreateChannel: vi.fn(),
   CONTEXT_OBJECT_TYPE_VALUES: [

@@ -172,6 +172,12 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
             description: "Property equality pairs { key: value } (JSONB ->>).",
           },
           workspaceId: { type: "string", format: "uuid" },
+          scope: {
+            type: "string",
+            enum: ["workspace", "pod"],
+            description:
+              "'workspace' (default) = explicit workspaceId, else the acting workspace lens, else the full user floor. 'pod' = explicit opt-in to enumerate POD-WIDE entities (workspaceId IS NULL, owner-gated) even under an active workspace lens; an explicit workspaceId is ignored under 'pod'.",
+          },
           limit: { type: "number", minimum: 1, maximum: 100 },
         },
       },
@@ -514,21 +520,43 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Record a GENERIC inbound message onto its external channel via the shared inbound sink (resolve-or-create the channel, dedup-insert the message, emit external_message.received). Provider-agnostic — every field is a parameter, so provider ingest can be composed as config/automation from outside the pod. WRITE: flows through the full capability gate (an owner-run automation passes straight through). Returns { channelId, contextObjectId, inboundHash, created } (created=false on a duplicate delivery).",
+        "Record a GENERIC inbound message onto its external channel via the shared inbound sink (resolve-or-create the channel, dedup-insert the message, emit external_message.received). Provider-agnostic — every field is a parameter, so provider ingest can be composed as config/automation from outside the pod. Two exclusive modes: SINGLE (text + idempotencySeed) for one message, or BATCH (messages[] + messageMap) for a whole thread in one call — for automations that cannot loop per-message; messageMap gives the dot-paths into each raw row. WRITE: flows through the full capability gate (an owner-run automation passes straight through). Returns { channelId, contextObjectId, inboundHash, created } (created=false on a duplicate delivery).",
       parameters: {
         type: "object",
-        required: ["provider", "externalId", "text", "idempotencySeed"],
+        required: ["provider", "externalId"],
         properties: {
           provider: { type: "string" },
           externalId: { type: "string" },
-          text: { type: "string" },
+          text: {
+            type: "string",
+            description:
+              "Message body (SINGLE mode). Requires idempotencySeed.",
+          },
+          idempotencySeed: {
+            type: "string",
+            description: "Stable per-message idempotency seed (SINGLE mode).",
+          },
+          messages: {
+            type: "array",
+            description:
+              "Raw message rows (e.g. a thread's messages[] from a list verb) — BATCH mode. Requires messageMap.",
+          },
+          messageMap: {
+            type: "object",
+            description:
+              "Dot-paths locating each field inside a messages[] row (BATCH mode): { text, id, sentAt?, participant?, participantExternalId?, isOutbound? }. text and id are required.",
+          },
           participant: { type: "string" },
           participantExternalId: { type: "string" },
           accountExternalId: { type: "string" },
           title: { type: "string" },
-          idempotencySeed: { type: "string" },
           sentAt: { type: "string" },
           workspaceId: { type: "string", format: "uuid" },
+          suppressSideEffects: {
+            type: "boolean",
+            description:
+              "When true, skip the per-message external_message.received event (channel resolve + dedup still run). Use for a historical backfill so replaying a thread doesn't fan out through webhook/automation reactors. Defaults to false.",
+          },
         },
       },
     },

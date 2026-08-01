@@ -3205,8 +3205,17 @@ export async function executeMCPToolViaHubProtocol(
         skills: sections.skills,
         commands: sections.commands,
         // Honest, not hidden: these were folded out of the actionable view.
+        //
+        // `sections.builtins` now carries built-in tools as real ROWS (the
+        // human catalogue renders them as a collapsed section). This adapter
+        // deliberately does NOT forward them: over MCP a built-in already IS a
+        // native tool the caller can invoke directly, so listing it again here
+        // would be a second, weaker copy of something already in reach. The
+        // asymmetry is the correct answer, not a gap — but the COUNT must
+        // survive, or an agent loses the signal that anything was folded out.
         excluded: {
           ...sections.excluded,
+          builtinTools: sections.builtins.length,
           note: 'Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are omitted here. Ask for kind:"builtin-tool" if you need the full catalog.',
         },
         ...(zeroHitNote ? { note: zeroHitNote } : {}),

@@ -4,8 +4,11 @@ import {
   deriveBuiltinVerbParamsSchema,
   deriveProviderVerbParamsSchema,
   buildVerbStates,
+  sectionCapabilities,
+  type RegistryCapability,
 } from "./capability-registry.js";
 import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { CapabilityVerbState } from "@synap/playbooks";
 
 describe("scoreTextMatch", () => {
   it("scores an exact primary match highest", () => {
@@ -190,5 +193,133 @@ describe("buildVerbStates — responseShape projection", () => {
       new Map()
     );
     expect(verb.paramsSchema).toEqual({ issueId: { required: true } });
+  });
+});
+
+/**
+ * Built-ins as BRICKS, not as a number.
+ *
+ * `sectionCapabilities` used to drop every `builtin-tool` row and only report
+ * `excluded.builtinTools`. A count cannot render a collapsed, browsable section,
+ * so built-ins are now real rows — and each carries `runnableHere`, the fact a
+ * flow-node picker filters on so a catalog-only brick can never be offered as a
+ * step. Teaching docs stay excluded (prompt prose is not a capability).
+ */
+describe("sectionCapabilities — the built-ins section", () => {
+  function verb(id: string, granted = false): CapabilityVerbState {
+    return {
+      id,
+      name: id,
+      kind: "action",
+      granted,
+      effectiveExecMode: "propose",
+    } as unknown as CapabilityVerbState;
+  }
+
+  function cap(
+    partial: Partial<RegistryCapability> & {
+      kind: RegistryCapability["kind"];
+      name: string;
+    }
+  ): RegistryCapability {
+    return {
+      id: partial.id ?? `id-${partial.name}`,
+      inputSchema: {},
+      executor: "is-agent",
+      governance: "propose",
+      ...partial,
+    } as RegistryCapability;
+  }
+
+  it("returns built-ins as rows instead of dropping them", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+      cap({ kind: "builtin-tool", name: "graph_traverse", catalogOnly: true }),
+      cap({ kind: "command", name: "digest" }),
+    ]);
+    expect(out.builtins.map((b) => b.name)).toEqual([
+      "web_search",
+      "graph_traverse",
+    ]);
+    // Still not smuggled into the actionable sections.
+    expect(out.integrations).toHaveLength(0);
+    expect(out.skills).toHaveLength(0);
+    expect(out.commands.map((c) => c.name)).toEqual(["digest"]);
+  });
+
+  it("keeps teaching docs excluded and no longer counts built-ins as excluded", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+      cap({ kind: "teaching-doc", name: "how-to-x", governance: "none" }),
+      cap({ kind: "teaching-doc", name: "how-to-y", governance: "none" }),
+    ]);
+    expect(out.excluded).toEqual({ teachingDocs: 2 });
+    // The lie the old shape would have told: a shown row reported as excluded.
+    expect(out.excluded).not.toHaveProperty("builtinTools");
+    expect(out.builtins).toHaveLength(1);
+  });
+
+  it("marks a catalogOnly built-in as NOT runnable through this door", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+    ]);
+    expect(out.builtins[0]!.runnableHere).toBe(false);
+  });
+
+  it("derives runnableHere from the row, not from the kind", () => {
+    // A `tools.kind='builtin'` row carries a verb catalog and NO catalogOnly
+    // flag — hardcoding false for every built-in would assert a falsehood here.
+    const out = sectionCapabilities([
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        verbs: [verb("feed.post")],
+      }),
+    ]);
+    expect(out.builtins[0]!.runnableHere).toBe(true);
+    expect(out.builtins[0]!.verbs.map((v) => v.id)).toEqual(["feed.post"]);
+  });
+
+  it("dedups a built-in described twice: unions verbs, never downgrades runnableHere", () => {
+    const out = sectionCapabilities([
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        description: null,
+        verbs: [verb("feed.post")],
+      }),
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        description: "Tier-0 builtin verbs",
+        catalogOnly: true,
+        verbs: [verb("channel.create")],
+      }),
+    ]);
+    expect(out.builtins).toHaveLength(1);
+    const core = out.builtins[0]!;
+    expect(new Set(core.verbs.map((v) => v.id))).toEqual(
+      new Set(["feed.post", "channel.create"])
+    );
+    expect(core.runnableHere).toBe(true); // the launchable copy wins
+    expect(core.description).toBe("Tier-0 builtin verbs");
+  });
+
+  it("counts consistently: every input row lands in exactly one bucket", () => {
+    const caps = [
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+      cap({ kind: "builtin-tool", name: "graph_traverse", catalogOnly: true }),
+      cap({ kind: "teaching-doc", name: "how-to-x", governance: "none" }),
+      cap({ kind: "tool", name: "exa_api", verbs: [verb("exa_search")] }),
+      cap({ kind: "skill", name: "ingest_message", runnable: true }),
+      cap({ kind: "command", name: "digest" }),
+    ];
+    const out = sectionCapabilities(caps);
+    const shown =
+      out.integrations.length +
+      out.skills.length +
+      out.commands.length +
+      out.builtins.length;
+    expect(shown + out.excluded.teachingDocs).toBe(caps.length);
   });
 });
