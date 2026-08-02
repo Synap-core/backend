@@ -258,6 +258,9 @@ export const profilesRouter = router({
         profileKind: z.enum(["kind", "role"]).optional(),
         /** For profileKind='role': base-kind slugs this role can attach to. */
         applicableKinds: z.array(z.string()).optional(),
+        /** Role-category grouping key (0222): clusters role-profiles so
+         *  `entity.query { roleCategory }` matches every role in the category. */
+        roleCategory: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -406,6 +409,9 @@ export const profilesRouter = router({
         ...(input.profileKind ? { profileKind: input.profileKind } : {}),
         ...(input.applicableKinds
           ? { applicableKinds: input.applicableKinds }
+          : {}),
+        ...(input.roleCategory != null
+          ? { roleCategory: input.roleCategory }
           : {}),
       });
 

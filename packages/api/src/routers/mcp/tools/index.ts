@@ -884,6 +884,11 @@ export const tools = {
               type: "string",
               description: "Optional icon hint for the role.",
             },
+            roleCategory: {
+              type: "string",
+              description:
+                "Optional grouping key so an automation can select entities wearing ANY role in this category via entity.query { roleCategory } — e.g. tag every supply role 'provider'. Future roles tagged the same category qualify with no query change.",
+            },
             properties: {
               type: "object",
               description:
@@ -892,6 +897,117 @@ export const tools = {
             workspaceId: {
               type: "string",
               description: "Workspace to define the role in.",
+            },
+          },
+          required: ["slug", "displayName", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_define_kind",
+        annotations: {
+          title: "Define entity kind",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Define a NEW entity KIND (a primary type: 'podcast', 'workout', 'invoice') and, optionally, its fields — the data model an app is built on. A kind is a thing that HAS identity; a hat that thing WEARS (client, sponsor, mentor) is a ROLE — use synap_define_role for those, never a kind. Escalation L3: call ONLY after synap_list_profiles shows no existing kind that fits; extending an existing kind with new fields is almost always better than minting a near-duplicate. Kinds are POD-WIDE by default (their entities are visible in every workspace) — pass entityScope:'workspace' only for a kind that is genuinely app-specific. Slug-idempotent: re-calling with an existing slug returns that profile and adds any new fields, so it is also the door for growing a kind's schema. Governed: may return 'proposed' — NEVER treat that as an error (when the kind itself is proposed, its fields are deferred until approval).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            slug: {
+              type: "string",
+              description:
+                "URL-safe kind slug (lowercase, digits, hyphens), e.g. 'podcast-episode'.",
+            },
+            displayName: {
+              type: "string",
+              description: "Human-readable type name, e.g. 'Podcast Episode'.",
+            },
+            description: {
+              type: "string",
+              description: "Optional description of what this kind represents.",
+            },
+            icon: {
+              type: "string",
+              description: "Optional icon hint for the kind.",
+            },
+            entityScope: {
+              type: "string",
+              enum: ["pod", "workspace"],
+              description:
+                "Where entities of this kind live. OMIT for the doctrine default 'pod' (kinds are pod-wide). Pass 'workspace' only for a kind that belongs to one app and should not appear pod-wide.",
+            },
+            properties: {
+              type: "array",
+              description:
+                "Optional FIELDS of this kind, created and linked after the profile exists. Each entry defines one property def.",
+              items: {
+                type: "object",
+                properties: {
+                  slug: {
+                    type: "string",
+                    description:
+                      "URL-safe field slug (lowercase, digits, hyphens), e.g. 'episode-number'.",
+                  },
+                  valueType: {
+                    type: "string",
+                    enum: [
+                      "string",
+                      "number",
+                      "boolean",
+                      "date",
+                      "entity_id",
+                      "array",
+                      "object",
+                      "secret",
+                    ],
+                    description:
+                      "Field value type. 'entity_id' is a structural link to another entity.",
+                  },
+                  displayName: {
+                    type: "string",
+                    description: "Optional human-readable field label.",
+                  },
+                  required: {
+                    type: "boolean",
+                    description:
+                      "Whether the field is required on entities of this kind.",
+                  },
+                  defaultValue: {
+                    description: "Optional default value for the field.",
+                  },
+                  displayOrder: {
+                    type: "number",
+                    description: "Optional ordering hint within the form.",
+                  },
+                  constraints: {
+                    type: "object",
+                    description:
+                      "Optional constraints, e.g. { enum: ['low','high'] } or { min: 0, max: 100 }.",
+                  },
+                  uiHints: {
+                    type: "object",
+                    description:
+                      "Optional UI hints, e.g. { inputType: 'email' }.",
+                  },
+                  overlay: {
+                    type: "boolean",
+                    description:
+                      "Create the field as a workspace-scoped overlay (invisible to other workspaces) instead of a base field on the kind.",
+                  },
+                },
+                required: ["slug", "valueType"],
+              },
+            },
+            defaultValues: {
+              type: "object",
+              description:
+                "Optional default property VALUES applied to new entities of this kind (distinct from `properties`, which defines the fields themselves).",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace to define the kind in.",
             },
           },
           required: ["slug", "displayName", "workspaceId"],

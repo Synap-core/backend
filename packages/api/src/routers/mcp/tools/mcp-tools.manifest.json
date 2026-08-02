@@ -768,6 +768,106 @@
       }
     },
     {
+      "name": "synap_define_kind",
+      "annotations": {
+        "title": "Define entity kind",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Define a NEW entity KIND (a primary type: 'podcast', 'workout', 'invoice') and, optionally, its fields — the data model an app is built on. A kind is a thing that HAS identity; a hat that thing WEARS (client, sponsor, mentor) is a ROLE — use synap_define_role for those, never a kind. Escalation L3: call ONLY after synap_list_profiles shows no existing kind that fits; extending an existing kind with new fields is almost always better than minting a near-duplicate. Kinds are POD-WIDE by default (their entities are visible in every workspace) — pass entityScope:'workspace' only for a kind that is genuinely app-specific. Slug-idempotent: re-calling with an existing slug returns that profile and adds any new fields, so it is also the door for growing a kind's schema. Governed: may return 'proposed' — NEVER treat that as an error (when the kind itself is proposed, its fields are deferred until approval).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "URL-safe kind slug (lowercase, digits, hyphens), e.g. 'podcast-episode'."
+          },
+          "displayName": {
+            "type": "string",
+            "description": "Human-readable type name, e.g. 'Podcast Episode'."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional description of what this kind represents."
+          },
+          "icon": {
+            "type": "string",
+            "description": "Optional icon hint for the kind."
+          },
+          "entityScope": {
+            "type": "string",
+            "enum": ["pod", "workspace"],
+            "description": "Where entities of this kind live. OMIT for the doctrine default 'pod' (kinds are pod-wide). Pass 'workspace' only for a kind that belongs to one app and should not appear pod-wide."
+          },
+          "properties": {
+            "type": "array",
+            "description": "Optional FIELDS of this kind, created and linked after the profile exists. Each entry defines one property def.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string",
+                  "description": "URL-safe field slug (lowercase, digits, hyphens), e.g. 'episode-number'."
+                },
+                "valueType": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "date",
+                    "entity_id",
+                    "array",
+                    "object",
+                    "secret"
+                  ],
+                  "description": "Field value type. 'entity_id' is a structural link to another entity."
+                },
+                "displayName": {
+                  "type": "string",
+                  "description": "Optional human-readable field label."
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Whether the field is required on entities of this kind."
+                },
+                "defaultValue": {
+                  "description": "Optional default value for the field."
+                },
+                "displayOrder": {
+                  "type": "number",
+                  "description": "Optional ordering hint within the form."
+                },
+                "constraints": {
+                  "type": "object",
+                  "description": "Optional constraints, e.g. { enum: ['low','high'] } or { min: 0, max: 100 }."
+                },
+                "uiHints": {
+                  "type": "object",
+                  "description": "Optional UI hints, e.g. { inputType: 'email' }."
+                },
+                "overlay": {
+                  "type": "boolean",
+                  "description": "Create the field as a workspace-scoped overlay (invisible to other workspaces) instead of a base field on the kind."
+                }
+              },
+              "required": ["slug", "valueType"]
+            }
+          },
+          "defaultValues": {
+            "type": "object",
+            "description": "Optional default property VALUES applied to new entities of this kind (distinct from `properties`, which defines the fields themselves)."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Workspace to define the kind in."
+          }
+        },
+        "required": ["slug", "displayName", "workspaceId"]
+      }
+    },
+    {
       "name": "synap_orient",
       "annotations": {
         "title": "Orient in pod",
@@ -2183,5 +2283,5 @@
       }
     }
   ],
-  "instructions": "You are connected to the user's Synap pod — their sovereign personal data brain\n(the source of truth about their life, work, projects, people, and preferences).\nTwo reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):\n\n- **Recall — BEFORE any non-trivial task.** Before answering anything about the\n  user's own world, and before creating anything, call `synap_ask` (CLI:\n  `synap ask`, REST: `POST /api/hub/knowledge/ask`) to recall what the pod\n  already knows. Prefer it over your own assumptions or training data — asking\n  first also avoids duplicate creates.\n- **Capture — AFTER you learn something durable.** A fact, a decision, a new\n  person/company/task, a stated preference — call `synap_capture` (CLI:\n  `synap capture`) to write it back. Don't wait to be asked; this is how the\n  second brain grows.\n\nRun `synap_orient` (CLI: `synap orient`) once per session to see the available\nworkspaces, projects, and entity types before acting.\n\n**Writes are governed: a `\"proposed\"` response is normal, never an error.** It\nmeans the write is queued for the user's review — like a PR, not a failure. Keep\nworking; see `writes.md` for the full governance contract and `inline-patterns.md`\nfor how to surface a proposal's review link in a Companion reply.\n\n**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.\n\n\nYou can always escalate — never dead-end on \"I can't.\" Full detail: `escalation-ladder.md`.\n\n- **L0 Reflexes** — recall before, capture after, proposed ≠ error\n- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions\n- **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)\n- **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:\n  define_role, create_property_def/profile, create_view, create_workspace, market.install.\n  **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace\n- **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.\n  Never crystallize a one-off that hasn't succeeded once\n\n**Gates:**\n\n- Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)\n- Success / repeatable pattern → one structural suggestion (question first if speculative)\n- Capture placement routes to EXISTING lenses only — never invent a workspace from capture\n\nMain-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call `synap_load_skill(\"catalog\")` to see every deeper reference available, and `synap_load_skill(slug)` to load one in full."
+  "instructions": "You are connected to the user's Synap pod — their sovereign personal data brain\n(the source of truth about their life, work, projects, people, and preferences).\nTwo reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):\n\n- **Recall — BEFORE any non-trivial task.** Before answering anything about the\n  user's own world, and before creating anything, call `synap_ask` (CLI:\n  `synap ask`, REST: `POST /api/hub/knowledge/ask`) to recall what the pod\n  already knows. Prefer it over your own assumptions or training data — asking\n  first also avoids duplicate creates.\n- **Capture — AFTER you learn something durable.** A fact, a decision, a new\n  person/company/task, a stated preference — call `synap_capture` (CLI:\n  `synap capture`) to write it back. Don't wait to be asked; this is how the\n  second brain grows.\n\nRun `synap_orient` (CLI: `synap orient`) once per session to see the available\nworkspaces, projects, and entity types before acting.\n\n**Writes are governed: a `\"proposed\"` response is normal, never an error.** It\nmeans the write is queued for the user's review — like a PR, not a failure. Keep\nworking; see `writes.md` for the full governance contract and `inline-patterns.md`\nfor how to surface a proposal's review link in a Companion reply.\n\n**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.\n\n\nYou can always escalate — never dead-end on \"I can't.\" Full detail: `escalation-ladder.md`.\n\n- **L0 Reflexes** — recall before, capture after, proposed ≠ error\n- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions\n- **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)\n- **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:\n  define_role, define_kind (kind + its fields), create_view, create_workspace, market.install.\n  **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace\n- **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.\n  Never crystallize a one-off that hasn't succeeded once\n\n**Gates:**\n\n- Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)\n- Success / repeatable pattern → one structural suggestion (question first if speculative)\n- Capture placement routes to EXISTING lenses only — never invent a workspace from capture\n\nMain-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call `synap_load_skill(\"catalog\")` to see every deeper reference available, and `synap_load_skill(slug)` to load one in full."
 }

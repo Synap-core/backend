@@ -34,14 +34,14 @@ Only if L2 returns empty for the real need do you climb to L3.
 
 Extend the substrate so the need becomes expressible. Always governed — expect `"proposed"`.
 
-| Need               | Prefer               | Tool sketch                                                                             |
-| ------------------ | -------------------- | --------------------------------------------------------------------------------------- |
-| Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                            |
-| Field missing      | Existing property    | `create_property_def`                                                                   |
-| Kind missing       | Closest parent kind  | `create_profile` (extend, don't fork)                                                   |
-| View missing       | Existing view        | `list_views` first, then `create_view` (recovery or proactive)                          |
-| Domain missing     | **Template**         | `market.search(kind:template)` → install/propose **before** freehand `create_workspace` |
-| Capability missing | Marketplace          | `market.install` (always proposes for agents)                                           |
+| Need               | Prefer               | Tool sketch                                                                                                            |
+| ------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                                                           |
+| Field missing      | Existing property    | `define_kind` with the existing kind's slug + the new field in `properties[]` (slug-idempotent)                        |
+| Kind missing       | Closest parent kind  | `define_kind` (extend, don't fork). Pod-wide by default — pass `entityScope:'workspace'` only for an app-specific kind |
+| View missing       | Existing view        | `list_views` first, then `create_view` (recovery or proactive)                                                         |
+| Domain missing     | **Template**         | `market.search(kind:template)` → install/propose **before** freehand `create_workspace`                                |
+| Capability missing | Marketplace          | `market.install` (always proposes for agents)                                                                          |
 
 **Template-before-workspace (hard rule in teaching):** new operational domains start as marketplace templates when one fits. Freehand workspace creation is last resort after the four workspace-design conditions hold (`workspace-design.md`). Capture never invents a workspace — placement only routes into existing lenses.
 

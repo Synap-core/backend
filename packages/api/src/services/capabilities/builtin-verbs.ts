@@ -40,6 +40,8 @@ import {
   insertChannelMessage,
   getEffectiveFacets,
   profileSlugScopeConditionFromRows,
+  profileScopeConditions,
+  profilesByRoleCategory,
   MessageRole,
   MessageAuthorType,
 } from "@synap/database";
@@ -424,29 +426,49 @@ async function getGlobalsReadScope(userId: string): Promise<ScopedDb> {
   return scopedDb(AccessContext.operator({ userId }).withLens(null));
 }
 
-/** entity.query — READ entities of a profile, scoped by the caller's floor. */
-const entityQueryParams = z.object({
-  /** Entity profile slug (e.g. "task", "deal") — the `type` discriminator. */
-  profileSlug: z.string().min(1).max(200),
-  /** Optional JSONB property equality filter: { key: value } pairs. */
-  filter: z.record(z.string(), z.unknown()).optional(),
-  /** Optional workspace lens; omit for the full user floor (pod-wide). */
-  workspaceId: z.string().uuid().optional(),
-  /**
-   * Read scope. "workspace" (default) = today's behavior EXACTLY: the explicit
-   * `workspaceId`, else the acting workspace lens, else the full user floor.
-   * "pod" = the EXPLICIT opt-in to enumerate POD-WIDE entities (`workspaceId IS
-   * NULL`, owner-gated) even when running under an active workspace lens — the
-   * flagship "list my pod-wide clients/companies" case. This is an explicit
-   * request, NOT the "globals silently bleed into a focused workspace" that the
-   * default deliberately forbids. A specific `workspaceId` is IGNORED under
-   * "pod". Plain string values survive the automation engine's String()
-   * coercion, so no z.coerce is needed.
-   */
-  scope: z.enum(["workspace", "pod"]).optional(),
-  // coerce: the CLI + automation engine pass params as strings ("50").
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
+/** entity.query — READ entities of a profile, scoped by the caller's floor.
+ *
+ * Selector: EXACTLY ONE of `profileSlug` (a single kind/role slug) or
+ * `roleCategory` (every role in a category — dynamic, no enumeration). The
+ * `roleCategory` form lets an automation query e.g. "providers" ONCE and have
+ * every role-facet tagged that category qualify, extensible to future roles
+ * with zero edits (migration 0222). */
+const entityQueryParams = z
+  .object({
+    /** Entity profile slug (e.g. "task", "deal") — the `type` discriminator.
+     *  Mutually exclusive with `roleCategory`. */
+    profileSlug: z.string().min(1).max(200).optional(),
+    /**
+     * Role-category selector: match entities wearing ANY role-facet whose
+     * profile carries this `role_category` (migration 0222). Resolves to the
+     * cohort's profiles → the polymorphic facet-EXISTS scope predicate, ANDed
+     * with the caller's floor exactly like `profileSlug`. An empty cohort (no
+     * role tagged this category) returns zero entities — a legitimately open
+     * set, not an error. Mutually exclusive with `profileSlug`.
+     */
+    roleCategory: z.string().min(1).max(200).optional(),
+    /** Optional JSONB property equality filter: { key: value } pairs. */
+    filter: z.record(z.string(), z.unknown()).optional(),
+    /** Optional workspace lens; omit for the full user floor (pod-wide). */
+    workspaceId: z.string().uuid().optional(),
+    /**
+     * Read scope. "workspace" (default) = today's behavior EXACTLY: the explicit
+     * `workspaceId`, else the acting workspace lens, else the full user floor.
+     * "pod" = the EXPLICIT opt-in to enumerate POD-WIDE entities (`workspaceId IS
+     * NULL`, owner-gated) even when running under an active workspace lens — the
+     * flagship "list my pod-wide clients/companies" case. This is an explicit
+     * request, NOT the "globals silently bleed into a focused workspace" that the
+     * default deliberately forbids. A specific `workspaceId` is IGNORED under
+     * "pod". Plain string values survive the automation engine's String()
+     * coercion, so no z.coerce is needed.
+     */
+    scope: z.enum(["workspace", "pod"]).optional(),
+    // coerce: the CLI + automation engine pass params as strings ("50").
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .refine((v) => (v.profileSlug ? 1 : 0) + (v.roleCategory ? 1 : 0) === 1, {
+    message: "Provide exactly one of `profileSlug` or `roleCategory`.",
+  });
 
 const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = entityQueryParams.parse(params);
@@ -470,22 +492,36 @@ const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
     ? await getGlobalsReadScope(ctx.userId)
     : await getReadScope(ctx.userId, workspaceId);
 
-  // Polymorphic (Kind + Facets): a role slug (client/partner/…) matches via
-  // the facet EXISTS, a kind slug via entities.type — same one-door routing
-  // as entities.list, so agents querying by role get rows post-conversion.
-  //
-  // Fail closed first: an agent that invents a slug ("crm-lead" where the pod
-  // says "lead") must get a typed "unknown profile" it can act on, not an
-  // empty result set it will report as "you have none".
-  const slugRows = await assertKnownProfileSlug(db, input.profileSlug);
-  const conditions: SQL[] = [
-    profileSlugScopeConditionFromRows(
+  // Selector → scope predicate. Both forms are routed polymorphically (Kind +
+  // Facets: role → facet-EXISTS, kind → entities.type — the same one-door
+  // routing as entities.list) and ANDed with the caller's floor by
+  // scoped.findMany below, so neither can return rows outside the access floor.
+  //   • profileSlug  — one kind/role slug.
+  //   • roleCategory — every profile tagged this category (0222); dynamic set,
+  //     no enumeration. Lets an automation query "providers" once.
+  // The schema's refine guarantees exactly one selector is present.
+  let scopeCondition: SQL;
+  if (input.roleCategory) {
+    // Open cohort: an empty category (no role tagged it yet) is a legitimate
+    // empty match — return zero entities without a DB round-trip, rather than
+    // erroring the way an unknown single slug does.
+    const cohort = await profilesByRoleCategory(db, input.roleCategory);
+    const predicate = profileScopeConditions(db, cohort, facetVisibilityScope);
+    if (!predicate) return { entities: [], count: 0 };
+    scopeCondition = predicate;
+  } else {
+    // Fail closed first: an agent that invents a slug ("crm-lead" where the pod
+    // says "lead") must get a typed "unknown profile" it can act on, not an
+    // empty result set it will report as "you have none".
+    const slugRows = await assertKnownProfileSlug(db, input.profileSlug!);
+    scopeCondition = profileSlugScopeConditionFromRows(
       db,
-      input.profileSlug,
+      input.profileSlug!,
       slugRows,
       facetVisibilityScope
-    ),
-  ];
+    );
+  }
+  const conditions: SQL[] = [scopeCondition];
   // JSONB property equality — mirror executeQueryStep's filter semantics.
   for (const [key, value] of Object.entries(input.filter ?? {})) {
     if (value !== undefined && value !== null) {

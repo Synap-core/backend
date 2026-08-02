@@ -354,6 +354,35 @@ export async function profileSlugRows(
 }
 
 /**
+ * THE roleCategory → profile-rows lookup. Resolves every profile tagged with a
+ * `role_category` (migration 0222) so a caller can select entities wearing ANY
+ * role in that category WITHOUT enumerating the roles — the networking
+ * intro-matcher's "query providers once" case. Feed the rows to
+ * `profileScopeConditions` to get the polymorphic (role→facet-EXISTS,
+ * kind→type) scope predicate, then AND it with the entity floor.
+ *
+ * Like `profileSlugRows` this is DELIBERATELY UNSCOPED by user/workspace — it
+ * answers "which profiles carry this category", a vocabulary question; the
+ * entity floor the predicate is ANDed with enforces access. Only ACTIVE
+ * profiles participate. An EMPTY result means no profile carries the category
+ * (no roles tagged yet, or a typo): unlike a single slug this is a legitimately
+ * open, possibly-empty cohort, so callers return an empty match rather than
+ * erroring.
+ */
+export async function profilesByRoleCategory(
+  db: PostgresJsDatabase<typeof schema>,
+  roleCategory: string
+): Promise<Array<{ id: string; profileKind: "kind" | "role" }>> {
+  return db.query.profiles.findMany({
+    where: and(
+      eq(profiles.roleCategory, roleCategory),
+      eq(profiles.isActive, true)
+    ),
+    columns: { id: true, profileKind: true },
+  });
+}
+
+/**
  * Polymorphic single-slug scope predicate: resolve `profileSlug`'s
  * `profileKind` and return the matching entity condition — role → the
  * facet-EXISTS (`facetRoleExists`), kind/unknown → `entities.type` equality

@@ -32,6 +32,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_attach_facet: ["entity_facet.attach"],
   synap_detach_facet: ["entity_facet.detach"],
   synap_define_role: ["profile.create", "synap_define_role"],
+  synap_define_kind: ["profile.create", "synap_define_kind"],
   synap_remember_fact: ["remember_fact"],
   synap_capture: ["propose_entity_graph", "synap_capture"],
   synap_create_document: ["document.create", "create_document"],

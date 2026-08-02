@@ -161,6 +161,15 @@ export const profiles = pgTable(
       .default("kind"),
     applicableKinds: text("applicable_kinds").array(),
 
+    // Role-category grouping key (0222). A nullable, free-string category that
+    // clusters role-profiles so an automation can select entities wearing ANY
+    // role in the category without hardcoding the role list — e.g. every supply
+    // role (`solution-provider`, `market-maker`, `security-auditor`, `dev-shop`,
+    // …) tagged `roleCategory: "provider"` qualifies for one `entity.query`.
+    // Resolved by `profilesByRoleCategory()` → the polymorphic facet-EXISTS
+    // scope predicate. NULL = "no category". Sibling of `semanticSlug`.
+    roleCategory: text("role_category"),
+
     // AI teaching substrate: per-kind posture base layer (see AiPosture above).
     // NULL means "fall back to code defaults" in getEffectiveAiPosture().
     aiPosture: jsonb("ai_posture").$type<AiPosture>(),
@@ -191,6 +200,7 @@ export const profiles = pgTable(
       table.workspaceId,
       table.userId
     ),
+    roleCategoryIdx: index("profiles_role_category_idx").on(table.roleCategory),
   })
 );
 

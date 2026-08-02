@@ -138,6 +138,17 @@ export const hubProfilesRouter = router({
         profileKind: z.enum(["kind", "role"]).optional(),
         /** For profileKind='role': base-kind slugs this role can attach to. */
         applicableKinds: z.array(z.string()).optional(),
+        /** Role-category grouping key (0222): clusters role-profiles so
+         *  `entity.query { roleCategory }` matches every role in the category. */
+        roleCategory: z.string().optional(),
+        /**
+         * Where entities of this type live. OMIT to let the one door
+         * (`resolveEntityScope`, profile-repository.ts) decide: a kind with no
+         * declared scope lands 'pod' (kinds are pod-wide), a role lands
+         * 'workspace'. Declare 'workspace' explicitly only for an app-specific
+         * kind. 'pod' on a role is rejected by that resolver.
+         */
+        entityScope: z.enum(["pod", "workspace"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -164,6 +175,13 @@ export const hubProfilesRouter = router({
         ...(input.applicableKinds
           ? { applicableKinds: input.applicableKinds }
           : {}),
+        ...(input.roleCategory != null
+          ? { roleCategory: input.roleCategory }
+          : {}),
+        // Passed through ONLY when declared — an omitted entityScope must reach
+        // `resolveEntityScope` as undefined so the kind→pod / role→workspace
+        // doctrine default applies instead of a value invented here.
+        ...(input.entityScope ? { entityScope: input.entityScope } : {}),
       });
     }),
 

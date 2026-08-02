@@ -75,6 +75,13 @@ export interface CreateProfileInput {
   /** For profileKind='role': which base-kind profile slugs this role can attach to. */
   applicableKinds?: string[];
   /**
+   * Role-category grouping key (migration 0222). Clusters role-profiles so an
+   * automation can select entities wearing ANY role in the category via
+   * `entity.query { roleCategory }` — e.g. every supply role tagged
+   * `roleCategory: "provider"`. NULL/omitted = no category.
+   */
+  roleCategory?: string | null;
+  /**
    * Per-kind AI behavioral posture (base layer). Workspace overlay lives at
    * workspaces.settings.profileAiPosture[slug]; resolved by getEffectiveAiPosture().
    * Pass `null` to clear (falls back to code defaults).
@@ -200,6 +207,9 @@ export class ProfileRepository {
         ...(input.profileKind ? { profileKind: input.profileKind } : {}),
         ...(input.applicableKinds
           ? { applicableKinds: input.applicableKinds }
+          : {}),
+        ...(input.roleCategory != null
+          ? { roleCategory: input.roleCategory }
           : {}),
       } as NewProfile)
       .returning();

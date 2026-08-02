@@ -221,6 +221,38 @@ describe.skipIf(!SCHEMA_LOADS)(
     `;
       expect(links).toHaveLength(2);
     });
+
+    // The load-bearing guarantee for the dynamic role-category matcher (0222):
+    // a definition role-profile tagged `roleCategory` must LAND in the
+    // `role_category` column via the create path — otherwise the column stays
+    // NULL and `entity.query { roleCategory }` returns empty.
+    it("a definition role-profile's roleCategory lands in the role_category column", async () => {
+      const providerSlug = `tprovider-${suf}`;
+      await reconcileWorkspaceFromDefinition({
+        workspaceId,
+        userId,
+        definition: {
+          workspaceName: `Recon Test ${suf}`,
+          profiles: [
+            {
+              slug: providerSlug,
+              displayName: "Solution Provider",
+              profileKind: "role",
+              applicableKinds: ["company"],
+              roleCategory: "provider",
+            },
+          ],
+        },
+      });
+
+      const [row] = await sql`
+        SELECT profile_kind, role_category
+          FROM profiles
+         WHERE workspace_id = ${workspaceId} AND slug = ${providerSlug}
+      `;
+      expect(row?.profile_kind).toBe("role");
+      expect(row?.role_category).toBe("provider");
+    });
   }
 );
 

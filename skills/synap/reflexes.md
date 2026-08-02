@@ -34,7 +34,7 @@ You can always escalate — never dead-end on "I can't." Full detail: `escalatio
 - **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions
 - **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
 - **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
-  define_role, create_property_def/profile, create_view, create_workspace, market.install.
+  define_role, define_kind (kind + its fields), create_view, create_workspace, market.install.
   **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace
 - **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.
   Never crystallize a one-off that hasn't succeeded once

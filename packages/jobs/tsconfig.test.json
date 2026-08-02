@@ -1,0 +1,19 @@
+{
+  // Typecheck-only config: the tests that `tsconfig.json` excludes from EMIT.
+  //
+  // `tsconfig.json` stopped compiling `__tests__` on 2026-08-02 because a test
+  // that imports a non-runtime package (`postgres`, used to drive the reaper
+  // predicate against a throwaway cluster) broke the production Docker image
+  // with TS2307. Excluding them from emit is right; leaving them unchecked is
+  // not — an untypechecked test is how a vacuous test survives.
+  //
+  // So: emit lives in tsconfig.json, verification lives here. `pnpm typecheck`
+  // runs BOTH.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

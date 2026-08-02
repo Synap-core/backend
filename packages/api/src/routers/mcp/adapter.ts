@@ -56,6 +56,7 @@ import {
   extractIdentitySignals,
   signalsFromExplicit,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
+  PropertyValueType,
   type IdentitySignal,
   type ProviderVerbSpec,
 } from "@synap/database";
@@ -570,6 +571,15 @@ const CAPTURE_MIN_DURABLE_CHARS = 3;
  * advisory link suggestions are dropped.
  */
 const CAPTURE_CROSSKIND_PRECHECK_MAX = 8;
+
+/**
+ * The `property_defs.value_type` PG enum, read off the schema SSOT
+ * (`PropertyValueType`, packages/database/src/schema/property-defs.ts) rather
+ * than re-listed here. `synap_define_kind` validates against it because the hub
+ * door types the field as a bare string and casts — an unknown value would only
+ * fail at INSERT with an opaque Postgres enum error.
+ */
+const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
 
 function normalizeCaptureText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -1723,6 +1733,9 @@ export async function executeMCPToolViaHubProtocol(
         displayName: args.displayName as string,
         profileKind: "role",
         applicableKinds,
+        ...(typeof args.roleCategory === "string"
+          ? { roleCategory: args.roleCategory }
+          : {}),
         ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
         ...(args.properties
           ? { defaultValues: args.properties as Record<string, unknown> }
@@ -1731,6 +1744,169 @@ export async function executeMCPToolViaHubProtocol(
         ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
+    }
+
+    // Mint a NEW entity KIND (a primary type: 'podcast', 'workout', 'deal') —
+    // the counterpart of synap_define_role, through the SAME governed door
+    // (hub profiles.createProfile → regular profiles.create →
+    // checkPermissionOrPropose). The ONLY differences from define_role:
+    //   - profileKind: 'kind' (a thing that HAS identity), no applicableKinds
+    //     (that field is meaningful only for an attachable role)
+    //   - entityScope is passed through ONLY when the caller declared it, so an
+    //     omitted scope reaches `resolveEntityScope` as undefined and lands
+    //     'pod' — kinds are pod-wide (profile-repository.ts).
+    //   - optional inline `properties[]`: the kind's FIELDS. profiles.create has
+    //     no property-def input, so they go through the sibling governed door
+    //     (profiles.createPropertyDef) after the profile exists — one tool for
+    //     the agent, still zero new write paths.
+    case "synap_define_kind": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+
+      // `properties` means DEFAULT VALUES on synap_define_role and FIELD DEFS
+      // here. Fail loudly on the role-shaped object instead of silently
+      // dropping the caller's fields.
+      if (args.properties !== undefined && !Array.isArray(args.properties)) {
+        return ok({
+          error:
+            "synap_define_kind: `properties` must be an ARRAY of field definitions ({ slug, valueType }). To set default VALUES for new entities of this kind, use `defaultValues` instead.",
+        });
+      }
+
+      const uiHints: Record<string, unknown> = {};
+      if (typeof args.icon === "string") uiHints.icon = args.icon;
+      if (typeof args.description === "string")
+        uiHints.description = args.description;
+
+      const declaredEntityScope =
+        args.entityScope === "pod" || args.entityScope === "workspace"
+          ? args.entityScope
+          : undefined;
+
+      const result = await caller.profiles.createProfile({
+        userId,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
+        slug: args.slug as string,
+        displayName: args.displayName as string,
+        profileKind: "kind",
+        ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+        ...(args.defaultValues
+          ? { defaultValues: args.defaultValues as Record<string, unknown> }
+          : {}),
+        ...(declaredEntityScope ? { entityScope: declaredEntityScope } : {}),
+        reasoning: "Entity kind defined via MCP synap_define_kind",
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+
+      const propertySpecs = (args.properties ?? []) as Array<
+        Record<string, unknown>
+      >;
+
+      // Governance gated the profile itself → there is no profileId to hang
+      // fields on. Return the proposal and tell the caller the fields are still
+      // pending, rather than half-applying a schema.
+      if (
+        result &&
+        typeof result === "object" &&
+        "status" in result &&
+        result.status === "proposed"
+      ) {
+        return ok({
+          ...result,
+          ...(propertySpecs.length > 0
+            ? {
+                properties: {
+                  status: "deferred",
+                  message:
+                    "The kind itself is awaiting review. Re-call synap_define_kind with the same slug once the proposal is approved to add these fields (the call is slug-idempotent).",
+                  pending: propertySpecs.length,
+                },
+              }
+            : {}),
+        });
+      }
+
+      const createdProfile = result.profile as {
+        id?: string;
+        slug?: string;
+      } | null;
+      const profileId = createdProfile?.id;
+
+      if (propertySpecs.length === 0 || !profileId) {
+        return ok(result);
+      }
+
+      const properties: Array<Record<string, unknown>> = [];
+      for (const spec of propertySpecs) {
+        const propSlug = typeof spec.slug === "string" ? spec.slug : undefined;
+        const valueType =
+          typeof spec.valueType === "string" ? spec.valueType : undefined;
+        if (!propSlug || !valueType) {
+          properties.push({
+            slug: propSlug ?? null,
+            status: "error",
+            error: "Each property requires `slug` and `valueType`.",
+          });
+          continue;
+        }
+        // The hub door types valueType as `z.string()` and then casts it onto
+        // the `property_defs.value_type` PG enum, so an unknown string fails at
+        // INSERT time with a Postgres error the agent cannot act on. The enum
+        // is PropertyValueType in packages/database/src/schema/property-defs.ts.
+        if (!PROPERTY_VALUE_TYPES.includes(valueType)) {
+          properties.push({
+            slug: propSlug,
+            status: "error",
+            error: `Unsupported valueType '${valueType}'. Valid: ${PROPERTY_VALUE_TYPES.join(", ")}.`,
+          });
+          continue;
+        }
+        try {
+          const propResult = await caller.profiles.createPropertyDef({
+            userId,
+            workspaceId: requestedWorkspaceId as string,
+            profileId,
+            slug: propSlug,
+            valueType,
+            ...(spec.constraints
+              ? { constraints: spec.constraints as Record<string, unknown> }
+              : {}),
+            ...(spec.uiHints || spec.displayName
+              ? {
+                  uiHints: {
+                    ...((spec.uiHints as Record<string, unknown>) ?? {}),
+                    ...(typeof spec.displayName === "string"
+                      ? { displayName: spec.displayName }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(typeof spec.required === "boolean"
+              ? { required: spec.required }
+              : {}),
+            ...(spec.defaultValue !== undefined
+              ? { defaultValue: spec.defaultValue }
+              : {}),
+            ...(typeof spec.displayOrder === "number"
+              ? { displayOrder: spec.displayOrder }
+              : {}),
+            ...(spec.overlay === true ? { overlay: true } : {}),
+            reasoning: `Field of kind '${args.slug}' defined via MCP synap_define_kind`,
+            ...(agentUserId ? { agentUserId } : {}),
+          });
+          properties.push({ slug: propSlug, ...propResult });
+        } catch (err) {
+          // One rejected field must not discard the fields that did land — the
+          // caller gets a per-field ledger and can retry just the failures.
+          properties.push({
+            slug: propSlug,
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return ok({ ...result, properties });
     }
 
     // (synap_send_message removed — synap_post_message supersedes it: it handles

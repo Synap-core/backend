@@ -161,12 +161,20 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "READ entities of a profile, scoped to the caller's floor. Optional JSONB property-equality filter and workspace lens. Returns { entities[], count }. Read-only: auto-runs, scoped by the access layer.",
+        "READ entities selected by EXACTLY ONE of `profileSlug` (a single kind/role slug) or `roleCategory` (every role tagged that category — dynamic, no enumeration), scoped to the caller's floor. Optional JSONB property-equality filter and workspace lens. Returns { entities[], count }. Read-only: auto-runs, scoped by the access layer.",
       parameters: {
         type: "object",
-        required: ["profileSlug"],
         properties: {
-          profileSlug: { type: "string" },
+          profileSlug: {
+            type: "string",
+            description:
+              "A single kind/role slug (e.g. 'task', 'solution-provider'). Mutually exclusive with roleCategory.",
+          },
+          roleCategory: {
+            type: "string",
+            description:
+              "Match entities wearing ANY role-facet whose profile carries this role_category (e.g. 'provider'). Dynamic set — future roles tagged the category qualify with no query change. Mutually exclusive with profileSlug.",
+          },
           filter: {
             type: "object",
             description: "Property equality pairs { key: value } (JSONB ->>).",

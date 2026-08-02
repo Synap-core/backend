@@ -305,6 +305,9 @@ CREATE TABLE IF NOT EXISTS "profiles" (
   -- (resolveEntityScope in profile-repository.ts); a column default cannot read
   -- a sibling column.
   "entity_scope"     text    NOT NULL DEFAULT 'pod',
+  -- Role-category grouping key (0222): a role-profile tagged with a category
+  -- joins that category's cohort for `entity.query`'s `roleCategory` selector.
+  "role_category"    text,
   "is_active"        boolean NOT NULL DEFAULT true,
   "version"          integer NOT NULL DEFAULT 1,
   "created_at"       timestamp with time zone NOT NULL DEFAULT now(),
@@ -341,6 +344,8 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "ai_posture" jsonb;
 -- Query-understanding vocabulary (mig 0197).
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "plural" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "synonyms" text[];
+-- Role-category grouping key (mig 0222).
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "role_category" text;
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -359,6 +364,11 @@ CREATE INDEX IF NOT EXISTS "profiles_parent_profile_id_idx"
 
 CREATE INDEX IF NOT EXISTS "profiles_scope_idx"
   ON "profiles" ("scope", "workspace_id", "user_id");
+
+-- Role-category cohort lookup (0222) — partial, most profiles carry no category.
+CREATE INDEX IF NOT EXISTS "profiles_role_category_idx"
+  ON "profiles" ("role_category")
+  WHERE "role_category" IS NOT NULL;
 
 -- Partial unique indexes for slug scoping (migration 0052)
 CREATE UNIQUE INDEX IF NOT EXISTS "profiles_slug_system_shared_uniq"

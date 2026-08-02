@@ -389,6 +389,12 @@ export async function reconcileWorkspaceFromDefinition(
           // not a template sync.
           profileKind: profile.profileKind,
           applicableKinds: profile.applicableKinds,
+          // Role-category grouping (0222): a role tagged e.g.
+          // `roleCategory: "provider"` joins that cohort for
+          // `entity.query { roleCategory }`. Applied on CREATE (like profileKind
+          // above) — a category change on an existing profile is a definition
+          // edit that reconcile does not retro-apply.
+          roleCategory: profile.roleCategory,
         });
         if (resolution.createScope === "shared")
           await profileRepo

@@ -216,6 +216,13 @@ export interface WorkspaceDefinitionInput {
     profileKind?: "kind" | "role";
     /** For profileKind='role': which base-kind profile slugs this role can attach to. */
     applicableKinds?: string[];
+    /**
+     * Role-category grouping key (migration 0222). Threaded into
+     * `ProfileRepository.create` — a role tagged e.g. `roleCategory: "provider"`
+     * joins that cohort so `entity.query { roleCategory }` matches it. Omit/null
+     * = no category.
+     */
+    roleCategory?: string | null;
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -1254,6 +1261,10 @@ export async function createWorkspaceFromDefinition(
             semanticSlug: profile.semanticSlug,
             profileKind: profile.profileKind,
             applicableKinds: profile.applicableKinds,
+            // Role-category grouping (0222) — see the definition type. A role
+            // tagged e.g. `roleCategory: "provider"` joins that cohort for
+            // `entity.query { roleCategory }`.
+            roleCategory: profile.roleCategory,
           });
         } catch (err) {
           await handleStepError(`profiles[${profile.slug}].create`, err);

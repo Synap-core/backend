@@ -73,7 +73,7 @@ You can always escalate — never dead-end on "I can't." Full detail: `escalatio
 - **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions
 - **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
 - **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
-  define_role, create_property_def/profile, create_view, create_workspace, market.install.
+  define_role, define_kind (kind + its fields), create_view, create_workspace, market.install.
   **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace
 - **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.
   Never crystallize a one-off that hasn't succeeded once
@@ -125,8 +125,8 @@ Extend the substrate so the need becomes expressible. Always governed — expect
 | Need               | Prefer               | Tool sketch                                                                             |
 | ------------------ | -------------------- | --------------------------------------------------------------------------------------- |
 | Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                            |
-| Field missing      | Existing property    | `create_property_def`                                                                   |
-| Kind missing       | Closest parent kind  | `create_profile` (extend, don't fork)                                                   |
+| Field missing      | Existing property    | `define_kind` with the existing kind's slug + the new field in `properties[]` (slug-idempotent) |
+| Kind missing       | Closest parent kind  | `define_kind` (extend, don't fork). Pod-wide by default — pass `entityScope:'workspace'` only for an app-specific kind |
 | View missing       | Existing view        | `list_views` first, then `create_view` (recovery or proactive)                          |
 | Domain missing     | **Template**         | `market.search(kind:template)` → install/propose **before** freehand `create_workspace` |
 | Capability missing | Marketplace          | `market.install` (always proposes for agents)                                           |

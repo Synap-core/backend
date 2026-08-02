@@ -26,6 +26,7 @@
   ],
   "scripts": {
     "build": "tsc --build",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:unit": "vitest run -c vitest.unit.config.ts",
     "dev": "tsx src/dev.ts",
@@ -53,6 +54,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "postgres": "^3.4.7",
     "typescript": "^5.3.3",
     "vitest": "^1.6.1"
   },

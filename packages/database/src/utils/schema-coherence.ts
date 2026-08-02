@@ -316,6 +316,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "synonyms",
     addedBy: "0197_profile_vocabulary.sql",
   },
+  // Role-category grouping key (0222): drives `entity.query`'s `roleCategory`
+  // selector — "entities wearing ANY role-facet in this category". Absence means
+  // a pod is on a pre-0222 schema where the selector can never resolve a cohort.
+  {
+    table: "profiles",
+    column: "role_category",
+    addedBy: "0222_profiles_role_category.sql",
+  },
 
   // api_keys
   {

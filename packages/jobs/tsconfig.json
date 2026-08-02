@@ -6,5 +6,19 @@
     "declaration": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  // Tests are EXCLUDED FROM THE BUILD, not from typechecking.
+  //
+  // WHY (2026-08-02): the production Docker build runs `tsc --build` here, which
+  // compiled `src/**/__tests__/**` too. A test that imports a package the
+  // RUNTIME does not depend on — `automation-run-reaper.test.ts` imports
+  // `postgres` to drive the real predicate against a throwaway cluster — then
+  // fails the image build with TS2307, even though the import is unreachable in
+  // production and the local build passed (root hoisting resolves it; Docker's
+  // stricter layout does not). A test dependency must never be able to break a
+  // production image.
+  //
+  // Typecheck coverage is NOT lost: `tsconfig.test.json` below re-includes them,
+  // and `pnpm typecheck` runs that. Emit and verification are separate concerns —
+  // this file owns emit only.
+  "exclude": ["node_modules", "dist", "**/__tests__/**", "**/*.test.ts"]
 }
