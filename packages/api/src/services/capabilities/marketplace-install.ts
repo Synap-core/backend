@@ -272,6 +272,8 @@ export async function applyMarketInstall(
         deps?: Record<string, string>;
         defaultSize?: { w: number; h: number };
         packageSlug?: string;
+        /** View types this cell can render (0221) — optional in the payload. */
+        viewTypes?: string[];
       } | null;
       if (!def?.code) {
         throw new TRPCError({
@@ -289,6 +291,10 @@ export async function applyMarketInstall(
         typeKey: `cell:${slugPackage}:${slugCellKey}`,
         deps: def.deps,
         defaultSize: def.defaultSize,
+        // View-renderer affinity from the package payload. Without it an
+        // installed renderer registers with no `viewRenderer.viewTypes` and the
+        // render chokepoint can never select it for a view.
+        viewTypes: Array.isArray(def.viewTypes) ? def.viewTypes : undefined,
         userId: input.userId,
       });
       return {

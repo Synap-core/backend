@@ -18869,6 +18869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
 				contentKind: ContentKind;
+				viewRendererViewTypes: string[] | null;
 			}[];
 			meta: object;
 		}>;
@@ -18904,6 +18905,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
 				contentKind: ContentKind;
+				viewRendererViewTypes: string[] | null;
 			}, "name" | "workspaceId" | "updatedAt" | "createdAt" | "isActive" | "description" | "category" | "typeKey" | "rendererType">[];
 			meta: object;
 		}>;
@@ -18941,6 +18943,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
 				contentKind: ContentKind;
+				viewRendererViewTypes: string[] | null;
 			} | null;
 			meta: object;
 		}>;
@@ -18968,6 +18971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rendererSource?: string | undefined;
 				source?: string | undefined;
 				deps?: Record<string, string> | undefined;
+				viewTypes?: string[] | undefined;
 				configSchema?: Record<string, unknown> | undefined;
 				defaultConfig?: Record<string, unknown> | undefined;
 				defaultSize?: {
@@ -19009,6 +19013,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
 				contentKind: ContentKind;
+				viewRendererViewTypes: string[] | null;
 			};
 			meta: object;
 		}>;

@@ -8,6 +8,7 @@
 
 export { registerAuthRoutes, registerExchangeRoutes } from "./auth.js";
 export { registerHealthRoutes } from "./health.js";
+export { registerHealthDependenciesRoutes } from "./health-dependencies.js";
 export { registerUsersRoutes } from "./users.js";
 export { registerWorkspacesRoutes } from "./workspaces.js";
 export { registerThreadsRoutes } from "./threads.js";

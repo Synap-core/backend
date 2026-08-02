@@ -70,6 +70,12 @@ export const hubWidgetDefinitionsRouter = router({
         description: z.string().optional(),
         icon: z.string().optional(),
         category: z.string().optional(),
+        // NOTE: no `frame`, and therefore deliberately NO `viewTypes` here.
+        // A view renderer must register with `runtime: "frame"` (the render
+        // chokepoint gates on it), and `runtime` derives from `rendererType`.
+        // This door cannot emit `frame`, so a `viewTypes` slot would be a
+        // declarable-but-ignored field. Declare affinity through `defineCell`
+        // (MCP `synap_create_cell`, `POST /cells/define`, `POST /cells/install`).
         rendererType: z.enum(["builtin", "iframe", "native"]).default("iframe"),
         rendererSource: z.string().optional(),
         /** Original JSX/TSX source for native widgets */

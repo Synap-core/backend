@@ -49,8 +49,41 @@ export interface DefineCellInput {
   description?: string | null;
   defaultSize?: { w: number; h: number };
   deps?: Record<string, string>;
+  /**
+   * View-type affinity for using this cell as a VIEW RENDERER, e.g.
+   * `["list", "table"]`. Persisted to `widget_definitions.view_renderer_view_types`
+   * (migration 0221) and copied onto the browser registration's
+   * `viewRenderer.viewTypes` — without it, the render chokepoint and the
+   * "Rendering style" picker can never select the cell for a view.
+   *
+   * OMITTED (undefined) on an upsert of an EXISTING row leaves the stored
+   * affinity untouched, so callers that don't know about it (older doors,
+   * source-only re-pushes) can't silently erase a declared affinity. Pass an
+   * explicit `[]` or `null` to clear it.
+   */
+  viewTypes?: string[] | null;
   /** Acting user — stamped on the realtime event. */
   userId: string;
+}
+
+/** Normalize an affinity list: trimmed non-empty strings, deduped; `[]` → null. */
+function normalizeViewTypes(
+  raw: string[] | null | undefined
+): string[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  // Trim BEFORE deduping. Deduping first compares the raw strings, so
+  // `[" table", "table"]` survives as two distinct entries and only becomes
+  // `["table","table"]` after the map — the opposite of what the doc promises.
+  const cleaned = [
+    ...new Set(
+      raw
+        .filter((t): t is string => typeof t === "string")
+        .map((t) => t.trim())
+        .filter((t) => t !== "")
+    ),
+  ];
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 export async function defineCell(
@@ -69,6 +102,12 @@ export async function defineCell(
     .replace(/^-|-$/g, "");
   const typeKey = input.typeKey ?? `generated:${slug}`;
 
+  const viewTypes = normalizeViewTypes(input.viewTypes);
+  // Only carried into the UPDATE branch when the caller actually spoke about
+  // affinity — see `DefineCellInput.viewTypes`.
+  const viewTypesUpdate =
+    viewTypes === undefined ? {} : { viewRendererViewTypes: viewTypes };
+
   const values = {
     typeKey,
     workspaceId,
@@ -83,6 +122,7 @@ export async function defineCell(
     defaultSize: input.defaultSize ?? { w: 6, h: 4 },
     isActive: true,
     trustLevel: "generated" as const,
+    viewRendererViewTypes: viewTypes ?? null,
   };
 
   let changeType: "created" | "updated" = "created";
@@ -100,6 +140,7 @@ export async function defineCell(
           rendererSource: input.rendererSource,
           deps: (input.deps ?? {}) as Record<string, string>,
           isActive: true,
+          ...viewTypesUpdate,
           updatedAt: new Date(),
         },
       })
@@ -128,6 +169,7 @@ export async function defineCell(
         rendererSource: input.rendererSource,
         deps: (input.deps ?? {}) as Record<string, string>,
         isActive: true,
+        ...viewTypesUpdate,
         updatedAt: new Date(),
       })
       .where(

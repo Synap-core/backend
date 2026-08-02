@@ -124,6 +124,7 @@ export function recordUnresolvedReference(
   reason: UnresolvedReferenceReason
 ): void {
   if (isCallerSuppliedInput(path)) return;
+  if (isEntityPropertyBagRead(path)) return;
   storage.getStore()?.record(path, reason);
 }
 
@@ -154,6 +155,48 @@ export function recordUnresolvedReference(
  */
 function isCallerSuppliedInput(path: string): boolean {
   return path === "trigger.payload" || path.startsWith("trigger.payload.");
+}
+
+/**
+ * The SAME rule as `isCallerSuppliedInput`, applied to the other sparse bag in
+ * the engine: an ITERATION ITEM'S ENTITY PROPERTY BAG.
+ *
+ * `entities.properties` is an OPEN, per-record key/value map. A task with no due
+ * date simply has no `dueDate` key — that is normal DATA SPARSITY, not a wiring
+ * fault, and `lookupContextPath` cannot tell the two apart because an absent
+ * object key is `missing` either way.
+ *
+ * WHY THIS MATTERS ENOUGH TO SPECIAL-CASE — measured, not hypothesised. The
+ * report flow's per-kind projections (`ensure-report-automation.ts`,
+ * `projectionNode`) render `status`/`priority`/`dueDate`/`email`/
+ * `lastInteractionAt`/`industry`/`location` for EVERY row of a `map:` pipe. A
+ * healthy run on 2026-08-01 recorded 88 "missing" hits across 7 such paths and
+ * SATURATED `MAX_PERSISTED_UNRESOLVED_REFS` (20) — so the run UI reported a
+ * wiring fault on a correct report, and the genuine wiring miss it was built to
+ * catch (the 2026-07-27 silent-empty run) would have been pushed off the list
+ * entirely. A diagnostic that fires on the happy path of the feature it guards
+ * is noise.
+ *
+ * WHY THIS EXACT PREFIX AND NOT `item.*` — the item's OWN shape is fixed
+ * (`id`, `title`, `updatedAt`, …), so a miss there IS a wiring fault and stays
+ * recorded. Only the open bag hanging off it is exempt. Concretely:
+ *   - `item.properties.dueDate`      → exempt (unset field on this record)
+ *   - `item.propertyz.status`        → STILL RECORDED (typo'd segment)
+ *   - `item.titel`                   → STILL RECORDED (typo on a fixed field)
+ *   - `steps.q1.output.properties.x` → STILL RECORDED (not an iteration item)
+ * `loop.item.*` is covered too: the loop node and the array pipes bind the same
+ * object under both names, so the two spellings must behave identically.
+ *
+ * THE TRADEOFF, stated rather than hidden: a typo INSIDE the bag
+ * (`item.properties.duDate`) is now invisible here. That is unavoidable at this
+ * layer — the bag is open, so "the profile has no such property slug" and "this
+ * record has not set it" are the SAME observation unless the resolver consults
+ * the property-def registry, which it does not have. Catching that class needs
+ * projection-time slug validation against `getEffectiveProperties`, which is a
+ * config-level check, not a recording-level one.
+ */
+function isEntityPropertyBagRead(path: string): boolean {
+  return /^(?:loop\.)?item\.properties(?:\.|$)/.test(path);
 }
 
 /** The collector for the step currently executing, if any. */

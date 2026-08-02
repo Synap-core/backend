@@ -2033,6 +2033,8 @@ export async function executeMCPToolViaHubProtocol(
           rendererSource: z.string().min(1),
           workspaceId: z.string().optional(),
           description: z.string().optional(),
+          /** View-type affinity for using this cell as a view renderer (0221). */
+          viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
         })
         .safeParse(args);
       if (!parsed.success) {
@@ -2061,6 +2063,11 @@ export async function executeMCPToolViaHubProtocol(
           rendererSource: parsed.data.rendererSource,
           workspaceId: cellWorkspaceId,
           description: parsed.data.description ?? null,
+          // Carried so the `cell/define` approve-executor materializes the
+          // view-renderer affinity on approval, not just the source.
+          ...(parsed.data.viewTypes
+            ? { viewTypes: parsed.data.viewTypes }
+            : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2090,6 +2097,7 @@ export async function executeMCPToolViaHubProtocol(
         rendererSource: parsed.data.rendererSource,
         workspaceId: cellWorkspaceId,
         description: parsed.data.description,
+        viewTypes: parsed.data.viewTypes,
         userId,
       });
       return ok({ status: result.changeType, ...result });

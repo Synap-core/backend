@@ -1,0 +1,34 @@
+-- Migration: 0221_widget_definitions_view_renderer_view_types.sql
+--
+-- Make an INSTALLED cell usable as a VIEW RENDERER.
+--
+-- The render chokepoint (`StructuredViewRenderer`) honours a per-view
+-- `rendererRef: { kind: "cell", cellKey }` binding only when the resolved
+-- registration is BOTH sandboxed (`runtime === "frame"`) AND declares an
+-- affinity for the view's type (`viewRenderer.viewTypes` includes it). The
+-- browser's `useRegisterFrameCells` — the only path by which a marketplace /
+-- agent-authored cell reaches `cellRegistry` — could set neither field, because
+-- `widget_definitions` had nowhere to store the affinity. An installed renderer
+-- therefore fell back to the first-party adapter and never appeared in the
+-- "Rendering style" picker.
+--
+-- `runtime` stays DERIVED from the existing `renderer_type` column
+-- (`renderer_type = 'frame' → 'frame'`, else `'direct'`) — deliberately NOT a
+-- stored column, so there is exactly one authority for the rendering mechanism.
+--
+-- This adds the ONE missing piece: the declared view-type affinity.
+--
+-- jsonb (not text[]): every other structured column on this table is jsonb
+-- (`deps`, `config_schema`, `default_config`, `default_size`, `min_size`), and
+-- the value crosses three JSON seams verbatim — the CP package definition, the
+-- `/api/sync/receive-supplementary` ingest body, and the tRPC row the browser
+-- reads. jsonb round-trips those without any pg array-literal quoting/escaping
+-- step, and Drizzle hands it back as a plain JS array.
+--
+-- NULLABLE with no default, and NULL is meaningful: "declares no view-type
+-- affinity" ⇒ the registration omits `viewRenderer` entirely and the view keeps
+-- falling through to the first-party adapter (the pre-existing, safe
+-- behaviour). Every existing row is untouched.
+
+ALTER TABLE "widget_definitions"
+  ADD COLUMN IF NOT EXISTS "view_renderer_view_types" jsonb;

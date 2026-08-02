@@ -1045,26 +1045,65 @@ const SUPPLEMENTARY_TABLES: Record<
   /**
    * Widget definitions sync.
    *
-   * Pod-portability audit:
-   * - `workspaceId` (uuid, nullable) FK → workspaces.id ON DELETE CASCADE.
-   *   If the workspace does not exist on the receiving pod, the insert will
-   *   fail with an FK violation. Strategy: skip silently (logged as warn) —
-   *   workspace-scoped widgets are only useful once their workspace is present.
-   *   System-wide widgets (workspaceId = null) have no FK and are always safe.
-   * - No user or credential FK columns.
-   * - `bundleSource` / `rendererSource` (text, nullable) — compiled bundles;
-   *   large but contain no secrets.
-   * - `configSchema` / `defaultConfig` (jsonb) — no secrets.
+   * Pod-portability audit — what this handler guarantees:
    *
-   * Conclusion: widget_definitions ARE pod-portable with the FK caveat above.
-   * System-wide (workspaceId = null) widgets replicate unconditionally.
-   * Workspace-scoped widgets may silently skip if workspace is not present yet;
-   * a subsequent sync cycle after workspace replication will succeed.
+   * 1. EXECUTION (the reason `rendererType: "native"` is hard-rejected below).
+   *    The earlier version of this audit reasoned only about SECRETS and never
+   *    asked whether a synced field EXECUTES. It does: the browser's
+   *    `WidgetRegistryProvider` selects rows on
+   *    `rendererType === "native" && bundleSource`, and `loadNativeWidget`
+   *    (`@synap-core/cell-runtime/NativeWidgetLoader`) wraps `bundleSource` in a
+   *    Blob and appends it as a `<script>` to `document.head` — arbitrary JS in
+   *    the renderer's OWN origin, un-sandboxed, with the user's session in
+   *    reach. A peer pod could therefore ship executable code into this pod's
+   *    browser by asserting one string. `native` definitions are consequently
+   *    NEVER accepted from a peer: the row is SKIPPED (never coerced) and
+   *    logged. `bundleSource` is likewise dropped to NULL on this path, since it
+   *    is only ever read for `native` rows and has no other consumer — so no
+   *    peer-supplied bundle is stored at all, dormant or otherwise.
+   *    `rendererType: "frame"` / `"iframe"` rows still replicate: they run in
+   *    the sandboxed cell-runtime iframe, not the host origin.
+   * 2. `workspaceId` (uuid, nullable) FK → workspaces.id ON DELETE CASCADE.
+   *    If the workspace does not exist on the receiving pod, the insert will
+   *    fail with an FK violation. Strategy: skip (logged as warn) —
+   *    workspace-scoped widgets are only useful once their workspace is present.
+   *    System-wide widgets (workspaceId = null) have no FK and are always safe.
+   * 3. No user or credential FK columns.
+   * 4. `rendererSource` (text, nullable) — frame/iframe source; no secrets.
+   * 5. `configSchema` / `defaultConfig` / `viewRendererViewTypes` (jsonb) — no
+   *    secrets, no execution.
+   *
+   * Conclusion: NON-native widget_definitions ARE pod-portable with the FK
+   * caveat above. System-wide (workspaceId = null) widgets replicate
+   * unconditionally. Workspace-scoped widgets may skip if the workspace is not
+   * present yet; a subsequent sync cycle after workspace replication succeeds.
    */
   widget_definitions: async (rows) => {
     let processed = 0;
+    let rejectedNative = 0;
     for (const row of rows) {
       try {
+        // HARD REJECT — a synced definition must never arrive as `native`
+        // (see (1) above). SKIP, not coerce: coercing would keep the
+        // peer-supplied `bundleSource` in the table under a different label,
+        // where one future bug — or an operator flipping the type in Cell
+        // Studio — re-arms it. Skipping stores nothing executable. It is not a
+        // SILENT loss either: the row is left intact on the source pod, and
+        // every rejection is logged with its identifying fields plus a
+        // per-batch count, so an operator can see exactly what did not land.
+        if (row.rendererType === "native") {
+          rejectedNative++;
+          logger.warn(
+            {
+              table: "widget_definitions",
+              rowId: row.id,
+              typeKey: row.typeKey,
+              workspaceId: row.workspaceId,
+            },
+            "Rejected synced widget_definition with rendererType='native' — a native bundle executes un-sandboxed in the host origin and is never accepted from a peer pod"
+          );
+          continue;
+        }
         const values: typeof widgetDefinitions.$inferInsert = {
           id: row.id as string,
           typeKey: (row.typeKey as string) ?? "synced-widget",
@@ -1078,7 +1117,11 @@ const SUPPLEMENTARY_TABLES: Record<
             "builtin",
           rendererSource: (row.rendererSource as string) ?? null,
           source: (row.source as string) ?? null,
-          bundleSource: (row.bundleSource as string) ?? null,
+          // Always NULL on the ingest path. `bundleSource` is read by exactly
+          // one consumer — the `native` branch of WidgetRegistryProvider, which
+          // is now unreachable for synced rows — so storing a peer-supplied
+          // bundle could only ever arm a future execution path.
+          bundleSource: null,
           configSchema: (row.configSchema as Record<string, unknown>) ?? {},
           defaultConfig: (row.defaultConfig as Record<string, unknown>) ?? {},
           defaultSize: (row.defaultSize as { w: number; h: number }) ?? {
@@ -1098,6 +1141,10 @@ const SUPPLEMENTARY_TABLES: Record<
           contentKind:
             (row.contentKind as typeof widgetDefinitions.$inferInsert.contentKind) ??
             "widget",
+          // View-renderer affinity (0221) — inert metadata, replicates as-is.
+          viewRendererViewTypes: Array.isArray(row.viewRendererViewTypes)
+            ? (row.viewRendererViewTypes as string[])
+            : null,
           createdAt: row.createdAt
             ? new Date(row.createdAt as string)
             : new Date(),
@@ -1124,6 +1171,7 @@ const SUPPLEMENTARY_TABLES: Record<
           trustLevel: values.trustLevel,
           role: values.role,
           contentKind: values.contentKind,
+          viewRendererViewTypes: values.viewRendererViewTypes,
           updatedAt: values.updatedAt,
         };
         await db.insert(widgetDefinitions).values(values).onConflictDoUpdate({
@@ -1137,6 +1185,17 @@ const SUPPLEMENTARY_TABLES: Record<
           "Failed to upsert supplementary row"
         );
       }
+    }
+    if (rejectedNative > 0) {
+      logger.warn(
+        {
+          table: "widget_definitions",
+          rejectedNative,
+          received: rows.length,
+          processed,
+        },
+        "Sync batch contained native widget definitions — all rejected (never executed, never stored)"
+      );
     }
     return processed;
   },

@@ -194,3 +194,112 @@ describe("caller-supplied input is not a wiring fault", () => {
     expect(refs[0].path).toBe("steps.gone.output");
   });
 });
+
+/**
+ * An UNSET ENTITY PROPERTY is data, not a wiring fault.
+ *
+ * Live regression (2026-08-01 13:55, a SUCCESSFUL report run): the per-kind
+ * projections in `ensure-report-automation.ts` render a fixed field list for
+ * every row of a `map:` pipe, so 88 hits across 7 paths
+ * (dueDate 18, lastInteractionAt 15, location 15, email 12, industry 12,
+ * priority 10, status 6) were recorded as `missing` and SATURATED
+ * MAX_PERSISTED_UNRESOLVED_REFS — the run UI reported a wiring fault on a
+ * healthy report, and a genuine miss would have been crowded off the list.
+ *
+ * The rule is narrow: only the OPEN property bag hanging off the iteration item
+ * is exempt. The item's own fixed shape, and every non-item path, still report.
+ */
+describe("an unset entity property is data, not a wiring fault", () => {
+  /** One row of the tasks projection against a task that has set nothing. */
+  const projectionContext = () =>
+    ({
+      trigger: { payload: {} },
+      steps: {},
+      item: {
+        id: "e1",
+        title: "Ship it",
+        updatedAt: "2026-08-01",
+        properties: {},
+      },
+      loop: { item: { id: "e1", title: "Ship it", properties: {} }, index: 0 },
+    }) as never;
+
+  it("does NOT record the report projection's unset property slugs", () => {
+    let rendered: string | undefined;
+    const refs = collect(() => {
+      rendered = resolveTemplate(
+        "{{item.id}} · {{item.title}} · status={{item.properties.status}} · priority={{item.properties.priority}} · due={{item.properties.dueDate}}",
+        projectionContext()
+      );
+    });
+
+    // Rendering is unchanged — an unset slug is still "".
+    expect(rendered).toBe("e1 · Ship it · status= · priority= · due=");
+    expect(refs).toEqual([]);
+  });
+
+  it("exempts the `loop.item.properties.*` spelling identically", () => {
+    const refs = collect(() => {
+      resolveTemplate("{{loop.item.properties.dueDate}}", projectionContext());
+    });
+    expect(refs).toEqual([]);
+  });
+
+  it("exempts an entity that carries no property bag at all", () => {
+    const refs = collect(() => {
+      resolveTemplate("{{item.properties.status}}", {
+        trigger: { payload: {} },
+        steps: {},
+        item: { id: "e1" },
+      } as never);
+    });
+    expect(refs).toEqual([]);
+  });
+
+  it("STILL records a typo on a segment OUTSIDE the bag", () => {
+    // This is the honesty check on the rule's narrowness: `propertyz` is a
+    // wiring typo, not sparse data, and must survive the exemption.
+    const refs = collect(() => {
+      resolveTemplate(
+        "{{item.propertyz.status}} {{item.titel}}",
+        projectionContext()
+      );
+    });
+    expect(refs.map((r) => r.path).sort()).toEqual([
+      "item.propertyz.status",
+      "item.titel",
+    ]);
+  });
+
+  it("STILL records a `properties` read that is NOT rooted at the item", () => {
+    const refs = collect(() => {
+      resolveTemplate("{{steps.q1.output.properties.status}}", context());
+    });
+    expect(refs.map((r) => r.path)).toEqual([
+      "steps.q1.output.properties.status",
+    ]);
+  });
+
+  it("does not saturate the persisted cap on a healthy multi-row projection", () => {
+    // The actual failure mode: volume, not a single hit. 25 rows × 3 slugs.
+    const collector = new UnresolvedReferenceCollector();
+    withStepDiagnostics(collector, () => {
+      for (let i = 0; i < 25; i++) {
+        resolveTemplate(
+          "status={{item.properties.status}} · priority={{item.properties.priority}} · due={{item.properties.dueDate}}",
+          projectionContext()
+        );
+      }
+      // ...while the ONE genuine wiring miss in the same step still lands.
+      resolveTemplate("{{steps.gather-tasks.output.entitites}}", context());
+    });
+
+    expect(collector.list()).toEqual([
+      {
+        path: "steps.gather-tasks.output.entitites",
+        reason: "missing",
+        count: 1,
+      },
+    ]);
+  });
+});

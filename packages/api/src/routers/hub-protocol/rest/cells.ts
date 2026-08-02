@@ -74,6 +74,8 @@ export function registerCellsRoutes(app: HubHono): void {
           name: r.name,
           deps: (r.deps as Record<string, string>) ?? {},
           rendererSource: r.rendererSource ?? "",
+          // Null when the cell declares no view-renderer affinity (0221).
+          viewTypes: r.viewRendererViewTypes ?? null,
         }))
       );
     } catch (err) {
@@ -182,6 +184,7 @@ export function registerCellsRoutes(app: HubHono): void {
         description: cell.description,
         defaultSize: cell.defaultSize,
         deps: cell.deps,
+        viewTypes: cell.viewTypes,
         userId: userId ?? "",
       });
 
@@ -230,6 +233,8 @@ export function registerCellsRoutes(app: HubHono): void {
         typeKey: z.string().min(1).max(120).optional(),
         description: z.string().max(500).optional(),
         defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
+        /** View-type affinity for using this cell as a view renderer (0221). */
+        viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
         deps: z
           .record(z.string(), z.string())
           .optional()
@@ -263,6 +268,7 @@ export function registerCellsRoutes(app: HubHono): void {
       description,
       defaultSize,
       deps,
+      viewTypes,
       reasoning,
     } = parsed.data;
     const userId = c.get("userId");
@@ -316,6 +322,10 @@ export function registerCellsRoutes(app: HubHono): void {
             rendererSource,
             workspaceId: workspaceId ?? null,
             description: description ?? null,
+            // Carried so the `cell/define` approve-executor materializes the
+            // view-renderer affinity too — dropping it here would approve a
+            // renderer that can never be selected for a view.
+            ...(viewTypes ? { viewTypes } : {}),
           },
           reasoning,
         });
@@ -348,6 +358,7 @@ export function registerCellsRoutes(app: HubHono): void {
         description,
         defaultSize,
         deps,
+        viewTypes,
         userId: userId ?? "",
       });
 
@@ -407,4 +418,6 @@ interface CellDef {
   deps?: Record<string, string>;
   description?: string;
   defaultSize?: { w: number; h: number };
+  /** View-type affinity declared by the package (0221) — optional. */
+  viewTypes?: string[];
 }

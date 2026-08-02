@@ -2100,6 +2100,12 @@ export function registerApproveExecutors(): void {
           null,
         description:
           (innerData.description as string | null | undefined) ?? null,
+        // View-renderer affinity, carried in the gate `data` by the doors that
+        // accept it (Hub `POST /cells/define`, MCP `synap_create_cell`).
+        // Absent ⇒ undefined ⇒ defineCell leaves any stored affinity untouched.
+        viewTypes: Array.isArray(innerData.viewTypes)
+          ? (innerData.viewTypes as string[])
+          : undefined,
         userId,
       });
 
@@ -3893,7 +3899,12 @@ export function registerApproveExecutors(): void {
             },
             "provider.action executor failed"
           );
-          return { delivered: false, reason: providerError, errorClass, providerRef };
+          return {
+            delivered: false,
+            reason: providerError,
+            errorClass,
+            providerRef,
+          };
         }
         providerBody = body;
         providerStatus = status;
@@ -4005,30 +4016,29 @@ export function registerApproveExecutors(): void {
             errorClass,
             providerRef,
           } = await triggerProviderAction({
-              userId,
-              provider,
-              method,
-              path,
-              body: data.body as Record<string, unknown> | undefined,
-              accountHint: data.accountHint as string | undefined,
-              baseUrlOverride:
-                (data.baseUrlOverride as string | undefined) ?? undefined,
-              workspaceId:
-                (data.workspaceId as string | undefined) ?? undefined,
-              // Replay the caller's run-time connection pick so the approved run
-              // uses the SAME credential that was selected at propose time (not the
-              // capability's default). Persisted into proposal.data at propose time.
-              connectionSelector:
-                (data.connectionSelector as
-                  | { connectionId?: string; contextObjectId?: string }
-                  | null
-                  | undefined) ?? undefined,
-              // BYPASS the capability-execution gate: a human already approved THIS
-              // proposal, so this is the governed Door-2 re-entry — dispatch directly,
-              // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
-              alreadyApproved: true,
-              sourceProposalId: input.proposalId,
-            });
+            userId,
+            provider,
+            method,
+            path,
+            body: data.body as Record<string, unknown> | undefined,
+            accountHint: data.accountHint as string | undefined,
+            baseUrlOverride:
+              (data.baseUrlOverride as string | undefined) ?? undefined,
+            workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+            // Replay the caller's run-time connection pick so the approved run
+            // uses the SAME credential that was selected at propose time (not the
+            // capability's default). Persisted into proposal.data at propose time.
+            connectionSelector:
+              (data.connectionSelector as
+                | { connectionId?: string; contextObjectId?: string }
+                | null
+                | undefined) ?? undefined,
+            // BYPASS the capability-execution gate: a human already approved THIS
+            // proposal, so this is the governed Door-2 re-entry — dispatch directly,
+            // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
+            alreadyApproved: true,
+            sourceProposalId: input.proposalId,
+          });
           if (!executed) {
             logger.warn(
               {
@@ -4040,7 +4050,12 @@ export function registerApproveExecutors(): void {
               },
               "capability/run executor failed"
             );
-            return { delivered: false, reason: providerError, errorClass, providerRef };
+            return {
+              delivered: false,
+              reason: providerError,
+              errorClass,
+              providerRef,
+            };
           }
           return { delivered: true };
         });
@@ -4101,7 +4116,9 @@ export function registerApproveExecutors(): void {
               errorClass:
                 runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
               providerRef:
-                runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
+                runOutcome.kind === "error"
+                  ? runOutcome.providerRef
+                  : undefined,
             };
           }
           skillRunResult = runOutcome.result;

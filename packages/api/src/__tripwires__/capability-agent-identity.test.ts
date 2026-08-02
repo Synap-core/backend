@@ -29,11 +29,20 @@ const FILE = "src/services/capabilities/execute-capability.ts";
  * on its own changelog is worse than no tripwire: a permanently-red guard trains
  * everyone to ignore it, and then it cannot report the real thing.
  *
- * Deliberately simple (line + block comments, no full tokenizer): the patterns
- * below are object-literal shapes that never legitimately appear inside a string.
+ * Deliberately simple (no full tokenizer): the patterns below are object-literal
+ * shapes that never legitimately appear inside a string.
+ *
+ * ⚠️ Only WHOLE-LINE line-comments are stripped, never a trailing one. An
+ * UNANCHORED line-comment pattern truncates a line at its first slash-slash —
+ * including one inside a string literal — so a line like
+ * `const doc = "see https:` + slash-slash + `x"; gate({ agentUserId: null });`
+ * would lose everything from that point on, and the negative assertion below
+ * would stay GREEN over the real regression. A guard defeated by a URL on the
+ * wrong line is the same "gate that lies" failure this function was written to
+ * fix, so the line-comment pattern stays anchored with `^\s*`.
  */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "");
 }
 
 describe("tripwire: capability execution threads agent identity to the gate", () => {

@@ -2921,6 +2921,9 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "deps" jsonb DEFAULT '
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "trust_level" text NOT NULL DEFAULT 'generated';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'widget';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_kind" text NOT NULL DEFAULT 'widget';
+-- Declared view-type affinity when this cell acts as a VIEW RENDERER (0221).
+-- NULL = declares none → the view falls through to the first-party adapter.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "view_renderer_view_types" jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

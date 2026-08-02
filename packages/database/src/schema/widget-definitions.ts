@@ -50,10 +50,7 @@ export type WidgetTrustLevel = "trusted" | "installed" | "generated";
  *   - "panel"           → side or floating panel surface
  */
 export type WidgetRole =
-  | "widget"
-  | "view-renderer"
-  | "entity-renderer"
-  | "panel";
+  "widget" | "view-renderer" | "entity-renderer" | "panel";
 
 /**
  * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
@@ -68,10 +65,7 @@ export type WidgetRole =
  *                        profile assignment, only placeable
  */
 export type ContentKind =
-  | "entity-detail"
-  | "entity-profile"
-  | "collection"
-  | "widget";
+  "entity-detail" | "entity-profile" | "collection" | "widget";
 
 export const widgetDefinitions = pgTable(
   "widget_definitions",
@@ -190,6 +184,27 @@ export const widgetDefinitions = pgTable(
       .notNull()
       .default("widget")
       .$type<ContentKind>(),
+
+    /**
+     * View-type affinity when this cell acts as a VIEW RENDERER, e.g.
+     * `["list", "table"]`. Mirrors `CellRegistration.viewRenderer.viewTypes` in
+     * `@synap-core/cell-runtime` — the browser's frame-cell registration copies
+     * it straight onto the registration.
+     *
+     * The render chokepoint (`StructuredViewRenderer`) honours a per-view
+     * `rendererRef: { kind: "cell", cellKey }` binding ONLY when the resolved
+     * registration is sandboxed (`runtime === "frame"`) AND declares the view's
+     * type here; the "Rendering style" picker offers the cell under the same
+     * rule. Without this column an installed renderer could satisfy neither.
+     *
+     * NULL / empty = declares NO affinity → the registration omits
+     * `viewRenderer` and the view falls through to the first-party adapter.
+     *
+     * NOT a `runtime` column: `CellRegistration.runtime` is DERIVED from
+     * `rendererType` (`"frame"` → `"frame"`, else `"direct"`), so the rendering
+     * mechanism keeps exactly one authority. See migration 0221.
+     */
+    viewRendererViewTypes: jsonb("view_renderer_view_types").$type<string[]>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

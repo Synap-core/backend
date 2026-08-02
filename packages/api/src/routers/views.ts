@@ -129,6 +129,68 @@ import {
 
 const logger = createLogger({ module: "views" });
 
+/**
+ * The ONLY two renderer bindings a view may store.
+ *
+ * `config.rendererRef` is the sovereign per-view renderer binding read by the
+ * render chokepoint (`StructuredViewRenderer`). Until now the door accepted
+ * `config` as an opaque `z.record(z.string(), z.any())`, so ANY `RendererTarget`
+ * shape could be persisted — including `{ kind: "iframe-srcdoc", srcdoc }`,
+ * which names raw HTML to mount. Only a FRONTEND gate kept a tampered binding
+ * inert; nothing stopped it from being STORED.
+ *
+ * These two are what the picker (`ViewConfigInspector.handleRendererChange`)
+ * actually writes, and the only two the chokepoint honours for a view. Every
+ * other `RendererTarget` kind (`iframe-srcdoc`, `host-app`, `view`, …) is
+ * rejected at the door — a view binding has no use for them.
+ *
+ * NOT `.strict()`: unknown sibling keys are tolerated so a future additive field
+ * doesn't 400 an otherwise valid binding. The narrow is on the DISCRIMINANT and
+ * the identifying key, which is what decides what gets mounted.
+ */
+const ViewRendererRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("cell"),
+    cellKey: z.string().min(1).max(200),
+    contractVersion: z.string().max(32).optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().max(200).optional(),
+  }),
+  z.object({
+    kind: z.literal("view-adapter"),
+    adapterKey: z.string().min(1).max(200),
+    contractVersion: z.string().max(32).optional(),
+    title: z.string().max(200).optional(),
+  }),
+]);
+
+/**
+ * Reject a view config carrying a renderer binding that is not one of the two
+ * legal shapes. Checks BOTH the flat `config.rendererRef` the picker writes and
+ * a nested `config.render.rendererRef`, since the chokepoint maps
+ * `view.config → RenderSettings` and either nesting could reach it.
+ * Absent binding ⇒ no-op, so every existing config still validates.
+ */
+function assertValidRendererRef(config: Record<string, unknown>): void {
+  const nested = config.render;
+  const candidates: unknown[] = [config.rendererRef];
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    candidates.push((nested as Record<string, unknown>).rendererRef);
+  }
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    const parsed = ViewRendererRefSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          'Invalid renderer binding: config.rendererRef must be { kind: "cell", cellKey } or { kind: "view-adapter", adapterKey }.',
+        cause: parsed.error,
+      });
+    }
+  }
+}
+
 export const viewsRouter = router({
   /**
    * Create a new view (Synchronous: Direct DB insert)
@@ -263,6 +325,7 @@ export const viewsRouter = router({
             cause: validation.errors,
           });
         }
+        assertValidRendererRef(input.config);
       }
 
       // Audit: log the requested event
@@ -1334,6 +1397,7 @@ export const viewsRouter = router({
             cause: validation.errors,
           });
         }
+        assertValidRendererRef(input.config);
       }
 
       // Direct DB update via ViewRepository

@@ -163,4 +163,79 @@ describe("sectionCapabilities", () => {
     ]);
     expect(out.integrations[0].verbs[0].responseShape).toBeUndefined();
   });
+
+  // ── The built-ins section ───────────────────────────────────────────────
+  // `sectionCapabilities` used to DROP every `builtin-tool` row and only report
+  // `excluded.builtinTools`. A count cannot render a collapsed, browsable
+  // section, so built-ins are real rows now — each carrying `runnableHere`, the
+  // fact a flow-node picker filters on so a catalog-only brick can never be
+  // offered as a step. (The "built-ins are rows, teaching docs stay excluded"
+  // half is already covered by the first test in this file.)
+
+  it("marks a catalogOnly built-in as NOT runnable through this door", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+    ]);
+    expect(out.builtins[0]!.runnableHere).toBe(false);
+  });
+
+  it("derives runnableHere from the row, not from the kind", () => {
+    // A `tools.kind='builtin'` row carries a verb catalog and NO catalogOnly
+    // flag — hardcoding false for every built-in would assert a falsehood here.
+    const out = sectionCapabilities([
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        verbs: [verb("feed.post")],
+      }),
+    ]);
+    expect(out.builtins[0]!.runnableHere).toBe(true);
+    expect(out.builtins[0]!.verbs.map((v) => v.id)).toEqual(["feed.post"]);
+  });
+
+  it("dedups a built-in described twice: unions verbs, never downgrades runnableHere", () => {
+    const out = sectionCapabilities([
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        description: null,
+        verbs: [verb("feed.post")],
+      }),
+      cap({
+        kind: "builtin-tool",
+        name: "synap_core",
+        description: "Tier-0 builtin verbs",
+        catalogOnly: true,
+        verbs: [verb("channel.create")],
+      }),
+    ]);
+    expect(out.builtins).toHaveLength(1);
+    const core = out.builtins[0]!;
+    expect(new Set(core.verbs.map((v) => v.id))).toEqual(
+      new Set(["feed.post", "channel.create"])
+    );
+    expect(core.runnableHere).toBe(true); // the launchable copy wins
+    expect(core.description).toBe("Tier-0 builtin verbs");
+  });
+
+  it("counts consistently: every input row lands in exactly one bucket", () => {
+    const caps = [
+      cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),
+      cap({ kind: "builtin-tool", name: "graph_traverse", catalogOnly: true }),
+      cap({ kind: "teaching-doc", name: "how-to-x", governance: "none" }),
+      cap({ kind: "tool", name: "exa_api", verbs: [verb("exa_search")] }),
+      {
+        ...cap({ kind: "skill", name: "ingest_message" }),
+        runnable: true,
+      } as Capability,
+      cap({ kind: "command", name: "digest" }),
+    ];
+    const out = sectionCapabilities(caps);
+    const shown =
+      out.integrations.length +
+      out.skills.length +
+      out.commands.length +
+      out.builtins.length;
+    expect(shown + out.excluded.teachingDocs).toBe(caps.length);
+  });
 });

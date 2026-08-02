@@ -313,6 +313,7 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
         previewCode?: string;
         defaultSize?: { w: number; h: number };
         configSchema?: Record<string, unknown>;
+        viewTypes?: string[];
         author?: string;
       }>;
       total?: number;
@@ -336,6 +337,11 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
             previewCode: cell.previewCode,
             defaultSize: cell.defaultSize,
             configSchema: cell.configSchema,
+            // Field-by-field rebuild: anything not named here is DROPPED, and
+            // this is the last hop before `applyMarketInstall` reads
+            // `def.viewTypes`. Omitting it made every marketplace-installed
+            // renderer unselectable, silently.
+            viewTypes: cell.viewTypes,
             packageSlug: cell.packageSlug,
           },
         })),

@@ -49,6 +49,7 @@ import {
   registerEntityShareRoutes,
   registerEventsRoutes,
   registerHealthRoutes,
+  registerHealthDependenciesRoutes,
   registerIdentityRoutes,
   registerKnowledgeRoutes,
   registerMcpServersRoutes,
@@ -632,6 +633,12 @@ registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window
 registerObservabilityRoutes(app); // /observability/routing-health — decision/correction routing analysis
+// /health/dependencies — AUTHENTICATED readiness probe (IS reachability).
+// Deliberately registered HERE, after the auth middleware, and NOT next to the
+// unauthenticated `/health` liveness probe above: it makes an outbound network
+// call and discloses the resolved IS host. See the file header for the full
+// argument for a second door over a `?deps=1` flag on /health.
+registerHealthDependenciesRoutes(app);
 registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────

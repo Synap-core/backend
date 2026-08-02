@@ -1410,7 +1410,9 @@ export const capabilitiesRouter = router({
   blastRadius: protectedProcedure
     .input(
       z.object({
-        toolId: z.string(),
+        // `tools.id` is a uuid column: a non-uuid here would reach postgres as
+        // a 22P02 (500) on a door that already models "not found" as a 404.
+        toolId: z.string().uuid(),
         /** Only narrows `sourcedEntityCount` — never the automation counts. */
         connectionId: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
@@ -1418,14 +1420,29 @@ export const capabilitiesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const database = await getDb();
+      const userId = requireUserId(ctx.userId);
 
       // Subject gate. The dependent-process query is access-scoped on its own,
-      // but grants and sourced-entity counts are not workspace-scoped tables —
-      // so the caller must be able to see the TOOL before we report anything
-      // about it. Same shape as the vault's "own the secret, then list its
-      // grants" pattern.
+      // but neither `vault_grants` nor `entity_external_links` is a scoped
+      // table — so the caller must first be able to SEE the tool.
+      //
+      // Visibility is NOT authority, and this is where the earlier version of
+      // this door was wrong: `tools` is registered
+      // `nullWorkspaceMeans:"podGlobalConfig"` (access/registry.ts), so every
+      // pod-wide tool row is visible to every pod member. Seeing a tool
+      // therefore cannot be the gate for reading its grants or another
+      // member's connection. The two per-principal reads below carry their own
+      // floors: grants are narrowed unless the caller OWNS the tool, and the
+      // sourced-entity count is bound to the caller's own connection AND
+      // joined through the `entities` access predicate.
       const [tool] = await database
-        .select({ id: toolsTable.id })
+        .select({
+          id: toolsTable.id,
+          createdBy: toolsTable.createdBy,
+          credentialRef: toolsTable.credentialRef,
+          config: toolsTable.config,
+          verbs: toolsTable.capabilities,
+        })
         .from(toolsTable)
         .where(
           and(
@@ -1438,16 +1455,42 @@ export const capabilitiesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
       }
 
+      // A `type:"capability"` node points at this tool in EITHER of two ways:
+      // `data.capabilityId` (the tool row id) or `data.verbId` alone —
+      // `CapabilityNodeDef.capabilityId` is OPTIONAL (schema/automations.ts)
+      // and the shipped first-party report automation emits four verb-only
+      // nodes (`ensure-report-automation.ts`). A capabilityId-only containment
+      // reports ZERO dependents for the built-in `synap_core` tool — the exact
+      // "nothing depends on this" lie this door exists to prevent. So the
+      // tool's own verb catalog is ORed in alongside the id match.
+      const capabilityNodeMatch = (data: Record<string, string>) =>
+        drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
+          [{ type: "capability", data }]
+        )}::jsonb`;
+      const byToolId = capabilityNodeMatch({ capabilityId: input.toolId });
+      const verbIds = (tool.verbs ?? [])
+        .map((v) => v.id)
+        .filter((id): id is string => !!id);
+
       const { automationRows, playbookRows } = await findDependentProcesses(
         ctx,
-        drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
-          [{ type: "capability", data: { capabilityId: input.toolId } }]
-        )}::jsonb`,
+        or(
+          byToolId,
+          ...verbIds.map((v) => capabilityNodeMatch({ verbId: v }))
+        ) ?? byToolId,
         input.workspaceId
       );
 
       // Grants on the tool itself. Indexed by
       // (grantable_type, grantable_id, revoked_at) — the hot-path index.
+      //
+      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`), a
+      // scope and an exec-mode, so it is not public metadata. Unless the caller
+      // OWNS the tool, only grants the caller is a party to (issued them, or is
+      // the grantee) are returned. A supplied workspace then NARROWS on top —
+      // the same `or(isNull, eq)` shape the automation query uses, so pod-wide
+      // grants are never dropped by the narrowing alone.
+      const callerOwnsTool = tool.createdBy === userId;
       const grantRows = await database
         .select({
           grantId: vaultGrants.id,
@@ -1461,7 +1504,19 @@ export const capabilitiesRouter = router({
           and(
             eq(vaultGrants.grantableType, "tool"),
             eq(vaultGrants.grantableId, input.toolId),
-            isNull(vaultGrants.revokedAt)
+            isNull(vaultGrants.revokedAt),
+            callerOwnsTool
+              ? undefined
+              : or(
+                  eq(vaultGrants.createdBy, userId),
+                  eq(vaultGrants.grantedTo, userId)
+                ),
+            input.workspaceId
+              ? or(
+                  isNull(vaultGrants.workspaceId),
+                  eq(vaultGrants.workspaceId, input.workspaceId)
+                )
+              : undefined
           )
         )
         .orderBy(vaultGrants.createdAt);
@@ -1470,13 +1525,51 @@ export const capabilitiesRouter = router({
       // path flips to "disconnected" (capability-nango-sync.ts). `null` (not 0)
       // when no connectionId was passed — "not asked" must never render as
       // "nothing would be affected".
+      //
+      // `entity_external_links` carries NO userId and NO workspaceId column and
+      // has NO VisibilityRule, so the access layer structurally cannot filter
+      // it. Two gates stand in instead:
+      //   (1) BINDING + OWNERSHIP — the connectionId must belong to this caller
+      //       AND to this tool. Nango connection ids are
+      //       `{userId}:{podId}:{provider}` (NangoConnector.buildConnectionId)
+      //       and a connectable tool's provider is its `nango://<provider>`
+      //       credentialRef / `config.providerConfigKey` (the same derivation as
+      //       `providerConfigKeyOf` in capability-nango-sync.ts). Without this,
+      //       an arbitrary connectionId enumerates a stranger's link count, and
+      //       a stale one returns a confident count for a DIFFERENT connection
+      //       inside the one dialog whose job is to be trusted before a revoke.
+      //   (2) VISIBILITY — the count joins `entities` under the access
+      //       predicate, so it only counts rows the caller can already see.
       let sourcedEntityCount: number | null = null;
       if (input.connectionId) {
+        const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
+        const toolProvider =
+          typeof toolConfig.providerConfigKey === "string"
+            ? toolConfig.providerConfigKey
+            : tool.credentialRef?.startsWith("nango://")
+              ? tool.credentialRef.slice("nango://".length)
+              : null;
+        const idParts = input.connectionId.split(":");
+        const connectionProvider =
+          idParts.length >= 3 ? idParts.slice(2).join(":") : null;
+        if (
+          !toolProvider ||
+          !input.connectionId.startsWith(`${userId}:`) ||
+          connectionProvider !== toolProvider
+        ) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Connection not found for this tool",
+          });
+        }
+
         const [row] = await database
           .select({ count: drizzleSql<number>`count(*)::int` })
           .from(entityExternalLinks)
+          .innerJoin(entities, eq(entities.id, entityExternalLinks.entityId))
           .where(
             and(
+              scopedDb(AccessContext.from(ctx)).predicate(entities),
               eq(entityExternalLinks.nangoConnectionId, input.connectionId),
               eq(entityExternalLinks.status, "active")
             )
@@ -1502,7 +1595,16 @@ export const capabilitiesRouter = router({
          *   - tools an agent chooses at RUN time (unknowable before the run);
          *   - usage in workspaces the caller cannot see (correctly filtered out
          *     by the access floor, but still real breakage for someone else);
-         *   - stale node ids pointing at already-deleted tools.
+         *   - stale node ids pointing at already-deleted tools;
+         *   - a verb-only node (`data.verbId`, no `capabilityId`) whose verb is
+         *     NOT in this tool's `capabilities` catalog. The catalog is derived
+         *     at apply time, so a node written against a verb the tool no longer
+         *     advertises — or never did — is invisible to the ORed verb match.
+         *
+         * `grants` is likewise a FLOOR and not a total: unless the caller owns
+         * the tool, grants the caller is not a party to are omitted (see the
+         * grant query above). A team-mate's grant on a pod-wide tool still
+         * breaks when the tool is revoked.
          * No transitive traversal exists anywhere in this codebase, so none of
          * the above can be closed by widening this query alone.
          *

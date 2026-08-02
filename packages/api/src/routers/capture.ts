@@ -18,6 +18,10 @@ import {
   resolveIntelligenceService,
   IntelligenceAuthError,
 } from "../utils/intelligence-routing.js";
+import {
+  callStructureWithRetry,
+  type StructureRetryReason,
+} from "../utils/is-structure-retry.js";
 import type { StructuredFollowUp } from "@synap/intelligence-client";
 import {
   eq,
@@ -210,6 +214,12 @@ const DEDUP_SIMILARITY_FLOOR = 0.5;
 // exactly this). The deep-import path already uses 60s; 45s is the interactive
 // budget (capture is optimistic/async — a slightly longer wait beats a degrade).
 const STRUCTURE_TIMEOUT_MS = 45_000;
+
+// Total attempts (first + retries) for the IS structure call. Small on purpose:
+// each attempt is an expensive LLM call, so this is reliability against a flaky
+// hop (proxy 502 / network blip), not a hammer. Only FAST nulls are retried, so
+// the added latency is bounded well below a full timeout budget per retry.
+const STRUCTURE_MAX_ATTEMPTS = 3;
 
 // ── Workspace routing (shared across ALL capture doors) ─────────────────────
 // The pure routing decision + its types live in `lib/capture-routing` (a
@@ -1119,30 +1129,32 @@ export const captureRouter = router({
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
+      let structureAttempts = 1;
+      let structureFailReason: StructureRetryReason | undefined;
       try {
-        const t0 = Date.now();
-        structureResult = await client.structure(structureInput);
-        // Retry once on a NULL — but ONLY a FAST null. The client returns null
-        // both on a transient error/empty completion (worth a retry) AND on a
-        // genuine timeout that burned the full budget. Retrying a timeout is the
-        // worst case: a long input that crossed the budget will just cross it
-        // again, doubling the wait to ~90s (and the LLM cost) for near-zero
-        // gain. A fast null ⇒ transient (retry); a slow null ⇒ timeout (degrade).
-        if (!structureResult) {
-          const elapsedMs = Date.now() - t0;
-          if (elapsedMs < STRUCTURE_TIMEOUT_MS * 0.7) {
-            logger.warn(
-              { userId, elapsedMs },
-              "IS structure returned a fast null — retrying once before degrading"
-            );
-            structureResult = await client.structure(structureInput);
-          } else {
-            logger.warn(
-              { userId, elapsedMs },
-              "IS structure timed out (slow null) — degrading without retry"
-            );
+        // Bounded retry on TRANSIENT failures only. The client returns null both
+        // on a transient error/empty completion (worth a retry) AND on a genuine
+        // timeout that burned the full budget; the policy (see
+        // `utils/is-structure-retry.ts`) retries only the fast nulls, and never
+        // retries an auth throw. Each retry is logged so the transient rate is
+        // observable — it was invisible until measured by hand during the
+        // 2026-08-01 IS outage.
+        const outcome = await callStructureWithRetry(
+          () => client.structure(structureInput),
+          {
+            timeoutMs: STRUCTURE_TIMEOUT_MS,
+            maxAttempts: STRUCTURE_MAX_ATTEMPTS,
+            onRetry: ({ attempt, maxAttempts, elapsedMs, backoffMs }) => {
+              logger.warn(
+                { userId, attempt, maxAttempts, elapsedMs, backoffMs },
+                "IS structure returned a fast null (transient) — retrying before degrading"
+              );
+            },
           }
-        }
+        );
+        structureResult = outcome.result;
+        structureAttempts = outcome.attempts;
+        structureFailReason = outcome.lastReason;
       } catch (err) {
         // Only an upstream auth failure reaches here as a throw — the client
         // returns null for every non-auth failure. This is the ONLY path that
@@ -1164,8 +1176,12 @@ export const captureRouter = router({
         // mark credential_error. Return a degraded fallback so the capture is
         // preserved and the caller can surface the real (non-auth) cause.
         logger.warn(
-          { userId },
-          "IS structure failed (non-auth) — returning degraded fallback, credential status left unchanged"
+          {
+            userId,
+            attempts: structureAttempts,
+            reason: structureFailReason,
+          },
+          "IS structure failed (non-auth) after retries — returning degraded fallback, credential status left unchanged"
         );
         return degradedFallback("is_invalid_response");
       }

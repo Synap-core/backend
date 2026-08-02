@@ -440,6 +440,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "trust_level",
     addedBy: "0034_widget_trust_level.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "view_renderer_view_types",
+    addedBy: "0221_widget_definitions_view_renderer_view_types.sql",
+  },
 
   // knowledge_facts — Ebbinghaus decay columns (0113)
   {

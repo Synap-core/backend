@@ -95,6 +95,13 @@ const WidgetUpsertSchema = z.object({
   source: z.string().optional(),
   /** npm package version pins for frame widgets, e.g. { 'recharts': '2.12.0' } */
   deps: z.record(z.string(), z.string()).optional(),
+  /**
+   * View types this cell can RENDER, e.g. ["list","table"] (migration 0221).
+   * Copied onto the browser registration's `viewRenderer.viewTypes`; the render
+   * chokepoint and the "Rendering style" picker both require it before a view
+   * may bind to this cell. Omitted → the stored value is left untouched.
+   */
+  viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
   configSchema: z.record(z.string(), z.unknown()).default({}),
   defaultConfig: z.record(z.string(), z.unknown()).optional(),
   defaultSize: z
@@ -104,6 +111,25 @@ const WidgetUpsertSchema = z.object({
     .object({ w: z.number().int().min(1).max(12), h: z.number().int().min(1) })
     .optional(),
 });
+
+/**
+ * Mirror of `normalizeViewTypes` in `services/cells/define-cell.ts` — trim,
+ * drop empties, dedupe, and map "nothing left" to NULL. Kept in step with that
+ * function deliberately: this router is a SECOND write door into the same
+ * column, and two doors disagreeing on how "no affinity" is encoded is how a
+ * column ends up with both `[]` and `null` meaning the same thing.
+ */
+function normalizeViewTypesForUpsert(raw: string[]): string[] | null {
+  const cleaned = [
+    ...new Set(
+      raw
+        .filter((t): t is string => typeof t === "string")
+        .map((t) => t.trim())
+        .filter((t) => t !== "")
+    ),
+  ];
+  return cleaned.length > 0 ? cleaned : null;
+}
 
 export const widgetDefinitionsRouter = router({
   /**
@@ -340,6 +366,13 @@ export const widgetDefinitionsRouter = router({
           defaultConfig: input.defaultConfig ?? {},
           defaultSize: input.defaultSize ?? { w: 6, h: 4 },
           minSize: input.minSize,
+          ...(input.viewTypes !== undefined && {
+            // `!== undefined`, not truthiness: `[]` is truthy in JS, so the old
+            // guard wrote `[]` where `defineCell`'s `normalizeViewTypes` maps
+            // `[]` → null — two encodings of "no affinity" in one column.
+            // Normalised here the same way so both write doors agree.
+            viewRendererViewTypes: normalizeViewTypesForUpsert(input.viewTypes),
+          }),
           isActive: true,
         })
         .onConflictDoUpdate({
@@ -359,6 +392,15 @@ export const widgetDefinitionsRouter = router({
             defaultConfig: input.defaultConfig ?? {},
             ...(input.defaultSize && { defaultSize: input.defaultSize }),
             ...(input.minSize && { minSize: input.minSize }),
+            ...(input.viewTypes !== undefined && {
+              // `!== undefined`, not truthiness: `[]` is truthy in JS, so the old
+              // guard wrote `[]` where `defineCell`'s `normalizeViewTypes` maps
+              // `[]` → null — two encodings of "no affinity" in one column.
+              // Normalised here the same way so both write doors agree.
+              viewRendererViewTypes: normalizeViewTypesForUpsert(
+                input.viewTypes
+              ),
+            }),
             isActive: true,
             updatedAt: new Date(),
           },

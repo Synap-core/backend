@@ -1224,6 +1224,12 @@ export const tools = {
               type: "string",
               description: "Optional short description of the cell.",
             },
+            viewTypes: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain widget and views fall back to the built-in adapter.',
+            },
           },
           required: ["name", "rendererSource"],
         },
