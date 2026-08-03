@@ -5723,6 +5723,15 @@ export interface CreateCapabilityResult {
 			id: string;
 			name: string;
 			status: "created" | "reused";
+			/**
+			 * Parts the installer seeded but could NOT attach to the container —
+			 * `addPart` refused (a pod-scoped container owned by someone else, and the
+			 * installer is not a pod admin). Reported, never swallowed: the tools and
+			 * skills are already written by this point, so throwing would abort a
+			 * half-finished install with no rollback, and a silent catch would claim a
+			 * complete install that is missing its membership edges.
+			 */
+			partsNotAttached: number;
 		} | null;
 		vault: {
 			ref: string;
@@ -19914,7 +19923,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 				status?: "read" | "dismissed" | "unread" | "snoozed" | "all" | undefined;
-				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
+				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -19924,7 +19933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "ai" | "governance" | "inbox";
+					category: "data" | "system" | "governance" | "ai" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;

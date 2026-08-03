@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
     name: "Google",
   } as Record<string, unknown> | null,
   partRow: { id: "part-1" } as Record<string, unknown> | null,
+  /** Whether the caller passes `requirePodAdmin` — addPart's pod-scope floor. */
+  isPodAdmin: false,
 }));
 
 // Schema tables are plain identity markers — only used for reference equality
@@ -100,14 +102,50 @@ vi.mock("../utils/user-visible-where.js", () => ({
   userVisibleWhere: vi.fn(() => ({ op: "userVisibleWhere" })),
 }));
 
-vi.mock("../utils/workspace-write-access.js", () => ({
-  assertWorkspaceWrite: vi.fn(async () => undefined),
-}));
+// NOT a no-op stub: it REPRODUCES the real pod-wide rule
+// (workspace-write-access.ts — "allow only the owner, if there is one") so the
+// tests assert an OUTCOME (throws / nothing written) rather than that a mock was
+// called. A no-op here is exactly what let a MISSING floor pass this file green.
+// This is `removePart`'s / `delete`'s floor; `addPart`'s pod floor is
+// `requirePodAdmin` (below) — the two must stay distinguishable, since the
+// attach/detach asymmetry is what exposed the original hole.
+vi.mock("../utils/workspace-write-access.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    assertWorkspaceWrite: vi.fn(
+      async (
+        _db: unknown,
+        userId: string,
+        row: { workspaceId: string | null; ownerId?: string | null }
+      ) => {
+        if (row.workspaceId === null && row.ownerId !== userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the owner can modify this pod-wide resource.",
+          });
+        }
+      }
+    ),
+  };
+});
 
-vi.mock("../utils/workspace-role.js", () => ({
-  getWorkspaceRole: vi.fn(async () => "owner"),
-  requirePodAdmin: vi.fn(async () => undefined),
-}));
+// `requirePodAdmin` is the pod-scope half of `addPart`'s floor, so — like
+// `assertWorkspaceWrite` below — it must REFUSE, not resolve. A no-op here would
+// make the floor untestable in exactly the direction that matters.
+vi.mock("../utils/workspace-role.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    getWorkspaceRole: vi.fn(async () => "owner"),
+    requirePodAdmin: vi.fn(async () => {
+      if (!h.isPodAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Pod admin required.",
+        });
+      }
+    }),
+  };
+});
 
 vi.mock("../services/capabilities/uninstall-capability.js", () => ({
   uninstallCapability: vi.fn(async () => ({ deleted: {} })),
@@ -125,6 +163,7 @@ vi.mock("../middleware/audit-log.js", async () => {
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
 
+import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import type { Context } from "../types/context.js";
 
@@ -153,6 +192,8 @@ beforeEach(() => {
     name: "Google",
   };
   h.partRow = { id: "part-1" };
+  h.isPodAdmin = false;
+  vi.mocked(uninstallCapability).mockClear();
 });
 
 describe("containers.create — agent caller is governed", () => {
@@ -300,6 +341,153 @@ describe("containers.addPart — agent caller is governed", () => {
 
     expect(result).toMatchObject({ ok: true, status: "created" });
     expect(h.insertedLinks).toHaveLength(1);
+  });
+});
+
+/**
+ * The governance gate is NOT an authorization floor at pod scope.
+ * `checkPermissionOrPropose` performs workspace-membership RBAC only when a
+ * workspace lens is present — at pod scope it explicitly does none ("the
+ * authenticated bearer is the owner"). So for a pod-wide container these tests
+ * are the ONLY thing standing between any authenticated pod member and silently
+ * changing what someone else's bundle grants. `removePart` never lost this floor,
+ * which is why its absence on `addPart` produced the tell: you could attach to a
+ * container you were not allowed to detach from.
+ */
+describe("containers.addPart — pod-wide floor beneath the gate", () => {
+  it("refuses a non-owner who is NOT a pod admin, writing nothing", async () => {
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null, // pod-wide → the gate does no RBAC at all
+      createdBy: "someone-else",
+      name: "Google",
+    };
+
+    await expect(
+      caller().addPart({
+        capabilityId: CAP_ID,
+        partType: "tool",
+        partId: PART_ID,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.insertedLinks).toHaveLength(0);
+  });
+
+  /**
+   * Owner-only was too narrow and BROKE INSTALL: `create-from-definition`
+   * resolves an existing container by NAME + scope, never by creator, so the
+   * second installer of a pod-scoped capability is routinely not its `createdBy`.
+   * Pod admin is the same floor `containers.delete` already applies at pod scope.
+   */
+  it("lets a POD ADMIN attach to a pod-wide container they do not own", async () => {
+    h.isPodAdmin = true;
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null,
+      createdBy: "someone-else",
+      name: "Google",
+    };
+
+    const result = await caller().addPart({
+      capabilityId: CAP_ID,
+      partType: "tool",
+      partId: PART_ID,
+    });
+
+    expect(result).toMatchObject({ ok: true, status: "created" });
+    expect(h.insertedLinks).toHaveLength(1);
+  });
+
+  it("lets the OWNER attach to their own pod-wide container", async () => {
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null,
+      createdBy: "user-1",
+      name: "Google",
+    };
+
+    const result = await caller().addPart({
+      capabilityId: CAP_ID,
+      partType: "tool",
+      partId: PART_ID,
+    });
+
+    expect(result).toMatchObject({ ok: true, status: "created" });
+    expect(h.insertedLinks).toHaveLength(1);
+  });
+
+  it("does NOT apply the owner floor to a workspace-scoped container", async () => {
+    // Workspace rows are the gate's job. Double-gating here would hard-deny a
+    // non-owner MEMBER who is perfectly entitled, and would kill the agent's
+    // "ask to join" proposal path.
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: WS,
+      createdBy: "someone-else",
+      name: "Google",
+    };
+
+    const result = await caller().addPart({
+      capabilityId: CAP_ID,
+      partType: "tool",
+      partId: PART_ID,
+    });
+
+    expect(result).toMatchObject({ ok: true, status: "created" });
+    expect(h.insertedLinks).toHaveLength(1);
+  });
+});
+
+/**
+ * The SAME pod floor on the destructive side. `delete` cascades (it routes
+ * through `uninstallCapability`, dropping orphaned member tools/skills), so an
+ * unfloored pod branch here is strictly worse than the `addPart` hole was.
+ * Untested until now — every other case in this file uses a workspace-scoped
+ * fixture and never reaches `requirePodAdmin`.
+ */
+describe("containers.delete — pod floor on the destructive path", () => {
+  it("refuses a non-pod-admin and deletes nothing", async () => {
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null,
+      createdBy: "someone-else",
+      name: "Google",
+    };
+
+    await expect(caller().delete({ id: CAP_ID })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(uninstallCapability).not.toHaveBeenCalled();
+  });
+
+  it("refuses even the CREATOR when they are not a pod admin", async () => {
+    // Deliberately unlike `addPart`, which short-circuits on `createdBy`.
+    // Delete cascades, so it holds the stricter floor — pin that difference.
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null,
+      createdBy: "user-1",
+      name: "Google",
+    };
+
+    await expect(caller().delete({ id: CAP_ID })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(uninstallCapability).not.toHaveBeenCalled();
+  });
+
+  it("lets a pod admin delete a pod-wide container", async () => {
+    h.isPodAdmin = true;
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: null,
+      createdBy: "someone-else",
+      name: "Google",
+    };
+
+    const result = await caller().delete({ id: CAP_ID });
+    expect(result).toMatchObject({ ok: true });
+    expect(uninstallCapability).toHaveBeenCalled();
   });
 });
 

@@ -328,8 +328,12 @@ export async function allAgentsScorecard(params: {
   const ids = [...byAgent.keys()];
   if (ids.length === 0) return [];
 
-  // Resolve identity — and DROP non-agent actors (a human owner whose proposals
-  // are visible must never show up in the agent trust grid).
+  // Resolve identity — DROP non-agent actors (a human owner whose proposals are
+  // visible must never show up), AND owner-floor to the caller's OWN agents. The
+  // owner floor keeps the grid consistent with the per-agent detail doors
+  // (`agentProfile`/`agentScorecard`, which are owner-floored): without it a
+  // team-pod card for a co-member's agent would be a dead link (the detail probe
+  // would miss). It also matches the identity-leak floor the detail doors apply.
   const identities = await db
     .select({
       id: users.id,
@@ -339,7 +343,13 @@ export async function allAgentsScorecard(params: {
       agentType: users.agentType,
     })
     .from(users)
-    .where(and(inArray(users.id, ids), eq(users.userType, "agent")));
+    .where(
+      and(
+        inArray(users.id, ids),
+        eq(users.userType, "agent"),
+        eq(users.createdByUserId, userId)
+      )
+    );
 
   const standings: AgentStanding[] = [];
   for (const ident of identities) {

@@ -479,6 +479,7 @@ async function run() {
     userType: "agent",
     agentType: serviceType,
     createdByUserId: null,
+    createdVia: "cli",
     agentMetadata: {
       agentType: serviceType,
       description: e.description,

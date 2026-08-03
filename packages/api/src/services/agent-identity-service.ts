@@ -263,6 +263,7 @@ export async function createNamedAgent(opts: {
       agentType: opts.agentType,
       isPersonalAgent: false,
       createdByUserId: opts.createdByUserId,
+      createdVia: "cli",
       agentMetadata: {
         agentType: opts.agentType,
         createdByUserId: opts.createdByUserId,
@@ -454,6 +455,7 @@ export async function provisionSurfaceAgentKey(
         agentType,
         isPersonalAgent: false,
         createdByUserId: createdByUserId ?? null,
+        createdVia: "cli",
         agentMetadata: {
           agentType,
           description:

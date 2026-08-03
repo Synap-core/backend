@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   insertValues: [] as Array<Record<string, unknown>>,
   updateSets: [] as Array<Record<string, unknown>>,
   permissionCalls: 0,
+  /** Membership the REAL `assertWorkspaceWrite` resolves for the caller. */
+  membership: { role: "owner" } as { role: string } | null,
   existing: {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     workspaceId: "11111111-1111-4111-8111-111111111111",
@@ -34,6 +36,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    // Feeds the REAL `assertWorkspaceWrite` (see below — it is deliberately NOT
+    // mocked), so the write floor under `update` is exercised, not stubbed away.
+    getWorkspaceMembership: vi.fn(async () => h.membership),
     getDb: vi.fn(async () => ({
       select: vi.fn(() => readChain),
       query: {
@@ -63,9 +68,15 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
 
-vi.mock("../utils/workspace-write-access.js", () => ({
-  assertWorkspaceWrite: vi.fn().mockResolvedValue(undefined),
-}));
+// `../utils/workspace-write-access.js` is deliberately NOT mocked.
+//
+// It is the ONLY authorization floor on `automations.update` (automations.ts:
+// 1146 — there is no second gate behind it), and a no-op stub of it meant this
+// file stayed green even if that call were deleted outright. The helper needs
+// nothing but `getWorkspaceMembership`, which the `@synap/database` mock above
+// supplies from `h.membership`, so running the real thing is strictly cheaper
+// than reproducing its rule — and a reproduction can drift from the original
+// silently, which is the failure mode being removed here.
 
 vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: vi.fn(async () => {
@@ -137,6 +148,49 @@ beforeEach(() => {
   h.permissionCalls = 0;
   h.existing.metadata = {};
   h.existing.flowDefinition = { nodes: [], edges: [] };
+  h.membership = { role: "owner" };
+});
+
+/**
+ * `assertWorkspaceWrite` is the ONLY floor on `automations.update` — no second
+ * gate stands behind it. These cases run the REAL helper (it is not mocked), so
+ * deleting that call, or weakening its role set, turns them red. Previously the
+ * helper was a no-op stub and the floor was untested at this door.
+ */
+describe("automations.update — the write floor is real", () => {
+  it("FORBIDS a non-member and persists nothing", async () => {
+    h.membership = null;
+
+    await expect(
+      caller().update({
+        id: h.existing.id as string,
+        name: "Renamed by an outsider",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("FORBIDS a member whose role is below editor", async () => {
+    h.membership = { role: "viewer" };
+
+    await expect(
+      caller().update({
+        id: h.existing.id as string,
+        name: "Renamed by a viewer",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("allows an editor", async () => {
+    h.membership = { role: "editor" };
+
+    await caller().update({
+      id: h.existing.id as string,
+      name: "Renamed by an editor",
+    });
+    expect(h.updateSets).toHaveLength(1);
+  });
 });
 
 describe("automations flow catalog validation", () => {

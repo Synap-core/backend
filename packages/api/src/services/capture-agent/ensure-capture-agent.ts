@@ -261,6 +261,7 @@ export async function ensureCaptureAgent(): Promise<void> {
       name: CAPTURE_AGENT_DEF.name,
       emailVerified: true,
       userType: "agent",
+      createdVia: "system",
       agentMetadata,
       // Dual-write: mirror agent-identity fields to real columns (migration 0038).
       agentType: CAPTURE_AGENT_DEF.agentType,

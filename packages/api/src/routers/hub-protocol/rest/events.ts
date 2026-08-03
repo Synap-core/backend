@@ -13,6 +13,7 @@ import { createSynapEvent } from "@synap-core/core";
 import { eventRepository, type EventRecord } from "@synap/database";
 
 import { eventStreamManager } from "../../../event-stream-manager.js";
+import { NotificationService } from "../../../notifications/NotificationService.js";
 import { emitChatEvent } from "../../../utils/chat-realtime-broadcast.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { ListEventsQuerySchema, WireEventSchema } from "./_codecs/misc.js";
@@ -506,6 +507,26 @@ export function registerEventsRoutes(app: HubHono): void {
       });
 
       const record = await eventRepository.append(event);
+
+      // Producer (B2): a FAILED agent run pushes agent.task_failed to every
+      // workspace member (fan-out) — previously the type was declared but never
+      // fired, so a failed automation reached the user only if they pulled
+      // diagnose. Best-effort, non-fatal (never break the telemetry append).
+      if (b.runStatus === "failed") {
+        await NotificationService.createForWorkspace({
+          type: "agent.task_failed",
+          sourceType: "agent",
+          sourceId: runId,
+          workspaceId: b.workspaceId,
+          data: {
+            agentName: b.agentType,
+            errorMessage: b.errorMessage ?? "The agent run failed.",
+          },
+        }).catch((err) =>
+          logger.warn({ err, runId }, "agent.task_failed notify failed")
+        );
+      }
+
       return c.json({ eventId: record.id, runId });
     } catch (err) {
       logger.error({ err, userId, runId }, "POST /agent-runs failed");

@@ -217,6 +217,15 @@ export interface CreateCapabilityResult {
       id: string;
       name: string;
       status: "created" | "reused";
+      /**
+       * Parts the installer seeded but could NOT attach to the container —
+       * `addPart` refused (a pod-scoped container owned by someone else, and the
+       * installer is not a pod admin). Reported, never swallowed: the tools and
+       * skills are already written by this point, so throwing would abort a
+       * half-finished install with no rollback, and a silent catch would claim a
+       * complete install that is missing its membership edges.
+       */
+      partsNotAttached: number;
     } | null;
     vault: { ref: string; vaultRef: string; secretId: string }[];
     mcpServers: {
@@ -945,6 +954,7 @@ export async function createCapabilityFromDefinition(
       id: containerId,
       name: def.name,
       status: existingContainer ? "reused" : "created",
+      partsNotAttached: 0,
     };
 
     // W1: stamp TEMPLATE PROVENANCE into the container's `metadata` jsonb — no
@@ -979,22 +989,40 @@ export async function createCapabilityFromDefinition(
       .where(eq(capabilitiesTable.id, containerId));
 
     // Attach every created tool (connections + built-ins) and skill as a member.
-    for (const toolId of toolIdByName.values()) {
-      await containersCaller.addPart({
-        capabilityId: containerId,
-        partType: "tool",
-        partId: toolId,
-      });
-    }
-    for (const s of createdSkills) {
-      if (s.skillId) {
+    //
+    // NON-FATAL, but COUNTED. `addPart` carries an authorization floor for
+    // pod-scoped containers (owner or pod admin), and the installer resolves an
+    // existing container by NAME, so a second installer is routinely not its
+    // creator. Letting that throw aborted the install AFTER the tools and skills
+    // were already written — a partial install with no rollback. Swallowing it
+    // would be just as wrong: the caller would be told the install succeeded
+    // while the container has no members. So: keep going, count, and surface it.
+    let partsNotAttached = 0;
+    const attachPart = async (
+      partType: "tool" | "skill",
+      partId: string
+    ): Promise<void> => {
+      try {
         await containersCaller.addPart({
           capabilityId: containerId,
-          partType: "skill",
-          partId: s.skillId,
+          partType,
+          partId,
         });
+      } catch (err) {
+        partsNotAttached += 1;
+        logger.warn(
+          { containerId, partType, partId, err },
+          "createFromDefinition: could not attach part to capability container"
+        );
       }
+    };
+    for (const toolId of toolIdByName.values()) {
+      await attachPart("tool", toolId);
     }
+    for (const s of createdSkills) {
+      if (s.skillId) await attachPart("skill", s.skillId);
+    }
+    container = { ...container, partsNotAttached };
 
     // W3: the vault IS the connection registry. Stamp the secrets this applier
     // created as THIS capability's connections (`capability_id`), promoting one to

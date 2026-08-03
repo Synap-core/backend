@@ -344,11 +344,17 @@ export const capabilityContainersRouter = router({
       // Workspace-scoped rows are deliberately NOT gated here: the governance gate
       // already covers them, and double-gating would kill the "agent asks to join"
       // proposal path.
-      if (cap.workspaceId === null) {
-        await assertWorkspaceWrite(db, userId, {
-          workspaceId: null,
-          ownerId: cap.createdBy,
-        });
+      //
+      // The pod floor is OWNER *or* POD ADMIN — the same floor `delete` (above)
+      // applies to a pod-scoped container. Owner-only was too narrow in two real
+      // cases: an ownership transfer orphans every container the old owner
+      // created, and a second pod admin legitimately maintains shared bundles.
+      // Re-apply hits this constantly because the installer resolves an existing
+      // container by NAME + scope (create-from-definition.ts:918-932), never by
+      // creator — so the second installer of a pod-scoped capability is almost
+      // never the row's `createdBy`.
+      if (cap.workspaceId === null && cap.createdBy !== userId) {
+        await requirePodAdmin(userId);
       }
 
       const perm = await checkPermissionOrPropose({

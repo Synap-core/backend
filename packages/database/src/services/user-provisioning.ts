@@ -993,6 +993,7 @@ export async function seedAdminUser(
         agentType: "twin",
         createdByUserId: identityId,
         isPersonalAgent: false,
+        createdVia: "system",
         agentMetadata: {
           agentTemplate: "twin",
           agentType: "twin",

@@ -99,7 +99,8 @@ export interface AgentScorecard {
   };
   /** Top rejection reasons, most frequent first. */
   rejectionReasons: Array<{ reason: string; count: number }>;
-  /** Daily-cap posture (the cap is shared across all of the owner's agents). */
+  /** Daily-cap posture. The cap is PER-AGENT (scales with this agent's own
+   *  trust — see `agentDailyProposalCap`), not shared across the owner's roster. */
   dailyCap: { todayCount: number; cap: number; atOrOverCap: boolean };
 }
 
