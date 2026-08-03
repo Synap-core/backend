@@ -48,8 +48,17 @@ export interface ViewIdentity {
  * positively proven:
  *   1. The view is persisted and authored by the acting user
  *      (`views.userId === userId`), OR
- *   2. The backing widget definition is marked `trust_level = "trusted"`
- *      (set exclusively by a human-approved install/publish path).
+ *   2. The backing widget definition is marked `trust_level = "trusted"`.
+ *
+ * On (2) — this comment previously claimed `trust_level = "trusted"` was "set
+ * exclusively by a human-approved install/publish path". That was FALSE for
+ * synced rows: `routers/sync.ts` took the peer's `trustLevel` verbatim, so a
+ * hostile peer could sync a `frame` definition asserting `"trusted"` and its
+ * mutations would skip the propose gate on THIS pod. The ingest path now floors
+ * every synced row to `"generated"` (see the `widget_definitions` handler in
+ * `sync.ts`), which is what makes the claim true. Any NEW write path into
+ * `widget_definitions.trust_level` must preserve that invariant: only a human
+ * approval performed ON THIS POD may set `"trusted"`.
  *
  * `installed` / `generated` definitions, unknown identities, and any resolution
  * failure all yield `{ trusted: false }` → the permission gate proposes.

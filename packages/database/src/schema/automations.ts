@@ -897,11 +897,24 @@ export const automationStepRuns = pgTable(
       .notNull(),
     errorMessage: text("error_message"),
 
-    // Per-step token/cost attribution (D3, cheap-now). Populated only where node
-    // execution surfaces usage; NULL otherwise (IS-side telemetry, out of scope
-    // for Wave 1). numeric maps to string in Drizzle.
+    // Per-step token/cost attribution (D3, cheap-now). numeric maps to string
+    // in Drizzle. `cost_usd` stays NULL until a provider reports a price —
+    // honest-by-design, never a fabricated 0.
     tokensUsed: integer("tokens_used"),
     costUsd: numeric("cost_usd"),
+
+    // ── AI telemetry across the pod↔IS seam (0224) ──────────────────────────
+    // Drained from the AI-usage collector when a step made one or more IS
+    // generations (see @synap/intelligence-client ai-usage-collector.ts). NULL
+    // on a non-AI step, and NULL when the provider reported no usage.
+    //
+    // `finishReason` is the field that EXPLAINS an empty output: `length` (the
+    // maxTokens budget truncated it), `content-filter`, `error`, or `stop` (the
+    // model genuinely emitted nothing). Before 0224 an empty generation was
+    // unexplainable without SSH-ing to the IS container.
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    finishReason: text("finish_reason"),
 
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     completedAt: timestamp("completed_at", {

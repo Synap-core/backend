@@ -108,6 +108,8 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
   getDefaultActiveService,
   requestTaskExecute,
+  beginAiUsageCapture,
+  type AiUsageCollector,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
 
@@ -4213,6 +4215,34 @@ async function executeAutomationFlow(params: {
       }
     };
 
+    /**
+     * The AI-telemetry columns for a step row, or `{}` when the step made no IS
+     * generation. Merged into the SAME `.set()` that closes the step so there is
+     * no second UPDATE and no ordering hazard — and merged on BOTH the completed
+     * and the failed branch, because an empty/truncated generation is precisely
+     * the case whose `finish_reason` is the whole answer.
+     *
+     * Every field stays NULL when the provider reported nothing. Never a
+     * fabricated 0.
+     */
+    const aiUsageColumns = (
+      collector: AiUsageCollector
+    ): {
+      tokensIn?: number | null;
+      tokensOut?: number | null;
+      tokensUsed?: number | null;
+      finishReason?: string | null;
+    } => {
+      if (collector.size === 0) return {};
+      const t = collector.totals();
+      return {
+        tokensIn: t.tokensIn,
+        tokensOut: t.tokensOut,
+        tokensUsed: t.tokensTotal,
+        finishReason: t.finishReason,
+      };
+    };
+
     for (const node of sortedNodes) {
       // Skip trigger node (already fired)
       if (node.type === "trigger") continue;
@@ -4255,6 +4285,13 @@ async function executeAutomationFlow(params: {
       // loop bodies and array-pipe predicates — is attributed to THIS step.
       // Recording only; nothing here can fail or skip a step.
       const stepDiagnostics = beginStepDiagnostics();
+
+      // Open this step's AI-usage scope. Any IS generation this node makes —
+      // including inside a loop body or a retry — is attributed to THIS step and
+      // drained onto its row below (success AND failure: an empty generation is
+      // exactly the case whose finish reason we need). Recording only; nothing
+      // here can fail or skip a step.
+      const aiUsage = beginAiUsageCapture();
 
       // Resolve per-node error handling config
       const nodeErrorHandling = ((node.data as Record<string, unknown>)
@@ -5197,6 +5234,7 @@ async function executeAutomationFlow(params: {
             status: "completed",
             output: output as Record<string, unknown>,
             completedAt: new Date(),
+            ...aiUsageColumns(aiUsage),
           })
           .where(eq(automationStepRuns.id, stepRun.id));
       } else {
@@ -5216,6 +5254,7 @@ async function executeAutomationFlow(params: {
             status: "failed",
             errorMessage,
             completedAt: new Date(),
+            ...aiUsageColumns(aiUsage),
           })
           .where(eq(automationStepRuns.id, stepRun.id));
 

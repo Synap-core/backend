@@ -1,5 +1,28 @@
 /**
- * Widget Compiler
+ * Widget Compiler — ⚠️ UN-ROUTED. NO CALLERS. DO-NOT-REVIVE-AS-IS.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * SECURITY REMOVAL (not a deprecation). Both write doors that called this
+ * (`routers/widget-definitions.ts` upsert and
+ * `routers/hub-protocol/widget-definitions.ts` upsertWidgetDef) now reject
+ * `rendererType: "native"` at schema validation.
+ *
+ * Compiling is not itself dangerous — the danger is the ONLY consumer of its
+ * output. `bundleSource` was shipped unprojected to every workspace member by
+ * `widgetDefinitions.list` and executed by the browser's `NativeWidgetLoader`
+ * via `Blob` → `URL.createObjectURL` → `<script src>` → `document.head`:
+ * arbitrary JS in the TOP-LEVEL document of an IPC-privileged Electron
+ * renderer, gated on `rendererType === "native" && bundleSource` and never on
+ * `trustLevel`.
+ *
+ * Re-wiring this compiler requires a REAL execution boundary on the browser
+ * side first — Worker, separate process, or Wasm VM. A same-VM shim is NOT
+ * acceptable: Figma shipped one (SES/Realms) and it was escaped by multiple
+ * independent bugs; their fix was a different VM (QuickJS compiled to Wasm).
+ * The sandboxed path that already exists is `rendererType: "frame"`.
+ *
+ * Kept on disk as the reference for what a sandboxed bundler must reproduce.
+ * ─────────────────────────────────────────────────────────────────────────────
  *
  * Compiles JSX/TSX widget source into an IIFE bundle with shared externals.
  * Platform packages (React, Tamagui, tRPC, etc.) are resolved from

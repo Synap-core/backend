@@ -2241,9 +2241,17 @@ ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "started_at" timesta
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_used" integer;  -- 0198 (per-step token attribution)
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "cost_usd" numeric;  -- 0198 (per-step cost attribution)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_in" integer;  -- 0224 (IS generation prompt tokens)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_out" integer;  -- 0224 (IS generation completion tokens)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "finish_reason" text;  -- 0224 (WHY a generation ended — explains an empty output)
 
 CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
   ON "automation_step_runs" ("run_id");
+
+-- 0224 — "every step that did not finish cleanly".
+CREATE INDEX IF NOT EXISTS "automation_step_runs_finish_reason_idx"
+  ON "automation_step_runs" ("finish_reason")
+  WHERE "finish_reason" IS NOT NULL AND "finish_reason" <> 'stop';
 
 CREATE TABLE IF NOT EXISTS "automation_claims" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),

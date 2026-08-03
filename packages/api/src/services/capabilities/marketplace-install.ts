@@ -61,7 +61,7 @@ import { openLink } from "../../utils/deep-links.js";
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../workspace-creation-service.js";
-import { defineCell } from "../cells/define-cell.js";
+import { installCellFromDefinition } from "../cells/install-cell-from-definition.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -284,17 +284,15 @@ export async function applyMarketInstall(
       const [slugPackage, slugCellKey] = input.slug.includes("/")
         ? input.slug.split("/")
         : [def.packageSlug ?? "unknown", def.key ?? input.slug];
-      const result = await defineCell({
+      // Shared with the packages/apply inline-`cells[]` applier so the typeKey
+      // derivation and the view-renderer affinity threading cannot drift
+      // between the two install doors. See `install-cell-from-definition.ts`.
+      const result = await installCellFromDefinition({
+        definition: def,
         name: cellEntry.name,
-        rendererSource: def.code,
+        packageSlug: slugPackage as string,
+        cellKey: slugCellKey as string,
         workspaceId: input.workspaceId,
-        typeKey: `cell:${slugPackage}:${slugCellKey}`,
-        deps: def.deps,
-        defaultSize: def.defaultSize,
-        // View-renderer affinity from the package payload. Without it an
-        // installed renderer registers with no `viewRenderer.viewTypes` and the
-        // render chokepoint can never select it for a view.
-        viewTypes: Array.isArray(def.viewTypes) ? def.viewTypes : undefined,
         userId: input.userId,
       });
       return {

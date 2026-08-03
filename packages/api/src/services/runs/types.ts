@@ -11,10 +11,11 @@
  * The channel rule the model encodes (validated with the user):
  *   - automation → ONE channel for all its runs
  *   - playbook   → ONE channel per run (its session's channel)
- *   - capture    → no channel (its story is its correlationId-keyed events)
- *   - capability → no channel (mirrors capture: correlationId-keyed events)
- *   - session    → its own channel
- *   - chat       → the channel the turn ran in (browser chat / Discord bridge)
+ *   - capture     → no channel (its story is its correlationId-keyed events)
+ *   - capability  → no channel (mirrors capture: correlationId-keyed events)
+ *   - session     → its own channel
+ *   - chat        → the channel the turn ran in (browser chat / Discord bridge)
+ *   - agent_write → no channel (mirrors capture: correlationId-keyed events)
  */
 
 import type {
@@ -23,9 +24,24 @@ import type {
   RunPathTaken,
 } from "@synap/database";
 
-/** Which ledger a run came from. */
+/**
+ * Which ledger a run came from.
+ *
+ * `agent_write` is the CATCH-ALL for a plain agent write that instantiates no
+ * flow at all — e.g. a CLI `synap capture` or an MCP `create_entity` that
+ * auto-approved. It produces an auto-approved proposal receipt + a `.completed`
+ * event and belongs to no automation, playbook, chat turn, or capability run, so
+ * before this member existed it rendered in NO flow type and was invisible in the
+ * unified feed — the "you did something on the pod, I got no way to see it" gap.
+ */
 export type FlowType =
-  "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
+  | "automation"
+  | "playbook"
+  | "capture"
+  | "capability"
+  | "session"
+  | "chat"
+  | "agent_write";
 
 /** Normalised lifecycle across all ledgers. */
 export type RunStatus =
@@ -141,6 +157,19 @@ export interface AutomationStepActivityDetail {
   commandId: string | null;
   errorMessage: string | null;
   nodeType: AutomationNode["type"] | null;
+  /**
+   * AI telemetry for a step that made one or more IS generations (0224).
+   *
+   * `finishReason` is the field that EXPLAINS an empty completion — `length`
+   * (the maxTokens budget truncated it), `content-filter`, `error`, or `stop`
+   * (the model genuinely emitted nothing). Null on a non-AI step, on any run
+   * that predates the migration, and against an IS build that predates the
+   * seam telemetry change.
+   */
+  finishReason: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  tokensUsed: number | null;
 }
 
 export interface AutomationStepActivityItem {

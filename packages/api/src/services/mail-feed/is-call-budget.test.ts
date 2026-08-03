@@ -159,3 +159,108 @@ describe("IS call budget", () => {
     timeoutSpy.mockRestore();
   });
 });
+
+/**
+ * Regression tests for run 92fb258a (2026-08-03) — the EMPTY GENERATION hole.
+ *
+ * `analyze` ran 24.5s and returned `""`; `relate` ran 9.9s and returned `""`.
+ * Both were recorded `completed`, the assembler apologised in >200 characters
+ * so the `minLength: 200` guard passed, and the run reported `completed` with a
+ * report entity created. The invariant these tests pin: a GENERATION that
+ * produced nothing is a FAILURE at the one call site that owns the IS response.
+ */
+describe("generateViaIS — an empty completion is a FAILURE, not a result", () => {
+  const origFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  /** A 200 OK IS response carrying the given `output`. `undefined` omits the key. */
+  const respondWith = (output: unknown) => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify(output === undefined ? {} : { output }), {
+          status: 200,
+        })
+    ) as unknown as typeof fetch;
+  };
+
+  it('rejects on "" — the exact shape that shipped a hollow report', async () => {
+    respondWith("");
+    await expect(
+      generateViaIS({ prompt: "x".repeat(6000), maxTokens: 700 })
+    ).rejects.toThrow(/\[empty completion\]/);
+  });
+
+  it("names elapsed, budget, endpoint, payload size, output type and maxTokens", async () => {
+    respondWith("");
+    // Each assertion is a separate field of the message an operator reads out of
+    // `automation_step_runs.error_message` — the only artifact `synap diagnose`
+    // shows for a failed step.
+    const err: Error = await generateViaIS({
+      prompt: "x".repeat(6000),
+      maxTokens: 700,
+    }).then(
+      () =>
+        new Error("expected generateViaIS to reject on an empty completion"),
+      (e: unknown) => e as Error
+    );
+
+    expect(err.message).toContain("IS generation call failed");
+    expect(err.message).toContain("[empty completion]");
+    expect(err.message).toMatch(/after \d+ms of a 180000ms budget/);
+    expect(err.message).toContain(
+      "endpoint=https://is.test.internal/v1/tools/generate"
+    );
+    expect(err.message).toMatch(/payloadChars=6\d\d\d/);
+    expect(err.message).toContain("outputType=string");
+    // maxTokens is the variable that predicts an empty reasoning-model answer.
+    expect(err.message).toContain("maxTokens=700");
+  });
+
+  it("rejects on whitespace-only output (a body of spaces is the empty body it looks like)", async () => {
+    respondWith("   \n\t  ");
+    await expect(generateViaIS({ prompt: "p" })).rejects.toThrow(
+      /\[empty completion\]/
+    );
+  });
+
+  it("rejects when the IS omits `output` entirely, and when it is null", async () => {
+    respondWith(undefined);
+    await expect(generateViaIS({ prompt: "p" })).rejects.toThrow(
+      /\[empty completion\].*outputType=undefined/s
+    );
+    respondWith(null);
+    await expect(generateViaIS({ prompt: "p" })).rejects.toThrow(
+      /\[empty completion\].*outputType=null/s
+    );
+  });
+
+  it("reports maxTokens=default when the caller set no ceiling", async () => {
+    respondWith("");
+    await expect(generateViaIS({ prompt: "p" })).rejects.toThrow(
+      /maxTokens=default/
+    );
+  });
+
+  it("stays NARROW: a json:true object still resolves, even with no keys", async () => {
+    // The invariant is "a GENERATION produced nothing", NOT "a call returned
+    // something falsy". A parsed `{}` is a SHAPE question for the caller's zod
+    // schema; widening this check to objects would fail legitimate json calls.
+    respondWith({});
+    await expect(generateViaIS({ prompt: "p", json: true })).resolves.toEqual(
+      {}
+    );
+    respondWith({ reviewNeeded: false });
+    await expect(generateViaIS({ prompt: "p", json: true })).resolves.toEqual({
+      reviewNeeded: false,
+    });
+  });
+
+  it("does not touch the happy path: a real completion is returned unchanged", async () => {
+    respondWith("a summary line");
+    await expect(generateViaIS({ prompt: "p" })).resolves.toBe(
+      "a summary line"
+    );
+  });
+});

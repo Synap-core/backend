@@ -1132,9 +1132,21 @@ const SUPPLEMENTARY_TABLES: Record<
           deps: (row.deps as Record<string, string>) ?? {},
           isActive: (row.isActive as boolean) !== false,
           version: (row.version as string) ?? "1.0.0",
-          trustLevel:
-            (row.trustLevel as typeof widgetDefinitions.$inferInsert.trustLevel) ??
-            "generated",
+          // FLOORED to "generated" unconditionally — peer-supplied `trustLevel`
+          // is DISCARDED, mirroring `bundleSource: null` above.
+          //
+          // Why: `services/view-trust-service.ts` (`resolveViewTrust`) treats
+          // `trust_level = "trusted"` as proof of a human-approved install, and
+          // returns `{ trusted: true }` — which is exactly what lets a framed
+          // view's mutations SKIP the propose gate in `checkPermissionOrPropose`.
+          // Taking the peer's word for that field meant a hostile pod could sync
+          // a perfectly legitimate `frame` definition carrying
+          // `trustLevel: "trusted"` and have its writes execute ungoverned on
+          // this pod. A synced row has passed no human approval HERE, which is
+          // the only approval that can grant this pod's trust.
+          //
+          // "generated" is the floor, not a default: do not restore the `??`.
+          trustLevel: "generated",
           role:
             (row.role as typeof widgetDefinitions.$inferInsert.role) ??
             "widget",

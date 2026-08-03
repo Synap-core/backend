@@ -21,11 +21,12 @@ import { fileURLToPath } from "node:url";
  *
  *   2. LENS AUTHORIZATION — a caller-supplied `workspaceId` reaches the
  *      registry's `eq(workspaceId, …)` predicates. Without the
- *      `workspaceProcedure` middleware, NOTHING else verifies membership, so
- *      every registry procedure must route its workspace input through
- *      `resolveRegistryLens`, which must call `getWorkspaceRole` and throw
- *      FORBIDDEN. This is the repo's documented owner-blind read defect class;
- *      a new read door is its prime candidate.
+ *      `workspaceProcedure` middleware, NOTHING else verifies access, so every
+ *      registry procedure must route its workspace input through
+ *      `resolveRegistryLens`, which must check BOTH membership
+ *      (`getWorkspaceRole`) and ownership (`ownedWorkspaceIds`) and throw
+ *      FORBIDDEN when neither holds. This is the repo's documented owner-blind
+ *      read defect class; a new read door is its prime candidate.
  */
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -81,11 +82,16 @@ describe("capabilities.registry door", () => {
     }
   });
 
-  it("resolveRegistryLens verifies membership and throws FORBIDDEN", () => {
+  it("resolveRegistryLens authorizes membership OR ownership and throws FORBIDDEN", () => {
     const start = ROUTER.indexOf("async function resolveRegistryLens");
     expect(start).toBeGreaterThan(-1);
     const fn = ROUTER.slice(start, ROUTER.indexOf("\n}", start));
-    expect(fn).toContain("getWorkspaceRole");
+    // Two arms, because `workspaces.owner_id` is a first-class column SEPARATE
+    // from `workspace_members`: a sovereign pod's owner may have no member row,
+    // and a membership-only gate hard-FORBIDs them from their own catalogue.
+    expect(fn).toContain("getWorkspaceRole"); // membership arm
+    expect(fn).toContain("ownedWorkspaceIds"); // ownership arm
+    // …and neither arm may be advisory: a caller with neither is still refused.
     expect(fn).toContain("FORBIDDEN");
     // Pod altitude is `null`, never a silent fall-through to some other lens.
     expect(fn).toContain("return null");

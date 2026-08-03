@@ -67,6 +67,20 @@ export {
   isCallBudgetMs,
   describeISFailure,
   describeISHttpError,
+  describeISEmptyGeneration,
 } from "./is-call-budget.js";
 
 export type { ISCallKind, ISCallContext } from "./is-call-budget.js";
+
+// AI usage/finish-reason capture — the side channel that carries an IS
+// generation's `usage` + `finishReason` to the automation step ledger WITHOUT
+// touching the `ai.generate` output contract (see ai-usage-collector.ts).
+export {
+  AiUsageCollector,
+  beginAiUsageCapture,
+  withAiUsageCapture,
+  recordAiUsage,
+  currentAiUsage,
+} from "./ai-usage-collector.js";
+
+export type { AiUsageSample, AiUsageTotals } from "./ai-usage-collector.js";

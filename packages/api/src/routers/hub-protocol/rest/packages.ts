@@ -234,6 +234,91 @@ const PackageApplySchema = z.object({
       })
     )
     .optional(),
+  // ─── CP-parity slots ──────────────────────────────────────────────────────
+  //
+  // Everything below is accepted by the CONTROL PLANE's `packageDefinitionSchema`
+  // (`synap-control-plane-api/src/routes/packages.ts`) and was, until this
+  // change, STRIPPED right here: this is a plain z.object, so an undeclared key
+  // is deleted from `body` BEFORE preflight, `checkPermissionOrPropose` (which
+  // stores `definition: body` for the approve executor to replay),
+  // `materializeWorkspaceCore` and `applyPackagePostWorkspace` ever see it.
+  // A published package therefore arrived thinner than the same template seeded
+  // from a file — no error, no log. Parity is now guarded programmatically by
+  // `__tripwires__/cp-pod-package-schema-parity.test.ts`, which derives BOTH key
+  // sets from source; adding a field to CP without a slot here goes red.
+
+  /**
+   * Inline cell (view-renderer) definitions shipped by a workspace package.
+   * Applied by `applyPackagePostWorkspace` through the shared
+   * `installCellFromDefinition` → `defineCell` door. `viewTypes` is declared
+   * because dropping it registers a renderer with no affinity, which the render
+   * chokepoint can never select. Bounds mirror the CP slot and `rest/cells.ts`.
+   */
+  cells: z
+    .array(
+      z.object({
+        key: z.string().min(1).max(100),
+        name: z.string().min(1).max(128),
+        code: z.string().min(1),
+        deps: z.record(z.string(), z.string()).optional(),
+        previewCode: z.string().optional(),
+        defaultSize: z
+          .object({
+            w: z.number().int().min(1).max(12),
+            h: z.number().int().min(1),
+          })
+          .optional(),
+        configSchema: z.record(z.string(), z.unknown()).optional(),
+        viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
+      })
+    )
+    .optional(),
+  /**
+   * Bento widget-type declarations (`{type,label,icon,defaultConfig,defaultSize}`).
+   * APPLIER PENDING: unlike `cells`, these carry no renderer source, and every
+   * existing pod write door for `widget_definitions` requires one
+   * (`routers/widget-definitions.ts` rejects a create without
+   * `rendererSource`/`source`). Declared so the field stops being silently
+   * dropped and reaches the stored `definition` (the approve executor replays
+   * it); inventing a speculative applier here is exactly what the CP header
+   * warns against.
+   */
+  widgets: z.array(z.record(z.string(), z.unknown())).optional(),
+  /**
+   * Full relation-def metadata (slug/displayName/description/isDirectional/
+   * uiHints). CONSUMER ALREADY EXISTS: `WorkspaceDefinitionInput.relationDefs`
+   * (create-workspace-from-definition.ts:404), seeded create-if-slug-missing by
+   * `reconcileWorkspaceFromDefinition` (:1123) — which `materializeWorkspaceCore`
+   * reaches on the compose and reconcile-if-stale paths. Only the slot was
+   * missing, so a republished workspace silently lost its relation graph one
+   * layer AFTER the CP had widened its own schema to preserve it.
+   */
+  relationDefs: z.array(z.record(z.string(), z.unknown())).optional(),
+  /**
+   * Default intelligence commands. CONSUMER ALREADY EXISTS:
+   * `WorkspaceDefinitionInput.commands` (create-workspace-from-definition.ts:393),
+   * seeded create-if-title-missing by `reconcileWorkspaceFromDefinition` (:1081).
+   * Slot-only fix, same as `relationDefs`.
+   */
+  commands: z.array(z.record(z.string(), z.unknown())).optional(),
+  /**
+   * Phased rollout definitions (each phase lists the profiles it activates).
+   * APPLIER PENDING — no pod consumer reads `definition.phases` today. Declared
+   * so it survives to the stored definition instead of vanishing at the door.
+   */
+  phases: z.array(z.unknown()).optional(),
+  /**
+   * Legacy composition list (bare pack slugs, no resolver — `dependencies` is
+   * the resolved successor). APPLIER PENDING: the dependency resolver keys off
+   * `dependencies`, not this. Declared for lossless carry only.
+   */
+  composesFrom: z.array(z.string().min(1).max(64)).optional(),
+  /**
+   * Free-form domain label for the package. APPLIER PENDING — catalog metadata
+   * with no pod consumer; declared so it is not silently dropped.
+   */
+  domain: z.string().optional(),
+
   // Phase 2 layers
   capabilities: z.array(CapabilitySchema).optional(),
   automations: z.array(AutomationSchema).optional(),

@@ -18,9 +18,35 @@ import { getDb, and, eq, or, isNull, asc } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { scopedDb, accessFor } from "../access/index.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { compileWidgetSource } from "../utils/widget-compiler.js";
+// SECURITY: `compileWidgetSource` is UN-ROUTED from this router — its only
+// caller was the `native` branch below. The import is REMOVED (not left
+// unused); the function itself is kept on disk at `../utils/widget-compiler.ts`
+// with its own DO-NOT-REVIVE-AS-IS header. See NATIVE_RENDERER_REJECTED.
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
+
+/**
+ * SECURITY — rejection message for `rendererType: "native"`. DO-NOT-REVIVE-AS-IS.
+ *
+ * The native renderer was an arbitrary-code-execution path, not a feature with a
+ * bug. `source` → `compileWidgetSource()` → `bundleSource` → `.list` (no column
+ * projection, so every workspace member received it) → the browser's
+ * `NativeWidgetLoader`, which wrapped the bundle in a `Blob`, minted an object
+ * URL, and appended it as a `<script>` to `document.head`: same-origin JS in the
+ * TOP-LEVEL document of an IPC-privileged Electron renderer. No iframe, no
+ * worker, no process boundary; the renderer CSP (`script-src 'self'
+ * 'unsafe-inline' blob:`) permits it, and the registration gate checked only
+ * `rendererType === "native" && bundleSource` — never `trustLevel`.
+ *
+ * Do not re-enable without a REAL boundary (Worker / separate process / Wasm
+ * VM). A same-VM shim is NOT acceptable — Figma shipped one (SES/Realms) and it
+ * was escaped by multiple independent bugs; their fix was a different VM
+ * (QuickJS on Wasm).
+ */
+const NATIVE_RENDERER_REJECTED =
+  'rendererType "native" is no longer accepted: native bundles executed un-sandboxed ' +
+  "in the host origin (arbitrary code execution in every workspace member's " +
+  'renderer). Use "frame" for a sandboxed React cell, or "iframe" for sandboxed HTML.';
 
 /**
  * Extract the first fenced code block from an LLM response. Falls back to the
@@ -82,9 +108,31 @@ const WidgetUpsertSchema = z.object({
   description: z.string().max(500).optional(),
   icon: z.string().max(64).optional(),
   category: z.string().max(64).optional(),
+  /**
+   * SECURITY: `"native"` is accepted by the parser ONLY so that a request asking
+   * for it fails LOUDLY with the explanation below instead of a bare
+   * "invalid enum value" — it can never validate, and `.transform` strips it
+   * from the output type so no downstream branch can reference it.
+   *
+   * Why it is gone: a native definition's `source` was compiled to
+   * `bundleSource`, shipped unprojected to every workspace member by `.list`,
+   * and executed by the browser's `NativeWidgetLoader` via
+   * `Blob` → `URL.createObjectURL` → `<script src>` → `document.head` — arbitrary
+   * JS in the top-level document of an IPC-privileged Electron renderer, with no
+   * `trustLevel` check anywhere on the path. DO-NOT-REVIVE-AS-IS.
+   */
   rendererType: z
     .enum(["builtin", "iframe", "native", "frame"])
-    .default("iframe"),
+    .default("iframe")
+    .superRefine((value, ctx) => {
+      if (value === "native") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: NATIVE_RENDERER_REJECTED,
+        });
+      }
+    })
+    .transform((value) => value as Exclude<typeof value, "native">),
   /** What this cell renders — the de-conflated content taxonomy. Selected by the
    *  author (Cell Studio) / AI generator; defaults to the content-agnostic `widget`. */
   contentKind: z
@@ -317,12 +365,17 @@ export const widgetDefinitionsRouter = router({
         });
       }
 
-      if (input.rendererType === "native" && !input.source) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "source (JSX/TSX) is required for native widgets",
-        });
-      }
+      // UN-ROUTED (security): the `native` arity check below is unreachable —
+      // `rendererType: "native"` now fails schema validation with
+      // NATIVE_RENDERER_REJECTED and is stripped from the parsed type.
+      // DO-NOT-REVIVE-AS-IS.
+      //
+      //   if (input.rendererType === "native" && !input.source) {
+      //     throw new TRPCError({
+      //       code: "BAD_REQUEST",
+      //       message: "source (JSX/TSX) is required for native widgets",
+      //     });
+      //   }
 
       if (input.rendererType === "frame" && !input.rendererSource) {
         throw new TRPCError({
@@ -332,19 +385,26 @@ export const widgetDefinitionsRouter = router({
         });
       }
 
-      // Compile native widget source to IIFE bundle.
+      // UN-ROUTED (security) — the native compile step. `bundleSource` is now
+      // always undefined from this door, so the row it writes below can never
+      // carry an executable bundle. DO-NOT-REVIVE-AS-IS: compiling the source is
+      // harmless, but the ONLY consumer of `bundleSource` was the browser's
+      // top-level-document `<script>` loader. See NATIVE_RENDERER_REJECTED.
+      // `compileWidgetSource` itself is kept on disk (utils/widget-compiler.ts).
+      //
+      //   if (input.rendererType === "native" && input.source) {
+      //     try {
+      //       bundleSource = await compileWidgetSource(input.source);
+      //     } catch (err) {
+      //       throw new TRPCError({
+      //         code: "BAD_REQUEST",
+      //         message: `Widget compilation failed: ${...}`,
+      //       });
+      //     }
+      //   }
+      //
       // Frame widgets store rendererSource as-is (raw ESM) — no compile step.
-      let bundleSource: string | undefined;
-      if (input.rendererType === "native" && input.source) {
-        try {
-          bundleSource = await compileWidgetSource(input.source);
-        } catch (err) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Widget compilation failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      }
+      const bundleSource: string | undefined = undefined;
 
       const db = await getDb();
       const [row] = await db

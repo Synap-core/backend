@@ -20,6 +20,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   getUserAccessibleWorkspaceIds,
   hasScope,
+  isUuid,
   logger,
   resolveActingContext,
   type HubHono,
@@ -60,7 +61,7 @@ export function registerEventsRoutes(app: HubHono): void {
     tags: ["Events"],
     summary: "List recent events for a user",
     description:
-      "Returns events from the event log filtered by type/subject/window. Default window is 7 days; default limit is 50, hard-capped at 200.",
+      "Returns events from the event log filtered by type/subject/window, and optionally by producer: `agentUserId` (everything one agent did), `isAgent` (agent- vs human-produced) and `correlationId` (one request chain). Default window is 7 days; default limit is 50, hard-capped at 200.",
     request: {
       query: ListEventsQuerySchema,
     },
@@ -96,6 +97,24 @@ export function registerEventsRoutes(app: HubHono): void {
     const fromDateStr = c.req.query("fromDate");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
 
+    // "What did this agent do?" — the reader for `events.agent_user_id` (indexed
+    // since 0131). `agentUserId` is a TEXT column (Kratos identity id), so it is
+    // NOT uuid-shape-checked; `correlationId` IS a uuid column, and a malformed
+    // value there makes Postgres throw — which this route's catch would report as
+    // a 500 (a client error dressed as a server fault). Shape-check it up front
+    // and 400 instead.
+    const agentUserId = c.req.query("agentUserId");
+    const correlationId = c.req.query("correlationId");
+    if (correlationId && !isUuid(correlationId)) {
+      return c.json({ error: "correlationId must be a UUID" }, 400);
+    }
+    const isAgentRaw = c.req.query("isAgent");
+    if (isAgentRaw !== undefined && !["true", "false"].includes(isAgentRaw)) {
+      return c.json({ error: "isAgent must be 'true' or 'false'" }, 400);
+    }
+    const isAgent =
+      isAgentRaw === undefined ? undefined : isAgentRaw === "true";
+
     if (!userId) return c.json({ error: "userId is required" }, 400);
 
     try {
@@ -104,6 +123,9 @@ export function registerEventsRoutes(app: HubHono): void {
         eventType: type,
         subjectType: subjectType as any,
         subjectId,
+        agentUserId,
+        correlationId,
+        isAgent,
         fromDate: fromDateStr
           ? new Date(fromDateStr)
           : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),

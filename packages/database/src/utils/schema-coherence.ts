@@ -1299,6 +1299,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "cost_usd",
     addedBy: "0198_workflow_attribution_spine.sql",
   },
+  // AI telemetry across the pod↔IS seam — the fields that explain an empty
+  // `ai.generate`. Checking `finish_reason` confirms 0224 ran (all three
+  // columns land in the same statement block).
+  {
+    table: "automation_step_runs",
+    column: "finish_reason",
+    addedBy: "0224_automation_step_run_ai_telemetry.sql",
+  },
   // P4-lite W0 — cross-pod project refs. NOTE: `projects` is created by 0151,
   // not the baseline, so this tripwire is the column's only startup guard.
   {

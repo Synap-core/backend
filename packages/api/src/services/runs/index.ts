@@ -704,6 +704,114 @@ async function listCapabilityRuns(
   return merged.slice(0, limit).filter((r) => !status || r.status === status);
 }
 
+/**
+ * A plain AGENT WRITE — the catch-all ledger for an auto-approved agent action
+ * that instantiates no flow.
+ *
+ * A CLI `synap capture`, an MCP `create_entity`, a `remember_fact` — each leaves
+ * an AUTO_APPROVED proposal receipt (permission-check.ts's `gov.decision ===
+ * "execute"` branch) plus a `.completed` event on the spine, and belongs to no
+ * automation, playbook, chat turn or capability run. Every other flow type keyed
+ * off a ledger row or a specific proposalType, so these rendered in NONE of them
+ * and were invisible in the unified feed.
+ *
+ * Synthesis is the SAME correlationId-keyed mechanism `listCaptureRuns` /
+ * `listCapabilityRuns` already use (the receipt is the row, its correlationId is
+ * the run identity and the join key for its events) — deliberately not a second
+ * mechanism.
+ *
+ * The floor excludes what another flow type already renders:
+ *   - `capture.graph` / `capability.run` proposalTypes  → their own flow types
+ *   - `stepRunId IS NOT NULL`                            → an automation step's
+ *     write, already inside its automation run's timeline
+ * and requires `agentUserId IS NOT NULL` (a HUMAN's auto-approved write is not
+ * an agent action, and is not what this feed answers for).
+ */
+async function listAgentWriteRuns(
+  userId: string,
+  scope: RunScope,
+  limit: number,
+  status?: RunStatus,
+  exactRunId?: string
+): Promise<UnifiedRun[]> {
+  // An auto-approved receipt means the write already executed → always
+  // "completed"; any other status filter excludes this ledger entirely.
+  if (status && status !== "completed") return [];
+  // No entity-subject linkage exists on a plain write receipt (unlike capture's
+  // `data.materialized.entityIds`) — an entity-focused scope has nothing to
+  // match. Mirrors listCapabilityRuns.
+  if (scope.subjectEntityId) return [];
+
+  const rows = await db
+    .select({
+      id: proposals.id,
+      correlationId: proposals.correlationId,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      agentUserId: proposals.agentUserId,
+      createdAt: proposals.createdAt,
+      workspaceId: proposals.workspaceId,
+      projectId: proposals.projectId,
+      data: proposals.data,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.AUTO_APPROVED),
+        drizzleSql`${proposals.agentUserId} IS NOT NULL`,
+        drizzleSql`${proposals.proposalType} NOT IN (${CAPTURE_PROPOSAL_TYPE}, ${CAPABILITY_RUN_PROPOSAL_TYPE})`,
+        isNull(proposals.stepRunId),
+        userVisibleWhere(proposals.workspaceId, userId),
+        exactRunId
+          ? or(
+              eq(proposals.correlationId, exactRunId),
+              eq(proposals.id, exactRunId)
+            )
+          : undefined,
+        scope.workspaceId
+          ? eq(proposals.workspaceId, scope.workspaceId)
+          : undefined,
+        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(limit);
+
+  return rows.map((r) => {
+    const data = (r.data ?? {}) as Record<string, unknown>;
+    // The model sometimes volunteers a rationale on an auto-approved write
+    // (permission-check threads it into `data.reasoning`) — it is the single
+    // most useful line to show, so prefer it over the bare action label.
+    const reasoning =
+      typeof data.reasoning === "string" && data.reasoning
+        ? (data.reasoning as string)
+        : null;
+    return {
+      // Mirrors capture: the correlationId IS the run's identity when present.
+      id: r.correlationId ?? r.id,
+      flowType: "agent_write" as const,
+      flowId: null,
+      flowName: r.proposalType,
+      status: "completed" as const,
+      startedAt: r.createdAt,
+      completedAt: r.createdAt,
+      workspaceId: r.workspaceId ?? null,
+      projectId: r.projectId ?? null,
+      subjectEntityId: null,
+      channelId: null,
+      correlationId: r.correlationId ?? null,
+      replayOf: null,
+      summary: reasoning ?? r.proposalType,
+      error: null,
+      // The AGENT is what did this — the whole point of the flow type.
+      triggeredBy: r.agentUserId ?? null,
+      stepsCompleted: null,
+      stepsFailed: null,
+      definitionVersion: null,
+    };
+  });
+}
+
 async function listSessionRuns(
   userId: string,
   scope: RunScope,
@@ -904,6 +1012,8 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     jobs.push(listCapabilityRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "session") && !flowId)
     jobs.push(listSessionRuns(userId, scope, perFlow, status));
+  if ((!flowType || flowType === "agent_write") && !flowId)
+    jobs.push(listAgentWriteRuns(userId, scope, perFlow, status));
   // Chat in the merged feed only when the caller is looking for trouble
   // (running/failed) or explicitly filters flowType=chat — avoids flooding the
   // Activity feed with every successful Discord ping. Explicit flowType=chat
@@ -1205,6 +1315,15 @@ export async function getRun(
             // step's own error and its node type from the snapshot.
             errorMessage: s.errorMessage ?? null,
             nodeType: nodeTypeById.get(s.nodeId) ?? null,
+            // AI telemetry across the pod↔IS seam (0224). NULL on a non-AI
+            // step, and on any step run before the IS started returning it.
+            // `finishReason` is what turns `out (empty)` from a dead end into
+            // an answer — `length` = truncated, `content-filter` = refused,
+            // `stop` + tokensOut 0 = the model said nothing.
+            finishReason: s.finishReason ?? null,
+            tokensIn: s.tokensIn ?? null,
+            tokensOut: s.tokensOut ?? null,
+            tokensUsed: s.tokensUsed ?? null,
           },
         };
       })
@@ -1282,6 +1401,65 @@ export async function getRun(
       playbookDetail: null,
       definitionSnapshot: null,
       pathTaken: null,
+    };
+  }
+
+  // Mirrors the "capture" branch above (same correlationId-keyed event join) —
+  // permission-check now writes correlationId as a COLUMN on the auto-approve
+  // receipt, which is what makes the receipt joinable to its spine events at all.
+  if (flowType === "agent_write") {
+    const [run] = await listAgentWriteRuns(userId, {}, 1, undefined, id);
+    if (!run) return null;
+    const base = {
+      trigger: null,
+      outputSummary: null,
+      playbookDetail: null,
+      definitionSnapshot: null,
+      pathTaken: null,
+    } as const;
+    if (!run.correlationId)
+      return {
+        run: { ...run, flowType: "agent_write" as const },
+        activity: [],
+        ...base,
+      };
+    const rows = await db
+      .select({
+        id: events.id,
+        at: events.timestamp,
+        subjectType: events.subjectType,
+        action: events.type,
+        data: events.data,
+      })
+      .from(events)
+      .where(
+        and(
+          eq(events.correlationId, run.correlationId),
+          eq(events.userId, userId)
+        )
+      );
+    const activity: RunActivityItem[] = rows
+      .map((e) => {
+        const data = (e.data ?? {}) as Record<string, unknown>;
+        return {
+          id: e.id,
+          at: e.at ?? null,
+          kind:
+            typeof data.kind === "string"
+              ? (data.kind as string)
+              : e.subjectType,
+          status: null,
+          label: e.action,
+          hint:
+            typeof data.fixHint === "string" ? (data.fixHint as string) : null,
+          detail: data,
+        };
+      })
+      .sort(byAtAsc);
+    return {
+      run: { ...run, flowType: "agent_write" as const },
+      activity,
+      ...base,
     };
   }
 

@@ -13,6 +13,8 @@ import {
   isCallBudgetMs,
   describeISFailure,
   describeISHttpError,
+  describeISEmptyGeneration,
+  recordAiUsage,
   type ISCallContext,
 } from "@synap/intelligence-client";
 
@@ -27,7 +29,8 @@ export interface GenerateArgs {
 /**
  * Run a single-shot LLM completion via the IS `generate` tool. Returns the IS
  * `output` field directly (text or parsed JSON). Throws on a non-2xx IS response
- * so the caller (a builtin verb inside an automation) fails loudly, not silently.
+ * — AND on an EMPTY completion — so the caller (a builtin verb inside an
+ * automation) fails loudly, not silently.
  *
  * THIS IS THE CALL THAT BLEW UP ON 2026-07-31: a report `analyze` step died at
  * exactly 60.011s against a hardcoded `AbortSignal.timeout(60_000)` with a ~6KB
@@ -73,6 +76,65 @@ export async function generateViaIS(args: GenerateArgs): Promise<unknown> {
     const text = await res.text().catch(() => "");
     throw describeISHttpError(ctx, res.status, res.statusText, text);
   }
-  const data = (await res.json()) as { output?: unknown };
+  // The IS returns `{ output, finishReason?, usage? }`. We still return `output`
+  // and ONLY `output` — the `ai.generate` verb's published output contract is
+  // that the node's output IS the IS output value, so an envelope here would
+  // break every `steps.<id>.output.<field>` template an author has written. The
+  // telemetry rides the AsyncLocalStorage side channel instead, where the
+  // automation executor drains it onto the step-run row (ai-usage-collector.ts).
+  //
+  // `finishReason`/`usage` are OPTIONAL BY CONSTRUCTION: an IS build that
+  // predates the seam change returns only `output`, and some providers do not
+  // report usage. Absent stays NULL — never a fabricated 0.
+  const data = (await res.json()) as {
+    output?: unknown;
+    finishReason?: unknown;
+    usage?: {
+      promptTokens?: unknown;
+      completionTokens?: unknown;
+      totalTokens?: unknown;
+    };
+  };
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  const finishReason =
+    typeof data.finishReason === "string" && data.finishReason
+      ? data.finishReason
+      : undefined;
+  // Record BEFORE the empty-completion throw below: an empty generation is
+  // EXACTLY the case whose finish reason we need, so the telemetry must survive
+  // the failure path. The executor writes it on the failed step row too.
+  recordAiUsage({
+    finishReason,
+    promptTokens: num(data.usage?.promptTokens),
+    completionTokens: num(data.usage?.completionTokens),
+    totalTokens: num(data.usage?.totalTokens),
+  });
+  // AN EMPTY GENERATION IS A FAILURE, NOT AN EMPTY RESULT (run 92fb258a,
+  // 2026-08-03). A 200 OK carrying `""` used to be returned as the step output,
+  // recorded `completed`, and fed downstream — see describeISEmptyGeneration for
+  // the incident. Throwing here makes the step record `failed` with a debuggable
+  // message, lets `continueOnError` mark that round failed HONESTLY, hands the
+  // assembler an `{error}` object its prompt already renders as a `status="failed"`
+  // section, and turns the run's terminal verdict into `failed` (stepsFailed > 0).
+  //
+  // Deliberately NARROW: only null/undefined and a whitespace-only STRING. A
+  // `json:true` call returns a parsed object, and an object with no keys is a
+  // shape question for the caller's schema, not "the model said nothing".
+  if (
+    data.output === null ||
+    data.output === undefined ||
+    (typeof data.output === "string" && data.output.trim() === "")
+  ) {
+    throw describeISEmptyGeneration(ctx, {
+      outputType: data.output === null ? "null" : typeof data.output,
+      maxTokens: args.maxTokens,
+      // The one field that EXPLAINS the emptiness — `length` means the budget
+      // truncated it, `content-filter` means it was refused, `stop` means the
+      // model genuinely emitted nothing. Undefined on a pre-seam IS build.
+      finishReason,
+      completionTokens: num(data.usage?.completionTokens),
+    });
+  }
   return data.output;
 }

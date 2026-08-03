@@ -915,26 +915,14 @@ export async function executeMCPToolViaHubProtocol(
       const rows = Array.isArray(result)
         ? result
         : ((result as { proposals?: unknown[] })?.proposals ?? []);
-      const summarized = (rows as Record<string, unknown>[]).map((p) => {
-        const data = (p.data ?? {}) as Record<string, unknown>;
-        const quality = (data.quality ?? {}) as Record<string, unknown>;
-        // Prefer a summary the writer actually authored; never invent one.
-        const summary = quality.summary ?? data.summary ?? undefined;
-        return {
-          id: p.id,
-          proposalType: p.proposalType,
-          targetType: p.targetType,
-          targetId: p.targetId,
-          status: p.status,
-          workspaceId: p.workspaceId,
-          createdAt: p.createdAt,
-          // Provenance — the columns that answer "which run produced this".
-          correlationId: p.correlationId ?? null,
-          sessionId: p.sessionId ?? null,
-          agentUserId: p.agentUserId ?? null,
-          ...(summary ? { summary } : {}),
-        };
-      });
+      // ONE definition of BASIC. This projection is shared verbatim with the
+      // Hub REST `GET /proposals?view=basic` door — a second hand-rolled
+      // summarizer here is how the two drifted in the first place.
+      const { toProposalBasic } =
+        await import("../hub-protocol/rest/_codecs/proposal.js");
+      const summarized = (rows as Record<string, unknown>[]).map(
+        toProposalBasic
+      );
       return ok({
         proposals: summarized,
         detail: "summary",

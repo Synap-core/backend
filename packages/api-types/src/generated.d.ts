@@ -6324,6 +6324,19 @@ export interface AutomationStepActivityDetail {
 	commandId: string | null;
 	errorMessage: string | null;
 	nodeType: AutomationNode["type"] | null;
+	/**
+	 * AI telemetry for a step that made one or more IS generations (0224).
+	 *
+	 * `finishReason` is the field that EXPLAINS an empty completion — `length`
+	 * (the maxTokens budget truncated it), `content-filter`, `error`, or `stop`
+	 * (the model genuinely emitted nothing). Null on a non-AI step, on any run
+	 * that predates the migration, and against an IS build that predates the
+	 * seam telemetry change.
+	 */
+	finishReason: string | null;
+	tokensIn: number | null;
+	tokensOut: number | null;
+	tokensUsed: number | null;
 }
 export interface AutomationStepActivityItem {
 	id: string;
@@ -21161,6 +21174,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					tokensUsed: number | null;
 					costUsd: string | null;
+					tokensIn: number | null;
+					tokensOut: number | null;
+					finishReason: string | null;
 					startedAt: Date | null;
 					completedAt: Date | null;
 				}[];

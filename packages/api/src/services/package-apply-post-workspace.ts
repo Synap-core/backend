@@ -17,6 +17,10 @@ import {
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
 import { createLinks } from "./links/links-service.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
+import {
+  installCellFromDefinition,
+  type PackageCellDefinition,
+} from "./cells/install-cell-from-definition.js";
 import type { WorkspaceSettings } from "@synap/database";
 
 /**
@@ -267,6 +271,19 @@ export interface PackagePostWorkspaceBody {
     definition?: Record<string, unknown>;
     params?: Record<string, unknown>;
   }>;
+  /**
+   * Inline cell (view-renderer) definitions carried by the package. Installed
+   * through the shared `installCellFromDefinition` → `defineCell` door — the
+   * SAME mapping `market.install({kind:"cell"})` uses, so a cell installed via
+   * either door lands on the same `cell:<package>:<key>` row.
+   */
+  cells?: PackageCellDefinition[];
+  /**
+   * Package identity — namespaces the installed cells' typeKeys. Present on the
+   * `/packages/apply` body; the approve-executor path passes the stored
+   * definition, which carries it too.
+   */
+  _meta?: { slug?: string };
   /**
    * Entity-detail action placements to merge into `settings.actionPlacements`.
    * Applied AFTER playbooks/loops so playbook/automation refs resolve to the
@@ -633,6 +650,63 @@ async function applyPackagePostWorkspaceInner(
       );
     }
     result.loops = loops;
+  }
+
+  // ── Cells (view renderers shipped by the package) ───────────────────────
+  // A renderer IS a cell package declaring `viewTypes`; that chain was intact
+  // for `market.install({kind:"cell"})` and dead for a WORKSPACE package's
+  // inline `cells[]` — the schema stripped the field, so nothing ever reached
+  // an applier. Installed workspace-scoped (this install owns them), through
+  // the same door market.install uses.
+  //
+  // Per-item isolation, like capabilities/automations above: a bad cell is
+  // reported as {status:"error"} and never aborts the independent steps below.
+  // `defineCell` is an idempotent upsert on (typeKey, workspaceId), so a
+  // re-apply converges instead of duplicating.
+  if (body.cells?.length && workspaceId) {
+    // NO `?? "inline"` FALLBACK. The typeKey is `cell:<packageSlug>:<key>`, and
+    // `defineCell`'s idempotent upsert keys on it — so a package applied once
+    // WITHOUT `_meta.slug` and once WITH it would mint TWO rows for the same
+    // cell, which the upsert can never reconcile because the keys differ. That
+    // silently defeats the convergence guarantee `installCellFromDefinition`
+    // exists to provide. An un-namespaceable cell is an error, per item, using
+    // the same isolation as every other step here.
+    const packageSlug = body._meta?.slug;
+    const cellResults: unknown[] = [];
+    for (const cell of body.cells) {
+      if (!packageSlug) {
+        cellResults.push({
+          key: cell.key ?? "inline",
+          status: "error",
+          message:
+            "package cells require _meta.slug to namespace their typeKey; " +
+            "applying without it would create a duplicate renderer row",
+        });
+        continue;
+      }
+      try {
+        const r = await installCellFromDefinition({
+          definition: cell,
+          name: cell.name ?? cell.key ?? "Cell",
+          packageSlug,
+          cellKey: cell.key,
+          workspaceId,
+          userId,
+        });
+        cellResults.push({
+          key: cell.key,
+          status: r.changeType,
+          typeKey: r.typeKey,
+        });
+      } catch (e) {
+        cellResults.push({
+          key: cell.key ?? "inline",
+          status: "error",
+          message: (e as Error).message,
+        });
+      }
+    }
+    result.cells = cellResults;
   }
 
   // ── Action placements (→ settings.actionPlacements) ─────────────────────

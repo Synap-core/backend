@@ -163,6 +163,60 @@ export function describeISFailure(ctx: ISCallContext, err: unknown): Error {
 }
 
 /**
+ * The `empty completion` half: the IS answered 200 OK and produced NOTHING —
+ * no text, or whitespace only. Same envelope as the other two so an operator
+ * reads ONE format regardless of which way the call failed.
+ *
+ * WHY THIS IS A FAILURE (run 92fb258a, 2026-08-03): a report run's `analyze`
+ * step ran 24.5s, returned `""`, and was recorded `completed`; `relate` did the
+ * same in 9.9s. The assembler then honestly wrote "No analysis material was
+ * produced", the body cleared the 200-char guard because an apology is long,
+ * and the run reported `completed` with a report entity created. Three
+ * independent safety mechanisms all said "success" about a report carrying zero
+ * information — because nothing on the path treated an empty generation as an
+ * error. A GENERATION that produced nothing is never valid data (unlike a query
+ * returning zero rows), so it throws here, at the one call site that owns the
+ * IS `generate` response.
+ *
+ * `maxTokens` rides in the message because it is the variable that predicts
+ * this failure: `ai.generate` is served by a reasoning model that spends its
+ * budget on hidden reasoning tokens BEFORE the first visible one, so a ceiling
+ * set too low yields an empty string rather than a short answer (dogfooded
+ * 2026-07-26: empty at 20 and 120, degraded at 300, correct at 500).
+ */
+export function describeISEmptyGeneration(
+  ctx: ISCallContext,
+  details: {
+    outputType: string;
+    maxTokens?: number;
+    /** The IS/provider's own reason the generation ended — `length`,
+     *  `content-filter`, `error`, `stop`. THE field that explains an empty
+     *  completion. Undefined against an IS build that predates the seam
+     *  telemetry change (it returned only `output`). */
+    finishReason?: string;
+    /** How many tokens the model actually emitted. `0` alongside
+     *  `finishReason=stop` is the signature of a model that said nothing. */
+    completionTokens?: number;
+  }
+): Error {
+  const elapsedMs = Date.now() - ctx.startedAt;
+  return new Error(
+    `IS ${ctx.kind} call failed [empty completion] — the IS answered 200 OK but produced no content` +
+      ` after ${elapsedMs}ms of a ${ctx.budgetMs}ms budget` +
+      ` · endpoint=${ctx.endpoint}` +
+      ` · payloadChars=${ctx.payloadChars}` +
+      ` · outputType=${details.outputType}` +
+      ` · maxTokens=${details.maxTokens ?? "default"}` +
+      (details.finishReason ? ` · finishReason=${details.finishReason}` : "") +
+      (details.completionTokens !== undefined
+        ? ` · completionTokens=${details.completionTokens}`
+        : "") +
+      ` · An empty generation is a FAILURE, not an empty result — raise maxTokens` +
+      ` or shorten the prompt.`
+  );
+}
+
+/**
  * The `IS error` half: the IS answered with a non-2xx. Same envelope so an
  * operator reads ONE format regardless of which side failed. `body` is
  * truncated because an IS stack trace can be megabytes and this string lands in

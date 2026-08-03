@@ -29,8 +29,16 @@ import { setProfileRenderer } from "../../services/profiles/set-profile-renderer
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
 
 /**
- * Frame definitions are registered directly. Sandboxed iframe/native widgets
- * still resolve through the generic iframe host.
+ * Frame definitions are registered directly. Iframe widgets resolve through the
+ * generic (sandboxed) iframe host.
+ *
+ * `"native"` is kept in the branch below deliberately, and NOT because native is
+ * sandboxed — it never was. The renderer has been removed, but legacy rows still
+ * carry `renderer_type = 'native'`. Mapping them to the sandboxed iframe host is
+ * the fail-SAFE degradation: such a row has no `rendererSource`, so it renders an
+ * init error instead of executing anything. Do not "fix" this by routing native
+ * anywhere that runs code. See NATIVE_RENDERER_REJECTED in
+ * `routers/widget-definitions.ts`.
  */
 export function buildCellRendererRef(
   cellKey: string,

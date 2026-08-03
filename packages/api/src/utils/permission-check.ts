@@ -802,15 +802,28 @@ export async function checkPermissionOrPropose(
       }
 
       if (gov.decision === "execute") {
-        // Auto-approved. Record a secondary audit-trail row, then grant. The
-        // PRIMARY durable audit of an auto-approved action is the event spine
-        // (the caller still emits `{subject}.{action}` .requested/.completed), so
-        // this insert stays NON-BLOCKING — but it must never fail SILENTLY (that
-        // was the Wave-B gap), so failures are logged loudly instead of swallowed.
+        // Auto-approved. Record the RECEIPT row, then grant.
+        //
+        // AWAITED, not fire-and-forget: a receipt that races the response is not
+        // a receipt — the caller could observe (and report) a completed write
+        // whose audit row does not exist yet. The await costs one INSERT of
+        // latency and does NOT change error semantics for the caller: the insert
+        // is wrapped so an audit-write failure NEVER fails the user's write. It
+        // is logged loudly instead of swallowed (the Wave-B gap) and the write is
+        // still granted, because the PRIMARY durable audit of an auto-approved
+        // action is the event spine (the caller still emits
+        // `{subject}.{action}` .requested/.completed).
+        //
+        // Provenance is written as COLUMNS (correlationId / sessionId /
+        // sourceMessageId / projectId — all present + indexed on `proposals`),
+        // not only inside `data`. Buried in JSONB the receipt was unjoinable:
+        // "what did this agent do in this session / this correlation chain" had
+        // no indexed reader. `data` keeps its copies for backwards compatibility
+        // with existing readers of the JSONB.
         const eventKey = `${subjectType}.${action}`;
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
-        db.insert(proposals)
-          .values({
+        try {
+          await db.insert(proposals).values({
             workspaceId: workspaceId ?? null,
             targetType: subjectType,
             targetId: String(data?.id ?? randomUUID()),
@@ -821,6 +834,11 @@ export async function checkPermissionOrPropose(
               ...(authorshipMode ? { authorshipMode } : {}),
               ...(correlationId ? { correlationId } : {}),
               ...(requestedEventId ? { requestedEventId } : {}),
+              // The model sometimes VOLUNTEERS a rationale for a write that
+              // auto-approves; this path used to drop it on the floor while the
+              // propose path stored it. Threaded through when present — never
+              // synthesised, and never required (a deliberate decision).
+              ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
               _autoApprove: {
                 matchedPattern: findMatchingPattern(
                   eventKey,
@@ -835,13 +853,18 @@ export async function checkPermissionOrPropose(
             ...(agentUserId ? { agentUserId } : {}),
             threadId: threadId ?? undefined,
             commandRunId: commandRunId ?? undefined,
-          })
-          .catch((err) =>
-            logger.error(
-              { err, workspaceId, agentUserId, eventKey },
-              "Auto-approve audit-trail row insert failed (write still granted; event spine remains the primary audit)"
-            )
+            correlationId: correlationId ?? undefined,
+            requestedEventId: requestedEventId ?? undefined,
+            sessionId: sessionId ?? undefined,
+            sourceMessageId: sourceMessageId ?? undefined,
+            projectId: projectId ?? undefined,
+          });
+        } catch (err) {
+          logger.error(
+            { err, workspaceId, agentUserId, eventKey },
+            "Auto-approve audit-trail row insert failed (write still granted; event spine remains the primary audit)"
           );
+        }
 
         return { granted: true };
       }

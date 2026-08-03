@@ -12,7 +12,10 @@ import {
   CreateProposalResponseSchema,
   ListProposalsQuerySchema,
   PROPOSAL_STATUS_FILTERS,
+  PROPOSAL_VIEWS,
+  ProposalBasicSchema,
   type ProposalStatusFilter,
+  toProposalBasic,
   UpdateProposalRequestSchema,
   WireProposalSchema,
 } from "./_codecs/proposal.js";
@@ -39,17 +42,29 @@ export function registerProposalsRoutes(app: HubHono): void {
     summary: "List proposals",
     description:
       "Returns proposals for the authenticated user / a workspace. Default status filter is `pending`; " +
-      "`auto_approved` lists the audit receipts of agent writes that executed immediately under governance.",
+      "`auto_approved` lists the audit receipts of agent writes that executed immediately under governance. " +
+      "`view=basic` returns the summary representation (identity + provenance, no `data`); the default " +
+      "`view=full` returns the detailed representation unchanged.",
     request: {
       query: ListProposalsQuerySchema,
     },
     responses: {
       200: {
-        description: "Array of proposals",
-        schema: z.array(WireProposalSchema),
+        // The handler returns the tRPC `listProposals` result verbatim, which
+        // is `{ proposals: [...] }` — NOT a bare array. The previous
+        // `z.array(WireProposalSchema)` declaration never matched the wire.
+        description:
+          "Proposals — full rows by default, basic rows when `view=basic`",
+        schema: z.object({
+          proposals: z.union([
+            z.array(WireProposalSchema),
+            z.array(ProposalBasicSchema),
+          ]),
+        }),
       },
       400: {
-        description: "Malformed sessionId/workspaceId, or unknown status",
+        description:
+          "Malformed sessionId/workspaceId, or unknown status / view",
         schema: ErrorSchema,
       },
       403: { description: "Missing scope", schema: ErrorSchema },
@@ -246,6 +261,18 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // AIP-157 `view`: absent ⇒ `full` ⇒ byte-for-byte today's response. Only an
+    // explicit `view=basic` opts into the summary representation, so no existing
+    // caller (or generated client) changes behaviour.
+    const rawView = c.req.query("view") ?? "full";
+    if (!(PROPOSAL_VIEWS as readonly string[]).includes(rawView)) {
+      return c.json(
+        {
+          error: `Invalid view: "${rawView}". Expected one of ${PROPOSAL_VIEWS.join(", ")}`,
+        },
+        400
+      );
+    }
     try {
       // No workspaceId = the USER-WIDE queue (the user floor), NOT an arbitrary
       // first workspace. listProposals always applies userVisibleWhere; a
@@ -261,6 +288,13 @@ export function registerProposalsRoutes(app: HubHono): void {
         status,
         ...(sessionId ? { sessionId } : {}),
       });
+      if (rawView === "basic") {
+        return c.json({
+          proposals: (
+            result.proposals as unknown as Record<string, unknown>[]
+          ).map(toProposalBasic),
+        });
+      }
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "listProposals failed");

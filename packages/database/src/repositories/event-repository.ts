@@ -637,6 +637,22 @@ export class EventRepository {
       offset?: number;
       /** Filter by the action verb (middle segment of type, e.g. "create", "update"). */
       actions?: string[];
+      /**
+       * Filter to the events one AGENT produced (`events.agent_user_id`, a text
+       * column matching `users.id`). The dedicated `events_agent_user_id_idx`
+       * index has existed since 0131 with no reader — this is the reader: "show
+       * me everything this agent did".
+       *
+       * NOT the same as the `agentUserId` on the EventRecord read model above —
+       * that is output telemetry; this is an input predicate.
+       */
+      agentUserId?: string;
+      /**
+       * Filter to agent-produced events (`is_agent = true`) or explicitly to
+       * human-produced ones (`is_agent` false/NULL — historical rows predate the
+       * column, so `false` must include NULL or it silently hides them).
+       */
+      isAgent?: boolean;
     } = {}
   ): Promise<EventRecord[]> {
     let query = "SELECT * FROM events WHERE 1=1";
@@ -702,6 +718,24 @@ export class EventRepository {
       query += ` AND correlation_id = $${paramIndex}`;
       params.push(filters.correlationId);
       paramIndex++;
+    }
+
+    if (filters.agentUserId) {
+      // `agent_user_id` is TEXT (users.id is a Kratos identity id, not a uuid) —
+      // no cast, so a malformed value simply matches nothing instead of making
+      // Postgres throw.
+      query += ` AND agent_user_id = $${paramIndex}`;
+      params.push(filters.agentUserId);
+      paramIndex++;
+    }
+
+    if (filters.isAgent !== undefined) {
+      // `false` must also match NULL: rows written before 0131 carry no
+      // is_agent, and they are human-produced — excluding them would silently
+      // truncate the human feed.
+      query += filters.isAgent
+        ? ` AND is_agent = true`
+        : ` AND COALESCE(is_agent, false) = false`;
     }
 
     if (filters.actions && filters.actions.length > 0) {

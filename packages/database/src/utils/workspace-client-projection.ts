@@ -17,6 +17,13 @@ export const CLIENT_SAFE_WORKSPACE_SETTINGS_KEYS = [
   "defaultSources",
   "appId",
   "packageSlug",
+  // Installed package VERSION (semver string stamped by
+  // create/reconcile-workspace-from-definition). Sibling of `packageSlug` and
+  // exactly as non-sensitive: it names a catalog row, carries no credential and
+  // no server-only reference. Withholding it made every client-side
+  // "is this workspace behind its template?" comparison read `undefined`, so the
+  // browser's template-update surface could never render.
+  "packageVersion",
   "systemSlug",
   // UI layout / view-id caches.
   "layout",

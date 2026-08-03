@@ -33,6 +33,7 @@ import {
   resolveIdentity,
   signalsFromExplicit,
   normalizeIdentitySignal,
+  ownedWorkspaceIds,
   eq,
   and,
   or,
@@ -158,11 +159,16 @@ const CAPABILITY_KINDS = [
 /**
  * Resolve the workspace LENS for a pod-altitude registry read.
  *
- * A caller-supplied `workspaceId` is untrusted input, so membership is verified
- * here BEFORE it reaches the registry's `eq(workspaceId, …)` predicates — the
+ * A caller-supplied `workspaceId` is untrusted input, so access is verified here
+ * BEFORE it reaches the registry's `eq(workspaceId, …)` predicates — the
  * `workspaceProcedure` middleware that normally does this is deliberately not in
  * play (the catalogue must work with no workspace selected). Returns `null` for
  * pod altitude, which the registry narrows to pod-wide rows only.
+ *
+ * Access = MEMBERSHIP **or** OWNERSHIP. `workspaces.owner_id` is a first-class
+ * column, SEPARATE from `workspace_members` (see `ownedWorkspaceIds`): a
+ * sovereign/single-user pod's owner may have no member row at all, so a
+ * membership-only gate would hard-FORBID them from their own catalogue.
  */
 async function resolveRegistryLens(
   userId: string,
@@ -171,10 +177,13 @@ async function resolveRegistryLens(
   if (!requested) return null;
   const role = await getWorkspaceRole(userId, requested);
   if (!role) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Access denied to workspace",
-    });
+    const owned = await ownedWorkspaceIds(userId);
+    if (!owned.some((w) => w.id === requested)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Access denied to workspace",
+      });
+    }
   }
   return requested;
 }
