@@ -37,8 +37,13 @@ import {
   db,
   agents,
   messages,
+  channels,
   eq,
   and,
+  isNull,
+  isNotNull,
+  inArray,
+  ChannelScope,
   MessageRole,
   MessageCategory,
   persistAssistantReply,
@@ -243,6 +248,21 @@ const EventSyncRunResponseSchema = z
     skippedExisting: z.number().optional(),
   })
   .openapi("DiscordEventSyncRunResponse");
+
+const ReconcilePodwideRequestSchema = z
+  .object({
+    // Dry-run unless explicitly applied. Absent/false → preview only, no mutation.
+    apply: z.boolean().optional().default(false),
+  })
+  .openapi("ReconcilePodwideRequest");
+
+const ReconcilePodwideResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    matched: z.number(),
+    updated: z.number(),
+  })
+  .openapi("ReconcilePodwideResponse");
 
 export function registerDiscordRoutes(app: HubHono): void {
   // ── POST /discord/ingest (static; registered before /discord/agent-turn) ──
@@ -949,6 +969,98 @@ export function registerDiscordRoutes(app: HubHono): void {
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err }, "POST /discord/mail-feed/run failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /discord/reconcile-podwide ────────────────────────────────────────
+  // Migrate EXISTING bridge channels that were created workspace-pinned (before
+  // the pod-wide default) to pod-wide: workspace_id=NULL, scope='pod'. Needed
+  // because resolveOrCreateExternalChannel only sets scope=POD on INSERT — an
+  // existing row is never re-scoped, so flipping the bridge pod-wide alone does
+  // NOT migrate the channels it already created (new inbound reuses the old row).
+  //
+  // SAFE BY CONSTRUCTION:
+  //   • dry-run by default (`apply:false`) — returns the match count, mutates nothing.
+  //   • UNBOUND channels ONLY (context_object_id IS NULL AND branch_purpose IS NULL):
+  //     client-BOUND CRM threads carry the client-isolation firewall and are left
+  //     untouched — making bound channels pod-wide needs the facet-floor first.
+  //   • scoped to the ACTING user's own channels + the bridge sources only.
+  //   • idempotent — the `workspace_id IS NOT NULL` predicate makes re-runs no-ops.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/discord/reconcile-podwide",
+    tags: ["Discord"],
+    summary:
+      "Migrate existing UNBOUND bridge channels to pod-wide (dry-run by default)",
+    description:
+      "Flips workspace-pinned, UNBOUND bridge channels (external_source in discord/telegram, no context binding) to pod-wide (workspace_id NULL, scope 'pod') for the acting user. Dry-run unless `apply:true`. Client-BOUND channels are intentionally excluded (client-isolation firewall). Idempotent.",
+    request: { body: ReconcilePodwideRequestSchema },
+    responses: {
+      200: {
+        description: "Reconcile summary",
+        schema: ReconcilePodwideResponseSchema,
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/discord/reconcile-podwide", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    let body: z.infer<typeof ReconcilePodwideRequestSchema>;
+    try {
+      body = ReconcilePodwideRequestSchema.parse(
+        await c.req.json().catch(() => ({}))
+      );
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid request body" },
+        400
+      );
+    }
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    // UNBOUND bridge channels of the acting user that still carry a workspace pin.
+    const cond = and(
+      eq(channels.userId, acting.userId),
+      inArray(channels.externalSource, ["discord", "telegram"]),
+      isNotNull(channels.workspaceId),
+      isNull(channels.contextObjectId),
+      isNull(channels.branchPurpose)
+    );
+
+    try {
+      if (!body.apply) {
+        const matched = await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(cond);
+        return c.json(
+          { dryRun: true, matched: matched.length, updated: 0 },
+          200
+        );
+      }
+      const updated = await db
+        .update(channels)
+        .set({ workspaceId: null, scope: ChannelScope.POD })
+        .where(cond)
+        .returning({ id: channels.id });
+      return c.json(
+        { dryRun: false, matched: updated.length, updated: updated.length },
+        200
+      );
+    } catch (err) {
+      logger.error({ err }, "POST /discord/reconcile-podwide failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
