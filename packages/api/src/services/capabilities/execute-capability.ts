@@ -40,6 +40,7 @@ import {
   desc,
   knowledgeRepository,
   capabilityRunReceipts,
+  getWorkspaceMembership,
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
@@ -372,6 +373,41 @@ export function capabilityVerbHasExternalEffect(
  * it must never block a real run. Observability (recordDirectCapabilityRun) is
  * emitted on delivery exactly as the read/unguarded path does.
  */
+/**
+ * STALE-TARGET PREFLIGHT (the ONE check, shared by the proposal-approval external
+ * executors AND this inline auto-run door).
+ *
+ * A proposal/run can sit for days; by approve/run time the target workspace may be
+ * one the acting user has LEFT or that was DELETED. Approval authority
+ * (`computeCanReviewApproval`) admits the agent-OWNER regardless of membership, so
+ * NOTHING else catches a phantom / lost-membership workspace — the run would
+ * dispatch and fail confusingly (or land in the wrong scope). A pure membership
+ * read (zero side effects) short-circuits it into the SAME P1 recovery classes the
+ * dispatcher uses, WITHOUT a wasted provider call and BEFORE any at-most-once claim.
+ *
+ * Scope is deliberately NARROW: only the workspace-membership gap. Missing/deleted
+ * CONNECTIONS are already surfaced by the dispatch layer (`external-dispatch.ts`
+ * pre-send `no_connection`, and `resolveBoundCredentialRef` throws for a deleted
+ * `connectionId`), so a connection-row copy here would be redundant. Pod-wide runs
+ * (`workspaceId == null`) have no membership to check and pass through.
+ *
+ * Returns a failure descriptor (mapped by each caller) or null when the target
+ * resolves.
+ */
+export async function assertApprovalTargetResolves(
+  workspaceId: string | null,
+  userId: string
+): Promise<{ errorClass: FailureErrorClass; message: string } | null> {
+  if (workspaceId == null) return null;
+  const membership = await getWorkspaceMembership(db, workspaceId, userId);
+  if (membership) return null;
+  return {
+    errorClass: "target_missing",
+    message:
+      "the target workspace is no longer accessible to you (removed or deleted) — nothing was run",
+  };
+}
+
 async function runDirectWriteVerbOnce(opts: {
   skillRow: ResolvedSkillRow;
   parameters?: Record<string, unknown>;
@@ -403,6 +439,23 @@ async function runDirectWriteVerbOnce(opts: {
   // repeated identical run in a later window is not blocked forever.
   const hasExplicitKey = opts.idempotencyKey != null;
   const correlationId = randomUUID();
+
+  // ── 0. STALE-TARGET PREFLIGHT (before the CAS — no claim on a dead target) ────
+  // Parity with the proposal-approval external executors: an auto/inline write
+  // whose target workspace the operator has left is short-circuited into the P1
+  // recovery class instead of executing → failing. Runs before the claim so a
+  // later retry (after re-scope) re-runs cleanly.
+  const targetFail = await assertApprovalTargetResolves(
+    opts.workspaceId,
+    opts.userId
+  );
+  if (targetFail) {
+    return {
+      kind: "error",
+      message: `Couldn't run — ${targetFail.message}.`,
+      errorClass: targetFail.errorClass,
+    };
+  }
 
   // ── 1. CLAIM (best-effort — a store hiccup degrades to an unguarded run) ──────
   let claimId: string | null = null;

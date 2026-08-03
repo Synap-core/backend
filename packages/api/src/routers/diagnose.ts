@@ -18,6 +18,11 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { diagnoseGlobal } from "../services/diagnose/index.js";
+import {
+  agentScorecard,
+  allAgentsScorecard,
+} from "../services/diagnose/agent-scorecard.js";
+import { agentProfile } from "../services/diagnose/agent-profile.js";
 
 export const diagnoseRouter = router({
   /**
@@ -43,5 +48,39 @@ export const diagnoseRouter = router({
         workspaceId: input?.workspaceId ?? null,
         stuckThresholdHours: input?.stuckThresholdHours,
       });
+    }),
+
+  /**
+   * The pod-wide agent trust grid — REAL lifetime `count(*) GROUP BY status` per
+   * agent-user, user-floored, humans excluded, keyed on stable `agentUserId`.
+   * Powers Governance › History. Replaces the browser's old client-side reduce
+   * over a fetched proposal page (which was a per-fetch slice, not a total).
+   */
+  agents: protectedProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    return allAgentsScorecard({ userId });
+  }),
+
+  /**
+   * One agent's full scorecard (counts + rates + rejection-reason histogram +
+   * duplicate rate + daily-cap posture) — the SAME `agentScorecard` service the
+   * MCP/Hub doors use, exposed over tRPC for the Agent dashboard.
+   */
+  agent: protectedProcedure
+    .input(z.object({ agentId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return agentScorecard({ userId, agentId: input.agentId });
+    }),
+
+  /**
+   * One agent's identity + PROVENANCE (origin, linked-by, pod-wide vs
+   * workspace) — powers the Agent dashboard header. Owner-floored.
+   */
+  agentProfile: protectedProcedure
+    .input(z.object({ agentId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return agentProfile({ userId, agentId: input.agentId });
     }),
 });

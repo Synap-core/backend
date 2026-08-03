@@ -218,6 +218,63 @@ describe("sectionCapabilities", () => {
     expect(core.description).toBe("Tier-0 builtin verbs");
   });
 
+  // ── Container reference ─────────────────────────────────────────────────
+  // Without these fields the door could not answer "is this brick packaged?":
+  // `integrations[]` carried neither an id nor a container, so a consumer had to
+  // group by NAME (which mis-groups on any collision). `null` is a REAL answer —
+  // it is what makes un-packaged bricks renderable as their own group.
+
+  it("carries the integration's row id and container reference through", () => {
+    const out = sectionCapabilities([
+      {
+        ...cap({ kind: "source-provider", name: "google", id: "tool-1" }),
+        containerId: "cap-1",
+        containerName: "Google Workspace",
+      } as Capability,
+    ]);
+    expect(out.integrations[0].id).toBe("tool-1");
+    expect(out.integrations[0].containerId).toBe("cap-1");
+    expect(out.integrations[0].containerName).toBe("Google Workspace");
+  });
+
+  it("reports containerId null — never omitted — for an un-packaged brick", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "tool", name: "exa_api", id: "tool-2" }),
+      cap({ kind: "skill", name: "ingest_message", id: "skill-2" }),
+    ]);
+    expect(out.integrations[0]).toHaveProperty("containerId", null);
+    expect(out.integrations[0]).toHaveProperty("containerName", null);
+    expect(out.skills[0]).toHaveProperty("containerId", null);
+    expect(out.skills[0]).toHaveProperty("containerName", null);
+  });
+
+  it("carries a standalone skill's container reference through", () => {
+    const out = sectionCapabilities([
+      {
+        ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
+        containerId: "cap-2",
+        containerName: "Inbox",
+      } as Capability,
+    ]);
+    expect(out.skills[0].containerId).toBe("cap-2");
+    expect(out.skills[0].containerName).toBe("Inbox");
+  });
+
+  it("recovers the container from a duplicate row when the first carries none", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "source-provider", name: "google", id: "tool-a" }),
+      {
+        ...cap({ kind: "source-provider", name: "google", id: "tool-b" }),
+        containerId: "cap-1",
+        containerName: "Google Workspace",
+      } as Capability,
+    ]);
+    expect(out.integrations).toHaveLength(1);
+    expect(out.integrations[0].id).toBe("tool-a"); // representative row
+    expect(out.integrations[0].containerId).toBe("cap-1");
+    expect(out.integrations[0].containerName).toBe("Google Workspace");
+  });
+
   it("counts consistently: every input row lands in exactly one bucket", () => {
     const caps = [
       cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),

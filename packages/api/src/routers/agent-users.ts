@@ -204,9 +204,7 @@ export const agentUsersRouter = router({
 
         if (creatorMembership) {
           resolvedRole = creatorMembership.role as
-            | "admin"
-            | "editor"
-            | "viewer";
+            "admin" | "editor" | "viewer";
         }
       } else if (input.template === "assistant") {
         agentMetadata.agentTemplate = "assistant";
@@ -234,6 +232,9 @@ export const agentUsersRouter = router({
         agentTemplate: agentMetadata.agentTemplate ?? null,
         createdByUserId: ctx.userId,
         isPersonalAgent: false,
+        // Provenance: this is the interactive/CLI create door. Default 'ui'; a
+        // CLI caller may override once the CLI threads it (0225_users_created_via).
+        createdVia: "ui",
         timezone: "UTC",
         locale: "en",
       });

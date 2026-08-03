@@ -14,15 +14,23 @@ vi.mock("../skills/execute-skill-via-is.js", () => ({
     result: { ran: "is" },
   })),
 }));
+// Partial-mock the DB package so the stale-target preflight is deterministic and
+// DB-free: only getWorkspaceMembership is overridden; everything else stays real.
+vi.mock("@synap/database", async (importActual) => {
+  const actual = await importActual<typeof import("@synap/database")>();
+  return { ...actual, getWorkspaceMembership: vi.fn() };
+});
 
 import {
   runResolvedSkill,
   capabilityVerbHasExternalEffect,
+  assertApprovalTargetResolves,
   type ResolvedSkillRow,
 } from "./execute-capability.js";
 import { BUILTIN_VERBS } from "./builtin-verbs.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
+import { getWorkspaceMembership } from "@synap/database";
 
 const ctx = { userId: "u1", workspaceId: null };
 
@@ -215,6 +223,36 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
       ctx
     );
     expect(out).toEqual({ kind: "run", skillId: "s1", result: proposed });
+  });
+});
+
+// STALE-TARGET PREFLIGHT: the ONE membership check shared by the proposal-approval
+// external executors AND the inline auto-run door. A phantom / lost-membership
+// workspace must short-circuit into `target_missing` (→ P1 recovery chip) BEFORE
+// any at-most-once claim or provider call; pod-wide (null workspace) has nothing to
+// check and passes. Runs against the real test DB (no mock — a non-existent
+// (workspace,user) pair is a genuine non-membership).
+describe("assertApprovalTargetResolves — stale-target preflight", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("pod-wide (null workspace) always resolves — no membership read", async () => {
+    expect(await assertApprovalTargetResolves(null, "u1")).toBeNull();
+    expect(getWorkspaceMembership).not.toHaveBeenCalled();
+  });
+
+  it("a workspace the user is NOT a member of → target_missing", async () => {
+    vi.mocked(getWorkspaceMembership).mockResolvedValueOnce(null);
+    const out = await assertApprovalTargetResolves("ws-1", "u1");
+    expect(out).toMatchObject({ errorClass: "target_missing" });
+    expect(out?.errorClass).toBe("target_missing");
+  });
+
+  it("a workspace the user IS a member of → resolves (null), never blocks a live run", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(getWorkspaceMembership).mockResolvedValueOnce({
+      role: "owner",
+    } as any);
+    expect(await assertApprovalTargetResolves("ws-1", "u1")).toBeNull();
   });
 });
 

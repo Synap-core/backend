@@ -54,6 +54,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "users_control_plane_user_id_unique"
   ON "users" ("control_plane_user_id") WHERE "control_plane_user_id" IS NOT NULL;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "user_type" text DEFAULT 'human';
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_metadata" jsonb;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_via" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -2287,6 +2288,7 @@ CREATE TABLE IF NOT EXISTS "notifications" (
   "status"        text  NOT NULL DEFAULT 'unread',
   "read_at"       timestamp with time zone,
   "expires_at"    timestamp with time zone,
+  "snoozed_until" timestamp with time zone,
   "created_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
@@ -2306,6 +2308,7 @@ ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "group_key" text;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unread';
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "snoozed_until" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "notifs_user_workspace_status_idx"
@@ -2321,6 +2324,11 @@ CREATE INDEX IF NOT EXISTS "notifs_source_idx"
 CREATE INDEX IF NOT EXISTS "notifs_unread_user_workspace_idx"
   ON "notifications" ("user_id", "workspace_id")
   WHERE "status" = 'unread';
+
+-- Partial index for waking due snoozes / listing snoozed items (migration 0226).
+CREATE INDEX IF NOT EXISTS "notifs_snoozed_until_idx"
+  ON "notifications" ("user_id", "snoozed_until")
+  WHERE "status" = 'snoozed';
 
 CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

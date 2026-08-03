@@ -3578,6 +3578,78 @@ export async function executeMCPToolViaHubProtocol(
             "flowDefinition is required and must be { nodes: [...], edges: [...] }",
         });
       }
+      // ── Capability-step validation (BEFORE the governance gate) ────────────
+      // A `capability` node names a VERB; nothing used to check that the verb
+      // exists, so an agent could create an automation whose step calls a verb
+      // that was never installed — it then fails (or silently does nothing) at
+      // run time. Resolve every capability step against what THIS CALLER can
+      // see, through the same access-scoped `listCapabilities` registry door
+      // `synap_list_capabilities` uses, so a flow can never be validated against
+      // capabilities the caller cannot see.
+      //
+      // This runs BEFORE `createAutomation`, i.e. before governance: a bad flow
+      // is rejected on its MERITS, and a `status:"proposed"` result (a success —
+      // the write is queued for review) is never turned into an error.
+      {
+        const { validateFlowCapabilities } =
+          await import("./validate-automation-flow.js");
+        const flowVerdict = await validateFlowCapabilities(flow.nodes, {
+          loadIndex: async () => {
+            const { listCapabilities } =
+              await import("../../services/capabilities/capability-registry.js");
+            const caps = await listCapabilities({
+              workspaceId: requestedWorkspaceId ?? null,
+              userId,
+            });
+            const verbIds = new Set<string>();
+            const capabilityIds = new Set<string>();
+            for (const cap of caps) {
+              capabilityIds.add(cap.id);
+              // Two resolution paths, both real: the process builder picks a
+              // verb out of a tool's verb catalog (`ToolVerbCatalogEntry.id`),
+              // and `executeCapability` resolves a bare verbId against
+              // `skills.name`. A skill row surfaces here as a `skill` /
+              // `teaching-doc` capability whose `name` IS that skill name.
+              for (const verb of cap.verbs ?? []) verbIds.add(verb.id);
+              if (cap.kind === "skill" || cap.kind === "teaching-doc") {
+                verbIds.add(cap.name);
+              }
+            }
+            return { verbIds, capabilityIds };
+          },
+          // Best-effort suggestion: the pod-local Control-Plane catalog cache —
+          // the SAME read the `market.search` builtin verb performs. Failure,
+          // timeout or an empty result degrades to silence; the validation
+          // error still stands and nothing is ever auto-installed.
+          searchMarketplace: async (verbId) => {
+            const { queryCatalogCache } =
+              await import("../../services/capabilities/catalog-cache-query.js");
+            let rows = await queryCatalogCache({
+              query: verbId,
+              kind: "capability",
+              limit: 3,
+            });
+            // Catalog matching is literal substring, so a namespaced verb
+            // ("gmail.send") rarely matches a package NAME. Retry on the
+            // namespace segment, which usually IS the provider's name.
+            const ns = verbId.includes(".") ? verbId.split(".")[0] : "";
+            if (rows.length === 0 && ns) {
+              rows = await queryCatalogCache({
+                query: ns,
+                kind: "capability",
+                limit: 3,
+              });
+            }
+            return rows.map((r) => ({
+              slug: r.slug,
+              name: r.name,
+              kind: r.kind,
+            }));
+          },
+        });
+        if (!flowVerdict.ok) return ok({ error: flowVerdict.error });
+      }
+
       // resultRouting (optional) threads into metadata.resultRouting — the SET
       // path for the per-entity/per-type run routing. We build the FULL metadata
       // bag here (a create, not an update), so no wholesale-replace hazard.

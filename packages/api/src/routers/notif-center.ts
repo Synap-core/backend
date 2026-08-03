@@ -19,10 +19,30 @@ import {
   count,
   inArray,
   isNull,
+  lte,
 } from "@synap/database";
 import { NotificationStatus } from "@synap/database";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+
+/**
+ * Flip any DUE snoozes (snoozedUntil now past) back to `unread` for this user,
+ * across all workspaces. Called lazily at the top of every read door so a woken
+ * item reappears in the bell without a dedicated cron. A 0-row UPDATE is cheap —
+ * it is served by the partial index `notifs_snoozed_until_idx` (migration 0226).
+ */
+async function wakeDueSnoozes(userId: string): Promise<void> {
+  await db
+    .update(notifications)
+    .set({ status: NotificationStatus.UNREAD, snoozedUntil: null })
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.status, NotificationStatus.SNOOZED),
+        lte(notifications.snoozedUntil, new Date())
+      )
+    );
+}
 
 export const notifCenterRouter = router({
   /**

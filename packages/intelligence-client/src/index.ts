@@ -68,6 +68,7 @@ export {
   describeISFailure,
   describeISHttpError,
   describeISEmptyGeneration,
+  isRetryableError,
 } from "./is-call-budget.js";
 
 export type { ISCallKind, ISCallContext } from "./is-call-budget.js";

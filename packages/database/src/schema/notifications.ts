@@ -39,6 +39,9 @@ export const NotificationStatus = {
   READ: "read",
   DISMISSED: "dismissed",
   ACTIONED: "actioned",
+  // Triage-defer (Linear-style): hidden from the active/unread list until
+  // `snoozedUntil`, then it surfaces again as unread. See notif-center reader.
+  SNOOZED: "snoozed",
 } as const;
 export type NotificationStatus =
   (typeof NotificationStatus)[keyof typeof NotificationStatus];
@@ -101,12 +104,16 @@ export const notifications = pgTable(
         NotificationStatus.READ,
         NotificationStatus.DISMISSED,
         NotificationStatus.ACTIONED,
+        NotificationStatus.SNOOZED,
       ],
     })
       .notNull()
       .default(NotificationStatus.UNREAD),
     readAt: timestamp("read_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    // Triage-defer: when status='snoozed', the item is hidden from active lists
+    // until this instant, at which point the reader flips it back to 'unread'.
+    snoozedUntil: timestamp("snoozed_until", { withTimezone: true }),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

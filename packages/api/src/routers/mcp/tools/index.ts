@@ -2195,7 +2195,7 @@ export const tools = {
             flowDefinition: {
               type: "object",
               description:
-                "The THEN flow: { nodes: [...], edges: [...] }. Nodes are the steps; edges wire them in order.",
+                "The THEN flow: { nodes: [...], edges: [...] }. Nodes are the steps; edges wire them in order. A step of type 'capability' MUST name a verb that actually exists — data.verbId is the backing skill's NAME (e.g. 'ai.generate'), not a UUID, and the create is REJECTED if it does not resolve for you (data.capabilityId is optional; omit it and the verb alone resolves). Check with synap_list_capabilities before authoring capability steps.",
               properties: {
                 nodes: { type: "array", items: { type: "object" } },
                 edges: { type: "array", items: { type: "object" } },

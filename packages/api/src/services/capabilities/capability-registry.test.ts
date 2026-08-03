@@ -1,11 +1,223 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   scoreTextMatch,
   deriveBuiltinVerbParamsSchema,
   deriveProviderVerbParamsSchema,
   buildVerbStates,
+  indexContainerLinks,
+  containerMemberKey,
+  loadContainerRefs,
 } from "./capability-registry.js";
 import type { ProviderVerbSpec } from "@synap/database/schema";
+
+// ── db harness for the batched container fan-out ─────────────────────────────
+// `loadContainerRefs` is the ONE query that resolves brick → container. The
+// harness records every `select()` so "batched" can be asserted as a FACT (one
+// query for N bricks) rather than inferred from the returned mapping, and keeps
+// the composed WHERE so the predicate itself is assertable.
+interface DbHarness {
+  rows: Array<{
+    fromType: string;
+    fromId: string;
+    containerId: string;
+    containerName: string | null;
+  }>;
+  selectCalls: number;
+  fromTables: unknown[];
+  wheres: unknown[];
+}
+let harness: DbHarness;
+
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  const chain = {
+    select: () => {
+      harness.selectCalls += 1;
+      return chain;
+    },
+    from: (t: unknown) => {
+      harness.fromTables.push(t);
+      return chain;
+    },
+    leftJoin: () => chain,
+    where: (w: unknown) => {
+      harness.wheres.push(w);
+      return chain;
+    },
+    orderBy: () => Promise.resolve(harness.rows),
+  };
+  return { ...actual, getDb: async () => chain };
+});
+
+/** Every string literal bound into a drizzle SQL tree (params + raw values). */
+function collectSqlValues(node: unknown, out: string[] = []): string[] {
+  if (node == null) return out;
+  if (typeof node === "string") return out;
+  if (Array.isArray(node)) {
+    for (const n of node) collectSqlValues(n, out);
+    return out;
+  }
+  if (typeof node === "object") {
+    const rec = node as Record<string, unknown>;
+    if ("value" in rec) {
+      const v = rec.value;
+      if (typeof v === "string") out.push(v);
+      else if (Array.isArray(v)) {
+        for (const x of v) if (typeof x === "string") out.push(x);
+      }
+    }
+    for (const [k, v] of Object.entries(rec)) {
+      if (k === "table" || k === "_") continue;
+      if (typeof v === "object") collectSqlValues(v, out);
+    }
+    return out;
+  }
+  return out;
+}
+
+/**
+ * Container membership is what makes "packaged capability" vs "loose brick"
+ * computable at this door: before it, `integrations[]` carried no id and no
+ * container reference at all, so a consumer had to group by NAME.
+ */
+describe("indexContainerLinks", () => {
+  it("maps a member to its container, keyed by endpoint TYPE + id", () => {
+    const idx = indexContainerLinks([
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "c1",
+        containerName: "Gmail",
+      },
+      {
+        fromType: "skill",
+        fromId: "s1",
+        containerId: "c2",
+        containerName: "Research",
+      },
+    ]);
+    expect(idx.get(containerMemberKey("tool", "t1"))).toEqual({
+      id: "c1",
+      name: "Gmail",
+    });
+    expect(idx.get(containerMemberKey("skill", "s1"))).toEqual({
+      id: "c2",
+      name: "Research",
+    });
+  });
+
+  it("does not collide a tool and a skill that share an id", () => {
+    const idx = indexContainerLinks([
+      {
+        fromType: "tool",
+        fromId: "same",
+        containerId: "c-tool",
+        containerName: "T",
+      },
+      {
+        fromType: "skill",
+        fromId: "same",
+        containerId: "c-skill",
+        containerName: "S",
+      },
+    ]);
+    expect(idx.get(containerMemberKey("tool", "same"))?.id).toBe("c-tool");
+    expect(idx.get(containerMemberKey("skill", "same"))?.id).toBe("c-skill");
+  });
+
+  it("keeps the FIRST (oldest, caller-ordered) edge when a brick has several", () => {
+    const idx = indexContainerLinks([
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "oldest",
+        containerName: "A",
+      },
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "newer",
+        containerName: "B",
+      },
+    ]);
+    expect(idx.get(containerMemberKey("tool", "t1"))?.id).toBe("oldest");
+  });
+
+  it("reports a dangling container name as null rather than fabricating one", () => {
+    const idx = indexContainerLinks([
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "c1",
+        containerName: null,
+      },
+    ]);
+    expect(idx.get(containerMemberKey("tool", "t1"))).toEqual({
+      id: "c1",
+      name: null,
+    });
+  });
+
+  it("returns no entry for a brick in no container (the caller reads null)", () => {
+    const idx = indexContainerLinks([]);
+    expect(idx.get(containerMemberKey("tool", "t1"))).toBeUndefined();
+  });
+});
+
+describe("loadContainerRefs — batched fan-out", () => {
+  beforeEach(() => {
+    harness = { rows: [], selectCalls: 0, fromTables: [], wheres: [] };
+  });
+
+  it("resolves N bricks with ONE query, not one per brick", async () => {
+    harness.rows = [
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "c1",
+        containerName: "Gmail",
+      },
+      {
+        fromType: "skill",
+        fromId: "s2",
+        containerId: "c1",
+        containerName: "Gmail",
+      },
+    ];
+    const idx = await loadContainerRefs({
+      toolIds: ["t1", "t2", "t3"],
+      skillIds: ["s1", "s2"],
+    });
+    // 5 bricks, 1 query — a per-brick lookup would be 5.
+    expect(harness.selectCalls).toBe(1);
+    expect(idx.get(containerMemberKey("tool", "t1"))?.id).toBe("c1");
+    // A brick with no edge is simply absent → the caller reports null.
+    expect(idx.get(containerMemberKey("tool", "t2"))).toBeUndefined();
+    expect(idx.get(containerMemberKey("skill", "s1"))).toBeUndefined();
+  });
+
+  it("issues NO query at all when there is nothing to resolve", async () => {
+    const idx = await loadContainerRefs({ toolIds: [], skillIds: [] });
+    expect(harness.selectCalls).toBe(0);
+    expect(idx.size).toBe(0);
+  });
+
+  /**
+   * Shape, not just count: the fan-out must reuse the SAME predicate as
+   * `resolveToolCapabilityId` — `member_of` edges from tool/skill endpoints to
+   * a `capability` — over ALL the ids in one `inArray`. Asserting the composed
+   * WHERE is what makes a broken predicate fail here instead of silently
+   * returning an empty index in production.
+   */
+  it("composes the member_of → capability predicate over every id at once", async () => {
+    await loadContainerRefs({ toolIds: ["t1", "t2"], skillIds: ["s1"] });
+    const values = collectSqlValues(harness.wheres[0]);
+    expect(values).toContain("member_of");
+    expect(values).toContain("capability");
+    expect(values).toEqual(expect.arrayContaining(["tool", "skill"]));
+    expect(values).toEqual(expect.arrayContaining(["t1", "t2", "s1"]));
+  });
+});
 
 describe("scoreTextMatch", () => {
   it("scores an exact primary match highest", () => {

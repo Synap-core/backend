@@ -635,8 +635,55 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * Two literals moved. `errorHandling` is untouched — `analyze`/`relate` stay
  * `continueOnError: true` (a failed round is a VISIBLE GAP the assembler
  * renders), and `assemble`/`summarize`/`create-report` stay fail-fast.
+ *
+ * ── v15 (2026-08-03) — the four AI rounds get a retry policy ─────────────────
+ *
+ * Same incident as v14, other half. v14 fixed the CAUSE of that day's failure
+ * (maxTokens 700 → 2000); this fixes the fact that each of those steps got
+ * exactly ONE attempt. Every durable-execution engine defaults a step to RETRY
+ * with an explicit opt-out (Temporal `nonRetryableErrorTypes`, Restate
+ * `TerminalError`, Inngest `NonRetriableError`); Synap's per-node
+ * `errorHandling.maxRetries` defaults to 0 — the inverse.
+ *
+ * A retry is only safe because of the paired executor change: the retry loop was
+ * ERROR-TYPE BLIND, so `maxRetries` alone would have re-run today's
+ * `finishReason=length` truncation — deterministic, identical every time — for
+ * 3× the tokens and 3× the latency. `isRetryableError`
+ * (@synap/intelligence-client) now marks that one case terminal and the loop
+ * breaks on it. What retries is what actually differs run to run: a pod-side
+ * abort at the 180s generation budget (FairSemaphore queue-wait behind
+ * interactive traffic), an IS 5xx, a transport failure.
+ *
+ * `maxRetries: 1` — ONE extra attempt, not the schema's max of 3. The binding
+ * constraint is `REAPER_STALE_MINUTES = 45` (automation-run-reaper.ts): a run
+ * still `running` after 45 minutes is reaped as failed. Worst case per AI node
+ * is (attempts × 180s budget) + (retries × retryDelay), and there are FOUR of
+ * them in series:
+ *   · maxRetries 1 → 4 × (2×180 + 5)  = 24.3 min — fits, with room for the
+ *     gather/compute/output steps around it.
+ *   · maxRetries 2 → 4 × (3×180 + 10) = 36.7 min — the AI rounds ALONE nearly
+ *     consume the reaper window.
+ *   · maxRetries 3 → 4 × (4×180 + 15) = 49.0 min — mathematically cannot finish.
+ * Past 1, "one more attempt" converts into "the whole run reaped and no report
+ * at all", which is strictly worse than the visible gap `continueOnError`
+ * already renders. The transient failures being covered — a queue-wait spike, a
+ * single 5xx, a reset connection — are cleared by a second attempt or not at all.
+ *
+ * `retryDelay: 5000` — HONEST LIMITATION: the executor honours `retryDelay` as a
+ * FIXED `setTimeout` sleep (automation-executor.ts, retry loop). There is no
+ * exponential backoff, no jitter and no cap in the node retry path. So 5000 is
+ * chosen as one pause, not as the base of a curve: long enough for a
+ * FairSemaphore queue to drain or an IS restart to settle, negligible against a
+ * 180s budget. With a single retry the thundering-herd problem jitter exists to
+ * solve does not arise; if `maxRetries` is ever raised, real backoff has to be
+ * built in the executor FIRST.
+ *
+ * The flow GRAPH is unchanged: no new nodes, no new edges, no new placeholders —
+ * only `errorHandling` on the four `ai.generate` nodes. Reconcile is LAZY (it
+ * fires from `workspaces.get`) and a seed-version bump OVERWRITES user edits to
+ * this automation's flow — known and accepted, as with every prior bump.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 14;
+export const REPORT_AUTOMATION_SEED_VERSION = 15;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -1451,7 +1498,13 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         },
         // A failed round must become a VISIBLE GAP in the report, not an aborted
         // run — the assembler is instructed to render it.
-        errorHandling: { continueOnError: true },
+        // ONE retry (v15): see the v15 note for why 1 and not 3, and why the
+        // 5s pause is a fixed sleep rather than backoff.
+        errorHandling: {
+          continueOnError: true,
+          maxRetries: 1,
+          retryDelay: 5000,
+        },
       },
     },
     // ── Round 3: RELATE / NOTICE ──────────────────────────────────────────────
@@ -1496,7 +1549,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
           // ceiling rather than another nudge.
           maxTokens: "2000",
         },
-        errorHandling: { continueOnError: true },
+        errorHandling: {
+          continueOnError: true,
+          maxRetries: 1,
+          retryDelay: 5000,
+        },
       },
     },
     // ── Round 4: ASSEMBLE (fail-fast — no body, no report) ────────────────────
@@ -1523,6 +1580,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
           ].join("\n"),
           maxTokens: "2000",
         },
+        // Fail-fast (no continueOnError — no body means no report), which is
+        // exactly why the retry matters MORE here than on the two rounds above:
+        // a transient IS blip on `analyze` costs a section, the same blip on
+        // `assemble` costs the whole run.
+        errorHandling: { maxRetries: 1, retryDelay: 5000 },
       },
     },
     // The `report` profile carries a `summary` property that the header renders.
@@ -1567,6 +1629,11 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         // `properties.summary` and render as `{"error":"…"}` to the reader.
         // A report with no summary is fine; a report whose summary is a raw
         // error object is not. Failing the run here is the honest outcome.
+        //
+        // Which is precisely why it gets the retry too (v15): this round is
+        // fail-fast AND it is the LAST AI round, so a transient failure here
+        // throws away three completed generations.
+        errorHandling: { maxRetries: 1, retryDelay: 5000 },
       },
     },
     // ── Fail closed before writing ────────────────────────────────────────────

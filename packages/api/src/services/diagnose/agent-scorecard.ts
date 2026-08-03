@@ -20,6 +20,8 @@ import {
   gte,
   desc,
   drizzleSql,
+  isNotNull,
+  inArray,
   proposals,
   users,
   ProposalStatus,
@@ -225,4 +227,146 @@ export async function agentScorecard(params: {
     todayCount: todayRow?.count ?? 0,
     cap,
   });
+}
+
+/** One agent's standing in the pod-wide trust grid — REAL lifetime totals. */
+export interface AgentStanding {
+  agentUserId: string;
+  agentName: string | null;
+  agentType: string | null;
+  /** Human approvals (approved + auto_approved). */
+  approved: number;
+  /** Subset of `approved` that were auto-approved (no human touched them). */
+  autoApproved: number;
+  rejected: number;
+  reverted: number;
+  /** Not scored — pending + approval_failed. */
+  pending: number;
+  /** Not scored — the agent recalled it. */
+  withdrawn: number;
+  /** Denominator: approved + rejected + reverted (genuine decisions). */
+  scoredTotal: number;
+  approveRate: number;
+  refuseRate: number;
+}
+
+/**
+ * The pod-wide trust grid: a REAL `count(*) GROUP BY agent_user_id, status`
+ * across every proposal the caller can see, so the numbers are lifetime totals —
+ * not a fetched-page slice like the browser's old client-side reduce. Only
+ * AGENT-user actors are returned (humans are filtered out by `userType`), keyed
+ * on the stable `agentUserId` so two agents that display the same name never
+ * collapse. Sorted most-refused-first (highest learning value).
+ */
+export async function allAgentsScorecard(params: {
+  userId: string;
+}): Promise<AgentStanding[]> {
+  const { userId } = params;
+
+  // USER floor: only proposals in workspaces the caller can see.
+  const rows = await db
+    .select({
+      agentUserId: proposals.agentUserId,
+      status: proposals.status,
+      count: drizzleSql<number>`count(*)::int`,
+    })
+    .from(proposals)
+    .where(
+      and(
+        isNotNull(proposals.agentUserId),
+        userVisibleWhere(proposals.workspaceId, userId)
+      )
+    )
+    .groupBy(proposals.agentUserId, proposals.status);
+
+  type Acc = {
+    approved: number;
+    autoApproved: number;
+    rejected: number;
+    reverted: number;
+    pending: number;
+    withdrawn: number;
+  };
+  const byAgent = new Map<string, Acc>();
+  for (const r of rows) {
+    if (!r.agentUserId) continue;
+    const a = byAgent.get(r.agentUserId) ?? {
+      approved: 0,
+      autoApproved: 0,
+      rejected: 0,
+      reverted: 0,
+      pending: 0,
+      withdrawn: 0,
+    };
+    switch (r.status) {
+      case ProposalStatus.APPROVED:
+        a.approved += r.count;
+        break;
+      case ProposalStatus.AUTO_APPROVED:
+        a.approved += r.count;
+        a.autoApproved += r.count;
+        break;
+      case ProposalStatus.REJECTED:
+        a.rejected += r.count;
+        break;
+      case ProposalStatus.REVERTED:
+        a.reverted += r.count;
+        break;
+      case ProposalStatus.PENDING:
+      case ProposalStatus.APPROVAL_FAILED:
+        a.pending += r.count;
+        break;
+      case ProposalStatus.WITHDRAWN:
+        a.withdrawn += r.count;
+        break;
+      default:
+        break;
+    }
+    byAgent.set(r.agentUserId, a);
+  }
+
+  const ids = [...byAgent.keys()];
+  if (ids.length === 0) return [];
+
+  // Resolve identity — and DROP non-agent actors (a human owner whose proposals
+  // are visible must never show up in the agent trust grid).
+  const identities = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      userType: users.userType,
+      agentType: users.agentType,
+    })
+    .from(users)
+    .where(and(inArray(users.id, ids), eq(users.userType, "agent")));
+
+  const standings: AgentStanding[] = [];
+  for (const ident of identities) {
+    const a = byAgent.get(ident.id);
+    if (!a) continue;
+    const scoredTotal = a.approved + a.rejected + a.reverted;
+    const rate = (n: number) =>
+      scoredTotal > 0 ? Number((n / scoredTotal).toFixed(4)) : 0;
+    standings.push({
+      agentUserId: ident.id,
+      agentName: ident.name ?? ident.email ?? null,
+      agentType: ident.agentType ?? null,
+      approved: a.approved,
+      autoApproved: a.autoApproved,
+      rejected: a.rejected,
+      reverted: a.reverted,
+      pending: a.pending,
+      withdrawn: a.withdrawn,
+      scoredTotal,
+      approveRate: rate(a.approved),
+      refuseRate: rate(a.rejected),
+    });
+  }
+
+  // Most-refused-first — the highest learning value.
+  standings.sort(
+    (x, y) => y.refuseRate - x.refuseRate || y.rejected - x.rejected
+  );
+  return standings;
 }

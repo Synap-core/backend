@@ -105,6 +105,84 @@ export function isCallBudgetMs(kind: ISCallKind): number {
   return DEFAULT_BUDGET_MS[kind];
 }
 
+/**
+ * ── RETRYABILITY (2026-08-03 incident) ───────────────────────────────────────
+ *
+ * The automation executor's per-node retry loop (`errorHandling.maxRetries`) is
+ * ERROR-TYPE BLIND: it re-attempts every failure identically. That is fine for a
+ * pod-side abort or an IS 5xx, and actively harmful for a DETERMINISTIC failure
+ * — the same prompt at the same `maxTokens` truncates the same way every time,
+ * so a retry buys 3× the tokens and 3× the latency for the identical error.
+ *
+ * The shape is the one every durable-execution engine converged on (Temporal
+ * `nonRetryableErrorTypes`, Restate `TerminalError`, Inngest `NonRetriableError`):
+ * **retry is the DEFAULT, and the PRODUCER of the error declares the opt-out.**
+ * `isRetryableError` therefore returns `true` for anything it does not recognise
+ * — an unknown failure is assumed transient, never silently made terminal.
+ *
+ * WHY A MARKER PROPERTY + A MESSAGE FALLBACK, and not an Error subclass:
+ *   · `@synap/jobs` already depends on `@synap/intelligence-client` (and NOT on
+ *     `@synap/api`), so this module is the only place both the producer
+ *     (`generateViaIS`, api-side) and the consumer (the executor, jobs-side) can
+ *     share. No new package edge, no cycle.
+ *   · A subclass would not survive the hops. `instanceof` breaks across a dual
+ *     package instance, and — verified — `executeCapabilityNode`
+ *     (automation-executor.ts) REBUILDS a `kind:"error"` dispatch verdict as
+ *     `new Error(\`Capability ${verbId} failed: ${message}\`)`. The builtin tier
+ *     (`ai.generate`) rethrows the original object, so the marker carries; the
+ *     declarative/code-skill tiers survive only as a message. Reading BOTH costs
+ *     three lines and covers both tiers.
+ * This is ONE predicate with ONE call site — deliberately not a taxonomy.
+ */
+const NON_RETRYABLE_MARKER = "synapNonRetryable";
+
+/**
+ * The message signature of the one non-retryable IS failure, used when only the
+ * message survived a rebuild hop. Both halves are asserted so a plain empty
+ * completion (retryable — the model may well answer on a second pass) is not
+ * caught by the `length` case.
+ */
+const NON_RETRYABLE_MESSAGE_SIGNATURE = [
+  "[empty completion]",
+  "finishReason=length",
+];
+
+/** Stamp an error as terminal. Non-enumerable so it never leaks into a JSON
+ *  serialisation of the error or a log line's field soup. */
+function markNonRetryable<E extends Error>(err: E): E {
+  Object.defineProperty(err, NON_RETRYABLE_MARKER, {
+    value: true,
+    enumerable: false,
+  });
+  return err;
+}
+
+/**
+ * Should a failed attempt be tried again? **Defaults to `true`** — only an error
+ * this module has explicitly marked terminal (or whose attributed message
+ * survived a rebuild) is non-retryable.
+ *
+ * Non-retryable today: an empty generation caused by `finishReason=length`. That
+ * is a deterministic truncation — same prompt, same ceiling, same result. The
+ * fix is `maxTokens` (or a shorter prompt), never another attempt.
+ *
+ * Retryable: everything else — a pod-side abort (the IS may finish under a less
+ * loaded FairSemaphore), a transport failure, an IS 5xx, and an empty completion
+ * with any OTHER finish reason (`stop`/`content-filter` can differ run to run).
+ */
+export function isRetryableError(err: unknown): boolean {
+  if (err === null || typeof err !== "object") return true;
+  if ((err as Record<string, unknown>)[NON_RETRYABLE_MARKER] === true)
+    return false;
+  const message = (err as { message?: unknown }).message;
+  if (
+    typeof message === "string" &&
+    NON_RETRYABLE_MESSAGE_SIGNATURE.every((part) => message.includes(part))
+  )
+    return false;
+  return true;
+}
+
 /** What the caller knows about the in-flight request, for attribution. */
 export interface ISCallContext {
   kind: ISCallKind;
@@ -200,7 +278,7 @@ export function describeISEmptyGeneration(
   }
 ): Error {
   const elapsedMs = Date.now() - ctx.startedAt;
-  return new Error(
+  const err = new Error(
     `IS ${ctx.kind} call failed [empty completion] — the IS answered 200 OK but produced no content` +
       ` after ${elapsedMs}ms of a ${ctx.budgetMs}ms budget` +
       ` · endpoint=${ctx.endpoint}` +
@@ -214,6 +292,12 @@ export function describeISEmptyGeneration(
       ` · An empty generation is a FAILURE, not an empty result — raise maxTokens` +
       ` or shorten the prompt.`
   );
+  // TERMINAL when the budget truncated it. `finishReason=length` means the model
+  // spent every token it was allowed on hidden reasoning before emitting one
+  // visible token — a pure function of (prompt, maxTokens), both of which are
+  // identical on the next attempt. Retrying is 3× the tokens for the same error.
+  // Every other finish reason stays retryable (the default).
+  return details.finishReason === "length" ? markNonRetryable(err) : err;
 }
 
 /**

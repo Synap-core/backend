@@ -525,6 +525,7 @@ async function ensureAgentUser(
           createdByUserId: userId,
           agentType: "orchestrator",
           isPersonalAgent: true,
+          createdVia: "system",
           agentMetadata: {
             createdByUserId: userId,
             agentType: "orchestrator",

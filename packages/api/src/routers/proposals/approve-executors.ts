@@ -72,7 +72,10 @@ import {
   type ConnectionSelector,
 } from "../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../connectors/index.js";
-import { runResolvedSkill } from "../../services/capabilities/execute-capability.js";
+import {
+  runResolvedSkill,
+  assertApprovalTargetResolves,
+} from "../../services/capabilities/execute-capability.js";
 import { applyMarketInstall } from "../../services/capabilities/marketplace-install.js";
 import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../context.js";
@@ -3402,6 +3405,23 @@ export function registerApproveExecutors(): void {
     key: "messaging.external.send",
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
+      // Stale-target preflight — before any at-most-once dispatch. Blocks
+      // approving into a workspace the approver has left (phantom/lost-membership)
+      // → the P1 recovery chip, no wasted provider call. See
+      // assertApprovalTargetResolves.
+      const targetFail = await assertApprovalTargetResolves(
+        proposal.workspaceId ?? null,
+        userId
+      );
+      if (targetFail) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Couldn't apply — ${targetFail.message}.`,
+          }),
+          { errorClass: targetFail.errorClass }
+        );
+      }
       const threadId = data.threadId as string | undefined;
       const body = data.body as string | undefined;
       const platform = data.platform as string | undefined;
@@ -3513,6 +3533,23 @@ export function registerApproveExecutors(): void {
     key: "capability.run",
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
+      // Stale-target preflight — before any at-most-once dispatch. Blocks
+      // approving into a workspace the approver has left (phantom/lost-membership)
+      // → the P1 recovery chip, no wasted provider call. See
+      // assertApprovalTargetResolves.
+      const targetFail = await assertApprovalTargetResolves(
+        proposal.workspaceId ?? null,
+        userId
+      );
+      if (targetFail) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Couldn't apply — ${targetFail.message}.`,
+          }),
+          { errorClass: targetFail.errorClass }
+        );
+      }
       const skillId = data.skillId as string | undefined;
       const parameters = (data.parameters ?? {}) as Record<string, unknown>;
 
@@ -3841,6 +3878,23 @@ export function registerApproveExecutors(): void {
     key: "provider.action",
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
+      // Stale-target preflight — before any at-most-once dispatch. Blocks
+      // approving into a workspace the approver has left (phantom/lost-membership)
+      // → the P1 recovery chip, no wasted provider call. See
+      // assertApprovalTargetResolves.
+      const targetFail = await assertApprovalTargetResolves(
+        proposal.workspaceId ?? null,
+        userId
+      );
+      if (targetFail) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Couldn't apply — ${targetFail.message}.`,
+          }),
+          { errorClass: targetFail.errorClass }
+        );
+      }
       const provider = data.provider as string | undefined;
       const method = data.method as string | undefined;
       const path = data.path as string | undefined;
@@ -3974,6 +4028,23 @@ export function registerApproveExecutors(): void {
     key: "capability/run",
     async execute({ proposal, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
+      // Stale-target preflight — before any at-most-once dispatch. Blocks
+      // approving into a workspace the approver has left (phantom/lost-membership)
+      // → the P1 recovery chip, no wasted provider call. See
+      // assertApprovalTargetResolves.
+      const targetFail = await assertApprovalTargetResolves(
+        proposal.workspaceId ?? null,
+        userId
+      );
+      if (targetFail) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Couldn't apply — ${targetFail.message}.`,
+          }),
+          { errorClass: targetFail.errorClass }
+        );
+      }
       const capabilityKind = data.capabilityKind as
         "tool" | "skill" | "command" | undefined;
       const capabilityId = data.capabilityId as string | undefined;

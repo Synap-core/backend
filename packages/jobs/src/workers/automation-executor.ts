@@ -109,6 +109,7 @@ import {
   getDefaultActiveService,
   requestTaskExecute,
   beginAiUsageCapture,
+  isRetryableError,
   type AiUsageCollector,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
@@ -335,6 +336,213 @@ export function seedPruningState(
   }
 
   return { skippedNodes, prunedEdges };
+}
+
+/** Why a failed attempt will not be tried again. */
+export type StepRetryDecision =
+  | { retry: true }
+  | { retry: false; reason: "non-retryable" | "attempts-exhausted" };
+
+/**
+ * The per-step retry decision — the ONE place the executor's attempt loop asks
+ * "again?". Pure, so it is unit-testable without a DB (the loop it drives lives
+ * inside `executeAutomationFlow`).
+ *
+ * WHY IT EXISTS (2026-08-03). The loop used to be error-type BLIND: it
+ * re-attempted every failure identically. That makes `maxRetries` actively
+ * harmful for a DETERMINISTIC failure — that day two `ai.generate` steps died
+ * with `finishReason=length · completionTokens=701 · maxTokens=700`, and the
+ * same prompt at the same ceiling truncates the same way every time. Retrying it
+ * is 3× the tokens and 3× the latency for the identical error.
+ *
+ * The shape is the durable-execution consensus (Temporal `nonRetryableErrorTypes`,
+ * Restate `TerminalError`, Inngest `NonRetriableError`): **retry is the DEFAULT
+ * and the PRODUCER of the error declares the opt-out.** `isRetryableError`
+ * (@synap/intelligence-client — the same module that builds the attributed
+ * message, so terminality is decided where the finish reason is known) is that
+ * declaration; an error it does not recognise is assumed transient.
+ *
+ * `attempts-exhausted` and `non-retryable` are distinguished on purpose: the
+ * caller logs the second one, so an operator reading the run can tell "we gave
+ * up after N tries" from "trying again could not have helped".
+ */
+export function decideStepRetry(
+  err: unknown,
+  attempt: number,
+  maxRetries: number
+): StepRetryDecision {
+  // Terminality is checked FIRST, before attempts: on the LAST attempt the
+  // distinction is still worth reporting, and it costs nothing.
+  if (!isRetryableError(err)) return { retry: false, reason: "non-retryable" };
+  if (attempt >= maxRetries)
+    return { retry: false, reason: "attempts-exhausted" };
+  return { retry: true };
+}
+
+/** Whether re-running a node's effect is safe, and if not, why not. */
+export type NodeRetrySafety = { safe: true } | { safe: false; reason: string };
+
+/** HTTP methods a `fetch` node may re-issue without risking a second effect. */
+const RETRY_SAFE_HTTP_METHODS = /^(GET|HEAD)$/i;
+
+/**
+ * `output` types whose re-execution produces a SECOND irreversible effect.
+ *   - entity_create: no idempotency receipt at all. `outputIdemId` (the
+ *     deterministic (runId, nodeId, loopIndex) id that makes `notification` and
+ *     `channel_message` exactly-once) is NOT applied here; the only guard is the
+ *     OPTIONAL, single-property, read-then-write `dedupeBy` — absent on most
+ *     nodes and racy when present. This is the exact duplication that forced the
+ *     job-level `retryLimit: 0`.
+ *   - webhook: an outbound POST to a third party with no receipt, no dedup key
+ *     and no read-back. A retry is a second delivery, user-visible and
+ *     irreversible.
+ */
+const RETRY_UNSAFE_OUTPUT_TYPES = new Set<string>(["entity_create", "webhook"]);
+
+/**
+ * THE RETRY-SAFETY FLOOR — may this node's effect be re-executed?
+ *
+ * WHY A FLOOR AND NOT A VALIDATOR (2026-08-03). `errorHandling.maxRetries` is
+ * authored per-node in a stored `flowDefinition`. An author-time check cannot
+ * reach a flow that was authored BEFORE the check existed, nor one seeded or
+ * imported around the door — and this repo has the documented failure mode of
+ * validators returning `{valid:true}` over a real defect. So the executor
+ * itself refuses, exactly like the governance floors: a stored config may
+ * NARROW the retry budget, never widen it past what the effect can survive.
+ *
+ * The verdict is derived from what each node ACTUALLY does (see the audit in
+ * this wave), not from a hand-maintained allowlist of "dangerous" names:
+ *   safe    — pure reads/compute (`condition`, `transform`, `query`,
+ *             `entity_read`, `related_entities`, `guard`, `compute`, `select`,
+ *             `switch`, `*_query`, `delay`), the CAS `claim` node (its second
+ *             insert conflicts and replays the winner), `output` types that
+ *             re-write the same value (`entity_update`, `set_state`,
+ *             `facet_*`, `relation_create`) or carry a deterministic
+ *             (runId, nodeId, loopIndex) id + `onConflictDoNothing`
+ *             (`notification`, `channel_message`), and `skill`/`capability` —
+ *             those route through `executeCapability`, which runs any
+ *             external-effect verb through the `capability_run_receipts` CAS
+ *             (`runDirectWriteVerbOnce`) keyed on a CONTENT hash, so an
+ *             immediate retry collapses onto the prior claim.
+ *   unsafe  — everything below, each for a reason stated in its branch.
+ *
+ * PURE (no DB, no I/O) so the floor is unit-testable, and total: an unknown
+ * node type is treated as safe because every node type not enumerated here is
+ * a read/compute node — the effectful ones are all named.
+ */
+export function assessNodeRetrySafety(
+  node: AutomationNode,
+  flow?: { nodes: AutomationNode[]; edges: AutomationEdge[] }
+): NodeRetrySafety {
+  const data = (node.data ?? {}) as Record<string, unknown>;
+
+  switch (node.type) {
+    case "command":
+      // Dispatches a free-form task to the Intelligence Service. Whatever the
+      // agent wrote back into the pod during the attempt that "failed" (a
+      // client-perceived timeout is the common case) is already committed —
+      // there is no receipt, no correlation key, nothing to collapse a second
+      // dispatch onto.
+      return {
+        safe: false,
+        reason:
+          "a `command` node dispatches an IS task with no idempotency receipt — a retry re-runs the agent and duplicates whatever it already wrote",
+      };
+
+    case "fetch": {
+      const method = String(data.method ?? "GET");
+      if (RETRY_SAFE_HTTP_METHODS.test(method)) return { safe: true };
+      return {
+        safe: false,
+        reason: `a \`fetch\` node issuing ${method.toUpperCase()} is an outbound write with no idempotency key — a retry is a second request`,
+      };
+    }
+
+    case "output": {
+      const outputType = String(data.outputType ?? "");
+      if (RETRY_UNSAFE_OUTPUT_TYPES.has(outputType)) {
+        return {
+          safe: false,
+          reason:
+            outputType === "entity_create"
+              ? "an `entity_create` output has no idempotency receipt (only the optional, racy `dedupeBy`) — a retry creates a second entity"
+              : "a `webhook` output POSTs to a third party with no idempotency receipt — a retry is a second delivery",
+        };
+      }
+      // `session_update` is idempotent for stage/grantStatus (it SETS them),
+      // but `addOutput` is an unconditional read-modify-APPEND onto
+      // `focus_sessions.expected_outputs` — a retry appends a duplicate row.
+      if (outputType === "session_update") {
+        const config = (data.config ?? {}) as Record<string, unknown>;
+        if (config.addOutput) {
+          return {
+            safe: false,
+            reason:
+              "a `session_update` output with `addOutput` APPENDS to expectedOutputs — a retry appends a duplicate entry",
+          };
+        }
+      }
+      return { safe: true };
+    }
+
+    case "sub_automation":
+      // `const childRunId = randomUUID()` is minted INSIDE the attempt, so a
+      // retry starts a whole second child run — and because the child's own
+      // `outputIdemId` is keyed on `automationRunId`, the fresh id also defeats
+      // the child's notification/channel_message deduplication. A key derived
+      // per attempt is decoration, not idempotency.
+      return {
+        safe: false,
+        reason:
+          "a `sub_automation` node mints a fresh child runId per attempt — a retry runs the entire child flow again AND defeats the child's own run-id-keyed idempotency",
+      };
+
+    case "playbook_run":
+      // The spine's `idempotentBySubject` guard is CONDITIONAL:
+      // `if (input.idempotentBySubject && input.subjectId)`. With no resolvable
+      // subject — or one dropped by the cross-workspace visibility guard — each
+      // attempt starts a fresh session/run.
+      return {
+        safe: false,
+        reason:
+          "a `playbook_run` node is only idempotent when a subject entity resolves (`idempotentBySubject && subjectId`) — with no subject a retry starts a second session",
+      };
+
+    case "loop": {
+      // A loop node's attempt dispatches its WHOLE body over every item. A
+      // retry after a mid-body failure re-runs the items that already
+      // succeeded, so the loop is exactly as retry-safe as its least-safe body
+      // node. Nested loops are traversal boundaries (see LOOP_BODY_NODE_TYPES),
+      // so this recursion terminates.
+      if (!flow) {
+        return {
+          safe: false,
+          reason:
+            "a `loop` node's retry safety is its body's, and the flow graph was not supplied to evaluate it",
+        };
+      }
+      const bodyNodeIds = computeLoopBodyNodeIds(
+        flow.nodes,
+        flow.edges,
+        node.id
+      );
+      for (const bodyNodeId of bodyNodeIds) {
+        const child = flow.nodes.find((n) => n.id === bodyNodeId);
+        if (!child) continue;
+        const verdict = assessNodeRetrySafety(child, flow);
+        if (!verdict.safe) {
+          return {
+            safe: false,
+            reason: `a \`loop\` re-dispatches its whole body per attempt, and body node "${bodyNodeId}" is not retry-safe: ${verdict.reason}`,
+          };
+        }
+      }
+      return { safe: true };
+    }
+
+    default:
+      return { safe: true };
+  }
 }
 
 /**
@@ -4296,10 +4504,33 @@ async function executeAutomationFlow(params: {
       // Resolve per-node error handling config
       const nodeErrorHandling = ((node.data as Record<string, unknown>)
         .errorHandling ?? {}) as NodeErrorHandling;
-      const maxRetries = Math.min(
+      const requestedRetries = Math.min(
         Math.max(Number(nodeErrorHandling.maxRetries ?? 0), 0),
         3
       );
+      // RETRY-SAFETY FLOOR. A stored `errorHandling.maxRetries` may NARROW the
+      // retry budget, never widen it past what the node's effect can survive:
+      // re-running an un-receipted outbound/irreversible step is a double-send,
+      // which is precisely why the JOB-level `retryLimit` is already 0. The
+      // floor lives here (not only in an author-time validator) because a flow
+      // authored, seeded or imported before any check exists still runs through
+      // this loop. See `assessNodeRetrySafety` for the per-type reasoning.
+      const retrySafety = assessNodeRetrySafety(node, {
+        nodes: flow.nodes,
+        edges: flow.edges,
+      });
+      if (requestedRetries > 0 && !retrySafety.safe) {
+        logger.warn(
+          {
+            nodeId: node.id,
+            nodeType: node.type,
+            requestedRetries,
+            reason: retrySafety.reason,
+          },
+          "Automation step declares maxRetries but is NOT retry-safe — flooring to 0 (retrying it risks a duplicate irreversible effect)"
+        );
+      }
+      const maxRetries = retrySafety.safe ? requestedRetries : 0;
       const retryDelay = Math.max(Number(nodeErrorHandling.retryDelay ?? 0), 0);
       const continueOnError = nodeErrorHandling.continueOnError === true;
 
@@ -5208,7 +5439,21 @@ async function executeAutomationFlow(params: {
           break; // Exit retry loop
         } catch (err) {
           lastError = err;
-          if (attempt < maxRetries) {
+          const decision = decideStepRetry(err, attempt, maxRetries);
+          if (!decision.retry && decision.reason === "non-retryable") {
+            logger.warn(
+              {
+                err,
+                nodeId: node.id,
+                attempt,
+                maxRetries,
+                attemptsSkipped: maxRetries - attempt,
+              },
+              "Automation step failed with a NON-RETRYABLE error — stopping early instead of burning the remaining attempts"
+            );
+            break;
+          }
+          if (decision.retry) {
             logger.warn(
               { err, nodeId: node.id, attempt, maxRetries },
               "Automation step failed — will retry"

@@ -40,6 +40,7 @@ import {
   secrets,
   vaultGrants,
   links,
+  capabilities as capabilityContainers,
   type ToolVerbCatalogEntry,
   type ProviderVerbSpec,
 } from "@synap/database/schema";
@@ -114,7 +115,97 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
   verbs?: CapabilityVerbStateWithResponseShape[];
   /** Skill lifecycle: false for an inactive/errored skill (not launchable). */
   runnable?: boolean;
+  /**
+   * The capability CONTAINER this brick belongs to (`tool|skill --member_of-->
+   * capability`), or `null` for a brick that is in no container. DERIVED per
+   * read from `links` — never stored, so it cannot drift. `null` is a real
+   * answer (it is what makes un-packaged bricks renderable), never a placeholder.
+   */
+  containerId?: string | null;
+  /** Display name of `containerId`'s container; null when unresolvable. */
+  containerName?: string | null;
 };
+
+// ── Container membership (derived per read, batched) ──────────────────────────
+
+/** The capability container a brick belongs to. */
+export interface ContainerRef {
+  id: string;
+  name: string | null;
+}
+
+/** Index key for a polymorphic member endpoint (`tool`/`skill` + its id). */
+export function containerMemberKey(fromType: string, fromId: string): string {
+  return `${fromType}:${fromId}`;
+}
+
+/**
+ * Fold `member_of` edge rows into a `fromType:fromId → container` index. Pure,
+ * so the batching (below) and the mapping are independently testable. A brick
+ * linked into several containers reports the OLDEST edge — the same "first row
+ * wins" semantics as `resolveToolCapabilityId` (routers/tools.ts), which the
+ * caller orders by `links.createdAt` to make deterministic.
+ */
+export function indexContainerLinks(
+  rows: Array<{
+    fromType: string;
+    fromId: string;
+    containerId: string;
+    containerName: string | null;
+  }>
+): Map<string, ContainerRef> {
+  const out = new Map<string, ContainerRef>();
+  for (const r of rows) {
+    const key = containerMemberKey(r.fromType, r.fromId);
+    if (!out.has(key)) {
+      out.set(key, { id: r.containerId, name: r.containerName ?? null });
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve the owning capability container for every tool/skill the caller has
+ * already loaded — ONE batched query over `links`, never N single-row lookups.
+ * Same predicate as `resolveToolCapabilityId` (`from_type` + `from_id` +
+ * `link_type='member_of'` + `to_type='capability'`), which rides the
+ * `idx_links_from` index, widened to an `inArray` fan-out and joined to the
+ * container for its display name.
+ *
+ * The `::text` cast on `capabilities.id` is required, not cosmetic: `links.toId`
+ * is text and Postgres has no implicit uuid=text operator (SQLSTATE 42883) — the
+ * same trap the connection-state query above documents.
+ */
+export async function loadContainerRefs(members: {
+  toolIds: string[];
+  skillIds: string[];
+}): Promise<Map<string, ContainerRef>> {
+  const ids = [...members.toolIds, ...members.skillIds];
+  if (ids.length === 0) return new Map();
+  const db = await getDb();
+  const rows = await db
+    .select({
+      fromType: links.fromType,
+      fromId: links.fromId,
+      containerId: links.toId,
+      containerName: capabilityContainers.name,
+    })
+    .from(links)
+    .leftJoin(
+      capabilityContainers,
+      eq(drizzleSql`${capabilityContainers.id}::text`, links.toId)
+    )
+    .where(
+      and(
+        inArray(links.fromType, ["tool", "skill"]),
+        inArray(links.fromId, ids),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability")
+      )
+    )
+    .orderBy(links.createdAt);
+  return indexContainerLinks(rows);
+}
 
 /** Coerce a loosely-typed jsonb input schema into the contract shape. */
 function asInputSchema(value: unknown): Record<string, unknown> {
@@ -450,6 +541,14 @@ export async function listCapabilities(
     for (const r of rows) connectedProviderToolIds.add(r.toolId);
   }
 
+  // Which capability container each brick belongs to — ONE batched `links`
+  // fan-out over the ids already loaded above. Derived per read, never stored:
+  // nothing denormalises verb→tool→container, so there is no cache to drift.
+  const containerByMember = await loadContainerRefs({
+    toolIds,
+    skillIds: skillRows.map((r) => r.id),
+  });
+
   const toolCaps: RegistryCapability[] = toolRows.map((row) => ({
     kind: toolKindToCapabilityKind(row.kind),
     id: row.id,
@@ -458,6 +557,10 @@ export async function listCapabilities(
     inputSchema: asInputSchema(row.inputSchema),
     executor: row.executor as ExecutorRef,
     governance: deriveGovernance(row.approved),
+    containerId:
+      containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
+    containerName:
+      containerByMember.get(containerMemberKey("tool", row.id))?.name ?? null,
     verbs: buildVerbStates(
       row.capabilities as ToolVerbCatalogEntry[] | null,
       grantByGrantableId.get(row.id),
@@ -499,6 +602,12 @@ export async function listCapabilities(
           inputSchema: asInputSchema(row.parameters),
           executor: "is-agent",
           governance: deriveGovernance(row.approved),
+          containerId:
+            containerByMember.get(containerMemberKey("skill", row.id))?.id ??
+            null,
+          containerName:
+            containerByMember.get(containerMemberKey("skill", row.id))?.name ??
+            null,
           // Lifecycle is distinct from approval. Keep inactive/error skills in
           // the broad registry for management surfaces, but mark them so the
           // shared action projection never advertises an unlaunchable skill.
@@ -590,6 +699,21 @@ export async function listCapabilities(
 export interface SectionedCapabilities {
   /** Integrations (Nango providers + API/MCP tools), one per name, verbs nested. */
   integrations: Array<{
+    /**
+     * The `tools` row id this entry stands for. Rows are still de-duplicated by
+     * NAME (a provider installed twice), so this is the REPRESENTATIVE row —
+     * the first one seen — not a claim that only one row exists.
+     */
+    id: string;
+    /**
+     * The capability container this integration belongs to, or `null` for an
+     * un-packaged brick. `null` is a real answer, not a missing one: it is what
+     * lets a catalogue render packaged capabilities and loose bricks apart.
+     * Derived per read from the `member_of` links — never stored.
+     */
+    containerId: string | null;
+    /** Display name of `containerId`'s container; null when it has none. */
+    containerName: string | null;
     name: string;
     kind: CapabilityKind;
     description: string | null;
@@ -605,6 +729,10 @@ export interface SectionedCapabilities {
     name: string;
     description: string | null;
     governance: "auto" | "propose" | "none";
+    /** Owning capability container, or `null` for an un-packaged skill. */
+    containerId: string | null;
+    /** Display name of `containerId`'s container; null when it has none. */
+    containerName: string | null;
   }>;
   /** Intelligence commands. */
   commands: Array<{ id: string; name: string; description: string | null }>;
@@ -705,6 +833,9 @@ export function sectionCapabilities(
       const existing = integrations.get(c.name);
       if (!existing) {
         integrations.set(c.name, {
+          id: c.id,
+          containerId: c.containerId ?? null,
+          containerName: c.containerName ?? null,
           name: c.name,
           kind: c.kind,
           description: c.description ?? null,
@@ -731,6 +862,13 @@ export function sectionCapabilities(
         if (!existing.description && c.description) {
           existing.description = c.description;
         }
+        // Only one of several same-named rows may carry the `member_of` edge —
+        // take the first that does rather than letting the representative row's
+        // `null` mask a real membership.
+        if (!existing.containerId && c.containerId) {
+          existing.containerId = c.containerId;
+          existing.containerName = c.containerName ?? null;
+        }
       }
       continue;
     }
@@ -744,6 +882,8 @@ export function sectionCapabilities(
           name: c.name,
           description: c.description ?? null,
           governance: c.governance,
+          containerId: c.containerId ?? null,
+          containerName: c.containerName ?? null,
         });
       }
       continue;

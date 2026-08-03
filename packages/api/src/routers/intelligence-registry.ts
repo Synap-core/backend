@@ -657,6 +657,7 @@ export const intelligenceRegistryRouter = router({
         userType: "agent",
         agentType: input.serviceType,
         createdByUserId: ctx.userId ?? null,
+        createdVia: "intelligence-service",
         agentMetadata: {
           agentType: input.serviceType,
           description: entry.description,

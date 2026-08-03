@@ -71,6 +71,10 @@ export const users = pgTable("users", {
   isPersonalAgent: boolean("is_personal_agent").notNull().default(false),
   agentTemplate: text("agent_template"),
   agentType: text("agent_type"),
+  // How this agent-user came to exist — provenance for the Agent dashboard
+  // ('cli' | 'intelligence-service' | 'ui' | 'system'). Null for humans and for
+  // agents created before migration 0225. Stamped at each creation call-site.
+  createdVia: text("created_via"),
   parentAgentId: text("parent_agent_id").references((): any => users.id, {
     onDelete: "set null",
   }),
