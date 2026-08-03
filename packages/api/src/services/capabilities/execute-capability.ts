@@ -339,7 +339,15 @@ export function capabilityVerbHasExternalEffect(
     return false;
   }
   if (skill.kind === "declarative") {
-    return !/^(GET|HEAD)$/i.test(String(skill.providerSpec?.method ?? ""));
+    const spec = skill.providerSpec;
+    // GraphQL keys read/write off its OPERATION (all GraphQL is a POST), not the
+    // HTTP method — the SAME notion `execute-provider-verb`'s `isReadMethod`
+    // uses; both sites MUST agree. `operation:"query"`=read; default "mutation"
+    // (fail-closed) = external write.
+    if (spec?.transport === "graphql") {
+      return (spec.graphql?.operation ?? "mutation") !== "query";
+    }
+    return !/^(GET|HEAD)$/i.test(String(spec?.method ?? ""));
   }
   return true;
 }

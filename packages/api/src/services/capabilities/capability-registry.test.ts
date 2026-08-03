@@ -93,6 +93,27 @@ describe("deriveProviderVerbParamsSchema", () => {
     };
     expect(deriveProviderVerbParamsSchema(spec)).toBeUndefined();
   });
+
+  it("extracts {{param}} tokens from a GraphQL verb's query text AND variables", () => {
+    const spec: ProviderVerbSpec = {
+      tool: "fireflies",
+      method: "POST",
+      pathTemplate: "/graphql",
+      transport: "graphql",
+      graphql: {
+        // one token in the query string, one in variables
+        query: 'query { thing(id: "{{id}}") { x } }',
+        variables: { keyword: "{{query}}" },
+        operation: "query",
+      },
+      paramMapping: { id: { required: true } },
+    };
+    const schema = deriveProviderVerbParamsSchema(spec);
+    expect(schema).toEqual({
+      id: { required: true },
+      query: { required: false },
+    });
+  });
 });
 
 /**

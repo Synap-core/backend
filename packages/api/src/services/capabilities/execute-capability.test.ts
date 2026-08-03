@@ -17,6 +17,7 @@ vi.mock("../skills/execute-skill-via-is.js", () => ({
 
 import {
   runResolvedSkill,
+  capabilityVerbHasExternalEffect,
   type ResolvedSkillRow,
 } from "./execute-capability.js";
 import { BUILTIN_VERBS } from "./builtin-verbs.js";
@@ -187,5 +188,70 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
       ctx
     );
     expect(out).toEqual({ kind: "run", skillId: "s1", result: proposed });
+  });
+});
+
+// The governance mirror MUST agree with execute-provider-verb's `isReadMethod`:
+// a declarative READ has no irreversible external effect (skips the at-most-once
+// receipt); a WRITE does. For GraphQL that read/write notion keys off the
+// OPERATION (all GraphQL is a POST), never the HTTP method.
+describe("capabilityVerbHasExternalEffect — read/write classification", () => {
+  const decl = (providerSpec: unknown) =>
+    ({ kind: "declarative", name: "v", providerSpec }) as Pick<
+      ResolvedSkillRow,
+      "kind" | "name" | "providerSpec"
+    >;
+
+  it("builtin is never an external send", () => {
+    expect(
+      capabilityVerbHasExternalEffect({
+        kind: "builtin",
+        name: "feed.post",
+        providerSpec: null,
+      })
+    ).toBe(false);
+  });
+
+  it("code may send externally → true", () => {
+    expect(
+      capabilityVerbHasExternalEffect({
+        kind: "code",
+        name: "x",
+        providerSpec: null,
+      })
+    ).toBe(true);
+  });
+
+  it("REST GET = read (false), REST POST = write (true)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(
+      capabilityVerbHasExternalEffect(decl({ method: "GET" } as any))
+    ).toBe(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(
+      capabilityVerbHasExternalEffect(decl({ method: "POST" } as any))
+    ).toBe(true);
+  });
+
+  it("GraphQL keys off operation, NOT the (always-POST) method", () => {
+    const gql = (operation?: string) => ({
+      method: "POST",
+      pathTemplate: "/graphql",
+      transport: "graphql",
+      graphql: { query: "query { x }", ...(operation ? { operation } : {}) },
+    });
+    // read
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(capabilityVerbHasExternalEffect(decl(gql("query") as any))).toBe(
+      false
+    );
+    // explicit write
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(capabilityVerbHasExternalEffect(decl(gql("mutation") as any))).toBe(
+      true
+    );
+    // default (omitted) is fail-closed → write
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(capabilityVerbHasExternalEffect(decl(gql() as any))).toBe(true);
   });
 });

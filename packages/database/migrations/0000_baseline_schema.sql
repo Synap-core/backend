@@ -247,6 +247,8 @@ CREATE TABLE IF NOT EXISTS "events" (
   "tool_count"     integer,
   "run_status"     text,
   "finish_reason"  text,
+  -- Workspace context as a first-class column (0223). Nullable, no default.
+  "workspace_id"   text,
   PRIMARY KEY ("id", "timestamp")
 );
 -- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
@@ -267,6 +269,8 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "latency_ms"    integer;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "tool_count"    integer;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "run_status"    text;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "finish_reason" text;
+-- Workspace context as a first-class column (0223).
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "workspace_id"  text;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -286,6 +290,12 @@ CREATE INDEX IF NOT EXISTS "idx_events_correlation_id"
 CREATE INDEX IF NOT EXISTS "events_agent_user_id_idx"
   ON "events" ("agent_user_id")
   WHERE "agent_user_id" IS NOT NULL;
+
+-- Workspace-scoped event lookup (migration 0223). Partial so only
+-- workspace-scoped rows are indexed.
+CREATE INDEX IF NOT EXISTS "idx_events_workspace_id"
+  ON "events" ("workspace_id")
+  WHERE "workspace_id" IS NOT NULL;
 
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 

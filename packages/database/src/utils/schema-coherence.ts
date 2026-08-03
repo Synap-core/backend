@@ -944,6 +944,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "run_status",
     addedBy: "0131_agent_run_observability.sql",
   },
+  {
+    table: "events",
+    column: "workspace_id",
+    addedBy: "0223_events_workspace_id_column.sql",
+  },
 
   // vault_grants → capability grants generalization (0142). The polymorphic
   // subject columns are what the resolver/issuance now key on; their absence

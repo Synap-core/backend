@@ -81,6 +81,13 @@ export const events = pgTable(
     toolCount: integer("tool_count"),
     runStatus: text("run_status"),
     finishReason: text("finish_reason"),
+
+    // ─── Workspace context (0223) ───────────────────────────────────────────
+    // Promoted from data->>'workspaceId' to a real, indexable column. `text`
+    // (matches proposals.workspaceId — NOT uuid). Nullable: pod-wide / hydration
+    // events leave it NULL. Readers COALESCE(workspace_id, data->>'workspaceId')
+    // so un-backfilled historical rows still resolve.
+    workspaceId: text("workspace_id"),
   },
   (table) => ({
     // ✨ COMPOSITE PK: Required for TimescaleDB hypertable with primary key
@@ -101,6 +108,9 @@ export const events = pgTable(
 
     // INDEX: agent-run observability — "all runs by this agent" (0131)
     agentUserIdIdx: index("events_agent_user_id_idx").on(table.agentUserId),
+
+    // INDEX: workspace-scoped event lookup (0223)
+    workspaceIdIdx: index("idx_events_workspace_id").on(table.workspaceId),
   })
 );
 

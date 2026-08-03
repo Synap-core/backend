@@ -11,34 +11,67 @@
 
 import { z } from "zod";
 
-export const CreateVerbInput = z.object({
-  toolName: z.string().min(1),
-  verbName: z.string().min(1).max(255),
-  description: z.string().optional(),
-  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-  pathTemplate: z.string().min(1),
-  query: z
-    .record(z.string(), z.union([z.string(), z.array(z.string())]))
-    .optional(),
-  body: z.record(z.string(), z.unknown()).optional(),
-  responseShape: z
-    .object({
-      collectionPath: z.string().optional(),
-      collectionAs: z.string().optional(),
-      item: z.record(z.string(), z.string()).optional(),
-      scalar: z.record(z.string(), z.string()).optional(),
-      headers: z.record(z.string(), z.string()).optional(),
-    })
-    .optional(),
-  parameters: z.record(z.string(), z.unknown()).optional(),
-  workspaceId: z.string().uuid().optional(),
-});
+export const CreateVerbInput = z
+  .object({
+    toolName: z.string().min(1),
+    verbName: z.string().min(1).max(255),
+    description: z.string().optional(),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+    pathTemplate: z.string().min(1),
+    query: z
+      .record(z.string(), z.union([z.string(), z.array(z.string())]))
+      .optional(),
+    body: z.record(z.string(), z.unknown()).optional(),
+    // Transport for the provider call. Absent ⇒ "rest" (REST behavior unchanged).
+    transport: z.enum(["rest", "graphql"]).optional(),
+    // GraphQL request (only with transport:"graphql"): a `{{param}}`-interpolated
+    // `query` + deep-interpolated `variables`; `operation` classifies read/write
+    // for governance; `dataPath` unwraps the response before responseShape.
+    graphql: z
+      .object({
+        query: z.string().min(1),
+        variables: z.record(z.string(), z.unknown()).optional(),
+        operation: z.enum(["query", "mutation"]).optional(),
+        dataPath: z.string().optional(),
+      })
+      .optional(),
+    responseShape: z
+      .object({
+        collectionPath: z.string().optional(),
+        collectionAs: z.string().optional(),
+        item: z.record(z.string(), z.string()).optional(),
+        scalar: z.record(z.string(), z.string()).optional(),
+        headers: z.record(z.string(), z.string()).optional(),
+      })
+      .optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    workspaceId: z.string().uuid().optional(),
+  })
+  // Cross-field: a GraphQL verb REQUIRES `graphql.query`, and the two transports
+  // never mix — a GraphQL verb carries its args in `graphql.variables`, never in
+  // REST `query`/`body`.
+  .superRefine((val, ctx) => {
+    if (val.transport === "graphql" && !val.graphql?.query) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["graphql", "query"],
+        message: 'A verb with transport:"graphql" requires graphql.query.',
+      });
+    }
+    if (val.graphql && (val.query !== undefined || val.body !== undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["graphql"],
+        message:
+          "A GraphQL verb cannot also set REST query/body — carry arguments in graphql.variables.",
+      });
+    }
+  });
 
 export type CreateVerbInput = z.infer<typeof CreateVerbInput>;
 
 export type ValidateCreateVerbResult =
-  | { ok: true; data: CreateVerbInput }
-  | { ok: false; error: string };
+  { ok: true; data: CreateVerbInput } | { ok: false; error: string };
 
 /**
  * Validates a raw synap_create_verb args bag against the three safety

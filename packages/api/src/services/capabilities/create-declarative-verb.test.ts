@@ -59,6 +59,37 @@ describe("buildProviderVerbSpec", () => {
     expect(spec.query).toEqual({ limit: "{{limit}}" });
     expect(spec.body).toEqual({ title: "{{title}}" });
   });
+
+  it("carries transport + graphql for a GraphQL verb", () => {
+    const spec = buildProviderVerbSpec({
+      ...base,
+      method: "POST",
+      pathTemplate: "/graphql",
+      transport: "graphql",
+      graphql: {
+        query: "query Q($k: String) { things(keyword: $k) { id } }",
+        variables: { k: "{{query}}" },
+        operation: "query",
+        dataPath: "data",
+      },
+    });
+    expect(spec.transport).toBe("graphql");
+    expect(spec.graphql).toEqual({
+      query: "query Q($k: String) { things(keyword: $k) { id } }",
+      variables: { k: "{{query}}" },
+      operation: "query",
+      dataPath: "data",
+    });
+    // No REST query/body keys leak onto a GraphQL verb.
+    expect(spec.query).toBeUndefined();
+    expect(spec.body).toBeUndefined();
+  });
+
+  it("omits transport/graphql entirely for a plain REST verb", () => {
+    const spec = buildProviderVerbSpec(base);
+    expect("transport" in spec).toBe(false);
+    expect("graphql" in spec).toBe(false);
+  });
 });
 
 describe("parentToolMissingMessage", () => {

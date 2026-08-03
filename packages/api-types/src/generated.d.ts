@@ -1162,6 +1162,27 @@ export type ProviderVerbSpec = {
 	baseUrlOverride?: string;
 	/** Static custom request headers (e.g. Cal.com's `cal-api-version`). Auth wins. */
 	headers?: Record<string, string>;
+	/**
+	 * Transport for the provider call. Absent ⇒ `"rest"` (byte-identical to the
+	 * prior behavior). `"graphql"` POSTs a `{ query, variables }` body to
+	 * `pathTemplate` (usually `""` or `"/graphql"`) — see `graphql`.
+	 */
+	transport?: "rest" | "graphql";
+	/**
+	 * GraphQL request — only when `transport:"graphql"`. `query` takes `{{param}}`
+	 * interpolation (like `pathTemplate`); `variables` is deep-interpolated (like
+	 * `body`). `operation` classifies the call for GOVERNANCE — `"query"`=READ,
+	 * `"mutation"`=WRITE (default `"mutation"`, fail-closed). `dataPath` is the
+	 * dot-path unwrapped from the response body before `responseShape` runs
+	 * (default `"data"`); a non-empty `errors[]` on a 200 body is surfaced as an
+	 * error, NEVER swallowed as success.
+	 */
+	graphql?: {
+		query: string;
+		variables?: Record<string, unknown>;
+		operation?: "query" | "mutation";
+		dataPath?: string;
+	};
 	paramMapping?: Record<string, {
 		required?: boolean;
 		default?: unknown;
@@ -3756,6 +3777,7 @@ export interface EventRecord {
 	toolCount?: number;
 	runStatus?: string;
 	finishReason?: string;
+	workspaceId?: string;
 }
 /** Minimal message fields for list/preview */
 export interface LinkedMessagePreview {
@@ -8497,7 +8519,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9198,7 +9220,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9299,7 +9321,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9410,7 +9432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -13147,6 +13169,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string | undefined;
 					query?: Record<string, string | string[]> | undefined;
 					body?: Record<string, unknown> | undefined;
+					transport?: "rest" | "graphql" | undefined;
+					graphql?: {
+						query: string;
+						variables?: Record<string, unknown> | undefined;
+						operation?: "query" | "mutation" | undefined;
+						dataPath?: string | undefined;
+					} | undefined;
 					responseShape?: {
 						collectionPath?: string | undefined;
 						collectionAs?: string | undefined;
@@ -17344,6 +17373,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				}[];
 			};
@@ -17378,6 +17408,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				};
 				effectiveProperties: EffectiveProperty[];
@@ -17399,6 +17430,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				profileKind?: "role" | "kind" | undefined;
 				applicableKinds?: string[] | undefined;
+				roleCategory?: string | undefined;
 			};
 			output: {
 				profile: {
@@ -17425,6 +17457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				};
 				existing: boolean;
@@ -17462,6 +17495,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				};
 				existing?: undefined;
@@ -17618,6 +17652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				};
 			};
@@ -17670,6 +17705,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				}[];
 			};
@@ -17714,6 +17750,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				}[];
 			};
@@ -17749,6 +17786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultRenderers: Record<string, unknown>;
 					profileKind: "role" | "kind";
 					applicableKinds: string[] | null;
+					roleCategory: string | null;
 					aiPosture: AiPosture | null;
 				}[];
 			};

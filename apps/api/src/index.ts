@@ -1904,6 +1904,10 @@ try {
               await import("@synap/jobs/workers/mail-feed-cron.js");
             const { registerCalBackfillRunner } =
               await import("@synap/jobs/workers/cal-backfill-cron.js");
+            const {
+              registerFirefliesIngestRunner,
+              registerFirefliesBackfillRunner,
+            } = await import("@synap/jobs/workers/fireflies-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerEventEndRunner } =
@@ -1922,6 +1926,12 @@ try {
             registerPlaybookRunner((input) => api.runPlaybook(input));
             registerMailFeedRunner(() => api.runMailFeed());
             registerCalBackfillRunner(() => api.runCalBackfill());
+            // Fireflies: webhook-triggered ingest + the backfill safety net both
+            // delegate to api-side runners (executeCapability + recordInboundMessage).
+            registerFirefliesIngestRunner((input) =>
+              api.runFirefliesIngest(input)
+            );
+            registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
             // ONE schedule, correct ordering: import Google Calendar → Synap
             // `event` entities FIRST, then the source-A mirror pass pushes those
             // (and native/Stellar events) to Discord — so a Google event lands as

@@ -84,6 +84,11 @@ export interface EventRecord {
   toolCount?: number;
   runStatus?: string;
   finishReason?: string;
+
+  // ── Workspace context (0223) ────────────────────────────────────────────────
+  // Populated from the events table's real `workspace_id` column. Undefined for
+  // pod-wide / hydration events and for rows written before the column existed.
+  workspaceId?: string;
 }
 
 export interface EventStreamOptions {
@@ -229,10 +234,11 @@ export class EventRepository {
           latency_ms,
           tool_count,
           run_status,
-          finish_reason
+          finish_reason,
+          workspace_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
         )
         RETURNING *
       `,
@@ -263,6 +269,10 @@ export class EventRepository {
           validated.toolCount ?? null,
           validated.runStatus ?? null,
           validated.finishReason ?? null,
+          // Workspace context as a real column (0223). Nullable for pod-wide /
+          // hydration events. Still folded into `data` by the writer for
+          // back-compat, so readers COALESCE the two.
+          validated.workspaceId ?? null,
         ]
       );
 
@@ -521,7 +531,7 @@ export class EventRepository {
              data, metadata, source, correlation_id,
              is_agent, agent_user_id, agent_type, model, provider, cost_usd,
              tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
-             run_status, finish_reason
+             run_status, finish_reason, workspace_id
       FROM events
       WHERE correlation_id = $1
       AND user_id = $2
@@ -571,7 +581,7 @@ export class EventRepository {
              data, metadata, source, correlation_id,
              is_agent, agent_user_id, agent_type, model, provider, cost_usd,
              tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
-             run_status, finish_reason
+             run_status, finish_reason, workspace_id
       FROM events
       WHERE correlation_id = ANY($1::uuid[])
       AND user_id = $2
@@ -640,8 +650,10 @@ export class EventRepository {
     }
 
     if (filters.workspaceId) {
-      // Workspace context is stored inside the event's `data` JSONB.
-      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      // Workspace context lives in the real `workspace_id` column (0223) but
+      // historical / un-backfilled / compressed rows may only carry it in the
+      // `data` JSONB — COALESCE resolves both.
+      query += ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
       params.push(filters.workspaceId);
       paramIndex++;
     }
@@ -759,7 +771,7 @@ export class EventRepository {
              data, metadata, source, correlation_id,
              is_agent, agent_user_id, agent_type, model, provider, cost_usd,
              tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
-             run_status, finish_reason
+             run_status, finish_reason, workspace_id
       FROM events
       WHERE type = 'agentRun.create.completed'
       AND user_id = $1
@@ -768,7 +780,8 @@ export class EventRepository {
     let paramIndex = 2;
 
     if (filters.workspaceId) {
-      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      // Real column (0223) with JSONB fallback for un-backfilled rows.
+      query += ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
       params.push(filters.workspaceId);
       paramIndex++;
     }
@@ -810,7 +823,8 @@ export class EventRepository {
     }
 
     if (filters.workspaceId) {
-      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      // Real column (0223) with JSONB fallback for un-backfilled rows.
+      query += ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
       params.push(filters.workspaceId);
       paramIndex++;
     }
@@ -892,6 +906,8 @@ export class EventRepository {
       toolCount: (row.tool_count as number | null) ?? undefined,
       runStatus: (row.run_status as string | null) ?? undefined,
       finishReason: (row.finish_reason as string | null) ?? undefined,
+      // Workspace context real column (0223). Absent on pre-migration rows.
+      workspaceId: (row.workspace_id as string | null) ?? undefined,
     };
   }
 }

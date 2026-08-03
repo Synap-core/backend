@@ -119,4 +119,61 @@ describe("validateCreateVerbInput", () => {
       expect(result.data.pathTemplate).toBe(VALID_ARGS.pathTemplate);
     }
   });
+
+  // ── GraphQL transport (Wave 0) ───────────────────────────────────────────
+  const GRAPHQL_ARGS = {
+    toolName: "fireflies",
+    verbName: "fireflies_search",
+    method: "POST",
+    pathTemplate: "/graphql",
+    transport: "graphql",
+    graphql: {
+      query: "query Q($k: String) { transcripts(keyword: $k) { id } }",
+      variables: { k: "{{query}}" },
+      operation: "query",
+      dataPath: "data",
+    },
+    parameters: { query: "string" },
+  };
+
+  it("accepts a well-formed GraphQL verb", () => {
+    const result = validateCreateVerbInput(GRAPHQL_ARGS);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.transport).toBe("graphql");
+      expect(result.data.graphql?.operation).toBe("query");
+    }
+  });
+
+  it('rejects transport:"graphql" with no graphql.query', () => {
+    const { graphql: _drop, ...rest } = GRAPHQL_ARGS;
+    const result = validateCreateVerbInput(rest);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/graphql\.query/i);
+  });
+
+  it("rejects mixing a GraphQL verb with a REST query", () => {
+    const result = validateCreateVerbInput({
+      ...GRAPHQL_ARGS,
+      query: { limit: "{{limit}}" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/cannot also set REST/i);
+  });
+
+  it("rejects mixing a GraphQL verb with a REST body", () => {
+    const result = validateCreateVerbInput({
+      ...GRAPHQL_ARGS,
+      body: { title: "{{title}}" },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a graphql block with an invalid operation", () => {
+    const result = validateCreateVerbInput({
+      ...GRAPHQL_ARGS,
+      graphql: { ...GRAPHQL_ARGS.graphql, operation: "subscription" },
+    });
+    expect(result.ok).toBe(false);
+  });
 });

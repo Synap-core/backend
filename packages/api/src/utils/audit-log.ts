@@ -94,18 +94,17 @@ export async function auditLog(
       data: event.data as Record<string, unknown>,
       metadata: event.metadata as Record<string, unknown>,
       userId: event.userId,
+      // Workspace context → the real `workspace_id` column (0223). Also kept in
+      // `data.workspaceId` above for back-compat; readers COALESCE the two. Null
+      // for pod-wide / hydration operations.
+      workspaceId: opts.workspaceId ?? undefined,
       // Agent attribution → realtime presence. `is_agent` defaults to whether an
       // agent-user drove the write; both stay null for owner writes.
       isAgent: opts.isAgent ?? (opts.agentUserId ? true : undefined),
       agentUserId: opts.agentUserId ?? undefined,
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
-        | "api"
-        | "automation"
-        | "sync"
-        | "migration"
-        | "system"
-        | "intelligence",
+        "api" | "automation" | "sync" | "migration" | "system" | "intelligence",
       timestamp: event.timestamp,
       correlationId: event.correlationId,
     });

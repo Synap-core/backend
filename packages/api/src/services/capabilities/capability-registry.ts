@@ -173,7 +173,15 @@ export function deriveBuiltinVerbParamsSchema(
 
 /** Every `{{param}}` token referenced across a provider verb's templated strings. */
 function extractTemplateParams(spec: ProviderVerbSpec): string[] {
-  const text = JSON.stringify([spec.pathTemplate, spec.query, spec.body]);
+  const text = JSON.stringify([
+    spec.pathTemplate,
+    spec.query,
+    spec.body,
+    // GraphQL verbs template their args in the query text + variables, not
+    // path/query/body — scan them too so params still project into the catalog.
+    spec.graphql?.query,
+    spec.graphql?.variables,
+  ]);
   const found = new Set<string>();
   for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) found.add(m[1]);
   return [...found];

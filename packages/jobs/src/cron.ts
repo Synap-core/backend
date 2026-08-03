@@ -49,6 +49,10 @@ import {
   CONTEXT_CARD_REFRESH_QUEUE,
   CONTEXT_CARD_REFRESH_CRON,
 } from "./workers/context-card-refresh.js";
+import {
+  FIREFLIES_BACKFILL_CRON_QUEUE,
+  FIREFLIES_BACKFILL_CRON,
+} from "./workers/fireflies-worker.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -241,6 +245,17 @@ export async function registerCronSchedules(): Promise<void> {
   // has calcom.backfill.enabled.
   await scheduleSafe(boss, "cal-backfill-cron", "*/30 * * * *", {});
   logger.info("Registered cron: cal-backfill-cron (every 30min)");
+
+  // Fireflies backfill (every 30min) — re-ingests any completed transcript whose
+  // completion webhook was missed (safety net for the inbound webhook). No-ops
+  // unless the fireflies tool has fireflies.backfill.enabled.
+  await scheduleSafe(
+    boss,
+    FIREFLIES_BACKFILL_CRON_QUEUE,
+    FIREFLIES_BACKFILL_CRON,
+    {}
+  );
+  logger.info("Registered cron: fireflies-backfill-cron (every 30min)");
 
   // Event sync (every 6 hours — the cron worker invokes the api-side runner
   // in-process (IoC slot): FIRST imports Google Calendar → Synap `event`

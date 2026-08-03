@@ -245,6 +245,21 @@ export function buildProviderRequest(
   const mapped = applyParamMapping(spec, parameters);
   const mappedForPath = encodeForPath(spec, mapped);
   const path = interpolateString(spec.pathTemplate, mappedForPath);
+
+  // GraphQL: one POST of a `{ query, variables }` body to the endpoint path (no
+  // URL query string). `query` is interpolated like `pathTemplate`; `variables`
+  // are deep-interpolated like a REST `body`. Method is FORCED to POST.
+  if (spec.transport === "graphql") {
+    const body: Record<string, unknown> = {
+      query: interpolateString(spec.graphql?.query ?? "", mapped),
+      variables: interpolateDeep(
+        spec.graphql?.variables ?? {},
+        mapped
+      ) as Record<string, unknown>,
+    };
+    return { method: "POST", path, query: "", body, mapped };
+  }
+
   const query = buildQueryString(spec.query, mapped);
   const body = spec.body
     ? (interpolateDeep(spec.body, mapped) as Record<string, unknown>)
@@ -289,7 +304,14 @@ async function executeSingleCall(
   // write is governed IDENTICALLY to a code write (per-invocation propose/deny),
   // never silently pre-approved by the skill gate alone.
   // Fail-closed: an unknown/absent method is treated as a write (tool-gate runs).
-  const isReadMethod = /^(GET|HEAD)$/i.test(method ?? "");
+  //
+  // GraphQL: read/write is the OPERATION, never the HTTP method (all GraphQL is a
+  // POST). `graphql.operation:"query"` is a READ; anything else (default
+  // "mutation") is a WRITE — fail-closed, same as REST.
+  const isGraphql = spec.transport === "graphql";
+  const isReadMethod = isGraphql
+    ? (spec.graphql?.operation ?? "mutation") === "query"
+    : /^(GET|HEAD)$/i.test(method ?? "");
 
   const result = await triggerProviderAction({
     userId: ctx.userId,
@@ -316,6 +338,38 @@ async function executeSingleCall(
       providerRef: result.providerRef,
     };
   }
+
+  // GraphQL returns 200 even on an application-level failure, carrying an
+  // `errors[]` array. NEVER treat a 200-with-errors[] as success — surface it as
+  // a provider error. On success, unwrap `graphql.dataPath` (default "data")
+  // BEFORE response shaping so the shape's dot-paths index the payload, not the
+  // `{ data, errors }` envelope.
+  if (isGraphql) {
+    const gqlBody = result.body as Record<string, unknown> | undefined;
+    const errors = gqlBody?.errors;
+    if (Array.isArray(errors) && errors.length > 0) {
+      const message = `GraphQL error: ${errors
+        .map((e) => String((e as { message?: unknown })?.message ?? e))
+        .join("; ")}`;
+      return {
+        kind: "error",
+        message,
+        // The transport SUCCEEDED (HTTP 200) but the query FAILED — synthesize a
+        // FAILURE envelope (success:false) so `executeProviderVerb`'s flatten and
+        // the caller's `capErrorMessage` treat a 200-with-errors[] IDENTICALLY to a
+        // transport failure. Returning the raw success:true envelope would let the
+        // caller re-read it as success — the exact swallow this guards against.
+        result: { success: false, error: message, errorClass: "provider" },
+        errorClass: "provider",
+      };
+    }
+    const unwrapped = getPath(gqlBody, spec.graphql?.dataPath ?? "data");
+    return {
+      kind: "shaped",
+      value: applyResponseShape(unwrapped, spec.responseShape, mapped),
+    };
+  }
+
   return {
     kind: "shaped",
     value: applyResponseShape(result.body, spec.responseShape, mapped),

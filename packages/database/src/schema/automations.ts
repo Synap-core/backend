@@ -381,21 +381,61 @@ export interface GuardNodeDef extends AutomationNodeBase {
 
 /**
  * Source node that reads stored chat messages for a client. Either reads a
- * channel directly (`channelId`) or resolves the client-comms channel bound to
- * a subject entity (`channels.contextObjectId`). Output:
+ * channel directly (`channelId`) or resolves the channel(s) bound to a subject
+ * entity (`channels.contextObjectId`).
+ *
+ * DEFAULT output (scope="single-external" / explicit channelId):
  * `{ messages: [{ role, content, authorName, createdAt }], channelId, count }`
  * so a downstream loop can iterate `steps.<id>.output.messages`.
+ *
+ * FAN-OUT output (scope="all-channels") is a SUPERSET of the above — the same
+ * `messages`/`channelId`/`count` keys plus:
+ *   - each message carries a `source` tag `{ channelId, channelType, branchPurpose, title }`
+ *     so a downstream `ai.generate` prompt can attribute who said what where;
+ *   - `channels: [{ id, channelType, branchPurpose, title }]` — the gathered set;
+ *   - `truncated: boolean` — true when the merged history hit the per-gather ceiling.
+ * `channelId` is `null` in fan-out mode (there is no single channel). Consumers
+ * that use the DEFAULT mode are byte-for-byte unaffected.
+ *
+ * When `includeDocuments` is true (either mode, requires `subjectEntityId`), the
+ * output also carries `documents: [{ documentId, entityId, title, body }]` —
+ * the entity's own body document plus the bodies of linked file/document
+ * entities (DB-only preview, workspace-floored).
  */
 export interface MessagesQueryNodeDef extends AutomationNodeBase {
   type: "messages_query";
   data: {
     label: string;
-    /** Read messages for the client-comms channel bound to this entity. */
+    /** Read messages for the channel(s) bound to this entity. */
     subjectEntityId?: string;
-    /** Read this channel directly (wins over subjectEntityId). */
+    /** Read this channel directly (wins over subjectEntityId + scope). */
     channelId?: string;
-    /** Most-recent N messages (default 40). */
+    /** Most-recent N messages per channel (default 40, capped 200). */
     limit?: number;
+    /**
+     * Gather scope. DEFAULT `"single-external"` = today's exact behavior (the
+     * single EXTERNAL client-comms channel bound to `subjectEntityId`).
+     * `"all-channels"` fans across EVERY channel bound to the entity (Discord +
+     * email client-comms + team threads + Fireflies meeting transcripts + feed),
+     * reads each channel's recent history, and MERGES chronologically. Ignored
+     * when an explicit `channelId` is given (that is always a single channel).
+     */
+    scope?: "single-external" | "all-channels";
+    /**
+     * `all-channels` only: restrict the fan-out to these channelTypes
+     * (e.g. `["external","thread"]`). Omit = all types bound to the entity.
+     */
+    channelTypes?: string[];
+    /**
+     * `all-channels` only: restrict the fan-out to this firewall branchPurpose
+     * (e.g. `"client-comms"`). Omit = any purpose.
+     */
+    branchPurpose?: string;
+    /**
+     * Also gather the entity's linked documents (title + DB-only body preview).
+     * Requires `subjectEntityId`. Default false → output unchanged.
+     */
+    includeDocuments?: boolean;
     /** Optional per-node error handling */
     errorHandling?: NodeErrorHandling;
   };

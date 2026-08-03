@@ -53,6 +53,24 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "fireflies-ingest",
+    name: "Fireflies Transcript Ingest",
+    description:
+      "On-demand (enqueued by the inbound Fireflies webhook on a Transcription-complete event). Delegates to the api-side runner (in-process, IoC slot) which fetches the full transcript via the fireflies_get_transcript declarative GraphQL verb and lands it as a channel message via recordInboundMessage (so the AI can query it). Retries via pg-boss on transient failure.",
+    triggers: ["queue:fireflies-ingest"],
+    outputs: ["external_message.received"],
+    category: "ai",
+  },
+  {
+    id: "fireflies-backfill-cron",
+    name: "Fireflies Backfill",
+    description:
+      "Every 30min, runs the api-side Fireflies backfill runner (in-process) which lists recent transcripts via fireflies_list_recent_transcripts and re-ingests any not-yet-seen meeting as a channel message. Safety net for the inbound webhook (catches meetings missed during downtime); caller-side throttled to respect Fireflies' 60 req/min limit. No-ops unless the fireflies tool has fireflies.backfill.enabled.",
+    triggers: ["cron:*/30 * * * *"],
+    outputs: ["external_message.received"],
+    category: "ai",
+  },
+  {
     id: "event-sync-cron",
     name: "Event Sync",
     description:

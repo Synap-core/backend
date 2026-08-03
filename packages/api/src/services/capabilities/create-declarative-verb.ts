@@ -95,6 +95,8 @@ export function buildProviderVerbSpec(
     tool: input.toolName,
     method: input.method,
     pathTemplate: input.pathTemplate,
+    ...(input.transport ? { transport: input.transport } : {}),
+    ...(input.graphql ? { graphql: input.graphql } : {}),
     ...(input.query ? { query: input.query } : {}),
     ...(input.body ? { body: input.body } : {}),
     ...(input.responseShape ? { responseShape: input.responseShape } : {}),

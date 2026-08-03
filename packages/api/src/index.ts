@@ -668,6 +668,13 @@ registerRouter("activity", activityRouter, {
   description: "Activity / timeline surface",
 });
 
+import { diagnoseRouter } from "./routers/diagnose.js";
+registerRouter("diagnose", diagnoseRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Whole-pod health / what-needs-me surface",
+});
+
 import { runsRouter } from "./routers/runs.js";
 registerRouter("runs", runsRouter, {
   version: "1.0.0",
@@ -788,6 +795,15 @@ export {
   runCalBackfill,
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";
+export {
+  runFirefliesIngest,
+  type RunFirefliesIngestInput,
+  type RunFirefliesIngestResult,
+} from "./services/fireflies/run-fireflies-ingest.js";
+export {
+  runFirefliesBackfill,
+  type RunFirefliesBackfillResult,
+} from "./services/fireflies/run-fireflies-backfill.js";
 export {
   runEventSync,
   type RunEventSyncResult,

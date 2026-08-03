@@ -104,6 +104,12 @@ import {
   CAL_BACKFILL_CRON_QUEUE,
 } from "./cal-backfill-cron.js";
 import {
+  handleFirefliesIngest,
+  handleFirefliesBackfillCron,
+  FIREFLIES_INGEST_QUEUE,
+  FIREFLIES_BACKFILL_CRON_QUEUE,
+} from "./fireflies-worker.js";
+import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
@@ -215,6 +221,8 @@ const ALL_QUEUES = [
   // violated → registerCronSchedules aborted → every cron after cal-backfill
   // in cron.ts silently never scheduled (found live 2026-07-12).
   CAL_BACKFILL_CRON_QUEUE,
+  FIREFLIES_INGEST_QUEUE,
+  FIREFLIES_BACKFILL_CRON_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
@@ -604,6 +612,23 @@ export async function registerAllWorkers(): Promise<void> {
     handleCalBackfillCron(job)
   );
   logger.info("Registered worker: cal-backfill-cron");
+
+  // Fireflies transcript ingest (on-demand) — the inbound webhook enqueues one
+  // job per completed meeting; the api-side runner (IoC slot) fetches the
+  // transcript and lands it as a channel message via recordInboundMessage.
+  // Re-throws on failure so pg-boss retries; the backfill cron is the last net.
+  await boss.work(FIREFLIES_INGEST_QUEUE, async ([job]: any[]) =>
+    handleFirefliesIngest(job)
+  );
+  logger.info("Registered worker: fireflies-ingest");
+
+  // Fireflies backfill (cron: every 30min) — invokes the api-side backfill runner
+  // in-process (IoC slot) to re-ingest any transcript whose completion webhook was
+  // missed. No-ops unless the fireflies tool has fireflies.backfill.enabled.
+  await boss.work(FIREFLIES_BACKFILL_CRON_QUEUE, async ([job]: any[]) =>
+    handleFirefliesBackfillCron(job)
+  );
+  logger.info("Registered worker: fireflies-backfill-cron");
 
   // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
   // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into

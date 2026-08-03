@@ -33,7 +33,37 @@ let subscriptionRow: {
   active: boolean;
 } | null = null;
 
+// Fireflies tool row + vault secret + enqueue spy (driven per-test below).
+let toolRow: {
+  id: string;
+  createdBy: string;
+  workspaceId: string | null;
+  metadata: unknown;
+} | null = null;
+let vaultSecret: string | null = null;
+const sendJob = vi.fn().mockResolvedValue(undefined);
+
 const emitSideEffects = vi.fn().mockResolvedValue(undefined);
+
+// Mailgun: resolveIdentity + recordInboundMessage are driven per-test.
+let identityResolution: {
+  match: string | null;
+  entity: { id: string } | null;
+} = {
+  match: null,
+  entity: null,
+};
+const resolveIdentityMock = vi.fn((..._args: unknown[]) =>
+  Promise.resolve(identityResolution)
+);
+const recordInboundMessageMock = vi.fn((..._args: unknown[]) =>
+  Promise.resolve({
+    channelId: "chan-1",
+    contextObjectId: null,
+    inboundHash: "hash-1",
+    recorded: true,
+  })
+);
 
 function chainable(result: unknown) {
   const p: Record<string, unknown> = {};
@@ -58,7 +88,7 @@ vi.mock("@synap/database", () => ({
       webhookSubscriptions: {
         findFirst: () => Promise.resolve(subscriptionRow),
       },
-      tools: { findFirst: () => Promise.resolve(null) },
+      tools: { findFirst: () => Promise.resolve(toolRow) },
       entities: { findMany: () => Promise.resolve([]) },
       messagingAccounts: { findFirst: () => Promise.resolve(null) },
       workspaces: { findFirst: () => Promise.resolve(null) },
@@ -73,11 +103,19 @@ vi.mock("@synap/database", () => ({
   entities: {},
   messagingAccounts: {},
   webhookSubscriptions: { id: "id", active: "active" },
-  resolveVaultSecret: () => Promise.resolve(null),
+  resolveVaultSecret: () => Promise.resolve(vaultSecret),
+  resolveIdentity: (...args: unknown[]) => resolveIdentityMock(...args),
 }));
 
 vi.mock("@synap/events", () => ({
   emitSideEffects: (...args: unknown[]) => emitSideEffects(...args),
+}));
+
+vi.mock("@synap/jobs", () => ({
+  getBoss: () => ({ send: (...args: unknown[]) => sendJob(...args) }),
+}));
+vi.mock("@synap/jobs/workers/fireflies-worker.js", () => ({
+  FIREFLIES_INGEST_QUEUE: "fireflies-ingest",
 }));
 
 vi.mock("../connectors/index.js", () => ({
@@ -87,7 +125,8 @@ vi.mock("../services/messaging-account-service.js", () => ({
   MessagingAccountService: {},
 }));
 vi.mock("../services/connectors/inbound-recorder.js", () => ({
-  recordInboundMessage: vi.fn(),
+  recordInboundMessage: (...args: unknown[]) =>
+    recordInboundMessageMock(...args),
 }));
 vi.mock("../services/capture-agent/submit-capture-graph.js", () => ({
   submitCaptureGraph: vi.fn(),
@@ -206,5 +245,340 @@ describe("inbound webhook ingress auth", () => {
     });
     expect(res.status).toBe(413);
     expect(emitSideEffects).not.toHaveBeenCalled();
+  });
+});
+
+// ── Fireflies inbound webhook ─────────────────────────────────────────────────
+const FF_TOKEN = "ff-token-xyz";
+const MEETING_ID = "ASxwZxCstx";
+const CLIENT_REF = "be582c46-4ac9-4565-9ba6-6ab4264496a8";
+
+function firefliesBody(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    meetingId: MEETING_ID,
+    eventType: "Transcription complete",
+    clientReferenceId: CLIENT_REF,
+    ...overrides,
+  });
+}
+
+async function postFireflies(
+  token: string,
+  body: string,
+  headers: Record<string, string> = {}
+): Promise<Response> {
+  return app.request(`/api/webhooks/fireflies/${token}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body,
+  });
+}
+
+describe("fireflies inbound webhook", () => {
+  beforeEach(() => {
+    sendJob.mockClear();
+    vaultSecret = null;
+    // Token-only config (no signing secret) by default — the :token authorizes.
+    toolRow = {
+      id: "tool-ff",
+      createdBy: OWNER_ID,
+      workspaceId: WS_ID,
+      metadata: {
+        fireflies: {
+          webhook: {
+            token: FF_TOKEN,
+            workspaceId: WS_ID,
+            ownerUserId: OWNER_ID,
+            seen: {},
+          },
+        },
+      },
+    };
+  });
+
+  it("enqueues a fetch-then-ingest job on Transcription complete", async () => {
+    const res = await postFireflies(FF_TOKEN, firefliesBody());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, queued: true });
+    expect(sendJob).toHaveBeenCalledTimes(1);
+    const [queue, data] = sendJob.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(queue).toBe("fireflies-ingest");
+    expect(data).toMatchObject({
+      meetingId: MEETING_ID,
+      clientReferenceId: CLIENT_REF,
+      toolId: "tool-ff",
+      workspaceId: WS_ID,
+      ownerUserId: OWNER_ID,
+    });
+  });
+
+  it("dedups an already-seen meeting (no re-enqueue)", async () => {
+    toolRow!.metadata = {
+      fireflies: {
+        webhook: {
+          token: FF_TOKEN,
+          workspaceId: WS_ID,
+          ownerUserId: OWNER_ID,
+          seen: { [MEETING_ID]: "2026-08-01T00:00:00.000Z" },
+        },
+      },
+    };
+    const res = await postFireflies(FF_TOKEN, firefliesBody());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, deduped: true });
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an unknown token (no enqueue, no leak)", async () => {
+    const res = await postFireflies("wrong-token", firefliesBody());
+    expect(res.status).toBe(404);
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when no fireflies tool is configured", async () => {
+    toolRow = null;
+    const res = await postFireflies(FF_TOKEN, firefliesBody());
+    expect(res.status).toBe(404);
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+
+  it("ignores a non-transcription event type without enqueueing", async () => {
+    const res = await postFireflies(
+      FF_TOKEN,
+      firefliesBody({ eventType: "Something else" })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, ignored: true });
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+
+  it("ignores a payload with no meetingId (ping/handshake)", async () => {
+    const res = await postFireflies(FF_TOKEN, firefliesBody({ meetingId: "" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, ignored: true });
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+
+  it("verifies x-hub-signature when a signing secret is provisioned", async () => {
+    vaultSecret = "webhook-signing-secret";
+    toolRow!.metadata = {
+      fireflies: {
+        webhook: {
+          token: FF_TOKEN,
+          secretVaultRef: "vault://ff-sig",
+          workspaceId: WS_ID,
+          ownerUserId: OWNER_ID,
+          seen: {},
+        },
+      },
+    };
+    const body = firefliesBody();
+    const good = `sha256=${createHmac("sha256", vaultSecret).update(body).digest("hex")}`;
+
+    const okRes = await postFireflies(FF_TOKEN, body, {
+      "x-hub-signature": good,
+    });
+    expect(okRes.status).toBe(200);
+    expect(sendJob).toHaveBeenCalledTimes(1);
+
+    sendJob.mockClear();
+    const badRes = await postFireflies(FF_TOKEN, body, {
+      "x-hub-signature": "sha256=deadbeef",
+    });
+    expect(badRes.status).toBe(401);
+    expect(sendJob).not.toHaveBeenCalled();
+  });
+});
+
+// ── Mailgun inbound webhook ────────────────────────────────────────────────────
+const MG_TOKEN = "mg-token-xyz";
+const MG_SIGNING_KEY = "mg-signing-key";
+
+function mailgunSignature(
+  key: string,
+  timestamp: string,
+  mgToken: string
+): string {
+  return createHmac("sha256", key)
+    .update(`${timestamp}${mgToken}`)
+    .digest("hex");
+}
+
+function mailgunForm(overrides: Record<string, string> = {}): FormData {
+  // Current timestamp by default — the route's replay guard rejects stale ones.
+  const timestamp =
+    overrides.timestamp ?? String(Math.floor(Date.now() / 1000));
+  const mgToken = overrides.token ?? "nonce-abc";
+  const fields: Record<string, string> = {
+    timestamp,
+    token: mgToken,
+    signature: mailgunSignature(MG_SIGNING_KEY, timestamp, mgToken),
+    sender: "relay@mailgun-forwarder.example",
+    recipient: "client-abc@inbound.synap.live",
+    subject: "Re: proposal",
+    "body-plain": "Full body.",
+    "stripped-text": "Full body.",
+    "Message-Id": "<abc123@mail.gmail.com>",
+    From: '"Sam Antoine" <sam@etik.com>',
+    ...overrides,
+  };
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.set(k, v);
+  return form;
+}
+
+async function postMailgun(
+  token: string,
+  form: FormData,
+  headers: Record<string, string> = {}
+): Promise<Response> {
+  return app.request(`/api/webhooks/mailgun/${token}`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+}
+
+describe("mailgun inbound webhook", () => {
+  beforeEach(() => {
+    recordInboundMessageMock.mockClear();
+    vaultSecret = MG_SIGNING_KEY;
+    identityResolution = { match: null, entity: null };
+    toolRow = {
+      id: "tool-mg",
+      createdBy: OWNER_ID,
+      workspaceId: WS_ID,
+      metadata: {
+        mailgun: {
+          webhook: {
+            token: MG_TOKEN,
+            secretVaultRef: "vault://mg-sig",
+            workspaceId: WS_ID,
+            ownerUserId: OWNER_ID,
+            seen: {},
+          },
+        },
+      },
+    };
+  });
+
+  it("accepts a valid signature and lands the message via recordInboundMessage", async () => {
+    const res = await postMailgun(MG_TOKEN, mailgunForm());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, deduped: false });
+    expect(recordInboundMessageMock).toHaveBeenCalledTimes(1);
+    const arg = recordInboundMessageMock.mock.calls[0][0] as {
+      provider: string;
+      idempotencySeed: string;
+      text: string;
+    };
+    expect(arg.provider).toBe("mailgun");
+    expect(arg.idempotencySeed).toBe("<abc123@mail.gmail.com>");
+    expect(arg.text).toContain("Subject: Re: proposal");
+  });
+
+  it("rejects a tampered signature with 401 and never calls recordInboundMessage", async () => {
+    const form = mailgunForm();
+    form.set("signature", "0".repeat(64));
+    const res = await postMailgun(MG_TOKEN, form);
+    expect(res.status).toBe(401);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a signature computed with the wrong key", async () => {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const mgToken = "nonce-abc";
+    const form = mailgunForm({
+      timestamp,
+      token: mgToken,
+      signature: mailgunSignature("wrong-key", timestamp, mgToken),
+    });
+    const res = await postMailgun(MG_TOKEN, form);
+    expect(res.status).toBe(401);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale timestamp before the HMAC check (replay guard)", async () => {
+    // A validly-signed but old (timestamp,token,signature) triple must be refused.
+    const timestamp = "1700000000"; // 2023 — well outside the ~15-min window
+    const mgToken = "nonce-abc";
+    const form = mailgunForm({
+      timestamp,
+      token: mgToken,
+      signature: mailgunSignature(MG_SIGNING_KEY, timestamp, mgToken), // VALID sig
+    });
+    const res = await postMailgun(MG_TOKEN, form);
+    expect(res.status).toBe(401);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an unknown :token (no leak)", async () => {
+    const res = await postMailgun("wrong-token", mailgunForm());
+    expect(res.status).toBe(404);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when no mailgun tool is configured", async () => {
+    toolRow = null;
+    const res = await postMailgun(MG_TOKEN, mailgunForm());
+    expect(res.status).toBe(404);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("dedups an already-seen Message-Id (no re-record)", async () => {
+    toolRow!.metadata = {
+      mailgun: {
+        webhook: {
+          token: MG_TOKEN,
+          secretVaultRef: "vault://mg-sig",
+          workspaceId: WS_ID,
+          ownerUserId: OWNER_ID,
+          seen: { "<abc123@mail.gmail.com>": "2026-08-01T00:00:00.000Z" },
+        },
+      },
+    };
+    const res = await postMailgun(MG_TOKEN, mailgunForm());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, deduped: true });
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keys the channel on the RESOLVED client entity id when the sender strong-matches", async () => {
+    identityResolution = { match: "strong", entity: { id: "entity-client-1" } };
+    await postMailgun(MG_TOKEN, mailgunForm());
+    const arg = recordInboundMessageMock.mock.calls[0][0] as {
+      externalId: string;
+      participant: string;
+    };
+    expect(arg.externalId).toBe("entity-client-1");
+    expect(arg.participant).toBe("sam@etik.com");
+  });
+
+  it("falls back to the sender email as the channel key when unresolved (unlinked review queue)", async () => {
+    identityResolution = { match: null, entity: null };
+    await postMailgun(MG_TOKEN, mailgunForm());
+    const arg = recordInboundMessageMock.mock.calls[0][0] as {
+      externalId: string;
+    };
+    expect(arg.externalId).toBe("sam@etik.com");
+  });
+
+  it("ignores a message with no parseable sender address", async () => {
+    const form = mailgunForm({ From: "", sender: "", "Reply-To": "" });
+    const res = await postMailgun(MG_TOKEN, form);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ received: true, ignored: true });
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request missing the Mailgun signature fields", async () => {
+    const form = mailgunForm();
+    form.delete("signature");
+    const res = await postMailgun(MG_TOKEN, form);
+    expect(res.status).toBe(401);
+    expect(recordInboundMessageMock).not.toHaveBeenCalled();
   });
 });

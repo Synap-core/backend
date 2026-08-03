@@ -12,17 +12,25 @@ import {
   messagingAccounts,
   webhookSubscriptions,
   resolveVaultSecret,
+  resolveIdentity,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
+import { getBoss } from "@synap/jobs";
+import {
+  FIREFLIES_INGEST_QUEUE,
+  type FirefliesIngestJobData,
+} from "@synap/jobs/workers/fireflies-worker.js";
 import { getMessagingConnector } from "../connectors/index.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
+import { markWebhookSeen } from "../services/connectors/mark-webhook-seen.js";
 import { submitCaptureGraph } from "../services/capture-agent/submit-capture-graph.js";
 import { getCaptureAgentUserId } from "../services/capture-agent/ensure-capture-agent.js";
 import {
   mapBookingToGraph,
   type CalBookingPayload,
 } from "../services/calcom/map-booking-to-graph.js";
+import { mapMailgunInboundToMessage } from "../services/mailgun/map-inbound-to-message.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
@@ -294,30 +302,340 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
     return c.json({ received: true, unapplied: true }, 200);
   }
 
-  // Mark seen. Single-LEAF jsonb_set computed entirely in-statement: writing
-  // the whole map from an earlier snapshot raced the backfill poller (and
-  // concurrent webhooks) — a clobbered key re-mints duplicate deal/event rows
-  // since those have no identity-signal dedup. The nested ensure-chain creates
-  // missing parents; the payload-derived key rides in a BOUND array element,
-  // never interpolated into SQL.
-  await db
-    .update(tools)
-    .set({
-      metadata: drizzleSql`jsonb_set(
-        jsonb_set(
-          jsonb_set(
-            jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom}', COALESCE(${tools.metadata}#>'{calcom}', '{}'::jsonb), true),
-            '{calcom,webhook}', COALESCE(${tools.metadata}#>'{calcom,webhook}', '{}'::jsonb), true),
-          '{calcom,webhook,seen}', COALESCE(${tools.metadata}#>'{calcom,webhook,seen}', '{}'::jsonb), true),
-        ARRAY['calcom','webhook','seen', ${seenKey}]::text[], ${JSON.stringify(new Date().toISOString())}::jsonb, true)`,
-      updatedAt: new Date(),
-    })
-    .where(eq(tools.id, calTool.id))
-    .catch((err) =>
-      logger.warn({ err }, "cal.com webhook: seen-map persist failed")
-    );
+  // Mark seen via the shared race-safe single-leaf writer (see markWebhookSeen).
+  await markWebhookSeen(calTool.id, "calcom", seenKey);
 
   return c.json({ received: true }, 200);
+});
+
+// ── Fireflies inbound webhook — meeting transcripts → channel/message ─────────
+//
+// Fireflies fires ONE event, `Transcription complete`, with a MINIMAL payload
+// { meetingId, eventType, clientReferenceId } — no transcript body. We verify,
+// dedup on meetingId, and ACK-THEN-PROCESS: enqueue a `fireflies-ingest` pg-boss
+// job that follows up with a GraphQL fetch (fireflies_get_transcript) and lands
+// the transcript as a channel MESSAGE via recordInboundMessage. Returning fast is
+// deliberate — the fetch is off the request path (timeout/retry safety), and the
+// backfill poller recovers anything the webhook drops.
+//
+// Config lives on the `fireflies` tool: metadata.fireflies.webhook =
+//   { token, secretVaultRef?, workspaceId?, ownerUserId?, seen: { "<meetingId>": iso } }
+// The `:token` path segment selects + authorizes the config (unknown → 404, no
+// leak) — the same primary-auth contract as the cal.com route. When `secretVaultRef`
+// is set we ADDITIONALLY verify the Fireflies `x-hub-signature` header (SHA-256 HMAC
+// of the raw body, `sha256=<hex>`, vault-resolved secret) FAIL-CLOSED. When it is
+// absent the unguessable `:token` is the shared secret (documented fallback — some
+// Fireflies webhooks are configured without a signing secret).
+// Docs: https://docs.fireflies.ai/graphql-api/webhooks (V2 sends X-Hub-Signature
+// = `sha256=<hex>`).
+//
+// The seen-map is written by the INGEST RUNNER only, AFTER the message lands (not
+// here) — so a fetch/ingest failure leaves the meeting unseen for the backfill
+// poller to retry. This route only READS `seen` to skip re-enqueueing.
+interface FirefliesWebhookConfig {
+  token?: string;
+  secretVaultRef?: string;
+  workspaceId?: string | null;
+  ownerUserId?: string;
+  seen?: Record<string, string>;
+}
+
+webhooksInboundRouter.post("/fireflies/:token", async (c) => {
+  const token = c.req.param("token");
+
+  const contentLength = c.req.header("content-length");
+  if (
+    contentLength &&
+    Number.parseInt(contentLength, 10) > MAX_INBOUND_WEBHOOK_BODY
+  ) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+  const rawBody = await c.req.text();
+  if (rawBody.length > MAX_INBOUND_WEBHOOK_BODY) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+
+  // Resolve the fireflies tool + its webhook config; `:token` must match (else 404).
+  const ffTool = await db.query.tools.findFirst({
+    where: eq(tools.name, "fireflies"),
+    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
+  });
+  const metadata = (ffTool?.metadata ?? {}) as {
+    fireflies?: { webhook?: FirefliesWebhookConfig };
+  };
+  const cfg = metadata.fireflies?.webhook;
+  if (!ffTool || !cfg?.token || cfg.token !== token) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const ownerUserId = cfg.ownerUserId ?? ffTool.createdBy;
+  const workspaceId = cfg.workspaceId ?? ffTool.workspaceId ?? null;
+
+  // Signature (defense-in-depth): only when a signing secret is provisioned. Verify
+  // the SHA-256 HMAC in `x-hub-signature` (`sha256=<hex>`) against the vault secret.
+  if (cfg.secretVaultRef) {
+    const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+    if (!secret) {
+      logger.error(
+        { toolId: ffTool.id },
+        "fireflies webhook: secret unresolved"
+      );
+      return c.json({ error: "Webhook not configured" }, 500);
+    }
+    const signature = c.req.header("x-hub-signature") ?? "";
+    const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+      logger.warn(
+        { toolId: ffTool.id },
+        "fireflies webhook: invalid signature"
+      );
+      return c.json({ error: "Invalid signature" }, 401);
+    }
+  }
+
+  let envelope: {
+    meetingId?: string;
+    eventType?: string;
+    clientReferenceId?: string;
+  } | null;
+  try {
+    envelope = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const meetingId = envelope?.meetingId?.trim();
+  const eventType = envelope?.eventType ?? "";
+  if (!meetingId) {
+    // Ping/handshake or a payload we can't key — ack so Fireflies doesn't retry.
+    return c.json({ received: true, ignored: true }, 200);
+  }
+  // Fireflies fires exactly one event; match it leniently ("Transcription
+  // complete"/"completed"). Anything else → ack no-op.
+  if (!/transcription complet/i.test(eventType)) {
+    return c.json({ received: true, ignored: true }, 200);
+  }
+
+  // Dedup: already ingested (seen-map keyed on meetingId) → ack no-op.
+  if (cfg.seen && cfg.seen[meetingId]) {
+    return c.json({ received: true, deduped: true }, 200);
+  }
+
+  // Ack-then-process: enqueue the fetch-then-land job with pg-boss retry safety.
+  const jobData: FirefliesIngestJobData = {
+    meetingId,
+    clientReferenceId: envelope?.clientReferenceId ?? null,
+    toolId: ffTool.id,
+    workspaceId,
+    ownerUserId,
+  };
+  await getBoss()
+    .send(FIREFLIES_INGEST_QUEUE, jobData, {
+      retryLimit: 5,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 300,
+    })
+    .catch((err) =>
+      logger.error(
+        { err, toolId: ffTool.id, meetingId },
+        "fireflies webhook: enqueue failed (backfill will retry)"
+      )
+    );
+
+  return c.json({ received: true, queued: true }, 200);
+});
+
+// ── Mailgun inbound webhook — client email → channel/message ────────────────
+//
+// Mailgun's inbound route POSTs a `multipart/form-data` "Parsed" payload
+// (https://documentation.mailgun.com/docs/mailgun/user-manual/receiving-forwarding-and-storing-messages/#parsed-messages-parameters)
+// for every message delivered to our catch-all inbound address — this ALSO
+// covers Proton Mail: a Proton user sets an auto-forward rule from their inbox
+// to that address, so a client's Proton email lands here as an ordinary
+// forwarded message (see the forwarding nuance in map-inbound-to-message.ts).
+//
+// Signature verification (Mailgun's webhook-signing scheme, same for tracking
+// AND inbound-route webhooks):
+//   expected = hex(HMAC-SHA256(key = signingKey, msg = timestamp + token))
+// compared against the payload's own `signature` field. NOTE the payload's
+// `token` FIELD (Mailgun's per-request nonce) is distinct from the `:token`
+// URL segment below (our tenant/tool selector) — same naming collision as
+// documented on the cal.com/fireflies routes for their own schemes.
+// Docs: https://documentation.mailgun.com/docs/mailgun/user-manual/tracking-messages/#webhooks
+// and https://documentation.mailgun.com/docs/mailgun/user-manual/receiving-forwarding-and-storing-messages/#webhook
+//
+// Config lives on the `mailgun` tool: metadata.mailgun.webhook =
+//   { token, secretVaultRef, workspaceId?, ownerUserId?, seen: { "<Message-Id>": iso } }
+// The `:token` path segment selects + authorizes the config (unknown → 404, no
+// leak) — the same primary-auth contract as the cal.com/fireflies routes.
+//
+// One channel per CLIENT (not per email thread): externalId is the resolved
+// client entity id when the sender's email strong-matches an existing entity,
+// else the sender email itself (creates an unlinked channel for the review
+// queue — same posture as the Fireflies unlinked-transcript fallback).
+interface MailgunWebhookConfig {
+  token?: string;
+  secretVaultRef?: string;
+  workspaceId?: string | null;
+  ownerUserId?: string;
+  seen?: Record<string, string>;
+}
+
+webhooksInboundRouter.post("/mailgun/:token", async (c) => {
+  const token = c.req.param("token");
+
+  const contentLength = c.req.header("content-length");
+  if (
+    contentLength &&
+    Number.parseInt(contentLength, 10) > MAX_INBOUND_WEBHOOK_BODY
+  ) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+
+  // Resolve the mailgun tool + its webhook config; `:token` must match (else 404).
+  const mgTool = await db.query.tools.findFirst({
+    where: eq(tools.name, "mailgun"),
+    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
+  });
+  const metadata = (mgTool?.metadata ?? {}) as {
+    mailgun?: { webhook?: MailgunWebhookConfig };
+  };
+  const cfg = metadata.mailgun?.webhook;
+  if (!mgTool || !cfg?.token || !cfg.secretVaultRef || cfg.token !== token) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const ownerUserId = cfg.ownerUserId ?? mgTool.createdBy;
+  const workspaceId = cfg.workspaceId ?? mgTool.workspaceId ?? null;
+
+  // Redeem the webhook signing key from the vault (never logged).
+  const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+  if (!secret) {
+    logger.error({ toolId: mgTool.id }, "mailgun webhook: secret unresolved");
+    return c.json({ error: "Webhook not configured" }, 500);
+  }
+
+  // Mailgun sends multipart/form-data, not JSON — parse it, cap size defensively
+  // via content-length above (form parsing buffers the whole body regardless).
+  let form: Record<string, string | File>;
+  try {
+    form = await c.req.parseBody();
+  } catch {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+  const field = (name: string): string =>
+    typeof form[name] === "string" ? (form[name] as string) : "";
+
+  const mgTimestamp = field("timestamp");
+  const mgToken = field("token");
+  const mgSignature = field("signature");
+  if (!mgTimestamp || !mgToken || !mgSignature) {
+    // Not a real Mailgun signed request — reject fail-closed rather than guess.
+    logger.warn(
+      { toolId: mgTool.id },
+      "mailgun webhook: missing signature fields"
+    );
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  // Replay guard: reject a stale (timestamp,token,signature) triple. Mailgun's
+  // `timestamp` field is Unix SECONDS; bound a captured POST to a ~15-min window.
+  // (The seen-map dedup covers same-Message-Id replays; this closes the window
+  // before an id is ever recorded, per Mailgun's own anti-replay guidance.)
+  const tsSeconds = Number.parseInt(mgTimestamp, 10);
+  if (
+    !Number.isFinite(tsSeconds) ||
+    Math.abs(Date.now() / 1000 - tsSeconds) > 900
+  ) {
+    logger.warn(
+      { toolId: mgTool.id },
+      "mailgun webhook: stale/invalid timestamp"
+    );
+    return c.json({ error: "Stale timestamp" }, 401);
+  }
+  const expected = createHmac("sha256", secret)
+    .update(`${mgTimestamp}${mgToken}`)
+    .digest("hex");
+  const sigBuf = Buffer.from(mgSignature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+    logger.warn({ toolId: mgTool.id }, "mailgun webhook: invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  // Fall back to a deterministic seed when Mailgun omits Message-Id (rare,
+  // malformed origin message) so we always have something stable to dedup on.
+  const fallbackMessageId = `${mgTimestamp}:${mgToken}`;
+  const mapped = mapMailgunInboundToMessage(
+    {
+      sender: field("sender"),
+      recipient: field("recipient"),
+      subject: field("subject"),
+      "body-plain": field("body-plain"),
+      "stripped-text": field("stripped-text"),
+      "Message-Id": field("Message-Id"),
+      From: field("From"),
+      "Reply-To": field("Reply-To"),
+    },
+    fallbackMessageId
+  );
+
+  // Dedup: already ingested (seen-map keyed on Message-Id) → ack no-op.
+  if (cfg.seen && cfg.seen[mapped.messageId]) {
+    return c.json({ received: true, deduped: true }, 200);
+  }
+
+  if (!mapped.senderEmail) {
+    // No usable sender address at all — nothing to resolve or land against.
+    // Ack so Mailgun doesn't retry a message we can never process.
+    logger.warn(
+      { toolId: mgTool.id, messageId: mapped.messageId },
+      "mailgun webhook: no parseable sender address — ignored"
+    );
+    return c.json({ received: true, ignored: true }, 200);
+  }
+
+  // Resolve the sender to an existing client entity via the strong `email`
+  // signal. Unresolved → fall back to the sender email as the channel key
+  // (unlinked channel, same posture as the Fireflies unlinked-transcript path).
+  let resolvedClientEntityId: string | null = null;
+  try {
+    const resolution = await resolveIdentity(db, {
+      userId: ownerUserId,
+      signals: [{ type: "email", value: mapped.senderEmail }],
+    });
+    if (resolution.match === "strong" && resolution.entity) {
+      resolvedClientEntityId = resolution.entity.id;
+    }
+  } catch (err) {
+    logger.warn(
+      { err, senderEmail: mapped.senderEmail },
+      "mailgun webhook: identity resolution failed — falling back to sender-email channel"
+    );
+  }
+  const externalId = resolvedClientEntityId ?? mapped.senderEmail;
+
+  const result = await recordInboundMessage({
+    provider: "mailgun",
+    externalId,
+    userId: ownerUserId,
+    workspaceId,
+    // `recordInboundMessage` has no separate subject field — the mapper folds
+    // "Subject: <subject>" into the stored text (mirrors fireflies' header).
+    text: mapped.text,
+    participant: mapped.senderEmail,
+    title: mapped.senderEmail,
+    idempotencySeed: mapped.messageId,
+    messageId: mapped.messageId,
+  });
+
+  // Mark seen via the shared race-safe single-leaf writer.
+  if (result.recorded) {
+    await markWebhookSeen(mgTool.id, "mailgun", mapped.messageId);
+  }
+
+  return c.json({ received: true, deduped: !result.recorded }, 200);
 });
 
 webhooksInboundRouter.post("/messaging", async (c) => {

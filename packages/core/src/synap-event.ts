@@ -76,6 +76,12 @@ export const SynapEventSchema = z.object({
   toolCount: z.number().int().optional(),
   runStatus: z.string().optional(),
   finishReason: z.string().optional(),
+
+  // ── Workspace context (persisted into the REAL events.workspace_id column) ──
+  // Promoted out of `data.workspaceId` into a first-class column by
+  // EventRepository.append(). Optional so every existing event still validates
+  // unchanged; `text` (never uuid-validated) to match proposals.workspaceId.
+  workspaceId: z.string().optional(),
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;

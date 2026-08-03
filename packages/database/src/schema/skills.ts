@@ -61,6 +61,32 @@ export type ProviderVerbSpec = {
   baseUrlOverride?: string;
   /** Static custom request headers (e.g. Cal.com's `cal-api-version`). Auth wins. */
   headers?: Record<string, string>;
+  /**
+   * Transport for the provider call. Absent ⇒ `"rest"` (byte-identical to the
+   * prior behavior). `"graphql"` POSTs a `{ query, variables }` body to
+   * `pathTemplate` (usually `""` or `"/graphql"`) — see `graphql`.
+   */
+  transport?: "rest" | "graphql";
+  /**
+   * GraphQL request — only when `transport:"graphql"`. `query` takes `{{param}}`
+   * interpolation (like `pathTemplate`); `variables` is deep-interpolated (like
+   * `body`). `operation` classifies the call for GOVERNANCE — `"query"`=READ,
+   * `"mutation"`=WRITE (default `"mutation"`, fail-closed). `dataPath` is the
+   * dot-path unwrapped from the response body before `responseShape` runs
+   * (default `"data"`); a non-empty `errors[]` on a 200 body is surfaced as an
+   * error, NEVER swallowed as success.
+   */
+  graphql?: {
+    /**
+     * The GraphQL document. Keep it STATIC — put every runtime/user/agent-supplied
+     * value in `variables` (bound as GraphQL variables), NEVER interpolate a param
+     * into this query text: `{{param}}` substitution here is GraphQL-injection surface.
+     */
+    query: string;
+    variables?: Record<string, unknown>;
+    operation?: "query" | "mutation";
+    dataPath?: string;
+  };
   paramMapping?: Record<
     string,
     {
