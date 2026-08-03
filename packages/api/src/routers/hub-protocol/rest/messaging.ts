@@ -129,6 +129,9 @@ const MessagingInboundRequestSchema = z
     subject: z.string().max(2_000).optional(),
     sentAt: z.string().optional(),
     workspaceId: z.string().uuid().optional(),
+    // Cross-cutting project lens (independent of workspace). Absent → not
+    // project-scoped; absent workspace too → pod-wide.
+    projectId: z.string().uuid().optional(),
     userId: z.string().uuid().optional(),
   })
   .refine((d) => Boolean(d.externalId || d.participantEmail), {
@@ -209,6 +212,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         subject: body.subject,
         sentAt: body.sentAt,
         workspaceId: acting.workspaceId,
+        projectId: body.projectId,
         userId: acting.userId,
       });
       return c.json({ recorded, channelId, deduped }, 200);

@@ -1912,6 +1912,8 @@ try {
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerStaleProposalRunner } =
               await import("@synap/jobs/workers/stale-proposal-cron.js");
+            const { registerBrokenAutomationRunner } =
+              await import("@synap/jobs/workers/broken-automation-cron.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
             const { registerSessionRecapRunner } =
@@ -1945,6 +1947,7 @@ try {
             });
             registerEventEndRunner(() => api.runEventEnd());
             registerStaleProposalRunner(() => api.scanStaleProposals());
+            registerBrokenAutomationRunner(() => api.scanBrokenAutomations());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The pattern detector writes an LLM's suggested flow straight to

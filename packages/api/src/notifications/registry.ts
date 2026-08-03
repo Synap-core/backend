@@ -311,6 +311,22 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     defaultChannels: ["in_app"],
     ttl: 0,
   },
+  {
+    // An automation the system flipped to status='error' has silently stopped
+    // running — surface it so the user can fix/re-enable it (absence-is-invisible
+    // otherwise). High (a dead automation means work isn't happening). Deduped per
+    // automation via groupBy so a persistently-broken one collapses to one row.
+    type: "automation.broken",
+    category: "system",
+    label: "Automation Broken",
+    icon: "alert-octagon",
+    priority: "high",
+    titleTemplate: "Automation stopped: {{automationName}}",
+    bodyTemplate: "{{errorMessage}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    groupBy: "automationId",
+  },
 
   // ── Data: Entity Lifecycle ──────────────────────────────────────────────
   {

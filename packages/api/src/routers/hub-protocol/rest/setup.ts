@@ -72,6 +72,7 @@ const SURFACE_AGENT_TYPES = [
   "codex",
   "openwebui",
   "discord",
+  "proton",
   "generic",
 ] as const;
 

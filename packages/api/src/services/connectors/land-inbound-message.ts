@@ -63,6 +63,8 @@ export interface LandInboundMessageArgs {
   sentAt?: string | Date;
   /** Workspace home for a freshly-created channel; `null`/absent = pod-level. */
   workspaceId?: string | null;
+  /** Cross-cutting project lens for a freshly-created channel; `null`/absent = none. */
+  projectId?: string | null;
   /** The acting (resolved) Synap user id. */
   userId: string;
 
@@ -135,6 +137,7 @@ export async function landInboundMessage(
     externalId,
     userId: args.userId,
     workspaceId: args.workspaceId ?? null,
+    projectId: args.projectId ?? null,
     text,
     participant: args.participant,
     participantExternalId: args.participantExternalId,

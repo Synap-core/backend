@@ -117,6 +117,10 @@ import {
   handleStaleProposalCron,
   STALE_PROPOSAL_CRON_QUEUE,
 } from "./stale-proposal-cron.js";
+import {
+  handleBrokenAutomationCron,
+  BROKEN_AUTOMATION_CRON_QUEUE,
+} from "./broken-automation-cron.js";
 import { handleEventEndCron, EVENT_END_CRON_QUEUE } from "./event-end-cron.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
@@ -214,6 +218,7 @@ const ALL_QUEUES = [
   MAIL_FEED_CRON_QUEUE,
   EVENT_SYNC_CRON_QUEUE,
   STALE_PROPOSAL_CRON_QUEUE,
+  BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   SESSION_RECAP_QUEUE,
   PROACTIVE_SCAN_QUEUE,
@@ -649,6 +654,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleStaleProposalCron(job)
   );
   logger.info("Registered worker: stale-proposal-cron");
+
+  // Broken-automation scan (cron: every 6h) — invokes the api-side runner
+  // in-process (IoC slot) to notify members of automations in status='error'.
+  await boss.work(BROKEN_AUTOMATION_CRON_QUEUE, async ([job]: any[]) =>
+    handleBrokenAutomationCron(job)
+  );
+  logger.info("Registered worker: broken-automation-cron");
 
   // Event end (cron: every 5min) — invokes the api-side event-end runner
   // in-process (IoC slot) to flip focus sessions bound to just-ended events into

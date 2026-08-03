@@ -39,6 +39,7 @@ import {
 import { resolveNangoConnector } from "../connectors/index.js";
 import { gateCapabilityExecution } from "./capabilities/gate-capability-execution.js";
 import { ImportOrchestrator } from "./import-orchestrator.js";
+import { NotificationService } from "../notifications/NotificationService.js";
 
 const logger = createLogger({ module: "connector-import-bridge" });
 
@@ -146,10 +147,7 @@ function ensureReadable(instance: DiConnector): Readable {
   facade.type = (instance as { name?: string }).name ?? "connector";
   facade.kind =
     ((instance as { kind?: string }).kind as
-      | "sync"
-      | "enrichment"
-      | "messaging"
-      | undefined) ?? "sync";
+      "sync" | "enrichment" | "messaging" | undefined) ?? "sync";
   return facade;
 }
 
@@ -325,11 +323,37 @@ export async function syncConnectionToImport(
     );
   }
 
-  const result = await pullToImport({
-    ctx,
-    connector,
-    request: { kind: "sync", connectionId, model, since },
-  });
+  let result;
+  try {
+    result = await pullToImport({
+      ctx,
+      connector,
+      request: { kind: "sync", connectionId, model, since },
+    });
+  } catch (err) {
+    // Producer (B3, ONE-DOOR): a genuine SYNC failure notifies the connection
+    // OWNER (they reconnect/fix it). Scoped to THIS sync entry — generic agent
+    // reads via `pullToImport` do NOT notify, so a transient read blip never
+    // fans a high-priority alert (the alert-fatigue anti-pattern). groupKey
+    // collapses repeats per provider. Best-effort, non-fatal; the throw is
+    // preserved so callers' error handling is unchanged.
+    const provider = connectionId.split(":")[2] ?? model;
+    await NotificationService.create({
+      type: "connector.sync.failed",
+      sourceType: "connector",
+      sourceId: connectionId,
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+      groupKey: `${ctx.workspaceId}:connector.sync.failed:${provider}`,
+      data: {
+        connectorName: provider,
+        errorMessage: err instanceof Error ? err.message : "Sync failed",
+      },
+    }).catch((e) =>
+      logger.warn({ e, connectionId }, "connector.sync.failed notify failed")
+    );
+    throw err;
+  }
 
   return {
     proposalId: result.proposalId,

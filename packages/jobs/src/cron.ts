@@ -272,6 +272,12 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "stale-proposal-cron", "0 */6 * * *", {});
   logger.info("Registered cron: stale-proposal-cron (every 6h)");
 
+  // Broken-automation scan (every 6h — automations flipped to status='error' get
+  // an automation.broken notification; absence-is-invisible otherwise). Invokes
+  // the api-side runner via the registerBrokenAutomationRunner IoC slot.
+  await scheduleSafe(boss, "broken-automation-cron", "0 */6 * * *", {});
+  logger.info("Registered cron: broken-automation-cron (every 6h)");
+
   // Event end (every 5 min — the cron worker invokes the api-side event-end
   // runner in-process (IoC slot) which flips focus sessions bound to an event
   // whose endDate just crossed into their `post` stage, triggering the recap).

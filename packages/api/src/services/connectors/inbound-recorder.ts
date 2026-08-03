@@ -97,6 +97,8 @@ export interface ResolveOrCreateExternalChannelArgs {
    * so a pod-wide inbound isn't forced into one workspace. Non-null pins it.
    */
   workspaceId: string | null;
+  /** Cross-cutting project lens for a freshly-created channel; `null`/absent = none. */
+  projectId?: string | null;
   /** Channel title for a freshly-created row. */
   title: string;
   /** Participant display name (cached in metadata). */
@@ -213,8 +215,12 @@ export async function resolveOrCreateExternalChannel(
     .values({
       userId: args.userId,
       workspaceId: args.workspaceId,
+      // Cross-cutting project lens (independent of the workspace/pod axis).
+      projectId: args.projectId ?? null,
       channelType: ChannelType.EXTERNAL,
-      scope: ChannelScope.WORKSPACE,
+      // Pod-wide when there's no workspace pin (Wave 3): a null workspace must be
+      // a POD-scoped channel, not a WORKSPACE-scoped one with a null home.
+      scope: args.workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
       title: titleAtBirth,
       contextObjectType: bornContextObjectType,
       contextObjectId: bornContextObjectId,
@@ -284,6 +290,11 @@ export interface RecordInboundMessageArgs {
    * inbound against a pod-level channel (no workspace pin); non-null pins it.
    */
   workspaceId: string | null;
+  /**
+   * Cross-cutting project lens for a freshly-created channel. `null`/absent =
+   * not project-scoped. Independent of workspaceId (compose either/both/neither).
+   */
+  projectId?: string | null;
   /** Message body. */
   text: string;
   /** Participant display name. */
@@ -394,6 +405,7 @@ export async function recordInboundMessage(
     externalId: args.externalId,
     userId: args.userId,
     workspaceId: args.workspaceId,
+    projectId: args.projectId ?? null,
     title: args.title,
     participant: args.participant,
     participantExternalId: args.participantExternalId,
