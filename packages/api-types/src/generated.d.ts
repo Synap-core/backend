@@ -19913,7 +19913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
-				status?: "read" | "dismissed" | "unread" | "all" | undefined;
+				status?: "read" | "dismissed" | "unread" | "snoozed" | "all" | undefined;
 				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
@@ -19934,9 +19934,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceUrl: string | null;
 					actions: unknown;
 					groupKey: string | null;
-					status: "read" | "dismissed" | "unread" | "actioned";
+					status: "read" | "dismissed" | "unread" | "actioned" | "snoozed";
 					readAt: Date | null;
 					expiresAt: Date | null;
+					snoozedUntil: Date | null;
 					createdAt: Date;
 				}[];
 				total: number;
@@ -19977,6 +19978,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		dismissAll: import("@trpc/server").TRPCMutationProcedure<{
 			input: void;
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		snooze: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				notificationId: string;
+				until: string;
+			};
 			output: {
 				success: boolean;
 			};

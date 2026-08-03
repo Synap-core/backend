@@ -62,7 +62,7 @@ export const notifCenterRouter = router({
       z.object({
         workspaceId: ScopeFilterShape.workspaceId,
         status: z
-          .enum(["unread", "read", "dismissed", "all"])
+          .enum(["unread", "read", "dismissed", "snoozed", "all"])
           .default("unread"),
         category: z
           .enum(["governance", "data", "ai", "system", "inbox"])
@@ -72,6 +72,8 @@ export const notifCenterRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
+      // Surface any due snoozes before reading (flips them back to unread).
+      await wakeDueSnoozes(requireUserId(ctx.userId));
       const { workspaceLens } = resolveScope(ctx, input);
       const conditions = [eq(notifications.userId, requireUserId(ctx.userId))];
 
@@ -109,6 +111,8 @@ export const notifCenterRouter = router({
    * Total unread count for the bell badge.
    */
   unreadCount: workspaceProcedure.query(async ({ ctx }) => {
+    // Wake due snoozes first so the badge counts them (0-row UPDATE when none).
+    await wakeDueSnoozes(ctx.userId);
     // COUNT(*) in the DB — was materializing up to 100 id rows then taking
     // .length (which also silently capped the badge at 100). This is polled
     // frequently (bell badge); the aggregate is served entirely from the
@@ -199,6 +203,34 @@ export const notifCenterRouter = router({
       );
     return { success: true };
   }),
+
+  /**
+   * Snooze a notification until `until` (triage-defer). Hidden from the active
+   * unread list until then; `wakeDueSnoozes` flips it back to unread on the next
+   * read. User-owned floor (`eq(userId)`) — snoozeable from any lens.
+   */
+  snooze: protectedProcedure
+    .input(
+      z.object({
+        notificationId: z.string().uuid(),
+        until: z.string().datetime(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await db
+        .update(notifications)
+        .set({
+          status: NotificationStatus.SNOOZED,
+          snoozedUntil: new Date(input.until),
+        })
+        .where(
+          and(
+            eq(notifications.id, input.notificationId),
+            eq(notifications.userId, requireUserId(ctx.userId))
+          )
+        );
+      return { success: true };
+    }),
 
   /**
    * Get notification preferences for the current user + workspace.

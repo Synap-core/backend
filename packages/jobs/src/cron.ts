@@ -265,6 +265,13 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "event-sync-cron", "0 */6 * * *", {});
   logger.info("Registered cron: event-sync-cron (every 6h)");
 
+  // Stale-proposal scan (every 6h — pending proposals whose target workspace the
+  // owner can no longer reach get a governance.proposal_stale notification; the
+  // proactive twin of the approve-time preflight). Invokes the api-side runner via
+  // the registerStaleProposalRunner IoC slot.
+  await scheduleSafe(boss, "stale-proposal-cron", "0 */6 * * *", {});
+  logger.info("Registered cron: stale-proposal-cron (every 6h)");
+
   // Event end (every 5 min — the cron worker invokes the api-side event-end
   // runner in-process (IoC slot) which flips focus sessions bound to an event
   // whose endDate just crossed into their `post` stage, triggering the recap).

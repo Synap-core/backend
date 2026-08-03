@@ -39,7 +39,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       harness.fromTables.push(t);
       return chain;
     },
-    leftJoin: () => chain,
+    innerJoin: () => chain,
     where: (w: unknown) => {
       harness.wheres.push(w);
       return chain;
@@ -143,7 +143,15 @@ describe("indexContainerLinks", () => {
     expect(idx.get(containerMemberKey("tool", "t1"))?.id).toBe("oldest");
   });
 
-  it("reports a dangling container name as null rather than fabricating one", () => {
+  /**
+   * A null name can ONLY mean the container row is gone (`capabilities.name` is
+   * NOT NULL, no soft-delete), so the edge is dangling. Emitting it handed
+   * consumers a `containerId` that 404s AND — worse — `sectionCapabilities`'s
+   * fill-in reads a dead id as truthy, permanently blocking the brick's real
+   * membership from ever landing. Dropping it is what makes `ContainerRef.name`
+   * non-null by construction.
+   */
+  it("DROPS a dangling edge rather than reporting a container that is gone", () => {
     const idx = indexContainerLinks([
       {
         fromType: "tool",
@@ -152,9 +160,27 @@ describe("indexContainerLinks", () => {
         containerName: null,
       },
     ]);
+    expect(idx.get(containerMemberKey("tool", "t1"))).toBeUndefined();
+  });
+
+  it("lets the next, LIVE edge win when the oldest one is dangling", () => {
+    const idx = indexContainerLinks([
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "dead",
+        containerName: null,
+      },
+      {
+        fromType: "tool",
+        fromId: "t1",
+        containerId: "live",
+        containerName: "Gmail",
+      },
+    ]);
     expect(idx.get(containerMemberKey("tool", "t1"))).toEqual({
-      id: "c1",
-      name: null,
+      id: "live",
+      name: "Gmail",
     });
   });
 
@@ -187,6 +213,7 @@ describe("loadContainerRefs — batched fan-out", () => {
     const idx = await loadContainerRefs({
       toolIds: ["t1", "t2", "t3"],
       skillIds: ["s1", "s2"],
+      userId: "u1",
     });
     // 5 bricks, 1 query — a per-brick lookup would be 5.
     expect(harness.selectCalls).toBe(1);
@@ -197,7 +224,11 @@ describe("loadContainerRefs — batched fan-out", () => {
   });
 
   it("issues NO query at all when there is nothing to resolve", async () => {
-    const idx = await loadContainerRefs({ toolIds: [], skillIds: [] });
+    const idx = await loadContainerRefs({
+      toolIds: [],
+      skillIds: [],
+      userId: "u1",
+    });
     expect(harness.selectCalls).toBe(0);
     expect(idx.size).toBe(0);
   });
@@ -210,7 +241,11 @@ describe("loadContainerRefs — batched fan-out", () => {
    * returning an empty index in production.
    */
   it("composes the member_of → capability predicate over every id at once", async () => {
-    await loadContainerRefs({ toolIds: ["t1", "t2"], skillIds: ["s1"] });
+    await loadContainerRefs({
+      toolIds: ["t1", "t2"],
+      skillIds: ["s1"],
+      userId: "u1",
+    });
     const values = collectSqlValues(harness.wheres[0]);
     expect(values).toContain("member_of");
     expect(values).toContain("capability");

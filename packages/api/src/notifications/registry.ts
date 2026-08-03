@@ -90,6 +90,34 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 5_000,
   },
   {
+    // Proactive twin of the approve-time preflight: a pending proposal whose
+    // target workspace the owner can no longer reach will FAIL on approve. Surface
+    // it before they try. Hygiene, not blocking → `normal` (reserve high/urgent for
+    // live approvals + auth-expired). Deduped per workspace+reason via groupBy.
+    type: "governance.proposal_stale",
+    category: "governance",
+    label: "Stale Proposal",
+    icon: "clock-alert",
+    priority: "normal",
+    titleTemplate: "Can't be approved: {{proposalType}}",
+    bodyTemplate: "Its {{reason}} — withdraw it or re-run fresh.",
+    defaultChannels: ["in_app"],
+    actions: [
+      {
+        id: "withdraw",
+        label: "Withdraw",
+        variant: "destructive",
+        handler: {
+          type: "mutation",
+          procedure: "proposals.reject",
+          inputKey: "proposalId",
+        },
+      },
+    ],
+    ttl: 0,
+    groupBy: "reason",
+  },
+  {
     type: "ai_request.vault_access",
     category: "governance",
     label: "Vault Access Request",

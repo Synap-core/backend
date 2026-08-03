@@ -113,6 +113,10 @@ import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
+import {
+  handleStaleProposalCron,
+  STALE_PROPOSAL_CRON_QUEUE,
+} from "./stale-proposal-cron.js";
 import { handleEventEndCron, EVENT_END_CRON_QUEUE } from "./event-end-cron.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
@@ -209,6 +213,7 @@ const ALL_QUEUES = [
   CRM_DAILY_DIGEST_QUEUE,
   MAIL_FEED_CRON_QUEUE,
   EVENT_SYNC_CRON_QUEUE,
+  STALE_PROPOSAL_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   SESSION_RECAP_QUEUE,
   PROACTIVE_SCAN_QUEUE,
@@ -637,6 +642,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleEventSyncCron(job)
   );
   logger.info("Registered worker: event-sync-cron");
+
+  // Stale-proposal scan (cron: every 6h) — invokes the api-side runner in-process
+  // (IoC slot) to notify owners of pending proposals whose target workspace is gone.
+  await boss.work(STALE_PROPOSAL_CRON_QUEUE, async ([job]: any[]) =>
+    handleStaleProposalCron(job)
+  );
+  logger.info("Registered worker: stale-proposal-cron");
 
   // Event end (cron: every 5min) — invokes the api-side event-end runner
   // in-process (IoC slot) to flip focus sessions bound to just-ended events into

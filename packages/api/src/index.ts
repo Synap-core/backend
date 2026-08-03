@@ -812,6 +812,7 @@ export {
   runGcalImport,
   type RunGcalImportResult,
 } from "./services/event-sync/run-gcal-import.js";
+export { scanStaleProposals } from "./services/proposals/scan-stale-proposals.js";
 export {
   runEventEnd,
   type RunEventEndResult,

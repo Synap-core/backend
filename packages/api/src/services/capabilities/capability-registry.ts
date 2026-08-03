@@ -53,6 +53,7 @@ import type {
 } from "@synap/playbooks";
 import { getDefaultActiveService } from "@synap/intelligence-client";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
+import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface CapabilityRegistryContext {
@@ -128,10 +129,18 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
 
 // ── Container membership (derived per read, batched) ──────────────────────────
 
-/** The capability container a brick belongs to. */
+/**
+ * The capability container a brick belongs to.
+ *
+ * `name` is non-null BY CONSTRUCTION: `capabilities.name` is NOT NULL with no
+ * soft-delete, so a null name could only ever mean the container row is GONE and
+ * the `member_of` edge is dangling. A dangling edge is not a membership — see
+ * `indexContainerLinks`, which drops those rows rather than emitting a
+ * `containerId` that resolves to nothing.
+ */
 export interface ContainerRef {
   id: string;
-  name: string | null;
+  name: string;
 }
 
 /** Index key for a polymorphic member endpoint (`tool`/`skill` + its id). */
@@ -145,6 +154,14 @@ export function containerMemberKey(fromType: string, fromId: string): string {
  * linked into several containers reports the OLDEST edge — the same "first row
  * wins" semantics as `resolveToolCapabilityId` (routers/tools.ts), which the
  * caller orders by `links.createdAt` to make deterministic.
+ *
+ * A row whose `containerName` is null is DROPPED, not recorded. `capabilities`
+ * .name is NOT NULL, so null here means the container row no longer exists and
+ * the edge is dangling. Recording it was harmful twice over: consumers navigated
+ * to a `containerId` that 404s, and — worse — `sectionCapabilities`'s fill-in
+ * (`if (!existing.containerId && c.containerId)`) read the dead id as truthy,
+ * permanently BLOCKING a second row's real membership from landing, so a brick
+ * reported a dead container forever while its live one stayed invisible.
  */
 export function indexContainerLinks(
   rows: Array<{
@@ -156,9 +173,10 @@ export function indexContainerLinks(
 ): Map<string, ContainerRef> {
   const out = new Map<string, ContainerRef>();
   for (const r of rows) {
+    if (r.containerName == null) continue; // dangling edge — not a membership
     const key = containerMemberKey(r.fromType, r.fromId);
     if (!out.has(key)) {
-      out.set(key, { id: r.containerId, name: r.containerName ?? null });
+      out.set(key, { id: r.containerId, name: r.containerName });
     }
   }
   return out;
@@ -179,6 +197,8 @@ export function indexContainerLinks(
 export async function loadContainerRefs(members: {
   toolIds: string[];
   skillIds: string[];
+  /** The reading identity — the container name is disclosed under THEIR lens. */
+  userId: string;
 }): Promise<Map<string, ContainerRef>> {
   const ids = [...members.toolIds, ...members.skillIds];
   if (ids.length === 0) return new Map();
@@ -191,7 +211,9 @@ export async function loadContainerRefs(members: {
       containerName: capabilityContainers.name,
     })
     .from(links)
-    .leftJoin(
+    // INNER, not LEFT: an edge to a container row that no longer exists is a
+    // dangling edge, not a membership. See `indexContainerLinks`.
+    .innerJoin(
       capabilityContainers,
       eq(drizzleSql`${capabilityContainers.id}::text`, links.toId)
     )
@@ -200,7 +222,16 @@ export async function loadContainerRefs(members: {
         inArray(links.fromType, ["tool", "skill"]),
         inArray(links.fromId, ids),
         eq(links.linkType, "member_of"),
-        eq(links.toType, "capability")
+        eq(links.toType, "capability"),
+        // The membership edge must be visible to the reader. Without this, a
+        // POD-WIDE brick (visible to everyone) that `addPart` deliberately allows
+        // into a WORKSPACE-scoped container (capability-containers.ts: "attaching
+        // a pod-wide tool/skill the caller can see is intentional") leaked that
+        // private container's NAME to every other workspace — rendered verbatim
+        // as a chip in the step picker and the browser catalogue. `addPart` stamps
+        // the edge with the CONTAINER's workspaceId, so this predicate is exactly
+        // the container's lens.
+        userVisibleWhere(links.workspaceId, members.userId)
       )
     )
     .orderBy(links.createdAt);
@@ -547,6 +578,7 @@ export async function listCapabilities(
   const containerByMember = await loadContainerRefs({
     toolIds,
     skillIds: skillRows.map((r) => r.id),
+    userId: ctx.userId,
   });
 
   const toolCaps: RegistryCapability[] = toolRows.map((row) => ({

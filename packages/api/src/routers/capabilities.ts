@@ -396,9 +396,10 @@ const capabilityRegistryRouter = router({
               });
               wiring.capabilityIds.push(capabilityId);
             } catch (err) {
-              // `addPart` gates on WRITE access to the container: a caller who
-              // may see a pod-wide capability but not edit it still gets the
-              // verb — it just doesn't join that card.
+              // `addPart` refuses when the caller may SEE the container but not
+              // write it — a pod-wide container the caller does not own, or a
+              // workspace they are not a member of. The verb is still created;
+              // it just doesn't join that card.
               logger.warn(
                 { capabilityId, skillId: result.id, err },
                 "createVerb: could not attach verb to capability"
@@ -417,33 +418,44 @@ const capabilityRegistryRouter = router({
         // the shared `deriveVerbKind`, govDefault aligned to the seeded grant
         // exec-mode). Idempotent by verb id — re-creating never duplicates.
         try {
-          const [toolRow] = await database
-            .select({ capabilities: toolsTable.capabilities })
-            .from(toolsTable)
-            .where(eq(toolsTable.id, parentTool.id))
-            .limit(1);
-          const entry: ToolVerbCatalogEntry = {
-            id: input.verbName,
-            label: input.verbName,
-            kind: deriveVerbKind({
-              name: input.verbName,
-              ...(input.description ? { description: input.description } : {}),
-            }),
-            ...(input.parameters && typeof input.parameters === "object"
-              ? { argsSchema: input.parameters }
-              : {}),
-            govDefault: GRANT_DEFAULT_EXEC_MODE,
-          };
-          await database
-            .update(toolsTable)
-            .set({
-              capabilities: upsertVerbCatalogEntry(
-                toolRow?.capabilities ?? [],
-                entry
-              ),
-              updatedAt: new Date(),
-            })
-            .where(eq(toolsTable.id, parentTool.id));
+          // Read-modify-write on a jsonb ARRAY, so it MUST be serialized: two
+          // concurrent createVerb calls on the same parent tool would otherwise
+          // both read the pre-state and the second would overwrite the first's
+          // entry — silently, since `wiring.catalogued` reports true for both.
+          // The row lock makes the append at-most-once-per-verb and last-writer-
+          // additive instead of last-writer-wins.
+          await database.transaction(async (tx) => {
+            const [toolRow] = await tx
+              .select({ capabilities: toolsTable.capabilities })
+              .from(toolsTable)
+              .where(eq(toolsTable.id, parentTool.id))
+              .for("update")
+              .limit(1);
+            const entry: ToolVerbCatalogEntry = {
+              id: input.verbName,
+              label: input.verbName,
+              kind: deriveVerbKind({
+                name: input.verbName,
+                ...(input.description
+                  ? { description: input.description }
+                  : {}),
+              }),
+              ...(input.parameters && typeof input.parameters === "object"
+                ? { argsSchema: input.parameters }
+                : {}),
+              govDefault: GRANT_DEFAULT_EXEC_MODE,
+            };
+            await tx
+              .update(toolsTable)
+              .set({
+                capabilities: upsertVerbCatalogEntry(
+                  toolRow?.capabilities ?? [],
+                  entry
+                ),
+                updatedAt: new Date(),
+              })
+              .where(eq(toolsTable.id, parentTool.id));
+          });
           wiring.catalogued = true;
         } catch (err) {
           logger.error(

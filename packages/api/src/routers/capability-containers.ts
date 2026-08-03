@@ -334,6 +334,23 @@ export const capabilityContainersRouter = router({
           code: "NOT_FOUND",
           message: "Capability not found",
         });
+      // FLOOR, beneath the governance gate — not a substitute for it.
+      // `checkPermissionOrPropose` performs workspace-membership RBAC ONLY when a
+      // workspace lens is present (permission-check.ts: "At pod scope there is no
+      // membership to verify"). So a pod-wide container (workspaceId === null)
+      // would otherwise be attachable by ANY authenticated pod member, silently
+      // changing what someone else's bundle grants. `removePart` never lost this
+      // floor — without it you could attach to a container you cannot detach from.
+      // Workspace-scoped rows are deliberately NOT gated here: the governance gate
+      // already covers them, and double-gating would kill the "agent asks to join"
+      // proposal path.
+      if (cap.workspaceId === null) {
+        await assertWorkspaceWrite(db, userId, {
+          workspaceId: null,
+          ownerId: cap.createdBy,
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId: input.agentUserId,

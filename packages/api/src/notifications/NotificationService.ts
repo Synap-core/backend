@@ -23,6 +23,7 @@ import {
   db,
   notifications,
   notificationPreferences,
+  workspaceMembers,
   and,
   eq,
   eventRepository,
@@ -288,6 +289,39 @@ export const NotificationService = {
       );
       return undefined;
     }
+  },
+
+  /**
+   * Fan-out a workspace-scoped alert to EVERY member of `workspaceId` — N
+   * per-recipient rows (the ratified fan-out shape). Reuses `create()` per
+   * member, so per-user read/ack/snooze state, routing prefs, quiet hours, and
+   * socket delivery all work unchanged (no shared-row rework). Per-member
+   * best-effort: one member's failure never blocks the rest. `subjectUserId` (in
+   * `data`, optional) is the person the alert is ABOUT — never a recipient
+   * filter; every member is notified. Returns the created notification ids.
+   */
+  async createForWorkspace(
+    input: Omit<CreateNotificationInput, "userId"> & { workspaceId: string }
+  ): Promise<string[]> {
+    const members = await db.query.workspaceMembers.findMany({
+      where: eq(workspaceMembers.workspaceId, input.workspaceId),
+      columns: { userId: true },
+    });
+    const ids: string[] = [];
+    for (const member of members) {
+      const id = await NotificationService.create({
+        ...input,
+        userId: member.userId,
+      }).catch((err) => {
+        logger.warn(
+          { err, userId: member.userId, type: input.type },
+          "createForWorkspace: per-member create failed (continuing)"
+        );
+        return undefined;
+      });
+      if (id) ids.push(id);
+    }
+    return ids;
   },
 
   /**

@@ -1910,6 +1910,8 @@ try {
             } = await import("@synap/jobs/workers/fireflies-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
+            const { registerStaleProposalRunner } =
+              await import("@synap/jobs/workers/stale-proposal-cron.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
             const { registerSessionRecapRunner } =
@@ -1942,6 +1944,7 @@ try {
               return { imported, mirrored };
             });
             registerEventEndRunner(() => api.runEventEnd());
+            registerStaleProposalRunner(() => api.scanStaleProposals());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The pattern detector writes an LLM's suggested flow straight to
