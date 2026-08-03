@@ -600,8 +600,43 @@ export const REPORT_AUTOMATION_NAME = "Generate report";
  * The flow GRAPH is once again unchanged — no new nodes, no new edges. The
  * projection EXPRESSIONS changed (they carry fields now) and `relate` gained an
  * instruction and 100 tokens; no new placeholders reach a new step.
+ *
+ * ── v14 (2026-08-03) — `analyze`/`relate` maxTokens 700 → 2000 ───────────────
+ *
+ * DOGFOODED, run of 2026-08-03 15:26. `analyze` failed in 10.1s (not a timeout)
+ * with `finishReason=length`, `promptTokens=5776`, `completionTokens=701`, and
+ * ZERO visible output; `relate` failed identically (6177 → 700). `assemble`
+ * completed in the SAME run at `maxTokens: 2000`, spending 376 completion
+ * tokens with `finishReason=stop`.
+ *
+ * The number is derived, not guessed:
+ *   · 701 is a LOWER BOUND on what `analyze` needs and nothing more — the round
+ *     was cut off mid-reasoning, so the real requirement is unmeasured and
+ *     strictly greater. Any value picked "just above" an unmeasured bound is a
+ *     guess wearing evidence's clothes.
+ *   · Those rounds are asked for ~250-300 visible tokens on top of that hidden
+ *     reasoning, and none of the 701 was visible.
+ *   · The trigger was v13 itself: the per-kind projections grew the user prompt
+ *     to 15,917 chars, and a richer prompt makes a reasoning model reason
+ *     LONGER. Every future prompt improvement pushes the same ceiling again, so
+ *     the budget must carry headroom rather than fit today's measurement.
+ *   · A higher ceiling costs NOTHING when reasoning is cheap — `assemble` proves
+ *     it, sitting at 2000 and spending 376. Tokens are billed on what is used;
+ *     `maxTokens` is a truncation point, never a length control. Brevity belongs
+ *     in the prompt, which is the same lesson v2 recorded when `summarize` went
+ *     120 → 500.
+ *   · 2000 is therefore the value, because 2000 is the CEILING: both
+ *     `aiGenerateParams` (builtin-verbs.ts) and the IS route (tools-v1.ts) cap
+ *     `maxTokens` at 2000. There is no headroom above it to choose. If a future
+ *     run reports `finishReason=length` at 2000, the fix is those two schemas —
+ *     NOT another nudge in this file.
+ *
+ * The flow GRAPH is unchanged: no new nodes, no new edges, no new placeholders.
+ * Two literals moved. `errorHandling` is untouched — `analyze`/`relate` stay
+ * `continueOnError: true` (a failed round is a VISIBLE GAP the assembler
+ * renders), and `assemble`/`summarize`/`create-report` stay fail-fast.
  */
-export const REPORT_AUTOMATION_SEED_VERSION = 13;
+export const REPORT_AUTOMATION_SEED_VERSION = 14;
 
 export const REPORT_AUTOMATION_DESCRIPTION =
   "Gather this workspace's state, interpret it over three AI rounds, and write a " +
@@ -1405,7 +1440,14 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
         inputMapping: {
           system: ANALYZE_SYSTEM,
           prompt: [STEER_BLOCK, "", GATHERED_DATA].join("\n"),
-          maxTokens: "700",
+          // 2000, the schema ceiling — see the v14 note above. At 700 this round
+          // burned all 701 completion tokens on hidden reasoning and emitted
+          // NOTHING (finishReason=length, 10.1s, 2026-08-03). 701 is a lower
+          // bound on the need, not the need; the visible ~250-300 tokens sit on
+          // top of it; and v13's richer 15,917-char prompt is what pushed the
+          // reasoning over. A ceiling is not a length control and costs nothing
+          // unused — `assemble` runs at 2000 and spends 376.
+          maxTokens: "2000",
         },
         // A failed round must become a VISIBLE GAP in the report, not an aborted
         // run — the assembler is instructed to render it.
@@ -1444,12 +1486,15 @@ export const REPORT_AUTOMATION_FLOW: FlowDefinition = {
             "that span TWO OR MORE records or kinds. If there are none, say what you",
             "checked and did not find — never answer with nothing.",
           ].join("\n"),
-          // 700, not 600 — matching `analyze`, the round that demonstrably
-          // emitted in the same run where this one returned "" after 6.1s. v2
-          // established that `ai.generate` yields an EMPTY STRING when the
-          // budget is spent before the first visible token, and 600 was the only
-          // round budget below the one that worked.
-          maxTokens: "700",
+          // 2000, matching `analyze` — the rounds are budgeted together because
+          // they are asked for the same shape of answer over the same data.
+          // History: 600 → 700 (v9) because 600 was the only round below one
+          // that demonstrably emitted; 700 → 2000 (v14) because 700 then failed
+          // the same way `analyze` did — 6177 prompt tokens in, all 700
+          // completion tokens spent on hidden reasoning, finishReason=length,
+          // zero visible output (2026-08-03). See the v14 note above for why the
+          // ceiling rather than another nudge.
+          maxTokens: "2000",
         },
         errorHandling: { continueOnError: true },
       },

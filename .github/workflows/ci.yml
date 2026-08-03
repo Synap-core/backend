@@ -168,6 +168,26 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
 
+      # A GREEN TEST RUN MUST MEAN TESTS ACTUALLY RAN.
+      #
+      # `pnpm test` above reports numFailedTests. It does NOT report that a whole
+      # package executed ZERO tests: `@synap/database` was measured at
+      # 475 total / 0 passed / **0 failed** — indistinguishable from green to any
+      # reader of the failure count. Nor does it report a file that collected
+      # zero assertions, which stops testing anything without turning red.
+      #
+      # `test:floor` fails on exactly those classes plus a drop below a MEASURED
+      # per-package passing floor. Without this step the script only runs when a
+      # human types it, which is not a gate.
+      #
+      # SYNAP_TEST_ALLOW_BLIND is a LOCAL-only acknowledgement for machines with
+      # no Postgres. CI provisions Postgres, so it must never be set here.
+      - name: Test floor (a green run must mean tests ran)
+        run: pnpm test:floor
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
       - name: Build
         run: pnpm build
 

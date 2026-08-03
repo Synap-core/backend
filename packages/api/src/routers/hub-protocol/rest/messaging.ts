@@ -27,14 +27,16 @@ import {
   ChannelType,
   ensureExternalChannel,
 } from "@synap/database";
-import { resolveActingContext } from "./_shared.js";
+import { hasScope, resolveActingContext } from "./_shared.js";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
 import { getServiceSecret, upsertServiceSecret } from "@synap/database";
 import { getMessagingConnector } from "../../../connectors/index.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { pullToImport } from "../../../services/connector-import-bridge.js";
+import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono } from "./_shared.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
@@ -106,7 +108,122 @@ type ChannelMetadata = {
   unread?: boolean;
 };
 
+// ── POST /messaging/inbound — provider-agnostic inbound sensor door ─────────
+// The ONE generic door external bridges (Discord, Proton, future connectors)
+// POST an inbound message to. Scope-gated `hub-protocol.write`, NON-governed
+// (a sensor write — never routed through channel.ingest / capabilities.execute,
+// which would turn each message into an unapprovable proposal). Delegates the
+// subject-fold + email-identity-resolve + dedup-record to `landInboundMessage`.
+const MessagingInboundRequestSchema = z
+  .object({
+    provider: z.string().min(1),
+    // Empty allowed: a subject-only or attachment-only message is valid; the
+    // refine below rejects a wholly empty (no text AND no subject) inbound.
+    text: z.string().max(50_000).optional().default(""),
+    messageId: z.string().min(1),
+    // Channel key. When absent, participantEmail is resolved to one.
+    externalId: z.string().min(1).optional(),
+    participantEmail: z.string().email().optional(),
+    participant: z.string().min(1).optional(),
+    participantExternalId: z.string().min(1).optional(),
+    subject: z.string().max(2_000).optional(),
+    sentAt: z.string().optional(),
+    workspaceId: z.string().uuid().optional(),
+    userId: z.string().uuid().optional(),
+  })
+  .refine((d) => Boolean(d.externalId || d.participantEmail), {
+    message: "externalId or participantEmail is required",
+  })
+  .refine((d) => Boolean((d.text && d.text.trim()) || d.subject), {
+    message: "text or subject required",
+  })
+  .openapi("MessagingInboundRequest");
+
+const MessagingInboundResponseSchema = z
+  .object({
+    recorded: z.boolean(),
+    channelId: z.string(),
+    deduped: z.boolean(),
+  })
+  .openapi("MessagingInboundResponse");
+
 export function registerMessagingRoutes(app: HubHono): void {
+  registerOpenApi(app, {
+    method: "post",
+    path: "/messaging/inbound",
+    tags: ["Messaging"],
+    summary: "Land a provider-agnostic inbound message into the pod",
+    description:
+      "Provider-agnostic inbound sensor door. Resolves-or-creates the EXTERNAL " +
+      "channel and dedup-records the inbound message (folding a subject line into " +
+      "the body and resolving a participant email to an existing entity when no " +
+      "externalId is given), then fires external_message.received. NON-governed " +
+      "(a sensor write). Used by external bridges (Discord, Proton, …).",
+    request: { body: MessagingInboundRequestSchema },
+    responses: {
+      200: {
+        description: "Record result",
+        schema: MessagingInboundResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/messaging/inbound", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    let body: z.infer<typeof MessagingInboundRequestSchema>;
+    try {
+      body = MessagingInboundRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid request body" },
+        400
+      );
+    }
+
+    // Resolve the acting identity + workspace via the SAME door the discord
+    // route uses (service key may act-as body.userId; workspace membership-checked).
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      const { recorded, channelId, deduped } = await landInboundMessage({
+        provider: body.provider,
+        text: body.text,
+        messageId: body.messageId,
+        externalId: body.externalId,
+        participantEmail: body.participantEmail,
+        participant: body.participant,
+        participantExternalId: body.participantExternalId,
+        subject: body.subject,
+        sentAt: body.sentAt,
+        workspaceId: acting.workspaceId,
+        userId: acting.userId,
+      });
+      return c.json({ recorded, channelId, deduped }, 200);
+    } catch (err) {
+      logger.error(
+        { err, provider: body.provider },
+        "POST /messaging/inbound failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
   // ── GET /messaging/accounts ───────────────────────────────────────────────
   app.openapi(
     createRoute({

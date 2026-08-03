@@ -99,7 +99,12 @@ const ApplyImportSchema = ApplyImportBaseSchema.superRefine(
 // mirrors submitBatch's MAX_BATCH_BYTES, scaled.
 const MAX_LARGE_CONTENT_BYTES = 48 * 1024 * 1024; // 48MB total text/request
 
-const AnalyzeLargeImportSchema = AnalyzeImportSchema.extend({
+/**
+ * Exported so the Hub REST door (`POST /import/enqueue-corpus`) validates the
+ * SAME shape as the tRPC procedures rather than re-declaring the item caps and
+ * the aggregate byte budget — two copies would drift.
+ */
+export const AnalyzeLargeImportSchema = AnalyzeImportSchema.extend({
   items: z
     .array(
       z.object({

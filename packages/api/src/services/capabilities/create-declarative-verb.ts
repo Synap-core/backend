@@ -23,7 +23,10 @@
 
 import { and, eq, isNull, or, type SQL } from "@synap/database";
 import { tools as toolsTable } from "@synap/database/schema";
-import type { ProviderVerbSpec } from "@synap/database/schema";
+import type {
+  ProviderVerbSpec,
+  ToolVerbCatalogEntry,
+} from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import type { CreateVerbInput } from "../../routers/mcp/validate-create-verb.js";
 
@@ -101,4 +104,27 @@ export function buildProviderVerbSpec(
     ...(input.body ? { body: input.body } : {}),
     ...(input.responseShape ? { responseShape: input.responseShape } : {}),
   };
+}
+
+/**
+ * Idempotent merge of ONE verb into a tool's `tools.capabilities` catalogue.
+ *
+ * The catalogue is keyed by `id` (the backing skill's name), so re-creating a
+ * verb of the same name REPLACES its entry instead of appending a duplicate —
+ * `capability-registry` would otherwise render the same verb twice and the
+ * stale entry would keep an outdated `argsSchema`. Position is preserved on
+ * replace so the catalogue's order stays stable across re-creates.
+ *
+ * Pure (no I/O) — the caller does the one-line drizzle update.
+ */
+export function upsertVerbCatalogEntry(
+  existing: ToolVerbCatalogEntry[] | null | undefined,
+  entry: ToolVerbCatalogEntry
+): ToolVerbCatalogEntry[] {
+  const current = Array.isArray(existing) ? existing : [];
+  const at = current.findIndex((v) => v.id === entry.id);
+  if (at === -1) return [...current, entry];
+  const next = [...current];
+  next[at] = entry;
+  return next;
 }

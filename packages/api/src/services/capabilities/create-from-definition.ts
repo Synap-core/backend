@@ -1048,7 +1048,7 @@ export async function createCapabilityFromDefinition(
 // The exec-mode the applier seeds on every tool/skill grant (`issueCapabilityGrant`
 // below). The verb catalog's `govDefault` reuses this SAME constant so a verb's
 // governance default can never drift from the grant the gate actually enforces.
-const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
+export const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
 const VERB_WRITE_SIGNALS = [
   "send",

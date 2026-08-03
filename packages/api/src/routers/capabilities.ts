@@ -42,7 +42,8 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { FlowDefinition } from "@synap/database";
-import { MessageAuthorType } from "@synap/database/schema";
+import { MessageAuthorType, links } from "@synap/database/schema";
+import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
@@ -64,6 +65,7 @@ import {
   buildProviderVerbSpec,
   parentToolMissingMessage,
   parentToolWhere,
+  upsertVerbCatalogEntry,
 } from "../services/capabilities/create-declarative-verb.js";
 import {
   normalizeVerbResult,
@@ -76,7 +78,9 @@ import { buildCapabilityCatalog } from "../services/capabilities/capability-cata
 import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
 import {
   createCapabilityFromDefinition,
+  deriveVerbKind,
   loadCapabilityTemplate,
+  GRANT_DEFAULT_EXEC_MODE,
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
@@ -254,11 +258,14 @@ const capabilityRegistryRouter = router({
    * Create a declarative provider verb — a new brick — on an ALREADY-installed
    * tool. The human/UI counterpart of the `synap_create_verb` MCP tool.
    *
-   * Same three steps, same helpers, no new business logic:
+   * Same steps, same helpers, no new business logic:
    *   1. `validateCreateVerbInput` (declarative-only, never accepts `code`);
    *   2. `parentToolWhere` — the parent tool must exist and be caller-visible;
    *   3. `skillsRouter.create` — the ONE governed door. `checkPermissionOrPropose`
-   *      runs INSIDE it; no bypass flag, no direct insert here.
+   *      runs INSIDE it; no bypass flag, no direct insert here;
+   *   4. WIRING — `skills.create` writes a bare skill row and nothing else, so
+   *      without this step the verb is born ORPHANED: invisible to every read
+   *      path that surfaces it. See the step-4 comment for the three edges.
    *
    * `agentUserId` is deliberately NOT threaded: this door is the HUMAN caller,
    * so governance evaluates the operator's own rights. An agent creating a verb
@@ -300,34 +307,163 @@ const capabilityRegistryRouter = router({
       }
 
       // Step 3 — the governed create door, called exactly as MCP calls it.
-      const result = await skillsRouter
-        .createCaller({
-          ...ctx,
-          workspaceId,
-        } as unknown as Parameters<typeof skillsRouter.createCaller>[0])
-        .create({
-          ...(workspaceId ? { workspaceId } : {}),
-          kind: "declarative",
-          scope: workspaceId ? "workspace" : "pod",
-          name: input.verbName,
-          description: input.description,
-          providerSpec: buildProviderVerbSpec(
-            validated.data
-          ) as unknown as Record<string, unknown>,
-          parameters: input.parameters,
-          executionMode: "sync",
-          timeoutSeconds: 30,
-        });
+      const skillsCaller = skillsRouter.createCaller({
+        ...ctx,
+        workspaceId,
+      } as unknown as Parameters<typeof skillsRouter.createCaller>[0]);
+      const result = await skillsCaller.create({
+        ...(workspaceId ? { workspaceId } : {}),
+        kind: "declarative",
+        scope: workspaceId ? "workspace" : "pod",
+        name: input.verbName,
+        description: input.description,
+        providerSpec: buildProviderVerbSpec(
+          validated.data
+        ) as unknown as Record<string, unknown>,
+        parameters: input.parameters,
+        executionMode: "sync",
+        timeoutSeconds: 30,
+      });
+
+      // Step 4 — WIRING. `skills.create` inserts a bare skill row and writes no
+      // links, so a verb created here used to be unreachable from EVERY read
+      // path that surfaces it:
+      //   · `tools.capabilities` — the jsonb catalogue the Bricks registry reads
+      //     (`capability-registry.buildVerbStates`) ⇒ the verb never appeared
+      //     under its tool;
+      //   · `skill --requires--> tool` — the parent edge;
+      //   · `skill --member_of--> capability` — how a capability CARD folds its
+      //     verbs in (`capability-catalog`).
+      // Each edge is written through its EXISTING door, never hand-inserted.
+      //
+      // Only on the `created` branch. A `proposed` result is a SUCCESS, but the
+      // skill row does NOT exist yet (the insert is queued behind review), so
+      // there is nothing to link to — `setRequiredTools`/`addPart` would both
+      // 404 on a lookup of it. The wiring for an approved proposal has to happen
+      // where the proposal MATERIALIZES the skill (`insertSkillGoverned`), which
+      // is outside this door; until then a verb created via the proposed branch
+      // stays orphaned. `wiring` reports that honestly rather than implying it.
+      //
+      // Wiring failures are reported, not thrown: the skill row already exists
+      // and `skills.create` is not idempotent, so raising here would push a UI
+      // into re-creating a duplicate verb.
+      const wiring = {
+        requires: false,
+        catalogued: false,
+        capabilityIds: [] as string[],
+      };
+
+      if (result.status === "created") {
+        try {
+          await skillsCaller.setRequiredTools({
+            skillId: result.id,
+            toolIds: [parentTool.id],
+          });
+          wiring.requires = true;
+        } catch (err) {
+          logger.error(
+            { skillId: result.id, toolId: parentTool.id, err },
+            "createVerb: failed to write the requires edge"
+          );
+        }
+
+        // The parent tool's capability container(s), if it belongs to any. A
+        // tool with no container is normal (a bare connect) — then there is no
+        // card to join and nothing to do.
+        try {
+          const containerLinks = await database
+            .select({ capabilityId: links.toId })
+            .from(links)
+            .where(
+              and(
+                eq(links.fromType, "tool"),
+                eq(links.fromId, parentTool.id),
+                eq(links.toType, "capability"),
+                eq(links.linkType, "member_of")
+              )
+            );
+          const containersCaller = capabilityContainersRouter.createCaller(
+            ctx as never
+          );
+          for (const capabilityId of new Set(
+            containerLinks.map((l) => l.capabilityId)
+          )) {
+            try {
+              await containersCaller.addPart({
+                capabilityId,
+                partType: "skill",
+                partId: result.id,
+              });
+              wiring.capabilityIds.push(capabilityId);
+            } catch (err) {
+              // `addPart` gates on WRITE access to the container: a caller who
+              // may see a pod-wide capability but not edit it still gets the
+              // verb — it just doesn't join that card.
+              logger.warn(
+                { capabilityId, skillId: result.id, err },
+                "createVerb: could not attach verb to capability"
+              );
+            }
+          }
+        } catch (err) {
+          logger.error(
+            { toolId: parentTool.id, err },
+            "createVerb: capability-container lookup failed"
+          );
+        }
+
+        // Append to the parent tool's verb catalogue, in the SAME shape
+        // `deriveToolVerbs` produces (id = the backing skill's name, kind from
+        // the shared `deriveVerbKind`, govDefault aligned to the seeded grant
+        // exec-mode). Idempotent by verb id — re-creating never duplicates.
+        try {
+          const [toolRow] = await database
+            .select({ capabilities: toolsTable.capabilities })
+            .from(toolsTable)
+            .where(eq(toolsTable.id, parentTool.id))
+            .limit(1);
+          const entry: ToolVerbCatalogEntry = {
+            id: input.verbName,
+            label: input.verbName,
+            kind: deriveVerbKind({
+              name: input.verbName,
+              ...(input.description ? { description: input.description } : {}),
+            }),
+            ...(input.parameters && typeof input.parameters === "object"
+              ? { argsSchema: input.parameters }
+              : {}),
+            govDefault: GRANT_DEFAULT_EXEC_MODE,
+          };
+          await database
+            .update(toolsTable)
+            .set({
+              capabilities: upsertVerbCatalogEntry(
+                toolRow?.capabilities ?? [],
+                entry
+              ),
+              updatedAt: new Date(),
+            })
+            .where(eq(toolsTable.id, parentTool.id));
+          wiring.catalogued = true;
+        } catch (err) {
+          logger.error(
+            { toolId: parentTool.id, verbName: input.verbName, err },
+            "createVerb: failed to append the verb catalogue entry"
+          );
+        }
+      }
 
       // Identity of the thing just created, so a UI can select it inline
       // (create-then-configure, never a wizard) — plus the brick's parent so the
       // caller knows where it landed. `status` is `"created" | "proposed"`,
-      // verbatim from the governed door.
+      // verbatim from the governed door; `wiring` says which read paths the verb
+      // actually reached.
       return {
         ...result,
         verbName: input.verbName,
         toolId: parentTool.id,
         toolName: parentTool.name,
+        wiring,
       };
     }),
 });

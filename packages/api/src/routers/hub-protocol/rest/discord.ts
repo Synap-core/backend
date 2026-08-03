@@ -45,7 +45,7 @@ import {
 } from "@synap/database";
 import { resolveClientBinding } from "../../../utils/resolve-client-binding.js";
 import type { AIStep } from "@synap-core/types";
-import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
+import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
 import {
   createOrGetChatTurn,
   decideChatTurnClaimAction,
@@ -298,7 +298,10 @@ export function registerDiscordRoutes(app: HubHono): void {
     const callerKeyId = c.get("apiKeyId") as string | undefined;
 
     try {
-      const { recorded } = await recordInboundMessage({
+      // Provider-agnostic lander (Wave A). Discord passes an explicit channel key
+      // + title + idempotency seed, so this is byte-identical to the prior direct
+      // recordInboundMessage call (no subject-fold, no email-resolve for discord).
+      const { recorded } = await landInboundMessage({
         provider: "discord",
         externalId: body.discordChannelId,
         userId,
@@ -432,7 +435,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       // `recorded: false` for a duplicate, and we replay the prior assistant
       // reply (chained off the same inbound hash) instead of doing the work again.
       const { channelId, contextObjectId, inboundHash, recorded } =
-        await recordInboundMessage({
+        await landInboundMessage({
           provider: "discord",
           externalId: body.discordChannelId,
           userId,

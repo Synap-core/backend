@@ -6222,8 +6222,17 @@ export interface FunnelStep {
 	label: string;
 	count: number;
 }
-/** Which ledger a run came from. */
-export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
+/**
+ * Which ledger a run came from.
+ *
+ * `agent_write` is the CATCH-ALL for a plain agent write that instantiates no
+ * flow at all — e.g. a CLI `synap capture` or an MCP `create_entity` that
+ * auto-approved. It produces an auto-approved proposal receipt + a `.completed`
+ * event and belongs to no automation, playbook, chat turn, or capability run, so
+ * before this member existed it rendered in NO flow type and was invisible in the
+ * unified feed — the "you did something on the pod, I got no way to see it" gap.
+ */
+export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat" | "agent_write";
 /** Normalised lifecycle across all ledgers. */
 export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped";
 /** One run, ledger-agnostic. */
@@ -13105,9 +13114,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description?: string | undefined;
 					workspaceId?: string | undefined;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
 				};
 				output: {
+					capability: CapabilityRow | null;
+					status: "proposed";
+					proposalId: string;
+				} | {
 					capability: CapabilityRow;
+					status: "created";
+					proposalId: string | null;
 				};
 				meta: object;
 			}>;
@@ -13141,9 +13159,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					capabilityId: string;
 					partType: "tool" | "skill";
 					partId: string;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
 				};
 				output: {
+					ok: false;
+					status: "proposed";
+					proposalId: string;
+				} | {
 					ok: true;
+					status: "created";
+					proposalId: string | null;
 				};
 				meta: object;
 			}>;
@@ -13248,6 +13275,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					verbName: string;
 					toolId: string;
 					toolName: string;
+					wiring: {
+						requires: boolean;
+						catalogued: boolean;
+						capabilityIds: string[];
+					};
 					id: `${string}-${string}-${string}-${string}-${string}`;
 					status: "proposed";
 					proposalId: string;
@@ -13255,6 +13287,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					verbName: string;
 					toolId: string;
 					toolName: string;
+					wiring: {
+						requires: boolean;
+						catalogued: boolean;
+						capabilityIds: string[];
+					};
 					id: string;
 					status: "created";
 					proposalId?: undefined;

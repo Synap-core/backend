@@ -88,6 +88,31 @@ const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
 const CAPABILITY_RUN_EVENT_KIND = "capability_run";
 
 /**
+ * Newest-first comparator for the unified feed — TOLERANT OF A MISSING DATE.
+ *
+ * `UnifiedRun.startedAt` is declared `Date` (non-optional), but this feed is a
+ * UNION over six independently-mapped ledgers, and each mapper reads a different
+ * source column (`startedAt`, `createdAt`, an event `timestamp`, …). A mapper
+ * that reads a column its row does not carry yields `undefined` at runtime while
+ * still typechecking — and the previous `b.startedAt.getTime()` then threw
+ * `Cannot read properties of undefined (reading 'getTime')` INSIDE `Array.sort`,
+ * taking down the ENTIRE runs feed because ONE row of one ledger was malformed.
+ *
+ * A union feed must degrade per-row, never per-request: an undateable run sorts
+ * last instead of erasing every other run. This is deliberately NOT a silent
+ * `?? new Date()` — fabricating "now" would rank a broken row FIRST, which is
+ * the opposite of honest.
+ */
+function byStartedAtDesc(
+  a: { startedAt?: Date | null },
+  b: { startedAt?: Date | null }
+): number {
+  const at = a.startedAt?.getTime?.() ?? -Infinity;
+  const bt = b.startedAt?.getTime?.() ?? -Infinity;
+  return bt - at;
+}
+
+/**
  * A capability run's output (`proposal.data.runResult`) can be arbitrarily large
  * (a provider list, a full API envelope). Pass it through the RunDetail's
  * `outputSummary` verbatim when small; otherwise a truncated preview + a flag so
@@ -700,7 +725,7 @@ async function listCapabilityRuns(
       (r) => !r.correlationId || !seenCorrelation.has(r.correlationId)
     ),
   ];
-  merged.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  merged.sort(byStartedAtDesc);
   return merged.slice(0, limit).filter((r) => !status || r.status === status);
 }
 
@@ -1033,7 +1058,7 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     seen.add(key);
     return true;
   });
-  unique.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  unique.sort(byStartedAtDesc);
   return unique.slice(0, perFlow);
 }
 

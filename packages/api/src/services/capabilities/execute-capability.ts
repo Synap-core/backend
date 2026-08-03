@@ -761,6 +761,12 @@ export async function runResolvedSkill(
     return {
       kind: "error",
       message: envelope.error ?? `Skill "${skill.name}" execution failed.`,
+      // P1: a code-skill provider failure now carries its classification too, so
+      // an in-skill callProvider 401 surfaces the recovery chip — not just the
+      // declarative-verb path above. Set by the IS (HubApiError.body) or the
+      // in-process sandbox (dispatch result); undefined for a non-provider failure.
+      errorClass: envelope.errorClass,
+      providerRef: envelope.providerRef,
     };
   }
   return { kind: "run", skillId: skill.id, result: envelope.result };

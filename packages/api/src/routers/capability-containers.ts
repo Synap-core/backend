@@ -26,6 +26,7 @@ import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 /** A part the user can attach to a capability. Built-ins are tools (kind=builtin). */
 const PART_TYPES = ["tool", "skill"] as const;
@@ -191,20 +192,46 @@ export const capabilityContainersRouter = router({
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId,
+        subjectType: "capability",
+        action: "create",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: { name: input.name },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return {
+          capability: null as CapabilityRow | null,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+
       const [cap] = await db
         .insert(capabilities)
         .values({
           workspaceId: input.workspaceId ?? null,
-          createdBy: userId,
+          createdBy: input.agentUserId ?? userId,
           name: input.name,
           description: input.description,
         })
         .returning();
-      return { capability: cap as CapabilityRow };
+      return {
+        capability: cap as CapabilityRow,
+        status: "created" as const,
+        proposalId: null as string | null,
+      };
     }),
 
   /** Edit a capability's config (name · description · approval). */
@@ -291,6 +318,9 @@ export const capabilityContainersRouter = router({
         capabilityId: z.string().uuid(),
         partType: z.enum(PART_TYPES),
         partId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -304,10 +334,28 @@ export const capabilityContainersRouter = router({
           code: "NOT_FOUND",
           message: "Capability not found",
         });
-      await assertWorkspaceWrite(db, userId, {
-        workspaceId: cap.workspaceId,
-        ownerId: cap.createdBy,
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: input.agentUserId,
+        workspaceId: cap.workspaceId ?? undefined,
+        subjectType: "capability",
+        action: "attach",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          capabilityId: input.capabilityId,
+          partType: input.partType,
+          partId: input.partId,
+        },
       });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return {
+          ok: false as const,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
 
       // The part need only be VISIBLE to the caller (read floor), not writable.
       // A Capability is inert — it executes nothing and each part keeps its own
@@ -349,7 +397,11 @@ export const capabilityContainersRouter = router({
             links.linkType,
           ],
         });
-      return { ok: true as const };
+      return {
+        ok: true as const,
+        status: "created" as const,
+        proposalId: null as string | null,
+      };
     }),
 
   /** Detach a part from a capability (removes the member_of link only). */

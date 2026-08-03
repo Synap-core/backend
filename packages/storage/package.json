@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "test": "vitest"
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",

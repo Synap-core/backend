@@ -48,7 +48,10 @@ import { skills, secrets } from "@synap/database/schema";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import { createHubProtocolCallerContext } from "../../routers/hub-protocol/utils.js";
-import { triggerProviderAction } from "../../connectors/external-dispatch.js";
+import {
+  triggerProviderAction,
+  type FailureErrorClass,
+} from "../../connectors/external-dispatch.js";
 import {
   SKILL_STDLIB_BOOTSTRAP,
   SKILL_RUNTIME_VERSION,
@@ -89,15 +92,20 @@ async function redeemVaultSecretDirect(
   });
   if (!secret) return null;
   try {
-    return await resolveVaultSecret(parsed.secretId, secret.userId, parsed.fieldName, {
-      requireGrant: true,
-      // Redeemer is the acting agent (or the operator when no agent key is in
-      // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
-      redeemer: {
-        agentUserId: agentUserId ?? operatorUserId,
-        workspaceId: workspaceId ?? null,
-      },
-    });
+    return await resolveVaultSecret(
+      parsed.secretId,
+      secret.userId,
+      parsed.fieldName,
+      {
+        requireGrant: true,
+        // Redeemer is the acting agent (or the operator when no agent key is in
+        // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
+        redeemer: {
+          agentUserId: agentUserId ?? operatorUserId,
+          workspaceId: workspaceId ?? null,
+        },
+      }
+    );
   } catch (err) {
     if (err instanceof VaultGrantError) return null;
     throw err;
@@ -121,6 +129,18 @@ export async function runSkillInSandbox(args: {
   const operatorUserId = args.userId;
   const workspaceId = args.workspaceId ?? null;
   const agentUserId = args.agentUserId ?? null;
+
+  // P1: host-side carrier for a classified provider failure. `callProvider`
+  // throws INTO the isolate (which strips Error properties down to the message)
+  // and lives in the `runIsolate` helper, so the classification can't ride the
+  // thrown error — we pass this sink into the helper, it writes the sink on a
+  // provider failure, and we read it here on the failure return. Consulted only
+  // when the run fails; a skill that catches the provider error and succeeds
+  // leaves it unused.
+  const providerFailure: {
+    errorClass?: FailureErrorClass;
+    providerRef?: string;
+  } = {};
 
   try {
     // Load the full skill row (the IS fetches it over Hub Protocol; in-process we
@@ -166,9 +186,8 @@ export async function runSkillInSandbox(args: {
       HUB_SCOPES,
       workspaceId
     );
-    const { hubProtocolRouter } = await import(
-      "../../routers/hub-protocol/index.js"
-    );
+    const { hubProtocolRouter } =
+      await import("../../routers/hub-protocol/index.js");
     const caller = hubProtocolRouter.createCaller(ctx as never);
 
     const result = await runIsolate({
@@ -181,6 +200,7 @@ export async function runSkillInSandbox(args: {
       workspaceId,
       agentUserId,
       caller,
+      failureSink: providerFailure,
     });
 
     return {
@@ -193,6 +213,9 @@ export async function runSkillInSandbox(args: {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",
       executionTimeMs: Date.now() - startTime,
+      // P1: surface the provider failure's classification if the failure came
+      // from an in-skill callProvider (empty sink → spreads nothing).
+      ...providerFailure,
     };
   }
 }
@@ -256,6 +279,9 @@ async function runIsolate(params: {
   workspaceId: string | null;
   agentUserId: string | null;
   caller: HubCaller;
+  /** P1: written on a classified provider failure so the caller can attach the
+   *  recovery classification to its failure envelope (see runSkillInSandbox). */
+  failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
 }): Promise<unknown> {
   const {
     code,
@@ -267,6 +293,7 @@ async function runIsolate(params: {
     workspaceId,
     agentUserId,
     caller,
+    failureSink,
   } = params;
 
   const ivm = await loadIvm();
@@ -496,6 +523,11 @@ async function runIsolate(params: {
               body: result.body,
             }).copyInto();
           }
+          // P1: stash the dispatcher's classification on the host-side sink
+          // before throwing (the throw crosses the isolate boundary and would
+          // drop it); the caller reads it on its failure return.
+          failureSink.errorClass = result.errorClass;
+          failureSink.providerRef = result.providerRef;
           throw new Error(result.error ?? "Provider call failed");
         } catch (err) {
           throw new Error(
@@ -558,7 +590,7 @@ async function runIsolate(params: {
           workspaceId:
             typeof inputWorkspaceId === "string"
               ? inputWorkspaceId
-              : workspaceId ?? undefined,
+              : (workspaceId ?? undefined),
           source: "intelligence",
         });
         return new ivm.ExternalCopy({

@@ -112,7 +112,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc && node scripts/verify-exports.mjs",
     "dev": "tsup --watch",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.1",

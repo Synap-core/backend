@@ -36,16 +36,47 @@ import {
   ImportApplyRequestSchema,
 } from "./_codecs/misc.js";
 import { ImportOrchestrator } from "../../../services/import-orchestrator.js";
+import { AnalyzeLargeImportSchema } from "../../import.js";
+import { getBoss } from "@synap/jobs";
+import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   resolveActingContext,
   hasScope,
   getCaller,
+  isUuid,
+  uuidPathParam,
   logger,
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+
+/**
+ * Body for POST /import/enqueue-corpus.
+ *
+ * Reuses the tRPC procedure's own schema (item caps + the 48MB aggregate byte
+ * budget) so the two doors onto `analyzeLarge` can never drift apart. Adds only
+ * the Hub-REST convention of an optional acting `userId` (service keys act for
+ * a user; `resolveActingContext` rejects a mismatch on a session key).
+ */
+const ImportEnqueueCorpusRequestSchema = AnalyzeLargeImportSchema.extend({
+  userId: z.string().min(1).optional(),
+});
+
+const EnqueueCorpusResponseSchema = z.object({
+  queued: z.literal(true),
+  jobId: z.string().nullable(),
+  itemCount: z.number(),
+  workspaceId: z.string().nullable(),
+});
+
+const CorpusJobStatusSchema = z.object({
+  jobId: z.string(),
+  state: z.string(),
+  createdOn: z.union([z.string(), z.date()]).nullable(),
+  completedOn: z.union([z.string(), z.date()]).nullable(),
+});
 
 const GRAPH_WRITE_SOURCES = new Set([
   "intelligence",
@@ -165,6 +196,217 @@ export function registerCaptureRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/import/enqueue-corpus",
+    tags: ["Import"],
+    summary: "Enqueue a large corpus import as a background job",
+    description:
+      "Background door onto ImportOrchestrator.analyzeLarge: enqueues the corpus on the `import-corpus` pg-boss queue and returns immediately with a jobId. The worker chunks the items (cross-chunk dedup preserved) and produces ONE governed import.graph proposal — so a many-file corpus is a single background job instead of N synchronous /import/analyze calls racing the request timeout. Poll GET /import/corpus-job/{jobId}; on completion the result is the import.graph proposal in the review inbox.",
+    request: {
+      body: ImportEnqueueCorpusRequestSchema,
+    },
+    responses: {
+      202: {
+        description: "Corpus queued",
+        schema: EnqueueCorpusResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/import/corpus-job/{jobId}",
+    tags: ["Import"],
+    summary: "Poll a background corpus-import job",
+    description:
+      "Returns the pg-boss state of a job created by POST /import/enqueue-corpus. Only the job's own submitter may read it. `completed` means the governed import.graph proposal has been written — fetch it from the proposals inbox.",
+    request: {
+      params: z.object({ jobId: uuidPathParam }),
+    },
+    responses: {
+      200: { description: "Job state", schema: CorpusJobStatusSchema },
+      400: { description: "Malformed jobId", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "No such job for this caller", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * POST /import/enqueue-corpus
+   *
+   * Hub REST door onto the BACKGROUND large-import path — the same call
+   * `trpc.import.enqueueLargeImport` makes (routers/import.ts). Nothing is
+   * reimplemented here: chunking, cross-chunk dedup and the single governed
+   * `import.graph` proposal all live in `ImportOrchestrator.analyzeLarge`,
+   * which the worker reaches through the handler slot filled at api boot (IoC,
+   * apps/api/src/index.ts). This route only validates, authorizes, and enqueues.
+   *
+   * WHY it exists: Hub REST previously exposed only the PER-FILE synchronous
+   * `/import/analyze`, so a Hub-REST-speaking client (the CLI) had no way to
+   * reach the chunked path and ran N synchronous requests against the request
+   * timeout instead of one background job.
+   *
+   * Additive: `/import/analyze` and `/import/apply` are unchanged.
+   */
+  app.post("/import/enqueue-corpus", async (c) => {
+    // Enqueues work that writes a durable import.graph proposal — same
+    // write-scope floor as /import/analyze. Read-only keys must not queue jobs.
+    if (
+      !hasScope(c.get("scopes") as string[], "hub-protocol.write") &&
+      !hasScope(c.get("scopes") as string[], "mcp.write")
+    ) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.write or mcp.write" },
+        403
+      );
+    }
+
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = ImportEnqueueCorpusRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    const body = parsed.data;
+
+    // Confine a workspace-bound service key BEFORE the id reaches the acting
+    // context or the job payload — same clamp as /import/store-unit.
+    const workspaceId = getConfinedWorkspace(c, body.workspaceId);
+
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: workspaceId ?? undefined,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId } = acting;
+
+    try {
+      // Byte-identical payload to trpc.import.enqueueLargeImport — the worker
+      // reads exactly these four fields (ImportCorpusPayload).
+      const jobId = await getBoss().send(IMPORT_CORPUS_QUEUE, {
+        userId,
+        workspaceId: acting.workspaceId,
+        source: body.source,
+        items: body.items,
+      });
+
+      logger.info(
+        {
+          userId,
+          workspaceId: acting.workspaceId,
+          source: body.source,
+          itemCount: body.items.length,
+          jobId,
+        },
+        "POST /import/enqueue-corpus — corpus queued"
+      );
+
+      return c.json(
+        {
+          queued: true as const,
+          jobId,
+          itemCount: body.items.length,
+          workspaceId: acting.workspaceId,
+        },
+        202
+      );
+    } catch (err) {
+      logger.error({ err, userId }, "POST /import/enqueue-corpus failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /import/corpus-job/:jobId
+   *
+   * Poll handle for the job returned by /import/enqueue-corpus.
+   *
+   * `jobId` is shape-checked before it reaches pg-boss: the column is a `uuid`,
+   * so a truncated or mistyped id would make Postgres throw and the catch-all
+   * below would report a CLIENT mistake as a 500. A malformed id is a 400.
+   */
+  app.get("/import/corpus-job/:jobId", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const jobId = c.req.param("jobId");
+    if (!isUuid(jobId)) {
+      return c.json(
+        {
+          error:
+            "jobId must be a full 36-character UUID — use the jobId returned by POST /import/enqueue-corpus",
+        },
+        400
+      );
+    }
+
+    // Accept the SAME optional acting user the sibling POST accepts.
+    //
+    // `POST /import/enqueue-corpus` takes `body.userId`, so a SERVICE key
+    // enqueues a job owned by that user. Without the mirror here, the poll
+    // resolved to the key's own `authUserId`, the ownership floor found
+    // `job.data.userId !== userId`, and the caller got a 404 on a job it had
+    // just created. A user-linked agent key (the CLI) was unaffected, which is
+    // exactly why the tests missed it.
+    //
+    // This grants no new authority: `resolveActingContext` already rejects a
+    // mismatched `userId` on a session key, and the 404-not-403 floor below is
+    // deliberate (no existence oracle).
+    const acting = await resolveActingContext(c, {
+      userId: c.req.query("userId"),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId } = acting;
+
+    try {
+      // includeArchive: a completed job moves to the archive table within
+      // minutes, and "completed" is exactly the state a poller waits for.
+      const job = await getBoss().getJobById<{ userId?: string }>(
+        IMPORT_CORPUS_QUEUE,
+        jobId,
+        { includeArchive: true }
+      );
+
+      // Ownership floor: a jobId is guessable-adjacent and the payload carries
+      // the corpus. Only the submitter may read it — an unrelated caller gets
+      // the same 404 as a nonexistent job (no existence oracle).
+      if (!job || job.data?.userId !== userId) {
+        return c.json({ error: "No such corpus-import job" }, 404);
+      }
+
+      return c.json({
+        jobId,
+        state: job.state,
+        createdOn: job.createdOn ?? null,
+        completedOn: job.completedOn ?? null,
+      });
+    } catch (err) {
+      logger.error({ err, userId, jobId }, "GET /import/corpus-job failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
   });
 
   /**

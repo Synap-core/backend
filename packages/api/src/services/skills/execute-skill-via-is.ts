@@ -17,6 +17,7 @@
  * worker's two skill calls were fixed to match this same contract.
  */
 
+import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
 
@@ -26,6 +27,16 @@ export interface SkillExecutionResult {
   result?: unknown;
   error?: string;
   executionTimeMs?: number;
+  /**
+   * P1: when the skill failed BECAUSE an in-skill `callProvider` hit a classified
+   * provider failure (e.g. a 401 → `auth`), these ride the envelope so the
+   * `capability.run` executor can persist `data.failure` and the frontend can
+   * render the recovery chip — the SAME contract the declarative-verb path uses.
+   * Absent on success or a non-provider failure. The IS sets them from
+   * `HubApiError.body`; the backend sandbox sets them from the dispatch result.
+   */
+  errorClass?: FailureErrorClass;
+  providerRef?: string;
 }
 
 export async function executeSkillViaIS(args: {

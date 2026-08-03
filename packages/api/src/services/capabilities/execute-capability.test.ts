@@ -142,6 +142,33 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
     expect(out.kind).not.toBe("run");
   });
 
+  it('TIER 2: a code-skill PROVIDER failure carries errorClass/providerRef onto kind:"error" (P1 self-healing chip)', async () => {
+    // The bug this locks: a 401 from an in-skill callProvider used to return a
+    // kind:"error" with NO classification, so the capability.run executor could
+    // never persist data.failure → the frontend showed a raw toast instead of a
+    // "Reconnect <provider>" chip. The IS now rides errorClass/providerRef on the
+    // SkillExecutionResult envelope (from HubApiError.body); this must survive the
+    // mapping here, EXACTLY as the declarative branch already does.
+    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+      success: false,
+      error:
+        "callProvider failed: Hub API error: 400 Bad Request — provider call failed (status 401)",
+      errorClass: "auth",
+      providerRef: "unipile",
+    });
+    const out = await runResolvedSkill(row({ kind: "code" }), {}, ctx);
+    expect(out).toMatchObject({
+      kind: "error",
+      errorClass: "auth",
+      providerRef: "unipile",
+    });
+    // Guard against a vacuous pass: the classification must be PRESENT, not just
+    // "not wrong". (out is narrowed to the error member.)
+    if (out.kind !== "error") throw new Error("expected kind:error");
+    expect(out.errorClass).toBe("auth");
+    expect(out.providerRef).toBe("unipile");
+  });
+
   it("TIER 2: a SUCCESSFUL code skill UNWRAPS the envelope's .result", async () => {
     vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
       success: true,

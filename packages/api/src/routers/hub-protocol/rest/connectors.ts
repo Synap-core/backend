@@ -1073,10 +1073,20 @@ export function registerConnectorsRoutes(app: HubHono): void {
         }
 
         // Map the structured failure onto the endpoint's response codes
-        // (400 / 404 / 503).
+        // (400 / 404 / 503). P1: carry the dispatcher's failure classification
+        // (errorClass/providerRef, stamped at external-dispatch's single exit)
+        // in the body so an in-skill callProvider failure can surface the
+        // recovery chip — HubApiError.body preserves these across the IS hop.
         const code =
           result.status === 404 ? 404 : result.status === 503 ? 503 : 400;
-        return c.json({ error: result.error ?? "Unknown error" }, code);
+        return c.json(
+          {
+            error: result.error ?? "Unknown error",
+            ...(result.errorClass ? { errorClass: result.errorClass } : {}),
+            ...(result.providerRef ? { providerRef: result.providerRef } : {}),
+          },
+          code
+        );
       } catch (err) {
         logger.error(
           { err, userId, provider, method, path },

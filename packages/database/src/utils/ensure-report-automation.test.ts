@@ -175,6 +175,13 @@ describe("report automation flow definition", () => {
     expect(errorHandling("relate")?.continueOnError).toBe(true);
     // No body → no report. Default fail-fast is intentional here.
     expect(errorHandling("assemble")?.continueOnError).toBeUndefined();
+    // The WHOLE-GRAPH partition — exactly which nodes may carry
+    // `continueOnError: true`, and the load-bearing assemble → summarize →
+    // create-report chain that may not — is pinned in
+    // `packages/jobs/src/workers/__tests__/report-flow-filter-safety.test.ts`.
+    // It lives there because @synap/jobs OWNS the semantics being relied on
+    // (the executor's fail-fast `break` and its `{output: {error}}` branch), so
+    // a change to either side goes red in the same suite.
   });
 
   it("fails closed before writing — a guard precedes the entity_create", () => {
