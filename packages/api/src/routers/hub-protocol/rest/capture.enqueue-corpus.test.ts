@@ -155,6 +155,61 @@ describe("GET /import/corpus-job/:jobId — input validation", () => {
     });
   });
 
+  it("returns the job output — the file-level outcome the CLI reports", async () => {
+    // The worker's ImportCorpusResult, as pg-boss stored it. Without this field
+    // on the wire the poller sees only `state: "completed"`, so a run that
+    // dropped 2 of 3 files is indistinguishable from a clean one.
+    const output = {
+      proposalId: "prop-1",
+      workspaceId: WORKSPACE_ID,
+      filesProcessed: 1,
+      filesFailed: 2,
+      qualityScore: 41,
+      findings: [
+        {
+          id: "files-failed",
+          severity: "warn",
+          message: "2 file(s) failed deep structure (timeouts/empty)",
+        },
+      ],
+    };
+    getJobByIdMock.mockResolvedValue({
+      state: "completed",
+      data: { userId: USER_ID },
+      createdOn: null,
+      completedOn: null,
+      output,
+    });
+
+    const app = buildTestApp();
+    const res = await app.request(`/import/corpus-job/${JOB_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      jobId: JOB_ID,
+      state: "completed",
+      output,
+    });
+  });
+
+  it("reports a missing output as null (older pod / unfinished job), never as success", async () => {
+    getJobByIdMock.mockResolvedValue({
+      state: "active",
+      data: { userId: USER_ID },
+      createdOn: null,
+      completedOn: null,
+    });
+
+    const app = buildTestApp();
+    const res = await app.request(`/import/corpus-job/${JOB_ID}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.output).toBeNull();
+    // Additive, not replacing: the pre-existing fields must survive.
+    expect(body).toMatchObject({ jobId: JOB_ID, state: "active" });
+  });
+
   it("404s another user's job without revealing that it exists", async () => {
     getJobByIdMock.mockResolvedValue({
       state: "active",

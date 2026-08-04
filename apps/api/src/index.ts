@@ -1879,7 +1879,7 @@ try {
               await import("@synap/jobs/workers/import-corpus-worker.js");
             const { ImportOrchestrator } = await import("@synap/api");
             registerImportCorpusHandler(async (p) => {
-              await new ImportOrchestrator({
+              const res = await new ImportOrchestrator({
                 workspaceId: p.workspaceId,
                 userId: p.userId,
                 trpcCtx: {},
@@ -1887,6 +1887,37 @@ try {
                 source: p.source as never,
                 items: p.items,
               });
+              // Project the orchestrator's own numbers into the queue's OUTPUT
+              // contract (ImportCorpusResult). pg-boss persists whatever the
+              // worker resolves to as the job `output`, which is what
+              // GET /import/corpus-job/:jobId reads — before this, the result
+              // was discarded and a run that dropped 2 of 3 files still polled
+              // as a clean "completed". Only a PROJECTION travels: the full
+              // return carries every operation of the graph, which belongs on
+              // the proposal, not in the job row. No count is recomputed here.
+              return {
+                proposalId: res.proposalId ?? null,
+                workspaceId: res.workspaceId ?? null,
+                ...(typeof res.quality?.counts?.filesProcessed === "number"
+                  ? { filesProcessed: res.quality.counts.filesProcessed }
+                  : {}),
+                ...(typeof res.quality?.counts?.filesFailed === "number"
+                  ? { filesFailed: res.quality.counts.filesFailed }
+                  : {}),
+                ...(typeof res.quality?.score === "number"
+                  ? { qualityScore: res.quality.score }
+                  : {}),
+                findings: (res.quality?.findings ?? [])
+                  .filter(
+                    (f) => f.severity === "warn" || f.severity === "blocker"
+                  )
+                  .slice(0, 8)
+                  .map((f) => ({
+                    id: f.id,
+                    severity: f.severity,
+                    message: f.message,
+                  })),
+              };
             });
             apiLogger.info("Registered import-corpus handler (IoC)");
           }

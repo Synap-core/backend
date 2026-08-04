@@ -171,6 +171,13 @@ export async function resolveOrCreateExternalChannel(
       .set({
         metadata: drizzleSql`${channels.metadata} || ${JSON.stringify({
           ...(args.participant ? { participantName: args.participant } : {}),
+          // Backfill the participant external-id (e.g. an email sender address) on
+          // EXISTING channels too, not just at birth — the send side resolves a
+          // reply recipient from it, and a channel born before it was supplied (or
+          // keyed on an entity UUID) would otherwise never cache it.
+          ...(args.participantExternalId
+            ? { participantExternalId: args.participantExternalId }
+            : {}),
           lastMessageAt,
           lastMessagePreview: args.preview,
           unread: true,

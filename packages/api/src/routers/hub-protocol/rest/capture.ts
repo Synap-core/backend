@@ -71,11 +71,41 @@ const EnqueueCorpusResponseSchema = z.object({
   workspaceId: z.string().nullable(),
 });
 
+/**
+ * File-level outcome of a finished corpus run — the pg-boss job `output`, which
+ * is the worker's `ImportCorpusResult` projection of
+ * `ImportOrchestrator.analyzeLarge`.
+ *
+ * `null` for a job that has not completed, AND for one completed by a pod that
+ * predates the worker returning its result. A consumer must treat absence as
+ * UNKNOWN, never as success: the numbers below are the only place a partially
+ * failed import (e.g. files over the 8000-char structure cap) is visible.
+ */
+const CorpusJobOutputSchema = z
+  .object({
+    proposalId: z.string().nullable().optional(),
+    workspaceId: z.string().nullable().optional(),
+    filesProcessed: z.number().optional(),
+    filesFailed: z.number().optional(),
+    qualityScore: z.number().optional(),
+    findings: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          severity: z.string(),
+          message: z.string(),
+        })
+      )
+      .optional(),
+  })
+  .nullable();
+
 const CorpusJobStatusSchema = z.object({
   jobId: z.string(),
   state: z.string(),
   createdOn: z.union([z.string(), z.date()]).nullable(),
   completedOn: z.union([z.string(), z.date()]).nullable(),
+  output: CorpusJobOutputSchema,
 });
 
 const GRAPH_WRITE_SOURCES = new Set([
@@ -225,7 +255,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Import"],
     summary: "Poll a background corpus-import job",
     description:
-      "Returns the pg-boss state of a job created by POST /import/enqueue-corpus. Only the job's own submitter may read it. `completed` means the governed import.graph proposal has been written — fetch it from the proposals inbox.",
+      "Returns the pg-boss state of a job created by POST /import/enqueue-corpus. Only the job's own submitter may read it. `completed` means the governed import.graph proposal has been written — fetch it from the proposals inbox. `output` carries the run's file-level outcome (proposalId, filesProcessed/filesFailed, warn+blocker findings); it is null while the job is unfinished and on pods older than the worker that returns it — treat null as UNKNOWN, never as success.",
     request: {
       params: z.object({ jobId: uuidPathParam }),
     },
@@ -394,11 +424,21 @@ export function registerCaptureRoutes(app: HubHono): void {
         return c.json({ error: "No such corpus-import job" }, 404);
       }
 
+      // ADDITIVE: the job's own output — the worker's ImportCorpusResult
+      // (proposalId + quality counts + warn/blocker findings). Without it
+      // "completed" was the ONLY signal a poller got, so a run that structured
+      // 1 of 3 files and recorded filesFailed: 2 on the proposal was reported
+      // as a clean success. Absence (older pod, or job not finished) is
+      // `null` = UNKNOWN, and consumers must not read it as "nothing failed".
+      const output =
+        (job.output as Record<string, unknown> | null | undefined) ?? null;
+
       return c.json({
         jobId,
         state: job.state,
         createdOn: job.createdOn ?? null,
         completedOn: job.completedOn ?? null,
+        output,
       });
     } catch (err) {
       logger.error({ err, userId, jobId }, "GET /import/corpus-job failed");

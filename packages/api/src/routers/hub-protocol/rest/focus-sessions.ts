@@ -546,8 +546,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = patch.expectedOutputs;
-      if (patch.verificationReport !== undefined)
-        set.verificationReport = patch.verificationReport;
+      // Shallow-merge, exactly like the `metadata` bag below — `verificationReport`
+      // is the SAME shape of thing: an open JSONB bag written by SEVERAL
+      // independent producers at different moments in a session's life.
+      //
+      // `completeFocusSession` writes `{ summary }` at close; a verify step writes
+      // `{ codeQuality }`. Under the previous full REPLACE, whichever landed second
+      // silently destroyed the other — verify-then-close threw away the code-quality
+      // result, close-then-verify threw away the session narrative. Nothing warned,
+      // and the loss is invisible because the surface only ever renders one key.
+      //
+      // Merging makes the column additive, which is what every producer already
+      // assumes. To CLEAR a key a caller must now send it explicitly as null —
+      // acceptable, because no caller does, and silent destruction is the worse
+      // default by a wide margin.
+      if (patch.verificationReport !== undefined) {
+        const existingReport =
+          (existing.verificationReport as Record<string, unknown> | null) ?? {};
+        set.verificationReport = {
+          ...existingReport,
+          ...patch.verificationReport,
+        };
+      }
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
       // Shallow-merge the metadata bag into the existing row metadata (additive).

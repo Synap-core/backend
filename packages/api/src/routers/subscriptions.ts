@@ -510,11 +510,12 @@ export const subscriptionsRouter = router({
         kind: reactionKindSchema.optional(),
         eventType: z.string().optional(),
         lens: lensSchema.default("all"),
-        /**
-         * Decision-inbox filter: when true, return only `.requested` events
-         * whose linked proposal is still pending (awaiting approve/reject).
-         */
-        pending: z.boolean().optional(),
+        // NOTE: the `pending` decision-inbox filter was REMOVED. It narrowed to
+        // `.requested` events in the recent window whose proposal is still open,
+        // so older / correlationId-null pending proposals never appeared — the
+        // queue read "all clear" over a real backlog. The authoritative decision
+        // inbox reads `proposals.list` directly (see the browser
+        // `usePendingDecisions` hook). This lens returns ACTIVITY only.
       })
     )
     .query(async ({ ctx, input }) => {
@@ -618,11 +619,12 @@ export const subscriptionsRouter = router({
       }
 
       // If a `kind` filter is set, keep only events that map to that kind by
-      // their own type (the dense fan-out filter happens in eventFanout).
-      // If `pending` is set, narrow to the decision inbox (open proposals).
+      // their own type (the dense fan-out filter happens in eventFanout). The
+      // `.requested` shells are still marked `pending`/`proposalId` above so the
+      // activity strip can exclude open-decision rows (the authoritative queue
+      // owns those) — but there is no longer a decision-inbox NARROWING here.
       const final = mapped
         .filter((m) => (input.kind ? m.kind === input.kind : true))
-        .filter((m) => (input.pending ? m.shell.pending === true : true))
         .map((m) => m.shell);
 
       return { items: final, lens: input.lens as ReactionLens };

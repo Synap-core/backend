@@ -113,6 +113,22 @@ export async function runInboundAttachmentIngest(
           skipped++;
           continue;
         }
+        // Reject an oversized body BEFORE reading it into memory — a truthful
+        // Content-Length lets us skip the OOM that `arrayBuffer()` would cause on a
+        // huge/hostile url. (A server that omits/lies about the header still hits
+        // the post-buffer cap below; the 30s abort bounds an unbounded stream.)
+        const declaredLen = Number(res.headers.get("content-length"));
+        if (
+          Number.isFinite(declaredLen) &&
+          declaredLen > MAX_ATTACHMENT_BYTES
+        ) {
+          logger.warn(
+            { url: att.url, bytes: declaredLen, messageId: input.messageId },
+            "inbound-attachment: Content-Length over cap — skipping before buffering"
+          );
+          skipped++;
+          continue;
+        }
         const arrayBuf = await res.arrayBuffer();
         if (
           arrayBuf.byteLength === 0 ||

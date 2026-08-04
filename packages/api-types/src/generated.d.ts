@@ -21910,7 +21910,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind?: "webhook" | "automation" | "notify" | "ai_feed" | "ai_react" | "message_out" | undefined;
 				eventType?: string | undefined;
 				lens?: "external" | "all" | "internal" | undefined;
-				pending?: boolean | undefined;
 			};
 			output: {
 				items: ReactionEvent[];
