@@ -275,6 +275,66 @@ describe("sectionCapabilities", () => {
     expect(out.integrations[0].containerName).toBe("Google Workspace");
   });
 
+  // ── The `limit` option — cap AFTER dedup, not before ─────────────────────
+  // `listCapabilities` used to be the only place a query-narrowed result got
+  // sliced, and it sliced the RAW (pre-dedup) flat list — before duplicate
+  // rows (a provider installed twice, N backing-skill copies of one verb)
+  // were folded into one. A genuine, distinct match could rank just past the
+  // slice window and never reach `sectionCapabilities` at all, so the picker
+  // rendered "no match" for a real capability. The fix: the caller now passes
+  // the FULL unsliced list (`listCapabilities({ limit: null })`) and caps
+  // HERE, over distinct rows, via this `limit` option.
+
+  it("FAILS on the pre-dedup-slice bug: a distinct match ranked after duplicate rows of something else must still make the cut", () => {
+    // Score-sorted input, as `listCapabilities` would hand it over: two RAW
+    // rows for the same integration (occupying ranks 0 and 1), then one
+    // genuinely distinct capability at rank 2.
+    const caps = [
+      cap({ kind: "source-provider", name: "google", id: "google-1" }),
+      cap({ kind: "source-provider", name: "google", id: "google-2" }),
+      cap({ kind: "tool", name: "exa_api", id: "exa-1" }),
+    ];
+    // A naive pre-dedup `caps.slice(0, 2)` would keep both "google" rows and
+    // drop "exa_api" — a real capability, lost behind a duplicate. Capping
+    // AFTER the fold must keep both DISTINCT rows instead.
+    const out = sectionCapabilities(caps, { limit: 2 });
+    expect(out.integrations.map((i) => i.name).sort()).toEqual([
+      "exa_api",
+      "google",
+    ]);
+  });
+
+  it("caps DISTINCT rows across every section combined, preserving rank order", () => {
+    const caps = [
+      cap({ kind: "command", name: "digest", id: "cmd-1" }),
+      {
+        ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
+        runnable: true,
+      } as Capability,
+      cap({ kind: "tool", name: "exa_api", id: "tool-1" }),
+    ];
+    const out = sectionCapabilities(caps, { limit: 2 });
+    // Ranks 0 and 1 (command, skill) are kept; rank 2 (exa_api) is cut.
+    expect(out.commands.map((c) => c.name)).toEqual(["digest"]);
+    expect(out.skills.map((s) => s.name)).toEqual(["ingest_message"]);
+    expect(out.integrations).toHaveLength(0);
+  });
+
+  it("omitting `limit` returns every distinct row, unbounded — the historic behaviour", () => {
+    const caps = [
+      cap({ kind: "command", name: "digest", id: "cmd-1" }),
+      {
+        ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
+        runnable: true,
+      } as Capability,
+      cap({ kind: "tool", name: "exa_api", id: "tool-1" }),
+    ];
+    const out = sectionCapabilities(caps);
+    expect(
+      out.commands.length + out.skills.length + out.integrations.length
+    ).toBe(3);
+  });
+
   it("counts consistently: every input row lands in exactly one bucket", () => {
     const caps = [
       cap({ kind: "builtin-tool", name: "web_search", catalogOnly: true }),

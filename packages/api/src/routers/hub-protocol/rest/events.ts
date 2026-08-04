@@ -10,7 +10,15 @@ import { z } from "@hono/zod-openapi";
 import { streamSSE } from "hono/streaming";
 
 import { createSynapEvent } from "@synap-core/core";
-import { eventRepository, type EventRecord } from "@synap/database";
+import {
+  eventRepository,
+  db,
+  notifications,
+  and,
+  eq,
+  gte,
+  type EventRecord,
+} from "@synap/database";
 
 import { eventStreamManager } from "../../../event-stream-manager.js";
 import { NotificationService } from "../../../notifications/NotificationService.js";
@@ -26,6 +34,12 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+
+/**
+ * Collapse repeated agent-failure alerts for the SAME (workspace, agent) within
+ * this window — one flaky automation must not spam every member each tick.
+ */
+const AGENT_FAILURE_RENOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
 
 /**
  * Body contract for POST /agent-runs. costUsd is nullable (NULL = provider did
@@ -512,19 +526,45 @@ export function registerEventsRoutes(app: HubHono): void {
       // workspace member (fan-out) — previously the type was declared but never
       // fired, so a failed automation reached the user only if they pulled
       // diagnose. Best-effort, non-fatal (never break the telemetry append).
+      //
+      // STORM GUARD (alert-fatigue): a flaky/retrying automation fails every tick
+      // with a NEW runId, so keying dedup on the runId would never collapse. The
+      // repeating dimension is the AGENT — collapse by (workspace, agent) with a
+      // cooldown. `groupKey` alone only groups the bell visually (it is set on the
+      // row but there is no insert-time dedup), so the actual suppressor is this
+      // recent-row check — the SAME pattern the scan producers use.
       if (b.runStatus === "failed") {
-        await NotificationService.createForWorkspace({
-          type: "agent.task_failed",
-          sourceType: "agent",
-          sourceId: runId,
-          workspaceId: b.workspaceId,
-          data: {
-            agentName: b.agentType,
-            errorMessage: b.errorMessage ?? "The agent run failed.",
-          },
-        }).catch((err) =>
-          logger.warn({ err, runId }, "agent.task_failed notify failed")
+        const agentKey = b.agentUserId ?? b.agentType ?? runId;
+        const groupKey = `${b.workspaceId}:agent.task_failed:${agentKey}`;
+        const cooldownFloor = new Date(
+          Date.now() - AGENT_FAILURE_RENOTIFY_COOLDOWN_MS
         );
+        const [recent] = await db
+          .select({ id: notifications.id })
+          .from(notifications)
+          .where(
+            and(
+              eq(notifications.type, "agent.task_failed"),
+              eq(notifications.groupKey, groupKey),
+              gte(notifications.createdAt, cooldownFloor)
+            )
+          )
+          .limit(1);
+        if (!recent) {
+          await NotificationService.createForWorkspace({
+            type: "agent.task_failed",
+            sourceType: "agent",
+            sourceId: runId,
+            workspaceId: b.workspaceId,
+            groupKey,
+            data: {
+              agentName: b.agentType,
+              errorMessage: b.errorMessage ?? "The agent run failed.",
+            },
+          }).catch((err) =>
+            logger.warn({ err, runId }, "agent.task_failed notify failed")
+          );
+        }
       }
 
       return c.json({ eventId: record.id, runId });

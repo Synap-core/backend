@@ -130,13 +130,64 @@ function extractParamNames(schema: unknown): string[] {
 }
 
 /**
+ * The FLAT convention's closed value vocabulary — `"<jsonType>"` for a required
+ * param, `"<jsonType>?"` for an optional one. Every seeded skill that declares
+ * flat `parameters` draws from exactly these eight tokens; the map is the SSOT
+ * for that fact. A token OUTSIDE this set is not an error (see below) — the set
+ * only decides which values carry a trustworthy `type`.
+ */
+const FLAT_PARAM_TYPES: ReadonlySet<string> = new Set([
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "object",
+  // `integer` is not in the seeded corpus today, but it is the one JSON-schema
+  // primitive a template author would reach for next; accepting it costs
+  // nothing and keeps the first such template from degrading silently.
+  "integer",
+]);
+
+/**
+ * Parse ONE flat-convention value (`"string"`, `"number?"`, …) into the typed
+ * fields it carries.
+ *
+ * The flat convention encodes BOTH type and optionality — the `?` suffix means
+ * optional, its absence means required. This was previously discarded wholesale
+ * (`Object.keys(obj).map(name => ({ name }))`), which is why every seeded param
+ * rendered as an identical, required-looking text box.
+ *
+ * DEGRADATION IS DELIBERATE AND TOTAL: an unrecognized value (a nested object, a
+ * number, a token outside `FLAT_PARAM_TYPES`, an author's freehand
+ * `"the user's email"`) yields `{}` — the param keeps its NAME and renders as an
+ * untyped field. A param must never be dropped and this must never throw: a
+ * form that silently omits an argument is strictly worse than one that shows it
+ * untyped.
+ */
+function parseFlatParamValue(
+  raw: unknown
+): Pick<CapabilityCardVerbParam, "type" | "required"> {
+  if (typeof raw !== "string") return {};
+  const trimmed = raw.trim();
+  const optional = trimmed.endsWith("?");
+  const token = (optional ? trimmed.slice(0, -1) : trimmed).trim();
+  if (!FLAT_PARAM_TYPES.has(token)) return {};
+  return { type: token, required: !optional };
+}
+
+/**
  * Extract a TYPED parameter list from a skill `parameters` blob. Honors the
  * JSON-schema shape (`{ properties: { name: { type, description } }, required }`)
  * — pulling `type`/`description` per property and `required` from the schema's
- * `required[]`. Falls back to a flat `{ name: … }` map (keys → bare names, no
- * type info). Mirrors `extractParamNames`' two shapes additively.
+ * `required[]`. Falls back to the flat `{ name: "type?" }` map, whose value
+ * carries type + optionality (see `parseFlatParamValue`). Mirrors
+ * `extractParamNames`' two shapes additively.
+ *
+ * Exported for test only — the catalog is the sole production caller.
  */
-function extractParamsSchema(schema: unknown): CapabilityCardVerbParam[] {
+export function extractParamsSchema(
+  schema: unknown
+): CapabilityCardVerbParam[] {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
   const obj = schema as Record<string, unknown>;
   const props = obj.properties;
@@ -163,8 +214,12 @@ function extractParamsSchema(schema: unknown): CapabilityCardVerbParam[] {
       }
     );
   }
-  // Flat shape — bare names, no type info.
-  return Object.keys(obj).map((name) => ({ name }));
+  // Flat shape — the value carries type + optionality; an unparseable value
+  // degrades to a named-but-untyped param rather than being dropped.
+  return Object.entries(obj).map(([name, raw]) => ({
+    name,
+    ...parseFlatParamValue(raw),
+  }));
 }
 
 /** A template's INSTALL parameter — what the caller supplies to `apply` it. */

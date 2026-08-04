@@ -1908,6 +1908,8 @@ try {
               registerFirefliesIngestRunner,
               registerFirefliesBackfillRunner,
             } = await import("@synap/jobs/workers/fireflies-worker.js");
+            const { registerInboundAttachmentIngestRunner } =
+              await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerStaleProposalRunner } =
@@ -1936,6 +1938,11 @@ try {
               api.runFirefliesIngest(input)
             );
             registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
+            // Inbound attachments: fetch bytes off the sensor path → GOVERNED
+            // file door → link to channel + message (IoC across the api↔jobs dep).
+            registerInboundAttachmentIngestRunner((input) =>
+              api.runInboundAttachmentIngest(input)
+            );
             // ONE schedule, correct ordering: import Google Calendar → Synap
             // `event` entities FIRST, then the source-A mirror pass pushes those
             // (and native/Stellar events) to Discord — so a Google event lands as

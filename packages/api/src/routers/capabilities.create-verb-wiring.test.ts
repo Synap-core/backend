@@ -88,6 +88,11 @@ function selectChain(rows: unknown[]) {
   const chain: Record<string, unknown> = {
     from: () => chain,
     where: () => chain,
+    // `.for("update")` — the row lock createVerb takes before its
+    // read-modify-write of the jsonb verb catalogue. Chainable no-op here: the
+    // lock is a Postgres concern, but the mock must accept the call or the whole
+    // catalogue-append branch throws and gets swallowed by its own try/catch.
+    for: () => chain,
     limit: () => Promise.resolve(rows),
     then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
       Promise.resolve(rows).then(res, rej),
@@ -111,22 +116,29 @@ function mockDatabase(opts: {
     opts.toolCatalogue ?? [{ capabilities: [] }],
   ];
   const updates: Record<string, unknown>[] = [];
-  return {
-    updates,
-    db: {
-      select: () => selectChain(queue.shift() ?? []),
-      update: () => {
-        const u: Record<string, unknown> = {
-          set: (values: Record<string, unknown>) => {
-            updates.push(values);
-            return u;
-          },
-          where: () => Promise.resolve(),
-        };
-        return u;
-      },
+  const db: Record<string, unknown> = {
+    // The catalogue append runs inside `database.transaction(...)` so the
+    // select+update is serialized under a row lock (two concurrent createVerb
+    // calls on one parent tool would otherwise lose an entry, silently — the
+    // append reports `catalogued: true` either way). The mock runs the callback
+    // against THIS same db object: no real isolation, but it exercises the real
+    // code path. Without it the callback throws `transaction is not a function`,
+    // the surrounding try/catch swallows it, and the suite reads as "no
+    // catalogue entry written" — which is how this regression hid.
+    transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(db),
+    select: () => selectChain(queue.shift() ?? []),
+    update: () => {
+      const u: Record<string, unknown> = {
+        set: (values: Record<string, unknown>) => {
+          updates.push(values);
+          return u;
+        },
+        where: () => Promise.resolve(),
+      };
+      return u;
     },
   };
+  return { updates, db };
 }
 
 function callerCtx() {

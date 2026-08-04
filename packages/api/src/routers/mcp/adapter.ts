@@ -556,7 +556,11 @@ interface CaptureWriteReceipt {
  * capture-door design doc §2.3.
  */
 type CaptureRejectReason =
-  "already-known" | "no-durable-content" | "structuring-unavailable";
+  | "already-known"
+  | "no-durable-content"
+  | "structuring-unavailable"
+  /** Domain write had no explicit/advisory workspace — refuse silent membership[0]. */
+  | "workspace-required";
 
 /**
  * Minimum durable text. Deliberately tiny: the guard exists to stop empty /
@@ -630,6 +634,59 @@ function captureRejected(params: {
     message: params.message,
     scope: params.scope,
     writeReceipt: receipt,
+  });
+}
+
+/**
+ * Caller's member workspaces (id + name) for write-placement error messages.
+ * Cheap: membership ids + one name query. Same shape as set_workspace_focus.
+ */
+async function listMemberWorkspacesForAgent(
+  userId: string
+): Promise<Array<{ id: string; name: string }>> {
+  const memberIds = await getUserMemberWorkspaceIds(userId);
+  if (memberIds.length === 0) return [];
+  return db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
+    .where(inArray(workspaces.id, memberIds));
+}
+
+/**
+ * WRITE placement must not silently land on membership[0] (the wrong-placement
+ * bug — data filed into whichever workspace happened to sort first). When
+ * neither an explicit/confined `workspaceId` nor an advisory agent focus
+ * resolved, fail loud with the accessible list so the agent can pass one or
+ * call orient / set_workspace_focus. Same philosophy as `synap_link_entities`.
+ *
+ * Capture uses the uniform `captureRejected` envelope; other write tools use
+ * a bare `{ error, availableWorkspaces }` ok-shaped reject.
+ */
+async function rejectMissingWriteWorkspace(
+  userId: string,
+  opts?: { captureScope?: CaptureScope }
+): Promise<CallToolResult> {
+  const available = await listMemberWorkspacesForAgent(userId);
+  const list =
+    available.length === 0
+      ? "none yet — create or join a workspace first"
+      : available.map((w) => `${w.name} (${w.id})`).join("; ");
+  const message =
+    `No workspace resolved for this write — refusing to pick an arbitrary membership. ` +
+    `Pass workspaceId, call synap_set_workspace_focus(workspace), or call synap_orient() to list domains. ` +
+    `Available workspaces: ${list}.`;
+
+  if (opts?.captureScope) {
+    return captureRejected({
+      reason: "workspace-required",
+      scope: { ...opts.captureScope, workspaceId: null },
+      message,
+      extra: { availableWorkspaces: available },
+    });
+  }
+  return ok({
+    error: message,
+    availableWorkspaces: available,
   });
 }
 
@@ -707,10 +764,14 @@ export async function executeMCPToolViaHubProtocol(
   // ADVISORY WORKSPACE FOCUS (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2):
   // only consulted when NEITHER an explicit `args.workspaceId` NOR a bound
   // service-key pin resolved anything above — priority is explicit-per-call >
-  // service-key pin > agent's live focus > (the old membership-fallback deeper
-  // in the hub write procs, unchanged). Never overrides, never 403s: a focus on
-  // a workspace the caller has since lost access to is silently dropped by the
-  // `verifyWorkspaceAccess` check right below, same as any other lens.
+  // service-key pin > agent's live focus. MCP *write* tools that need a
+  // concrete home (capture text, create_project/playbook, run_playbook) must
+  // NOT fall back to membership[0] when this is still null — they reject via
+  // `rejectMissingWriteWorkspace`. Catalog/read fallbacks may still pick a
+  // first membership with an explicit comment. Never overrides, never 403s: a
+  // focus on a workspace the caller has since lost access to is silently
+  // dropped by the `verifyWorkspaceAccess` check right below, same as any
+  // other lens.
   const requestedWorkspaceId = pickAdvisoryWorkspaceId(
     confinedWorkspaceId,
     agentUserId ? await getAgentFocusWorkspaceId(agentUserId) : undefined
@@ -758,9 +819,10 @@ export async function executeMCPToolViaHubProtocol(
         return ok({ error: "query is required" });
       }
       const workspaceId = args.workspaceId as string | undefined;
-      // The semantic engine's catalog (type inference) needs a concrete
-      // workspace; resolve the user's first accessible one when no lens is
-      // pinned. Recall itself keeps the caller's lens (undefined = pod-wide).
+      // READ/catalog only: the semantic engine's type-inference catalog needs a
+      // concrete workspace id. First membership is fine here — this is not a
+      // write placement. Recall itself keeps the caller's lens (undefined =
+      // pod-wide).
       let catalogWs = workspaceId;
       if (!catalogWs) {
         const wsIds = await getUserMemberWorkspaceIds(userId);
@@ -2303,6 +2365,9 @@ export async function executeMCPToolViaHubProtocol(
     // ── Playbooks (reusable session templates) ──────────────────────────────
     case "synap_list_playbooks": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      // READ/catalog: playbook list is workspace-scoped; first membership is an
+      // arbitrary catalog lens only (not write placement). Prefer explicit
+      // workspaceId when the agent knows the domain.
       let playbookWsId = args.workspaceId as string | undefined;
       if (!playbookWsId) {
         const wsIds = await getUserMemberWorkspaceIds(userId);
@@ -2327,6 +2392,8 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_match_playbooks": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      // READ: match is workspace-scoped; first membership is catalog-only, not
+      // a write home. Same class as list_playbooks — not rejectMissingWrite.
       let matchWsId = args.workspaceId as string | undefined;
       if (!matchWsId) {
         const wsIds = await getUserMemberWorkspaceIds(userId);
@@ -2733,19 +2800,15 @@ export async function executeMCPToolViaHubProtocol(
 
       // ══ TEXT BRANCH ═════════════════════════════════════════════════════════
       const { captureRouter } = await import("../capture.js");
-      // Resolve workspace: use the confined workspace (service-key clamp) or fall
-      // back to user's first workspace. Feeds both the global-lane knowledge_keys
-      // write and the captureCtx below, so a bound key never writes elsewhere.
-      let captureWsId = requestedWorkspaceId;
-      if (!captureWsId) {
-        const wsIds = await getUserMemberWorkspaceIds(userId);
-        captureWsId = wsIds[0];
-      }
-      if (!captureWsId) {
-        return ok({ error: "No accessible workspace found for this user" });
-      }
+      // Placement already resolved into `requestedWorkspaceId`:
+      //   1. explicit args.workspaceId / URL pin / service-key confinement
+      //   2. advisory agent focus (pickAdvisoryWorkspaceId, above)
+      // Domain text capture MUST NOT fall back to membership[0] (silent
+      // wrong-placement — same bug link_entities stopped fabricating). Global
+      // knowledge_keys may still need a concrete workspaceId column (below).
+      let captureWsId: string | undefined = requestedWorkspaceId;
       const textScope: CaptureScope = {
-        workspaceId: captureWsId,
+        workspaceId: captureWsId ?? null,
         projectId: captureProjectId,
         sessionId: sessionId ?? null,
       };
@@ -2764,6 +2827,24 @@ export async function executeMCPToolViaHubProtocol(
       // structuring pipeline. This folds the former synap_write_knowledge tool
       // into capture so there is ONE write door; the lane is the routing signal.
       if (args.global === true) {
+        // knowledge_keys still stamps a workspaceId column for ownership/catalog.
+        // Content is pod-wide runbook text — this is NOT domain entity placement.
+        // Prefer an explicit/advisory lens; else first membership so the upsert
+        // can complete (the only remaining write-path use of membership[0]).
+        if (!captureWsId) {
+          const wsIds = await getUserMemberWorkspaceIds(userId);
+          captureWsId = wsIds[0];
+        }
+        if (!captureWsId) {
+          return ok({
+            error:
+              "No accessible workspace found — global knowledge_keys still need a home workspace row for this user.",
+          });
+        }
+        const globalScope: CaptureScope = {
+          ...textScope,
+          workspaceId: captureWsId,
+        };
         const text = args.text as string;
         const key =
           (args.key as string | undefined) ||
@@ -2788,9 +2869,15 @@ export async function executeMCPToolViaHubProtocol(
         return ok({
           status: "applied",
           lane: "global",
-          scope: textScope,
+          scope: globalScope,
           writeReceipt: globalReceipt,
           knowledgeKey: record,
+        });
+      }
+      // Domain text capture — require a resolved workspace (explicit or advisory).
+      if (!captureWsId) {
+        return rejectMissingWriteWorkspace(userId, {
+          captureScope: textScope,
         });
       }
       const captureCtx = await createHubProtocolCallerContext(
@@ -3156,16 +3243,10 @@ export async function executeMCPToolViaHubProtocol(
       if (typeof args.name !== "string" || args.name.trim() === "") {
         return ok({ error: "name is required" });
       }
-      // Resolve the HOME workspace: use the confined workspace (service-key
-      // clamp) or fall back to the user's first workspace (same fallback
-      // synap_capture uses).
-      let projectWsId = requestedWorkspaceId;
+      // WRITE: confined/explicit lens or advisory focus only — never membership[0].
+      const projectWsId = requestedWorkspaceId;
       if (!projectWsId) {
-        const wsIds = await getUserMemberWorkspaceIds(userId);
-        projectWsId = wsIds[0];
-      }
-      if (!projectWsId) {
-        return ok({ error: "No accessible workspace found for this user" });
+        return rejectMissingWriteWorkspace(userId);
       }
       const projectCtx = await createHubProtocolCallerContext(
         userId,
@@ -3201,14 +3282,10 @@ export async function executeMCPToolViaHubProtocol(
       ) {
         return ok({ error: "goalTemplate is required" });
       }
-      // Confined workspace (service-key clamp) before the first-ws fallback.
-      let pbWsId = requestedWorkspaceId;
+      // WRITE: confined/explicit lens or advisory focus only — never membership[0].
+      const pbWsId = requestedWorkspaceId;
       if (!pbWsId) {
-        const wsIds = await getUserMemberWorkspaceIds(userId);
-        pbWsId = wsIds[0];
-      }
-      if (!pbWsId) {
-        return ok({ error: "No accessible workspace found for this user" });
+        return rejectMissingWriteWorkspace(userId);
       }
       const pbCtx = await createHubProtocolCallerContext(
         userId,
@@ -3365,15 +3442,26 @@ export async function executeMCPToolViaHubProtocol(
           : undefined;
       const kind = typeof args.kind === "string" ? args.kind : undefined;
       const limit = typeof args.limit === "number" ? args.limit : undefined;
-      const { listCapabilities, sectionCapabilities } =
+      const { listCapabilities, sectionCapabilities, DEFAULT_QUERY_LIMIT } =
         await import("../../services/capabilities/capability-registry.js");
+      // `limit: null` — never slice the RAW flat list here when a `query` is
+      // set. This result is handed to `sectionCapabilities` below, which
+      // dedupes (a provider installed twice, N backing-skill copies of one
+      // verb); slicing before that fold could push a genuine match out of the
+      // window behind duplicate rows of something else, so an agent could
+      // conclude a capability does not exist when it does. Cap AFTER dedup
+      // instead (see the `sections =` cap below). Same fix as the tRPC
+      // `capabilities.sections` door (`routers/capabilities.ts`).
       let capabilities = await listCapabilities(
         { workspaceId: wsId, userId },
         query || kind || limit !== undefined
           ? {
               query,
               kind: kind as never,
-              limit,
+              // Always `null` here — whatever cap applies (the caller's
+              // explicit `limit`, or the `DEFAULT_QUERY_LIMIT` fallback) is
+              // applied post-dedup below, never by slicing this raw list.
+              limit: null,
             }
           : undefined
       );
@@ -3399,8 +3487,10 @@ export async function executeMCPToolViaHubProtocol(
           { workspaceId: wsId, userId },
           // Drop `query` (that's what matched nothing) but keep the kind filter
           // if the caller set one — they asked for a category, not this string.
+          // `limit: null` for the same reason as the primary fetch above — an
+          // explicit caller `limit` is still applied, but post-dedup below.
           kind || limit !== undefined
-            ? { kind: kind as never, limit }
+            ? { kind: kind as never, limit: null }
             : undefined
         );
         zeroHitNote =
@@ -3414,7 +3504,31 @@ export async function executeMCPToolViaHubProtocol(
       // type with each integration's verbs nested — NOT the flat management dump
       // (which buries the ~20 real actions under 90+ built-in MCP tools + 100+
       // teaching docs + duplicate rows). See `sectionCapabilities`.
-      const sections = sectionCapabilities(capabilities);
+      //
+      // Cap AFTER dedup, over distinct rows — the fix, mirrors the tRPC
+      // `capabilities.sections` door. An explicit caller `limit` always wins;
+      // otherwise fall back to `DEFAULT_QUERY_LIMIT`, but ONLY on the primary
+      // query-hit path (`query && !zeroHitNote`) — the zero-hit rescue's whole
+      // point is showing the agent the FULL catalog ("scan it before
+      // concluding anything is impossible", above), so it must stay unbounded.
+      //
+      // ONE DELIBERATE DIVERGENCE from the tRPC door: this adapter never
+      // forwards `sections.builtins` (see the comment on `excluded` below —
+      // over MCP a built-in is already a native tool, so listing it again here
+      // is a weaker duplicate). The comment right above already names built-ins
+      // as the noise that buries "the ~20 real actions" — so letting them
+      // compete for the SAME ranked budget as integrations/skills/commands
+      // would starve the only rows this door actually returns, for a section
+      // it never shows. Rank/cap the FORWARDED kinds only; builtins (and the
+      // `excluded` counts) are read from a second, unbounded fold of the exact
+      // same `capabilities` list — same fold, same dedupe rule, just not
+      // competing for the same slice budget.
+      const cappedInput = capabilities.filter((c) => c.kind !== "builtin-tool");
+      const sections = sectionCapabilities(cappedInput, {
+        limit:
+          limit ?? (query && !zeroHitNote ? DEFAULT_QUERY_LIMIT : undefined),
+      });
+      const fullSections = sectionCapabilities(capabilities);
       return ok({
         integrations: sections.integrations,
         skills: sections.skills,
@@ -3430,7 +3544,10 @@ export async function executeMCPToolViaHubProtocol(
         // survive, or an agent loses the signal that anything was folded out.
         excluded: {
           ...sections.excluded,
-          builtinTools: sections.builtins.length,
+          // From the UNBOUNDED fold — builtins never entered `cappedInput`
+          // (see above), so `sections.builtins` is always empty and would
+          // undercount every built-in the ranked cap never saw.
+          builtinTools: fullSections.builtins.length,
           note: 'Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are omitted here. Ask for kind:"builtin-tool" if you need the full catalog.',
         },
         ...(zeroHitNote ? { note: zeroHitNote } : {}),
@@ -3749,14 +3866,12 @@ export async function executeMCPToolViaHubProtocol(
       ) {
         return ok({ error: "playbookId is required" });
       }
-      // `run` is a workspaceProcedure — resolve the workspace lens (confined
-      // value, else the user's first workspace) exactly like synap_list_playbooks.
-      let runWsId = requestedWorkspaceId;
+      // WRITE: `run` is a workspaceProcedure — confined/explicit lens or
+      // advisory focus only. Unlike list/match (read/catalog), never membership[0].
+      const runWsId = requestedWorkspaceId;
       if (!runWsId) {
-        const wsIds = await getUserMemberWorkspaceIds(userId);
-        runWsId = wsIds[0];
+        return rejectMissingWriteWorkspace(userId);
       }
-      if (!runWsId) return ok({ error: "No accessible workspace found" });
       const runCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,

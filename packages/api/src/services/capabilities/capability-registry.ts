@@ -436,12 +436,25 @@ export interface ListCapabilitiesOptions {
   query?: string;
   /** Exact `CapabilityKind` filter, applied before ranking. */
   kind?: CapabilityKind;
-  /** Cap the result count. Defaults to 20 when `query` is set; unset otherwise. */
-  limit?: number;
+  /**
+   * Cap the result count. Three states, not two:
+   *   - `undefined` (omitted) — default behaviour: `DEFAULT_QUERY_LIMIT` when
+   *     `query` is set, unbounded otherwise. Unchanged for every existing caller.
+   *   - a `number` — explicit cap, sliced from this RAW (pre-dedup) flat list.
+   *     Unchanged for every existing caller.
+   *   - `null` — explicitly UNBOUNDED: skip the slice below entirely, even with
+   *     a `query` set. For a caller that is about to fold this list through
+   *     `sectionCapabilities` — slicing the raw list first can push a genuine
+   *     match out of the window behind duplicate rows (a provider installed
+   *     twice, N backing-skill copies of one verb) that dedup would otherwise
+   *     collapse. Pass `null` and cap AFTER dedup instead (`sectionCapabilities`'s
+   *     own `limit` option), over distinct rows.
+   */
+  limit?: number | null;
 }
 
 /** Default result cap when a query narrows the list (keeps agent responses compact). */
-const DEFAULT_QUERY_LIMIT = 20;
+export const DEFAULT_QUERY_LIMIT = 20;
 
 /**
  * List every capability visible to the caller in this workspace, normalized into
@@ -577,7 +590,12 @@ export async function listCapabilities(
   // nothing denormalises verb→tool→container, so there is no cache to drift.
   const containerByMember = await loadContainerRefs({
     toolIds,
-    skillIds: skillRows.map((r) => r.id),
+    // `kind: 'instruction'` rows are teaching-doc skills — the branch below
+    // never reads their containerByMember entry, so exclude them here to
+    // avoid widening the `inArray` fan-out for nothing.
+    skillIds: skillRows
+      .filter((r) => r.kind !== "instruction")
+      .map((r) => r.id),
     userId: ctx.userId,
   });
 
@@ -699,8 +717,12 @@ export async function listCapabilities(
       }))
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score)
-      .map((s) => s.cap)
-      .slice(0, opts.limit ?? DEFAULT_QUERY_LIMIT);
+      .map((s) => s.cap);
+    // `null` means "an explicit caller-owned cap runs later, over deduped
+    // rows — don't slice the raw list here." See `ListCapabilitiesOptions.limit`.
+    if (opts.limit !== null) {
+      result = result.slice(0, opts.limit ?? DEFAULT_QUERY_LIMIT);
+    }
   } else if (typeof opts?.limit === "number") {
     result = result.slice(0, opts.limit);
   }
@@ -802,12 +824,25 @@ export interface SectionedCapabilities {
   excluded: { teachingDocs: number };
 }
 
+export interface SectionCapabilitiesOptions {
+  /**
+   * Cap the DISTINCT row count across every section combined, ranked by each
+   * row's first-occurrence position in `caps` (its score rank, when `caps` was
+   * produced by a `query`). Applied AFTER dedup — the fix for the truncation
+   * bug: pass the FULL (pre-dedup, unsliced — `listCapabilities({ limit: null,
+   * query })`) list in and cap here, never by slicing `caps` before folding.
+   * Omit for the historic behaviour: every distinct row, unbounded.
+   */
+  limit?: number;
+}
+
 /**
  * Fold the flat `Capability[]` read-model into the agent-facing sectioned view.
  * Pure — no I/O — so it is unit-testable and reusable by any door.
  */
 export function sectionCapabilities(
-  caps: RegistryCapability[]
+  caps: RegistryCapability[],
+  opts?: SectionCapabilitiesOptions
 ): SectionedCapabilities {
   const integrations = new Map<
     string,
@@ -939,12 +974,78 @@ export function sectionCapabilities(
     (s) => !providerVerbIds.has(s.name)
   );
 
-  return {
+  const full: SectionedCapabilities = {
     integrations: [...integrations.values()],
     skills,
     commands,
     builtins: [...builtinByName.values()],
     excluded: { teachingDocs },
+  };
+
+  if (typeof opts?.limit !== "number") return full;
+  return capSectionsByRank(full, caps, opts.limit);
+}
+
+/** The dedupe identity `sectionCapabilities` folds each `caps` row onto, or
+ *  `null` for a row that never lands in a ranked section (teaching-doc and
+ *  any other grantable kind the fold above skips). Kept as ONE function so a
+ *  row's rank key can never drift from the fold's own "what counts as the
+ *  same row" rule above. */
+function sectionDedupeKey(c: RegistryCapability): string | null {
+  if (c.kind === "builtin-tool") return `builtin:${c.name}`;
+  if (c.kind === "tool" || c.kind === "source-provider")
+    return `integration:${c.name}`;
+  if (c.kind === "skill") return `skill:${c.name}`;
+  if (c.kind === "command") return `command:${c.id}`;
+  return null;
+}
+
+/**
+ * Trim an already-deduped sectioned view down to `limit` DISTINCT rows,
+ * keeping the highest-ranked ones. Rank = a row's first-occurrence position in
+ * the ORIGINAL `caps` array — which is score-sorted top-first when the caller
+ * ran a `query` through `listCapabilities`, so insertion order IS rank order.
+ *
+ * This is what fixes the truncation bug: capping HERE, after `sectionCapabilities`
+ * has already unioned every duplicate row (multiple installs of one provider,
+ * N backing-skill copies of one verb), means the cap counts distinct, visible
+ * items — never a raw-row slice that could bury a real match behind duplicates
+ * of something else. Re-derives no identity of its own: `sectionDedupeKey`
+ * mirrors exactly what the fold above already decided "the same row" means.
+ */
+function capSectionsByRank(
+  full: SectionedCapabilities,
+  caps: RegistryCapability[],
+  limit: number
+): SectionedCapabilities {
+  const firstIndex = new Map<string, number>();
+  caps.forEach((c, i) => {
+    const key = sectionDedupeKey(c);
+    if (key && !firstIndex.has(key)) firstIndex.set(key, i);
+  });
+
+  const dedupeKeys = [
+    ...full.integrations.map((it) => `integration:${it.name}`),
+    ...full.skills.map((s) => `skill:${s.name}`),
+    ...full.builtins.map((b) => `builtin:${b.name}`),
+    ...full.commands.map((c) => `command:${c.id}`),
+  ];
+  const ranked = dedupeKeys
+    .map((key) => ({
+      key,
+      rank: firstIndex.get(key) ?? Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((a, b) => a.rank - b.rank);
+  const kept = new Set(ranked.slice(0, limit).map((r) => r.key));
+
+  return {
+    integrations: full.integrations.filter((it) =>
+      kept.has(`integration:${it.name}`)
+    ),
+    skills: full.skills.filter((s) => kept.has(`skill:${s.name}`)),
+    commands: full.commands.filter((c) => kept.has(`command:${c.id}`)),
+    builtins: full.builtins.filter((b) => kept.has(`builtin:${b.name}`)),
+    excluded: full.excluded,
   };
 }
 

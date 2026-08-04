@@ -79,6 +79,10 @@ export interface LandInboundMessageArgs {
   senderKeyId?: string;
   /** Inbound attachments (e.g. Discord photo embeds). */
   attachments?: { type: string; url: string; name?: string }[];
+  /** RFC reply-threading headers (email) — carried + stored, not interpreted. */
+  headerMessageId?: string;
+  inReplyTo?: string;
+  references?: string[];
 }
 
 export type LandInboundMessageResult = RecordInboundMessageResult & {
@@ -147,6 +151,9 @@ export async function landInboundMessage(
     senderKeyId: args.senderKeyId,
     messageId: args.messageId,
     attachments: args.attachments,
+    headerMessageId: args.headerMessageId,
+    inReplyTo: args.inReplyTo,
+    references: args.references,
     ...(args.sentAt !== undefined ? { sentAt: args.sentAt } : {}),
   });
 

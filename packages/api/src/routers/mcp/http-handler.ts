@@ -95,9 +95,9 @@ export function formatGrounding(
   const compose = hasProjects
     ? " Projects organize; workspaces hold the data."
     : "";
-  // The WRITE rule is stated explicitly: reads may go pod-wide, but a write with
-  // no workspaceId lands against an arbitrary membership and is the #1 way data
-  // ends up "somewhere else" from the user's point of view.
+  // The WRITE rule is stated explicitly: reads may go pod-wide, but a domain
+  // write with no workspaceId (and no advisory focus) is rejected rather than
+  // silently landing on membership[0] (Phase A3). Agents must pass an id.
   return (
     `${projPart}Workspaces (operational domains), busiest first: ${list}${more}.${compose}${emptyNote}` +
     ` For READS omit workspaceId for pod-wide recall, or pass one to scope.` +

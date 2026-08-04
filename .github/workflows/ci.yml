@@ -39,6 +39,39 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # The cross-repo parity tripwire
+      # (packages/api/src/__tripwires__/cp-pod-package-schema-parity.test.ts)
+      # compares the CP publish schema against the pod apply schema by READING
+      # the CP source — the two schemas live in different pnpm workspaces, so
+      # neither can import the other. It resolves the CP checkout as a SIBLING
+      # of this one (`<backend>/../synap-control-plane-api`) and ASSERTS it
+      # exists, deliberately: a guard that skips when its input is missing is
+      # how the two schemas silently drifted the first time. So CI must provide
+      # the sibling — the test must never be taught to skip.
+      #
+      # NOTE the two steps. `actions/checkout` refuses any `path:` that resolves
+      # outside $GITHUB_WORKSPACE ("Repository path … is not under …"), and the
+      # sibling location is by definition its parent — so the repo is checked
+      # out INSIDE the workspace and then moved into place. The move happens
+      # before `pnpm install` so no workspace glob, lint or typecheck ever sees
+      # the temporary directory.
+      #
+      # The repo is `control-plane-api`; the DIRECTORY must be named
+      # `synap-control-plane-api`, which is the name the tripwire resolves.
+      - name: Checkout Control Plane API (cross-repo parity tripwire)
+        uses: actions/checkout@v4
+        with:
+          repository: Synap-core/control-plane-api
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: .cp-checkout
+
+      - name: Place Control Plane API beside this checkout
+        run: |
+          set -euo pipefail
+          mv "${GITHUB_WORKSPACE}/.cp-checkout" \
+             "${GITHUB_WORKSPACE}/../synap-control-plane-api"
+          test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

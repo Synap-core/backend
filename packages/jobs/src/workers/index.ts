@@ -110,6 +110,10 @@ import {
   FIREFLIES_BACKFILL_CRON_QUEUE,
 } from "./fireflies-worker.js";
 import {
+  handleInboundAttachmentIngest,
+  INBOUND_ATTACHMENT_QUEUE,
+} from "./inbound-attachment-worker.js";
+import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
@@ -240,6 +244,7 @@ const ALL_QUEUES = [
   CAL_BACKFILL_CRON_QUEUE,
   FIREFLIES_INGEST_QUEUE,
   FIREFLIES_BACKFILL_CRON_QUEUE,
+  INBOUND_ATTACHMENT_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
@@ -646,6 +651,15 @@ export async function registerAllWorkers(): Promise<void> {
     handleFirefliesBackfillCron(job)
   );
   logger.info("Registered worker: fireflies-backfill-cron");
+
+  // Inbound attachment ingest (on-demand) — the inbound sensor recorder enqueues
+  // one job per inbound message that carried attachments; the api-side runner
+  // (IoC slot) fetches each url's bytes and stores it via the GOVERNED file door,
+  // then links the `file` entity to the channel + message. Swallows on failure.
+  await boss.work(INBOUND_ATTACHMENT_QUEUE, async ([job]: any[]) =>
+    handleInboundAttachmentIngest(job)
+  );
+  logger.info("Registered worker: inbound-attachment-ingest");
 
   // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
   // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into

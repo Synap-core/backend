@@ -40,8 +40,12 @@ import {
   MessageAuthorType,
   MessageCategory,
 } from "@synap/database";
-import { emitSideEffects } from "@synap/events";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { resolveIdentity } from "@synap/database";
+import {
+  INBOUND_ATTACHMENT_QUEUE,
+  type InboundAttachmentJobData,
+} from "@synap/jobs/workers/inbound-attachment-worker.js";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
 
 const logger = createLogger({ module: "inbound-recorder" });
@@ -347,6 +351,16 @@ export interface RecordInboundMessageArgs {
    */
   attachments?: { type: string; url: string; name?: string }[];
   /**
+   * RFC reply-threading headers (email). Carried + stored under
+   * `metadata.emailHeaders` so the SEND side can thread a reply by Message-Id /
+   * In-Reply-To / References — prior art: thread by HEADERS, not subject. No
+   * threading LOGIC here (carry-and-store only). Like attachments, these are
+   * ADDITIVE METADATA and never part of the idempotency or tamper hash.
+   */
+  headerMessageId?: string;
+  inReplyTo?: string;
+  references?: string[];
+  /**
    * Provenance override for the stored message row. Defaults to the historical
    * inbound shape (`authorType=EXTERNAL`, `role=USER`) when omitted, so every
    * existing caller (Discord bridge, Unipile webhook) is byte-for-byte unchanged.
@@ -446,6 +460,16 @@ export async function recordInboundMessage(
     }
   }
 
+  // RFC reply-threading headers (carry-and-store; see RecordInboundMessageArgs).
+  const rfcHeaders =
+    args.headerMessageId || args.inReplyTo || args.references?.length
+      ? {
+          ...(args.headerMessageId ? { messageId: args.headerMessageId } : {}),
+          ...(args.inReplyTo ? { inReplyTo: args.inReplyTo } : {}),
+          ...(args.references?.length ? { references: args.references } : {}),
+        }
+      : undefined;
+
   // Race-safe claim: UNIQUE(messages.hash) + ON CONFLICT DO NOTHING is the
   // concurrency boundary. Loser re-SELECTs and reports recorded:false so
   // callers skip a second IS turn / side-effect fan-out.
@@ -468,7 +492,7 @@ export async function recordInboundMessage(
       // ConversationMessageMetadataSchema.attachments (AttachmentSchema drops
       // `name`) and bounded to 4. Written only when at least one is present so a
       // plain text message keeps a null metadata column as before.
-      ...(senderMetadata || args.attachments?.length
+      ...(senderMetadata || args.attachments?.length || rfcHeaders
         ? {
             metadata: {
               ...(senderMetadata ? { sender: senderMetadata } : {}),
@@ -479,6 +503,7 @@ export async function recordInboundMessage(
                       .map((a) => ({ type: a.type, url: a.url })),
                   }
                 : {}),
+              ...(rfcHeaders ? { emailHeaders: rfcHeaders } : {}),
             } as (typeof messages.$inferInsert)["metadata"],
           }
         : {}),
@@ -504,6 +529,46 @@ export async function recordInboundMessage(
     { channelId, provider: args.provider, externalId: args.externalId },
     "Inbound message stored"
   );
+
+  // Live search index — enqueue the SAME per-row `search-index` job the entity/
+  // document reactors use (collection "messages" resolves the row by
+  // messages.id). Cross-cutting: this makes EVERY inbound channel's messages
+  // searchable, not just email — nothing enqueued a live message index before.
+  // Runs regardless of suppressSideEffects: an index is a store, not a fan-out
+  // replay — a historical backfill must still be searchable. Non-fatal.
+  try {
+    await getBoss().send("search-index", {
+      collection: "messages",
+      operation: "upsert",
+      documentId: inserted.id,
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.warn({ err, channelId }, "search-index enqueue failed (non-fatal)");
+  }
+
+  // Attachment ingest OFF the sensor path: fetch each attachment's bytes and
+  // store it through the GOVERNED file door in a background job, then link the
+  // resulting `file` entity to this channel + message. Never blocks the insert;
+  // the {type,url} preview already lives on the message metadata (out of the
+  // idempotency/tamper hash). Also a store, so it runs for backfill too. Non-fatal.
+  if (args.attachments?.length) {
+    try {
+      await getBoss().send(INBOUND_ATTACHMENT_QUEUE, {
+        channelId,
+        messageId: inserted.id,
+        userId: args.userId,
+        workspaceId: args.workspaceId,
+        provider: args.provider,
+        attachments: args.attachments.slice(0, 8),
+      } satisfies InboundAttachmentJobData);
+    } catch (err) {
+      logger.warn(
+        { err, channelId },
+        "inbound-attachment enqueue failed (non-fatal)"
+      );
+    }
+  }
 
   // Bulk backfill/reconciliation suppresses the fan-out so historical messages
   // don't replay through webhook + automation-trigger reactors. Everything above

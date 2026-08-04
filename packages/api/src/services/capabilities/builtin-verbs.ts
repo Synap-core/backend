@@ -360,7 +360,14 @@ const aiGenerateParams = z.object({
     .union([z.boolean(), z.enum(["true", "false"])])
     .optional()
     .transform((v) => v === true || v === "true"),
-  maxTokens: z.coerce.number().int().min(1).max(2000).optional(),
+  // Ceiling raised 2000 → 8000 to match the IS `/generate` route's own bound
+  // (tools-v1.ts caps output at 8000, ~proportionate to its 24000-char input;
+  // matches EXTRACTION_MAX_TOKENS). 2000 was the end-to-end truncation floor:
+  // even after the IS default rose to 2000/ceiling 8000, this mirror still
+  // clamped any caller here to 2000, so a report round could never reach the
+  // headroom it needs. `maxTokens` is a truncation point, never a length
+  // control — billing is on tokens USED, so headroom is free when unused.
+  maxTokens: z.coerce.number().int().min(1).max(8000).optional(),
 });
 
 const aiGenerateHandler: BuiltinVerbHandler = async (params) => {
@@ -2074,6 +2081,112 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * messaging.send — send a governed EXTERNAL message on a bound channel, on ANY
+ * provider (email / LinkedIn / Discord / Proton …). This is the ONE builtin door
+ * that lets a stored config (an automation/playbook `capability` node) emit an
+ * outbound message that STILL passes the governance + client-comms firewall — it
+ * routes through `sendExternalMessage`, the single governed send door, and never
+ * reimplements or bypasses it.
+ *
+ * PROVIDER-AGNOSTIC: it resolves the channel's `externalSource` and lets
+ * `getMessagingConnector` (inside `sendExternalMessage`) pick the connector — no
+ * provider is special-cased here. The connector owns any header derivation (e.g.
+ * Proton reads reply headers from the DB); this verb only carries the body.
+ *
+ * GOVERNANCE: `sendExternalMessage` gates an AGENT-initiated send
+ * (`agentUserId` present) through `gateMessagingSend`, which PROPOSES rather than
+ * auto-sends when there's no approving grant. An owner send (no agentUserId) goes
+ * direct. A `proposed` verdict is a normal, non-error outcome — surfaced as
+ * `{ proposed: true, proposalId }` so a flow can see it went to review.
+ */
+const messagingSendParams = z.object({
+  /** The bound EXTERNAL channel to send on. */
+  channelId: z.string().uuid(),
+  /** Message body. */
+  content: z.string().min(1).max(100000),
+  /**
+   * OPTIONAL reply headers — part of the frozen caller contract. NOT threaded
+   * into the send today: `sendExternalMessage` carries only the body, and the
+   * per-provider connector derives its own reply envelope from the DB (Proton) or
+   * live thread (Stalwart/JMAP). Accepted here so a caller's config is stable and
+   * a future explicit-override path has a home; changing that would mean a shared
+   * connector-signature change, out of scope for this verb.
+   */
+  subject: z.string().max(2000).optional(),
+  inReplyTo: z.string().max(1000).optional(),
+});
+
+const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = messagingSendParams.parse(params);
+
+  // Resolve the channel: an EXTERNAL channel carries the routing identity the
+  // send door needs (`externalId` = the thread key; `externalSource` = the
+  // provider). Bound WHICH channel the run may target — the capability gate
+  // already governs THAT this operator/agent may run messaging.send.
+  const [channel] = await db
+    .select({
+      id: channels.id,
+      workspaceId: channels.workspaceId,
+      channelType: channels.channelType,
+      externalId: channels.externalId,
+      externalSource: channels.externalSource,
+    })
+    .from(channels)
+    .where(eq(channels.id, input.channelId))
+    .limit(1);
+  if (!channel) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
+  }
+  if (
+    channel.workspaceId &&
+    ctx.workspaceId &&
+    channel.workspaceId !== ctx.workspaceId
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Channel is not in the acting workspace.",
+    });
+  }
+  if (!channel.externalId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "messaging.send requires an EXTERNAL channel with an externalId (a bound external conversation).",
+    });
+  }
+
+  // THE one governed send door. It resolves the connector from the channel's
+  // externalSource, runs the governance + client-comms firewall INSIDE, mirrors
+  // the outbound to `messages`, and emits `{provider}.send.completed`. An agent
+  // send with no grant routes to a proposal (never auto-sent); an owner send goes
+  // direct. Lazy-imported to keep this module's load graph light (mirrors the
+  // other router/service imports in this file).
+  const { sendExternalMessage } =
+    await import("../../connectors/external-dispatch.js");
+  const result = await sendExternalMessage({
+    threadId: channel.externalId,
+    // The connector resolves its own account (Discord/Proton ignore it; Unipile/
+    // Stalwart resolve per-call from DB/vault/env).
+    accountId: "",
+    body: input.content,
+    userId: ctx.userId,
+    // Thread the agent identity so an agent-initiated send is GATED (propose when
+    // ungranted); an owner run (no agentUserId) skips the gate byte-identically.
+    agentUserId: ctx.agentUserId ?? null,
+    workspaceId: ctx.workspaceId,
+  });
+
+  return {
+    success: result.success,
+    ...(result.messageId ? { messageId: result.messageId } : {}),
+    // A gated agent send routed to review is NOT a failure — surface it distinctly
+    // so a flow reads it as pending, not errored.
+    ...(result.proposed ? { proposed: true } : {}),
+    ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+  };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -2116,6 +2229,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // via the shared recordInboundMessage (the one composition seam so provider
   // ingest can be driven from outside the pod as config/automation).
   "channel.ingest": channelIngestHandler,
+  // Outbound send — emit a governed EXTERNAL message on ANY provider through the
+  // ONE governed send door (sendExternalMessage). Agent sends propose; owner
+  // sends go direct. Provider-agnostic (routes by the channel's externalSource).
+  "messaging.send": messagingSendHandler,
 };
 
 /**
@@ -2158,6 +2275,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "market.install": marketInstallParams,
   "connector.health_check": connectorHealthCheckParams,
   "channel.ingest": channelIngestParams,
+  "messaging.send": messagingSendParams,
 };
 
 /**

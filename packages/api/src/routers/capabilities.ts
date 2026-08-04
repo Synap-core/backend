@@ -60,6 +60,7 @@ import {
 import {
   listCapabilities,
   sectionCapabilities,
+  DEFAULT_QUERY_LIMIT,
 } from "../services/capabilities/capability-registry.js";
 import {
   buildProviderVerbSpec,
@@ -233,16 +234,28 @@ const capabilityRegistryRouter = router({
       const userId = requireUserId(ctx.userId);
       const workspaceId = await resolveRegistryLens(userId, input?.workspaceId);
 
+      // `limit: null` — never slice the RAW flat list here. This door hands its
+      // result straight to `sectionCapabilities`, which dedupes (a provider
+      // installed twice, N backing-skill copies of one verb); slicing before
+      // that fold could push a genuine match out of the window behind
+      // duplicate rows of something else, so the picker could render "no
+      // match" while a match exists. Cap AFTER dedup instead, below.
       const caps = await listCapabilities(
         { workspaceId, userId },
         {
           ...(input?.query ? { query: input.query } : {}),
           ...(input?.kind ? { kind: input.kind } : {}),
-          ...(typeof input?.limit === "number" ? { limit: input.limit } : {}),
+          limit: null,
         }
       );
 
-      const sections = sectionCapabilities(caps);
+      const sections = sectionCapabilities(caps, {
+        // Same default as the flat door's own query-path cap
+        // (`DEFAULT_QUERY_LIMIT`), just applied over distinct rows now. No cap
+        // at all without a query — an unsearched catalogue must not be
+        // silently short.
+        limit: input?.limit ?? (input?.query ? DEFAULT_QUERY_LIMIT : undefined),
+      });
       return {
         ...sections,
         /**

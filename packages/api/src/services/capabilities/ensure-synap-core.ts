@@ -568,6 +568,31 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "messaging.send",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Send a governed EXTERNAL message on a bound channel, on ANY provider (email / LinkedIn / Discord / Proton). Routes through the ONE governed send door (sendExternalMessage): an AGENT-initiated send with no approving grant is PROPOSED (never auto-sent), an owner send goes direct, and the client-comms firewall stays enforced. Provider-agnostic — the connector is resolved from the channel's externalSource and owns any reply-header derivation. WRITE: flows through the full capability gate. Returns { success, messageId?, proposed?, proposalId? } (proposed=true when routed to review).",
+      parameters: {
+        type: "object",
+        required: ["channelId", "content"],
+        properties: {
+          channelId: { type: "string", format: "uuid" },
+          content: { type: "string" },
+          subject: {
+            type: "string",
+            description:
+              "Optional reply subject. Advisory: the per-provider connector derives its own reply envelope; not threaded into the send today.",
+          },
+          inReplyTo: {
+            type: "string",
+            description:
+              "Optional parent Message-Id for threading. Advisory: derived by the connector; not threaded into the send today.",
+          },
+        },
+      },
+    },
   ],
 };
 

@@ -5,12 +5,7 @@ import {
   isRetryableError,
   type ISCallContext,
 } from "@synap/intelligence-client";
-import {
-  REPORT_AUTOMATION_FLOW,
-  type NodeErrorHandling,
-  type AutomationNode,
-  type AutomationEdge,
-} from "@synap/database";
+import { type AutomationNode, type AutomationEdge } from "@synap/database";
 import {
   decideStepRetry,
   assessNodeRetrySafety,
@@ -227,69 +222,24 @@ describe("the attempt loop with the report automation's v15 policy", () => {
   });
 });
 
-describe("the SHIPPED report flow carries the v15 retry policy", () => {
-  // Read off the REAL exported flow — editing the seed without re-reading this
-  // file cannot quietly drop the policy (the same guard shape as
-  // report-flow-filter-safety.test.ts).
-  const aiNodes = REPORT_AUTOMATION_FLOW.nodes.filter(
-    (n) =>
-      n.type === "capability" &&
-      (n.data as { verbId?: string }).verbId === "ai.generate"
-  );
-
-  it("has exactly the four ai.generate rounds", () => {
-    expect(aiNodes.map((n) => n.id)).toEqual([
-      "analyze",
-      "relate",
-      "assemble",
-      "summarize",
-    ]);
-  });
-
-  it("gives every AI round ONE retry with a 5s pause", () => {
-    for (const n of aiNodes) {
-      const eh = (n.data as { errorHandling?: NodeErrorHandling })
-        .errorHandling;
-      expect(eh?.maxRetries, `${n.id} must declare maxRetries`).toBe(1);
-      expect(eh?.retryDelay, `${n.id} must declare retryDelay`).toBe(5000);
-    }
-  });
-
-  it("keeps maxRetries within what the 45-minute reaper window allows", () => {
-    // REAPER_STALE_MINUTES = 45 (automation-run-reaper.ts). Worst case per node
-    // is attempts × the 180s generation budget + retries × retryDelay, and the
-    // four rounds run in SERIES. At maxRetries 2 the AI rounds alone would take
-    // 36.7 min; at 3 they could not finish at all.
-    const GENERATION_BUDGET_MS = 180_000;
-    const worstCaseMs = aiNodes.reduce((sum, n) => {
-      const eh =
-        (n.data as { errorHandling?: NodeErrorHandling }).errorHandling ?? {};
-      const retries = eh.maxRetries ?? 0;
-      return (
-        sum +
-        (retries + 1) * GENERATION_BUDGET_MS +
-        retries * (eh.retryDelay ?? 0)
-      );
-    }, 0);
-    expect(worstCaseMs).toBeLessThan(30 * 60_000);
-  });
-
-  it("leaves the two mid rounds continueOnError and the two last fail-fast", () => {
-    // The retry policy must not have quietly changed the failure semantics: a
-    // failed analyze/relate is still a VISIBLE GAP; a failed assemble/summarize
-    // still stops the run rather than writing a broken report.
-    const eh = (id: string) =>
-      (
-        aiNodes.find((n) => n.id === id)!.data as {
-          errorHandling?: NodeErrorHandling;
-        }
-      ).errorHandling;
-    expect(eh("analyze")?.continueOnError).toBe(true);
-    expect(eh("relate")?.continueOnError).toBe(true);
-    expect(eh("assemble")?.continueOnError).toBeUndefined();
-    expect(eh("summarize")?.continueOnError).toBeUndefined();
-  });
-});
+// NOTE (report-automation retire): the block that asserted the SHIPPED report
+// flow's errorHandling CONTENT (four ai.generate rounds each carrying
+// maxRetries:1 / retryDelay:5000, and the continueOnError partition) read the
+// exported `REPORT_AUTOMATION_FLOW` const, which is gone — the flow now lives in
+// base.yaml. Those are flow-CONTENT invariants and belong at the SSOT
+// (`@synap-core/workspace-templates`' base.template.test.ts), NOT in @synap/jobs,
+// which no longer has the flow to read.
+//
+// ⚠️ FOLLOW-UP (base.yaml parity): as of this retire, base.yaml's four
+// ai.generate nodes do NOT carry maxRetries/retryDelay — the v15 retry policy
+// was never ported into base.yaml (only maxTokens 700→2000 was). Since the
+// base-template reconcile makes base.yaml the flow that persists, that retry
+// policy is currently NOT reaching workspaces regardless of this change. The
+// content assertion was not moved (asserting it now would be asserting a
+// fiction); it should be re-added to base.template.test.ts once base.yaml gains
+// the retry fields. The EXECUTOR SEMANTICS below (isRetryableError /
+// decideStepRetry / the attempt loop / assessNodeRetrySafety) are the reusable
+// engine invariants and stay pinned here in full.
 
 /**
  * THE RETRY-SAFETY FLOOR — which node types may be retried at all.
@@ -433,24 +383,17 @@ describe("assessNodeRetrySafety — the executor's retry floor", () => {
     expect(verdict.safe === false && verdict.reason).toContain("body-1");
   });
 
-  it("keeps the report automation's four AI rounds retryable (the v15 policy stays live)", () => {
-    // The floor must not silently undo the shipped `maxRetries: 1` — a floor
-    // that clamps the one node it was never aimed at is a regression, not a fix.
-    const reportAiNodes = REPORT_AUTOMATION_FLOW.nodes.filter(
-      (candidate) =>
-        candidate.type === "capability" &&
-        (candidate.data as { verbId?: string }).verbId === "ai.generate"
-    );
-    expect(reportAiNodes.length).toBe(4);
-    for (const node of reportAiNodes) {
-      expect(
-        assessNodeRetrySafety(node as AutomationNode, {
-          nodes: REPORT_AUTOMATION_FLOW.nodes as AutomationNode[],
-          edges: REPORT_AUTOMATION_FLOW.edges as AutomationEdge[],
-        }).safe,
-        `${node.id} must remain retryable`
-      ).toBe(true);
-    }
+  it("keeps an ai.generate capability round retryable (the floor never clamps it)", () => {
+    // The floor must not silently undo an authored `maxRetries` on the report's
+    // AI rounds — a floor that clamps the one node it was never aimed at is a
+    // regression, not a fix. Asserted on a synthetic `ai.generate` capability
+    // node (its idempotency is the `capability_run_receipts` CAS) rather than by
+    // reading the shipped flow, which now lives in base.yaml, not @synap/jobs.
+    const round = n("capability", { verbId: "ai.generate" });
+    expect(
+      assessNodeRetrySafety(round).safe,
+      "ai.generate must stay retryable"
+    ).toBe(true);
   });
 
   /**

@@ -14,11 +14,14 @@ import {
   and,
   inArray,
 } from "@synap/database";
-import { sql as drizzleSql } from "drizzle-orm";
 
 export async function resolvePodOwnerUserId(): Promise<string | null> {
+  // Read the `systemSlug` column, not the `settings.systemSlug` JSONB mirror:
+  // the `isPodAdmin` authorization floor reads the column (see
+  // utils/workspace-role.ts), and this resolver must never disagree with it —
+  // both are written together on workspace creation, so the column is canonical.
   const podAdminWs = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+    where: eq(workspaces.systemSlug, "pod-admin"),
     columns: { id: true },
   });
   if (!podAdminWs) return null;

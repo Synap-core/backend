@@ -6,6 +6,7 @@ import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
 import { StalwartConnector } from "./StalwartConnector.js";
 import { DiscordConnector } from "./DiscordConnector.js";
+import { ProtonConnector } from "./ProtonConnector.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import {
   connectorRegistry,
@@ -139,6 +140,14 @@ registerMessagingType("discord", async () => {
   // bridge delivers. No token is resolved here (the bridge holds it), so the
   // connector is always available.
   return new DiscordConnector();
+});
+
+registerMessagingType("proton", async () => {
+  // Proton is outbound-only here. The backend is Proton-AGNOSTIC — this connector
+  // never calls Proton; `sendMessage` reads the reply envelope from the DB and
+  // enqueues a `channel_egress` intent the standalone Proton Bridge delivers. No
+  // credential is resolved here (the bridge holds it), so it is always available.
+  return new ProtonConnector();
 });
 
 registerMessagingType("unipile", async ({ ownerId, settings }) => {
@@ -414,6 +423,8 @@ export async function migrateNangoEnvToVault(): Promise<{
  *   - "stalwart" → self-hosted Stalwart/JMAP (vault `stalwart-connector`)
  *   - "discord"  → agnostic egress: enqueues to the channel_egress outbox; the
  *                  Discord bridge holds the token and delivers (no token here)
+ *   - "proton"   → agnostic egress: reads the reply envelope from the DB, enqueues
+ *                  to the channel_egress outbox; the Proton bridge delivers
  *   - anything else / undefined → Unipile, reading credentials from:
  *       1. Vault (server-encrypted secret with serviceId='messaging-connector')
  *       2. workspace.settings.messaging (set via Settings UI)
@@ -439,8 +450,7 @@ export async function getMessagingConnector(
         ? provider
         : DEFAULT_MESSAGING_TYPE;
     const descriptor = connectorRegistry.get(type) as
-      | MessagingConnectorDescriptor
-      | undefined;
+      MessagingConnectorDescriptor | undefined;
     if (!descriptor) return null;
 
     return await descriptor.resolve({
@@ -497,4 +507,5 @@ export { UnipileConnector } from "./UnipileConnector.js";
 export { StalwartConnector } from "./StalwartConnector.js";
 export type { StalwartConnectorConfig } from "./StalwartConnector.js";
 export { DiscordConnector } from "./DiscordConnector.js";
+export { ProtonConnector } from "./ProtonConnector.js";
 export { NangoConnector } from "./NangoConnector.js";

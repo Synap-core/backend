@@ -25,16 +25,13 @@ import {
   db,
   and,
   eq,
-  inArray,
   isNull,
   users,
-  workspaces,
-  workspaceMembers,
   governanceRules,
   type AgentMetadata,
 } from "@synap/database";
-import { sql as drizzleSql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
 
 const logger = createLogger({ module: "ensure-capture-agent" });
 
@@ -68,29 +65,6 @@ export const CAPTURE_AGENT_DEF = {
  * repeat callers avoid a DB round-trip. Reset only by a process restart.
  */
 let cachedCaptureAgentUserId: string | null = null;
-
-/**
- * Resolve the pod-owner user id — the owner/admin member of the pod-admin system
- * workspace. Returns null on a pre-bootstrap pod (no pod-admin workspace / owner),
- * so the caller can skip seeding without failing startup. Mirrors the resolver
- * in `ensure-synap-core.ts`.
- */
-async function resolvePodOwnerUserId(): Promise<string | null> {
-  const podAdminWs = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
-    columns: { id: true },
-  });
-  if (!podAdminWs) return null;
-
-  const owner = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, podAdminWs.id),
-      inArray(workspaceMembers.role, ["owner", "admin"])
-    ),
-    columns: { userId: true },
-  });
-  return owner?.userId ?? null;
-}
 
 /**
  * Find the pod-level capture agent — a pod-wide `users` row (userType='agent',

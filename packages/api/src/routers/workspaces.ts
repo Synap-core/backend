@@ -673,17 +673,18 @@ export const workspacesRouter = router({
           console.error(`[workspaces.get] base reconcile failed:`, err);
         }
       } else {
-        // Fallback: `base` unresolvable — seed via the legacy hardcoded utilities.
-        const {
-          ensureDefaultCommands,
-          ensureDefaultRelationDefs,
-          ensureReportAutomation,
-        } = await import("@synap/database");
+        // Fallback: `base` unresolvable — seed commands + relation defs via the
+        // legacy hardcoded utilities. The report automation is NOT seeded here:
+        // its only source is base.yaml (reconciled above), so if `base` is
+        // unresolvable the automation simply waits for the next `get` once the
+        // template resolves. There is no hardcoded report flow to fall back to
+        // anymore — that duplicate copy was retired (base.yaml is the SSOT).
+        const { ensureDefaultCommands, ensureDefaultRelationDefs } =
+          await import("@synap/database");
         await ensureDefaultCommands(input.id, ctx.userId);
         await ensureDefaultRelationDefs(input.id, ctx.userId);
-        await ensureReportAutomation(input.id, ctx.userId);
         console.warn(
-          `[workspaces.get] base template unresolved — used legacy seeders`
+          `[workspaces.get] base template unresolved — used legacy seeders (commands + relation defs only)`
         );
       }
 

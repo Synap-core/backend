@@ -133,6 +133,26 @@ const MessagingInboundRequestSchema = z
     // project-scoped; absent workspace too → pod-wide.
     projectId: z.string().uuid().optional(),
     userId: z.string().uuid().optional(),
+    // Inbound attachments (mirrors the Discord {type,url,name?} shape). Fetched
+    // OFF the request path (background job) → stored via the governed file door →
+    // linked to the channel + message. Bounded to 8. Stays out of the message
+    // idempotency/tamper hash (metadata-only).
+    attachments: z
+      .array(
+        z.object({
+          type: z.string().min(1),
+          url: z.string().url(),
+          name: z.string().optional(),
+        })
+      )
+      .max(8)
+      .optional(),
+    // RFC reply-threading headers (email) — carried + stored under
+    // metadata.emailHeaders so the send side can thread by Message-Id /
+    // In-Reply-To / References. No threading logic here.
+    headerMessageId: z.string().max(998).optional(),
+    inReplyTo: z.string().max(998).optional(),
+    references: z.array(z.string().max(998)).max(50).optional(),
   })
   .refine((d) => Boolean(d.externalId || d.participantEmail), {
     message: "externalId or participantEmail is required",
@@ -214,6 +234,10 @@ export function registerMessagingRoutes(app: HubHono): void {
         workspaceId: acting.workspaceId,
         projectId: body.projectId,
         userId: acting.userId,
+        attachments: body.attachments,
+        headerMessageId: body.headerMessageId,
+        inReplyTo: body.inReplyTo,
+        references: body.references,
       });
       return c.json({ recorded, channelId, deduped }, 200);
     } catch (err) {

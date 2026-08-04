@@ -296,6 +296,7 @@ export {
   runFirefliesBackfill,
   type RunFirefliesBackfillResult,
 } from "./services/fireflies/run-fireflies-backfill.js";
+export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound-attachments.js";
 export {
   runEventSync,
   type RunEventSyncResult,

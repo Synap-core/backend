@@ -290,6 +290,10 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate: "{{agentName}} encountered an error",
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
+    // Group repeated failures of the same agent in the bell. The B2 producer
+    // (events.ts) additionally passes an explicit agentUserId-keyed groupKey and
+    // a cooldown gate — this declares the fallback grouping for any other caller.
+    groupBy: "agentName",
     ttl: 0,
     actions: [
       {

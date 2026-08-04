@@ -1,15 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { REPORT_AUTOMATION_FLOW } from "@synap/database";
 import {
   parseQueryFilterConditions,
   type StepContext,
 } from "../automation-executor.js";
 
 /**
- * Cross-package guard: the SHIPPED report flow's filters, run through the REAL
- * parser.
+ * ENGINE guard: the report flow's gather filters, run through the REAL parser.
  *
- * WHY THIS EXISTS. The seeded flow bounds each gather with
+ * WHY THIS EXISTS. The `base` report automation bounds each gather with
  * `{"updatedAt": {"$gte": "{{trigger.payload.since}}"}}`, and the automation is
  * documented to be runnable with NO payload at all. So on the canonical run
  * that placeholder resolves to `""`.
@@ -23,18 +21,21 @@ import {
  * The failure directions are asymmetric and that asymmetry is the design:
  * dropping a bad term WIDENS the result (visible, self-correcting), binding one
  * NARROWS it to nothing (invisible, and the narrator confidently reports the
- * emptiness as a finding). This test pins the safe direction.
+ * emptiness as a finding). This test pins the safe direction of the PARSER.
  *
- * It reads the filter off the REAL exported flow rather than restating the
- * string, so editing the flow without re-reading this file cannot quietly
- * invalidate the guarantee.
+ * WHAT CHANGED (report-automation retire). This suite used to read the filter
+ * strings off the exported `REPORT_AUTOMATION_FLOW` const. That const is gone —
+ * the flow now lives in base.yaml (@synap-core/workspace-templates), which
+ * `@synap/jobs` does not (and should not) depend on. So the ENGINE invariant
+ * (this parser drops an unparseable date, binds a real one) is pinned here on
+ * the exact filter SHAPE base uses, and the complementary CONTENT invariant
+ * (base's flow actually uses that shape on every gather) is pinned at the SSOT
+ * in `@synap-core/workspace-templates`' `base.template.test.ts`.
  */
-function gatherFilters(): string[] {
-  return REPORT_AUTOMATION_FLOW.nodes
-    .filter((n) => n.type === "query")
-    .map((n) => (n.data as { filter?: unknown }).filter)
-    .filter((f): f is string => typeof f === "string" && f.length > 0);
-}
+
+/** The exact filter shape every base-report gather node carries. */
+const BASE_GATHER_FILTER =
+  '{"updatedAt": {"$gte": "{{trigger.payload.since}}"}}';
 
 const ctx = (payload: Record<string, unknown>): StepContext =>
   ({
@@ -43,110 +44,42 @@ const ctx = (payload: Record<string, unknown>): StepContext =>
     automation: { id: "a", state: {} },
   }) as never;
 
-describe("shipped report flow — gather filter safety", () => {
-  it("has a filter on every gather node (guard against silent removal)", () => {
-    expect(gatherFilters().length).toBeGreaterThan(0);
-  });
-
-  it("NO payload → every filter term is DROPPED, so gathers stay UNFILTERED", () => {
-    for (const filter of gatherFilters()) {
-      expect(parseQueryFilterConditions(filter, ctx({}))).toEqual([]);
-    }
+describe("report gather filter — parser date safety", () => {
+  it("NO payload → the term is DROPPED, so the gather stays UNFILTERED", () => {
+    expect(parseQueryFilterConditions(BASE_GATHER_FILTER, ctx({}))).toEqual([]);
   });
 
   it("an unparseable date → dropped, never bound as Invalid Date", () => {
-    for (const filter of gatherFilters()) {
-      expect(
-        parseQueryFilterConditions(filter, ctx({ since: "last week" }))
-      ).toEqual([]);
-      expect(parseQueryFilterConditions(filter, ctx({ since: "" }))).toEqual(
-        []
-      );
-    }
+    expect(
+      parseQueryFilterConditions(
+        BASE_GATHER_FILTER,
+        ctx({ since: "last week" })
+      )
+    ).toEqual([]);
+    expect(
+      parseQueryFilterConditions(BASE_GATHER_FILTER, ctx({ since: "" }))
+    ).toEqual([]);
   });
 
   it("a real ISO date → a REAL column condition carrying a real Date", () => {
-    for (const filter of gatherFilters()) {
-      const conds = parseQueryFilterConditions(
-        filter,
-        ctx({ since: "2026-07-20T00:00:00.000Z" })
-      );
-      expect(conds).toHaveLength(1);
-      const c = conds[0] as unknown as { column?: unknown; value?: unknown };
-      // A real COLUMN, not a jsonb property lookup — the whole point.
-      expect(c.column).toBeDefined();
-      expect(c.value).toBeInstanceOf(Date);
-    }
+    const conds = parseQueryFilterConditions(
+      BASE_GATHER_FILTER,
+      ctx({ since: "2026-07-20T00:00:00.000Z" })
+    );
+    expect(conds).toHaveLength(1);
+    const c = conds[0] as unknown as { column?: unknown; value?: unknown };
+    // A real COLUMN, not a jsonb property lookup — the whole point.
+    expect(c.column).toBeDefined();
+    expect(c.value).toBeInstanceOf(Date);
   });
 });
 
 /**
- * Cross-package guard: which steps of the SHIPPED report flow are allowed to
- * fail without stopping the run.
- *
- * `errorHandling.continueOnError` is the ONE switch that expresses this — there
- * is no separate `hard`/`optional` field, and adding one would be a second
- * vocabulary for a concept the engine already has. Its two meanings, read off
- * `automation-executor.ts`:
- *
- *   · `true`  = OPTIONAL. The step row records `failed`, `stepsFailed` is
- *     incremented (so the RUN still ends `failed` — the verdict stays honest),
- *     `context.steps[<id>] = { output: { error } }`, and the walk continues.
- *     The `{error: …}` object is what `ASSEMBLE_SYSTEM`'s MISSING ROUNDS rule
- *     renders as a visible `status="failed"` section — the anti-fabrication
- *     path. It is deliberately NOT "" : an empty string is indistinguishable
- *     from a round that had nothing to say.
- *   · absent/`false` = LOAD-BEARING. The walk `break`s, so no downstream node
- *     runs and no output artifact is written.
- *
- * WHY THIS LIVES IN @synap/jobs. The definition-side sibling
- * (`ensure-report-automation.test.ts`) is skipped wherever no test database
- * exists, because @synap/database's vitest setup opens a postgres connection.
- * This suite runs unconditionally, and it is the package that owns the
- * semantics being relied on.
- *
- * Asserted as a WHOLE-GRAPH PARTITION, not an id-by-id list: the regression to
- * catch is a NEW node shipping with `continueOnError: true` — precisely the node
- * a named list would never mention.
+ * The load-bearing-vs-optional PARTITION of the report flow (which steps may
+ * fail without stopping the run) is a property of base.yaml's flow content, not
+ * of this engine. It moved to the SSOT test alongside base.yaml
+ * (`@synap-core/workspace-templates`' `base.template.test.ts`) when the hardcoded
+ * `REPORT_AUTOMATION_FLOW` const was retired — @synap/jobs no longer has the flow
+ * to read. The `continueOnError` SEMANTICS the executor gives that field are
+ * covered by `step-retry-policy.test.ts`.
  */
-describe("shipped report flow — load-bearing vs optional steps", () => {
-  const continueOnError = (n: { data: unknown }): boolean | undefined =>
-    (n.data as { errorHandling?: { continueOnError?: boolean } }).errorHandling
-      ?.continueOnError;
-
-  it("optional = the reads and the interpretation rounds, and nothing else", () => {
-    // The four gathers and their four projections are optional for the same
-    // reason the rounds are: one dead read should DEGRADE the report, not kill
-    // the run, and the assembler renders the gap. Nothing past the projections
-    // may join them — everything downstream either produces the body or writes
-    // the artifact.
-    const optional = REPORT_AUTOMATION_FLOW.nodes
-      .filter((n) => continueOnError(n) === true)
-      .map((n) => n.id)
-      .sort();
-    expect(optional).toEqual([
-      "analyze",
-      "gather-companies",
-      "gather-notes",
-      "gather-people",
-      "gather-tasks",
-      "project-companies",
-      "project-notes",
-      "project-people",
-      "project-tasks",
-      "relate",
-    ]);
-  });
-
-  it("the body → summary → write chain is load-bearing, every link", () => {
-    // A failed `assemble` must not produce a report entity with no body; a
-    // failed `summarize` must not stamp `{"error":…}` into the report's
-    // `summary` property (a bare whole-string placeholder passes the step
-    // output through NATIVELY); and `create-report` is the artifact itself.
-    for (const id of ["assemble", "summarize", "create-report"]) {
-      const node = REPORT_AUTOMATION_FLOW.nodes.find((n) => n.id === id);
-      expect(node, `node "${id}" is missing from the flow`).toBeDefined();
-      expect(continueOnError(node!)).not.toBe(true);
-    }
-  });
-});

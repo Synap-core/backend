@@ -1,21 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { validateFlowDefinition } from "./validate-flow.js";
-import {
-  REPORT_AUTOMATION_FLOW,
-  REPORT_AUTOMATION_NAME,
-} from "@synap/database";
+import { toPackageDefinition } from "@synap-core/workspace-templates";
 
 /**
- * Author-time gate for flows seeded FROM CODE.
+ * Author-time gate for flows applied to workspaces WITHOUT passing the door.
  *
  * WHY THIS FILE EXISTS SEPARATELY FROM `config-automation-seeds.validate.test.ts`:
- * that one reads the CP repo's capability-template JSON. This one covers flows
- * that live as TypeScript constants and are written straight to the DB by an
- * `ensure*` reconcile — which means they NEVER pass through
- * `routers/automations.ts`'s create/update door, and therefore never meet
- * `validateFlowDefinition` in production. A direct `db.insert` bypasses every
- * door-level check by construction, so the only place these can be gated is
- * CI. This is that place.
+ * that one reads the CP repo's capability-template JSON. This one covers the
+ * `base` workspace template's report automation ("Generate report"), which the
+ * base-template reconcile (`reconcileWorkspaceFromDefinition` §7) writes straight
+ * to the DB with `db.insert` — it NEVER passes through `routers/automations.ts`'s
+ * create/update door, and therefore never meets `validateFlowDefinition` in
+ * production. A direct insert bypasses every door-level check by construction, so
+ * the only place this flow's shape can be gated is CI. This is that place.
+ *
+ * (History: this flow used to be a TypeScript const, `REPORT_AUTOMATION_FLOW`,
+ * seeded by `ensureReportAutomation`. That hardcoded copy was retired — base.yaml
+ * is now the single source — but the reconcile door still `db.insert`s the flow
+ * unvalidated, so the gate is still needed; it now reads the compiled base flow.)
  *
  * ── A DELIBERATE LIMITATION, STATED ──────────────────────────────────────────
  * Passing this test means the flow is STRUCTURALLY sound: node ids unique and
@@ -41,9 +43,25 @@ import {
  * (reference resolution, orderBy targets, guard intent) where they can actually
  * see meaning rather than shape.
  */
-describe("code-seeded flow definitions are author-valid", () => {
-  it(`"${REPORT_AUTOMATION_NAME}" passes the same validator the persist doors run`, () => {
-    const result = validateFlowDefinition(REPORT_AUTOMATION_FLOW);
+
+/** The compiled `base` report automation's flow — the SSOT the reconcile applies. */
+const reportFlow = (() => {
+  const pkg = toPackageDefinition("base");
+  const automation = (pkg.automations ?? [])[0];
+  if (!automation?.flowDefinition) {
+    throw new Error(
+      "base template does not carry a 'Generate report' automation flow"
+    );
+  }
+  return {
+    name: automation.name,
+    flow: automation.flowDefinition as { nodes: unknown[]; edges: unknown[] },
+  };
+})();
+
+describe("code-applied flow definitions are author-valid", () => {
+  it(`"${reportFlow.name}" passes the same validator the persist doors run`, () => {
+    const result = validateFlowDefinition(reportFlow.flow);
     // Assert on `errors` rather than the boolean: a failure should PRINT what
     // is wrong, not just say `false !== true`.
     expect(result.errors).toEqual([]);
@@ -53,8 +71,13 @@ describe("code-seeded flow definitions are author-valid", () => {
   it("every node the report flow references in an edge actually exists", () => {
     // Belt-and-braces on the highest-value structural invariant, asserted here
     // too so a regression names the specific broken edge.
-    const nodeIds = new Set(REPORT_AUTOMATION_FLOW.nodes.map((n) => n.id));
-    const dangling = REPORT_AUTOMATION_FLOW.edges.flatMap((e) =>
+    const nodes = reportFlow.flow.nodes as Array<{ id: string }>;
+    const edges = reportFlow.flow.edges as Array<{
+      source: string;
+      target: string;
+    }>;
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const dangling = edges.flatMap((e) =>
       [e.source, e.target].filter((id) => !nodeIds.has(id))
     );
     expect(dangling).toEqual([]);

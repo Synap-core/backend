@@ -172,14 +172,10 @@ export {
   type EnsureDefaultCommandsResult,
 } from "./utils/ensure-default-commands.js";
 
-// Export ensureReportAutomation utility (THE manually-triggered report flow)
-export {
-  ensureReportAutomation,
-  REPORT_AUTOMATION_NAME,
-  REPORT_AUTOMATION_DESCRIPTION,
-  REPORT_AUTOMATION_FLOW,
-  type EnsureReportAutomationResult,
-} from "./utils/ensure-report-automation.js";
+// The report automation ("Generate report") was RETIRED as a hardcoded flow.
+// Its single source is now base.yaml (@synap-core/workspace-templates), applied
+// by the base-template reconcile on `workspaces.get`. See git history of
+// utils/ensure-report-automation.ts (deleted) for the v1–v15 prompt rationale.
 
 // Export ensureDefaultRelationDefs utility
 export {

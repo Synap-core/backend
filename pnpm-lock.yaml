@@ -107,8 +107,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/hub-protocol
       '@synap-core/workspace-templates':
-        specifier: ^0.10.0
-        version: 0.10.0
+        specifier: '>=0.11.0 <1.0.0'
+        version: 0.11.0
       '@synap/api':
         specifier: workspace:*
         version: link:../../packages/api
@@ -354,8 +354,8 @@ importers:
         specifier: workspace:*
         version: link:../types
       '@synap-core/workspace-templates':
-        specifier: ^0.10.0
-        version: 0.10.0
+        specifier: '>=0.11.0 <1.0.0'
+        version: 0.11.0
       '@synap/ai':
         specifier: workspace:*
         version: link:../ai
@@ -5169,8 +5169,8 @@ packages:
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
 
-  '@synap-core/workspace-templates@0.10.0':
-    resolution: {integrity: sha512-OIONkbcO28QiJyXYE+4vlovJPcVksU95px6oHsUfd5l8hzaKcZLUiFM3Pn9LfSTXUgvbvnbDgBECdeuRN3a/pg==}
+  '@synap-core/workspace-templates@0.11.0':
+    resolution: {integrity: sha512-/XQwnfrETYM8P+vsxRHma1QWX7/BKBqNS9+sHL/YIp3DfqxE/Pxlfe7gqWBjOm+vVbUvhGs3DznfNxYvtb9etw==}
 
   '@tanstack/query-core@5.90.16':
     resolution: {integrity: sha512-MvtWckSVufs/ja463/K4PyJeqT+HMlJWtw6PrCpywznd2NSgO3m4KwO9RqbFqGg6iDE8vVMFWMeQI4Io3eEYww==}
@@ -14575,7 +14575,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@synap-core/workspace-templates@0.10.0':
+  '@synap-core/workspace-templates@0.11.0':
     dependencies:
       js-yaml: 4.3.0
       zod: 4.3.6

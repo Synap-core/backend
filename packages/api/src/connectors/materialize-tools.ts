@@ -18,13 +18,78 @@
  */
 
 import { db, eq, and, isNull } from "@synap/database";
-import { tools } from "@synap/database/schema";
+import {
+  tools,
+  capabilities as capabilitiesTable,
+} from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { createCapabilityFromDefinition } from "../services/capabilities/create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "../services/capabilities/cp-template-client.js";
+import { capabilityContainersRouter } from "../routers/capability-containers.js";
 import type { Context } from "../types/context.js";
 
 const logger = createLogger({ module: "materialize-tools" });
+
+/**
+ * Give a BARE provider tool (no family `CapabilityDefinition` in the CP
+ * catalog — see the `!def` branch below) a container named after the
+ * provider, so it renders as a coherent brick instead of drowning the
+ * product's deliberate "loose brick" signal in accidental noise.
+ *
+ * Resolution matches `create-from-definition.ts`'s container step EXACTLY
+ * (same name+scope lookup, same GOVERNED router doors, same non-fatal +
+ * counted `addPart` failure handling) — this is not a second resolution
+ * rule, it is the same one applied to the ungoverned path that never ran it.
+ * Pod-wide only (`workspaceId: undefined` → the router stores `null`),
+ * because a connector tool is always materialized pod-wide (see the insert
+ * above). Idempotent: `create`'s by-name+scope lookup reuses an existing
+ * container, `addPart` is `onConflictDoNothing` — safe to call every sync.
+ */
+async function ensureProviderContainer(
+  ctx: Context,
+  toolId: string,
+  providerName: string
+): Promise<void> {
+  try {
+    const [existingContainer] = await db
+      .select({ id: capabilitiesTable.id })
+      .from(capabilitiesTable)
+      .where(
+        and(
+          eq(capabilitiesTable.name, providerName),
+          isNull(capabilitiesTable.workspaceId)
+        )
+      )
+      .limit(1);
+
+    const containersCaller = capabilityContainersRouter.createCaller(
+      ctx as never
+    );
+    const containerId = existingContainer
+      ? existingContainer.id
+      : ((
+          await containersCaller.create({
+            name: providerName,
+            description: `${providerName} — connected provider bricks.`,
+          })
+        ).capability?.id ?? null);
+    if (!containerId) return;
+
+    await containersCaller.addPart({
+      capabilityId: containerId,
+      partType: "tool",
+      partId: toolId,
+    });
+  } catch (err) {
+    // NON-FATAL, but logged — mirrors `attachPart()` in create-from-definition.ts.
+    // The connection still works as a bare tool; it just stays unpackaged until
+    // a later sync (or an operator) attaches it.
+    logger.warn(
+      { toolId, providerName, err },
+      "materialize: could not attach bare provider tool to its container"
+    );
+  }
+}
 
 /**
  * The narrow connector surface materialization needs — satisfied by
@@ -198,7 +263,13 @@ export async function materializeConnectorTools(
       // that the CP hasn't declared verbs for yet. Degrade quietly to the bare
       // tool; only real apply failures below are warn-worthy.
       const def = await fetchCPCapabilityTemplate(templateKey);
-      if (!def) continue;
+      if (!def) {
+        // No family template — this connection will never go through
+        // `createCapabilityFromDefinition`'s container step, so it must get
+        // one here or it stays an accidental orphan forever.
+        await ensureProviderContainer(ctx, toolId, displayName);
+        continue;
+      }
       // Report what this connection can do — from the template's skills — for
       // ALL providers with a family (even already-verbed ones), so a poll on an
       // already-connected provider still learns its verbs.

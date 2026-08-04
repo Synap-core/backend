@@ -36,7 +36,6 @@ export async function handleWorkspaceInit(
   const {
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
-    ensureReportAutomation,
     ensureSystemProfiles,
     seedPropertyRelationMappings,
   } = await import("@synap/database");
@@ -55,17 +54,20 @@ export async function handleWorkspaceInit(
   // auto-created per workspace: there is ONE pod-canonical board, resolved lazily
   // via views.resolveScopedSurface on first open (single door). Per-workspace
   // auto-creation manufactured a graveyard of empty boards.
+  // The report automation ("Generate report") is NOT seeded here anymore. It
+  // lives in the first-party `base` workspace template (base.yaml) and is
+  // materialized — and kept current — by the base-template reconcile that runs
+  // on `workspaces.get` (the content-hash-keyed door in
+  // reconcile-workspace-from-definition.ts §7). base.yaml is the single source;
+  // birth no longer carries a duplicate hardcoded flow. Because the automation
+  // is manual-trigger, "created on first get" rather than "at pg-boss birth" is
+  // benign: a human must open the workspace (→get→reconcile) before they could
+  // ever run it.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [
     { name: "commands", promise: ensureDefaultCommands(workspaceId, userId) },
     {
       name: "relation-defs",
       promise: ensureDefaultRelationDefs(workspaceId, userId),
-    },
-    // THE report automation — manual trigger, so seeding it costs nothing until a
-    // human runs it. Idempotent + name-keyed, same contract as the two above.
-    {
-      name: "report-automation",
-      promise: ensureReportAutomation(workspaceId, userId),
     },
   ];
 

@@ -510,13 +510,20 @@ async function runIsolate(params: {
           // Map triggerProviderAction's structured result onto the SAME shape the
           // IS `executeProviderCall` returns: { status, headers, body } OR
           // { proposed, proposalId }; a structured failure throws.
+          // A provider call that succeeds (or is proposed) means any EARLIER
+          // failure on this run was recovered — clear the sink so a later,
+          // unrelated failure doesn't surface a stale (e.g. re-auth) chip.
           if (result.proposed) {
+            failureSink.errorClass = undefined;
+            failureSink.providerRef = undefined;
             return new ivm.ExternalCopy({
               proposed: true,
               proposalId: result.proposalId,
             }).copyInto();
           }
           if (result.success) {
+            failureSink.errorClass = undefined;
+            failureSink.providerRef = undefined;
             return new ivm.ExternalCopy({
               status: result.status,
               headers: result.headers ?? {},

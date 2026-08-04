@@ -7,10 +7,12 @@
  * proposal (the config-over-code producer pattern — all category/priority/actions
  * live in the registry entry, this file only detects + emits).
  *
- * Recipient = the proposal's OWNER (`proposedByUserId ?? createdBy`), NOT the
- * workspace members: a DELETED workspace has zero members to fan out to, and a
- * stale proposal is the owner's to withdraw / re-run. Deduped by a cooldown so a
- * still-stale proposal is not re-notified every tick.
+ * Recipient = the proposal's HUMAN owner, NOT the workspace members: a DELETED
+ * workspace has zero members to fan out to, and a stale proposal is the owner's
+ * to withdraw / re-run. For an AI-authored proposal the human is the agent's
+ * creator (`users.createdByUserId`) — never the agent user itself, which reads no
+ * bell — mirroring the approve-path canReview resolution. Deduped by a cooldown
+ * so a still-stale proposal is not re-notified every tick.
  *
  * Scope is the workspace-gone reason only (the genuine unguarded gap). A dead
  * *connection* is already surfaced by the connection-health nudge + the dispatch
@@ -21,6 +23,7 @@ import {
   db,
   proposals,
   notifications,
+  users,
   eq,
   and,
   isNotNull,
@@ -47,6 +50,7 @@ export async function scanStaleProposals(): Promise<{
       workspaceId: proposals.workspaceId,
       proposedByUserId: proposals.proposedByUserId,
       createdBy: proposals.createdBy,
+      agentUserId: proposals.agentUserId,
       proposalType: proposals.proposalType,
     })
     .from(proposals)
@@ -58,7 +62,27 @@ export async function scanStaleProposals(): Promise<{
   const cooldownFloor = new Date(Date.now() - RENOTIFY_COOLDOWN_MS);
 
   for (const p of pending) {
-    const owner = p.proposedByUserId ?? p.createdBy;
+    // Resolve the HUMAN owner — the recipient must be someone who reads a bell.
+    // An AI-authored proposal carries proposedByUserId=NULL and createdBy=the
+    // AGENT user (which has no workspace_members row and never reads a bell), so
+    // `proposedByUserId ?? createdBy` would false-flag every AI proposal as stale
+    // AND address the alert to a non-human. Resolve the agent's creator
+    // (`users.createdByUserId`) — the SAME human the approve-path canReview admits
+    // as owner (routers/proposals.ts:472). Human-authored proposals keep
+    // proposedByUserId (or a human createdBy) and skip the lookup.
+    let owner: string | null;
+    if (p.proposedByUserId) {
+      owner = p.proposedByUserId;
+    } else if (p.agentUserId) {
+      const [agent] = await db
+        .select({ createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(eq(users.id, p.agentUserId))
+        .limit(1);
+      owner = agent?.createdByUserId ?? null;
+    } else {
+      owner = p.createdBy;
+    }
     // No attributable human owner, or (defensively) no workspace → can't act.
     if (!owner || !p.workspaceId) continue;
 

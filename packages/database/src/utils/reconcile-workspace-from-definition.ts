@@ -990,9 +990,11 @@ export async function reconcileWorkspaceFromDefinition(
 
   // ── 7. Automations — version-aware reconcile (create / overwrite-on-drift) ──
   //
-  // Generalizes `ensureReportAutomation` (ensure-report-automation.ts:1704-1757)
-  // off the hardcoded seed-int and onto a CONTENT HASH of the definition entry,
-  // keyed on `(workspaceId, name)`. The int→hash comparison self-heals the v5
+  // Generalizes the retired `ensureReportAutomation` seeder off the hardcoded
+  // seed-int and onto a CONTENT HASH of the definition entry, keyed on
+  // `(workspaceId, name)`. This is now the SOLE creation path for the report
+  // automation ("Generate report"), sourced from base.yaml — there is no
+  // hardcoded flow anymore. The int→hash comparison self-heals the old seed-int
   // freeze structurally: a stored `metadata.seedVersion: 5` (number) is `!==`
   // any hex hash string, so the first reconcile detects drift and overwrites.
   for (const auto of definition.flowAutomations ?? []) {

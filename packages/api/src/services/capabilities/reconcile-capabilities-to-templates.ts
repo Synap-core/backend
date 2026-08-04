@@ -34,8 +34,8 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, eq, and, inArray } from "@synap/database";
-import { capabilities, skills, links } from "@synap/database/schema";
+import { db, eq, and, inArray, drizzleSql } from "@synap/database";
+import { capabilities, skills, tools, links } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { queryCatalogCache } from "./catalog-cache-query.js";
@@ -70,6 +70,42 @@ export interface CapabilityReconcileReport {
   /** Drift detected but re-apply could not safely resolve it (e.g. a required
    *  param the reconcile has no value for) — reported, never forced. */
   conflicts: CapabilityReconcileEntry[];
+}
+
+/**
+ * Diff a definition's declared tool NAMES against the tool names that are
+ * actually `member_of` the container (matched by name, same convention as
+ * `capabilityDefinitionDrift`'s skill diff — a tool has no separate
+ * content-drift concept here, only presence-as-a-member).
+ *
+ * WHY THIS EXISTS: `capability-containers.addPart` carries a pod-scope
+ * authorization floor (container's own `createdBy` or a pod admin, for a
+ * `workspaceId: null` container). `create-from-definition.ts`'s `attachPart`
+ * calls it but SWALLOWS a rejection (non-fatal, counted as
+ * `partsNotAttached`) — so when a non-owning teammate applies a template
+ * update that introduces a NEW tool to an ALREADY-EXISTING pod-scoped
+ * container, the tool row gets created but never attached: it exists with no
+ * `member_of` edge. `capabilityDefinitionDrift` only diffs skills, so that
+ * orphan was previously invisible to reconcile entirely. A member-less tool
+ * is not cosmetic — `uninstall-capability.ts` and this same reconcile both
+ * resolve a container's parts VIA `member_of`, so an orphan is left behind on
+ * uninstall and can shadow a re-installed capability's pod-wide tool.
+ *
+ * A tool name carrying an unresolved `{{param}}` placeholder is skipped for
+ * the same reason `capabilityDefinitionDrift` skips templated skill names:
+ * the live row's name was interpolated at install with params this reconcile
+ * doesn't have, so it can never be matched by exact name here.
+ */
+export function missingToolMemberships(
+  declaredTools: Array<{ name: string }>,
+  memberToolNames: Set<string>
+): string[] {
+  const missing: string[] = [];
+  for (const t of declaredTools) {
+    if (typeof t.name !== "string" || t.name.includes("{{")) continue;
+    if (!memberToolNames.has(t.name)) missing.push(t.name);
+  }
+  return missing;
 }
 
 /** Read-modify-write merge of a container's `metadata` jsonb (never clobbers). */
@@ -261,7 +297,37 @@ export async function reconcileCapabilitiesToTemplates(
           : [];
 
       const drift = capabilityDefinitionDrift(installedSkills, cachedDef);
-      const hasDrift = drift.missing.length > 0 || drift.drifted.length > 0;
+
+      // Batched membership repair check — ONE query per container (never per
+      // part): which of this container's TOOL members (by name) does the
+      // template declare that the `member_of` graph doesn't actually have?
+      // See `missingToolMemberships` above for why this is a distinct check
+      // from `capabilityDefinitionDrift` (skills only, content not presence).
+      const memberToolRows = await db
+        .select({ name: tools.name })
+        .from(links)
+        // `tools.id` is uuid, `links.fromId` is text — same cast trap
+        // `loadContainerRefs` (capability-registry.ts) documents for
+        // `capabilityContainers.id` vs `links.toId`; an uncast column-to-column
+        // `eq` between the two types is a Postgres runtime error, not a TS one.
+        .innerJoin(tools, eq(drizzleSql`${tools.id}::text`, links.fromId))
+        .where(
+          and(
+            eq(links.toType, "capability"),
+            eq(links.toId, container.id),
+            eq(links.linkType, "member_of"),
+            eq(links.fromType, "tool")
+          )
+        );
+      const missingTools = missingToolMemberships(
+        cachedDef.tools ?? [],
+        new Set(memberToolRows.map((r) => r.name))
+      );
+
+      const hasDrift =
+        drift.missing.length > 0 ||
+        drift.drifted.length > 0 ||
+        missingTools.length > 0;
 
       if (!hasDrift) {
         // Nothing to converge, but a legacy container may still be missing
@@ -288,7 +354,7 @@ export async function reconcileCapabilitiesToTemplates(
       }
 
       const updatePolicy = cachedDef.updatePolicy ?? "auto";
-      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]`;
+      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}`;
 
       // A template that carries `{{param}}` in a skill NAME needs install-time
       // params the reconcile doesn't have — re-projecting it with `{}` would
