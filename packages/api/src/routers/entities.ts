@@ -57,6 +57,9 @@ import {
   resolveWorkspacePlacement,
   acceptDeterministicGraphWorkspace,
   resolveProjectPlacement,
+  isDomainHomeWorkspace,
+  normalizeEntityScope,
+  DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
   classifyWeakEntityDedup,
@@ -1391,10 +1394,43 @@ export const entitiesRouter = router({
           acceptDeterministicGraphWorkspace(entityPlacement);
         if (deterministic) {
           resolvedEntityWorkspaceId = deterministic;
-        } else if ((earlyResolvedProfile.entityScope ?? "pod") === "pod") {
+        } else if (
+          normalizeEntityScope(earlyResolvedProfile.entityScope) === "pod"
+        ) {
           resolvedEntityWorkspaceId = null;
         } else {
           resolvedEntityWorkspaceId = entityPlacement.workspaceId;
+        }
+      }
+
+      // Refuse domain dumps into admin/settings/agent/operational homes.
+      // global:true → null (allowed). Pod-wide placement is fine; pinning or
+      // ambient-resolving into a non-domain home is not — pick a domain app
+      // or omit workspaceId for server placement. Hub create funnels here.
+      if (resolvedEntityWorkspaceId) {
+        const filingTarget = await placementDb.query.workspaces.findFirst({
+          where: eq(workspaces.id, resolvedEntityWorkspaceId),
+          columns: {
+            workspaceType: true,
+            systemSlug: true,
+            settings: true,
+          },
+        });
+        if (
+          filingTarget &&
+          !isDomainHomeWorkspace({
+            workspaceType: filingTarget.workspaceType,
+            systemSlug: filingTarget.systemSlug,
+            settings: filingTarget.settings as {
+              surfaceClass?: string | null;
+              systemSlug?: string | null;
+            } | null,
+          })
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
+          });
         }
       }
 
@@ -1410,6 +1446,13 @@ export const entitiesRouter = router({
       });
       const resolvedProjectId = projectPlacement.projectId;
 
+      // Governance home MUST follow resolved placement when ontology pins a
+      // workspace (agent omit workspaceId → rung 2 place). Otherwise proposals
+      // land pod-null while data materializes in CRM, and workspace AI policy
+      // never runs. Ambient remains fallback when placement is pod-wide null.
+      const permWorkspaceId =
+        resolvedEntityWorkspaceId ?? governanceWorkspaceId;
+
       // 1. Emit .requested event — records intent regardless of outcome
       const requestedEvent = await auditLog({
         subjectType: "entity",
@@ -1418,7 +1461,7 @@ export const entitiesRouter = router({
         subjectId: entityId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: permWorkspaceId,
         correlationId,
         data: {
           profileSlug,
@@ -1435,7 +1478,7 @@ export const entitiesRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: permWorkspaceId,
         subjectType: "entity",
         action: "create",
         source: input.source,
@@ -1460,6 +1503,20 @@ export const entitiesRouter = router({
           // verbatim; a present key — including null — beats its legacy
           // `data.global ? null : workspaceId` derivation.
           resolvedWorkspaceId: resolvedEntityWorkspaceId,
+          // R2: carry facets on the proposal so approve attaches them (same
+          // shape as create input / composite op.facets). No longer dropped.
+          ...(input.facets?.length
+            ? {
+                facets: input.facets.map((f) => ({
+                  profileSlug: f.profileSlug,
+                  ...(f.status ? { status: f.status } : {}),
+                  ...(f.properties ? { properties: f.properties } : {}),
+                  ...(f.contextEntityId
+                    ? { contextEntityId: f.contextEntityId }
+                    : {}),
+                })),
+              }
+            : {}),
         },
       });
 
@@ -1482,19 +1539,17 @@ export const entitiesRouter = router({
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
           proposedEntityId: entityId,
-          // Kind + Facets: a proposal-gated create has no id yet, and the
-          // pending create-proposal does NOT carry these roles — say so
-          // explicitly rather than silently dropping them (which reads as
-          // "roles will follow the approval" when they won't). Compose entity +
-          // roles under governance via the entity-graph door instead. Direct
-          // (always-array) field so the return union stays `.id`-narrowable.
+          // Homed proposal: same as materialize target (may be null = pod-wide).
+          workspaceId: resolvedEntityWorkspaceId,
+          effectiveWorkspaceId: resolvedEntityWorkspaceId,
+          // Facets ride the proposal payload and attach on approve (R2).
+          // outcome "pending" = will attach after approval (not dropped).
           facets: (input.facets ?? []).map((f) => ({
             slug: f.profileSlug,
             // `status` deprecated (operation-outcome overload) — read `outcome`.
-            status: "dropped",
-            outcome: "dropped",
-            error:
-              "create was proposal-gated — re-attach after approval, or use the entity-graph door to propose entity + roles together",
+            status: "pending",
+            outcome: "pending",
+            message: "Role will attach when this create proposal is approved",
           })),
         };
       }

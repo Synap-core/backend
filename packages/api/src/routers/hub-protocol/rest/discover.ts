@@ -230,7 +230,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
         const summaryProfiles = selectedProfiles.map((p) => ({
           slug: p.slug,
           displayName: p.displayName,
-          scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
+          scope: (p.entityScope === "workspace" ? "workspace" : "pod") as
+            "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
             "system" | "shared" | "workspace" | "user" | undefined,
           description: p.description ?? null,
@@ -316,7 +317,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
         return {
           slug: p.slug,
           displayName: p.displayName,
-          scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
+          scope: (p.entityScope === "workspace" ? "workspace" : "pod") as
+            "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
             "system" | "shared" | "workspace" | "user" | undefined,
           description: p.description ?? null,

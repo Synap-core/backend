@@ -11,6 +11,7 @@ import {
   proposals,
   ProposalStatus,
   eq,
+  ProfileResolutionService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
@@ -74,7 +75,7 @@ import {
   buildImportGraphProposalData,
   computeImportHomes,
   majorityWorkspaceFromHomes,
-  stampWorkspaceOnUnpinnedOps,
+  stampScopeAwareHomesOnOps,
   type ProfileHints,
 } from "./import/structuring.js";
 import { suggestViewsFromImportGraph } from "./import/suggest-views.js";
@@ -842,7 +843,12 @@ export class ImportOrchestrator {
         if (placed) {
           workspaceId = placed;
           this.ctx.workspaceId = placed;
-          stampWorkspaceOnUnpinnedOps(ops, placed);
+          // Scope-aware stamp: workspace-scoped kinds only. Pod identity
+          // (person/company/knowledge…) stays unpinned — same rule as capture.
+          const scopeService = new ProfileResolutionService(db);
+          await stampScopeAwareHomesOnOps(ops, placed, (slug) =>
+            scopeService.getEntityScope(slug, placed)
+          );
           homes = computeImportHomes(ops);
         }
       }
@@ -1275,7 +1281,10 @@ export class ImportOrchestrator {
         if (placed) {
           workspaceId = placed;
           this.ctx.workspaceId = placed;
-          stampWorkspaceOnUnpinnedOps(operations, placed);
+          const scopeService = new ProfileResolutionService(db);
+          await stampScopeAwareHomesOnOps(operations, placed, (slug) =>
+            scopeService.getEntityScope(slug, placed)
+          );
           homes = computeImportHomes(operations);
         }
       }

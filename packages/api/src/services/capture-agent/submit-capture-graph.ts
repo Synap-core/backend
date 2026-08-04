@@ -66,6 +66,10 @@ import {
   type CaptureGraphRelation,
   type CaptureGraphBinding,
 } from "../../routers/hub-protocol/rest/_capture-graph-dedup.js";
+import {
+  computeImportHomes,
+  stampScopeAwareHomesOnOps,
+} from "../import/structuring.js";
 
 const logger = createLogger({ module: "submit-capture-graph" });
 
@@ -481,6 +485,10 @@ export async function submitCaptureGraph(
       properties: e.properties ?? {},
       ...(e.existingEntityId ? { existingEntityId: e.existingEntityId } : {}),
       ...(e.facets ? { facets: e.facets } : {}),
+      // Per-op pin when the producer already multi-homed (parity with import).
+      ...(e.targetWorkspaceId
+        ? { targetWorkspaceId: e.targetWorkspaceId }
+        : {}),
     })),
     ...relations.map((r) => ({
       op: "create_relation" as const,
@@ -489,6 +497,17 @@ export async function submitCaptureGraph(
       type: r.type,
     })),
   ];
+
+  // Scope-aware homes (shared with import): stamp process kinds into the graph
+  // home; leave pod-scope identity unpinned. Replaces blanket workspaceScoped
+  // on materialize — pin ≠ exclusive for person/company/knowledge.
+  if (workspaceId) {
+    const homeScope = new ProfileResolutionService(db);
+    await stampScopeAwareHomesOnOps(operations, workspaceId, (slug) =>
+      homeScope.getEntityScope(slug, workspaceId)
+    );
+  }
+  const homes = computeImportHomes(operations);
 
   // ── PREFLIGHT: never queue what can't materialize ────────────────────────
   // Required-property validation runs only at MATERIALIZE (EntityRepository.
@@ -653,15 +672,11 @@ export async function submitCaptureGraph(
             ),
           {
             source,
-            // Workspace-resolved graphs (explicit lens/focus OR the placement
-            // resolver above) must pin their entities to `workspaceId` —
-            // OVERRIDING a pod-default profile's `entityScope` — same as the
-            // approve-flow composite branch (`proposals.ts`:
-            // `...(proposal.workspaceId ? { workspaceScoped: true } : {})`).
-            // Without this, `entities.create`'s own rung-1/6-only placement
-            // would independently re-derive null for a pod-scope kind and
-            // silently undo the graph-level placement decided above.
-            ...(workspaceId ? { workspaceScoped: true } : {}),
+            // Homes are per-op via stampScopeAwareHomesOnOps (targetWorkspaceId
+            // on workspace-scoped kinds only). Do NOT blanket workspaceScoped —
+            // that re-pinned pod identity into the graph home (folder prison).
+            // materializeCompositeGraph forces pin only when op.targetWorkspaceId
+            // is set; pod kinds stay null via entities.create entityScope.
             // The composite ctx's `attachFacet` door — same governance context,
             // so a policy-approved graph attaches facets directly.
             facetCaller: entityCaller,
@@ -711,6 +726,7 @@ export async function submitCaptureGraph(
               operations,
               source,
               graphSource: "capture",
+              homes,
               materialized: { entityIds: materializedEntityIds },
               // Stored so a re-submit of the same graph resolves to THIS record
               // via findPriorCaptureGraphProposal (queries data->>'idempotencyKey').
@@ -788,6 +804,8 @@ export async function submitCaptureGraph(
       source,
       graphSource: "capture",
       bindings,
+      // Same homes summary import proposals carry — multi-home review UI reuses.
+      homes,
       // Stored so a re-submit of the same graph resolves to THIS proposal via
       // findPriorCaptureGraphProposal (queries data->>'idempotencyKey') instead
       // of filing a second row — the core of the anti-duplicate fix.

@@ -737,23 +737,42 @@ export function registerApproveExecutors(): void {
       })) as { id?: string; deduplicated?: boolean };
 
       // Approve-time FACET channel (single-entity twin of the composite path):
-      // attach the caller-NAMED facets (`input.facets`) to the created entity.
-      // Domain-agnostic — the backend attaches exactly what the caller listed,
-      // with no default/eligibility logic (duplicate slugs within the list are
-      // collapsed). Best-effort — a facet-attach failure is logged and NEVER
-      // aborts the approve (mirrors the composite pass-1.5 no-abort contract).
-      // `entityCaller` is the same human-approved ctx, so attachFacet lands
-      // directly rather than re-proposing.
-      if (createdEntity?.id && input.facets && input.facets.length > 0) {
-        const seen = new Set<string>();
-        for (const facet of input.facets) {
-          if (seen.has(facet.profileSlug)) continue;
-          seen.add(facet.profileSlug);
+      // Prefer facets stored on the proposal at propose time (R2 — entities.create
+      // persists data.facets). Approver can still pass/override via input.facets.
+      // Domain-agnostic; duplicate slugs collapsed. Best-effort — never aborts.
+      // `entityCaller` is human-approved ctx → attachFacet lands directly.
+      type FacetSpec = {
+        profileSlug: string;
+        status?: string;
+        properties?: Record<string, unknown>;
+        contextEntityId?: string | null;
+      };
+      const proposedFacets = Array.isArray(innerData.facets)
+        ? (innerData.facets as FacetSpec[])
+        : [];
+      const approveFacets = input.facets ?? [];
+      // Merge: proposal facets first, then approve-time facets (later wins slug).
+      const facetBySlug = new Map<string, FacetSpec>();
+      for (const f of [...proposedFacets, ...approveFacets]) {
+        if (!f?.profileSlug) continue;
+        facetBySlug.set(f.profileSlug, f);
+      }
+      if (createdEntity?.id && facetBySlug.size > 0) {
+        for (const facet of facetBySlug.values()) {
           try {
             await entityCaller.attachFacet({
               entityId: createdEntity.id,
               profileSlug: facet.profileSlug,
               ...(facet.status ? { status: facet.status } : {}),
+              ...(facet.properties ? { properties: facet.properties } : {}),
+              ...(facet.contextEntityId
+                ? { contextEntityId: facet.contextEntityId }
+                : {}),
+              // Role lens: proposal governance home when parent is pod-wide —
+              // attachFacet also derives from role enablement if omitted.
+              ...(proposalWorkspaceId
+                ? { workspaceId: proposalWorkspaceId }
+                : {}),
               source: "system",
             });
           } catch (err) {

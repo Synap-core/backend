@@ -15,27 +15,51 @@ import { users, workspaces, workspaceMembers } from "@synap/database/schema";
  * membership, the operator can sign in but every admin tRPC call returns
  * 403 "Pod admin access required".
  */
+/** Canonical settings stamp for the built-in operator console workspace. */
+const POD_ADMIN_SETTINGS = {
+  systemSlug: "pod-admin",
+  surfaceClass: "admin" as const,
+};
+
 async function ensurePodAdminWorkspace(
   identityId: string,
   db: Awaited<ReturnType<typeof getDb>>
 ): Promise<string> {
   const existing = await db.query.workspaces.findFirst({
     where: eq(workspaces.systemSlug, "pod-admin"),
-    columns: { id: true },
+    columns: { id: true, workspaceType: true, settings: true },
   });
 
   let podAdminId: string;
   if (existing) {
     podAdminId = existing.id;
+    // Heal legacy seeds that stamped workspaceType "personal" (create-admin
+    // used to do this) so auto-placement no longer treats admin as a domain home.
+    const prevSettings =
+      (existing.settings as Record<string, unknown> | null) ?? {};
+    const needsType = existing.workspaceType !== "operational";
+    const needsSurface = prevSettings.surfaceClass !== "admin";
+    if (needsType || needsSurface) {
+      await db
+        .update(workspaces)
+        .set({
+          workspaceType: "operational",
+          settings: { ...prevSettings, ...POD_ADMIN_SETTINGS },
+        })
+        .where(eq(workspaces.id, podAdminId));
+      console.error(
+        `[create-admin] Healed pod-admin workspace ${podAdminId} → operational + surfaceClass=admin`
+      );
+    }
   } else {
     const [created] = await db
       .insert(workspaces)
       .values({
         ownerId: identityId,
         name: "Pod Admin",
-        workspaceType: "personal",
+        workspaceType: "operational",
         systemSlug: "pod-admin",
-        settings: { systemSlug: "pod-admin" },
+        settings: POD_ADMIN_SETTINGS,
       })
       .returning({ id: workspaces.id });
     if (!created) throw new Error("Failed to create pod-admin workspace");

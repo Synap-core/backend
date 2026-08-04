@@ -887,7 +887,7 @@ export async function seedAdminUser(
     // local; it does not depend on the external issuer that authenticated them.
     let podAdminWorkspace = await tx.query.workspaces.findFirst({
       where: eq(workspaces.systemSlug, "pod-admin"),
-      columns: { id: true },
+      columns: { id: true, workspaceType: true, settings: true },
     });
     if (!podAdminWorkspace) {
       const [createdPodAdminWorkspace] = await tx
@@ -897,13 +897,37 @@ export async function seedAdminUser(
           name: "Pod Admin",
           workspaceType: "operational",
           systemSlug: "pod-admin",
-          settings: { systemSlug: "pod-admin" },
+          settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
         })
-        .returning({ id: workspaces.id });
+        .returning({
+          id: workspaces.id,
+          workspaceType: workspaces.workspaceType,
+          settings: workspaces.settings,
+        });
       if (!createdPodAdminWorkspace) {
         throw new Error("seedAdminUser: failed to create pod-admin workspace");
       }
       podAdminWorkspace = createdPodAdminWorkspace;
+    } else {
+      // Heal legacy personal-typed / missing-surfaceClass pod-admin rows so
+      // domain auto-placement never treats the operator console as a home.
+      const prevSettings =
+        (podAdminWorkspace.settings as Record<string, unknown> | null) ?? {};
+      const needsType = podAdminWorkspace.workspaceType !== "operational";
+      const needsSurface = prevSettings.surfaceClass !== "admin";
+      if (needsType || needsSurface) {
+        await tx
+          .update(workspaces)
+          .set({
+            workspaceType: "operational",
+            settings: {
+              ...prevSettings,
+              systemSlug: "pod-admin",
+              surfaceClass: "admin",
+            },
+          })
+          .where(eq(workspaces.id, podAdminWorkspace.id));
+      }
     }
     const podAdminMembership = await tx.query.workspaceMembers.findFirst({
       where: and(

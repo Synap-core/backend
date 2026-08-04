@@ -5,4 +5,9 @@
  * `WorkspaceResolutionService` door so there is ONE implementation of the K1
  * precedence. Existing importers/tests keep pulling it from here unchanged.
  */
-export { resolveEntityWorkspacePlacement } from "@synap/database";
+export {
+  resolveEntityWorkspacePlacement,
+  resolveKindWritePin,
+  normalizeEntityScope,
+  DEFAULT_ENTITY_SCOPE,
+} from "@synap/database";

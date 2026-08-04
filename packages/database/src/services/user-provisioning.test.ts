@@ -265,6 +265,10 @@ describe("seedAdminUser", () => {
       expect.objectContaining({
         systemSlug: "pod-admin",
         workspaceType: "operational",
+        settings: expect.objectContaining({
+          systemSlug: "pod-admin",
+          surfaceClass: "admin",
+        }),
       })
     );
   });

@@ -3,6 +3,7 @@ import {
   getDb,
   ProfileResolutionService,
   PropertyValidationService,
+  resolveKindWritePin,
   eq,
   workspaces,
   workspaceMembers,
@@ -126,11 +127,10 @@ export function majorityWorkspaceFromHomes(
 }
 
 /**
- * Stamp a single-lens workspaceId onto every create_entity op that still lacks
- * `targetWorkspaceId`. Mutates the ops array in place (and replaces each
- * unpinned create_entity entry). Used after resolveGraphPlacement so apply's
- * multi-home materialize path is consistent with the proposal's home.
- * Does NOT overwrite existing per-op pins.
+ * @deprecated Prefer {@link stampScopeAwareHomesOnOps}. This pins EVERY unpinned
+ * create_entity (including pod-scope identity kinds) and reintroduces the
+ * folder-prison class of bugs. Kept only for callers that intentionally force
+ * import isolation with an explicit scope map via stampScopeAwareHomesOnOps.
  */
 export function stampWorkspaceOnUnpinnedOps(
   operations: CompositeProposalOperation[],
@@ -141,6 +141,38 @@ export function stampWorkspaceOnUnpinnedOps(
     if (op.op !== "create_entity") continue;
     if (op.targetWorkspaceId) continue;
     operations[i] = { ...op, targetWorkspaceId: workspaceId };
+  }
+}
+
+/**
+ * Stamp a graph's process home onto **workspace-scoped** create_entity ops only.
+ *
+ * THE one home-stamp for import + capture graphs (parity). Pod-scope kinds
+ * (person, company, knowledge, …) stay unpinned so materialize leaves them
+ * pod-wide; role facets carry domain visibility. Does NOT overwrite existing
+ * per-op `targetWorkspaceId` pins (multi-home import paths).
+ *
+ * Uses {@link resolveKindWritePin} so create doors and graph stamps share ONE rule.
+ */
+export async function stampScopeAwareHomesOnOps(
+  operations: CompositeProposalOperation[],
+  graphWorkspaceId: string | null | undefined,
+  getEntityScope: (profileSlug: string) => Promise<"pod" | "workspace">
+): Promise<void> {
+  if (!graphWorkspaceId) return;
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (op.op !== "create_entity") continue;
+    if (op.targetWorkspaceId) continue;
+    if (op.existingEntityId) continue;
+    const entityScope = await getEntityScope(op.profileSlug);
+    const pin = resolveKindWritePin({
+      entityScope,
+      routedWorkspaceId: graphWorkspaceId,
+    });
+    if (pin.targetWorkspaceId) {
+      operations[i] = { ...op, targetWorkspaceId: pin.targetWorkspaceId };
+    }
   }
 }
 

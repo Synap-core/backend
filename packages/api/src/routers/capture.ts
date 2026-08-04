@@ -56,6 +56,7 @@ import {
   resolveRolePayload,
   resolveWorkspacePlacement,
   resolveProjectPlacement,
+  resolveKindWritePin,
   loadFacetSlugsBatch,
   type ResolutionRung,
 } from "@synap/database";
@@ -75,7 +76,7 @@ import { loadTeamRosterForCapture } from "../services/team-roster-context.js";
 import { AI_KIND, BELOW_GATE_CONFIDENCE } from "../lib/ai-events.js";
 import { type CaptureRoutingResult } from "../lib/capture-routing.js";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
-import { isRoutableWorkspaceType } from "../lib/routing-candidates.js";
+import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -510,9 +511,8 @@ export const captureRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       // Pod-wide allowed (twin of capture.structure): no workspace is required.
-      // Placement is derived by the entities.create door below (which routes
-      // through resolveWorkspacePlacement) — `workspaceScoped: true` keeps a
-      // present workspace as the lens and lands pod-wide when there is none.
+      // Pin flags use resolveKindWritePin — pod kinds stay unpinned; process
+      // kinds pin to ambient when present. Never blanket workspaceScoped.
       const workspaceId = ctx.workspaceId; // string | null
 
       logger.debug(
@@ -697,18 +697,30 @@ export const captureRouter = router({
       let propertiesDropped: true | undefined;
 
       let entityId: string;
+      // Shared pin rule (R1/R3/R4): pod identity unpinned; process kinds use ambient.
+      const thoughtScopeService = new ProfileResolutionService(await getDb());
+      const pinFor = async (slug: string) => {
+        const entityScope = await thoughtScopeService.getEntityScope(
+          slug,
+          workspaceId ?? null
+        );
+        return resolveKindWritePin({
+          entityScope,
+          routedWorkspaceId: workspaceId,
+        });
+      };
       try {
+        const pin = await pinFor(profileSlug);
         const created = await entitiesCaller.create({
           profileSlug,
           title,
           properties,
           documentId,
           source: "user",
-          // Force the entity into this workspace even for a pod-default
-          // profile (person/company) — matches capture's historical
-          // literal-workspaceId behavior, unlike the door's default of
-          // honoring the profile's pod-wide default.
-          workspaceScoped: true,
+          ...(pin.targetWorkspaceId
+            ? { targetWorkspaceId: pin.targetWorkspaceId }
+            : {}),
+          workspaceScoped: pin.workspaceScoped,
         });
         entityId = (created as { id: string }).id;
       } catch (err) {
@@ -724,13 +736,17 @@ export const captureRouter = router({
               { err, userId, profileSlug },
               "Entity creation failed validation — retrying same profile with properties dropped"
             );
+            const pin = await pinFor(profileSlug);
             const salvaged = await entitiesCaller.create({
               profileSlug,
               title,
               properties: salvageProperties,
               documentId,
               source: "user",
-              workspaceScoped: true,
+              ...(pin.targetWorkspaceId
+                ? { targetWorkspaceId: pin.targetWorkspaceId }
+                : {}),
+              workspaceScoped: pin.workspaceScoped,
             });
             entityId = (salvaged as { id: string }).id;
             propertiesDropped = true;
@@ -740,13 +756,17 @@ export const captureRouter = router({
               { err: retryErr, userId, profileSlug },
               "Same-profile retry failed, falling back to item"
             );
+            const pin = await pinFor(DEFAULT_CAPTURE_PROFILE);
             const fallback = await entitiesCaller.create({
               profileSlug: DEFAULT_CAPTURE_PROFILE,
               title,
               properties: salvageProperties,
               documentId,
               source: "user",
-              workspaceScoped: true,
+              ...(pin.targetWorkspaceId
+                ? { targetWorkspaceId: pin.targetWorkspaceId }
+                : {}),
+              workspaceScoped: pin.workspaceScoped,
             });
             entityId = (fallback as { id: string }).id;
             degradedFrom = originalProfileSlug;
@@ -760,13 +780,17 @@ export const captureRouter = router({
             { err, userId, profileSlug },
             "Entity creation failed (non-validation), falling back to item"
           );
+          const pin = await pinFor(DEFAULT_CAPTURE_PROFILE);
           const fallback = await entitiesCaller.create({
             profileSlug: DEFAULT_CAPTURE_PROFILE,
             title,
             properties: salvageProperties,
             documentId,
             source: "user",
-            workspaceScoped: true,
+            ...(pin.targetWorkspaceId
+              ? { targetWorkspaceId: pin.targetWorkspaceId }
+              : {}),
+            workspaceScoped: pin.workspaceScoped,
           });
           entityId = (fallback as { id: string }).id;
           degradedFrom = originalProfileSlug;
@@ -964,6 +988,8 @@ export const captureRouter = router({
           name: workspaces.name,
           description: workspaces.description,
           workspaceType: workspaces.workspaceType,
+          systemSlug: workspaces.systemSlug,
+          settings: workspaces.settings,
         })
         .from(workspaces)
         .innerJoin(
@@ -979,11 +1005,11 @@ export const captureRouter = router({
         )
         .orderBy(desc(workspaces.updatedAt))
         .limit(30);
-      // Never surface non-user-data workspaces as routing candidates —
-      // `operational` (system/admin) or `agent` (D2). Archived workspaces are
-      // already excluded at the query level above (isNull(archivedAt)).
+      // Never surface non-domain homes as routing candidates — operational /
+      // agent types, surfaceClass admin|settings, or systemSlug pod-admin
+      // (legacy personal-typed admin rows). Archived already excluded above.
       const availableWorkspaces = userWorkspaceRows
-        .filter((w) => isRoutableWorkspaceType(w.workspaceType))
+        .filter((w) => isDomainHomeWorkspace(w))
         .map((w) => ({
           id: w.id,
           name: w.name,
@@ -2217,17 +2243,19 @@ export const captureRouter = router({
       // deal/event…) keep the routed stamp — their documents/sessions/projects
       // link via the entity's workspaceId (load-bearing; do not break). Cache
       // per slug so a batch of many same-kind entities resolves scope once.
+      // Shared pin rule with thought + graph stamps (resolveKindWritePin).
       const scopeService = new ProfileResolutionService(database);
       const entityScopeCache = new Map<string, "pod" | "workspace">();
-      const isPodScopeProfile = async (slug: string): Promise<boolean> => {
-        const cached = entityScopeCache.get(slug);
-        if (cached) return cached === "pod";
-        const scope = await scopeService.getEntityScope(
-          slug,
-          workspaceId ?? null
-        );
-        entityScopeCache.set(slug, scope);
-        return scope === "pod";
+      const pinForSlug = async (slug: string) => {
+        let scope = entityScopeCache.get(slug);
+        if (!scope) {
+          scope = await scopeService.getEntityScope(slug, workspaceId ?? null);
+          entityScopeCache.set(slug, scope);
+        }
+        return resolveKindWritePin({
+          entityScope: scope,
+          routedWorkspaceId: workspaceId,
+        });
       };
 
       const entityCaller = {
@@ -2238,10 +2266,7 @@ export const captureRouter = router({
           properties?: Record<string, unknown>;
           content?: string;
         }) => {
-          // Pod-scope kinds land pod-wide (null workspace); workspace-scope
-          // kinds keep the routed stamp. The item fallback below is explicitly
-          // pinned to the routed workspace so degraded captures stay in-lane.
-          const isPod = await isPodScopeProfile(op.profileSlug);
+          const pin = await pinForSlug(op.profileSlug);
           const { documentId, inlineContent } = await resolveCapturedBody({
             content: op.content,
             title: op.title,
@@ -2266,12 +2291,10 @@ export const captureRouter = router({
               properties,
               documentId,
               source: "user",
-              // Pod-scope kind → pod-wide (null workspace): omit the routed
-              // stamp and let the profile's pod-default win. Workspace-scope
-              // kind → pin to the ROUTED workspace so the entity doesn't split
-              // from its document/project/session links (which use workspaceId).
-              targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
-              workspaceScoped: !isPod,
+              ...(pin.targetWorkspaceId
+                ? { targetWorkspaceId: pin.targetWorkspaceId }
+                : {}),
+              workspaceScoped: pin.workspaceScoped,
             });
             return {
               id: (created as { id: string }).id,
@@ -2297,10 +2320,10 @@ export const captureRouter = router({
                   properties: salvageProperties,
                   documentId,
                   source: "user",
-                  targetWorkspaceId: isPod
-                    ? undefined
-                    : (workspaceId ?? undefined),
-                  workspaceScoped: !isPod,
+                  ...(pin.targetWorkspaceId
+                    ? { targetWorkspaceId: pin.targetWorkspaceId }
+                    : {}),
+                  workspaceScoped: pin.workspaceScoped,
                 });
                 return {
                   id: (salvaged as { id: string }).id,
@@ -2319,6 +2342,8 @@ export const captureRouter = router({
                 "Entity creation failed (non-validation), falling back to item"
               );
             }
+            // Item fallback is process-shaped — pin to routed home when present.
+            const fallbackPin = await pinForSlug(DEFAULT_CAPTURE_PROFILE);
             const fallback = await entitiesCaller.create({
               profileSlug: DEFAULT_CAPTURE_PROFILE,
               title: op.title,
@@ -2326,8 +2351,10 @@ export const captureRouter = router({
               properties: salvageProperties,
               documentId,
               source: "user",
-              targetWorkspaceId: workspaceId ?? undefined,
-              workspaceScoped: true,
+              ...(fallbackPin.targetWorkspaceId
+                ? { targetWorkspaceId: fallbackPin.targetWorkspaceId }
+                : {}),
+              workspaceScoped: fallbackPin.workspaceScoped,
             });
             return {
               id: (fallback as { id: string }).id,

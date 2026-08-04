@@ -63,6 +63,10 @@ type Db = PostgresJsDatabase<typeof schema>;
  * (ratified decision D2). Explicit `workspaceId` targeting elsewhere is
  * unaffected. Archival is orthogonal (`archivedAt IS NULL`, enforced below).
  *
+ * Type-only. Prefer {@link isDomainHomeWorkspace} when settings/systemSlug are
+ * available — admin/settings surfaces may be mis-typed as `personal` in legacy
+ * data and are excluded via `surfaceClass` / system slug, not display name.
+ *
  * MOVED here from @synap/api in Wave 1 so the door and the api candidate-list
  * builder share ONE definition; `@synap/api`'s `lib/routing-candidates.ts`
  * re-exports it.
@@ -71,6 +75,57 @@ export function isRoutableWorkspaceType(
   workspaceType: string | null | undefined
 ): boolean {
   return workspaceType !== "operational" && workspaceType !== "agent";
+}
+
+/**
+ * Signals used to decide whether a workspace may be a domain-data home
+ * (auto-placement candidate or explicit filing target for kinds/roles).
+ * Prefer metadata over display names — never gate on workspace NAME.
+ */
+export type WorkspaceHomeSignals = {
+  workspaceType?: string | null;
+  /** Column SSOT for built-in system workspaces (e.g. pod-admin). */
+  systemSlug?: string | null;
+  /**
+   * Partial settings bag — only surfaceClass/systemSlug are read.
+   * No index signature: keeps `WorkspaceSettings` (and other concrete settings
+   * types) assignable without casts at call sites (tsc structural typing).
+   */
+  settings?: {
+    surfaceClass?: string | null;
+    systemSlug?: string | null;
+  } | null;
+};
+
+/**
+ * Error message when a caller tries to file domain entity data into an
+ * admin/settings/agent/operational workspace. Shared by create doors + tests.
+ */
+export const DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE =
+  "Cannot file domain data into an admin/settings workspace; omit workspaceId for server placement or pick a domain app.";
+
+/**
+ * True when this workspace may be an auto-home / ambient default / explicit
+ * filing target for **domain** entity data (CRM, content, personal notes, …).
+ *
+ * Excludes:
+ * - `workspaceType` operational | agent (via {@link isRoutableWorkspaceType})
+ * - `settings.surfaceClass` admin | settings (template/operator metadata)
+ * - built-in system slug `pod-admin` (column or settings dual-write)
+ *
+ * Templates that mint admin/settings surfaces MUST set `workspaceType:
+ * "operational"` and/or `settings.surfaceClass: "admin"|"settings"`. Do not
+ * rely on the display name — product code never hardcodes workspace names.
+ */
+export function isDomainHomeWorkspace(ws: WorkspaceHomeSignals): boolean {
+  if (!isRoutableWorkspaceType(ws.workspaceType)) return false;
+  const surfaceClass = ws.settings?.surfaceClass ?? null;
+  if (surfaceClass === "admin" || surfaceClass === "settings") return false;
+  const slug = ws.systemSlug ?? ws.settings?.systemSlug ?? null;
+  // systemSlug is the SSOT identifier for built-in system workspaces — not a
+  // display name. pod-admin is the only admin system surface today.
+  if (slug === "pod-admin") return false;
+  return true;
 }
 
 /**
@@ -86,11 +141,71 @@ export function isRoutableWorkspaceType(
  * MOVED here from @synap/api in Wave 1 (absorbed into the door); the api helper
  * re-exports it, so the CI tripwire's "one K1 implementation" holds.
  */
+/**
+ * Canonical default when a kind's entityScope is missing/null.
+ * Matches schema column default (migration 0220) + ProfileRepository write door:
+ * omitted kind scope = pod. Explicit `"workspace"` remains for process kinds.
+ */
+export const DEFAULT_ENTITY_SCOPE: "pod" | "workspace" = "pod";
+
+/**
+ * Normalize a stored/resolved entityScope to the two legal values.
+ * Only the explicit string `"workspace"` pins; everything else (pod, null,
+ * undefined, garbage) is pod — identity by default, process pin by declaration.
+ */
+export function normalizeEntityScope(
+  scope: string | null | undefined
+): "pod" | "workspace" {
+  return scope === "workspace" ? "workspace" : DEFAULT_ENTITY_SCOPE;
+}
+
+/**
+ * Create-door pin flags for one kind given an optional process home.
+ * THE shared rule for capture execute, capture thought, graph op stamps, and
+ * any other writer that must not turn ambient lens into identity prison.
+ *
+ * - Explicit `targetWorkspaceId` → pin (workspaceScoped)
+ * - Pod-scope kind → no pin (home NULL; facets carry role-as-lens)
+ * - Workspace-scope kind + routed home → pin to that home
+ * - Workspace-scope with no home → no pin (caller ambient / rung-6)
+ */
+export function resolveKindWritePin(input: {
+  entityScope?: string | null;
+  /** Per-op or caller explicit pin (wins). */
+  targetWorkspaceId?: string | null;
+  /** Graph majority / ambient process home — never applied to pod kinds. */
+  routedWorkspaceId?: string | null;
+}): {
+  targetWorkspaceId: string | undefined;
+  workspaceScoped: boolean;
+} {
+  if (input.targetWorkspaceId) {
+    return {
+      targetWorkspaceId: input.targetWorkspaceId,
+      workspaceScoped: true,
+    };
+  }
+  if (normalizeEntityScope(input.entityScope) === "pod") {
+    return { targetWorkspaceId: undefined, workspaceScoped: false };
+  }
+  if (input.routedWorkspaceId) {
+    return {
+      targetWorkspaceId: input.routedWorkspaceId,
+      workspaceScoped: true,
+    };
+  }
+  return { targetWorkspaceId: undefined, workspaceScoped: false };
+}
+
 export function resolveEntityWorkspacePlacement(input: {
   global: boolean;
   targetWorkspaceId?: string | null;
   workspaceScoped: boolean;
-  /** The profile's `entityScope` ("pod" | "workspace"); defaults to "workspace". */
+  /**
+   * The profile's `entityScope` ("pod" | "workspace").
+   * Defaults to **pod** (schema 0220 + ProfileRepository). Explicit
+   * `"workspace"` required for process kinds (deal, pipeline, …).
+   */
   profileEntityScope?: string | null;
   /** The governance/ambient workspace (targetWorkspaceId ?? ctx.workspaceId ?? null). */
   ambientWorkspaceId: string | null;
@@ -98,7 +213,7 @@ export function resolveEntityWorkspacePlacement(input: {
   if (input.global) return null;
   if (input.targetWorkspaceId) return input.targetWorkspaceId;
   if (input.workspaceScoped) return input.ambientWorkspaceId;
-  const scope = input.profileEntityScope ?? "workspace";
+  const scope = normalizeEntityScope(input.profileEntityScope);
   return scope === "pod" ? null : input.ambientWorkspaceId;
 }
 
@@ -295,12 +410,28 @@ async function loadRoutableMemberWorkspaces(
 
   const wsRows = await db.query.workspaces.findMany({
     where: inArray(workspaces.id, [...memberIds]),
-    columns: { id: true, name: true, workspaceType: true, archivedAt: true },
+    columns: {
+      id: true,
+      name: true,
+      workspaceType: true,
+      archivedAt: true,
+      systemSlug: true,
+      settings: true,
+    },
   });
   for (const w of wsRows) {
     if (!memberIds.has(w.id)) continue; // I2 floor (redundant under SQL, load-bearing under mock)
     if (w.archivedAt) continue;
-    if (!isRoutableWorkspaceType(w.workspaceType)) continue;
+    // Domain-home floor: type + surfaceClass + systemSlug (not display name).
+    if (
+      !isDomainHomeWorkspace({
+        workspaceType: w.workspaceType,
+        systemSlug: w.systemSlug,
+        settings: w.settings as WorkspaceHomeSignals["settings"],
+      })
+    ) {
+      continue;
+    }
     map.set(w.id, { id: w.id, name: w.name, type: w.workspaceType });
   }
   return map;
@@ -664,16 +795,29 @@ export async function resolveWorkspacePlacement(
   }
 
   // ── Rung 6 — entity-scope default (the ONE K1 precedence) ──
+  // Prefer explicit input; when omitted, resolve from the kind profile so
+  // process kinds (entityScope workspace) still ambient-pin and identity
+  // kinds stay pod-wide. Missing profile → normalizeEntityScope → pod.
+  let resolvedEntityScope: string | null | undefined = input.entityScope;
+  if (resolvedEntityScope == null && input.kindSlug) {
+    try {
+      resolvedEntityScope = await new ProfileResolutionService(
+        db
+      ).getEntityScope(input.kindSlug, ambient);
+    } catch {
+      resolvedEntityScope = null;
+    }
+  }
   const ws = resolveEntityWorkspacePlacement({
     global: false, // handled at rung 1
     targetWorkspaceId: undefined, // handled at rung 1
     workspaceScoped: input.workspaceScopedFlag === true,
-    profileEntityScope: input.entityScope ?? null,
+    profileEntityScope: resolvedEntityScope ?? null,
     ambientWorkspaceId: ambient,
   });
   const reason = input.workspaceScopedFlag
     ? "workspace-scoped flag → the ambient workspace"
-    : (input.entityScope ?? "workspace") === "pod"
+    : normalizeEntityScope(resolvedEntityScope) === "pod"
       ? "kind is pod-wide → visible everywhere"
       : ambient
         ? "default to the ambient workspace"

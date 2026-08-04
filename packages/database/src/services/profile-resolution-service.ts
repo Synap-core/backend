@@ -154,7 +154,9 @@ export class ProfileResolutionService {
     const profile = workspaceId
       ? await this.profileRepo.getBySlugForWorkspace(profileSlug, workspaceId)
       : await this.profileRepo.getBySlug(profileSlug);
-    const scope = profile?.entityScope === "pod" ? "pod" : "workspace";
+    // Schema default + write door = pod. Only an explicit "workspace" pins.
+    // Missing profile / null column → pod (identity by default), never ambient.
+    const scope = profile?.entityScope === "workspace" ? "workspace" : "pod";
 
     ProfileResolutionService.entityScopeCache.set(cacheKey, {
       scope,

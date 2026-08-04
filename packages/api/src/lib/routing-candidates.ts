@@ -1,8 +1,14 @@
 /**
- * Routable workspace-type predicate — thin re-export.
+ * Routable / domain-home workspace predicates — thin re-exports.
  *
- * The implementation MOVED to @synap/database in Wave 1 so the door and this
- * api-side candidate-list builder share ONE definition. Existing importers keep
- * pulling `isRoutableWorkspaceType` from here unchanged.
+ * Implementations live in @synap/database so the placement door and api-side
+ * candidate-list builders share ONE definition. Prefer
+ * `isDomainHomeWorkspace` when settings/systemSlug are available (catches
+ * admin surfaces mis-typed as personal).
  */
-export { isRoutableWorkspaceType } from "@synap/database";
+export {
+  isRoutableWorkspaceType,
+  isDomainHomeWorkspace,
+  DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
+  type WorkspaceHomeSignals,
+} from "@synap/database";

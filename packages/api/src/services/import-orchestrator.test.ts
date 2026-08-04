@@ -103,6 +103,30 @@ describe("resolveImportIdempotencyKey", () => {
   });
 });
 
+describe("stampScopeAwareHomesOnOps", () => {
+  it("stamps only workspace-scoped ops; leaves pod kinds unpinned", async () => {
+    const { stampScopeAwareHomesOnOps } =
+      await import("./import/structuring.js");
+    const ops = [
+      { op: "create_entity" as const, profileSlug: "person", title: "A" },
+      { op: "create_entity" as const, profileSlug: "deal", title: "B" },
+      {
+        op: "create_entity" as const,
+        profileSlug: "task",
+        title: "C",
+        targetWorkspaceId: "ws-existing",
+      },
+    ];
+    await stampScopeAwareHomesOnOps(ops, "ws-crm", async (slug) =>
+      slug === "person" ? "pod" : "workspace"
+    );
+    expect(ops[0].targetWorkspaceId).toBeUndefined();
+    expect(ops[1].targetWorkspaceId).toBe("ws-crm");
+    // Existing pin preserved
+    expect(ops[2].targetWorkspaceId).toBe("ws-existing");
+  });
+});
+
 describe("computeImportHomes", () => {
   it("counts pod-wide creates and is not multi-home", () => {
     const homes = computeImportHomes([

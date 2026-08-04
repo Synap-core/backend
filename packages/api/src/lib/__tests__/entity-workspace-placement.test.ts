@@ -33,7 +33,7 @@ describe("resolveEntityWorkspacePlacement", () => {
     ).toBe(AMBIENT);
   });
 
-  it("defaults an undefined entityScope to workspace-scope → ambient", () => {
+  it("defaults an undefined entityScope to pod-scope → NULL (schema 0220)", () => {
     expect(
       resolveEntityWorkspacePlacement({
         global: false,
@@ -41,7 +41,18 @@ describe("resolveEntityWorkspacePlacement", () => {
         profileEntityScope: undefined,
         ambientWorkspaceId: AMBIENT,
       })
-    ).toBe(AMBIENT);
+    ).toBeNull();
+  });
+
+  it("defaults null entityScope to pod-scope → NULL", () => {
+    expect(
+      resolveEntityWorkspacePlacement({
+        global: false,
+        workspaceScoped: false,
+        profileEntityScope: null,
+        ambientWorkspaceId: AMBIENT,
+      })
+    ).toBeNull();
   });
 
   it("(c) explicit targetWorkspaceId wins over a pod-scope profile", () => {

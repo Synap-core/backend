@@ -24,6 +24,11 @@ export interface CaptureGraphEntity {
   properties?: Record<string, unknown>;
   existingEntityId?: string;
   /**
+   * Optional per-entity process home (multi-home capture, parity with import).
+   * Pod-scope kinds should omit this — identity is not a folder.
+   */
+  targetWorkspaceId?: string;
+  /**
    * Role-profile facets (Kind + Facets) to attach once the entity materializes.
    * Threaded straight through to the composite `create_entity` op (see
    * CompositeCreateEntityOp.facets). Carried through within-batch collapse on the

@@ -13,6 +13,11 @@ import {
   resolveImportEntityPlacement,
   acceptDeterministicGraphWorkspace,
   resolveGraphWorkspaceFromSlugs,
+  isRoutableWorkspaceType,
+  isDomainHomeWorkspace,
+  resolveEntityWorkspacePlacement,
+  resolveKindWritePin,
+  normalizeEntityScope,
 } from "./workspace-resolution-service.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 
@@ -21,6 +26,7 @@ const WS_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 /** A workspace the caller is NOT a member of — the I2 floor must never surface it. */
 const WS_OTHER = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const WS_ADMIN = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 
 interface Seed {
   members?: string[];
@@ -29,6 +35,11 @@ interface Seed {
     name: string;
     workspaceType?: string | null;
     archivedAt?: Date | null;
+    systemSlug?: string | null;
+    settings?: {
+      surfaceClass?: string | null;
+      systemSlug?: string | null;
+    } | null;
   }[];
   profiles?: {
     id: string;
@@ -68,6 +79,8 @@ function makeDb(seed: Seed): any {
               name: w.name,
               workspaceType: w.workspaceType ?? "domain",
               archivedAt: w.archivedAt ?? null,
+              systemSlug: w.systemSlug ?? null,
+              settings: w.settings ?? {},
             }));
           }
           return (seed.podReadable ?? []).map((id) => ({ id }));
@@ -221,6 +234,8 @@ describe("resolveWorkspacePlacement — rung 2 (ontology)", () => {
       userId: USER,
       kindSlug: "client",
       ambientWorkspaceId: WS_A,
+      // Role/process kind — explicit workspace scope (omit would default pod).
+      entityScope: "workspace",
     });
     expect(r.rung).toBe(6);
     expect(r.workspaceId).toBe(WS_A);
@@ -363,6 +378,7 @@ describe("resolveWorkspacePlacement — rung 4 (feeds seam)", () => {
       userId: USER,
       kindSlug: "asset",
       ambientWorkspaceId: WS_A,
+      entityScope: "workspace",
     });
     expect(r.rung).toBe(6);
     expect(r.workspaceId).toBe(WS_A);
@@ -426,6 +442,7 @@ describe("resolveWorkspacePlacement — rung 5 (AI tie-break)", () => {
       ambientWorkspaceId: WS_A,
       aiHint: { workspaceId: WS_B, confidence: 0.9 },
       mode: "locked",
+      entityScope: "workspace",
     });
     expect(r.workspaceId).toBe(WS_A);
     expect(r.ask).toBe(false);
@@ -452,6 +469,7 @@ describe("resolveWorkspacePlacement — rung 5 (AI tie-break)", () => {
       ambientWorkspaceId: WS_A,
       aiHint: { workspaceId: WS_B, confidence: 0.3 },
       mode: "auto",
+      entityScope: "workspace",
     });
     expect(r.rung).toBe(6);
     expect(r.workspaceId).toBe(WS_A);
@@ -508,6 +526,140 @@ describe("resolveWorkspacePlacement — rung 6 (K1 parity)", () => {
       ambientWorkspaceId: null,
     });
     expect(r).toMatchObject({ workspaceId: null, rung: 6 });
+  });
+});
+
+describe("isRoutableWorkspaceType / isDomainHomeWorkspace", () => {
+  it("type-only predicate excludes operational + agent", () => {
+    expect(isRoutableWorkspaceType("operational")).toBe(false);
+    expect(isRoutableWorkspaceType("agent")).toBe(false);
+    expect(isRoutableWorkspaceType("personal")).toBe(true);
+  });
+
+  it("domain-home excludes surfaceClass admin and systemSlug pod-admin", () => {
+    expect(
+      isDomainHomeWorkspace({
+        workspaceType: "personal",
+        settings: { surfaceClass: "admin" },
+      })
+    ).toBe(false);
+    expect(
+      isDomainHomeWorkspace({
+        workspaceType: "personal",
+        systemSlug: "pod-admin",
+      })
+    ).toBe(false);
+    expect(isDomainHomeWorkspace({ workspaceType: "personal" })).toBe(true);
+  });
+});
+
+describe("normalizeEntityScope / resolveEntityWorkspacePlacement / resolveKindWritePin", () => {
+  const AMBIENT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+  it("normalizeEntityScope: only explicit workspace pins; else pod", () => {
+    expect(normalizeEntityScope("workspace")).toBe("workspace");
+    expect(normalizeEntityScope("pod")).toBe("pod");
+    expect(normalizeEntityScope(null)).toBe("pod");
+    expect(normalizeEntityScope(undefined)).toBe("pod");
+    expect(normalizeEntityScope("garbage")).toBe("pod");
+  });
+
+  it("omitted entityScope → pod-wide NULL (not ambient)", () => {
+    expect(
+      resolveEntityWorkspacePlacement({
+        global: false,
+        workspaceScoped: false,
+        profileEntityScope: undefined,
+        ambientWorkspaceId: AMBIENT,
+      })
+    ).toBeNull();
+  });
+
+  it("resolveKindWritePin: pod kind never takes routed home", () => {
+    expect(
+      resolveKindWritePin({
+        entityScope: "pod",
+        routedWorkspaceId: AMBIENT,
+      })
+    ).toEqual({ targetWorkspaceId: undefined, workspaceScoped: false });
+  });
+
+  it("resolveKindWritePin: workspace kind pins to routed home", () => {
+    expect(
+      resolveKindWritePin({
+        entityScope: "workspace",
+        routedWorkspaceId: AMBIENT,
+      })
+    ).toEqual({ targetWorkspaceId: AMBIENT, workspaceScoped: true });
+  });
+
+  it("resolveKindWritePin: explicit target wins over pod scope", () => {
+    expect(
+      resolveKindWritePin({
+        entityScope: "pod",
+        targetWorkspaceId: AMBIENT,
+      })
+    ).toEqual({ targetWorkspaceId: AMBIENT, workspaceScoped: true });
+  });
+});
+
+describe("resolveWorkspacePlacement — admin/surfaceClass exclusion from candidates", () => {
+  it("does not place onto a personal-typed pod-admin (systemSlug) via ontology", async () => {
+    // Legacy seed bug: create-admin stamped workspaceType=personal. The door
+    // must still exclude it via systemSlug, not display name.
+    const db = makeDb({
+      members: [WS_ADMIN],
+      workspaces: [
+        {
+          id: WS_ADMIN,
+          name: "Pod Admin",
+          workspaceType: "personal",
+          systemSlug: "pod-admin",
+        },
+      ],
+      profiles: [
+        {
+          id: "p",
+          slug: "client",
+          scope: "workspace",
+          workspaceId: WS_ADMIN,
+        },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "client",
+    });
+    // Only candidate was non-domain → no ontology survivor; falls through.
+    expect(r.workspaceId).not.toBe(WS_ADMIN);
+  });
+
+  it("does not place onto surfaceClass=admin personal workspace via ontology", async () => {
+    const db = makeDb({
+      members: [WS_A, WS_ADMIN],
+      workspaces: [
+        { id: WS_A, name: "CRM", workspaceType: "personal" },
+        {
+          id: WS_ADMIN,
+          name: "Operator Console",
+          workspaceType: "personal",
+          settings: { surfaceClass: "admin" },
+        },
+      ],
+      profiles: [
+        {
+          id: "p",
+          slug: "client",
+          scope: "workspace",
+          workspaceId: WS_ADMIN,
+        },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "client",
+    });
+    expect(r.workspaceId).not.toBe(WS_ADMIN);
   });
 });
 

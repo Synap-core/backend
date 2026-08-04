@@ -673,7 +673,8 @@ async function rejectMissingWriteWorkspace(
       : available.map((w) => `${w.name} (${w.id})`).join("; ");
   const message =
     `No workspace resolved for this write — refusing to pick an arbitrary membership. ` +
-    `Pass workspaceId, call synap_set_workspace_focus(workspace), or call synap_orient() to list domains. ` +
+    `Pass workspaceId (process home / list lens), call synap_set_workspace_focus(workspace), or call synap_orient() to list domains. ` +
+    `Pod-scope kinds (person, company, knowledge, note…) can omit workspaceId on create/capture — server places them pod-wide; ambient is a read lens, not a silent dump. ` +
     `Available workspaces: ${list}.`;
 
   if (opts?.captureScope) {

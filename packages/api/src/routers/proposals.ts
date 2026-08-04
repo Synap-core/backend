@@ -2040,15 +2040,11 @@ async function applyProposalApproval(args: {
           { err, type },
           "composite proposal: relation create failed (entities kept)"
         ),
-      // Workspace-scoped imports must pin their entities to the target
-      // workspace on approval (overriding pod-default profile entityScope),
-      // mirroring rest/capture.ts /import/apply. Only when the proposal is
-      // workspace-bound; interactive pod-default approvals stay global.
-      // `entityCaller` is the full entitiesRouter caller (same ctx), so it
-      // doubles as the facetCaller — attaching declared facets (op.facets)
-      // right after each entity materializes.
+      // Per-op homes (targetWorkspaceId) pin process kinds only — stamped at
+      // import/capture submit via stampScopeAwareHomesOnOps. Do NOT blanket
+      // workspaceScoped: that re-pinned pod identity into the proposal home.
+      // `entityCaller` doubles as facetCaller for op.facets after materialize.
       {
-        ...(proposal.workspaceId ? { workspaceScoped: true } : {}),
         facetCaller: entityCaller,
         // Graph submitters persist their origin in proposal data. Reuse it
         // on approval so source attribution survives the proposal boundary.

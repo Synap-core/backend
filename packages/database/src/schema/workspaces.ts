@@ -516,6 +516,14 @@ export interface WorkspaceSettings {
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
 
+  /**
+   * Product surface class for placement hygiene. Admin/settings surfaces must
+   * never be auto-homes or ambient defaults for domain entity dumps.
+   * Templates that mint operator consoles MUST set this (or
+   * `workspaceType: "operational"`) — product code never gates on display name.
+   */
+  surfaceClass?: "admin" | "settings" | "domain";
+
   /** Product-surface policy for a CRM workspace. */
   crm?: CrmWorkspacePolicy;
 
