@@ -3807,6 +3807,16 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+-- TOCTOU race backstop (0227): at-most-one non-archived playbook per
+-- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
+-- pod-wide rows participate. Soft-archive of pre-existing name clones is only
+-- in 0227_playbooks_workspace_name_unique.sql (baseline assumes clean seed).
+CREATE UNIQUE INDEX IF NOT EXISTS "playbooks_workspace_name_active_uq"
+  ON "playbooks" (
+    COALESCE(workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    lower(name)
+  )
+  WHERE status <> 'archived';
 -- Process North Star subject spine (0139)
 ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS flow_automation_id uuid;
 CREATE INDEX IF NOT EXISTS idx_playbooks_flow_automation_id ON playbooks (flow_automation_id);

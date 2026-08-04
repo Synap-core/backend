@@ -56,6 +56,12 @@ import {
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   resolveWorkspacePlacement,
   resolveProjectPlacement,
+  shouldRejectJunkTitle,
+  buildJunkTitleMessage,
+  classifyWeakEntityDedup,
+  buildWeakEntityDedupMessage,
+  buildWeakDedupCause,
+  ENTITY_JUNK_TITLE_CODE,
 } from "@synap/database";
 import {
   entities,
@@ -848,6 +854,16 @@ export const entitiesRouter = router({
             })
           )
           .optional(),
+        /**
+         * Bypass the WEAK same-name create gate (Phase 1). When true, a
+         * same-profile title match still creates a new entity instead of
+         * rejecting with candidates. Strong-signal auto-merge is NOT bypassed
+         * — email/phone/url still collapse onto the existing subject. Prefer
+         * reusing an existing id / enriching / attaching a facet; only set this
+         * when the subject is genuinely distinct (e.g. two people who share a
+         * name). Logged as `identity_resolve_merge` outcome `force_create`.
+         */
+        forceCreate: z.boolean().optional().default(false),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -992,14 +1008,34 @@ export const entitiesRouter = router({
         return out;
       };
 
+      // Junk-title gate (Phase 1) — person/company/contact never mint with a
+      // placeholder name agents invent when a subject is not disclosed. Runs
+      // before identity resolve so we don't waste a lookup on garbage.
+      if (shouldRejectJunkTitle(profileSlug, input.title)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: buildJunkTitleMessage(profileSlug ?? "entity"),
+          cause: {
+            code: ENTITY_JUNK_TITLE_CODE,
+            profileSlug,
+            title: input.title ?? null,
+          },
+        });
+      }
+
       // Resolve-then-merge (identity-first dedup — the single-entity door). A
       // STRONG identity signal (email/phone/url/handle) means this subject
       // already exists: enrich the matched entity + attach any requested roles
       // instead of creating a duplicate, and return it with `deduplicated: true`.
-      // WEAK / no signal falls through to create (zero-friction by design). The
-      // enrich + facet attach ride their own governed doors (update/attachFacet),
-      // so agent writes stay proposal-gated. Never blocks: a resolver hiccup
-      // falls through to a normal create.
+      // WEAK same-name (same profile) REJECTS create with candidates unless
+      // `forceCreate: true` — never auto-merges (Phase 1). The enrich + facet
+      // attach ride their own governed doors (update/attachFacet), so agent
+      // writes stay proposal-gated. Resolver hiccup falls through to a normal
+      // create (never blocks on a failed lookup).
+      //
+      // NOTE — capture-graph within-batch collapse still has its own weak
+      // auto-link path (`_capture-graph-dedup.ts`); that asymmetry is intentional
+      // for this PR (within-batch collapse ≠ persisted create gate).
       //
       // Runs on the `proposedEntityId` (proposal-approval replay) path TOO. It
       // used to be skipped there — "the approval must reuse its assigned id" —
@@ -1014,7 +1050,13 @@ export const entitiesRouter = router({
       // a proposal that merges is reported with `deduplicated: true` so the
       // executor records it as LINKED, not created (see approve-executors.ts).
       const dedupSignals = extractIdentitySignals(input.properties ?? {});
-      if (dedupSignals.length > 0) {
+      // Resolve when we have strong signals OR a title for the weak same-name
+      // gate. Title-only creates used to skip resolve entirely (zero-friction);
+      // Phase 1 runs the weak path for every profile so agents stop minting
+      // "Alice" person #47.
+      const needsIdentityResolve =
+        dedupSignals.length > 0 || (!!profileSlug && !!input.title?.trim());
+      if (needsIdentityResolve) {
         try {
           const resolveDb = await getDb();
           const identity = await resolveIdentity(resolveDb, {
@@ -1033,6 +1075,8 @@ export const entitiesRouter = router({
           // normal create. Without this gate the response below would leak
           // the matched row's title/properties to an unauthorized caller
           // (the enrich/attach doors deny the writes, but the read leaked).
+          // Invisible strong matches also must NOT be surfaced as weak
+          // candidates below — candidates come only from the scoped weak path.
           const visibleMatch =
             identity.match === "strong" && identity.entity
               ? await resolveDb.query.entities.findFirst({
@@ -1216,7 +1260,60 @@ export const entitiesRouter = router({
               facets: dedupFacets,
             };
           }
+
+          // ── WEAK same-name gate (Phase 1) ────────────────────────────────
+          // Same profile + same title → reject with candidates. Never auto-
+          // merge. forceCreate opts in to create anyway (logged). Cross-kind
+          // same-title stays advisory only (not blocked). Strong invisible
+          // fall-through above still proceeds; weak candidates are already
+          // caller-scoped by resolveIdentity's userScope so no leak.
+          if (profileSlug && identity.match !== "strong") {
+            const weakGate = classifyWeakEntityDedup({
+              forceCreate: input.forceCreate,
+              profileSlug,
+              match: identity.match,
+              candidates: identity.candidates.map((c) => ({
+                id: c.id,
+                title: c.title,
+                type: c.type,
+              })),
+            });
+            if (weakGate.block) {
+              logger.info(
+                {
+                  event: "identity_resolve_merge",
+                  outcome: "blocked_weak",
+                  userId: ctx.userId,
+                  profileSlug,
+                  candidateCount: weakGate.sameKindCandidates.length,
+                },
+                "[entities.create] weak same-name match — rejecting create with candidates"
+              );
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: buildWeakEntityDedupMessage(
+                  weakGate.sameKindCandidates,
+                  profileSlug
+                ),
+                cause: buildWeakDedupCause(weakGate.sameKindCandidates),
+              });
+            }
+            if (input.forceCreate && identity.match === "weak") {
+              logger.info(
+                {
+                  event: "identity_resolve_merge",
+                  outcome: "force_create",
+                  userId: ctx.userId,
+                  profileSlug,
+                },
+                "[entities.create] forceCreate=true — bypassing weak same-name gate"
+              );
+            }
+          }
         } catch (resolveErr) {
+          // Re-throw intentional gate rejects (junk already threw above; weak
+          // CONFLICT is thrown inside the try). Only swallow resolver failures.
+          if (resolveErr instanceof TRPCError) throw resolveErr;
           logger.warn(
             { resolveErr },
             "[entities.create] identity resolve failed — proceeding to create"

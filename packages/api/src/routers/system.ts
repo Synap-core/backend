@@ -22,7 +22,6 @@ import { getAllEventTypes, getBoss, getEventCatalog } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
 import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
-import { dynamicRouterRegistry } from "../router-registry.js";
 import { createSynapEvent } from "@synap-core/core";
 import { eventRepository } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
@@ -99,17 +98,21 @@ export const systemRouter = router({
         };
       });
 
-    // Get all routers
-    const routersStats = dynamicRouterRegistry.getStats();
-    const routers = dynamicRouterRegistry.getRouterNames().map((name) => {
-      const metadata = dynamicRouterRegistry.getRouterMetadata(name);
-      return {
-        name,
-        version: metadata?.version || "unknown",
-        source: metadata?.source || "unknown",
-        description: metadata?.description,
-      };
-    });
+    // Get all routers — coreRouter (root.ts) is the single source of truth for
+    // the served + typed API surface (the dynamic registry is retired). Lazy
+    // import breaks the module cycle (root.ts → system.ts → root.ts).
+    // `as unknown` cast severs the TYPE cycle (root.ts → systemRouter → root.ts);
+    // the runtime value is unchanged.
+    const rootMod = (await import("../root.js")) as unknown as {
+      coreRouter: { _def: { record: Record<string, unknown> } };
+    };
+    const routerNames = Object.keys(rootMod.coreRouter._def.record);
+    const routers = routerNames.map((name) => ({
+      name,
+      version: "unknown",
+      source: "core" as const,
+      description: undefined as string | undefined,
+    }));
 
     // Get SSE stats
     const sseStats = eventStreamManager.getStats();
@@ -123,10 +126,10 @@ export const systemRouter = router({
         totalEventTypes: eventTypes.length,
         totalHandlers: workers.length,
         totalTools: toolsStats.totalTools,
-        totalRouters: routersStats.totalRouters,
+        totalRouters: routerNames.length,
         connectedSSEClients: sseStats.totalClients,
         toolsBySource: toolsStats.toolsBySource,
-        routersBySource: routersStats.routersBySource,
+        routersBySource: { core: routerNames.length },
       },
     };
   }),

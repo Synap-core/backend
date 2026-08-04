@@ -160,6 +160,12 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Kind + Facets: role-profiles to attach to the new entity in the same call (each via the governed attachFacet door). Applied only when the entity materializes. `slug` is canonical; `profileSlug` is accepted as an alias for parity with the /structure and tRPC facet shapes."
       ),
+    forceCreate: z
+      .boolean()
+      .optional()
+      .describe(
+        "Bypass the weak same-name create gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does not bypass strong-signal auto-merge (email/phone/url)."
+      ),
   })
   .openapi("CreateEntityRequest");
 

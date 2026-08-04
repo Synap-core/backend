@@ -106,3 +106,41 @@ describe("extractIdentitySignals", () => {
     );
   });
 });
+
+/**
+ * Strong-signal race (documented residual).
+ *
+ * TOCTOU: two concurrent creates with the same strong signal can both see
+ * resolveIdentity match:null, both insert entities, then registerIdentitySignals
+ * races on unique (signal_type, signal_value). onConflictDoNothing means only
+ * ONE entity owns the signal; the loser has the email in properties but is
+ * invisible to future strong resolves.
+ *
+ * Mitigations in place:
+ *   - EntityRepository.create AWAITS signal registration (was fire-and-forget)
+ *   - unique index is the last line of defence
+ *
+ * NOT fixed (FK blocks claim-before-insert: entity_identity_signals.entity_id
+ * references entities.id). A full fix would need a deferred claim table or a
+ * single transaction that rolls back the loser — out of scope for Phase 1.
+ *
+ * This pure test pins the policy contracts the race depends on; live concurrent
+ * inserts are covered when PG is available by the unique-index behavior of
+ * registerIdentitySignals itself.
+ */
+describe("strong-signal race (documented residual)", () => {
+  it("normalizeIdentitySignal is the shared door — concurrent writers agree on the collision key", () => {
+    const a = normalizeIdentitySignal("email", "Race@Example.com");
+    const b = normalizeIdentitySignal("email", "race@example.com ");
+    expect(a).toBe(b);
+    expect(a).toBe("race@example.com");
+  });
+
+  it("extractIdentitySignals feeds the same key registerIdentitySignals stores", () => {
+    const signals = extractIdentitySignals({ email: "Race@Example.com" });
+    expect(signals).toHaveLength(1);
+    expect(normalizeIdentitySignal(signals[0].type, signals[0].value)).toBe(
+      "race@example.com"
+    );
+  });
+});

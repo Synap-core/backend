@@ -119,7 +119,7 @@ export const apiKeys = pgTable(
     // NULL = the legacy single-key model (minting revokes all siblings). When set,
     // /setup/agent skips the blanket sibling-revoke and scopes idempotency/rotation
     // to THIS instance, so multiple instances hold live keys concurrently. Purely a
-    // key label — the agent-user identity remains a pod-wide singleton per agentType.
+    // key label — agent-user identity is singleton per (createdByUserId, agentType).
     // See migration 0204_api_keys_instance_id.sql.
     instanceId: text("instance_id"),
 

@@ -59,4 +59,17 @@ describe("tripwire: setup/agent never mints an agent key with no linked human", 
     // Guards against a 'fix' that drops the field entirely instead of gating it.
     expect(src).toMatch(/linkedUserId:\s*resolvedLinkedUserId/);
   });
+
+  it("fails closed on multi-human pods without explicit linkedUserId (non-surface)", () => {
+    // JWT / PROVISIONING_TOKEN / setup.agent must not warn-and-continue to the
+    // oldest human — that mis-attributes creator×type ownership.
+    expect(src).toMatch(/LINKED_USER_REQUIRED/);
+    const at = src.indexOf("LINKED_USER_REQUIRED");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 800)).toMatch(/\b409\b/);
+    // Must not still have the silent oldest-human attribution warn path.
+    expect(src).not.toMatch(
+      /attributed the agent to the oldest human \(first-owner\)/
+    );
+  });
 });

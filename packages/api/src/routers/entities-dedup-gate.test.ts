@@ -205,5 +205,36 @@ describe.skipIf(!dbAvailable)(
       expect(visibleMatch?.id).toBe(ALICE_PERSON);
       expect(visibleMatch?.title).toBe("Alice's Private Contact");
     });
+
+    it("weak same-name resolve for Bob does NOT surface Alice's invisible person as a candidate", async () => {
+      // Weak path is userScope-floored — Bob must not see Alice's private row
+      // as a create-gate candidate (no leak via the Phase 1 weak reject path).
+      const resolution = await resolveIdentity(db, {
+        userId: USERS.BOB,
+        kindSlug: "person",
+        name: "Alice's Private Contact",
+        signals: [],
+        userScope: userVisibleWhere(entities.workspaceId, USERS.BOB),
+      });
+      expect(resolution.match).not.toBe("strong");
+      expect(resolution.candidates.some((c) => c.id === ALICE_PERSON)).toBe(
+        false
+      );
+    });
+
+    it("weak same-name resolve for Alice DOES find her own person", async () => {
+      const resolution = await resolveIdentity(db, {
+        userId: USERS.ALICE,
+        kindSlug: "person",
+        name: "Alice's Private Contact",
+        signals: [],
+        userScope: userVisibleWhere(entities.workspaceId, USERS.ALICE),
+      });
+      // Alice can see her private workspace → weak match on same title+kind.
+      // userVisibleWhere admits NULL-workspace rows owner-blind; private WS
+      // membership is the real floor here (Alice is a member).
+      expect(resolution.match).toBe("weak");
+      expect(resolution.entity?.id).toBe(ALICE_PERSON);
+    });
   }
 );

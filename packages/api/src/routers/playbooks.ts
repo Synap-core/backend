@@ -29,6 +29,7 @@ import {
   gt,
   lt,
   isNull,
+  ne,
   asc,
   desc,
   drizzleSql,
@@ -77,6 +78,43 @@ import {
 } from "../utils/keyset-cursor.js";
 
 const logger = createLogger({ module: "playbooks-router" });
+
+/** Postgres unique-violation SQLSTATE — raised by playbooks_workspace_name_active_uq. */
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e.code === "23505" || e.cause?.code === "23505";
+}
+
+/**
+ * Load the surviving non-archived playbook for (workspaceId, name).
+ * Case-insensitive on name; NULL workspace = pod-wide (matches the unique index
+ * COALESCE sentinel). Oldest-wins so concurrent 23505 recovery agrees with the
+ * migration's soft-archive keep-oldest rule.
+ */
+async function findNonArchivedPlaybookByName(
+  database: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string | null | undefined,
+  name: string
+): Promise<Playbook | null> {
+  const scope =
+    workspaceId == null || workspaceId === ""
+      ? isNull(playbooks.workspaceId)
+      : eq(playbooks.workspaceId, workspaceId);
+  const [row] = await database
+    .select()
+    .from(playbooks)
+    .where(
+      and(
+        scope,
+        drizzleSql`lower(${playbooks.name}) = lower(${name})`,
+        ne(playbooks.status, "archived")
+      )
+    )
+    .orderBy(asc(playbooks.createdAt), asc(playbooks.id))
+    .limit(1);
+  return (row as Playbook | undefined) ?? null;
+}
 
 /**
  * WARN (never reject) when a persisted goal carries references substitution
@@ -1270,91 +1308,128 @@ export const playbooksRouter = router({
       }
 
       const database = await getDb();
-      const [created] = await database
-        .insert(playbooks)
-        .values({
-          workspaceId: ctx.workspaceId,
-          createdBy: input.agentUserId ?? ctx.userId,
-          name: input.name,
-          description: input.description ?? null,
-          goalTemplate: input.goalTemplate,
-          params: input.params ?? [],
-          inputStrategy: input.inputStrategy ?? { kind: "none" },
-          channelSpec: input.channelSpec ?? {},
-          expectedOutputs: input.expectedOutputs ?? [],
-          stages: input.stages ?? [],
-          subjectProfile: input.subjectProfile ?? null,
-          schedule: input.schedule ?? null,
-          metadata: input.metadata ?? {},
-          executor: input.executor,
-          status: input.status,
-        })
-        .returning();
 
-      warnUnresolvedGoalReferences(created as Playbook);
-
-      // S1: a scheduled playbook maintains ONE backing cron automation (stamped
-      // on flow_automation_id) that the existing automation-cron-scheduler fires.
-      await materializePlaybookCronAutomation(created as Playbook, {
-        userId: input.agentUserId ?? ctx.userId,
-      });
-
-      // W6 Layer-2 context skill — persist the AI-generated "how to run this
-      // playbook" instruction as a non-runnable `instruction` skill and link it
-      // playbook→skill via a non-grant `documents` edge (kept OUT of the
-      // grantable/runnable set so it's never executed). Rides the playbook's
-      // approval exactly like the cron automation above (this direct-create path
-      // is only reached AFTER checkPermissionOrPropose granted).
-      //
-      // TWO TRUST BOUNDARIES, deliberately separate: approving the PLAYBOOK is
-      // not approving arbitrary prose injected into every future kickoff's
-      // system prompt. So the executor injects this body ONLY once it is
-      // `approved` (is-agent-executor.ts) — which for an agent author means a
-      // human must approve the skill separately. Do not "simplify" either side
-      // to match the other. Best-effort — never fail the create.
-      if (input.contextSkill?.body?.trim()) {
-        try {
-          const skillId = randomUUID();
-          await database.insert(skills).values({
-            id: skillId,
-            name: input.contextSkill.name ?? `${input.name} — how to run`,
-            kind: "instruction",
-            body: input.contextSkill.body,
-            scope: "workspace",
+      // Insert with 23505 recovery against playbooks_workspace_name_active_uq
+      // (0227). Reconcile/package-apply already peek-then-create; concurrent
+      // callers both miss the peek and race the insert — the unique index makes
+      // the loser a unique-violation, and we return the winner instead of a 500
+      // or a second clone (mirrors insertPendingProposal / rememberFact).
+      let created: Playbook;
+      let reused = false;
+      try {
+        const [row] = await database
+          .insert(playbooks)
+          .values({
             workspaceId: ctx.workspaceId,
-            userId: input.agentUserId ?? ctx.userId,
-            status: "active",
-            // Born-approved only for a trusted human author (mirrors
-            // insertSkillGoverned). An agent-authored body stays unapproved and
-            // the executor SKIPS it (is-agent-executor.ts filters on `approved`)
-            // until a human approves — this body is system-prompt surface.
-            approved: !input.agentUserId,
-          });
-          await createLinks([
-            {
+            createdBy: input.agentUserId ?? ctx.userId,
+            name: input.name,
+            description: input.description ?? null,
+            goalTemplate: input.goalTemplate,
+            params: input.params ?? [],
+            inputStrategy: input.inputStrategy ?? { kind: "none" },
+            channelSpec: input.channelSpec ?? {},
+            expectedOutputs: input.expectedOutputs ?? [],
+            stages: input.stages ?? [],
+            subjectProfile: input.subjectProfile ?? null,
+            schedule: input.schedule ?? null,
+            metadata: input.metadata ?? {},
+            executor: input.executor,
+            status: input.status,
+          })
+          .returning();
+        created = row as Playbook;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        const winner = await findNonArchivedPlaybookByName(
+          database,
+          ctx.workspaceId,
+          input.name
+        );
+        if (!winner) throw err;
+        created = winner;
+        reused = true;
+        logger.info(
+          {
+            playbookId: winner.id,
+            workspaceId: ctx.workspaceId,
+            name: input.name,
+          },
+          "playbooks.create: unique violation — returning existing non-archived playbook"
+        );
+      }
+
+      // Side-effects only for a true insert. A 23505 reuse must NOT re-materialize
+      // cron automations or re-attach a context skill (would spam those too).
+      if (!reused) {
+        warnUnresolvedGoalReferences(created);
+
+        // S1: a scheduled playbook maintains ONE backing cron automation (stamped
+        // on flow_automation_id) that the existing automation-cron-scheduler fires.
+        await materializePlaybookCronAutomation(created, {
+          userId: input.agentUserId ?? ctx.userId,
+        });
+
+        // W6 Layer-2 context skill — persist the AI-generated "how to run this
+        // playbook" instruction as a non-runnable `instruction` skill and link it
+        // playbook→skill via a non-grant `documents` edge (kept OUT of the
+        // grantable/runnable set so it's never executed). Rides the playbook's
+        // approval exactly like the cron automation above (this direct-create path
+        // is only reached AFTER checkPermissionOrPropose granted).
+        //
+        // TWO TRUST BOUNDARIES, deliberately separate: approving the PLAYBOOK is
+        // not approving arbitrary prose injected into every future kickoff's
+        // system prompt. So the executor injects this body ONLY once it is
+        // `approved` (is-agent-executor.ts) — which for an agent author means a
+        // human must approve the skill separately. Do not "simplify" either side
+        // to match the other. Best-effort — never fail the create.
+        if (input.contextSkill?.body?.trim()) {
+          try {
+            const skillId = randomUUID();
+            await database.insert(skills).values({
+              id: skillId,
+              name: input.contextSkill.name ?? `${input.name} — how to run`,
+              kind: "instruction",
+              body: input.contextSkill.body,
+              scope: "workspace",
               workspaceId: ctx.workspaceId,
-              fromType: "playbook",
-              fromId: (created as Playbook).id,
-              toType: "skill",
-              toId: skillId,
-              linkType: "documents",
-            },
-          ]);
-        } catch (err) {
-          // Non-fatal: a context-skill hiccup must never fail the playbook
-          // create. Logged, not swallowed — otherwise the playbook looks healthy
-          // while every run silently misses the HOW it was meant to carry.
-          logger.warn(
-            { err, playbookId: (created as Playbook).id },
-            "playbooks.create: context skill persist failed (non-fatal)"
-          );
+              userId: input.agentUserId ?? ctx.userId,
+              status: "active",
+              // Born-approved only for a trusted human author (mirrors
+              // insertSkillGoverned). An agent-authored body stays unapproved and
+              // the executor SKIPS it (is-agent-executor.ts filters on `approved`)
+              // until a human approves — this body is system-prompt surface.
+              approved: !input.agentUserId,
+            });
+            await createLinks([
+              {
+                workspaceId: ctx.workspaceId,
+                fromType: "playbook",
+                fromId: created.id,
+                toType: "skill",
+                toId: skillId,
+                linkType: "documents",
+              },
+            ]);
+          } catch (err) {
+            // Non-fatal: a context-skill hiccup must never fail the playbook
+            // create. Logged, not swallowed — otherwise the playbook looks healthy
+            // while every run silently misses the HOW it was meant to carry.
+            logger.warn(
+              { err, playbookId: created.id },
+              "playbooks.create: context skill persist failed (non-fatal)"
+            );
+          }
         }
       }
 
       return {
-        playbook: created as Playbook,
+        playbook: created,
+        // Minimal API surface: still "created" so call sites that only branch on
+        // created|proposed keep working. Idempotent create returns the survivor.
         status: "created" as const,
-        message: "Playbook created",
+        message: reused
+          ? "Playbook already exists (idempotent create)"
+          : "Playbook created",
         proposalId: null as string | null,
       };
     }),
@@ -1450,23 +1525,37 @@ export const playbooksRouter = router({
       );
       if (definitionChanged) set.version = (existing.version ?? 1) + 1;
 
-      const [updated] = await database
-        .update(playbooks)
-        .set(set)
-        .where(eq(playbooks.id, input.id))
-        .returning();
+      let updated: Playbook;
+      try {
+        const [row] = await database
+          .update(playbooks)
+          .set(set)
+          .where(eq(playbooks.id, input.id))
+          .returning();
+        updated = row as Playbook;
+      } catch (err) {
+        // Name/status transition collided with another non-archived playbook
+        // under playbooks_workspace_name_active_uq — surface as CONFLICT, not 500.
+        if (isUniqueViolation(err)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `A non-archived playbook named "${input.name ?? existing.name}" already exists in this workspace`,
+          });
+        }
+        throw err;
+      }
 
-      warnUnresolvedGoalReferences(updated as Playbook);
+      warnUnresolvedGoalReferences(updated);
 
       // S1: re-reconcile the backing cron automation against the new schedule.
       // Idempotent — re-points/updates the SAME row via flow_automation_id, or
       // tears it down when the schedule was cleared/disabled.
-      await materializePlaybookCronAutomation(updated as Playbook, {
+      await materializePlaybookCronAutomation(updated, {
         userId: input.agentUserId ?? ctx.userId,
       });
 
       return {
-        playbook: updated as Playbook,
+        playbook: updated,
         status: "updated" as const,
         message: "Playbook updated",
         proposalId: null as string | null,

@@ -154,6 +154,13 @@ import {
   handlePodHygieneNearDupScan,
   POD_HYGIENE_NEAR_DUP_QUEUE,
 } from "./pod-hygiene-near-dup.js";
+export {
+  isSentinelTitle,
+  findPropertyKeyAliasHits,
+  classifyIdentityHygieneEntity,
+  IDENTITY_SCAN_KINDS,
+  PROPERTY_KEY_ALIASES,
+} from "./hygiene-identity-patterns.js";
 import {
   handleGovernanceLaneScan,
   GOVERNANCE_LANE_SCANNER_QUEUE,

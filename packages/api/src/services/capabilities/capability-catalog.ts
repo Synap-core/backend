@@ -241,7 +241,9 @@ function extractInstallParams(
 }
 
 export interface CapabilityCatalogContext {
-  workspaceId: string;
+  /** Absent/null = POD-WIDE view (pod-global capabilities only, no workspace
+   *  overlay) — capabilities are viewable without an active workspace lens. */
+  workspaceId?: string | null;
   userId: string;
   /** Resolve this key/name even if excluded from the default-sync list
    *  (syncByDefault=false) — see `loadTemplates`'s doc. */
@@ -582,10 +584,14 @@ export async function buildCapabilityCatalog(
     .from(capabilities)
     .where(
       and(
-        or(
-          isNull(capabilities.workspaceId),
-          eq(capabilities.workspaceId, workspaceId)
-        ),
+        // Pod-wide (NULL) always; the active workspace's own containers ADD to
+        // that only when a workspace lens is present. Absent lens = pod-wide only.
+        workspaceId
+          ? or(
+              isNull(capabilities.workspaceId),
+              eq(capabilities.workspaceId, workspaceId)
+            )
+          : isNull(capabilities.workspaceId),
         userVisibleWhere(capabilities.workspaceId, userId)
       )
     );

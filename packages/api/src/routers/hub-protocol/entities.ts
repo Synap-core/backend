@@ -175,6 +175,12 @@ export const entitiesRouter = router({
             })
           )
           .optional(),
+        /**
+         * Bypass the weak same-name create gate (entities.create Phase 1).
+         * Strong-signal auto-merge is never bypassed. Prefer reusing an
+         * existing id; only set when the subject is genuinely distinct.
+         */
+        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -252,6 +258,7 @@ export const entitiesRouter = router({
               })),
             }
           : {}),
+        ...(input.forceCreate ? { forceCreate: true } : {}),
       });
       // Emit session event so whiteboards in ambient mode can mirror new entities.
       if (result.status === "created" && result.id) {

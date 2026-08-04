@@ -50,6 +50,7 @@ import {
   workspaces,
   ProfileRepository,
 } from "@synap/database";
+import { ownAdjunctFilter } from "../agent-identity-service.js";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -265,7 +266,7 @@ function hydrationScopeWhere(
     case "agent":
       return or(
         eq((t as typeof agents).ownerType, "system"),
-        eq((t as typeof agents).userId, userId)
+        ownAdjunctFilter(userId)
       );
     // ownerPrivate + part of the entity-facet substrate → the canonical entity
     // READ scope (owner-gated NULL + membership + exposure + role-lens).
@@ -557,7 +558,7 @@ const GRANTABLE_FOCUS_KINDS: ReadonlySet<string> = new Set([
  * agents (shared built-ins) OR the caller's own agents — never another user's
  * private adjunct. Mirrors the `agent` branch in hydrateNodes. */
 function agentFloor(userId: string) {
-  return or(eq(agents.ownerType, "system"), eq(agents.userId, userId))!;
+  return or(eq(agents.ownerType, "system"), ownAdjunctFilter(userId))!;
 }
 
 /**

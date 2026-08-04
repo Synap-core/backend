@@ -359,10 +359,9 @@ oauthApp.post("/token", async (c) => {
       linkedUserId: claimed.userId,
       // Sibling revocation inside provisionSurfaceAgentKey is instance-scoped.
       // Keying the instance on (client, human) means re-authorizing rotates
-      // exactly this connection's key and never kills another human's — the
-      // agent USER is a pod-wide singleton per agentType, so without the user
-      // in the instance id two people sharing a client_id would revoke each
-      // other on every authorization.
+      // exactly this connection's key and never kills another human's — agent
+      // USERs are singleton per (createdByUserId, agentType), and instanceId
+      // further isolates multi-runtime keys for the same human.
       instanceId: `oauth:${claimed.clientId}:${claimed.userId}`,
       scopes,
       ensureRegistryRow: true,

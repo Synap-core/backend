@@ -164,6 +164,9 @@ async function resolveActionPlacementRefs(
     db,
     and,
     eq,
+    ne,
+    asc,
+    drizzleSql,
     playbooks: playbooksTable,
     automations: automationsTable,
   } = await import("@synap/database");
@@ -180,10 +183,12 @@ async function resolveActionPlacementRefs(
         .from(playbooksTable)
         .where(
           and(
-            eq(playbooksTable.name, p.ref),
-            eq(playbooksTable.workspaceId, workspaceId)
+            drizzleSql`lower(${playbooksTable.name}) = lower(${p.ref})`,
+            eq(playbooksTable.workspaceId, workspaceId),
+            ne(playbooksTable.status, "archived")
           )
         )
+        .orderBy(asc(playbooksTable.createdAt), asc(playbooksTable.id))
         .limit(1);
       if (!row)
         throw new Error(
@@ -551,15 +556,20 @@ async function applyPackagePostWorkspaceInner(
     for (const p of body.playbooks) {
       try {
         if (workspaceId) {
+          // Match playbooks_workspace_name_active_uq (0227): case-insensitive,
+          // non-archived, oldest-wins. create's 23505 recovery closes the race.
+          const { ne, asc, drizzleSql } = await import("@synap/database");
           const [existing] = await db
             .select({ id: playbooksTable.id })
             .from(playbooksTable)
             .where(
               and(
-                eq(playbooksTable.name, p.name),
-                eq(playbooksTable.workspaceId, workspaceId)
+                drizzleSql`lower(${playbooksTable.name}) = lower(${p.name})`,
+                eq(playbooksTable.workspaceId, workspaceId),
+                ne(playbooksTable.status, "archived")
               )
             )
+            .orderBy(asc(playbooksTable.createdAt), asc(playbooksTable.id))
             .limit(1);
           if (existing) {
             // Reuse still ensures grants idempotently — a re-applied package

@@ -64,6 +64,7 @@ import {
   getUserAccessibleWorkspaceIds,
   getUserMemberWorkspaceIds,
   logger,
+  resolveProposalId,
   verifyWorkspaceAccess,
 } from "../hub-protocol/rest/_shared.js";
 import {
@@ -1023,6 +1024,8 @@ export async function executeMCPToolViaHubProtocol(
               }>,
             }
           : {}),
+        // Bypass weak same-name gate only (strong merge never bypassed).
+        ...(args.forceCreate === true ? { forceCreate: true } : {}),
         // agent-key remap: the write is OWNED by the operator (userId) but
         // AUTHORED by the agent — pass agentUserId so governance proposes.
         ...(agentUserId ? { agentUserId } : {}),
@@ -3307,6 +3310,46 @@ export async function executeMCPToolViaHubProtocol(
         actorId: userId,
       });
       return ok({ success: true, proposalId });
+    }
+
+    /**
+     * Reject a pending proposal — delegates to the canonical `proposals.reject`
+     * tRPC mutation, the SAME door the Hub REST route
+     * (`POST /proposals/:id/reject`) and the CLI already call, so behavior is
+     * identical across doors (rejection telemetry, realtime, reason recording).
+     *
+     * There is deliberately no `synap_approve_proposal` counterpart:
+     * `rejectAgentReviewer` (hub-protocol/rest/_shared.ts) 403s any agent-linked
+     * key on /approve and /revert because approval is the human step. Reject is
+     * INTENTIONALLY unguarded there — it only prevents a pending change from
+     * landing, so it carries no self-approval / undo risk — which is exactly why
+     * this tool can exist while an approve tool cannot.
+     */
+    case "synap_reject_proposal": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      // Accepts the 8-char short id `synap_list_proposals` / the CLI print, not
+      // just a full uuid (a bare prefix in a `WHERE id = $1` uuid lookup throws).
+      const resolvedProposalId = await resolveProposalId(
+        userId,
+        args.proposalId as string
+      );
+      const rejectCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        undefined,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const { proposalsRouter } = await import("../proposals.js");
+      const rejectCaller = proposalsRouter.createCaller(
+        rejectCtx as Parameters<typeof proposalsRouter.createCaller>[0]
+      );
+      await rejectCaller.reject({
+        proposalId: resolvedProposalId,
+        reason: args.reason as string | undefined,
+      });
+      return ok({ success: true, proposalId: resolvedProposalId });
     }
 
     // (synap_write_knowledge folded into synap_capture's `global` lane — one

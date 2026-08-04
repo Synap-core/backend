@@ -7,6 +7,7 @@ import { db, eq, and, inArray } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
+import { isPodAdmin } from "../../../utils/workspace-role.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -109,6 +110,12 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     }
     const workspaceId = c.req.query("workspaceId");
     const parentUserId = c.req.query("parentUserId");
+    // mine=1 → agents created by the effective human (pod SSOT roster for CLI).
+    // With agent keys, userId is remapped to the human; agentUserId is the actor.
+    const mine =
+      c.req.query("mine") === "1" ||
+      c.req.query("mine") === "true" ||
+      c.req.query("createdBy") === "me";
     const userId = c.get("userId") as string;
 
     // Security gate: a caller can only filter by parentUserId === self.
@@ -161,6 +168,45 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         );
       }
 
+      // Roster mode (CLI `synap agents list --pod`): agents created by me —
+      // one principal per (creator, agentType). No workspace membership join
+      // required; surface agents are pod-wide resources.
+      if (mine) {
+        const mineAgents = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            agentType: users.agentType,
+            agentTemplate: users.agentTemplate,
+            createdByUserId: users.createdByUserId,
+            createdVia: users.createdVia,
+            createdAt: users.createdAt,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(
+            and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
+          );
+        return c.json(
+          mineAgents.map((row) => {
+            const meta = (row.agentMetadata ?? {}) as {
+              agentType?: string;
+              focusWorkspaceId?: string;
+            };
+            return {
+              id: row.id,
+              name: row.name,
+              agentType: row.agentType ?? meta.agentType ?? null,
+              agentTemplate: row.agentTemplate ?? null,
+              createdByUserId: row.createdByUserId,
+              createdVia: row.createdVia ?? null,
+              createdAt: row.createdAt,
+              focusWorkspaceId: meta.focusWorkspaceId ?? null,
+            };
+          })
+        );
+      }
+
       // A supplied workspaceId may only NARROW within the caller's memberships,
       // never widen to a foreign workspace.
       const memberWsIds = await getUserAccessibleWorkspaceIds(userId);
@@ -197,7 +243,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * PATCH /agent-users/:agentUserId/governance
    *
    * Set per-agent governance — autoApproveFor + writesRequireProposal.
-   * Only the agent's creator (or an admin) can set this.
+   * Authz: agent's creator (`users.createdByUserId ===` effective userId) OR
+   * pod admin (`isPodAdmin`). Anyone else → 403.
    */
   app.patch("/agent-users/:agentUserId/governance", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -244,13 +291,30 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     try {
       const { users } = await import("@synap/database/schema");
       const [agentUser] = await db
-        .select({ id: users.id, agentMetadata: users.agentMetadata })
+        .select({
+          id: users.id,
+          agentMetadata: users.agentMetadata,
+          createdByUserId: users.createdByUserId,
+        })
         .from(users)
         .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")))
         .limit(1);
 
       if (!agentUser) {
         return c.json({ error: "Agent not found" }, 404);
+      }
+
+      // Effective user (agent keys: linked human). Creator or pod admin only.
+      const callerId = c.get("userId") as string;
+      const isCreator = agentUser.createdByUserId === callerId;
+      if (!isCreator && !(await isPodAdmin(callerId))) {
+        return c.json(
+          {
+            error:
+              "Only the agent's creator or a pod admin can set agent governance",
+          },
+          403
+        );
       }
 
       const existingMeta = (agentUser.agentMetadata ?? {}) as Record<
@@ -284,7 +348,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         agentUserId,
         scopeKind: "pod",
         actions: merged.autoApproveFor as string[],
-        createdBy: (c.get("userId") as string | undefined) ?? agentUserId,
+        createdBy: callerId ?? agentUserId,
       });
 
       return c.json({

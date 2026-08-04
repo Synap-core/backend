@@ -31,41 +31,6 @@ import {
 } from "../services/identity-resolution-service.js";
 
 /**
- * Bounded-concurrency guard for the fire-and-forget identity-signal writes in
- * `create()`. Signal registration never blocks a create (it must not add
- * latency to the single-capture path), but a bulk import fans out one create
- * per row — with nothing capping it, N rows means N concurrent inserts piling
- * onto the pool at once. Cap in-flight writes; anything past the cap queues.
- * Mirrors the guard that previously lived in the entities.create tRPC proc,
- * moved down here so it protects EVERY create door (imports, provisioning,
- * automation/feed workers), not just the one router that had it.
- */
-const MAX_INFLIGHT_SIGNAL_WRITES = 25;
-let inFlightSignalWrites = 0;
-const signalWriteQueue: Array<() => void> = [];
-
-function runBoundedSignalWrite(task: () => Promise<void>): void {
-  const start = () => {
-    inFlightSignalWrites++;
-    // Promise.resolve().then(task): a synchronous throw from task() would
-    // otherwise skip .finally() and leak the counter — 25 leaks and every
-    // future signal write queues forever.
-    Promise.resolve()
-      .then(task)
-      .catch(() => {})
-      .finally(() => {
-        inFlightSignalWrites--;
-        signalWriteQueue.shift()?.();
-      });
-  };
-  if (inFlightSignalWrites < MAX_INFLIGHT_SIGNAL_WRITES) {
-    start();
-  } else {
-    signalWriteQueue.push(start);
-  }
-}
-
-/**
  * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
  * caller aimed the generic create door at something that is not an entity
  * (a project, a multi-kind role). These were `throw new Error(...)`, which no
@@ -585,27 +550,38 @@ export class EntityRepository extends BaseRepository<
     // 5. Emit completed event
     await this.emitCompleted("create", entity, userId);
 
-    // 6. Auto-register identity signals (email/phone/url/handle) — non-blocking.
+    // 6. Auto-register identity signals (email/phone/url/handle) — AWAITED.
     //    THE door: every producer that reaches EntityRepository.create (tRPC
     //    create, imports, provisioning, automation/feed workers) now feeds
     //    resolveIdentity's strong path, so a later write dedups against this
-    //    entity instead of silently creating a duplicate. Never blocks or fails
-    //    the create — a signal-write error is logged and swallowed.
+    //    entity instead of silently creating a duplicate.
+    //
+    //    Phase 1 race mitigation: registration used to be fire-and-forget
+    //    (runBoundedSignalWrite), which widened the TOCTOU window between
+    //    resolveIdentity (no match) and signal insert — two concurrent creates
+    //    with the same email both inserted entities, then only one won the
+    //    unique (type,value) index. Awaiting narrows that window to the create
+    //    path itself. Full claim-before-insert is blocked by the FK from
+    //    entity_identity_signals.entity_id → entities.id (signal cannot land
+    //    before the row). Residual race is documented in
+    //    identity-resolution-service.test.ts ("strong-signal race").
+    //    A signal-write error is still logged and swallowed — never fails the
+    //    create after the row exists.
     const signals = extractIdentitySignals(validatedProperties);
     if (signals.length > 0) {
-      runBoundedSignalWrite(() =>
-        registerIdentitySignals(
+      try {
+        await registerIdentitySignals(
           this.db,
           entity.id,
           signals,
           "entity-repository.create"
-        ).catch((error) => {
-          console.warn(
-            `Failed to register identity signals for entity ${entity.id}:`,
-            error
-          );
-        })
-      );
+        );
+      } catch (error) {
+        console.warn(
+          `Failed to register identity signals for entity ${entity.id}:`,
+          error
+        );
+      }
     }
 
     // Additive: the row exactly as before, plus the advisory `unmodeled` list

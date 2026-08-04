@@ -526,7 +526,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates.",
+          "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected.",
         inputSchema: {
           type: "object",
           properties: {
@@ -551,6 +551,11 @@ export const tools = {
               type: "string",
               description:
                 "Optional project id to file the created entity into — stamps belongs_to_project membership.",
+            },
+            forceCreate: {
+              type: "boolean",
+              description:
+                "Bypass the weak same-name gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does NOT bypass strong-signal auto-merge (email/phone/url). Default false.",
             },
             facets: {
               type: "array",
@@ -1961,6 +1966,34 @@ export const tools = {
             proposalId: { type: "string", description: "Proposal UUID" },
             summary: { type: "string" },
             reasoning: { type: "string" },
+          },
+          required: ["proposalId"],
+        },
+      },
+      {
+        name: "synap_reject_proposal",
+        annotations: {
+          title: "Reject proposal",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Reject a pending proposal so the queued change never lands — withdraw a write you now know is wrong (a duplicate, a superseded plan, a mistaken read) instead of leaving it in the user's review queue. Give a `reason`: it is recorded on the proposal and feeds your agent scorecard. " +
+          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a pending change from landing, so it carries no self-approval or undo risk. Only a still-pending proposal can be rejected.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            proposalId: {
+              type: "string",
+              description:
+                "Proposal UUID, or the 8-char short id printed by synap_list_proposals / the CLI.",
+            },
+            reason: {
+              type: "string",
+              description:
+                "Why you are rejecting it (recorded on the proposal). Always give one.",
+            },
           },
           required: ["proposalId"],
         },

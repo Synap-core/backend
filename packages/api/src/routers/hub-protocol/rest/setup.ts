@@ -500,8 +500,13 @@ export function registerSetupRoutes(app: HubHono): void {
       }
     }
 
-    // Path 4: any hub-protocol.write key (human-owned) can self-provision a surface agent type
+    // Path 4: any hub-protocol.write key can self-provision a surface agent type.
+    // Attribute to the HUMAN principal: if this is already an agent key, use
+    // linkedUserId (the human it acts for); if human-owned PAT, userId is the human.
+    // Human-owned = linkedUserId null/empty (key acts as its userId human).
+    // Agent key = linkedUserId set (key is agent principal acting for that human).
     let surfaceAgentLinkedUserId: string | undefined;
+    let surfaceKeyIsHumanOwned = false;
     if (!authenticated) {
       const keyRecord = await apiKeyService.validateApiKey(token);
       if (
@@ -510,7 +515,10 @@ export function registerSetupRoutes(app: HubHono): void {
       ) {
         authenticated = true;
         authMethod = "api_key_surface";
-        surfaceAgentLinkedUserId = keyRecord.userId;
+        surfaceKeyIsHumanOwned =
+          keyRecord.linkedUserId == null || keyRecord.linkedUserId === "";
+        surfaceAgentLinkedUserId =
+          keyRecord.linkedUserId ?? keyRecord.userId ?? undefined;
       }
     }
 
@@ -569,11 +577,22 @@ export function registerSetupRoutes(app: HubHono): void {
     const requireApproval: boolean =
       authMethod === "api_key_surface" && body.requireApproval === true;
 
+    // Surface-key path: SURFACE_AGENT_TYPES are always allowed (claude-code, cursor, …).
+    // Non-surface types (twin, custom slug, assistant, …) are only allowed when the
+    // authenticating key is human-owned (PAT: linkedUserId null). Agent keys may
+    // only mint further surface adjuncts — not arbitrary named agents.
     if (authMethod === "api_key_surface") {
-      if (!(SURFACE_AGENT_TYPES as readonly string[]).includes(agentType)) {
+      const isSurfaceType = (SURFACE_AGENT_TYPES as readonly string[]).includes(
+        agentType
+      );
+      if (!isSurfaceType && !surfaceKeyIsHumanOwned) {
         return c.json(
           {
-            error: "Surface key provisioning only supports surface agent types",
+            error:
+              "Agent keys may only provision surface agent types. " +
+              "Named agents (non-surface agentType) require a human-owned hub-protocol.write key.",
+            code: "SURFACE_AGENT_TYPE_REQUIRED",
+            allowedSurfaceTypes: SURFACE_AGENT_TYPES,
           },
           400
         );
@@ -583,38 +602,49 @@ export function registerSetupRoutes(app: HubHono): void {
     const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
     try {
-      // ── Auto-resolve linkedUserId: find the pod owner when not explicit ───────
-      // When linkedUserId is not passed in the body, default to the first human
-      // user on the pod. This means all agent keys are automatically attributed
-      // to the pod owner — memory dual-writes then appear in the owner's timeline
-      // without the lifecycle needing to fetch the userId separately.
-      // Explicit body.linkedUserId overrides this (passed as "" to opt out).
+      // ── Resolve linkedUserId (human the agent acts for) ─────────────────────
+      // - api_key_surface: always the human principal of the authenticating key
+      //   (linkedUserId ?? userId). Caller body.linkedUserId is ignored here.
+      // - Other auth (JWT / PROVISIONING_TOKEN / setup.agent key):
+      //   explicit body.linkedUserId wins; single-human pods may default to that
+      //   human; multi-human pods FAIL CLOSED without an explicit link (never
+      //   warn-and-continue to oldest-human — that mis-attributes agents).
+      // Agent user singleton is (createdByUserId × agentType), not pod-wide type.
       let resolvedLinkedUserId: string | undefined = linkedUserId;
       if (authMethod === "api_key_surface") {
         resolvedLinkedUserId = surfaceAgentLinkedUserId;
       } else if (resolvedLinkedUserId === undefined) {
-        // Deterministic pod-owner attribution: the OLDEST human (the first-owner),
-        // not an arbitrary DB-order "first human". On a MULTI-human pod, silently
-        // defaulting mis-attributes the agent to whoever happens to sort first —
-        // so detect ambiguity (limit 2) and WARN loudly rather than hide it. Pass
-        // an explicit body.linkedUserId to bind the agent to the intended human
-        // (the CLI-bootstrap repoint must do this on multi-user pods).
         const humans = await db.query.users.findMany({
           where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
           orderBy: (u, { asc }) => [asc(u.createdAt)],
           columns: { id: true },
           limit: 2,
         });
+        if (humans.length > 1) {
+          // ── FAIL CLOSED: multi-human pod without explicit linkedUserId ────
+          // JWT / OpenClaw / provisioning must name the human. Silently picking
+          // the oldest human mis-attributes memory dual-writes and creator×type
+          // singleton ownership on multi-user pods.
+          logger.warn(
+            { agentType, authMethod, humanCount: humans.length },
+            "setup/agent: refusing auto-link on multi-human pod without linkedUserId"
+          );
+          return c.json(
+            {
+              error:
+                "Multiple humans on this pod — pass an explicit linkedUserId",
+              code: "LINKED_USER_REQUIRED",
+              detail:
+                "This pod has more than one human. Agent keys act on behalf of a specific " +
+                "human (creator × agentType singleton). Pass body.linkedUserId to bind the " +
+                "agent to the intended human. Single-human pods may omit it.",
+            },
+            409
+          );
+        }
         if (humans[0]) {
+          // Single-human pod: safe default to that human.
           resolvedLinkedUserId = humans[0].id;
-          if (humans.length > 1) {
-            logger.warn(
-              { agentType, chosenLinkedUserId: humans[0].id },
-              "setup/agent: no explicit linkedUserId on a multi-human pod — " +
-                "attributed the agent to the oldest human (first-owner). Pass an " +
-                "explicit linkedUserId to bind it to the intended human."
-            );
-          }
         } else {
           // ── FAIL CLOSED: no human on this pod yet ──────────────────────────
           // Previously this branch did not exist: with zero human rows,
@@ -686,9 +716,9 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       if (!ownerUserId) {
-        // Deterministic first-owner (oldest human) — same rule as the linkedUserId
-        // attribution above, so createdBy/owner and linkedUserId can't diverge onto
-        // different arbitrary humans on a multi-user pod.
+        // Workspace membership repair only — oldest human is fine as a
+        // fallback inviter. Agent attribution (createdByUserId / linkedUserId)
+        // already resolved above and fails closed on multi-human without link.
         const humanUser = await db.query.users.findFirst({
           where: (u, { eq }) => eq(u.userType, "human"),
           orderBy: (u, { asc }) => [asc(u.createdAt)],
@@ -722,18 +752,16 @@ export function registerSetupRoutes(app: HubHono): void {
         }
       }
 
-      // ── Provision the surface agent Hub key via the ONE door ────────────────
-      // provisionSurfaceAgentKey does: find-or-create agent user (pod-wide
-      // singleton per agentType, with the provisioning-race catch) → optional
-      // local-adjunct registry row → onAgentUserResolved hook (our workspace
-      // membership grant) → idempotent short-circuit → instance-aware sibling
-      // revoke → mint+verify. Same call the CP-MCP pod-accept gate uses.
+      // ── Provision the agent Hub key via the ONE door ───────────────────────
+      // Singleton is (createdByUserId × agentType) — per human creator, not
+      // pod-wide by agentType alone. createdByUserId MUST be the resolved human
+      // (resolvedLinkedUserId); ownerUserId is only a last-resort fallback and
+      // for workspace membership repair.
+      const agentCreatorId = resolvedLinkedUserId ?? ownerUserId ?? null;
       const provisioned = await provisionSurfaceAgentKey({
         agentType,
-        // createdBy/owner and linkedUserId are resolved above so they can't
-        // diverge onto different humans on a multi-user pod.
-        createdByUserId: ownerUserId ?? null,
-        linkedUserId: resolvedLinkedUserId ?? null,
+        createdByUserId: agentCreatorId,
+        linkedUserId: resolvedLinkedUserId ?? agentCreatorId,
         instanceId,
         agentLabel,
         // Only the surface-key path provisions a genuine local CLI adjunct
@@ -860,6 +888,22 @@ export function registerSetupRoutes(app: HubHono): void {
         registration: registrationTrace,
       });
     } catch (err) {
+      // provisionSurfaceAgentKey throws code NO_HUMAN_OWNER when creator missing
+      if (
+        err &&
+        typeof err === "object" &&
+        (err as { code?: string }).code === "NO_HUMAN_OWNER"
+      ) {
+        return c.json(
+          {
+            error: "Pod has no human owner yet",
+            code: "NO_HUMAN_OWNER",
+            detail:
+              "An agent key must be linked to a human creator (singleton is creator × agentType).",
+          },
+          409
+        );
+      }
       logger.error({ err, agentType, flowId }, "setup/agent: failed");
       return c.json({ error: "Internal server error", flowId }, 500);
     }

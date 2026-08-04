@@ -155,10 +155,20 @@ async function findWorkspaceOwner(
   return row?.id ?? null;
 }
 
+/**
+ * Find agent for (workspace owner as creator, serviceType).
+ * Aligns with provisionSurfaceAgentKey / migration 0228 creator×type singleton.
+ * Membership join retained so workspace-tied CLI agents still resolve.
+ */
 async function findAgent(
   db: Awaited<ReturnType<typeof getDb>>,
-  workspaceId: string
+  workspaceId: string,
+  createdByUserId: string | null
 ) {
+  // Without a human creator we cannot safely match creator×type. Prefer
+  // returning null over collapsing onto another human's agent.
+  if (!createdByUserId) return undefined;
+
   const [row] = await db
     .select({ id: users.id, email: users.email })
     .from(users)
@@ -169,7 +179,13 @@ async function findAgent(
         eq(workspaceMembers.workspaceId, workspaceId)
       )
     )
-    .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType!)))
+    .where(
+      and(
+        eq(users.userType, "agent"),
+        eq(users.agentType, serviceType!),
+        eq(users.createdByUserId, createdByUserId)
+      )
+    )
     .limit(1);
   return row;
 }
@@ -238,10 +254,13 @@ async function run() {
   const workspaceId = await resolveWorkspaceId(db);
   // At this point action is one of: status, remove, rotate, provision — all require entry
   const e = entry!;
+  // Creator for (createdByUserId, agentType) — workspace owner is the CLI
+  // attribution for service agents when no interactive human is present.
+  const ownerUserId = await findWorkspaceOwner(db, workspaceId);
 
   // ── status ──────────────────────────────────────────────────────────────
   if (action === "status") {
-    const agent = await findAgent(db, workspaceId);
+    const agent = await findAgent(db, workspaceId, ownerUserId);
     if (!agent) {
       console.log(
         `${entry!.displayName}: NOT provisioned in workspace ${workspaceId}`
@@ -359,7 +378,7 @@ async function run() {
 
   // ── remove ───────────────────────────────────────────────────────────────
   if (action === "remove") {
-    const agent = await findAgent(db, workspaceId);
+    const agent = await findAgent(db, workspaceId, ownerUserId);
     if (!agent) {
       console.error(
         `❌ ${e.displayName} is not provisioned in workspace ${workspaceId}`
@@ -393,7 +412,7 @@ async function run() {
 
   // ── rotate ───────────────────────────────────────────────────────────────
   if (action === "rotate") {
-    const agent = await findAgent(db, workspaceId);
+    const agent = await findAgent(db, workspaceId, ownerUserId);
     if (!agent) {
       console.error(
         `❌ ${e.displayName} is not provisioned in workspace ${workspaceId}`
@@ -455,12 +474,21 @@ async function run() {
   }
 
   // ── provision (default) ─────────────────────────────────────────────────
-  const existing = await findAgent(db, workspaceId);
+  if (!ownerUserId) {
+    console.error(
+      "❌ ERROR: No workspace owner found — cannot attribute agent (createdByUserId required for creator×type singleton)."
+    );
+    console.error("   Ensure the workspace has an owner member, then retry.");
+    process.exit(1);
+  }
+
+  const existing = await findAgent(db, workspaceId, ownerUserId);
   if (existing) {
     console.log(`ℹ️  ${e.displayName} agent already provisioned`);
     console.log(`   Agent User ID: ${existing.id}`);
     console.log(`   Agent Email:   ${existing.email}`);
     console.log(`   Workspace ID:  ${workspaceId}`);
+    console.log(`   Created by:    ${ownerUserId}`);
     console.log("");
     console.log("To get a fresh API key, run:");
     console.log(`  synap services rotate ${serviceType}`);
@@ -478,12 +506,14 @@ async function run() {
     emailVerified: true,
     userType: "agent",
     agentType: serviceType,
-    createdByUserId: null,
+    isPersonalAgent: false,
+    createdByUserId: ownerUserId,
     createdVia: "cli",
     agentMetadata: {
       agentType: serviceType,
       description: e.description,
-      createdByUserId: "system",
+      createdByUserId: ownerUserId,
+      isPersonalAgent: false,
       capabilities: e.agentCapabilities,
     } as AgentMetadata,
     timezone: "UTC",
@@ -494,10 +524,10 @@ async function run() {
     workspaceId,
     userId: agentId,
     role: e.agentRole,
-    invitedBy: null,
+    invitedBy: ownerUserId,
   });
 
-  const linkedUserId = await findWorkspaceOwner(db, workspaceId);
+  const linkedUserId = ownerUserId;
 
   const keyPrefix =
     process.env.NODE_ENV === "production"

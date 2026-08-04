@@ -181,17 +181,25 @@ export async function createLoopFromDefinition(
         db,
         and,
         eq,
+        ne,
+        asc,
+        drizzleSql,
         playbooks: playbooksTable,
       } = await import("@synap/database");
+      // Match playbooks_workspace_name_active_uq (0227): case-insensitive name,
+      // non-archived only, oldest-wins. Peek closes the common case; create's
+      // 23505 recovery closes the concurrent race.
       const [existing] = await db
         .select({ id: playbooksTable.id })
         .from(playbooksTable)
         .where(
           and(
-            eq(playbooksTable.name, pb.name),
-            eq(playbooksTable.workspaceId, workspaceId)
+            drizzleSql`lower(${playbooksTable.name}) = lower(${pb.name})`,
+            eq(playbooksTable.workspaceId, workspaceId),
+            ne(playbooksTable.status, "archived")
           )
         )
+        .orderBy(asc(playbooksTable.createdAt), asc(playbooksTable.id))
         .limit(1);
       if (existing) {
         playbookIdByRef.set(pb.ref, existing.id);

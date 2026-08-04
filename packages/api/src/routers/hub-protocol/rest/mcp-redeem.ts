@@ -213,9 +213,9 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
     const scopes = mapCpScopesToPodScopes(row.scopes);
 
     try {
-      // Mint the claude-web agent key NOW via the ONE door. The agent USER is a
-      // pod-wide singleton per agentType (dedup lives inside), but each human
-      // gets a DISTINCT KEY: own linkedUserId (this human) + own instanceId.
+      // Mint the claude-web agent key NOW via the ONE door. Agent USER is
+      // singleton per (createdByUserId, agentType); each human also gets a
+      // DISTINCT KEY via linkedUserId + instanceId.
       // NOT idempotent — every redeem is a fresh consent and mints a fresh key.
       const provisioned = await provisionSurfaceAgentKey({
         agentType: row.agentType, // "claude-web"

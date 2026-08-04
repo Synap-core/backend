@@ -23,11 +23,17 @@ import {
   timestamp,
   integer,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
+
+/** Sentinel used when workspace_id IS NULL so pod-wide names participate in uniqueness. */
+export const PLAYBOOK_POD_WIDE_WORKSPACE_SENTINEL =
+  "00000000-0000-0000-0000-000000000000";
 
 export const playbooks = pgTable(
   "playbooks",
@@ -101,6 +107,17 @@ export const playbooks = pgTable(
     flowAutomationIdIdx: index("idx_playbooks_flow_automation_id").on(
       table.flowAutomationId
     ),
+    // TOCTOU race backstop (0227): at-most-one non-archived playbook per
+    // (workspace | pod-wide, lower(name)). Expression index — app recovers
+    // SQLSTATE 23505 by re-selecting the winner (not ON CONFLICT, which cannot
+    // target expression indexes cleanly via drizzle). Pairs with
+    // 0227_playbooks_workspace_name_unique.sql.
+    workspaceNameActiveUniq: uniqueIndex("playbooks_workspace_name_active_uq")
+      .on(
+        sql`COALESCE(${table.workspaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+        sql`lower(${table.name})`
+      )
+      .where(sql`${table.status} <> 'archived'`),
   })
 );
 

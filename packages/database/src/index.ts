@@ -51,6 +51,7 @@ export * from "./utils/preferences.js";
 export * from "./utils/document-version-storage.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
+export * from "./utils/entity-create-guardrails.js";
 export * from "./utils/project-slug.js";
 export * from "./utils/cp-project-sync-trigger.js";
 export * from "./utils/materialize-entity.js";

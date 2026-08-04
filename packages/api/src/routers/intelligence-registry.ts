@@ -610,28 +610,30 @@ export const intelligenceRegistryRouter = router({
    * pass it to the container as SYNAP_HUB_API_KEY. Use rotateAgentKey to get a
    * fresh credential.
    *
-   * Idempotent: if an agent of this type already exists, returns already_provisioned
-   * without creating a new key.
+   * Idempotent per (createdByUserId, serviceType): if THIS human already has
+   * an agent of this type, returns already_provisioned without creating a new key.
    */
   provisionAgent: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      // Pod-wide provisioning: any authenticated user can provision (podProcedure handles auth check)
+      // Authenticated human provisions their own (creator × type) agent.
       // Throws if serviceType is not registered
       const entry = getServiceEntry(input.serviceType);
 
-      // Check for existing agent user of this type (pod-wide search)
+      // Creator×type find — multi-human pods each get their own principal
       const existing = await findProvisionedAgent(
-        null, // null workspaceId = pod-wide search
-        input.serviceType
+        null, // null workspaceId = no membership join; still creator-scoped
+        input.serviceType,
+        ctx.userId
       );
       if (existing) {
         logger.info(
           {
             agentUserId: existing.id,
             serviceType: input.serviceType,
+            createdByUserId: ctx.userId,
           },
-          "Agent already provisioned pod-wide — returning existing info"
+          "Agent already provisioned for creator×type — returning existing info"
         );
         const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
         return {
@@ -644,7 +646,7 @@ export const intelligenceRegistryRouter = router({
         };
       }
 
-      // Create pod-wide agent user (no workspace membership)
+      // Create agent user for this human (creator × type; no workspace membership)
       const agentId = randomUUID();
       const shortId = agentId.slice(0, 8);
       const email = `agent-${input.serviceType}-${shortId}@synap.agent`;
@@ -656,12 +658,14 @@ export const intelligenceRegistryRouter = router({
         emailVerified: true,
         userType: "agent",
         agentType: input.serviceType,
-        createdByUserId: ctx.userId ?? null,
+        isPersonalAgent: false,
+        createdByUserId: ctx.userId,
         createdVia: "intelligence-service",
         agentMetadata: {
           agentType: input.serviceType,
           description: entry.description,
           createdByUserId: ctx.userId,
+          isPersonalAgent: false,
           capabilities: entry.agentCapabilities,
         } satisfies NonNullable<(typeof users.$inferInsert)["agentMetadata"]>,
         // INVARIANT: agents NEVER carry a Kratos identity — `kratos_identity_id
@@ -711,8 +715,9 @@ export const intelligenceRegistryRouter = router({
         {
           agentUserId: agentId,
           serviceType: input.serviceType,
+          createdByUserId: ctx.userId,
         },
-        "Pod-wide agent provisioned"
+        "Agent provisioned for creator×type"
       );
 
       logger.info(
@@ -805,12 +810,16 @@ export const intelligenceRegistryRouter = router({
       // Validate service type (throws on unknown)
       getServiceEntry(input.serviceType);
 
-      // Pod-wide search - no workspace membership required
-      const agent = await findProvisionedAgent(null, input.serviceType);
+      // Creator×type: only deprovision THIS human's agent of this type
+      const agent = await findProvisionedAgent(
+        null,
+        input.serviceType,
+        ctx.userId
+      );
       if (!agent) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `${input.serviceType} is not provisioned on this pod`,
+          message: `${input.serviceType} is not provisioned for this user`,
         });
       }
 
@@ -824,7 +833,7 @@ export const intelligenceRegistryRouter = router({
         })
         .where(eq(apiKeys.userId, agent.id));
 
-      // 2. Delete agent user record (no workspace membership for pod-wide agents)
+      // 2. Delete agent user record (surface agents have no required workspace membership)
       await db.delete(users).where(eq(users.id, agent.id));
 
       auditLog({
@@ -854,7 +863,8 @@ export const intelligenceRegistryRouter = router({
    *
    * Revokes all existing keys and issues a new one. The new plaintext key is
    * returned ONCE — update the container's SYNAP_HUB_API_KEY.
-   * Uses podProcedure to support pod-wide agents (no workspace required).
+   * Uses podProcedure (no workspace required). Scoped to the caller's
+   * (createdByUserId, serviceType) principal.
    */
   rotateAgentKey: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
@@ -875,14 +885,28 @@ export const intelligenceRegistryRouter = router({
 
       const entry = getServiceEntry(input.serviceType);
 
-      let existingAgent = await findProvisionedAgent(null, input.serviceType);
+      let existingAgent = await findProvisionedAgent(
+        null,
+        input.serviceType,
+        ctx.userId
+      );
 
+      // Legacy recovery: pre-0228 rows may lack createdByUserId but still hold
+      // an active hub_id key. Only adopt the key's agent if it is owned by (or
+      // unattributed for) THIS human — never rotate another creator's principal.
       if (!existingAgent) {
         const hubId = `integration:${input.serviceType}`;
         const keyRows = await db.execute(sqlDrizzle`
           SELECT k.user_id FROM api_keys k
+          INNER JOIN users u ON u.id = k.user_id
           WHERE k.hub_id = ${hubId}
             AND k.is_active = true
+            AND u.user_type = 'agent'
+            AND u.agent_type = ${input.serviceType}
+            AND (
+              u.created_by_user_id = ${ctx.userId}
+              OR u.created_by_user_id IS NULL
+            )
           ORDER BY k.created_at DESC
           LIMIT 1
         `);
@@ -907,7 +931,7 @@ export const intelligenceRegistryRouter = router({
       if (!existingAgent) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `${input.serviceType} is not provisioned on this pod`,
+          message: `${input.serviceType} is not provisioned for this user`,
         });
       }
 
@@ -1010,7 +1034,7 @@ export const intelligenceRegistryRouter = router({
       const entry = getServiceEntry(input.serviceType);
 
       const [agent, service] = await Promise.all([
-        findProvisionedAgent(ctx.workspaceId, input.serviceType),
+        findProvisionedAgent(ctx.workspaceId, input.serviceType, ctx.userId),
         entry.matchCapability
           ? findRegisteredService(entry.matchCapability)
           : Promise.resolve(undefined),
@@ -1593,15 +1617,26 @@ function generateApiKey(prefix: string): string {
 }
 
 /**
- * Find an existing provisioned agent user of a given service type.
- * If workspaceId is null, searches pod-wide (no workspace membership required).
+ * Find an existing provisioned agent user for (createdByUserId, serviceType).
+ * Product invariant (migration 0228 / provisionSurfaceAgentKey): one principal
+ * per human per agentType — never agentType-only (that collapses multi-human pods).
+ *
+ * If workspaceId is set, also requires membership in that workspace (legacy
+ * workspace-tied agents). Null workspaceId = membership not required.
  */
 async function findProvisionedAgent(
   workspaceId: string | null,
-  serviceType: string
+  serviceType: string,
+  createdByUserId: string
 ) {
+  const typeAndCreator = and(
+    eq(users.userType, "agent"),
+    eq(users.agentType, serviceType),
+    eq(users.createdByUserId, createdByUserId)
+  );
+
   if (workspaceId) {
-    // Workspace-scoped search (legacy)
+    // Workspace-scoped search (legacy membership join + creator floor)
     const [row] = await db
       .select({
         id: users.id,
@@ -1618,11 +1653,11 @@ async function findProvisionedAgent(
           eq(workspaceMembers.workspaceId, workspaceId)
         )
       )
-      .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType)))
+      .where(typeAndCreator)
       .limit(1);
     return row;
   } else {
-    // Pod-wide search (no workspace membership required)
+    // Creator×type search (no workspace membership required)
     const [row] = await db
       .select({
         id: users.id,
@@ -1631,7 +1666,7 @@ async function findProvisionedAgent(
         agentMetadata: users.agentMetadata,
       })
       .from(users)
-      .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType)))
+      .where(typeAndCreator)
       .limit(1);
     return row;
   }

@@ -745,10 +745,12 @@ export const capabilitiesRouter = router({
    * `CapabilityCard` per pack (installed containers + available templates).
    */
   catalog: protectedProcedure
-    .input(z.object({ workspaceId: z.string().uuid() }))
+    // workspaceId OPTIONAL: capabilities are viewable POD-WIDE without an active
+    // workspace lens (pod-global capabilities only). A lens ADDS its own containers.
+    .input(z.object({ workspaceId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
       return buildCapabilityCatalog({
-        workspaceId: input.workspaceId,
+        workspaceId: input.workspaceId ?? null,
         userId: ctx.userId,
       });
     }),

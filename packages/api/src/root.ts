@@ -76,6 +76,13 @@ import { projectsRouter } from "./routers/projects.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
 import { onboardingRouter } from "./routers/onboarding.js";
+// Previously mounted ONLY via the dynamic `registerRouter` registry (so they
+// were served but invisible to codegen). Folded into coreRouter so root.ts is
+// the SINGLE source of truth for the served + typed API surface.
+import { diagnoseRouter } from "./routers/diagnose.js";
+import { typesenseRouter } from "./routers/typesense.js";
+import { n8nActionsRouter } from "./routers/n8n/actions.js";
+import { usersRouter } from "./routers/users.js";
 
 /**
  * Core API Router
@@ -159,6 +166,10 @@ export const coreRouter = router({
   artifacts: artifactsRouter,
   projects: projectsRouter,
   onboarding: onboardingRouter,
+  diagnose: diagnoseRouter,
+  typesense: typesenseRouter,
+  n8nActions: n8nActionsRouter,
+  users: usersRouter,
 });
 
 export type AppRouter = typeof coreRouter;

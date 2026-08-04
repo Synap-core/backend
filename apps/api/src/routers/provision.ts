@@ -38,7 +38,6 @@ import {
   getDb,
   eq,
   and,
-  drizzleSql,
   EventRepository,
   ApiKeyRepository,
   sql,
@@ -789,8 +788,7 @@ provisionRouter.get("/status", async (c) => {
       | undefined;
 
     const intelligenceServiceId = settings.intelligenceServiceId as
-      | string
-      | undefined;
+      string | undefined;
     let intelligenceService: {
       serviceId: string;
       url: string;
@@ -1084,8 +1082,7 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
       await db.query.workspaces.findFirst({ columns: { settings: true } })
     )?.settings as Record<string, unknown> | undefined;
     const intelligenceServiceId = settings?.intelligenceServiceId as
-      | string
-      | undefined;
+      string | undefined;
 
     if (intelligenceServiceId) {
       const svc = await db.query.intelligenceServices.findFirst({
@@ -1242,8 +1239,7 @@ provisionRouter.get("/addon-status", async (c) => {
       columns: { settings: true },
     });
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
-      | { url?: string; podId?: string }
-      | undefined;
+      { url?: string; podId?: string } | undefined;
     cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
@@ -1298,14 +1294,31 @@ provisionRouter.get("/addon-status", async (c) => {
       (s) => s.serviceId.startsWith("openclaw-") && s.enabled
     );
 
-    // Check if the agent user exists (independent of IS registration)
-    const agentUser = await db.query.users.findFirst({
-      where: and(
-        eq(users.userType, "agent"),
-        drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
-      ),
-      columns: { id: true },
+    // Agent user for the workspace owner (creator × type). CP addon path is
+    // owner-attributed; multi-human surface keys use provisionSurfaceAgentKey.
+    const ownerMember = await db.query.workspaceMembers.findFirst({
+      where: eq(workspaceMembers.role, "owner"),
+      columns: { userId: true },
     });
+    const agentUser = ownerMember?.userId
+      ? await db.query.users.findFirst({
+          where: and(
+            eq(users.userType, "agent"),
+            eq(users.agentType, "openclaw"),
+            eq(users.createdByUserId, ownerMember.userId)
+          ),
+          columns: { id: true },
+        })
+      : await db.query.users.findFirst({
+          // Fail-safe when no owner row: still prefer agentType column over
+          // metadata-only; do not invent a cross-creator match.
+          where: and(
+            eq(users.userType, "agent"),
+            eq(users.agentType, "openclaw")
+          ),
+          columns: { id: true },
+          // TODO(multi-human): require owner/creator once CP status carries it
+        });
 
     return c.json({
       addon: "openclaw",
@@ -1330,8 +1343,8 @@ provisionRouter.get("/addon-status", async (c) => {
 // Body: JWT claims carry { addon, serviceId, workspaceId? }
 //
 // For addon = "openclaw":
-//   1. Find or create a pod-wide OpenClaw agent user
-//      (agentMetadata.writesRequireProposal: true — all writes require approval)
+//   1. Find or create OpenClaw agent user for the workspace owner
+//      (creator × type; agentMetadata.writesRequireProposal: true)
 //   2. Grant the agent editor membership in the target workspace (idempotent)
 //   3. Create a Hub Protocol API key bound to the agent user
 //
@@ -1362,8 +1375,7 @@ provisionRouter.post("/activate-addon", async (c) => {
       columns: { settings: true },
     });
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
-      | { url?: string; podId?: string }
-      | undefined;
+      { url?: string; podId?: string } | undefined;
     cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
@@ -1434,15 +1446,31 @@ provisionRouter.post("/activate-addon", async (c) => {
     });
     const ownerUserId = ownerMember?.userId ?? null;
 
-    // ── 1. Find or create the OpenClaw agent user (pod-wide singleton) ────────
+    // ── 1. Find or create OpenClaw agent for workspace owner (creator × type) ─
     //
-    // One agent user per pod, not per workspace. It's granted access to
-    // specific workspaces via workspace_members (step 2).
+    // CP addon path attributes the agent to the workspace owner. Without an
+    // owner we cannot enforce (creator, agentType) — fail closed rather than
+    // minting a creator-less singleton that collides under migration 0228.
+    if (!ownerUserId) {
+      logger.error(
+        { flowId, targetWorkspaceId },
+        "activate-addon: no workspace owner — cannot attribute OpenClaw agent"
+      );
+      return c.json(
+        {
+          error:
+            "No workspace owner to attribute the OpenClaw agent to (createdByUserId required)",
+          code: "NO_HUMAN_OWNER",
+        },
+        409
+      );
+    }
 
     const existingAgent = await db.query.users.findFirst({
       where: and(
         eq(users.userType, "agent"),
-        drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
+        eq(users.agentType, "openclaw"),
+        eq(users.createdByUserId, ownerUserId)
       ),
       columns: { id: true },
     });
@@ -1452,8 +1480,8 @@ provisionRouter.post("/activate-addon", async (c) => {
     if (existingAgent) {
       agentUserId = existingAgent.id;
       logger.info(
-        { agentUserId },
-        "activate-addon: reusing existing OpenClaw agent user"
+        { agentUserId, createdByUserId: ownerUserId },
+        "activate-addon: reusing existing OpenClaw agent user for creator×type"
       );
     } else {
       agentUserId = randomUUID();
@@ -1465,11 +1493,15 @@ provisionRouter.post("/activate-addon", async (c) => {
         emailVerified: true,
         userType: "agent",
         kratosIdentityId: null,
+        // Dual-write identity columns (migration 0038 / 0228) — not metadata-only
+        agentType: "openclaw",
+        isPersonalAgent: false,
+        createdByUserId: ownerUserId,
         agentMetadata: {
           agentType: "openclaw",
           description:
             "OpenClaw — world-interface AI agent (shell, browser, messaging channels)",
-          createdByUserId: ownerUserId ?? agentUserId,
+          createdByUserId: ownerUserId,
           isPersonalAgent: false,
           writesRequireProposal: true,
           capabilities: ["shell", "browser", "filesystem", "messaging"],
@@ -1478,8 +1510,8 @@ provisionRouter.post("/activate-addon", async (c) => {
         locale: "en",
       });
       logger.info(
-        { agentUserId },
-        "activate-addon: created OpenClaw agent user"
+        { agentUserId, createdByUserId: ownerUserId },
+        "activate-addon: created OpenClaw agent user for creator×type"
       );
     }
 
@@ -1620,8 +1652,7 @@ provisionRouter.post("/deactivate-addon", async (c) => {
       columns: { settings: true },
     });
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
-      | { url?: string; podId?: string }
-      | undefined;
+      { url?: string; podId?: string } | undefined;
     cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
@@ -1665,17 +1696,25 @@ provisionRouter.post("/deactivate-addon", async (c) => {
   try {
     const db = await getDb();
 
-    // Locate the OpenClaw agent — prefer agentUserId from JWT claim, fall back to lookup
+    // Locate the OpenClaw agent — prefer agentUserId from JWT claim; fall back
+    // to creator×type for the workspace owner (same attribution as activate).
     let agentUserId = payload.agentUserId;
     if (!agentUserId) {
-      const agent = await db.query.users.findFirst({
-        where: and(
-          eq(users.userType, "agent"),
-          drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
-        ),
-        columns: { id: true },
+      const ownerMember = await db.query.workspaceMembers.findFirst({
+        where: eq(workspaceMembers.role, "owner"),
+        columns: { userId: true },
       });
-      agentUserId = agent?.id;
+      if (ownerMember?.userId) {
+        const agent = await db.query.users.findFirst({
+          where: and(
+            eq(users.userType, "agent"),
+            eq(users.agentType, "openclaw"),
+            eq(users.createdByUserId, ownerMember.userId)
+          ),
+          columns: { id: true },
+        });
+        agentUserId = agent?.id;
+      }
     }
 
     if (!agentUserId) {

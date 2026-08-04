@@ -172,10 +172,15 @@ export async function buildAutomationCatalog(
       .from(automations)
       .where(
         and(
-          or(
-            isNull(automations.workspaceId),
-            eq(automations.workspaceId, workspaceId)
-          ),
+          // Pod-wide (NULL) always; a workspace lens ADDS its own automations.
+          // Absent lens (shared CapabilityCatalogContext now allows null) =
+          // pod-wide only — mirrors buildCapabilityCatalog.
+          workspaceId
+            ? or(
+                isNull(automations.workspaceId),
+                eq(automations.workspaceId, workspaceId)
+              )
+            : isNull(automations.workspaceId),
           userVisibleWhere(automations.workspaceId, userId)
         )
       );

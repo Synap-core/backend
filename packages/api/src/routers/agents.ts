@@ -14,6 +14,7 @@ import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, desc, or, and, verifyPermission } from "@synap/database";
 import { agents } from "@synap/database/schema";
+import { ownAdjunctFilter } from "../services/agent-identity-service.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -65,13 +66,10 @@ export const agentsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       // `system` + `provider` agents are SHARED (visible to everyone).
-      // `user`-owned agents are PRIVATE local/CLI adjuncts — they MUST be
-      // scoped to the requesting user, or one user's adjuncts leak into every
-      // other user's picker. Filter by USER, never by ownerType alone.
-      const ownAdjuncts = and(
-        eq(agents.ownerType, "user"),
-        eq(agents.userId, ctx.userId)
-      );
+      // `user`-owned agents are PRIVATE local/CLI adjuncts — scoped to the caller
+      // via the canonical owner predicate (owner = the actor's `createdByUserId`,
+      // NOT `agents.userId`, which is the actor id). One door: `ownAdjunctFilter`.
+      const ownAdjuncts = ownAdjunctFilter(ctx.userId);
       const ownerFilter =
         input.ownerType === "user"
           ? ownAdjuncts
@@ -109,7 +107,7 @@ export const agentsRouter = router({
             or(
               eq(agents.ownerType, "system"),
               eq(agents.ownerType, "provider"),
-              and(eq(agents.ownerType, "user"), eq(agents.userId, ctx.userId))
+              ownAdjunctFilter(ctx.userId)
             )
           )
         )

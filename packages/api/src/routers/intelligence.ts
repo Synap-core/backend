@@ -1217,8 +1217,9 @@ export const intelligenceRouter = router({
    * Once the container is started, it connects to the pod via Hub Protocol and
    * self-registers as an intelligence service.
    *
-   * Idempotent: if the agent already exists, returns its ID without a new API key
-   * (key is only shown once — user must rotate if lost).
+   * Idempotent per (createdByUserId, serviceType): if THIS human already has
+   * an agent of this type, rotates and returns a fresh key (key is only shown
+   * once otherwise — other humans get their own principal).
    */
   provisionService: podProcedure
     .input(
@@ -1232,7 +1233,7 @@ export const intelligenceRouter = router({
       const { serviceType, podUrlOverride } = input;
       const workspaceId = ctx.workspaceId ?? null;
 
-      // Pod-level: any authenticated user can provision (pod-level check done by podProcedure)
+      // Authenticated human provisions their own (creator × type) agent.
       const entry = SERVICE_CATALOG[serviceType];
       if (!entry) {
         throw new TRPCError({
@@ -1241,12 +1242,17 @@ export const intelligenceRouter = router({
         });
       }
 
-      // Check if agent already exists (pod-wide search - no workspace membership required)
+      // Creator×type: one openclaw (etc.) principal per human, not pod-wide.
+      // Aligns with provisionSurfaceAgentKey / migration 0228.
       const [existing] = await db
         .select({ id: users.id, email: users.email })
         .from(users)
         .where(
-          and(eq(users.userType, "agent"), eq(users.agentType, serviceType))
+          and(
+            eq(users.userType, "agent"),
+            eq(users.agentType, serviceType),
+            eq(users.createdByUserId, ctx.userId)
+          )
         )
         .limit(1);
 
@@ -1308,7 +1314,8 @@ export const intelligenceRouter = router({
         };
       }
 
-      // Create new pod-wide agent user (no workspace membership required)
+      // Create new agent user for this human (creator × type). No workspace
+      // membership required — surface agents are human-owned, not workspace-tied.
       const agentId = randomUUID();
       const shortId = agentId.slice(0, 8);
       const email = `agent-${serviceType}-${shortId}@synap.agent`;
@@ -1320,11 +1327,13 @@ export const intelligenceRouter = router({
         emailVerified: true,
         userType: "agent",
         agentType: serviceType,
-        createdByUserId: ctx.userId ?? null,
+        isPersonalAgent: false,
+        createdByUserId: ctx.userId,
         agentMetadata: {
           agentType: serviceType,
           description: entry.description,
-          createdByUserId: ctx.userId ?? "system",
+          createdByUserId: ctx.userId,
+          isPersonalAgent: false,
           capabilities: entry.agentCapabilities,
         } satisfies AgentMetadata,
         // INVARIANT: agents NEVER carry a Kratos identity — `kratos_identity_id

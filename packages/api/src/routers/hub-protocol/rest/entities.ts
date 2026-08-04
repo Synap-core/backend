@@ -930,6 +930,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         description: "Referenced profile not found",
         content: { "application/json": { schema: ErrorSchema } },
       },
+      409: {
+        description:
+          "Weak same-name conflict — a same-profile entity with this title already exists (pass forceCreate or reuse the candidate id)",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       500: {
         description: "Internal error",
         content: { "application/json": { schema: ErrorSchema } },
@@ -1062,6 +1067,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Kind + Facets: attach roles in the same call (handled by the governed
         // createEntity door, which attaches each after the entity materializes).
         ...(body.facets?.length ? { facets: body.facets } : {}),
+        ...(body.forceCreate ? { forceCreate: true } : {}),
       });
 
       // ── Impact-aware writes (SHALLOW, exact-name) ─────────────────────────
@@ -1097,12 +1103,79 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err }, "createEntity failed");
       // Classify instead of a blanket 500: a PropertyValidationError (unknown /
       // invalid property) is a fixable CLIENT mistake and must come back as 400
-      // with its message, so the agent can correct itself. `facetErrorStatus`
+      // with its message, so the agent can correct itself. Weak same-name dedup
+      // is 409 with structured candidates (Phase 1). `facetErrorStatus`
       // (defined further down, same closure) already walks the cause chain and
       // duck-types the codes/names; genuinely-unknown errors still return 500.
+      const status = facetErrorStatus(err);
+      const message = err instanceof Error ? err.message : "Unknown error";
+      // Surface structured weak-dedup / junk-title causes so agents can act
+      // without re-parsing the prose message. Walk the cause chain (createCaller
+      // may wrap domain TRPCErrors).
+      let cause: {
+        code?: string;
+        candidates?: unknown;
+        guidance?: string;
+      } | null = null;
+      let cursor: unknown = err;
+      for (
+        let depth = 0;
+        cursor && typeof cursor === "object" && depth < 4;
+        depth++
+      ) {
+        const c = cursor as {
+          cause?: unknown;
+          code?: unknown;
+          candidates?: unknown;
+          guidance?: unknown;
+        };
+        if (
+          c.code === "ENTITY_WEAK_DEDUP" ||
+          c.code === "ENTITY_JUNK_TITLE" ||
+          (Array.isArray(c.candidates) && c.candidates.length > 0)
+        ) {
+          cause = {
+            code: typeof c.code === "string" ? c.code : undefined,
+            ...(Array.isArray(c.candidates)
+              ? { candidates: c.candidates }
+              : {}),
+            ...(typeof c.guidance === "string" ? { guidance: c.guidance } : {}),
+          };
+          break;
+        }
+        // tRPCError.cause may be the structured payload directly
+        if (c.cause && typeof c.cause === "object") {
+          const nested = c.cause as {
+            code?: unknown;
+            candidates?: unknown;
+            guidance?: unknown;
+          };
+          if (
+            nested.code === "ENTITY_WEAK_DEDUP" ||
+            nested.code === "ENTITY_JUNK_TITLE"
+          ) {
+            cause = {
+              code: typeof nested.code === "string" ? nested.code : undefined,
+              ...(Array.isArray(nested.candidates)
+                ? { candidates: nested.candidates }
+                : {}),
+              ...(typeof nested.guidance === "string"
+                ? { guidance: nested.guidance }
+                : {}),
+            };
+            break;
+          }
+        }
+        cursor = c.cause;
+      }
       return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        facetErrorStatus(err)
+        {
+          error: message,
+          ...(cause?.code ? { code: cause.code } : {}),
+          ...(cause?.candidates ? { candidates: cause.candidates } : {}),
+          ...(cause?.guidance ? { guidance: cause.guidance } : {}),
+        },
+        status
       );
     }
   });
@@ -2103,7 +2176,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
   // Duck-typed on `.code` rather than `instanceof TRPCError`: the bundled
   // build carries its own TRPCError class identity, so instanceof fails
   // across the boundary (verified live — 9fb3e7d4 shipped and still 500'd).
-  const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 500 => {
+  const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 409 | 500 => {
     // Walk the cause chain: createCaller wraps a thrown domain error in
     // TRPCError{code:'INTERNAL_SERVER_ERROR', cause: <domain error>}, so the
     // meaningful `.code`/`.name` may sit one or two levels down (verified
@@ -2118,6 +2191,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       if (code === "BAD_REQUEST") return 400;
       if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
       if (code === "NOT_FOUND") return 404;
+      // Phase 1 weak same-name gate (entities.create) — structured candidates
+      // ride the cause; HTTP 409 so agents can distinguish "fix args" from
+      // "reuse existing".
+      if (code === "CONFLICT" || code === "ENTITY_WEAK_DEDUP") return 409;
       // Raw @synap/database domain errors carry no `.code` — duck-type on
       // `.name` (bundle-safe, same rationale as `.code`; mirrors mapDbError).
       const name = (cursor as { name?: unknown }).name;

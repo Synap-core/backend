@@ -14,6 +14,7 @@ import {
   db,
   eq,
   and,
+  inArray,
   isNull,
   sql,
   apiKeys,
@@ -71,6 +72,31 @@ export async function resolveAgentUser(
 export async function hasUserIdentity(agentId: string): Promise<boolean> {
   const agent = await getAgentById(agentId);
   return Boolean(agent?.userId);
+}
+
+/**
+ * Canonical visibility predicate for a caller's OWN user-owned adjunct registry
+ * rows. `agents.userId` is the ACTOR (the agent-user), NOT the human owner — so
+ * "mine" means the actor was created by me (`users.createdByUserId`), the SAME
+ * owner signal the governance scorecards use. Prior code floored on
+ * `eq(agents.userId, humanId)`, which never matched for a local adjunct (actor id
+ * ≠ human id) → a human could not see their own CLI adjunct. Defined ONCE here so
+ * every catalog reader (agents router + object-graph) floors identically. Shared
+ * built-ins (ownerType 'system'/'synap'/'provider') are OR'd in by the caller.
+ */
+export function ownAdjunctFilter(userId: string) {
+  return and(
+    eq(agents.ownerType, "user"),
+    inArray(
+      agents.userId,
+      db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
+        )
+    )
+  );
 }
 
 /**
@@ -216,6 +242,115 @@ export interface CreateNamedAgentResult {
   apiKey: string;
 }
 
+/** Minimal logging surface so callers can thread their own logger through. */
+interface ProvisionLogger {
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+}
+
+/**
+ * Find-or-create a non-personal (service) agent user for **(creatorId, agentType)**.
+ *
+ * Shared by `createNamedAgent` and `provisionSurfaceAgentKey` so both doors share
+ * one insert shape and the same race recovery against
+ * `idx_users_service_agent_creator_type_unique` (migration 0228). Concurrent
+ * inserts re-select the winning (oldest) singleton.
+ *
+ * Non-twin service agents always stamp `writesRequireProposal: true` and
+ * `kratosIdentityId: null` (agents authenticate on the Hub-key rail, never Kratos).
+ */
+export async function findOrCreateServiceAgentUser(opts: {
+  creatorId: string;
+  agentType: string;
+  label: string;
+  /** Merged into agentMetadata; identity fields (agentType/creator/isPersonal) are forced. */
+  metadata?: Partial<AgentMetadata>;
+  logger?: ProvisionLogger;
+}): Promise<{ agentUserId: string; email: string }> {
+  const { creatorId, agentType, label, logger } = opts;
+
+  // Deterministic: if a race produced more than one row for this pair, reuse the
+  // OLDEST so the singleton is stable across calls.
+  const existing = await db.query.users.findFirst({
+    where: and(
+      eq(users.userType, "agent"),
+      eq(users.agentType, agentType),
+      eq(users.createdByUserId, creatorId),
+      eq(users.isPersonalAgent, false)
+    ),
+    orderBy: (u, { asc }) => [asc(u.createdAt)],
+    columns: { id: true, email: true },
+  });
+
+  if (existing) {
+    logger?.info(
+      { agentUserId: existing.id, agentType, createdByUserId: creatorId },
+      "findOrCreateServiceAgentUser: reusing existing agent user for creator×type"
+    );
+    return { agentUserId: existing.id, email: existing.email };
+  }
+
+  const agentUserId = randomUUID();
+  const shortId = agentUserId.slice(0, 8);
+  const email = `agent-${agentType}-${shortId}@synap.agent`;
+  // Defaults first, caller metadata second, identity invariants last (forced).
+  const agentMetadata: AgentMetadata = {
+    capabilities: [],
+    ...opts.metadata,
+    agentType,
+    createdByUserId: creatorId,
+    isPersonalAgent: false,
+    // Non-twin service agents always route writes through proposals.
+    writesRequireProposal: true,
+  };
+
+  try {
+    await db.insert(users).values({
+      id: agentUserId,
+      email,
+      name: label,
+      emailVerified: true,
+      userType: "agent",
+      // INVARIANT: an agent NEVER carries a Kratos identity. `kratosIdentityId IS
+      // NULL` is the canonical human↔agent discriminator (agents authenticate on
+      // the Hub-key rail, not Kratos). Keep this NULL — the tripwire
+      // agent-kratos-identity-invariant.test.ts locks it.
+      kratosIdentityId: null,
+      agentType,
+      isPersonalAgent: false,
+      createdByUserId: creatorId,
+      createdVia: "cli",
+      agentMetadata,
+      timezone: "UTC",
+      locale: "en",
+    });
+    logger?.info(
+      { agentUserId, agentType, createdByUserId: creatorId },
+      "findOrCreateServiceAgentUser: created agent user for creator×type"
+    );
+    return { agentUserId, email };
+  } catch (err) {
+    // DB firewall: unique (created_by_user_id, agent_type) for service agents
+    // rejects a concurrent insert. Re-resolve the winning singleton and reuse.
+    const raced = await db.query.users.findFirst({
+      where: and(
+        eq(users.userType, "agent"),
+        eq(users.agentType, agentType),
+        eq(users.createdByUserId, creatorId),
+        eq(users.isPersonalAgent, false)
+      ),
+      orderBy: (u, { asc }) => [asc(u.createdAt)],
+      columns: { id: true, email: true },
+    });
+    if (!raced) throw err;
+    logger?.info(
+      { agentUserId: raced.id, agentType, createdByUserId: creatorId },
+      "findOrCreateServiceAgentUser: lost provision race — reusing existing agent user"
+    );
+    return { agentUserId: raced.id, email: raced.email };
+  }
+}
+
 /**
  * Creates a named agent user (userType="agent") and issues a Hub Protocol
  * API key for it. Idempotent by (agentType + createdByUserId): if an agent
@@ -230,54 +365,11 @@ export async function createNamedAgent(opts: {
   agentType: string;
   createdByUserId: string;
 }): Promise<CreateNamedAgentResult> {
-  // Idempotent lookup: reuse existing agent of same type for this user
-  const [existing] = await db
-    .select({ id: users.id, email: users.email })
-    .from(users)
-    .where(
-      and(
-        eq(users.createdByUserId, opts.createdByUserId),
-        eq(users.userType, "agent"),
-        eq(users.agentType, opts.agentType),
-        eq(users.isPersonalAgent, false)
-      )
-    )
-    .limit(1);
-
-  let agentUserId: string;
-  let email: string;
-
-  if (existing) {
-    agentUserId = existing.id;
-    email = existing.email;
-  } else {
-    agentUserId = randomUUID();
-    const shortId = agentUserId.slice(0, 8);
-    email = `agent-${opts.agentType}-${shortId}@synap.agent`;
-
-    await db.insert(users).values({
-      id: agentUserId,
-      email,
-      name: opts.name,
-      userType: "agent",
-      agentType: opts.agentType,
-      isPersonalAgent: false,
-      createdByUserId: opts.createdByUserId,
-      createdVia: "cli",
-      agentMetadata: {
-        agentType: opts.agentType,
-        createdByUserId: opts.createdByUserId,
-        isPersonalAgent: false,
-      },
-      // INVARIANT: an agent NEVER carries a Kratos identity. `kratosIdentityId IS
-      // NULL` is the canonical human↔agent discriminator (agents authenticate on
-      // the Hub-key rail, not Kratos). The federated user-sign-in rework keys human
-      // identity off a non-null kratosIdentityId, so a sentinel like `agent:${id}`
-      // here would mis-classify the agent as a Kratos human. Keep this NULL — the
-      // tripwire agent-kratos-identity-invariant.test.ts locks it.
-      kratosIdentityId: null,
-    });
-  }
+  const { agentUserId, email } = await findOrCreateServiceAgentUser({
+    creatorId: opts.createdByUserId,
+    agentType: opts.agentType,
+    label: opts.name,
+  });
 
   // Ensure a managed REGISTRY row exists for this agent-user so it appears as a
   // first-class ADJUNCT in the agent picker / management UI (agents.workspaceList
@@ -329,18 +421,24 @@ export async function createNamedAgent(opts: {
   return { agentUserId, email, apiKey: registration.plainKey };
 }
 
-/** Minimal logging surface so callers can thread their own logger through. */
-interface ProvisionLogger {
-  info: (obj: unknown, msg?: string) => void;
-  warn: (obj: unknown, msg?: string) => void;
-}
-
 export interface ProvisionSurfaceAgentKeyOpts {
-  /** Agent kind — pod-wide-singleton key. A row is reused across calls. */
+  /**
+   * Agent kind — singleton key together with `createdByUserId`.
+   * One agent user per (human creator, agentType); multi-runtime uses
+   * `instanceId` on keys, not a second agent user.
+   */
   agentType: string;
-  /** Human the agent user is attributed to (createdByUserId on the user row). */
+  /**
+   * Human the agent user is attributed to (createdByUserId on the user row).
+   * REQUIRED for surface agents — product invariant: one principal per
+   * (creator, agentType). Null is rejected (fail closed).
+   */
   createdByUserId: string | null;
-  /** Human the KEY acts for (key.linkedUserId → auth-middleware agent remap). */
+  /**
+   * Human the KEY acts for (key.linkedUserId → auth-middleware agent remap).
+   * Empty/null defaults to `createdByUserId`. Still fails closed with
+   * `NO_LINKED_HUMAN` if neither resolves — never mints hub_inbound with null.
+   */
   linkedUserId: string | null;
   /** Per-runtime instance label; scopes the sibling-revoke + idempotency check. */
   instanceId?: string | null;
@@ -391,14 +489,14 @@ export type ProvisionSurfaceAgentKeyResult =
 
 /**
  * Provision a SURFACE AGENT Hub key — the ONE door for minting an agent-user-owned
- * `hub_inbound` key that is a pod-wide singleton per `agentType`, whose
+ * `hub_inbound` key that is a singleton per **(createdByUserId, agentType)**, whose
  * `linkedUserId` is the human it acts for.
  *
- * Extracted verbatim (in effect) from the inline body of POST /api/hub/setup/agent
- * so other flows (e.g. the CP-MCP pod-accept gate) mint the SAME way. Sequence:
- *   1. find-or-create the agent user — deterministic OLDEST-wins dedup, with the
- *      provisioning-race catch on the `0037_users_agent_singleton_unique` index
- *      (a concurrent insert is caught and the existing row reused, never thrown).
+ * Aligns with `createNamedAgent` and product rule: one principal per human per
+ * surface type. Multi-machine concurrency uses `instanceId` on keys, not a second
+ * agent user. Sequence:
+ *   1. find-or-create the agent user for (creator, agentType) — race-safe against
+ *      the unique index (migration 0228; replaces pod-wide agentType-only 0037).
  *   2. optionally ensure the `agents` registry row (local CLI adjunct).
  *   3. `onAgentUserResolved` hook (caller-specific side effects — e.g. workspace
  *      membership) BEFORE the idempotency check and revoke+mint.
@@ -423,72 +521,40 @@ export async function provisionSurfaceAgentKey(
   const rotationLeadDays =
     opts.rotationLeadDays ?? AGENT_KEY_ROTATION_LEAD_DAYS;
 
-  // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
-  // Deterministic: if a provisioning race ever produced more than one row for
-  // this agentType, always reuse the OLDEST so the singleton is stable and the
-  // dedup never flip-flops between rows across calls.
-  const existingAgent = await db.query.users.findFirst({
-    where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
-    orderBy: (u, { asc }) => [asc(u.createdAt)],
-    columns: { id: true },
-  });
-
-  let agentUserId: string;
-
-  if (existingAgent) {
-    agentUserId = existingAgent.id;
-    logger?.info(
-      { agentUserId, agentType },
-      "provisionSurfaceAgentKey: reusing existing agent user"
+  // Fail closed: without a human creator we cannot enforce (creator, agentType).
+  // Callers (setup/agent) must resolve a human before minting.
+  if (!createdByUserId || !createdByUserId.trim()) {
+    const err = new Error(
+      "provisionSurfaceAgentKey: createdByUserId is required (one agent per human × type)"
     );
-  } else {
-    agentUserId = randomUUID();
-    const shortId = agentUserId.slice(0, 8);
-    try {
-      await db.insert(users).values({
-        id: agentUserId,
-        email: `agent-${agentType}-${shortId}@synap.agent`,
-        name: agentLabel,
-        emailVerified: true,
-        userType: "agent",
-        kratosIdentityId: null,
-        agentType,
-        isPersonalAgent: false,
-        createdByUserId: createdByUserId ?? null,
-        createdVia: "cli",
-        agentMetadata: {
-          agentType,
-          description:
-            opts.agentDescription ?? `${agentLabel} — external agent`,
-          createdByUserId: createdByUserId ?? agentUserId,
-          isPersonalAgent: false,
-          writesRequireProposal: true,
-          capabilities: [],
-        },
-        timezone: "UTC",
-        locale: "en",
-      });
-      logger?.info(
-        { agentUserId, agentType },
-        "provisionSurfaceAgentKey: created agent user"
-      );
-    } catch (err) {
-      // DB firewall: a partial unique index on (agentType) for service agents
-      // rejects a concurrent insert. Re-resolve the winning singleton and reuse
-      // it. If nothing matches, the error wasn't a dedup race — re-throw.
-      const raced = await db.query.users.findFirst({
-        where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
-        orderBy: (u, { asc }) => [asc(u.createdAt)],
-        columns: { id: true },
-      });
-      if (!raced) throw err;
-      agentUserId = raced.id;
-      logger?.info(
-        { agentUserId, agentType },
-        "provisionSurfaceAgentKey: lost provision race — reusing existing agent user"
-      );
-    }
+    (err as Error & { code?: string }).code = "NO_HUMAN_OWNER";
+    throw err;
   }
+  const creatorId = createdByUserId.trim();
+
+  // Fail closed: hub_inbound agent keys MUST carry a linked human. Default to
+  // the creator when linked is omitted; never mint with linkedUserId null
+  // (silent governance bypass — agent writes as the operator with no proposal).
+  const resolvedLinkedUserId =
+    (linkedUserId && linkedUserId.trim()) || creatorId;
+  if (!resolvedLinkedUserId) {
+    const err = new Error(
+      "provisionSurfaceAgentKey: linkedUserId is required (agent keys must act for a human)"
+    );
+    (err as Error & { code?: string }).code = "NO_LINKED_HUMAN";
+    throw err;
+  }
+
+  // ── 1. Find or create the agent user (singleton per creator × agentType) ─
+  const { agentUserId } = await findOrCreateServiceAgentUser({
+    creatorId,
+    agentType,
+    label: agentLabel,
+    metadata: {
+      description: opts.agentDescription ?? `${agentLabel} — external agent`,
+    },
+    logger,
+  });
 
   // ── 2. Managed registry row for LOCAL surface agents (observability) ────
   if (opts.ensureRegistryRow) {
@@ -554,7 +620,7 @@ export async function provisionSurfaceAgentKey(
       description:
         opts.keyDescription ??
         `Hub Protocol auth token for ${agentLabel} agent`,
-      linkedUserId: linkedUserId ?? null,
+      linkedUserId: resolvedLinkedUserId,
       instanceId: instanceId ?? null,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(

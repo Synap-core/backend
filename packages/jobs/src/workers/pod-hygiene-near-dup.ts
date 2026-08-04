@@ -32,6 +32,10 @@
  *
  * TODO(proactive digest): if any proposals created in a run, optionally post one
  * proactive_post summary ("N merge proposals ready") — skipped for W0 complexity.
+ *
+ * H0 identity patterns (sentinel titles, property-key aliases): pure detectors
+ * live in `./hygiene-identity-patterns.ts`. Wire into this worker in a follow-up
+ * to file retitle/merge proposals — do not auto-merge.
  */
 
 import {

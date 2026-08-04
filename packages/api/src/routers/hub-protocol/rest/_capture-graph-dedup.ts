@@ -6,6 +6,11 @@
  * the WITHIN-BATCH half (same proposal lists the same person under two
  * `ref`s); the persisted-entity half (already exists in the DB) is a
  * separate block in the handler.
+ *
+ * ASYMMETRY (Phase 1 entity-create dedup): entities.create now REJECTS weak
+ * same-name creates with candidates (unless forceCreate). Capture-graph
+ * within-batch collapse still auto-links weak title keys inside a single
+ * proposal — that is intentional for this PR (batch collapse ≠ create gate).
  */
 
 export interface CaptureGraphEntity {

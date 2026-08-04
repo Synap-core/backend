@@ -21,7 +21,17 @@
  * (team/platform/playbooks-capability-substrate.mdx).
  */
 
-import { getDb, eq, focusSessions, playbooks } from "@synap/database";
+import {
+  getDb,
+  eq,
+  and,
+  isNull,
+  ne,
+  asc,
+  drizzleSql,
+  focusSessions,
+  playbooks,
+} from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
 import type {
   ExpectedOutput,
@@ -38,6 +48,13 @@ import {
 } from "../links/links-service.js";
 
 const logger = createLogger({ module: "playbook-lifecycle" });
+
+/** Postgres unique-violation SQLSTATE — playbooks_workspace_name_active_uq (0227). */
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e.code === "23505" || e.cause?.code === "23505";
+}
 
 /**
  * Resolve a playbook's goalTemplate against caller-supplied param values.
@@ -229,23 +246,56 @@ export async function promoteSessionToPlaybook(
     fromType: "session",
   });
 
-  const [playbook] = await db
-    .insert(playbooks)
-    .values({
-      workspaceId: session.workspaceId,
-      createdBy: input.userId,
-      name: input.name ?? session.goal.slice(0, 200),
-      description: input.description ?? null,
-      goalTemplate: session.goal,
-      expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
-      executor: "is-agent",
-      status: "draft",
-      // Lineage lives in the `session → promoted_to → playbook` edge below — the
-      // single source of truth — not duplicated here.
-    })
-    .returning();
+  const name = input.name ?? session.goal.slice(0, 200);
+  let playbook: Playbook;
+  let reused = false;
+  try {
+    const [row] = await db
+      .insert(playbooks)
+      .values({
+        workspaceId: session.workspaceId,
+        createdBy: input.userId,
+        name,
+        description: input.description ?? null,
+        goalTemplate: session.goal,
+        expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
+        executor: "is-agent",
+        status: "draft",
+        // Lineage lives in the `session → promoted_to → playbook` edge below — the
+        // single source of truth — not duplicated here.
+      })
+      .returning();
+    playbook = row as Playbook;
+  } catch (err) {
+    // 0227: concurrent promote / same-name race — return the surviving non-archived
+    // playbook instead of failing the promote door.
+    if (!isUniqueViolation(err)) throw err;
+    const scope = session.workspaceId
+      ? eq(playbooks.workspaceId, session.workspaceId)
+      : isNull(playbooks.workspaceId);
+    const [winner] = await db
+      .select()
+      .from(playbooks)
+      .where(
+        and(
+          scope,
+          drizzleSql`lower(${playbooks.name}) = lower(${name})`,
+          ne(playbooks.status, "archived")
+        )
+      )
+      .orderBy(asc(playbooks.createdAt), asc(playbooks.id))
+      .limit(1);
+    if (!winner) throw err;
+    playbook = winner as Playbook;
+    reused = true;
+    logger.info(
+      { playbookId: playbook.id, name, sessionId: session.id },
+      "promoteSessionToPlaybook: unique violation — returning existing playbook"
+    );
+  }
 
-  // Lineage + re-granted capabilities, all as graph edges.
+  // Lineage + re-granted capabilities, all as graph edges. createLinks is
+  // onConflict-safe, so re-wiring on a reused playbook is idempotent.
   const edges: LinkInput[] = [
     {
       workspaceId: session.workspaceId,
@@ -266,5 +316,12 @@ export async function promoteSessionToPlaybook(
   ];
   await createLinks(edges);
 
-  return playbook as Playbook;
+  if (reused) {
+    logger.debug(
+      { playbookId: playbook.id, sessionId: session.id },
+      "promoteSessionToPlaybook: reused existing playbook (idempotent)"
+    );
+  }
+
+  return playbook;
 }

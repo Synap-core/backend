@@ -287,23 +287,19 @@ export async function ensureCaptureAgent(): Promise<void> {
 /**
  * Resolve the seeded capture agent's userId — the seam a second agent imports to
  * ATTRIBUTE capture writes. Returns the cached id after the first lookup, or
- * queries the pod-level capture agent row; null when not seeded (pre-bootstrap
- * pod, or `ensureCaptureAgent` has not yet run).
+ * queries the pod-owner's capture agent (creator × type); null when not seeded
+ * (pre-bootstrap pod, or `ensureCaptureAgent` has not yet run).
+ *
+ * Substrate capture is owned by the pod owner — not agentType-only (that would
+ * pick an arbitrary human's capture agent on multi-member pods after 0228).
  */
 export async function getCaptureAgentUserId(): Promise<string | null> {
   if (cachedCaptureAgentUserId) return cachedCaptureAgentUserId;
 
-  const [row] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      and(
-        eq(users.userType, "agent"),
-        eq(users.agentType, CAPTURE_AGENT_DEF.agentType)
-      )
-    )
-    .limit(1);
+  const ownerUserId = await resolvePodOwnerUserId();
+  if (!ownerUserId) return null;
 
-  cachedCaptureAgentUserId = row?.id ?? null;
+  const found = await findCaptureAgent(ownerUserId);
+  cachedCaptureAgentUserId = found?.id ?? null;
   return cachedCaptureAgentUserId;
 }

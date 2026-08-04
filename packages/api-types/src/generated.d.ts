@@ -3461,7 +3461,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "active" | "archived" | "paused" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -6653,6 +6653,115 @@ export interface ActionDescriptor {
 	description?: string;
 	placement: "primary" | "secondary" | "overflow";
 }
+/** A single global-health section verdict. */
+export type HealthStatus = "ok" | "attention" | "degraded";
+/** One section of the whole-pod health read. */
+export interface HealthSection {
+	key: "stuck_runs" | "failed_flows" | "review_backlog" | "duplicate_proposals" | "capabilities" | "agent_activity";
+	status: HealthStatus;
+	/** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
+	headline: string;
+	/** Structured evidence for the section (counts, samples). */
+	detail: Record<string, unknown>;
+}
+/** GLOBAL mode — whole-pod health. */
+export interface GlobalHealthReport {
+	mode: "global";
+	status: HealthStatus;
+	/** One paragraph a human can read; says "all clear" when nothing is wrong. */
+	summary: string;
+	thresholds: {
+		stuckHours: number;
+	};
+	scope: {
+		workspaceId: string | null;
+	};
+	sections: HealthSection[];
+}
+/** The pod-side, agent-system-agnostic behavioural scorecard. */
+export interface AgentScorecard {
+	mode: "agent";
+	agentId: string;
+	agentName: string | null;
+	agentType: string | null;
+	/** Proposals scanned to build this card (capped). */
+	sampled: number;
+	counts: {
+		total: number;
+		pending: number;
+		approved: number;
+		rejected: number;
+		revised: number;
+	};
+	rates: {
+		/** approved (incl. auto) / total */
+		approveRate: number;
+		/** rejected / total */
+		rejectRate: number;
+		/** share of proposals a human revised before it resolved */
+		reviseRate: number;
+		/** share of proposals landing in a same-shape cluster (size > 1) */
+		duplicateRate: number;
+	};
+	/** Top rejection reasons, most frequent first. */
+	rejectionReasons: Array<{
+		reason: string;
+		count: number;
+	}>;
+	/** Daily-cap posture. The cap is PER-AGENT (scales with this agent's own
+	 *  trust — see `agentDailyProposalCap`), not shared across the owner's roster. */
+	dailyCap: {
+		todayCount: number;
+		cap: number;
+		atOrOverCap: boolean;
+	};
+}
+/** One agent's standing in the pod-wide trust grid — REAL lifetime totals. */
+export interface AgentStanding {
+	agentUserId: string;
+	agentName: string | null;
+	agentType: string | null;
+	/** Human approvals (approved + auto_approved). */
+	approved: number;
+	/** Subset of `approved` that were auto-approved (no human touched them). */
+	autoApproved: number;
+	rejected: number;
+	reverted: number;
+	/** Not scored — pending + approval_failed. */
+	pending: number;
+	/** Not scored — the agent recalled it. */
+	withdrawn: number;
+	/** Denominator: approved + rejected + reverted (genuine decisions). */
+	scoredTotal: number;
+	approveRate: number;
+	refuseRate: number;
+}
+/**
+ * Agent provenance — WHERE an agent came from, for the Agent dashboard.
+ *
+ * Identity + origin from the governance-actor row (`users`, keyed by the same
+ * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
+ * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
+ * `workspace_members` rows — the same signal `provisionAgent` uses to detect an
+ * already-pod-wide agent. Owner-floored: only the caller's own agent-users, so a
+ * guessed id can't leak another owner's agent identity.
+ */
+export interface AgentProfile {
+	agentUserId: string;
+	name: string | null;
+	agentType: string | null;
+	agentTemplate: string | null;
+	isPersonalAgent: boolean;
+	/** 'cli' | 'intelligence-service' | 'ui' | 'system' | null (pre-0225). */
+	createdVia: string | null;
+	createdByUserId: string | null;
+	createdByName: string | null;
+	scope: "pod-wide" | "workspace";
+	workspaces: Array<{
+		id: string;
+		name: string | null;
+	}>;
+}
 /**
  * Core API Router
  */
@@ -7457,6 +7566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					contextEntityId?: string | null | undefined;
 				}[] | undefined;
+				forceCreate?: boolean | undefined;
 			};
 			output: {
 				status: string;
@@ -10159,7 +10269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				routers: {
 					name: string;
 					version: string;
-					source: string;
+					source: "core";
 					description: string | undefined;
 				}[];
 				stats: {
@@ -10169,7 +10279,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					totalRouters: number;
 					connectedSSEClients: number;
 					toolsBySource: Record<string, number>;
-					routersBySource: Record<string, number>;
+					routersBySource: {
+						core: number;
+					};
 				};
 			};
 			meta: object;
@@ -13408,7 +13520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		catalog: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId: string;
+				workspaceId?: string | undefined;
 			};
 			output: CapabilityCard[];
 			meta: object;
@@ -19605,11 +19717,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		previewModeling: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
+				source: "json" | "markdown" | "csv" | "connector_sync" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "local_migration";
 				sampleRows: Record<string, unknown>[];
 			};
 			output: {
-				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
+				source: "json" | "markdown" | "csv" | "connector_sync" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "local_migration";
 				analyzedRows: number;
 				suggestions: ImportModelingSuggestion[];
 			};
@@ -22694,7 +22806,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 			} | {
-				playbook: Playbook;
+				playbook: {
+					name: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					status: "active" | "paused" | "archived" | "draft";
+					metadata: unknown;
+					version: number;
+					description: string | null;
+					createdBy: string;
+					params: unknown;
+					expectedOutputs: unknown;
+					executor: PlaybookExecutorRef;
+					goalTemplate: string;
+					inputStrategy: unknown;
+					channelSpec: unknown;
+					stages: unknown;
+					schedule: unknown;
+					flowAutomationId: string | null;
+					subjectProfile: unknown;
+				};
 				status: "created";
 				message: string;
 				proposalId: string | null;
@@ -22726,7 +22859,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 			} | {
-				playbook: Playbook;
+				playbook: {
+					name: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					status: "active" | "paused" | "archived" | "draft";
+					metadata: unknown;
+					version: number;
+					description: string | null;
+					createdBy: string;
+					params: unknown;
+					expectedOutputs: unknown;
+					executor: PlaybookExecutorRef;
+					goalTemplate: string;
+					inputStrategy: unknown;
+					channelSpec: unknown;
+					stages: unknown;
+					schedule: unknown;
+					flowAutomationId: string | null;
+					subjectProfile: unknown;
+				};
 				status: "updated";
 				message: string;
 				proposalId: string | null;
@@ -23739,6 +23893,256 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: string;
 				updatedAt: string;
 			} | null;
+			meta: object;
+		}>;
+	}>>;
+	diagnose: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		global: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				stuckThresholdHours?: number | undefined;
+			} | undefined;
+			output: GlobalHealthReport;
+			meta: object;
+		}>;
+		agents: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: AgentStanding[];
+			meta: object;
+		}>;
+		agent: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentId: string;
+			};
+			output: AgentScorecard | {
+				error: string;
+			};
+			meta: object;
+		}>;
+		agentProfile: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentId: string;
+			};
+			output: AgentProfile | {
+				error: string;
+			};
+			meta: object;
+		}>;
+	}>>;
+	typesense: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		search: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				workspaceId?: string | undefined;
+				collections?: ("entities" | "documents" | "channels" | "agents" | "views")[] | undefined;
+				limit?: number | undefined;
+				page?: number | undefined;
+				entityTypes?: string[] | undefined;
+				documentTypes?: string[] | undefined;
+				viewTypes?: string[] | undefined;
+				tags?: string[] | undefined;
+				status?: string[] | undefined;
+				prefix?: boolean | undefined;
+				facetBy?: string[] | undefined;
+			};
+			output: SearchResponse;
+			meta: object;
+		}>;
+		searchCollection: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				collection: "entities" | "documents" | "channels" | "agents" | "views";
+				query: string;
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+				page?: number | undefined;
+				entityTypes?: string[] | undefined;
+				documentTypes?: string[] | undefined;
+				viewTypes?: string[] | undefined;
+				tags?: string[] | undefined;
+				status?: string[] | undefined;
+				prefix?: boolean | undefined;
+				facetBy?: string[] | undefined;
+			};
+			output: SearchResponse;
+			meta: object;
+		}>;
+		getStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Record<string, any>;
+			meta: object;
+		}>;
+		getQueueStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Record<string, number>;
+			meta: object;
+		}>;
+		reindex: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				collections?: string[] | undefined;
+			};
+			output: {
+				status: string;
+				message: string;
+			};
+			meta: object;
+		}>;
+		initializeCollections: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				status: string;
+				message: string;
+			};
+			meta: object;
+		}>;
+	}>>;
+	n8nActions: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		createEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				type: "note" | "project" | "task";
+				content: string;
+				title?: string | undefined;
+				tags?: string[] | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				success: boolean;
+				entityId: any;
+				eventId: any;
+				message: string;
+			};
+			meta: object;
+		}>;
+		searchEntities: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				limit?: number | undefined;
+				type?: "note" | "project" | "task" | "all" | undefined;
+			};
+			output: {
+				results: {
+					entityId: string;
+					title: string;
+					type: string;
+					preview: string | undefined;
+					fileUrl: string | undefined;
+					relevanceScore: number;
+				}[];
+				query: string;
+				count: number;
+			};
+			meta: object;
+		}>;
+		analyzeContent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				content: string;
+				analysisTypes: ("tasks" | "tags" | "summary" | "sentiment")[];
+			};
+			output: {
+				tags?: string[];
+				summary?: string;
+				tasks?: string[];
+				sentiment?: "positive" | "negative" | "neutral";
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	users: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		me: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				email: string;
+				name: string | null;
+				avatarUrl: string | null;
+				timezone: string;
+				locale: string;
+			};
+			meta: object;
+		}>;
+		getFeedPreferences: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				preferences: {
+					interests: any[];
+					dislikedTopics: any[];
+					persona: string;
+					goal: string;
+					frequency: string;
+					sources: any[];
+					relevanceThreshold: number;
+					notifications: boolean;
+					autoCreateEntities: boolean;
+					onboardingCompleted: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		updateFeedPreferences: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				preferences: {
+					interests: string[];
+					dislikedTopics: string[];
+					persona: "cto" | "sales" | "marketing" | "general" | "founder" | "project-manager" | "researcher";
+					frequency: "realtime" | "hourly" | "daily" | "weekly";
+					sources: {
+						id: string;
+						url: string;
+						name: string;
+						provider: "custom" | "direct";
+						enabled: boolean;
+						topics: string[];
+						addedAt: number;
+						lastFetched?: number | undefined;
+						fetchError?: string | undefined;
+					}[];
+					relevanceThreshold: number;
+					notifications: boolean;
+					autoCreateEntities: boolean;
+					onboardingCompleted: boolean;
+					goal?: "startup-leads" | "market-intelligence" | "personal-learning" | "competitor-watch" | "trend-monitoring" | undefined;
+				};
+			};
+			output: {
+				success: boolean;
+			};
 			meta: object;
 		}>;
 	}>>;
