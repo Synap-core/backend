@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   ProfileResolutionService,
-  resolveWorkspacePlacement,
+  resolveGraphWorkspaceFromSlugs,
 } from "@synap/database";
 import {
   submitCaptureGraph,
@@ -10,7 +10,7 @@ import {
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, resolveWorkspacePlacement: vi.fn() };
+  return { ...actual, resolveGraphWorkspaceFromSlugs: vi.fn() };
 });
 
 /**
@@ -30,6 +30,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 describe("submitCaptureGraph — propose-time required-property preflight", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // Placement runs before preflight; default abstain so workspaceId stays null.
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
   });
 
   it("REJECTS a graph whose entity is missing a required property (before any proposal is filed)", async () => {
@@ -78,12 +80,12 @@ describe("submitCaptureGraph — propose-time required-property preflight", () =
 /**
  * WORKSPACE PLACEMENT ROUTING (the fix under test): a graph submitted with no
  * explicit workspace/lens (`workspaceId: null`, mirroring `input.workspaceId ??
- * ctx.workspaceId ?? null` upstream) must resolve placement from the graph's
- * ontology (`resolveWorkspacePlacement`) instead of silently landing pod-wide —
- * a deterministic single-candidate hit re-lenses the whole graph, an ambiguous
- * (>1 candidate) or no-signal result ABSTAINS (stays null). `createEventBacked
- * Proposal` is stubbed so the assertion is purely "what workspaceId did the
- * proposal get filed under", independent of DB.
+ * ctx.workspaceId ?? null` upstream) must resolve placement via the shared
+ * `resolveGraphWorkspaceFromSlugs` helper (ontology slugs → deterministic accept
+ * policy) instead of silently landing pod-wide — a hit re-lenses the whole
+ * graph, null ABSTAINS. `createEventBackedProposal` is stubbed so the assertion
+ * is purely "what workspaceId did the proposal get filed under", independent of
+ * DB. Accept/abstain policy itself is unit-tested next to the helper.
  */
 describe("submitCaptureGraph — workspace placement routing", () => {
   beforeEach(() => {
@@ -95,14 +97,7 @@ describe("submitCaptureGraph — workspace placement routing", () => {
   });
 
   it("resolves a person/company/lead graph into the ontology-implied workspace (deterministic single candidate)", async () => {
-    vi.mocked(resolveWorkspacePlacement).mockResolvedValue({
-      workspaceId: "ws-crm",
-      rung: 2,
-      reason: "only workspace 'CRM' has role 'lead' enabled",
-      confidence: 1,
-      candidates: [],
-      ask: false,
-    });
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue("ws-crm");
     const spy = vi
       .spyOn(
         await import("../../utils/event-backed-proposal.js"),
@@ -125,12 +120,11 @@ describe("submitCaptureGraph — workspace placement routing", () => {
       ] as any,
     });
 
-    expect(resolveWorkspacePlacement).toHaveBeenCalledWith(
+    expect(resolveGraphWorkspaceFromSlugs).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         userId: "user-1",
-        kindSlug: "person",
-        facetSlugs: ["company", "lead"],
+        routingSlugs: expect.arrayContaining(["person", "company", "lead"]),
       })
     );
     expect(spy).toHaveBeenCalledWith(
@@ -140,17 +134,7 @@ describe("submitCaptureGraph — workspace placement routing", () => {
   });
 
   it("abstains (stays pod-wide null) when placement is ambiguous — never guesses", async () => {
-    vi.mocked(resolveWorkspacePlacement).mockResolvedValue({
-      workspaceId: null,
-      rung: 2,
-      reason: "role 'lead' enabled in 2 workspaces",
-      confidence: 1,
-      candidates: [
-        { id: "ws-crm", name: "CRM" },
-        { id: "ws-sales", name: "Sales" },
-      ],
-      ask: false,
-    });
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
     const spy = vi
       .spyOn(
         await import("../../utils/event-backed-proposal.js"),

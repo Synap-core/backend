@@ -1261,18 +1261,22 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List existing playbooks (reusable process/session templates) visible in a workspace. Call this to discover what already exists BEFORE improvising a new process. A playbook can then be started as a runtime session via synap_start_session, passing its id as templateId.",
+      "description": "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). A playbook can be launched via synap_run_playbook (executor) or started as a working session via synap_start_session(templateId).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "workspaceId": {
             "type": "string",
-            "description": "Workspace ID (optional — falls back to the user's first workspace if omitted)."
+            "description": "Optional workspace narrow — only that workspace's playbooks plus pod-wide ones. Omit for the full user-visible catalog."
           },
           "status": {
             "type": "string",
             "enum": ["draft", "active", "paused", "archived"],
             "description": "Optional status filter."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size (1–100, default 50)."
           }
         },
         "required": []
@@ -2188,13 +2192,21 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
-      "description": "LAUNCH a playbook via its executor (discover ids via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). This is the EXECUTOR launch, distinct from synap_start_session(templateId) which opens a working session for you to drive by hand. Governed: an agent launch returns status='proposed' for review; only on approval does the run execute. Pass params to fill {{placeholders}}, and subjectId to bind the run to an entity.",
+      "description": "LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook's workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). Distinct from synap_start_session(templateId). Governed: agent launch returns status='proposed' until approved.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "playbookId": {
             "type": "string",
-            "description": "UUID of the playbook to run."
+            "description": "UUID of the playbook to run. Provide this OR playbookName/name."
+          },
+          "playbookName": {
+            "type": "string",
+            "description": "Public name of the playbook (case-insensitive). Must be unique among playbooks you can see; ambiguous names return candidates with id + workspaceId."
+          },
+          "name": {
+            "type": "string",
+            "description": "Alias for playbookName."
           },
           "params": {
             "type": "object",
@@ -2202,7 +2214,7 @@
           },
           "subjectId": {
             "type": "string",
-            "description": "Optional entity UUID to bind this run to (the run's subject lens)."
+            "description": "Optional entity UUID to bind this run to (the run's subject lens). Also used as write-home fallback for pod-wide playbooks."
           },
           "agentIds": {
             "type": "array",
@@ -2217,10 +2229,10 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Workspace the playbook lives in (falls back to your first workspace)."
+            "description": "Write workspace for the run. Optional when the playbook is already workspace-scoped; required for pod-wide playbooks unless subject/session supplies a home. Never falls back to an arbitrary membership."
           }
         },
-        "required": ["playbookId"]
+        "required": []
       }
     },
     {

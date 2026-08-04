@@ -136,6 +136,67 @@ export async function resolveImportEntityPlacement(
   return placement.workspaceId;
 }
 
+/**
+ * Graph-batch placement acceptance policy (shared by capture.graph + import
+ * analyze when the caller supplied no explicit lens).
+ *
+ * A composite graph may adopt a workspace ONLY when the placement door returns
+ * a deterministic hit: rung ≤4, no multi-candidate ambiguity (`candidates`
+ * empty — a definitive single winner leaves that list empty), and a concrete
+ * `workspaceId`. Ambiguous (>1 candidate) or no ontology signal (rung 6) →
+ * stay pod-wide (`null`). Never invent `membership[0]`.
+ *
+ * Pure so callers (and unit tests) can apply the same accept/abstain rule the
+ * async helper uses without re-deriving it.
+ */
+export function acceptDeterministicGraphWorkspace(
+  placement: Pick<WorkspacePlacement, "workspaceId" | "rung" | "candidates">
+): string | null {
+  if (
+    placement.candidates.length === 0 &&
+    placement.rung <= 4 &&
+    placement.workspaceId
+  ) {
+    return placement.workspaceId;
+  }
+  return null;
+}
+
+/**
+ * When a composite graph has no explicit workspace/lens, derive one from its
+ * ontology slugs via the ONE placement door (`resolveWorkspacePlacement`).
+ *
+ * Call only when the caller's `workspaceId` is already `null` — an explicit
+ * lens always wins and must not be overridden here. Empty `routingSlugs` →
+ * null immediately. Errors propagate so callers keep their own log context.
+ *
+ * Shared by `submitCaptureGraph` and `ImportOrchestrator.resolveGraphPlacement`.
+ */
+export async function resolveGraphWorkspaceFromSlugs(
+  db: Db,
+  input: {
+    userId: string;
+    /**
+     * Deduped profile + facet slugs collected from the graph. First entry is
+     * the kindSlug; the rest are facetSlugs (order is stable for tests, not
+     * otherwise significant — the door unions them for ontology lookup).
+     */
+    routingSlugs: string[];
+    /** Optional focus-session signal for rung 3. */
+    sessionId?: string | null;
+  }
+): Promise<string | null> {
+  if (input.routingSlugs.length === 0) return null;
+  const placement = await resolveWorkspacePlacement(db, {
+    userId: input.userId,
+    kindSlug: input.routingSlugs[0],
+    facetSlugs: input.routingSlugs.slice(1),
+    ambientWorkspaceId: null,
+    ...(input.sessionId ? { context: { sessionId: input.sessionId } } : {}),
+  });
+  return acceptDeterministicGraphWorkspace(placement);
+}
+
 // ── The door ────────────────────────────────────────────────────────────────
 
 export type ResolutionRung = 1 | 2 | 3 | 4 | 5 | 6;

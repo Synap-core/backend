@@ -55,6 +55,7 @@ import {
   resolveIdentity,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   resolveWorkspacePlacement,
+  acceptDeterministicGraphWorkspace,
   resolveProjectPlacement,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
@@ -1344,23 +1345,58 @@ export const entitiesRouter = router({
         });
       }
 
-      // Resolve placement ONCE through the one door (I1/I3: same input → same
-      // workspace regardless of governance). Persisted into the proposal `data`
-      // below as `resolvedWorkspaceId` so the materializer reads it back verbatim
-      // instead of re-deriving from the ambient workspace (the four-door bug).
-      // No `kindSlug`/`context`/`aiHint` is passed here — a direct entity create
-      // exercises ONLY rungs 1 (explicit target / global) + 6 (the K1 entity-
-      // scope default), preserving the historical inline precedence exactly.
+      // Resolve placement ONCE through the one door (I1/I3). Persisted as
+      // `resolvedWorkspaceId` for the materializer (four-door bug fix).
+      //
+      // Kind + facet slugs feed rungs 2–4 (ontology / context / relational) so
+      // agents can create a lead/client WITHOUT inventing a workspaceId —
+      // placement is derived from installed profile metadata on this pod
+      // (dynamic; never hard-coded CRM/Ops). Same abstain rules as graph
+      // capture: multi-candidate or no signal falls through to rung 6 (pod
+      // entityScope → null; workspace-scope → ambient only when present).
       const placementDb = await getDb();
+      const facetSlugsForPlacement = (input.facets ?? [])
+        .map((f) => f.profileSlug)
+        .filter((s): s is string => typeof s === "string" && s.length > 0);
       const entityPlacement = await resolveWorkspacePlacement(placementDb, {
         userId: ctx.userId,
-        explicitWorkspaceId: input.targetWorkspaceId || undefined,
+        // Only an EXPLICIT target is rung-1. Omitting is undefined (not null)
+        // so ontology can place; deliberate pod-wide uses global:true.
+        explicitWorkspaceId: input.targetWorkspaceId
+          ? input.targetWorkspaceId
+          : undefined,
         globalFlag: input.global,
         workspaceScopedFlag: input.workspaceScoped === true,
-        entityScope: earlyResolvedProfile.entityScope,
+        entityScope: earlyResolvedProfile.entityScope as
+          "pod" | "workspace" | null | undefined,
+        kindSlug:
+          profileSlug ?? (earlyResolvedProfile as { slug?: string }).slug,
+        ...(facetSlugsForPlacement.length
+          ? { facetSlugs: facetSlugsForPlacement }
+          : {}),
+        // Ambient is advisory (MCP URL pin / session ctx) — never invent a
+        // membership[0] ambient here. Ontology (rung 2) wins when definitive.
         ambientWorkspaceId: governanceWorkspaceId,
+        ...(ctx.sessionId ? { context: { sessionId: ctx.sessionId } } : {}),
       });
-      const resolvedEntityWorkspaceId = entityPlacement.workspaceId;
+      // Placement accept policy (shared pure helper with graph capture/import):
+      // - Explicit pin / global / workspaceScoped → trust door result as-is
+      // - Else deterministic ontology (rung ≤4, single candidate) → place
+      // - Else K1: pod-scope kinds → null; workspace-scope → ambient only
+      let resolvedEntityWorkspaceId: string | null;
+      if (input.global || input.targetWorkspaceId || input.workspaceScoped) {
+        resolvedEntityWorkspaceId = entityPlacement.workspaceId;
+      } else {
+        const deterministic =
+          acceptDeterministicGraphWorkspace(entityPlacement);
+        if (deterministic) {
+          resolvedEntityWorkspaceId = deterministic;
+        } else if ((earlyResolvedProfile.entityScope ?? "pod") === "pod") {
+          resolvedEntityWorkspaceId = null;
+        } else {
+          resolvedEntityWorkspaceId = entityPlacement.workspaceId;
+        }
+      }
 
       // Project placement — the deterministic sibling door (explicit input.projectId
       // → producing session's project). Rung 1 (explicit) preserves the historical
@@ -1926,6 +1962,16 @@ export const entitiesRouter = router({
       // return ONLY that workspace's rows. includePodWide=true restores the
       // legacy "workspace OR pod-wide globals" union. globalOnly / workspace-less
       // callers are unaffected (they already resolve to pod-wide-only below).
+      //
+      // Role-as-lens (Phase 2): when filtering by facetSlug/facetProfileId,
+      // masters are often pod-wide (entityScope pod) with a role hat. Default
+      // includePodWide=true so "list leads in CRM" returns pod-wide persons
+      // wearing `lead`, not an empty page. Explicit includePodWide:false still
+      // wins for callers that want workspace-only rows.
+      const includePodWideEffective =
+        input.includePodWide === true ||
+        (input.includePodWide !== false &&
+          Boolean(input.facetSlug || input.facetProfileId));
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
       const facetVisibilityScope = await resolveFacetVisibilityScope(
@@ -1950,7 +1996,7 @@ export const entitiesRouter = router({
         workspaceScopeCondition = entityLensWhere(ctx.userId, null);
       } else if (lensWorkspaceId) {
         workspaceScopeCondition = entityLensWhere(ctx.userId, lensWorkspaceId, {
-          includePodWide: input.includePodWide,
+          includePodWide: includePodWideEffective,
         });
       } else {
         workspaceScopeCondition = entityReadVisibleWhere(ctx.userId);

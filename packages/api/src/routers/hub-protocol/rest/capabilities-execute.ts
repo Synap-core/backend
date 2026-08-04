@@ -108,6 +108,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden / denied by gate", schema: ErrorSchema },
       404: { description: "Capability/skill not found", schema: ErrorSchema },
+      424: {
+        description:
+          "Failed dependency — a client-actionable connection failure (auth expired/absent, or a missing target). Body carries errorClass + providerRef so the caller can offer a reconnect path.",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -160,13 +165,40 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
             { error: `Capability refused by gate: ${outcome.reason}` },
             403
           );
-        case "error":
+        case "error": {
           // The verb RAN and its handler FAILED (code sandbox / provider error).
-          // A failure is not a 200 success — surface it as a server-side error.
+          // A CONNECTION-class failure (expired/absent auth, a gone target) is
+          // CLIENT-ACTIONABLE, not a server fault: surface it as 4xx so
+          //   (a) it reads as "you can fix this" (reconnect), not "the server
+          //       crashed", and
+          //   (b) `errorClass` + `providerRef` SURVIVE the 5xx egress sanitizer
+          //       (middleware/error-egress.ts redacts every 5xx body; 4xx is left
+          //       intact) — the CLI / MCP agent reads them to offer a reconnect
+          //       path. This is the same self-heal signal the browser P1 chip uses.
+          // A genuine provider/transient/server fault stays 500 (correctly
+          // sanitized — its raw message may carry a driver stack).
+          const ec = outcome.errorClass;
+          const isReconnect =
+            ec === "auth" || ec === "no_connection" || ec === "target_missing";
+          if (isReconnect) {
+            return c.json(
+              {
+                error: outcome.message,
+                code:
+                  ec === "target_missing"
+                    ? "TARGET_MISSING"
+                    : "CONNECTION_REAUTH",
+                errorClass: ec,
+                providerRef: outcome.providerRef,
+              },
+              424
+            );
+          }
           return c.json(
             { error: `Capability execution failed: ${outcome.message}` },
             500
           );
+        }
         case "dry-run":
           return c.json(
             {

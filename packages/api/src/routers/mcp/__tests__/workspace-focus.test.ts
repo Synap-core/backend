@@ -267,7 +267,7 @@ describe("synap_capture domain write placement (no silent membership[0])", () =>
       ]);
   }
 
-  it("rejects domain text capture without workspaceId/focus (lists available)", async () => {
+  it("allows domain text capture without workspaceId (placement is server-derived)", async () => {
     await setUp();
 
     const result = await executeMCPToolViaHubProtocol(
@@ -281,18 +281,16 @@ describe("synap_capture domain write placement (no silent membership[0])", () =>
 
     const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
     const parsed = JSON.parse(text);
-    expect(parsed.status).toBe("rejected");
-    expect(parsed.reason).toBe("workspace-required");
-    expect(parsed.message).toMatch(/refusing to pick an arbitrary membership/);
-    expect(parsed.message).toMatch(/synap_orient/);
-    expect(parsed.availableWorkspaces).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: wsAId, name: "CRM" }),
-        expect.objectContaining({ id: wsBId, name: "Marketing" }),
-      ])
-    );
-    expect(parsed.writeReceipt?.state).toBe("rejected");
-    expect(parsed.scope?.workspaceId).toBeNull();
+    // Must NOT invent membership[0] via workspace-required reject.
+    // Structure may apply, propose, or degrade — never silent arbitrary home.
+    expect(parsed.reason).not.toBe("workspace-required");
+    if (parsed.status === "rejected") {
+      expect(["no-durable-content", "structuring-unavailable"]).toContain(
+        parsed.reason
+      );
+    } else {
+      expect(["applied", "proposed"]).toContain(parsed.status);
+    }
   });
 
   it("still rejects no-durable-content before placement when text is empty", async () => {

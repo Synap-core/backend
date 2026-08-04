@@ -158,7 +158,11 @@ interface DiscoverWorkspace {
   entityCount: number;
   /** light: `{ goal }` only; full: the whole onboarding interview spec. */
   onboarding?: OnboardingSpec;
-  /** full only */
+  /**
+   * When-to-use for this domain. Full detail uses workspace.description;
+   * light uses description or onboarding.goal so agents place work without
+   * detail:full. Never invent product names — only live workspace metadata.
+   */
   description?: string | null;
   /** full only — this workspace's profiles (slug + name + kind). */
   profiles?: ProfileSample[];
@@ -270,14 +274,14 @@ function buildNote(
       : "";
   return (
     queue +
-    `Lens map: ${projectCount} project(s), ${workspaceCount} workspace(s). ` +
-    (workspaceCount > 1
-      ? `Reads auto-scope across all your workspaces; pass workspaceId to narrow to one domain, projectId to one project. `
-      : `Tools default to your one workspace; pass projectId on reads/recall to narrow to a project. `) +
+    `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
+    `WRITE by kind/profile (+ roles as facets when known) — omit workspaceId unless deliberately pinning; ` +
+    `server places via installed profile metadata (never invent a workspace name). ` +
+    `READ by name/id/role across everything you can access; pass workspaceId only to narrow a list. ` +
     (projectCount > 0
-      ? `A project's data can span workspaces — see synap_get_entities(projectId) or the project digest. `
+      ? `A project is a cross-domain engagement thread — use projectId when working one client mandate. `
       : ``) +
-    `If a project clearly lacks an operational domain it needs (and the user hasn't declined it), offer once — see the agent-os skill.`
+    `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces.`
   );
 }
 
@@ -373,35 +377,59 @@ export async function discover(
     }
   }
 
-  // ── Workspaces DTO ──
+  // ── Workspaces DTO (domains for agents) ──
+  // Light orient always surfaces a short "when to use" so agents pick domain
+  // by meaning (CRM vs Operations vs Builder), not by inventing UUIDs. Source
+  // is live workspace metadata (description / onboarding.goal / subtype) —
+  // never a hard-coded product map of slug→purpose.
   const workspacesOut: DiscoverWorkspace[] = needWorkspaces
-    ? wsRaw.map((w) => {
-        const settings = (w.settings ?? {}) as Record<string, unknown>;
-        const onboarding = settings.onboarding as OnboardingSpec | undefined;
-        const domain =
-          (settings.workspaceSubtype as string | undefined) ??
-          w.workspaceType ??
-          null;
-        const out: DiscoverWorkspace = {
-          id: w.id,
-          name: w.name,
-          domain,
-          entityCount: entityCountByWs.get(w.id) ?? 0,
-        };
-        if (onboarding) {
-          out.onboarding =
-            detail === "full"
-              ? onboarding
-              : onboarding.goal !== undefined
-                ? { goal: onboarding.goal }
-                : undefined;
-        }
-        if (detail === "full") {
-          out.description = w.description ?? null;
-          out.profiles = perWsProfiles.get(w.id) ?? [];
-        }
-        return out;
-      })
+    ? wsRaw
+        .filter((w) => {
+          // Hide pure admin/system surfaces from the default domain map.
+          const t = w.workspaceType ?? "";
+          return t !== "operational" && t !== "agent";
+        })
+        .map((w) => {
+          const settings = (w.settings ?? {}) as Record<string, unknown>;
+          const onboarding = settings.onboarding as OnboardingSpec | undefined;
+          const domain =
+            (settings.workspaceSubtype as string | undefined) ??
+            w.workspaceType ??
+            null;
+          const purpose =
+            (typeof w.description === "string" && w.description.trim()) ||
+            (typeof onboarding?.goal === "string" && onboarding.goal.trim()) ||
+            (domain ? `Domain: ${domain}` : null);
+          const out: DiscoverWorkspace = {
+            id: w.id,
+            name: w.name,
+            domain,
+            entityCount: entityCountByWs.get(w.id) ?? 0,
+          };
+          if (onboarding) {
+            out.onboarding =
+              detail === "full"
+                ? onboarding
+                : onboarding.goal !== undefined
+                  ? { goal: onboarding.goal }
+                  : undefined;
+          }
+          // Light + full: agents need purpose without detail:full fanout.
+          if (purpose) {
+            out.description =
+              detail === "full"
+                ? (w.description ?? purpose)
+                : purpose.length > 220
+                  ? `${purpose.slice(0, 217)}…`
+                  : purpose;
+          } else if (detail === "full") {
+            out.description = w.description ?? null;
+          }
+          if (detail === "full") {
+            out.profiles = perWsProfiles.get(w.id) ?? [];
+          }
+          return out;
+        })
     : [];
 
   // ── Projects DTO ── (dual-mode visibility, parity with GET /projects)

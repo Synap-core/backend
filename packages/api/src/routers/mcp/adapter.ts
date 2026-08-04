@@ -767,8 +767,10 @@ export async function executeMCPToolViaHubProtocol(
   // service-key pin > agent's live focus. MCP *write* tools that need a
   // concrete home (capture text, create_project/playbook, run_playbook) must
   // NOT fall back to membership[0] when this is still null — they reject via
-  // `rejectMissingWriteWorkspace`. Catalog/read fallbacks may still pick a
-  // first membership with an explicit comment. Never overrides, never 403s: a
+  // `rejectMissingWriteWorkspace` (run_playbook also falls through to the
+  // playbook's own workspaceId, then subject/session, before rejecting).
+  // Catalog/read tools like list_playbooks use listAllPage (user floor) — no
+  // membership[0]. Never overrides, never 403s: a
   // focus on a workspace the caller has since lost access to is silently
   // dropped by the `verifyWorkspaceAccess` check right below, same as any
   // other lens.
@@ -2365,35 +2367,35 @@ export async function executeMCPToolViaHubProtocol(
     // ── Playbooks (reusable session templates) ──────────────────────────────
     case "synap_list_playbooks": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      // READ/catalog: playbook list is workspace-scoped; first membership is an
-      // arbitrary catalog lens only (not write placement). Prefer explicit
-      // workspaceId when the agent knows the domain.
-      let playbookWsId = args.workspaceId as string | undefined;
-      if (!playbookWsId) {
-        const wsIds = await getUserMemberWorkspaceIds(userId);
-        playbookWsId = wsIds[0];
-      }
-      if (!playbookWsId) return ok({ error: "No accessible workspace found" });
+      // User-floor catalog via `listAllPage` — no membership[0] fallback.
+      // Visibility is the access-layer predicate (member workspaces + pod-wide).
+      // Optional workspaceId narrows only (still includes pod-wide NULL rows).
       const playbookCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
-        playbookWsId,
+        null,
         undefined,
         undefined,
         agentUserId
       );
       const playbookCaller = playbooksRouter.createCaller(playbookCtx);
-      const result = await playbookCaller.list({
+      // Narrow only on an explicit/confined workspaceId — not advisory focus
+      // (focus is a write default; catalog stays full user floor unless asked).
+      const result = await playbookCaller.listAllPage({
+        workspaceId: confinedWorkspaceId ?? null,
         status: args.status as
           "draft" | "active" | "paused" | "archived" | undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
       });
       return ok(result);
     }
 
     case "synap_match_playbooks": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      // READ: match is workspace-scoped; first membership is catalog-only, not
-      // a write home. Same class as list_playbooks — not rejectMissingWrite.
+      // READ: matchForEntity is a workspaceProcedure (needs a ctx workspace for
+      // the facet lens). First membership is catalog-only, not a write home —
+      // not rejectMissingWrite. (list_playbooks uses listAllPage / user floor;
+      // match still needs a concrete workspace for loadFacetSlugsBatch.)
       let matchWsId = args.workspaceId as string | undefined;
       if (!matchWsId) {
         const wsIds = await getUserMemberWorkspaceIds(userId);
@@ -2874,12 +2876,9 @@ export async function executeMCPToolViaHubProtocol(
           knowledgeKey: record,
         });
       }
-      // Domain text capture — require a resolved workspace (explicit or advisory).
-      if (!captureWsId) {
-        return rejectMissingWriteWorkspace(userId, {
-          captureScope: textScope,
-        });
-      }
+      // Domain text capture — workspace optional. Structure + execute place via
+      // resolveWorkspacePlacement (kind/role ontology). Explicit/advisory lens
+      // still flows as ambient; never invent membership[0].
       const captureCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
@@ -3027,7 +3026,7 @@ export async function executeMCPToolViaHubProtocol(
       // The scope echo must be what the write ACTUALLY landed in: routing may
       // have moved it (movedToWorkspace), and a project only counts when it was
       // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
-      const landedWsId = ex.movedToWorkspace ?? captureWsId;
+      const landedWsId = ex.movedToWorkspace ?? captureWsId ?? null;
       const landedProjectId =
         ex.project?.status === "linked"
           ? ex.project.projectId
@@ -3860,18 +3859,103 @@ export async function executeMCPToolViaHubProtocol(
     // ── Playbook executor launch (distinct from start_session's working-run) ──
     case "synap_run_playbook": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      if (
-        typeof args.playbookId !== "string" ||
-        args.playbookId.trim() === ""
-      ) {
-        return ok({ error: "playbookId is required" });
+      const rawPlaybookId =
+        typeof args.playbookId === "string" && args.playbookId.trim() !== ""
+          ? args.playbookId.trim()
+          : undefined;
+      // Accept playbookName OR name (alias) when id is absent.
+      const rawPlaybookName =
+        typeof args.playbookName === "string" && args.playbookName.trim() !== ""
+          ? args.playbookName.trim()
+          : typeof args.name === "string" && args.name.trim() !== ""
+            ? args.name.trim()
+            : undefined;
+      if (!rawPlaybookId && !rawPlaybookName) {
+        return ok({
+          error:
+            "playbookId or playbookName (or name) is required — discover via synap_list_playbooks",
+        });
       }
-      // WRITE: `run` is a workspaceProcedure — confined/explicit lens or
-      // advisory focus only. Unlike list/match (read/catalog), never membership[0].
-      const runWsId = requestedWorkspaceId;
+
+      const {
+        resolvePlaybookByIdVisible,
+        resolvePlaybookByPublicName,
+        resolvePlaybookRunWriteWorkspace,
+      } = await import("../../services/playbooks/resolve-playbook-name.js");
+
+      // Resolve the playbook on the user floor (id or unambiguous public name).
+      let resolvedPlaybookId: string;
+      let playbookWorkspaceId: string | null;
+      if (rawPlaybookId) {
+        const byId = await resolvePlaybookByIdVisible({
+          userId,
+          playbookId: rawPlaybookId,
+          agentUserId,
+        });
+        if (!byId) {
+          return ok({ error: `Playbook ${rawPlaybookId} not found` });
+        }
+        resolvedPlaybookId = byId.id;
+        playbookWorkspaceId = byId.workspaceId;
+      } else {
+        // Full user floor (no workspace narrow) so names resolve pod-wide.
+        // Multi-match returns candidates with workspaceId — never a silent pick.
+        const byName = await resolvePlaybookByPublicName({
+          userId,
+          name: rawPlaybookName!,
+          agentUserId,
+        });
+        if (byName.status === "not_found") {
+          return ok({
+            error: `No playbook named "${rawPlaybookName}" among your visible playbooks`,
+          });
+        }
+        if (byName.status === "ambiguous") {
+          return ok({
+            error: `"${rawPlaybookName}" matches ${byName.candidates.length} playbooks — pass playbookId or a unique name.`,
+            candidates: byName.candidates,
+          });
+        }
+        resolvedPlaybookId = byName.playbook.id;
+        playbookWorkspaceId = byName.playbook.workspaceId;
+      }
+
+      // Write home ladder: explicit/focus lens → playbook home → subject →
+      // ambient session. Never membership[0]. Pod-wide playbooks with no home
+      // reject with the available workspace list.
+      let subjectWorkspaceId: string | null | undefined;
+      let sessionWorkspaceId: string | null | undefined;
+      const subjectIdArg =
+        typeof args.subjectId === "string" && args.subjectId.trim() !== ""
+          ? args.subjectId.trim()
+          : undefined;
+      const needsContextHome = !requestedWorkspaceId && !playbookWorkspaceId;
+      if (needsContextHome && subjectIdArg) {
+        const database = await getDb();
+        const ent = await database.query.entities.findFirst({
+          columns: { workspaceId: true },
+          where: eq(entities.id, subjectIdArg),
+        });
+        subjectWorkspaceId = ent?.workspaceId ?? null;
+      }
+      if (needsContextHome && !subjectWorkspaceId && sessionId) {
+        const database = await getDb();
+        const sess = await database.query.focusSessions.findFirst({
+          columns: { workspaceId: true },
+          where: eq(focusSessions.id, sessionId),
+        });
+        sessionWorkspaceId = sess?.workspaceId ?? null;
+      }
+      const runWsId = resolvePlaybookRunWriteWorkspace({
+        explicitWorkspaceId: requestedWorkspaceId,
+        playbookWorkspaceId,
+        subjectWorkspaceId,
+        sessionWorkspaceId,
+      });
       if (!runWsId) {
         return rejectMissingWriteWorkspace(userId);
       }
+
       const runCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
@@ -3886,9 +3970,9 @@ export async function executeMCPToolViaHubProtocol(
       // created); only on approval does runPlaybook execute. Same governance the
       // tRPC/UI run door enforces — never a direct-active bypass.
       const result = await runCaller.run({
-        playbookId: args.playbookId,
+        playbookId: resolvedPlaybookId,
         params: args.params as Record<string, unknown> | undefined,
-        subjectId: args.subjectId as string | undefined,
+        subjectId: subjectIdArg,
         agentIds: args.agentIds as string[] | undefined,
         source: "mcp",
         reasoning: args.reasoning as string | undefined,

@@ -95,14 +95,14 @@ export function formatGrounding(
   const compose = hasProjects
     ? " Projects organize; workspaces hold the data."
     : "";
-  // The WRITE rule is stated explicitly: reads may go pod-wide, but a domain
-  // write with no workspaceId (and no advisory focus) is rejected rather than
-  // silently landing on membership[0] (Phase A3). Agents must pass an id.
+  // Writes: prefer kind + role (facets); server places via ontology on installed
+  // templates — no hard-coded CRM/Ops ids. Optional workspaceId is an override
+  // pin only. Never invent a random membership as home.
   return (
-    `${projPart}Workspaces (operational domains), busiest first: ${list}${more}.${compose}${emptyNote}` +
-    ` For READS omit workspaceId for pod-wide recall, or pass one to scope.` +
-    ` For WRITES always pass the workspaceId of the matching domain — pass the id above verbatim,` +
-    ` and only omit it when the fact is genuinely cross-cutting.`
+    `${projPart}Domains (installed apps), busiest first: ${list}${more}.${compose}${emptyNote}` +
+    ` For READS omit workspaceId for pod-wide recall across everything you can access.` +
+    ` For WRITES pass kind/profile (+ roles as facets when known); omit workspaceId unless` +
+    ` you deliberately pin one domain — placement is derived from installed profiles.`
   );
 }
 

@@ -171,6 +171,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
                   provider: z.string().optional(),
                   workspaceId: z.string().optional(),
                   onBehalfOfUserId: z.string().optional(),
+                  // Force a fresh OAuth session even when a connection record
+                  // already exists — the reconnect path for an EXPIRED/revoked
+                  // token, which the record's mere existence can't detect. Without
+                  // it the door short-circuits to `connected` and the stale token
+                  // is never refreshed.
+                  forceReauth: z.boolean().optional(),
                 })
                 .openapi("ConnectorConnectRequest"),
             },
@@ -264,7 +270,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         return c.json({ error: "Nango not configured" }, 503);
       }
 
-      const { provider, workspaceId, onBehalfOfUserId } = c.req.valid("json");
+      const { provider, workspaceId, onBehalfOfUserId, forceReauth } =
+        c.req.valid("json");
 
       // Resolve the acting identity. Default = the caller; an explicit
       // onBehalfOfUserId binds to another member (owner/admin-gated + the target
@@ -387,11 +394,13 @@ export function registerConnectorsRoutes(app: HubHono): void {
           );
         }
 
-        // ── Already connected? Return it instead of a fresh OAuth.
+        // ── Already connected? Return it instead of a fresh OAuth — UNLESS the
+        // caller forces a reconnect (expired/revoked token: the record exists but
+        // its credential is dead, which only forcing a fresh OAuth session fixes).
         const existing = connections.find(
           (conn) => conn.provider === match.uniqueKey
         );
-        if (existing) {
+        if (existing && !forceReauth) {
           // Self-completing door: the moment a connection is confirmed,
           // materialize its provider tool + apply the family template (verbs +
           // skills + grants). Idempotent — safe to re-run on every poll. This is
@@ -786,9 +795,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
-      const { connectionId } = c.req.valid("json");
+      const { connectionId, provider } = c.req.valid("json");
       try {
-        await connector.revokeConnection(connectionId);
+        // Pass the provider key on the hot path (CLI sends it) so the revoke
+        // needs no extra Nango lookup; the door still self-resolves without it.
+        await connector.revokeConnection(connectionId, provider);
         await detachNangoConnectionRegistry(connectionId);
         return c.json({ success: true }, 200);
       } catch (err) {

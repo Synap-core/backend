@@ -7,7 +7,7 @@ import {
   MessageRole,
   MessageAuthorType,
   computeMessageHash,
-  resolveWorkspacePlacement,
+  resolveGraphWorkspaceFromSlugs,
   proposals,
   ProposalStatus,
   eq,
@@ -550,14 +550,13 @@ export class ImportOrchestrator {
    * `import.graph` pending proposal with whatever `this.ctx.workspaceId` was —
    * `null` when the caller supplied no explicit lens/focus (a hub write with no
    * lens deliberately lands pod-personal, `_shared.ts:303-309`), which stranded
-   * agent-generated leads pod-wide instead of the CRM workspace. Mirror the
-   * `capture.structure` resolver override (`routers/capture.ts:1195-1253`):
-   * collect every `create_entity` op's profileSlug in the graph and run the ONE
-   * placement door. A deterministic ontology hit (rung ≤4, single candidate)
-   * re-lenses the whole graph; an ambiguous hit (>1 candidate) or no ontology
-   * signal (rung 6) ABSTAINS — staying pod-wide is the honest default over an
-   * arbitrary guess. Only called when `this.ctx.workspaceId` is null — an
-   * explicit lens/focus always wins (never overridden by the ontology).
+   * agent-generated leads pod-wide instead of the CRM workspace. Collect every
+   * `create_entity` op's profileSlug in the graph and run the shared
+   * `resolveGraphWorkspaceFromSlugs` helper (ONE door + deterministic accept
+   * policy). A deterministic ontology hit (rung ≤4, single candidate) re-lenses
+   * the whole graph; ambiguous / no-signal ABSTAINS — staying pod-wide is the
+   * honest default over an arbitrary guess. Only called when
+   * `this.ctx.workspaceId` is null — an explicit lens/focus always wins.
    */
   private async resolveGraphPlacement(
     operations: CompositeProposalOperation[],
@@ -582,25 +581,14 @@ export class ImportOrchestrator {
           .filter((s): s is string => typeof s === "string" && s.length > 0)
       )
     );
-    if (routingSlugs.length === 0) return null;
     try {
-      const placement = await resolveWorkspacePlacement(db, {
+      // Shared graph policy: deterministic hit only (rung ≤4, no candidates,
+      // workspaceId set); ambiguous / no-signal → null. Never invent membership[0].
+      return await resolveGraphWorkspaceFromSlugs(db, {
         userId,
-        kindSlug: routingSlugs[0],
-        facetSlugs: routingSlugs.slice(1),
-        ambientWorkspaceId: null,
-        ...(sessionId ? { context: { sessionId } } : {}),
+        routingSlugs,
+        sessionId,
       });
-      if (
-        placement.candidates.length === 0 &&
-        placement.rung <= 4 &&
-        placement.workspaceId
-      ) {
-        return placement.workspaceId;
-      }
-      // candidates.length > 1 (ambiguous) or rung 6 (no ontology signal) →
-      // stay pod-wide; never guess.
-      return null;
     } catch (err) {
       logger.warn(
         { err, userId },

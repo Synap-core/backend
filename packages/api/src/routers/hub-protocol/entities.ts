@@ -13,7 +13,6 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
-import { db, workspaceMembers, workspaces, eq, desc } from "@synap/database";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
 export const entitiesRouter = router({
@@ -192,24 +191,12 @@ export const entitiesRouter = router({
       // entityScope: pod-scope kinds land pod-wide (NULL), workspace-scope kinds
       // land in this ambient workspace. Only an EXPLICIT `input.workspaceId` pins.
       //
-      // When the caller has no active workspace we fall back to the user's
-      // most-recently-updated membership (deterministic — the old `.limit(1)` had
-      // no orderBy and returned an arbitrary workspace). This fallback is ONLY the
-      // ambient/governance context; it never becomes an explicit target.
-      let ambientWorkspaceId: string | undefined = ctx.workspaceId ?? undefined;
-      if (!ambientWorkspaceId) {
-        const rows = await db
-          .select({ workspaceId: workspaceMembers.workspaceId })
-          .from(workspaceMembers)
-          .innerJoin(
-            workspaces,
-            eq(workspaces.id, workspaceMembers.workspaceId)
-          )
-          .where(eq(workspaceMembers.userId, input.userId))
-          .orderBy(desc(workspaces.updatedAt))
-          .limit(1);
-        ambientWorkspaceId = rows[0]?.workspaceId;
-      }
+      // Ambient lens = URL/session pin only. Do NOT invent "most recently
+      // updated membership" — that silent wrong-home was the #1 agent dump
+      // footgun. Placement for kinds/roles is derived in entities.create via
+      // resolveWorkspacePlacement (ontology rung) when ambient is absent.
+      const ambientWorkspaceId: string | undefined =
+        ctx.workspaceId ?? undefined;
 
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(

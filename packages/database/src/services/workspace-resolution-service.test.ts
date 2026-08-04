@@ -11,6 +11,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   resolveWorkspacePlacement,
   resolveImportEntityPlacement,
+  acceptDeterministicGraphWorkspace,
+  resolveGraphWorkspaceFromSlugs,
 } from "./workspace-resolution-service.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 
@@ -168,6 +170,31 @@ describe("resolveWorkspacePlacement — rung 2 (ontology)", () => {
     expect(r.rung).toBe(2);
     expect(r.reason).toContain("CRM");
     expect(r.reason).toContain("client");
+  });
+
+  it("pod-wide kind + workspace-scoped facet slug → places via facet (create path)", async () => {
+    // entities.create now passes kindSlug=person + facetSlugs=[client] so a
+    // lead/client role can home the entity without the agent inventing a UUID.
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "Sales CRM" },
+        { id: WS_B, name: "Ops" },
+      ],
+      profiles: [
+        { id: "pk", slug: "person", scope: "system", workspaceId: null },
+        { id: "pr", slug: "client", scope: "workspace", workspaceId: WS_A },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "person",
+      facetSlugs: ["client"],
+      ambientWorkspaceId: null,
+      entityScope: "pod",
+    });
+    expect(r.workspaceId).toBe(WS_A);
+    expect(r.rung).toBe(2);
   });
 
   // NOTE: rung-2 shared-scope (profile_workspace_access), rung-3 channel, and
@@ -531,5 +558,121 @@ describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
       sourceWorkspaceId: WS_A,
     });
     expect(r).toBe(WS_A);
+  });
+});
+
+// ── Graph-batch placement policy (capture.graph + import.analyze) ────────────
+// Pure accept rule is the lock: deterministic hit only; never invent membership[0].
+// The async helper's empty-slug short-circuit is free; rung wiring reuses the door
+// suites above (ontology single-hit / multi-candidate / rung 6).
+describe("acceptDeterministicGraphWorkspace (graph batch policy)", () => {
+  it("accepts a definitive rung≤4 hit with empty candidates + workspaceId", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: WS_A,
+        rung: 2,
+        candidates: [],
+      })
+    ).toBe(WS_A);
+  });
+
+  it("accepts rung 4 (relational / feeds) the same way as rung 2", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: WS_B,
+        rung: 4,
+        candidates: [],
+      })
+    ).toBe(WS_B);
+  });
+
+  it("abstains when candidates are present (ambiguous — never picks membership[0])", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: null,
+        rung: 2,
+        candidates: [
+          { id: WS_A, name: "CRM" },
+          { id: WS_B, name: "Sales" },
+        ],
+      })
+    ).toBeNull();
+  });
+
+  it("abstains on rung 5 (AI proposes, never acts) even if a workspaceId slipped in", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: WS_A,
+        rung: 5,
+        candidates: [{ id: WS_A, name: "CRM" }],
+      })
+    ).toBeNull();
+  });
+
+  it("abstains on rung 6 (no ontology signal → stay pod-wide)", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: null,
+        rung: 6,
+        candidates: [],
+      })
+    ).toBeNull();
+  });
+
+  it("abstains when workspaceId is null even on a low rung", () => {
+    expect(
+      acceptDeterministicGraphWorkspace({
+        workspaceId: null,
+        rung: 2,
+        candidates: [],
+      })
+    ).toBeNull();
+  });
+});
+
+describe("resolveGraphWorkspaceFromSlugs", () => {
+  it("returns null immediately when routingSlugs is empty (no door call needed)", async () => {
+    // Empty seed — any accidental door call that hits the mock would throw or
+    // return null either way; the contract under test is the short-circuit.
+    const r = await resolveGraphWorkspaceFromSlugs(makeDb({}), {
+      userId: USER,
+      routingSlugs: [],
+    });
+    expect(r).toBeNull();
+  });
+
+  it("returns the ontology workspace on a deterministic single-candidate hit", async () => {
+    const db = makeDb({
+      members: [WS_A],
+      workspaces: [{ id: WS_A, name: "CRM" }],
+      profiles: [
+        { id: "p", slug: "client", scope: "workspace", workspaceId: WS_A },
+      ],
+    });
+    const r = await resolveGraphWorkspaceFromSlugs(db, {
+      userId: USER,
+      routingSlugs: ["client"],
+    });
+    expect(r).toBe(WS_A);
+  });
+
+  it("abstains (null) when the role is enabled in >1 member workspace", async () => {
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "CRM" },
+        { id: WS_B, name: "Sales" },
+      ],
+      profiles: [
+        { id: "p1", slug: "client", scope: "workspace", workspaceId: WS_A },
+        { id: "p2", slug: "client", scope: "workspace", workspaceId: WS_B },
+      ],
+    });
+    const r = await resolveGraphWorkspaceFromSlugs(db, {
+      userId: USER,
+      routingSlugs: ["client"],
+    });
+    // Never invent membership[0] — multi-candidate → stay pod-wide.
+    expect(r).toBeNull();
   });
 });

@@ -388,11 +388,79 @@ export class NangoConnector implements SyncConnector {
     return { ok: true, userId: match?.end_user?.id ?? null };
   }
 
-  async revokeConnection(connectionId: string): Promise<void> {
-    await fetch(`${this.host}/connection/${connectionId}`, {
-      method: "DELETE",
-      headers: this.authHeaders(),
-    });
+  async revokeConnection(
+    connectionId: string,
+    providerConfigKey?: string
+  ): Promise<void> {
+    // TWO bugs fixed here (both let disconnect LIE about success):
+    //  1. Nango's `DELETE /connection/:id` requires `provider_config_key` as a
+    //     query param (docs.nango.dev) — without it the delete 400s and the
+    //     connection lives on, so existence-based "connected" never clears.
+    //  2. The old body did `await fetch(...)` and IGNORED res.ok — a rejected
+    //     delete was swallowed and the caller reported "Disconnected ✓". A revoke
+    //     that fails MUST throw so the disconnect door surfaces the real failure.
+    // The connectionId-only doors (DELETE /connections/:id, the tRPC door) don't
+    // carry the provider key — resolve it from the connection itself so every
+    // door revokes correctly. A connection that no longer exists is already in
+    // the desired end state → idempotent success, nothing to delete.
+    let pck = providerConfigKey;
+    if (!pck) {
+      const resolved = await this.resolveConnectionProviderKey(connectionId);
+      if (resolved === "absent") return;
+      if (resolved) pck = resolved;
+    }
+    const params = new URLSearchParams();
+    if (pck) params.set("provider_config_key", pck);
+    const qs = params.toString();
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.host}/connection/${encodeURIComponent(connectionId)}${qs ? `?${qs}` : ""}`,
+        { method: "DELETE", headers: this.authHeaders() }
+      );
+    } catch (err) {
+      throw new Error(
+        `Nango revoke could not reach ${this.host}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    // 404 = the connection is already gone, which IS the desired end state —
+    // idempotent success, not a failure.
+    if (res.ok || res.status === 404) return;
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Nango revoke of connection ${connectionId} failed: HTTP ${res.status}` +
+        (body ? ` — ${body.slice(0, 200)}` : "")
+    );
+  }
+
+  /**
+   * The `provider_config_key` for a connectionId (Nango's delete requires it).
+   * Returns the key, `"absent"` when Nango confirms no such connection exists
+   * (→ revoke is a no-op), or `null` when we couldn't ask (Nango unreachable /
+   * malformed) — the caller then attempts the delete without the key rather than
+   * silently skip a revoke that might be needed.
+   */
+  private async resolveConnectionProviderKey(
+    connectionId: string
+  ): Promise<string | "absent" | null> {
+    const params = new URLSearchParams({ connectionId });
+    let res: Response;
+    try {
+      res = await fetch(`${this.host}/connection?${params}`, {
+        headers: this.authHeaders(),
+      });
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    const parsed = NangoConnectionsResponseSchema.safeParse(
+      await res.json().catch(() => null)
+    );
+    if (!parsed.success) return null;
+    const match = parsed.data.connections.find(
+      (c) => c.connection_id === connectionId
+    );
+    return match ? match.provider_config_key : "absent";
   }
 
   /**
@@ -440,7 +508,9 @@ export class NangoConnector implements SyncConnector {
     const revoked: string[] = [];
     for (const c of plain.slice(1)) {
       try {
-        await this.revokeConnection(c.connection_id);
+        // provider_config_key is required by Nango's delete; every `c` here is
+        // already filtered to `provider`, so pass it.
+        await this.revokeConnection(c.connection_id, provider);
         revoked.push(c.connection_id);
       } catch {
         // Best-effort — a failed revoke must not break the connect flow.

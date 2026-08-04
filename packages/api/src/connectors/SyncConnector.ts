@@ -27,7 +27,10 @@ export interface SyncConnector {
     workspaceId: string
   ): Promise<SyncConnectorSession>;
   listConnections(userId: string): Promise<SyncConnectorConnection[]>;
-  revokeConnection(connectionId: string): Promise<void>;
+  revokeConnection(
+    connectionId: string,
+    providerConfigKey?: string
+  ): Promise<void>;
   fetchRecords(
     connectionId: string,
     model: string,
