@@ -127,24 +127,6 @@ export function majorityWorkspaceFromHomes(
 }
 
 /**
- * @deprecated Prefer {@link stampScopeAwareHomesOnOps}. This pins EVERY unpinned
- * create_entity (including pod-scope identity kinds) and reintroduces the
- * folder-prison class of bugs. Kept only for callers that intentionally force
- * import isolation with an explicit scope map via stampScopeAwareHomesOnOps.
- */
-export function stampWorkspaceOnUnpinnedOps(
-  operations: CompositeProposalOperation[],
-  workspaceId: string
-): void {
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (op.op !== "create_entity") continue;
-    if (op.targetWorkspaceId) continue;
-    operations[i] = { ...op, targetWorkspaceId: workspaceId };
-  }
-}
-
-/**
  * Stamp a graph's process home onto **workspace-scoped** create_entity ops only.
  *
  * THE one home-stamp for import + capture graphs (parity). Pod-scope kinds

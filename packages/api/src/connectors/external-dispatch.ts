@@ -9,7 +9,17 @@
  */
 
 import { randomUUID } from "crypto";
-import { and, asc, desc, eq, isNull, or, drizzleSql } from "@synap/database";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  isNull,
+  isNotNull,
+  or,
+  drizzleSql,
+} from "@synap/database";
 import {
   db,
   messages,
@@ -573,7 +583,11 @@ export async function sendExternalMessage(
   if (!connector) {
     // No messaging connector resolved for this platform — the account is not
     // connected. P1: a `no_connection` next action ("Connect <provider>").
-    return { success: false, errorClass: "no_connection", providerRef: provider };
+    return {
+      success: false,
+      errorClass: "no_connection",
+      providerRef: provider,
+    };
   }
 
   // ── Capability-execution gate (W3b: messaging-send under the ONE gate) ────────
@@ -656,7 +670,13 @@ export async function sendExternalMessage(
     });
   } catch (err) {
     logger.error(
-      { err, channel: provider ?? "messaging", action: "send", correlationId, target: threadId },
+      {
+        err,
+        channel: provider ?? "messaging",
+        action: "send",
+        correlationId,
+        target: threadId,
+      },
       "recordExternalAction failed after a completed sendMessage — audit row missing, send was NOT retried"
     );
   }
@@ -928,6 +948,14 @@ export interface TriggerProviderActionResult {
    * subject. Absent on success.
    */
   providerRef?: string;
+  /**
+   * The connection (Nango connectionId) this call actually used. Set by the
+   * nango handler so the dispatcher can mirror the call's auth outcome onto the
+   * connection-health store (`secrets.connection_state` by `accountHint`): an
+   * `errorClass:"auth"` failure increments toward `needs_reauth`, a success clears
+   * it. Absent for non-connection schemes / when no connection was resolved.
+   */
+  connectionId?: string;
 }
 
 /** A resolved `tools` row, passed to each scheme handler. */
@@ -1079,7 +1107,12 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     headers: input.headers,
   });
 
-  return nangoProxyEnvelope(result);
+  // Carry the connection used so the dispatcher can mirror this call's auth
+  // outcome onto the connection-health store (needs_reauth on a dead token).
+  return {
+    ...nangoProxyEnvelope(result),
+    connectionId: connection.connectionId,
+  };
 };
 
 /**
@@ -2107,7 +2140,14 @@ export async function triggerProviderAction(
       });
     } catch (err) {
       logger.error(
-        { err, channel: scheme, action: "action", correlationId, provider, tool: tool.name },
+        {
+          err,
+          channel: scheme,
+          action: "action",
+          correlationId,
+          provider,
+          tool: tool.name,
+        },
         "recordExternalAction failed after a completed triggerProviderAction — audit row missing, send was NOT retried"
       );
     }

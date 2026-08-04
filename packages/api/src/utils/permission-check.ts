@@ -15,6 +15,9 @@ import {
   proposals,
   eq,
   and,
+  or,
+  isNull,
+  gt,
   gte,
   desc,
   drizzleSql,
@@ -31,6 +34,7 @@ import {
 import {
   users,
   workspaces,
+  governanceRules,
   channelMembers,
   focusSessions,
   ChannelMemberKind,
@@ -196,11 +200,30 @@ type EntityPreviousData = {
  * about whether it's the default or a workspace override. Used by:
  *   - GET /api/hub/workspaces/:id/governance (client-facing introspection)
  *   - skills (to tell the user what will be auto-approved vs proposed)
+ *
+ * HONEST DISPLAY (Governance Rules editor wave): `effective.autoApproveFor` is
+ * derived from the `governance_rules` STORE — the SAME store enforcement reads
+ * at rung 2.8 — NOT from the raw `settings.aiGovernance.autoApproveFor` JSONB.
+ * The JSONB was a stale mirror: per-agent / pod / widen-lane rules never showed
+ * up in it, so display could disagree with what actually auto-applies. The
+ * enforced set is ADDITIVE: DEFAULT_AUTO_APPROVE (rung 8 code floor) ∪ the
+ * workspace-authored `verdict:"auto"` action rules (pod ∪ this workspace,
+ * `principal_kind = "any"`), minus any action a `verdict:"propose"` action rule
+ * pins back to review. The raw JSONB is preserved (unchanged, still written by
+ * every write path) and surfaced under `effective.settingsAutoApproveFor` for
+ * back-compat, but is no longer the DISPLAYED effective set. No write path is
+ * touched here — this is a read only.
  */
 export async function getEffectiveGovernance(workspaceId: string): Promise<{
   workspaceId: string;
   effective: {
     autoApproveFor: readonly string[];
+    /** The raw `settings.aiGovernance.autoApproveFor` JSONB (back-compat), or null. */
+    settingsAutoApproveFor: readonly string[] | null;
+    /** Actions a `verdict:"propose"` rule pins back to review (rules-derived). */
+    alwaysProposeFor: readonly string[];
+    /** True when the displayed `autoApproveFor` is now derived from the rules store. */
+    rulesDerived: boolean;
     governanceMode: "default" | "agent-owned";
     proposalApprovalPolicy: "owner_and_admins" | "any_editor" | "admins_only";
     destructiveAlwaysPropose: boolean;
@@ -212,7 +235,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
       >;
     };
   };
-  source: "workspace" | "default";
+  source: "rules" | "workspace" | "default";
   defaults: {
     autoApproveFor: readonly string[];
   };
@@ -232,10 +255,57 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
   const proposalApprovalPolicy =
     settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
 
+  // Rules-store read (same store enforcement uses at rung 2.8). Workspace
+  // BASELINE = principal "any" (agent-scoped rules are per-agent overrides, not
+  // part of the workspace's displayed baseline), action-target, pod ∪ this
+  // workspace, active only.
+  const ruleRows = await db
+    .select({
+      targetPattern: governanceRules.targetPattern,
+      verdict: governanceRules.verdict,
+    })
+    .from(governanceRules)
+    .where(
+      and(
+        isNull(governanceRules.revokedAt),
+        or(
+          isNull(governanceRules.expiresAt),
+          gt(governanceRules.expiresAt, new Date())
+        ),
+        eq(governanceRules.principalKind, "any"),
+        eq(governanceRules.targetKind, "action"),
+        or(
+          eq(governanceRules.scopeKind, "pod"),
+          and(
+            eq(governanceRules.scopeKind, "workspace"),
+            eq(governanceRules.workspaceId, workspaceId)
+          )
+        )
+      )
+    );
+
+  const autoRulePatterns = ruleRows
+    .filter((r) => r.verdict === "auto")
+    .map((r) => r.targetPattern);
+  const proposeRulePatterns = new Set(
+    ruleRows.filter((r) => r.verdict === "propose").map((r) => r.targetPattern)
+  );
+
+  // Additive union (rung 8 default ∪ rung 2.8 auto rules), then subtract any
+  // action a propose rule pins back to review (exact-pattern match).
+  const effectiveAutoApproveFor = Array.from(
+    new Set<string>([...DEFAULT_AUTO_APPROVE, ...autoRulePatterns])
+  ).filter((p) => !proposeRulePatterns.has(p));
+
+  const hasContributingRules = ruleRows.length > 0;
+
   return {
     workspaceId,
     effective: {
-      autoApproveFor: override ?? DEFAULT_AUTO_APPROVE,
+      autoApproveFor: effectiveAutoApproveFor,
+      settingsAutoApproveFor: override ?? null,
+      alwaysProposeFor: Array.from(proposeRulePatterns),
+      rulesDerived: true,
       governanceMode,
       proposalApprovalPolicy,
       destructiveAlwaysPropose: governanceMode === "agent-owned",
@@ -245,7 +315,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
         allowedResourceTypes: ["entity", "view", "doc", "cell", "channel"],
       },
     },
-    source: override ? "workspace" : "default",
+    source: hasContributingRules ? "rules" : "default",
     defaults: {
       autoApproveFor: DEFAULT_AUTO_APPROVE,
     },

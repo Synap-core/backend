@@ -1038,6 +1038,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "is_pod_wide",
     addedBy: "0211_secrets_pod_wide_connection_tier.sql",
   },
+  // Connection health mirror (0229): the catalog reads `connection_state` to
+  // decide "connected" means USABLE, not merely listed in Nango. Absence means the
+  // health column never landed → the catalog would fall back to existence-only.
+  {
+    table: "secrets",
+    column: "connection_state",
+    addedBy: "0229_secrets_connection_health.sql",
+  },
 
   // channel_egress — channel-agnostic outbound action outbox (0162). Absence
   // means a pod is on a pre-0162 schema where the egress write-helper / read-ack

@@ -2469,6 +2469,9 @@ CREATE TABLE IF NOT EXISTS "secrets" (
   "context_id"             text,
   "is_default"             boolean NOT NULL DEFAULT false,
   "is_pod_wide"            boolean NOT NULL DEFAULT false,
+  "connection_state"       text,
+  "auth_fail_count"        integer NOT NULL DEFAULT 0,
+  "last_auth_error_at"     timestamp with time zone,
   "deleted_at"             timestamp with time zone,
   "deleted_by"             text,
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
@@ -2529,6 +2532,11 @@ ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_default"    boolean NOT NULL 
 -- a per-user grant. Default slot is keyed on (capability_id, is_pod_wide) so a
 -- per-user default and a pod-wide default coexist without colliding.
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_pod_wide"   boolean NOT NULL DEFAULT false;
+-- Connection health mirror (0229): the catalog reads THIS for "connected" (usable),
+-- not raw Nango list-existence. Fed by the dispatch errorClass:"auth" classifier.
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "connection_state"   text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "auth_fail_count"    integer NOT NULL DEFAULT 0;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "last_auth_error_at" timestamp with time zone;
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_secrets_capability_default" ON "secrets" ("capability_id", "is_pod_wide") WHERE "is_default" AND "capability_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_secrets_capability" ON "secrets" ("capability_id") WHERE "capability_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_secrets_context" ON "secrets" ("context_type", "context_id");

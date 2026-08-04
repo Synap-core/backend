@@ -91,6 +91,7 @@ export type AgentGovernanceResolution =
 
 /** A candidate row's specificity-scoring columns (subset of `governanceRules`). */
 interface GovernanceRuleCandidate {
+  id: string;
   principalKind: "agent" | "any";
   scopeKind: "workspace" | "pod";
   targetKind: "action" | "profile" | "capability";
@@ -193,6 +194,13 @@ export interface ResolveGovernanceRuleInput {
 
 /** A resolved rule match: the winning verdict + the pattern that matched (for audit stamping). */
 export interface GovernanceRuleMatch {
+  /**
+   * The winning row's id — lets a preview surface (dry-run / the Governance
+   * Rules editor) chip→open the exact rule that decided rung 2.8. Additive:
+   * enforcement callers (`resolveAgentGovernanceDecision`) read only `verdict`
+   * / `matchedPattern`, so surfacing the id changes no decision.
+   */
+  ruleId: string;
   verdict: "auto" | "propose";
   /** The matched target — an action pattern, or `profile:<slug>` for a profile-kind rule. */
   matchedPattern: string;
@@ -239,6 +247,7 @@ export async function resolveGovernanceRule(
 
   const candidates = (await db
     .select({
+      id: governanceRules.id,
       principalKind: governanceRules.principalKind,
       scopeKind: governanceRules.scopeKind,
       targetKind: governanceRules.targetKind,
@@ -270,6 +279,7 @@ export async function resolveGovernanceRule(
 
   let best:
     | {
+        id: string;
         score: number;
         createdAt: Date;
         verdict: "auto" | "propose";
@@ -301,6 +311,7 @@ export async function resolveGovernanceRule(
       (score === best.score && rule.createdAt > best.createdAt)
     ) {
       best = {
+        id: rule.id,
         score,
         createdAt: rule.createdAt,
         verdict: rule.verdict,
@@ -312,7 +323,11 @@ export async function resolveGovernanceRule(
     }
   }
   return best
-    ? { verdict: best.verdict, matchedPattern: best.matchedPattern }
+    ? {
+        ruleId: best.id,
+        verdict: best.verdict,
+        matchedPattern: best.matchedPattern,
+      }
     : undefined;
 }
 
@@ -578,6 +593,20 @@ export async function dryRunAgentGovernanceDecision(
   outcome: "auto" | "propose" | "deny";
   rung: string;
   reason: string;
+  /**
+   * The `governance_rules` row that WON rung 2.8's specificity contest for this
+   * tuple, if any — so the editor can chip→open the exact rule. `null` when no
+   * rule matched (the outcome came from a floor, ownership, or the default
+   * whitelist). NOTE: a floor (ADMIN/DESTRUCTIVE/forcePropose) can still force
+   * `outcome: "propose"` even when an "auto" rule matched here — `outcome`
+   * remains the honest final verdict; `winningRule` is only "which rule the
+   * store resolved at rung 2.8", read the `reason` for whether a floor overrode.
+   */
+  winningRule: {
+    ruleId: string;
+    verdict: "auto" | "propose";
+    matchedPattern: string;
+  } | null;
 }> {
   const resolution = await resolveAgentGovernanceDecision({
     db: input.db,
@@ -588,6 +617,27 @@ export async function dryRunAgentGovernanceDecision(
     subjectProfileSlug: input.profileSlug,
     preferAgentMetadataAutoApproveFor: input.door === "chat",
   });
+
+  // Side-effect-free re-read of ONLY rung 2.8 (the same store enforcement uses,
+  // same principal eligibility as the resolution above) to name the winning
+  // rule for the editor. Not consulted for the outcome — that stays the full
+  // ladder's verdict from `resolveAgentGovernanceDecision`.
+  const ruleMatch = await resolveGovernanceRule({
+    db: input.db,
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId,
+    subjectType: input.subjectType,
+    action: input.action,
+    profileSlug: input.profileSlug,
+    includeAgentPrincipal: input.door === "chat",
+  });
+  const winningRule = ruleMatch
+    ? {
+        ruleId: ruleMatch.ruleId,
+        verdict: ruleMatch.verdict,
+        matchedPattern: ruleMatch.matchedPattern,
+      }
+    : null;
 
   switch (resolution.decision) {
     case "not-agent":
@@ -600,18 +650,21 @@ export async function dryRunAgentGovernanceDecision(
         rung: "not-agent",
         reason:
           "The acting user is not an agent — the agent governance ladder does not apply.",
+        winningRule,
       };
     case "deny":
       return {
         outcome: "deny",
         rung: "cbac-capability-allowlist",
         reason: resolution.reason,
+        winningRule,
       };
     case "propose":
       return {
         outcome: "propose",
         rung: resolution.reason ? reasonToRung(resolution.reason) : "default",
         reason: resolution.reason ?? "No auto-approve rule matched.",
+        winningRule,
       };
     case "execute":
       return {
@@ -622,6 +675,7 @@ export async function dryRunAgentGovernanceDecision(
         reason: resolution.explicitAutoApproveFor
           ? `Matched the workspace's explicit autoApproveFor list.`
           : "Matched the default auto-approve whitelist (or agent/workspace ownership).",
+        winningRule,
       };
   }
 }

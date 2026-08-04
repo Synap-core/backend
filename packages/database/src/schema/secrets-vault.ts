@@ -52,6 +52,24 @@ export const secretTypeEnum = pgEnum("secret_type", [
 export const SECRET_TYPES = secretTypeEnum.enumValues;
 export type SecretType = (typeof SECRET_TYPES)[number];
 
+/**
+ * Health of a capability CONNECTION (the `secrets.connection_state` column).
+ * Plain TEXT (not a pgEnum) to match the table's `encryptionMode`/`permission`
+ * precedent and keep the migration a single ADD COLUMN. NULL is treated as
+ * `connected` (no failure ever recorded).
+ */
+export const CONNECTION_STATES = [
+  "connected",
+  "needs_reauth",
+  "disconnected",
+] as const;
+export type ConnectionState = (typeof CONNECTION_STATES)[number];
+
+/** Flip a connection to `needs_reauth` only after this many consecutive auth
+ * failures — a single failure can be a concurrent-refresh race (prior-art:
+ * Nango's double-failure guidance). */
+export const CONNECTION_REAUTH_FAILURE_THRESHOLD = 2;
+
 // ============================================================================
 // Secrets Table
 // ============================================================================
@@ -163,6 +181,27 @@ export const secrets = pgTable(
     // Nango/provider-delegated connection. Precedence: a member's OWN connection
     // wins over the pod-wide default. Write RBAC (service layer): pod-admin only.
     isPodWide: boolean("is_pod_wide").notNull().default(false),
+
+    // ── Connection health (0229) ──
+    // The catalog's "connected" must mean USABLE, not merely LISTED. Nango (the
+    // OAuth broker) is the source of truth for the credential + its error state;
+    // these columns are this pod's MIRROR of that health, so the catalog reads ONE
+    // store (secrets) for both existence AND health instead of trusting raw Nango
+    // list-existence (which never sees an expired/revoked token). Only meaningful
+    // on capability-connection rows (`capabilityId` set).
+    //   connectionState — NULL/`connected` = healthy · `needs_reauth` = token
+    //     expired/revoked, the user must reconnect · `disconnected` = intentionally
+    //     removed. NULL is treated as healthy (no failure ever recorded).
+    //   authFailCount — consecutive auth failures seen at dispatch; we flip to
+    //     `needs_reauth` only at the 2-failure threshold (a single failure can be a
+    //     concurrent-refresh race). Reset to 0 on any successful call.
+    //   lastAuthErrorAt — when the most recent auth failure was observed.
+    // Fed reactively by the dispatch `errorClass:"auth"` classifier (and, as a
+    // fast-follow, a Nango refresh-failure webhook). See capability-catalog's
+    // connection-state resolution and external-dispatch's failure path.
+    connectionState: text("connection_state"),
+    authFailCount: integer("auth_fail_count").notNull().default(0),
+    lastAuthErrorAt: timestamp("last_auth_error_at", { withTimezone: true }),
 
     // Soft delete
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

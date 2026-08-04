@@ -36,10 +36,109 @@ import { db, eq, and, or, isNull, gt, desc, inArray } from "@synap/database";
 import {
   governanceRules,
   workspaceMembers,
+  workspaces,
   users,
 } from "@synap/database/schema";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
+import {
+  DEFAULT_AUTO_APPROVE,
+  DESTRUCTIVE_ACTIONS,
+  ADMIN_ACTIONS,
+} from "@synap/governance-policy";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
+
+/** A `governanceRules` row shaped for the wire, with the agent's display label resolved. */
+type GovernanceRuleRow = typeof governanceRules.$inferSelect;
+
+/**
+ * Map raw rule rows to the wire DTO used by `list` / `listAll`, resolving each
+ * agent-principal rule's display label in ONE batched lookup. Shared so the two
+ * listing doors never drift on shape.
+ */
+async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
+  const agentIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => r.principalKind === "agent" && r.agentUserId)
+        .map((r) => r.agentUserId as string)
+    )
+  );
+
+  const agentLabels = new Map<string, string>();
+  if (agentIds.length > 0) {
+    const agents = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        agentType: users.agentType,
+      })
+      .from(users)
+      .where(inArray(users.id, agentIds));
+    for (const a of agents) {
+      agentLabels.set(a.id, a.name ?? a.agentType ?? a.id);
+    }
+  }
+
+  return rows.map((r) => ({
+    id: r.id,
+    principalKind: r.principalKind,
+    agentUserId: r.agentUserId,
+    agentLabel: r.agentUserId
+      ? (agentLabels.get(r.agentUserId) ?? r.agentUserId)
+      : null,
+    scopeKind: r.scopeKind,
+    workspaceId: r.workspaceId,
+    targetKind: r.targetKind,
+    targetPattern: r.targetPattern,
+    targetProfile: r.targetProfile,
+    verdict: r.verdict,
+    createdAt: r.createdAt,
+    createdBy: r.createdBy,
+    sourceProposalId: r.sourceProposalId,
+    expiresAt: r.expiresAt,
+  }));
+}
+
+/** Active-rule predicate: not revoked, not expired. Shared by every read door. */
+function activeRulePredicate() {
+  return and(
+    isNull(governanceRules.revokedAt),
+    or(
+      isNull(governanceRules.expiresAt),
+      gt(governanceRules.expiresAt, new Date())
+    )
+  );
+}
+
+/**
+ * READ-visibility gate for a workspace lens on the preview doors: the caller
+ * must be able to SEE the workspace (member / owner / pod-visible), or be a pod
+ * admin. Mirrors `userVisibleWhere`'s floor so a preview can never reveal rules
+ * for a workspace the caller has no access to.
+ */
+async function assertWorkspaceVisible(
+  userId: string,
+  workspaceId: string
+): Promise<void> {
+  if (await isPodAdmin(userId)) return;
+  const [row] = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(
+      and(
+        eq(workspaces.id, workspaceId),
+        userVisibleWhere(workspaces.id, userId)
+      )
+    )
+    .limit(1);
+  if (!row) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You do not have access to this workspace",
+    });
+  }
+}
 
 async function isPodAdmin(userId: string): Promise<boolean> {
   try {
@@ -175,14 +274,6 @@ export const governanceRulesRouter = router({
     .query(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
 
-      const activePredicate = and(
-        isNull(governanceRules.revokedAt),
-        or(
-          isNull(governanceRules.expiresAt),
-          gt(governanceRules.expiresAt, new Date())
-        )
-      );
-
       const scopePredicate = workspaceId
         ? or(
             eq(governanceRules.scopeKind, "pod"),
@@ -194,54 +285,139 @@ export const governanceRulesRouter = router({
         : eq(governanceRules.scopeKind, "pod");
 
       const rows = await db.query.governanceRules.findMany({
-        where: and(activePredicate, scopePredicate),
+        where: and(activeRulePredicate(), scopePredicate),
         orderBy: [desc(governanceRules.createdAt)],
       });
 
-      const agentIds = Array.from(
-        new Set(
-          rows
-            .filter((r) => r.principalKind === "agent" && r.agentUserId)
-            .map((r) => r.agentUserId as string)
-        )
-      );
+      return { rules: await mapRulesWithAgentLabels(rows) };
+    }),
 
-      const agentLabels = new Map<string, string>();
-      if (agentIds.length > 0) {
-        const agents = await db
-          .select({
-            id: users.id,
-            name: users.name,
-            agentType: users.agentType,
-          })
-          .from(users)
-          .where(inArray(users.id, agentIds));
-        for (const a of agents) {
-          agentLabels.set(a.id, a.name ?? a.agentType ?? a.id);
+  /**
+   * List active rules across EVERY workspace the caller can see (pod ∪ all
+   * visible workspaces), not just one. Mirrors the `.list`/`.listAll` convention
+   * (backend-rules.md): floored by `userVisibleWhere` on `workspace_id` so
+   * pod-scope rules (NULL workspace → global) and workspace-scope rules for the
+   * caller's workspaces are returned, and no rule outside the caller's
+   * visibility ever leaks. Powers the Adjuncts facet's "an agent's overrides
+   * across every workspace" view. Newest first.
+   */
+  listAll: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await db.query.governanceRules.findMany({
+      where: and(
+        activeRulePredicate(),
+        userVisibleWhere(governanceRules.workspaceId, ctx.userId)
+      ),
+      orderBy: [desc(governanceRules.createdAt)],
+    });
+
+    return { rules: await mapRulesWithAgentLabels(rows) };
+  }),
+
+  /**
+   * Side-effect-free "Test policy" preview: would a given `(agent, action,
+   * subject, profile?)` write auto-apply or propose, and WHICH rule (if any)
+   * decided rung 2.8? Wraps `dryRunAgentGovernanceDecision` (the same pure
+   * resolver enforcement runs — it reads the rules store, never writes). Gated
+   * on workspace visibility so a caller can only preview within workspaces they
+   * can see.
+   */
+  dryRun: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().min(1),
+        action: z.string().min(1),
+        subjectType: z.string().min(1).optional(),
+        profileSlug: z.string().min(1).optional(),
+        door: z.enum(["chat", "automation"]).optional(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      if (workspaceId) {
+        await assertWorkspaceVisible(ctx.userId, workspaceId);
+      }
+
+      const { dryRunAgentGovernanceDecision } =
+        await import("@synap/database/agent-governance");
+      const result = await dryRunAgentGovernanceDecision({
+        db,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId,
+        subjectType: input.subjectType ?? "",
+        action: input.action,
+        profileSlug: input.profileSlug,
+        door: input.door ?? "chat",
+      });
+
+      // Enrich the rung-2.8 winner into a full chip the editor can open.
+      let winningRule:
+        Awaited<ReturnType<typeof mapRulesWithAgentLabels>>[number] | null =
+        null;
+      if (result.winningRule) {
+        const row = await db.query.governanceRules.findFirst({
+          where: eq(governanceRules.id, result.winningRule.ruleId),
+        });
+        if (row) {
+          winningRule = (await mapRulesWithAgentLabels([row]))[0] ?? null;
         }
       }
 
       return {
-        rules: rows.map((r) => ({
-          id: r.id,
-          principalKind: r.principalKind,
-          agentUserId: r.agentUserId,
-          agentLabel: r.agentUserId
-            ? (agentLabels.get(r.agentUserId) ?? r.agentUserId)
-            : null,
-          scopeKind: r.scopeKind,
-          workspaceId: r.workspaceId,
-          targetKind: r.targetKind,
-          targetPattern: r.targetPattern,
-          targetProfile: r.targetProfile,
-          verdict: r.verdict,
-          createdAt: r.createdAt,
-          createdBy: r.createdBy,
-          sourceProposalId: r.sourceProposalId,
-          expiresAt: r.expiresAt,
-        })),
+        outcome: result.outcome,
+        rung: result.rung,
+        reason: result.reason,
+        winningRule,
       };
     }),
+
+  /**
+   * The read-only PLATFORM FLOOR, for display alongside user-authored rules.
+   * Sources the REAL engine constants from `@synap/governance-policy` (imported,
+   * never copied) so the editor can never drift from what `decideAgentPolicy`
+   * actually enforces:
+   *   - `autoApproveFor` — the DEFAULT_AUTO_APPROVE whitelist (rung 8 floor).
+   *   - `alwaysPropose`  — the hard floors that always route to a proposal
+   *     regardless of any rule: ADMIN (rung 2), DESTRUCTIVE (rung 2.5), and the
+   *     forcePropose scope/identity floor (rung 2.1, applied dynamically — not a
+   *     fixed action list). Every entry is read-only (not user-editable).
+   */
+  platformDefaults: protectedProcedure.query(async () => {
+    return {
+      autoApproveFor: {
+        key: "default-auto-approve" as const,
+        label: "Default auto-approve whitelist",
+        rung: "8",
+        editable: false as const,
+        actions: DEFAULT_AUTO_APPROVE,
+      },
+      alwaysPropose: [
+        {
+          key: "admin" as const,
+          label: "Administrative actions",
+          rung: "2",
+          editable: false as const,
+          actions: ADMIN_ACTIONS,
+        },
+        {
+          key: "destructive" as const,
+          label: "Destructive actions (delete / archive / purge / merge)",
+          rung: "2.5",
+          editable: false as const,
+          actions: DESTRUCTIVE_ACTIONS,
+        },
+        {
+          key: "force-propose" as const,
+          label: "Scope / identity changes",
+          rung: "2.1",
+          editable: false as const,
+          actions: [] as readonly string[],
+          note: "Applied dynamically when a write alters a record's scope or identity (e.g. promote-to-global, change of profile kind) — not a fixed action list.",
+        },
+      ],
+    };
+  }),
 
   /**
    * Create one rule — the "always approve for X" door. See file header for

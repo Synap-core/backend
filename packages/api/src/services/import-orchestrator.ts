@@ -989,6 +989,16 @@ export class ImportOrchestrator {
       operations,
     });
 
+    // Scope-aware homes before materialize: process kinds pin to the graph
+    // home (explicit lens or ontology); pod identity stays unpinned. Never
+    // blanket workspaceScoped — that re-prisons person/company/knowledge.
+    if (workspaceId) {
+      const scopeService = new ProfileResolutionService(db);
+      await stampScopeAwareHomesOnOps(operations, workspaceId, (slug) =>
+        scopeService.getEntityScope(slug, workspaceId)
+      );
+    }
+
     const {
       created,
       linked,
@@ -1000,10 +1010,8 @@ export class ImportOrchestrator {
       (err, type) =>
         logger.warn({ err, type }, "import.apply: relation create failed"),
       {
-        // !!workspaceId: an active workspace pins entities to it; a pod-wide
-        // apply (null) lets each profile land in its natural scope (pod-default
-        // NULL), mirroring capture.
-        workspaceScoped: !!workspaceId,
+        // Per-op targetWorkspaceId only (parity with capture auto-apply +
+        // composite approve). Do NOT blanket workspaceScoped.
         // U1: always key materialize so retries link instead of duplicating.
         idempotency: makeExternalLinkIdempotency(db, {
           // userId-scoped so the global (provider, externalId) index can
@@ -1440,6 +1448,14 @@ export class ImportOrchestrator {
         userId
       ).catch(() => {});
 
+      // Scope-aware stamp each chunk (same rule as apply / capture).
+      if (workspaceId) {
+        const scopeService = new ProfileResolutionService(db);
+        await stampScopeAwareHomesOnOps(chunk, workspaceId, (slug) =>
+          scopeService.getEntityScope(slug, workspaceId)
+        );
+      }
+
       const res = await materializeCompositeGraph(
         chunk,
         entityCaller,
@@ -1450,8 +1466,7 @@ export class ImportOrchestrator {
             "import.applyLarge: relation create failed"
           ),
         {
-          // !!workspaceId: pin to active workspace, else pod-wide (NULL) — see apply().
-          workspaceScoped: !!workspaceId,
+          // Per-op pins only — never blanket workspaceScoped (folder prison).
           seedRefToRealId: refToRealId,
           idempotency,
           idemSeen,

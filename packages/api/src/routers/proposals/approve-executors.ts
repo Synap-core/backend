@@ -768,11 +768,9 @@ export function registerApproveExecutors(): void {
               ...(facet.contextEntityId
                 ? { contextEntityId: facet.contextEntityId }
                 : {}),
-              // Role lens: proposal governance home when parent is pod-wide —
-              // attachFacet also derives from role enablement if omitted.
-              ...(proposalWorkspaceId
-                ? { workspaceId: proposalWorkspaceId }
-                : {}),
+              // Do NOT force proposal.workspaceId as the facet lens — for
+              // pod-wide parents that may be ambient Admin / non-domain.
+              // attachFacet derives role home from ontology (rung 2) or parent.
               source: "system",
             });
           } catch (err) {
