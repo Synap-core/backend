@@ -246,6 +246,36 @@ export async function promoteSessionToPlaybook(
     fromType: "session",
   });
 
+  // If this session was instantiated from a playbook that belongs to capability
+  // container(s), the PROMOTED playbook joins the SAME capabilities as a
+  // `member_of` member. This is the promote-path half of the "capability →
+  // materialized flow" edge (create-from-definition seeds the other half): a
+  // playbook distilled from a capability's run stays part of that capability's
+  // materialized set, so the composition map stays complete. No session ever
+  // carries a direct `session --> capability` edge today, so the source is read
+  // transitively off the origin playbook's own `member_of` links.
+  let sourceCapabilityIds: string[] = [];
+  if (session.playbookId) {
+    const originLinks = await getLinksFor(
+      input.userId,
+      "playbook",
+      session.playbookId
+    );
+    sourceCapabilityIds = [
+      ...new Set(
+        originLinks
+          .filter(
+            (l) =>
+              l.fromType === "playbook" &&
+              l.fromId === session.playbookId &&
+              l.toType === "capability" &&
+              l.linkType === "member_of"
+          )
+          .map((l) => l.toId)
+      ),
+    ];
+  }
+
   const name = input.name ?? session.goal.slice(0, 200);
   let playbook: Playbook;
   let reused = false;
@@ -312,6 +342,15 @@ export async function promoteSessionToPlaybook(
       toType: cap.kind,
       toId: cap.id,
       linkType: "grants",
+    })),
+    // Inherit the origin playbook's capability membership (see above).
+    ...sourceCapabilityIds.map((capId): LinkInput => ({
+      workspaceId: session.workspaceId,
+      fromType: "playbook",
+      fromId: playbook.id,
+      toType: "capability",
+      toId: capId,
+      linkType: "member_of",
     })),
   ];
   await createLinks(edges);

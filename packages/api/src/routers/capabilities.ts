@@ -41,13 +41,12 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
-import type { FlowDefinition } from "@synap/database";
-import { MessageAuthorType, links } from "@synap/database/schema";
-import type { ToolVerbCatalogEntry } from "@synap/database/schema";
+import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -66,7 +65,7 @@ import {
   buildProviderVerbSpec,
   parentToolMissingMessage,
   parentToolWhere,
-  upsertVerbCatalogEntry,
+  wireCreatedVerb,
 } from "../services/capabilities/create-declarative-verb.js";
 import {
   normalizeVerbResult,
@@ -79,9 +78,7 @@ import { buildCapabilityCatalog } from "../services/capabilities/capability-cata
 import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
 import {
   createCapabilityFromDefinition,
-  deriveVerbKind,
   loadCapabilityTemplate,
-  GRANT_DEFAULT_EXEC_MODE,
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
@@ -339,144 +336,34 @@ const capabilityRegistryRouter = router({
       });
 
       // Step 4 — WIRING. `skills.create` inserts a bare skill row and writes no
-      // links, so a verb created here used to be unreachable from EVERY read
-      // path that surfaces it:
-      //   · `tools.capabilities` — the jsonb catalogue the Bricks registry reads
-      //     (`capability-registry.buildVerbStates`) ⇒ the verb never appeared
-      //     under its tool;
-      //   · `skill --requires--> tool` — the parent edge;
-      //   · `skill --member_of--> capability` — how a capability CARD folds its
-      //     verbs in (`capability-catalog`).
-      // Each edge is written through its EXISTING door, never hand-inserted.
+      // links, so a verb created here would be born ORPHANED: invisible under
+      // its tool, on its capability card, and in the Bricks registry catalogue.
+      // The SHARED `wireCreatedVerb` writes all three edges through their
+      // existing doors — the SAME call the MCP `synap_create_verb` door now
+      // makes, so the two can never drift.
       //
       // Only on the `created` branch. A `proposed` result is a SUCCESS, but the
       // skill row does NOT exist yet (the insert is queued behind review), so
-      // there is nothing to link to — `setRequiredTools`/`addPart` would both
-      // 404 on a lookup of it. The wiring for an approved proposal has to happen
-      // where the proposal MATERIALIZES the skill (`insertSkillGoverned`), which
-      // is outside this door; until then a verb created via the proposed branch
-      // stays orphaned. `wiring` reports that honestly rather than implying it.
-      //
-      // Wiring failures are reported, not thrown: the skill row already exists
-      // and `skills.create` is not idempotent, so raising here would push a UI
-      // into re-creating a duplicate verb.
-      const wiring = {
-        requires: false,
-        catalogued: false,
-        capabilityIds: [] as string[],
-      };
-
-      if (result.status === "created") {
-        try {
-          await skillsCaller.setRequiredTools({
-            skillId: result.id,
-            toolIds: [parentTool.id],
-          });
-          wiring.requires = true;
-        } catch (err) {
-          logger.error(
-            { skillId: result.id, toolId: parentTool.id, err },
-            "createVerb: failed to write the requires edge"
-          );
-        }
-
-        // The parent tool's capability container(s), if it belongs to any. A
-        // tool with no container is normal (a bare connect) — then there is no
-        // card to join and nothing to do.
-        try {
-          const containerLinks = await database
-            .select({ capabilityId: links.toId })
-            .from(links)
-            .where(
-              and(
-                eq(links.fromType, "tool"),
-                eq(links.fromId, parentTool.id),
-                eq(links.toType, "capability"),
-                eq(links.linkType, "member_of")
-              )
-            );
-          const containersCaller = capabilityContainersRouter.createCaller(
-            ctx as never
-          );
-          for (const capabilityId of new Set(
-            containerLinks.map((l) => l.capabilityId)
-          )) {
-            try {
-              await containersCaller.addPart({
-                capabilityId,
-                partType: "skill",
-                partId: result.id,
-              });
-              wiring.capabilityIds.push(capabilityId);
-            } catch (err) {
-              // `addPart` refuses when the caller may SEE the container but not
-              // write it — a pod-wide container the caller does not own, or a
-              // workspace they are not a member of. The verb is still created;
-              // it just doesn't join that card.
-              logger.warn(
-                { capabilityId, skillId: result.id, err },
-                "createVerb: could not attach verb to capability"
-              );
-            }
-          }
-        } catch (err) {
-          logger.error(
-            { toolId: parentTool.id, err },
-            "createVerb: capability-container lookup failed"
-          );
-        }
-
-        // Append to the parent tool's verb catalogue, in the SAME shape
-        // `deriveToolVerbs` produces (id = the backing skill's name, kind from
-        // the shared `deriveVerbKind`, govDefault aligned to the seeded grant
-        // exec-mode). Idempotent by verb id — re-creating never duplicates.
-        try {
-          // Read-modify-write on a jsonb ARRAY, so it MUST be serialized: two
-          // concurrent createVerb calls on the same parent tool would otherwise
-          // both read the pre-state and the second would overwrite the first's
-          // entry — silently, since `wiring.catalogued` reports true for both.
-          // The row lock makes the append at-most-once-per-verb and last-writer-
-          // additive instead of last-writer-wins.
-          await database.transaction(async (tx) => {
-            const [toolRow] = await tx
-              .select({ capabilities: toolsTable.capabilities })
-              .from(toolsTable)
-              .where(eq(toolsTable.id, parentTool.id))
-              .for("update")
-              .limit(1);
-            const entry: ToolVerbCatalogEntry = {
-              id: input.verbName,
-              label: input.verbName,
-              kind: deriveVerbKind({
-                name: input.verbName,
+      // there is nothing to link to. The wiring for an approved proposal happens
+      // where the proposal MATERIALIZES the skill (`insertSkillGoverned`); until
+      // then `wiring` reports the verb is unwired rather than implying otherwise.
+      const wiring =
+        result.status === "created"
+          ? await wireCreatedVerb(
+              { ...ctx, workspaceId } as unknown as Parameters<
+                typeof wireCreatedVerb
+              >[0],
+              {
+                skillId: result.id,
+                parentToolId: parentTool.id,
+                verbName: input.verbName,
                 ...(input.description
                   ? { description: input.description }
                   : {}),
-              }),
-              ...(input.parameters && typeof input.parameters === "object"
-                ? { argsSchema: input.parameters }
-                : {}),
-              govDefault: GRANT_DEFAULT_EXEC_MODE,
-            };
-            await tx
-              .update(toolsTable)
-              .set({
-                capabilities: upsertVerbCatalogEntry(
-                  toolRow?.capabilities ?? [],
-                  entry
-                ),
-                updatedAt: new Date(),
-              })
-              .where(eq(toolsTable.id, parentTool.id));
-          });
-          wiring.catalogued = true;
-        } catch (err) {
-          logger.error(
-            { toolId: parentTool.id, verbName: input.verbName, err },
-            "createVerb: failed to append the verb catalogue entry"
-          );
-        }
-      }
+                parameters: input.parameters,
+              }
+            )
+          : { requires: false, catalogued: false, capabilityIds: [] };
 
       // Identity of the thing just created, so a UI can select it inline
       // (create-then-configure, never a wizard) — plus the brick's parent so the
@@ -620,6 +507,26 @@ export const capabilitiesRouter = router({
    * a selected workspace. Degradation is honest, not empty (see `sections`).
    */
   registry: capabilityRegistryRouter,
+
+  /**
+   * The whole-pod CAPABILITY-COMPOSITION map (Studio "System" view). One frozen
+   * `CapabilityComposition` per visible container — members (tool/skill/playbook/
+   * automation with `wired` flags), rolled-up run health, and gaps — the SAME
+   * composition the `diagnose` capability object-mode returns, in LIST form for
+   * the graph. `CapabilityComposition.id` IS the container id, so it joins 1:1 to
+   * an atlas `capability` node. Pure read, access/workspace-scoped like
+   * `containers.list`: `workspaceId` NARROWS (pod-wide NULL rows always in);
+   * omit → pod-wide floor.
+   */
+  compositions: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return listCapabilityCompositions({
+        userId,
+        workspaceId: input?.workspaceId ?? null,
+      });
+    }),
 
   /**
    * Capability CONNECTIONS (Wave 4) — CRUD over a capability's connections
@@ -1419,87 +1326,6 @@ export const capabilitiesRouter = router({
         result: data?.result ?? null,
         dryRunEffects: data?.dryRunEffects ?? [],
       };
-    }),
-
-  /**
-   * "Use in an automation" — scaffold a DRAFT automation from a single capability
-   * verb. Builds a minimal FlowDefinition (trigger → ONE capability node) and
-   * inserts it via the SAME path `automations.create` uses for an operator-direct
-   * write: operator identity (no agentUserId), RBAC-gated, never proposed.
-   */
-  createFromVerbCapability: protectedProcedure
-    .input(
-      z.object({
-        verbId: z.string(),
-        capabilityId: z.string().optional(),
-        capabilityName: z.string(),
-        verbLabel: z.string(),
-        verbKind: z.enum(["read", "write", "action"]).optional(),
-        workspaceId: z.string().uuid(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const database = await getDb();
-
-      // Operator direct write — enforce workspace RBAC (deny if not permitted),
-      // but never propose. Mirrors the operator branch of automations.create.
-      const { verifyPermission } = await import("@synap/database");
-      const { requiredPermissionFor } =
-        await import("@synap/governance-policy");
-      const result = await verifyPermission({
-        db: database,
-        userId: ctx.userId!,
-        workspace: { id: input.workspaceId },
-        requiredPermission: requiredPermissionFor("create"),
-      });
-      if (!result.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: result.reason || "Permission denied",
-        });
-      }
-
-      const flowDefinition = {
-        nodes: [
-          {
-            id: "trigger",
-            type: "trigger",
-            position: { x: 0, y: 0 },
-            data: {},
-          },
-          {
-            id: "step-1",
-            type: "capability",
-            position: { x: 0, y: 140 },
-            data: {
-              capabilityId: input.capabilityId,
-              capabilityName: input.capabilityName,
-              verbId: input.verbId,
-              verbLabel: input.verbLabel,
-              verbKind: input.verbKind,
-              inputMapping: {},
-              label: `${input.capabilityName} · ${input.verbLabel}`,
-            },
-          },
-        ],
-        edges: [{ id: "e1", source: "trigger", target: "step-1" }],
-      } as unknown as FlowDefinition;
-
-      const [row] = await database
-        .insert(automations)
-        .values({
-          workspaceId: input.workspaceId,
-          createdBy: ctx.userId!,
-          name: `New automation: ${input.verbLabel}`,
-          triggerType: "manual",
-          triggerConfig: {},
-          flowDefinition,
-          status: "draft",
-          metadata: { createdVia: "manual" as const },
-        })
-        .returning({ id: automations.id });
-
-      return { automationId: row.id };
     }),
 
   /**

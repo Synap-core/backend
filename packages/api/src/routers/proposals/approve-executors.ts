@@ -23,6 +23,7 @@ import {
   type CreateDocumentInput,
   sql,
   skills,
+  tools,
   focusSessions,
   eq,
   getWorkspaceMembership,
@@ -35,12 +36,16 @@ import {
   links,
   relations,
   projectMembers,
+  workspaces,
   and,
   isNull,
   drizzleSql,
   type LinkEndpointType,
   type LinkType,
   knowledgeRepository,
+  resolveMaterializedEntityWorkspaceId,
+  isDomainHomeWorkspace,
+  DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
@@ -639,12 +644,40 @@ export function registerApproveExecutors(): void {
 
       const proposalWorkspaceId = proposal.workspaceId || null;
 
-      const profileService = new ProfileResolutionService(db);
-      const entityScope = await profileService.getEntityScope(
-        profileSlug,
+      // I3 (resolve-early-and-persist): land where the create door already
+      // resolved (`data.resolvedWorkspaceId`), never re-derived from ambient /
+      // getEntityScope alone. Same helper as jobs materializer.
+      const entityHome = resolveMaterializedEntityWorkspaceId(
+        innerData,
         proposalWorkspaceId
       );
-      const isPodWide = entityScope === "pod";
+
+      if (entityHome) {
+        const filingTarget = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, entityHome),
+          columns: {
+            workspaceType: true,
+            systemSlug: true,
+            settings: true,
+          },
+        });
+        if (
+          filingTarget &&
+          !isDomainHomeWorkspace({
+            workspaceType: filingTarget.workspaceType,
+            systemSlug: filingTarget.systemSlug,
+            settings: filingTarget.settings as {
+              surfaceClass?: string | null;
+              systemSlug?: string | null;
+            } | null,
+          })
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
+          });
+        }
+      }
 
       let entityCallerCtx: {
         db: typeof db;
@@ -654,7 +687,8 @@ export function registerApproveExecutors(): void {
         workspaceRole: string;
       };
 
-      if (isPodWide) {
+      if (entityHome === null) {
+        // Pod-wide home (persisted null, or legacy global): null ctx is OK.
         entityCallerCtx = {
           db,
           authenticated: true as const,
@@ -663,18 +697,7 @@ export function registerApproveExecutors(): void {
           workspaceRole: "owner",
         };
       } else {
-        if (!proposalWorkspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "Entity creation proposal for a workspace-scoped profile is missing a valid workspaceId",
-          });
-        }
-        const membership = await getWorkspaceMembership(
-          db,
-          proposalWorkspaceId,
-          userId
-        );
+        const membership = await getWorkspaceMembership(db, entityHome, userId);
         if (!membership) {
           throw new TRPCError({
             code: "FORBIDDEN",
@@ -685,7 +708,7 @@ export function registerApproveExecutors(): void {
           db,
           authenticated: true as const,
           userId,
-          workspaceId: proposalWorkspaceId,
+          workspaceId: entityHome,
           workspaceRole: membership.role,
         };
       }
@@ -703,6 +726,7 @@ export function registerApproveExecutors(): void {
       // per-field `propertyDecisions`. Best-effort: on def-create failure the
       // value is still stored verbatim (no data loss). See
       // services/proposals/reconcile-proposal-properties.ts.
+      const profileService = new ProfileResolutionService(db);
       const reconciledProfile = await profileService.resolveProfile(
         profileSlug,
         userId,
@@ -721,6 +745,9 @@ export function registerApproveExecutors(): void {
       // a DIFFERENT, pre-existing entity (strong email/phone/url match) with
       // `deduplicated: true` — the whole point of routing approval through the
       // one create door. Read the RETURNED id below for every downstream write.
+      //
+      // I3 pin: when entityHome is set, pass it as rung-1 `targetWorkspaceId`
+      // so create does not re-derive from ambient. Null home → no pin (pod).
       const createdEntity = (await entityCaller.create({
         proposedEntityId: storedEntityId,
         profileSlug,
@@ -733,6 +760,7 @@ export function registerApproveExecutors(): void {
         // entity-with-document proposal (a proposed file upload, or any
         // long-content entity that proposed) lost its document link. Forward it.
         documentId: innerData.documentId as string | undefined,
+        ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
         source: "system",
       })) as { id?: string; deduplicated?: boolean };
 
@@ -1536,6 +1564,79 @@ export function registerApproveExecutors(): void {
           code: "INTERNAL_SERVER_ERROR",
           message: "Skill approval unexpectedly re-proposed",
         });
+      }
+
+      // Declarative-verb WIRING on the AGENT (proposal) path. The create doors
+      // (`capabilities.createVerb` / MCP `synap_create_verb`) call `wireCreatedVerb`
+      // ONLY on their synchronous `created` branch; a GOVERNED create returns
+      // `proposed`, so the verb was materialized HERE by insertSkillGoverned with
+      // NO requires-edge / container-attach / catalogue entry — born ORPHANED (the
+      // T4 bug, re-opened on the approval path). Re-run the SAME shared wiring now
+      // that the skill row exists.
+      //
+      // Signal (identical to the create doors): a `declarative` skill whose
+      // `providerSpec` names a parent tool. Resolve that tool by name under the
+      // APPROVER's visibility + the skill's own workspace lens via `parentToolWhere`
+      // (the one shared predicate). Non-fatal throughout — if the tool can't be
+      // resolved or wiring fails, log-and-continue (wireCreatedVerb's own posture);
+      // never break the approval, whose skill row is already committed.
+      const materializedSkill = result.skill;
+      const providerSpec = materializedSkill.providerSpec;
+      if (
+        materializedSkill.kind === "declarative" &&
+        providerSpec &&
+        typeof providerSpec.tool === "string" &&
+        providerSpec.tool.trim() !== ""
+      ) {
+        try {
+          const { wireCreatedVerb, parentToolWhere } =
+            await import("../../services/capabilities/create-declarative-verb.js");
+          const wsLens = materializedSkill.workspaceId ?? null;
+          const [parentTool] = await db
+            .select({ id: tools.id })
+            .from(tools)
+            .where(
+              parentToolWhere({
+                userId,
+                toolName: providerSpec.tool,
+                workspaceId: wsLens,
+              })
+            )
+            .limit(1);
+          if (parentTool) {
+            await wireCreatedVerb(
+              {
+                db,
+                authenticated: true as const,
+                userId,
+                ...(wsLens ? { workspaceId: wsLens } : {}),
+              } as unknown as Parameters<typeof wireCreatedVerb>[0],
+              {
+                skillId: materializedSkill.id,
+                parentToolId: parentTool.id,
+                verbName: materializedSkill.name,
+                ...(materializedSkill.description
+                  ? { description: materializedSkill.description }
+                  : {}),
+                parameters: materializedSkill.parameters ?? undefined,
+              }
+            );
+          } else {
+            logger.warn(
+              {
+                skillId: materializedSkill.id,
+                toolName: providerSpec.tool,
+                workspaceId: wsLens,
+              },
+              "skill/create approval: parent tool for declarative verb not resolvable — verb left unwired"
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { skillId: materializedSkill.id, err },
+            "skill/create approval: wireCreatedVerb failed (non-fatal — approval proceeds)"
+          );
+        }
       }
 
       await db

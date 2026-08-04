@@ -16,6 +16,7 @@ import {
   isRoutableWorkspaceType,
   isDomainHomeWorkspace,
   resolveEntityWorkspacePlacement,
+  resolveMaterializedEntityWorkspaceId,
   resolveKindWritePin,
   normalizeEntityScope,
 } from "./workspace-resolution-service.js";
@@ -600,6 +601,38 @@ describe("normalizeEntityScope / resolveEntityWorkspacePlacement / resolveKindWr
         targetWorkspaceId: AMBIENT,
       })
     ).toEqual({ targetWorkspaceId: AMBIENT, workspaceScoped: true });
+  });
+});
+
+describe("resolveMaterializedEntityWorkspaceId (I3 read-back)", () => {
+  const AMBIENT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const EXPLICIT = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+  it("present null wins over ambient (four-door bug)", () => {
+    expect(
+      resolveMaterializedEntityWorkspaceId(
+        { resolvedWorkspaceId: null, global: false },
+        AMBIENT
+      )
+    ).toBeNull();
+  });
+
+  it("persisted explicit target is read back verbatim", () => {
+    expect(
+      resolveMaterializedEntityWorkspaceId(
+        { resolvedWorkspaceId: EXPLICIT },
+        AMBIENT
+      )
+    ).toBe(EXPLICIT);
+  });
+
+  it("legacy (no key): non-global falls back to ambient; global → null", () => {
+    expect(
+      resolveMaterializedEntityWorkspaceId({ global: false }, AMBIENT)
+    ).toBe(AMBIENT);
+    expect(
+      resolveMaterializedEntityWorkspaceId({ global: true }, AMBIENT)
+    ).toBeNull();
   });
 });
 

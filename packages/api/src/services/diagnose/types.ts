@@ -123,6 +123,36 @@ export interface ObjectReport {
   why: Record<string, unknown> | null;
 }
 
+/**
+ * CAPABILITY-COMPOSITION mode — "what did this installed capability materialize,
+ * and is it healthy?". Returned when OBJECT mode resolves a real `capabilities`
+ * row (a container). FROZEN shape — a parallel frontend consumes it verbatim, so
+ * do NOT reshape it. Members are the capability's `member_of` graph (now complete
+ * with playbook/automation after the T5 wiring); `wired` flags a member missing
+ * its own edges (a verb with no parent tool, an archived flow); `health` rolls up
+ * run health over the materialized playbook/automation flows; `gaps` is the
+ * human-readable list of what is unwired.
+ */
+export interface CapabilityComposition {
+  id: string;
+  name: string;
+  approved: boolean;
+  provenance: { templateKey?: string; contentHash?: string } | null;
+  members: Array<{
+    kind: "tool" | "skill" | "playbook" | "automation";
+    id: string;
+    name: string;
+    wired: boolean;
+  }>;
+  health: {
+    status: "ok" | "degraded" | "failed" | "unknown";
+    failedRuns: number;
+    stuckRuns: number;
+    lastRunAt?: string;
+  };
+  gaps: string[];
+}
+
 /** Today's run-feed / per-run behaviour, preserved verbatim (back-compat). */
 export interface RunFeedReport {
   mode: "run-feed";
@@ -146,6 +176,7 @@ export type DiagnoseResult =
   | AgentScorecard
   | ClassReport
   | ObjectReport
+  | CapabilityComposition
   | RunFeedReport
   | RunDetailReport
   | RunGroupsReport

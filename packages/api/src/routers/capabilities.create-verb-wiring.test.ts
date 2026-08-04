@@ -77,6 +77,7 @@ vi.mock("./capability-containers.js", () => ({
 }));
 
 import { capabilitiesRouter } from "./capabilities.js";
+import { wireCreatedVerb } from "../services/capabilities/create-declarative-verb.js";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 
 /**
@@ -282,6 +283,111 @@ describe("capabilities.registry.createVerb — wiring", () => {
     expect(result.wiring.capabilityIds).toEqual([]);
     // The two edges that do NOT depend on container write access still landed.
     expect(result.wiring.requires).toBe(true);
+    expect(updates).toHaveLength(1);
+  });
+});
+
+/**
+ * The MCP door (`synap_create_verb`, adapter.ts) used to write NONE of these
+ * edges — its verbs were permanently orphaned. Both doors now delegate to the
+ * ONE shared `wireCreatedVerb`; this block exercises that exact function (the MCP
+ * door's wiring path is nothing but this call), so a regression in EITHER door's
+ * wiring — the tRPC door above OR the shared fn here — fails loudly instead of
+ * silently re-orphaning agent-authored verbs.
+ */
+describe("wireCreatedVerb — the shared wiring both doors call", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSetRequiredTools.mockResolvedValue({});
+    mockAddPart.mockResolvedValue({ ok: true });
+  });
+
+  const wireArgs = {
+    skillId: "skill-1",
+    parentToolId: "tool-1",
+    verbName: "linear_list_issues",
+    description: "List issues from Linear",
+    parameters: { limit: { type: "number" } },
+  };
+
+  /**
+   * `wireCreatedVerb` issues only TWO reads — the parent-tool read is the DOOR's
+   * job, done BEFORE the call — so this db serves [member_of links, catalogue],
+   * unlike the door-shaped `mockDatabase` (which leads with the parent tool).
+   */
+  function mockWiringDatabase(opts: {
+    containerLinks?: unknown[];
+    toolCatalogue?: unknown[];
+  }) {
+    const queue = [
+      opts.containerLinks ?? [],
+      opts.toolCatalogue ?? [{ capabilities: [] }],
+    ];
+    const updates: Record<string, unknown>[] = [];
+    const db: Record<string, unknown> = {
+      transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(db),
+      select: () => selectChain(queue.shift() ?? []),
+      update: () => {
+        const u: Record<string, unknown> = {
+          set: (values: Record<string, unknown>) => {
+            updates.push(values);
+            return u;
+          },
+          where: () => Promise.resolve(),
+        };
+        return u;
+      },
+    };
+    return { updates, db };
+  }
+
+  it("writes all three edges (requires + member_of + catalogue) through the existing doors", async () => {
+    const { db, updates } = mockWiringDatabase({
+      containerLinks: [{ capabilityId: "cap-1" }, { capabilityId: "cap-1" }],
+      toolCatalogue: [{ capabilities: [] }],
+    });
+    mockGetDb.mockResolvedValue(db);
+
+    const wiring = await wireCreatedVerb({} as never, wireArgs);
+
+    expect(mockSetRequiredTools).toHaveBeenCalledWith({
+      skillId: "skill-1",
+      toolIds: ["tool-1"],
+    });
+    expect(mockAddPart).toHaveBeenCalledTimes(1);
+    expect(mockAddPart).toHaveBeenCalledWith({
+      capabilityId: "cap-1",
+      partType: "skill",
+      partId: "skill-1",
+    });
+    const verbs = updates[0].capabilities as ToolVerbCatalogEntry[];
+    expect(verbs).toEqual([
+      {
+        id: "linear_list_issues",
+        label: "linear_list_issues",
+        kind: "read",
+        argsSchema: { limit: { type: "number" } },
+        govDefault: "propose",
+      },
+    ]);
+    expect(wiring).toEqual({
+      requires: true,
+      catalogued: true,
+      capabilityIds: ["cap-1"],
+    });
+  });
+
+  it("reports a refused container attach without throwing (the verb still exists)", async () => {
+    mockAddPart.mockRejectedValue(new Error("FORBIDDEN"));
+    const { db, updates } = mockWiringDatabase({
+      containerLinks: [{ capabilityId: "cap-1" }],
+    });
+    mockGetDb.mockResolvedValue(db);
+
+    const wiring = await wireCreatedVerb({} as never, wireArgs);
+
+    expect(wiring.requires).toBe(true);
+    expect(wiring.capabilityIds).toEqual([]);
     expect(updates).toHaveLength(1);
   });
 });

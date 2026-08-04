@@ -28,6 +28,7 @@ import {
   isNull,
   users,
   governanceRules,
+  filterUncoveredActions,
   type AgentMetadata,
 } from "@synap/database";
 import { randomUUID } from "crypto";
@@ -126,9 +127,15 @@ async function syncCaptureAgentGovernanceRules(agentId: string): Promise<void> {
       )
     );
   const existingPatterns = new Set(existing.map((r) => r.targetPattern));
-  const toInsert = CAPTURE_AGENT_DEF.autoApproveFor.filter(
-    (pattern) => !existingPatterns.has(pattern)
-  );
+  // DIFF-ONLY (Convergence Plan D2, same as backfill-governance-rules.ts): drop
+  // patterns already covered by the DEFAULT_AUTO_APPROVE code floor (rung 8).
+  // Seeding a floor-equal pattern restates rung 8 and changes no enforcement
+  // outcome — it is pure flood, the exact third-seeder bug this fixes. The
+  // capture agent's autoApproveFor is entirely floor-covered today, so this
+  // seeds ZERO genuine widenings.
+  const toInsert = filterUncoveredActions(
+    CAPTURE_AGENT_DEF.autoApproveFor
+  ).filter((pattern) => !existingPatterns.has(pattern));
   if (toInsert.length === 0) return;
 
   await db.insert(governanceRules).values(

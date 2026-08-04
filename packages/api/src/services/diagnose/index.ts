@@ -46,12 +46,14 @@ import {
 import { AGENT_PROPOSALS_PER_USER_PER_DAY } from "../../utils/permission-check.js";
 import { agentScorecard } from "./agent-scorecard.js";
 import { diagnoseGlobal } from "./global.js";
+import { buildCapabilityComposition } from "./capability-composition.js";
 import { resolveObjectKind } from "./resolve-object-kind.js";
 import type {
   DiagnoseClass,
   DiagnoseResult,
   ClassReport,
   ObjectReport,
+  CapabilityComposition,
   ObjectKind,
   FlowType,
 } from "./types.js";
@@ -176,7 +178,7 @@ async function diagnoseObject(
   userId: string,
   kind: ObjectKind,
   id: string
-): Promise<ObjectReport | { error: string }> {
+): Promise<ObjectReport | CapabilityComposition | { error: string }> {
   switch (kind) {
     // Runs already have the richest "why" — reuse today's getRun verbatim.
     case "automation_run":
@@ -317,6 +319,7 @@ async function diagnoseObject(
           description: capabilities.description,
           approved: capabilities.approved,
           workspaceId: capabilities.workspaceId,
+          metadata: capabilities.metadata,
         })
         .from(capabilities)
         .where(
@@ -327,19 +330,19 @@ async function diagnoseObject(
         )
         .limit(1);
       if (row) {
-        return {
-          mode: "object",
-          kind,
-          id,
-          summary: `Capability "${row.name}" is ${row.approved ? "approved" : "awaiting approval"}`,
-          state: {
+        // A real `capabilities` row is a CONTAINER — return its composition
+        // (members + health + gaps), the FROZEN shape a parallel frontend
+        // consumes. The generic object report is insufficient for a container:
+        // "what did this materialize, and is it healthy?" is the actual question.
+        return await buildCapabilityComposition({
+          userId,
+          capability: {
+            id: row.id,
             name: row.name,
-            description: row.description,
             approved: row.approved,
-            workspaceId: row.workspaceId,
+            metadata: row.metadata as Record<string, unknown> | null,
           },
-          why: null,
-        };
+        });
       }
 
       // Not a registered `capabilities` verb — resolveObjectKind also matches a
@@ -437,7 +440,11 @@ async function diagnoseObject(
     // correlationId). Re-read the SAME audit event to explain it.
     case "external_send": {
       const [row] = await db
-        .select({ type: events.type, data: events.data, timestamp: events.timestamp })
+        .select({
+          type: events.type,
+          data: events.data,
+          timestamp: events.timestamp,
+        })
         .from(events)
         .where(
           and(

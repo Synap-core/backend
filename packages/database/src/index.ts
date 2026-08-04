@@ -67,6 +67,7 @@ export * from "./utils/user-visible-where.js";
 export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
+export * from "./utils/floor-covered-actions.js";
 
 // Server-side vault encryption
 export {

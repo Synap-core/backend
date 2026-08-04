@@ -18,6 +18,7 @@ import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../file-upload.js";
 import { validateCreateVerbInput } from "./validate-create-verb.js";
+import { wireCreatedVerb } from "../../services/capabilities/create-declarative-verb.js";
 import {
   getObjectGraph,
   resolveByName,
@@ -3667,7 +3668,23 @@ export async function executeMCPToolViaHubProtocol(
         agentUserId: agentUserId ?? undefined,
       });
 
-      return ok(result);
+      // WIRING — the MCP door used to write NONE of the edges the tRPC door
+      // writes, so an agent-authored verb was born ORPHANED (invisible under its
+      // tool, on its card, in the Bricks registry). Same SHARED `wireCreatedVerb`
+      // both doors call now, on the same governed context used for the create.
+      // Only on `created`; a `proposed` skill row does not exist yet.
+      const wiring =
+        result.status === "created"
+          ? await wireCreatedVerb(skillsCtx as never, {
+              skillId: result.id,
+              parentToolId: existingTool.id,
+              verbName: input.verbName,
+              ...(input.description ? { description: input.description } : {}),
+              parameters: input.parameters,
+            })
+          : { requires: false, catalogued: false, capabilityIds: [] };
+
+      return ok({ ...result, wiring });
     }
 
     // ── Automations (WHEN-triggered flows) ────────────────────────────────────

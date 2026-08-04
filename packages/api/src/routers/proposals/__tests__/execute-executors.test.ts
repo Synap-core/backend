@@ -411,3 +411,95 @@ describe("(f) command/execute stays on the catch-all + materializer path", () =>
     expect(materializer).not.toContain('case "automation":');
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// (g) skill/create approval WIRES a declarative verb — the orphan-on-approval
+//     bug (M1). The create doors (`capabilities.createVerb` / MCP
+//     `synap_create_verb`) call wireCreatedVerb ONLY on their synchronous
+//     `created` branch; a governed create returns `proposed`, so the verb is
+//     materialized HERE by insertSkillGoverned. Without re-running the shared
+//     wiring the verb is born ORPHANED (no requires-edge / catalogue entry /
+//     container attach) — the T4 bug, re-opened on the approval path. This block
+//     had NO coverage, which is why the ripple survived review.
+//
+//     Static/AST style like the rest of this file (the api suite needs live
+//     Postgres for anything DB-touching): the AST assertion proves the CALL
+//     exists, not merely the words in a comment.
+// ───────────────────────────────────────────────────────────────────────────
+const SKILL_CREATE_BLOCK = (() => {
+  const start = EXECUTORS.indexOf('key: "skill/create"');
+  const end = EXECUTORS.indexOf('key: "automation/create"', start);
+  return EXECUTORS.slice(start, end);
+})();
+
+/** Does the executor registered under `executorKey` contain a call `fnName(...)`? */
+function executorCallsBareFn(executorKey: string, fnName: string): boolean {
+  const sf = ts.createSourceFile(
+    "approve-executors.ts",
+    EXECUTORS,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TS
+  );
+  let obj: ts.ObjectLiteralExpression | undefined;
+  const find = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const keyProp = node.properties.find(
+        (p) =>
+          ts.isPropertyAssignment(p) &&
+          ts.isIdentifier(p.name) &&
+          p.name.text === "key" &&
+          ts.isStringLiteral(p.initializer) &&
+          p.initializer.text === executorKey
+      );
+      if (keyProp) obj = node;
+    }
+    if (!obj) ts.forEachChild(node, find);
+  };
+  find(sf);
+  if (!obj) return false;
+  let calls = false;
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === fnName
+    ) {
+      calls = true;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(obj);
+  return calls;
+}
+
+describe("(g) skill/create approval wires a declarative verb (M1 orphan-on-approval)", () => {
+  it("calls wireCreatedVerb inside the skill/create executor (AST, not a comment)", () => {
+    expect(executorCallsBareFn("skill/create", "wireCreatedVerb")).toBe(true);
+  });
+
+  it("resolves the parent tool via the ONE shared predicate parentToolWhere", () => {
+    expect(SKILL_CREATE_BLOCK).toContain("parentToolWhere");
+  });
+
+  it("gates wiring on the declarative-verb signal (kind + providerSpec.tool)", () => {
+    expect(SKILL_CREATE_BLOCK).toContain('kind === "declarative"');
+    expect(SKILL_CREATE_BLOCK).toContain("providerSpec.tool");
+  });
+
+  it("materializes THEN wires — wireCreatedVerb runs after insertSkillGoverned", () => {
+    const materializeIdx = SKILL_CREATE_BLOCK.indexOf("insertSkillGoverned({");
+    const wireIdx = SKILL_CREATE_BLOCK.indexOf("wireCreatedVerb(");
+    expect(materializeIdx).toBeGreaterThan(-1);
+    expect(wireIdx).toBeGreaterThan(materializeIdx);
+  });
+
+  it("wiring is non-fatal — parent-tool resolve + wire sit in a try/catch", () => {
+    // A wiring failure must never break an approval whose skill row is committed.
+    const wireIdx = SKILL_CREATE_BLOCK.indexOf("wireCreatedVerb(");
+    const tryIdx = SKILL_CREATE_BLOCK.lastIndexOf("try {", wireIdx);
+    const catchIdx = SKILL_CREATE_BLOCK.indexOf("} catch", wireIdx);
+    expect(tryIdx).toBeGreaterThan(-1);
+    expect(catchIdx).toBeGreaterThan(wireIdx);
+  });
+});

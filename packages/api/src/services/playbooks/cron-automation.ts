@@ -23,6 +23,11 @@
 import {
   getDb,
   eq,
+  and,
+  isNull,
+  ne,
+  desc,
+  drizzleSql,
   automations,
   playbooks,
   type FlowDefinition,
@@ -37,6 +42,48 @@ import { flowValidationErrorMessage } from "../automations/validate-flow.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
+
+/** Postgres unique-violation SQLSTATE — raised by automations_workspace_name_active_uq (0230). */
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e.code === "23505" || e.cause?.code === "23505";
+}
+
+/**
+ * Load the surviving non-archived automation for (workspaceId, name).
+ * Mirrors automations.ts's private `findNonArchivedAutomationByName` and 0230's
+ * newest-wins keep rule: case-insensitive on name, NULL workspace = pod-wide
+ * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
+ * 23505 recovery converges on the same winner the migration's soft-archive kept.
+ *
+ * Exported so both automation-writing playbook doors that live OUTSIDE the
+ * automations router (this module + `playbooks.saveFlow`) recover 23505 the same
+ * way, without re-deriving the identity predicate a third time.
+ */
+export async function findNonArchivedAutomationByName(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string | null | undefined,
+  name: string
+): Promise<{ id: string } | null> {
+  const scope =
+    workspaceId == null || workspaceId === ""
+      ? isNull(automations.workspaceId)
+      : eq(automations.workspaceId, workspaceId);
+  const [row] = await db
+    .select({ id: automations.id })
+    .from(automations)
+    .where(
+      and(
+        scope,
+        drizzleSql`lower(${automations.name}) = lower(${name})`,
+        ne(automations.status, "archived")
+      )
+    )
+    .orderBy(desc(automations.updatedAt), desc(automations.id))
+    .limit(1);
+  return row ?? null;
+}
 
 /** Narrowed view of the JSONB `schedule` column. */
 function readSchedule(value: unknown): PlaybookSchedule | null {
@@ -281,32 +328,67 @@ export async function materializePlaybookCronAutomation(
   }
 
   // ── No backing row yet → create one and stamp the playbook. ─────────────────
-  const [created] = await db
-    .insert(automations)
-    .values({
-      workspaceId: playbook.workspaceId,
-      createdBy: ctx.userId,
-      name: `${playbook.name} (schedule)`,
-      description: `Scheduled run of playbook "${playbook.name}"`,
-      triggerType: "cron",
-      triggerConfig: { expression: schedule.cron },
-      flowDefinition,
-      status: "active",
-      nextRunAt,
-      metadata: { createdVia: "template", playbookId: playbook.id },
-    })
-    .returning({ id: automations.id });
+  // 23505 recovery against automations_workspace_name_active_uq (0230): teardown
+  // PAUSES the backing row (status='paused', NOT archived) and nulls
+  // flow_automation_id, so a disable→re-enable lands here with existingId=null and
+  // the INSERT collides with the still-non-archived paused row of the same
+  // `<name> (schedule)`. Re-arm that surviving row instead of 500-ing on the dup.
+  const insertName = `${playbook.name} (schedule)`;
+  let automationId: string | null = null;
+  try {
+    const [created] = await db
+      .insert(automations)
+      .values({
+        workspaceId: playbook.workspaceId,
+        createdBy: ctx.userId,
+        name: insertName,
+        description: `Scheduled run of playbook "${playbook.name}"`,
+        triggerType: "cron",
+        triggerConfig: { expression: schedule.cron },
+        flowDefinition,
+        status: "active",
+        nextRunAt,
+        metadata: { createdVia: "template", playbookId: playbook.id },
+      })
+      .returning({ id: automations.id });
+    automationId = created?.id ?? null;
+    if (automationId) {
+      logger.info(
+        { playbookId: playbook.id, automationId },
+        "Created backing cron automation"
+      );
+    }
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const winner = await findNonArchivedAutomationByName(
+      db,
+      playbook.workspaceId,
+      insertName
+    );
+    if (!winner) throw err;
+    await db
+      .update(automations)
+      .set({
+        triggerType: "cron",
+        triggerConfig: { expression: schedule.cron },
+        flowDefinition,
+        status: "active",
+        nextRunAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(automations.id, winner.id));
+    automationId = winner.id;
+    logger.info(
+      { playbookId: playbook.id, automationId },
+      "Re-armed existing backing cron automation (name collision on re-enable)"
+    );
+  }
 
-  const automationId = created?.id ?? null;
   if (automationId) {
     await db
       .update(playbooks)
       .set({ flowAutomationId: automationId, updatedAt: new Date() })
       .where(eq(playbooks.id, playbook.id));
-    logger.info(
-      { playbookId: playbook.id, automationId },
-      "Created backing cron automation"
-    );
   }
   return automationId;
 }

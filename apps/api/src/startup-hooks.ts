@@ -662,10 +662,14 @@ export async function runStartupHooks(): Promise<void> {
   try {
     const { backfillGovernanceRules } = await import("@synap/database");
     const result = await backfillGovernanceRules(db);
-    if (result.workspaceRulesInserted > 0 || result.agentRulesInserted > 0) {
+    if (
+      result.workspaceRulesInserted > 0 ||
+      result.agentRulesInserted > 0 ||
+      result.floorCoveredRevoked > 0
+    ) {
       logger.info(
         result,
-        "Backfilled governance_rules from existing autoApproveFor JSONB"
+        "Converged governance_rules from autoApproveFor JSONB (diff-only widenings seeded; floor-covered flood revoked)"
       );
     }
   } catch (err) {

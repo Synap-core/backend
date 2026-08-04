@@ -19,7 +19,14 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, isNull, inArray, desc } from "@synap/database";
-import { capabilities, tools, skills, links } from "@synap/database/schema";
+import {
+  capabilities,
+  tools,
+  skills,
+  playbooks,
+  automations,
+  links,
+} from "@synap/database/schema";
 import type { CapabilityRow } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -28,8 +35,18 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
-/** A part the user can attach to a capability. Built-ins are tools (kind=builtin). */
-const PART_TYPES = ["tool", "skill"] as const;
+/**
+ * A part the user can attach to a capability. Built-ins are tools (kind=builtin).
+ *
+ * `playbook`/`automation` are MATERIALIZED members — a capability's seeded
+ * process flows (`playbook|automation --member_of--> capability`, allowed by the
+ * link vocabulary). Without them the "installed capability → what it
+ * materialized" edge does not exist in DATA, so the composition map is
+ * underivable. The container's count/get read model still groups only
+ * tool/skill/builtin; a process member is a valid link that those counts simply
+ * don't surface (the map reads the links directly via `getLinksFor`).
+ */
+const PART_TYPES = ["tool", "skill", "playbook", "automation"] as const;
 
 /** Empty per-group counts. */
 function zeroCounts(): {
@@ -387,7 +404,14 @@ export const capabilityContainersRouter = router({
       // attaching pod-wide parts (workspaceId=null → owner-only write). The edge
       // is stamped with the CAPABILITY's workspaceId, not the part's; consumers
       // must always re-derive part visibility from the part row (get/list do).
-      const partTable = input.partType === "tool" ? tools : skills;
+      const partTable =
+        input.partType === "tool"
+          ? tools
+          : input.partType === "skill"
+            ? skills
+            : input.partType === "playbook"
+              ? playbooks
+              : automations;
       const [partRow] = await db
         .select({ id: partTable.id })
         .from(partTable)

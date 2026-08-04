@@ -9,6 +9,7 @@ import {
   PROPOSE_REASON,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
+import { filterUncoveredActions } from "./floor-covered-actions.js";
 
 /**
  * Shared agent-governance orchestration — the SINGLE SOURCE OF TRUTH for the
@@ -403,38 +404,51 @@ export async function syncAutoApproveRules(
         )
       : eq(governanceRules.scopeKind, "pod");
 
-  await db
-    .update(governanceRules)
-    .set({ revokedAt: new Date() })
-    .where(
-      and(
-        isNull(governanceRules.revokedAt),
-        isNull(governanceRules.sourceProposalId),
-        eq(governanceRules.targetKind, "action"),
-        principalCondition,
-        scopeCondition
-      )
+  // DIFF-ONLY (Convergence Plan D2): drop patterns already covered by the
+  // DEFAULT_AUTO_APPROVE code floor (rung 8) — mirroring them as rows would
+  // restate the floor and change no enforcement outcome (pure flood). Only
+  // GENUINE widenings become rows. The REPLACE revoke below still clears the
+  // prior mirrored set, so a PATCH that narrows to floor-only correctly leaves
+  // zero mirrored rows. (Genuine widenings: e.g. channel.create, relation.update,
+  // playbook.create, tool.create, skill.create, or a broad glob like "*".)
+  const uniqueActions = Array.from(new Set(filterUncoveredActions(actions)));
+
+  // ATOMICITY (S1): the REPLACE revoke + the re-insert must commit as ONE unit.
+  // Run as two separate awaits, a decision resolving in the gap between them
+  // would see zero active rules for the (principal, scope) tuple — a transient
+  // wrong verdict. A single transaction closes that window. REPLACE semantics
+  // and the diff-only filtering above are unchanged.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(governanceRules)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          isNull(governanceRules.revokedAt),
+          isNull(governanceRules.sourceProposalId),
+          eq(governanceRules.targetKind, "action"),
+          principalCondition,
+          scopeCondition
+        )
+      );
+
+    // Empty list legitimately clears the mirrored rules (revoke-only) — the
+    // transaction still commits the revoke above.
+    if (uniqueActions.length === 0) return;
+
+    await tx.insert(governanceRules).values(
+      uniqueActions.map((targetPattern) => ({
+        principalKind,
+        scopeKind,
+        ...(principalKind === "agent" && agentUserId ? { agentUserId } : {}),
+        ...(scopeKind === "workspace" && workspaceId ? { workspaceId } : {}),
+        targetKind: "action" as const,
+        targetPattern,
+        verdict: "auto" as const,
+        createdBy,
+      }))
     );
-
-  const uniqueActions = Array.from(
-    new Set(
-      actions.filter((a): a is string => typeof a === "string" && a.length > 0)
-    )
-  );
-  if (uniqueActions.length === 0) return;
-
-  await db.insert(governanceRules).values(
-    uniqueActions.map((targetPattern) => ({
-      principalKind,
-      scopeKind,
-      ...(principalKind === "agent" && agentUserId ? { agentUserId } : {}),
-      ...(scopeKind === "workspace" && workspaceId ? { workspaceId } : {}),
-      targetKind: "action" as const,
-      targetPattern,
-      verdict: "auto" as const,
-      createdBy,
-    }))
-  );
+  });
 }
 
 export async function resolveAgentGovernanceDecision(

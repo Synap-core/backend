@@ -225,13 +225,19 @@ export class NangoConnector implements SyncConnector {
     // Use Nango's own connect_link when available (self-hosted v0.70+ returns
     // the full Connect UI URL). Falls back to constructing it from configured
     // connectUrl + token for older versions.
+    // Nango's `connect_link` already carries the correct public Connect-UI host
+    // (NANGO_PUBLIC_CONNECT_URL — e.g. connect.synap.live, the standalone Connect
+    // UI, a DIFFERENT service+host from the API on nango.synap.live). Do NOT rewrite
+    // its origin to `this.connectUrl`/the API host: that dead-ends the OAuth flow by
+    // pointing the browser at the API instead of the Connect UI. The one thing the
+    // pod adds is the apiURL param (below).
     const base = inner.connect_link ?? `${this.connectUrl}?token=${token}`;
+    const connectLink = new URL(base);
     // KNOWN NANGO SELF-HOST BUG (#5432): the standalone Connect UI defaults its
     // apiURL to https://api.nango.dev (Nango Cloud) instead of our self-hosted
     // server — so it validates the session token against Cloud and shows
     // "session expired". The standalone UI reads an `apiURL` query param, so we
     // append our API host to point it at the right backend.
-    const connectLink = new URL(base);
     connectLink.searchParams.set("apiURL", this.host);
     return {
       sessionToken: token,

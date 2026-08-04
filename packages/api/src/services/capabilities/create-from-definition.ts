@@ -30,6 +30,7 @@ import {
   and,
   eq,
   isNull,
+  drizzleSql,
   vaultGrants,
   assertGrantScoped,
 } from "@synap/database";
@@ -264,6 +265,56 @@ export interface CreateCapabilityResult {
 }
 
 // ── The applier ───────────────────────────────────────────────────────────────
+
+/**
+ * Stamp `metadata.sourceCapability = <templateKey>` on a seeded playbook or
+ * automation — the back-pointer mirror of the `member_of` link and of the
+ * mcpServers stamp. Read-modify-write so other metadata keys survive; non-fatal
+ * (a stamp failure must never abort the apply). Two typed branches rather than a
+ * union-typed drizzle table (whose `.set()` param does not narrow cleanly).
+ */
+async function stampSourceCapability(
+  table: typeof playbooksTable | typeof automationsTable,
+  id: string,
+  capabilityKey: string
+): Promise<void> {
+  try {
+    if (table === playbooksTable) {
+      const [row] = await db
+        .select({ metadata: playbooksTable.metadata })
+        .from(playbooksTable)
+        .where(eq(playbooksTable.id, id))
+        .limit(1);
+      const existing = (row?.metadata ?? {}) as Record<string, unknown>;
+      await db
+        .update(playbooksTable)
+        .set({
+          metadata: { ...existing, sourceCapability: capabilityKey },
+          updatedAt: new Date(),
+        })
+        .where(eq(playbooksTable.id, id));
+    } else {
+      const [row] = await db
+        .select({ metadata: automationsTable.metadata })
+        .from(automationsTable)
+        .where(eq(automationsTable.id, id))
+        .limit(1);
+      const existing = (row?.metadata ?? {}) as Record<string, unknown>;
+      await db
+        .update(automationsTable)
+        .set({
+          metadata: { ...existing, sourceCapability: capabilityKey },
+          updatedAt: new Date(),
+        })
+        .where(eq(automationsTable.id, id));
+    }
+  } catch (err) {
+    logger.warn(
+      { err, id, capabilityKey },
+      "createFromDefinition: sourceCapability stamp failed (non-fatal)"
+    );
+  }
+}
 
 /**
  * Apply a `CapabilityDefinition` (or a templateKey-loaded one), instantiating
@@ -785,12 +836,16 @@ export async function createCapabilityFromDefinition(
       // capability half-materialized (an empty container, missing later items).
       try {
         // Idempotent reuse keyed on the stable natural key: name within scope.
+        // Case-INSENSITIVE on name to match the DB identity (0227's
+        // playbooks_workspace_name_active_uq is on lower(name)); a case-variant
+        // re-seed would otherwise miss here and only be caught by the governed
+        // create's 23505 recovery — mislabeling a pre-existing playbook "created".
         const [existing] = await db
           .select({ id: playbooksTable.id })
           .from(playbooksTable)
           .where(
             and(
-              eq(playbooksTable.name, p.name),
+              drizzleSql`lower(${playbooksTable.name}) = lower(${p.name})`,
               eq(playbooksTable.workspaceId, workspaceId)
             )
           )
@@ -864,12 +919,16 @@ export async function createCapabilityFromDefinition(
       try {
         // Idempotent reuse keyed on the stable natural key: name within scope
         // (workspace-scoped when a workspaceId is present, else pod-wide/NULL).
+        // Case-INSENSITIVE on name to match the DB identity (0230's
+        // automations_workspace_name_active_uq is on lower(name)); a case-variant
+        // re-seed would otherwise miss here and only be caught by the governed
+        // create's 23505 recovery — mislabeling a pre-existing automation "created".
         const [existing] = await db
           .select({ id: automationsTable.id })
           .from(automationsTable)
           .where(
             and(
-              eq(automationsTable.name, a.name),
+              drizzleSql`lower(${automationsTable.name}) = lower(${a.name})`,
               workspaceId
                 ? eq(automationsTable.workspaceId, workspaceId)
                 : isNull(automationsTable.workspaceId)
@@ -999,7 +1058,7 @@ export async function createCapabilityFromDefinition(
     // while the container has no members. So: keep going, count, and surface it.
     let partsNotAttached = 0;
     const attachPart = async (
-      partType: "tool" | "skill",
+      partType: "tool" | "skill" | "playbook" | "automation",
       partId: string
     ): Promise<void> => {
       try {
@@ -1021,6 +1080,22 @@ export async function createCapabilityFromDefinition(
     }
     for (const s of createdSkills) {
       if (s.skillId) await attachPart("skill", s.skillId);
+    }
+
+    // Seeded PROCESS flows become members too — this is THE edge that makes
+    // "installed capability → what it materialized" derivable from data. Each
+    // also gets a `metadata.sourceCapability` back-pointer (mirrors the mcpServers
+    // stamp above), so the flow knows which capability seeded it even without the
+    // link. Non-fatal + idempotent, like the tool/skill attach.
+    for (const p of createdPlaybooks) {
+      if (!p.playbookId) continue;
+      await attachPart("playbook", p.playbookId);
+      await stampSourceCapability(playbooksTable, p.playbookId, def.key);
+    }
+    for (const a of createdAutomations) {
+      if (!a.automationId) continue;
+      await attachPart("automation", a.automationId);
+      await stampSourceCapability(automationsTable, a.automationId, def.key);
     }
     container = { ...container, partsNotAttached };
 

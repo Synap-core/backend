@@ -30,7 +30,7 @@
 
 import { createHash } from "crypto";
 import { getDb, sql } from "../client-pg.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql as drizzleSql } from "drizzle-orm";
 import { automations, type FlowDefinition } from "../schema/automations.js";
 import {
   intelligenceCommands,
@@ -1016,32 +1016,47 @@ export async function reconcileWorkspaceFromDefinition(
       )
       .digest("hex");
 
+    // Match the 0230 unique index's CASE-FOLDING (`lower(name)`): an exact-case
+    // lookup would miss a case-variant ("Generate Report" vs "generate report")
+    // and then the insert below would hit the case-insensitive index and abort
+    // the whole reconcile on an unhandled 23505.
     const existing = await dbConn.query.automations.findFirst({
       where: and(
         eq(automations.workspaceId, workspaceId),
-        eq(automations.name, auto.name)
+        drizzleSql`lower(${automations.name}) = lower(${auto.name})`
       ),
       columns: { id: true, metadata: true, version: true },
     });
 
     if (!existing) {
-      report.automations.created.push(auto.name);
       if (!dryRun) {
-        await dbConn.insert(automations).values({
-          workspaceId,
-          createdBy: userId,
-          name: auto.name,
-          description: auto.description,
-          triggerType: auto.triggerType,
-          triggerConfig: auto.triggerConfig ?? {},
-          flowDefinition,
-          // `active` so the trigger door will actually run it (matches
-          // ensureReportAutomation); a manual automation with no schedule costs
-          // nothing until a human runs it. Honor a declared status if present.
-          status: auto.status ?? "active",
-          metadata: { seedVersion: defHash },
-        });
+        try {
+          await dbConn.insert(automations).values({
+            workspaceId,
+            createdBy: userId,
+            name: auto.name,
+            description: auto.description,
+            triggerType: auto.triggerType,
+            triggerConfig: auto.triggerConfig ?? {},
+            flowDefinition,
+            // `active` so the trigger door will actually run it (matches
+            // ensureReportAutomation); a manual automation with no schedule costs
+            // nothing until a human runs it. Honor a declared status if present.
+            status: auto.status ?? "active",
+            metadata: { seedVersion: defHash },
+          });
+        } catch (e) {
+          // Case-insensitive 0230 index — a case-variant already exists (a lost
+          // race, or an active pre-0230 dup). Reconcile's job is "ensure it
+          // exists", so treat as present rather than aborting the reconcile.
+          if ((e as { code?: string } | null)?.code === "23505") {
+            report.automations.skipped.push(auto.name);
+            continue;
+          }
+          throw e;
+        }
       }
+      report.automations.created.push(auto.name);
       continue;
     }
 

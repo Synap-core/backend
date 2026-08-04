@@ -962,8 +962,20 @@ export function registerCaptureRoutes(app: HubHono): void {
     const content = typeof body.content === "string" ? body.content : undefined;
     const description =
       typeof body.description === "string" ? body.description : undefined;
-    const source =
-      typeof body.source === "string" ? body.source : ("cli" as const);
+    // `source` arrives as a raw multipart field and is validated downstream by
+    // `entities.createEntity`'s zod enum. Casting it through as "cli" turned a
+    // CLIENT input fault into a 500 (the zod throw surfaces in the generic catch
+    // below). Allowlist it here and answer 400, matching /capture/graph.
+    const rawSource = typeof body.source === "string" ? body.source : "cli";
+    if (!GRAPH_WRITE_SOURCES.has(rawSource as GraphWriteSource)) {
+      return c.json(
+        {
+          error: `Unsupported source '${rawSource}'. Expected one of: ${[...GRAPH_WRITE_SOURCES].join(", ")}`,
+        },
+        400
+      );
+    }
+    const source = rawSource as GraphWriteSource;
     let properties: Record<string, unknown> = {};
     if (typeof body.properties === "string" && body.properties) {
       try {
@@ -1020,7 +1032,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         ...(content ? { content } : {}),
         properties,
         ...(workspaceId ? { workspaceId } : {}),
-        ...(source ? { source: source as "cli" } : {}),
+        source,
       });
 
       const entityId = created.id as string;

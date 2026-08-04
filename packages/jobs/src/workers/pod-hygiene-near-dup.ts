@@ -360,11 +360,13 @@ export function findNearDupPairs(sample: NearDupEntity[]): NearDupPair[] {
   // Catches 0scr ↔ Oscar when the handle is stored on properties.discord-handle
   // or aliases[]. Same workspace only. Never auto-merge — proposal only.
   for (let i = 0; i < sample.length; i++) {
+    // `a` and its handle tokens are invariant across the whole inner loop —
+    // hoist them so collectHandleTokens(a) runs once per i, not once per (i,j).
+    const a = sample[i]!;
+    const aTok = collectHandleTokens(a);
     for (let j = i + 1; j < sample.length; j++) {
-      const a = sample[i]!;
       const b = sample[j]!;
       if (!sameWorkspace(a.workspaceId, b.workspaceId)) continue;
-      const aTok = collectHandleTokens(a);
       const bTok = collectHandleTokens(b);
       const overlap: string[] = [];
       for (const t of aTok) {

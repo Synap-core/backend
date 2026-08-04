@@ -69,7 +69,10 @@ import {
   resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
-import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
+import {
+  materializePlaybookCronAutomation,
+  findNonArchivedAutomationByName,
+} from "../services/playbooks/cron-automation.js";
 import { findUnresolvedGoalReferences } from "../services/playbooks/goal-references.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import {
@@ -2097,22 +2100,42 @@ export const playbooksRouter = router({
       }
 
       // 4b. No automation yet → create one, stamp playbook, write link edge.
-      const [created] = await database
-        .insert(automations)
-        .values({
-          workspaceId: existing.workspaceId,
-          createdBy: input.agentUserId ?? ctx.userId,
-          name: existing.name,
-          description: existing.description ?? null,
-          triggerType: "manual",
-          triggerConfig: {},
-          flowDefinition: flowDef,
-          status: "draft",
-          metadata: { createdVia: "manual", playbookId: existing.id },
-        })
-        .returning({ id: automations.id });
-
-      const automationId = (created as Pick<Automation, "id">).id;
+      // 23505 recovery against automations_workspace_name_active_uq (0230): a
+      // non-archived automation of this name may already exist (the playbook's
+      // backing row survived a flow_automation_id reset). Adopt it and persist
+      // THIS flow onto it — saveFlow's whole contract — rather than 500-ing or
+      // cloning. Case-insensitive identity handled by findNonArchivedAutomationByName.
+      let automationId: string;
+      try {
+        const [created] = await database
+          .insert(automations)
+          .values({
+            workspaceId: existing.workspaceId,
+            createdBy: input.agentUserId ?? ctx.userId,
+            name: existing.name,
+            description: existing.description ?? null,
+            triggerType: "manual",
+            triggerConfig: {},
+            flowDefinition: flowDef,
+            status: "draft",
+            metadata: { createdVia: "manual", playbookId: existing.id },
+          })
+          .returning({ id: automations.id });
+        automationId = (created as Pick<Automation, "id">).id;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        const winner = await findNonArchivedAutomationByName(
+          database,
+          existing.workspaceId,
+          existing.name
+        );
+        if (!winner) throw err;
+        await database
+          .update(automations)
+          .set({ flowDefinition: flowDef, updatedAt: new Date() })
+          .where(eq(automations.id, winner.id));
+        automationId = winner.id;
+      }
 
       // Stamp the playbook with the new automation id.
       await database

@@ -32,18 +32,24 @@ published to one catalog and installed through shared substrate — not hardcode
 the pod backend. The marketplace is that **package layer**, and the catalog
 (`synap_packages`) is **kind-agnostic** — one door serves every kind:
 
-| Kind                      | Configures                                                       | Tier                                       |
-| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------ |
-| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ first-class                             |
-| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ first-class                             |
-| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ first-class                             |
-| **view**                  | a saved view/layout                                              | 🟡 publish yes; standalone-install pending |
-| **skill**                 | agent know-how                                                   | 🟡 embedded in a capability today          |
-| **workflow / automation** | a WHEN→ACTION flow                                               | 🟡 publish yes; standalone-install pending |
+| Kind                      | Configures                                                       | Standalone install (via `applyMarketInstall`)      |
+| ------------------------- | ---------------------------------------------------------------- | -------------------------------------------------- |
+| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ `createWorkspaceFromDefinitionIdempotent`       |
+| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ `createCapabilityFromDefinition`                |
+| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ `installCellFromDefinition` (needs a cache row) |
+| **view**                  | a saved view/layout                                              | ✅ `viewsRouter.create` (needs a `workspaceId`)    |
+| **skill**                 | agent know-how                                                   | ✅ `skillsRouter.create` (pod-wide if no ws)       |
+| **workflow / automation** | a WHEN→ACTION flow                                               | ✅ `automationsRouter.create` into acting ws       |
 
-First-class = author → publish → install standalone → compose. 🟡 = accepted +
-composable, but the standalone _install_ applier isn't wired yet (the system is
-honest about this — it accepts the kind rather than faking install).
+**All six kinds install standalone today** through the ONE apply core
+`applyMarketInstall` (`services/capabilities/marketplace-install.ts`) — the same
+governed door `market.install` and the `capability.install` proposal executor share,
+each reusing the kind's _governed_ router caller (zero duplicated insert logic). The
+remaining gaps are NOT install: (1) **private-package sync is unauthenticated**, so a
+private package can't reach a pod yet (see `governance-and-catalog.md` / RC4); (2)
+standalone **view / skill / automation stamp no source-link**, so they don't self-heal
+via reconcile the way workspace/capability do. (Subscription-`tier` gating is a
+separate axis — see `governance-and-catalog.md`.)
 
 It lives in the Control Plane (CP) catalog and is discoverable and installable from
 any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub REST
@@ -386,3 +392,10 @@ unlocks; a slug missing from that list but present in the browse catalog is
 locked for them — `market.install` pre-checks this and fails before touching
 governance, so surface the tier requirement rather than treating it as a
 generic install error.
+
+The **server pre-check is the authoritative floor** (`assertPackageTierAccess`,
+wired at every install site). The browser UI is **display-only**: it threads
+`requiredTier` through to a "requires <tier>" badge but does NOT hard-block, and
+its lock/upgrade CTA only engages once a host wires a billing destination — so
+don't add a UI-side gate expecting it to enforce anything, and don't rebuild the
+badge thread (it exists). Full current-state: repo `TEMPLATE-DEV-GUIDE.md`.
