@@ -14,6 +14,7 @@ import {
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
+import { ensureSessionChannel } from "./ensure-session-channel.js";
 
 /** RFC-4122 UUID shape — templateId may be a legacy free-text template name. */
 const UUID_RE =
@@ -188,18 +189,36 @@ export async function createFocusSession(
     return session;
   });
 
+  // Gate 2: always mint a work channel when the caller did not supply one
+  // (parity with runPlaybook). Re-load so the returned row includes channelId.
+  let sessionOut = created;
+  if (!created.channelId) {
+    const channelId = await ensureSessionChannel({
+      sessionId: created.id,
+      userId,
+      workspaceId: created.workspaceId,
+      goal: created.goal,
+    });
+    if (channelId) {
+      const reloaded = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, created.id),
+      });
+      if (reloaded) sessionOut = reloaded;
+    }
+  }
+
   emitHubRealtimeEvent({
     eventType: "focus_session.create.completed",
-    subjectId: created.id,
+    subjectId: sessionOut.id,
     userId,
     data: {
-      id: created.id,
-      workspaceId: created.workspaceId,
-      status: created.status,
-      goal: created.goal,
-      progress: created.progress,
+      id: sessionOut.id,
+      workspaceId: sessionOut.workspaceId,
+      status: sessionOut.status,
+      goal: sessionOut.goal,
+      progress: sessionOut.progress,
     },
   });
 
-  return { status: "created", session: created };
+  return { status: "created", session: sessionOut };
 }

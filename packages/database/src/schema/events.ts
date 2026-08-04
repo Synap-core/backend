@@ -11,6 +11,7 @@
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -88,6 +89,17 @@ export const events = pgTable(
     // events leave it NULL. Readers COALESCE(workspace_id, data->>'workspaceId')
     // so un-backfilled historical rows still resolve.
     workspaceId: text("workspace_id"),
+
+    // ─── Governance linkage (0231) ──────────────────────────────────────────
+    // The proposal an AGENT write went through — auto-approved (an
+    // AUTO_APPROVED `proposals` row) OR pending→approved. NULL when the write
+    // executed with NO proposal at all. So an "ungoverned AI write" (an agent
+    // write that never touched governance) is:
+    //   is_agent = true AND proposal_id IS NULL   (on the `.completed` event)
+    // No FK — events are append-only immutable history and a proposal row is
+    // deletable (a FK could block an append or a proposal delete). Plain uuid,
+    // mirroring correlation_id / agent_user_id staying FK-free.
+    proposalId: uuid("proposal_id"),
   },
   (table) => ({
     // ✨ COMPOSITE PK: Required for TimescaleDB hypertable with primary key
@@ -111,6 +123,13 @@ export const events = pgTable(
 
     // INDEX: workspace-scoped event lookup (0223)
     workspaceIdIdx: index("idx_events_workspace_id").on(table.workspaceId),
+
+    // INDEX: ungoverned-AI-write blind spot (0231) — "agent writes that never
+    // went through a proposal". Partial (is_agent = true AND proposal_id IS
+    // NULL) so only un-stamped agent rows are indexed.
+    ungovernedAgentIdx: index("idx_events_ungoverned_agent")
+      .on(table.agentUserId, table.timestamp)
+      .where(sql`${table.isAgent} = true AND ${table.proposalId} IS NULL`),
   })
 );
 

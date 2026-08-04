@@ -31,6 +31,14 @@ export interface AuditLogOpts {
    * force the flag independently of an agent-user row (legacy AI-source paths).
    */
   isAgent?: boolean;
+  /**
+   * The proposal an AGENT write went through — auto-approved (an AUTO_APPROVED
+   * `proposals` row) OR pending→approved. Stamped onto the event row's
+   * `proposal_id` column (0231) so the "ungoverned AI write" blind spot
+   * (`is_agent = true AND proposal_id IS NULL`) becomes queryable. Absent → the
+   * write executed with no proposal (a direct/ungoverned write, or a human write).
+   */
+  proposalId?: string | null;
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -102,6 +110,9 @@ export async function auditLog(
       // agent-user drove the write; both stay null for owner writes.
       isAgent: opts.isAgent ?? (opts.agentUserId ? true : undefined),
       agentUserId: opts.agentUserId ?? undefined,
+      // Governance linkage (0231): the proposal this agent write went through.
+      // Null for a direct/ungoverned write or any human write.
+      proposalId: opts.proposalId ?? undefined,
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
         "api" | "automation" | "sync" | "migration" | "system" | "intelligence",

@@ -431,13 +431,21 @@ async function ownsFocusSession(
  * answer and the writes belonging to the just-opened session are exactly the
  * ones that would fail to group. The query is a single indexed lookup.
  */
-export async function resolveAmbientSession(
-  userId: string
-): Promise<string | undefined> {
-  let sessionId: string | undefined;
+/**
+ * Ambient open sessions for a user (newest first). Used for single-session
+ * attach and multi-session ambiguity guardrails.
+ */
+export async function listOpenFocusSessions(
+  userId: string,
+  limit = 5
+): Promise<Array<{ id: string; goal: string | null; startedAt: Date | null }>> {
   try {
-    const [row] = await db
-      .select({ id: focusSessions.id })
+    return await db
+      .select({
+        id: focusSessions.id,
+        goal: focusSessions.goal,
+        startedAt: focusSessions.startedAt,
+      })
       .from(focusSessions)
       .where(
         and(
@@ -446,16 +454,35 @@ export async function resolveAmbientSession(
         )
       )
       .orderBy(desc(focusSessions.startedAt))
-      .limit(1);
-    sessionId = row?.id;
+      .limit(limit);
   } catch (err) {
-    logger.warn(
-      { err, userId },
-      "mcp: ambient focus-session derivation failed"
-    );
-    sessionId = undefined;
+    logger.warn({ err, userId }, "mcp: list open focus sessions failed");
+    return [];
   }
-  return sessionId;
+}
+
+/**
+ * Most recent open session — only when **exactly one** open session exists.
+ * Multiple open sessions refuse silent ambient attach (mis-attribution risk);
+ * caller must pass sessionId or set ?sessionId= on the MCP URL.
+ */
+export async function resolveAmbientSession(
+  userId: string
+): Promise<string | undefined> {
+  const open = await listOpenFocusSessions(userId, 2);
+  if (open.length === 0) return undefined;
+  if (open.length > 1) {
+    logger.info(
+      {
+        userId,
+        openCount: open.length,
+        sessionIds: open.map((s) => s.id),
+      },
+      "mcp: multiple open focus sessions — refusing ambient attach; pass sessionId explicitly"
+    );
+    return undefined;
+  }
+  return open[0]?.id;
 }
 
 /**
@@ -969,6 +996,11 @@ export async function executeMCPToolViaHubProtocol(
         // model-supplied `args.userId` would list a foreign user's proposals.
         createdBy: userId,
         workspaceId: args.workspaceId as string | undefined,
+        // Gate 2: session proposal pack filter
+        sessionId:
+          typeof args.sessionId === "string" && args.sessionId.trim() !== ""
+            ? args.sessionId
+            : undefined,
         status: args.status as string | undefined,
         limit: (args.limit as number) || undefined,
       });
@@ -2103,7 +2135,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const { completeFocusSession } =
         await import("../../services/focus-sessions/complete-session.js");
-      const session = await completeFocusSession({
+      const result = await completeFocusSession({
         sessionId: args.sessionId as string,
         userId,
         agentUserId,
@@ -2111,10 +2143,21 @@ export async function executeMCPToolViaHubProtocol(
         verificationReport: args.verificationReport as
           Record<string, unknown> | undefined,
       });
-      if (!session) {
+      if (!result) {
         return ok({ error: `Focus session ${args.sessionId} not found` });
       }
-      return ok({ status: "closed", session });
+      // Gate 2: proposal pack on complete — one review unit for the session.
+      return ok({
+        status: "closed",
+        session: result.session,
+        pendingProposals: result.pendingProposals,
+        counts: result.counts,
+        warnings: result.warnings,
+        note:
+          result.counts.pending > 0
+            ? `Review pack: ${result.counts.pending} pending proposal(s) for this session — use synap_list_proposals with sessionId, or open the session room.`
+            : "Session closed with no pending proposals in the pack.",
+      });
     }
 
     // Re-find a session. Without these an agent that lost the id returned by
@@ -2129,6 +2172,20 @@ export async function executeMCPToolViaHubProtocol(
           ? args.sessionId
           : await resolveAmbientSession(userId);
       if (!wantedId) {
+        const open = await listOpenFocusSessions(userId, 5);
+        if (open.length > 1) {
+          return ok({
+            session: null,
+            multiSession: true,
+            openSessions: open.map((s) => ({
+              id: s.id,
+              goal: s.goal,
+              startedAt: s.startedAt,
+            })),
+            message:
+              "Multiple open focus sessions — pass sessionId explicitly (or set ?sessionId= on the MCP URL). Ambient attach is disabled to prevent mis-attribution.",
+          });
+        }
         return ok({
           session: null,
           message:

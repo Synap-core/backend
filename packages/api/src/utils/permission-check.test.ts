@@ -693,8 +693,13 @@ describe("checkPermissionOrPropose — session force-propose governance", () => 
       sessionId: "sess-plain",
     });
 
-    // entity.update ∈ DEFAULT_AUTO_APPROVE → granted, NOT a proposal.
-    expect(result).toEqual({ granted: true });
+    // entity.update ∈ DEFAULT_AUTO_APPROVE → granted, NOT a proposal. The
+    // auto-approve path now also threads back the receipt id (events.proposal_id
+    // stamp, 0231) — assert grant + a receipt id, not exact-equality.
+    expect(result).toMatchObject({ granted: true });
+    expect(
+      (result as { autoApprovedProposalId?: string }).autoApprovedProposalId
+    ).toEqual(expect.any(String));
   });
 
   it("stamped session forces the SAME write to a proposal", async () => {

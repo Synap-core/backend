@@ -250,6 +250,10 @@ CREATE TABLE IF NOT EXISTS "events" (
   "finish_reason"  text,
   -- Workspace context as a first-class column (0223). Nullable, no default.
   "workspace_id"   text,
+  -- Governance linkage (0231): the proposal an AGENT write went through
+  -- (auto-approved OR pending→approved). NULL = the write executed with no
+  -- proposal. No FK — events are immutable history, proposals are deletable.
+  "proposal_id"    uuid,
   PRIMARY KEY ("id", "timestamp")
 );
 -- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
@@ -272,6 +276,8 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "run_status"    text;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "finish_reason" text;
 -- Workspace context as a first-class column (0223).
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "workspace_id"  text;
+-- Governance linkage as a first-class column (0231).
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "proposal_id"   uuid;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -297,6 +303,12 @@ CREATE INDEX IF NOT EXISTS "events_agent_user_id_idx"
 CREATE INDEX IF NOT EXISTS "idx_events_workspace_id"
   ON "events" ("workspace_id")
   WHERE "workspace_id" IS NOT NULL;
+
+-- Ungoverned-AI-write blind spot (migration 0231): "agent writes that never
+-- went through a proposal". Partial so only un-stamped agent rows are indexed.
+CREATE INDEX IF NOT EXISTS "idx_events_ungoverned_agent"
+  ON "events" ("agent_user_id", "timestamp")
+  WHERE "is_agent" = true AND "proposal_id" IS NULL;
 
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 

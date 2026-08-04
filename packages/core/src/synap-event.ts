@@ -82,6 +82,12 @@ export const SynapEventSchema = z.object({
   // EventRepository.append(). Optional so every existing event still validates
   // unchanged; `text` (never uuid-validated) to match proposals.workspaceId.
   workspaceId: z.string().optional(),
+
+  // ── Governance linkage (persisted into the REAL events.proposal_id column) ──
+  // The proposal an AGENT write went through — auto-approved OR pending→approved.
+  // Absent/undefined when the write executed with no proposal. Optional so every
+  // existing event still validates unchanged.
+  proposalId: z.string().uuid().optional(),
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;
@@ -352,6 +358,8 @@ export function createSynapEvent(input: {
   toolCount?: number;
   runStatus?: string;
   finishReason?: string;
+  /** Governance linkage → real events.proposal_id column (0231). */
+  proposalId?: string;
 }): SynapEvent {
   // Validate event data against type-specific schema if schema exists
   let validatedData: Record<string, unknown> = input.data;
@@ -395,6 +403,7 @@ export function createSynapEvent(input: {
     toolCount: input.toolCount,
     runStatus: input.runStatus,
     finishReason: input.finishReason,
+    proposalId: input.proposalId,
   });
 }
 

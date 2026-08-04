@@ -356,6 +356,45 @@ export const NotificationService = {
   },
 
   /**
+   * Proposal-created notification for a POD-WIDE proposal (workspaceId === null).
+   * A pod-wide proposal has no workspace membership to notify, so its governance
+   * attention is routed to the pod owner + pod admins (resolved by the caller).
+   * Same type/shape/category ("proposal.created", governance) as
+   * `fromProposal` — only the recipients and the null workspace differ. One
+   * notification per recipient; the caller passes an already-deduped id list so
+   * an owner who is also an admin is not notified twice. `create()` never throws
+   * (logs non-fatally), so a per-recipient failure cannot abort the rest.
+   */
+  async fromPodWideProposal(opts: {
+    proposalId: string;
+    recipientUserIds: string[];
+    proposalType: string;
+    description?: string;
+    agentUserId?: string;
+  }): Promise<void> {
+    for (const userId of opts.recipientUserIds) {
+      await NotificationService.create({
+        type: "proposal.created",
+        workspaceId: null,
+        userId,
+        sourceType: "proposal",
+        sourceId: opts.proposalId,
+        data: {
+          proposalType: opts.proposalType,
+          description: opts.description ?? opts.proposalType,
+          agentUserId: opts.agentUserId ?? "",
+        },
+        // Collapse an agent's pod-wide proposals in the bell, mirroring the
+        // workspace path's `${workspaceId}:proposal.created:${agentUserId}` key
+        // (workspaceId is null here, so the pod is the collapse scope).
+        groupKey: opts.agentUserId
+          ? `pod:proposal.created:${opts.agentUserId}`
+          : undefined,
+      });
+    }
+  },
+
+  /**
    * Convenience wrapper for skill trigger events.
    */
   async fromSkillTrigger(opts: {

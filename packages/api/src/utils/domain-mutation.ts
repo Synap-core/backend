@@ -49,6 +49,14 @@ export interface DomainMutationOpts {
   agentUserId?: string | null;
   /** Force the agent flag independently of an agent-user row (legacy AI paths). */
   isAgent?: boolean;
+  /**
+   * The proposal an AGENT write went through (auto-approved OR pending→approved)
+   * → stamped onto the event's `proposal_id` column (0231). Absent → the write
+   * executed with no proposal, so the `.completed` event reads as an "ungoverned
+   * AI write" (`is_agent = true AND proposal_id IS NULL`). Only the log event
+   * carries it — the side-effect fan-out is unchanged.
+   */
+  proposalId?: string | null;
   correlationId?: string;
   source?: string;
   /** Focus session that produced this mutation → automation matcher (+ F2 chain floor). */
@@ -82,6 +90,7 @@ export async function recordDomainMutation(
     userId: opts.userId,
     agentUserId: opts.agentUserId,
     isAgent: opts.isAgent,
+    proposalId: opts.proposalId,
     workspaceId: opts.workspaceId,
     correlationId: opts.correlationId,
     source: opts.source,

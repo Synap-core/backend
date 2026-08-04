@@ -25,18 +25,23 @@ const {
   mockDbInsert,
   mockDbSelect,
   mockValues,
+  mockReturning,
   mockGov,
   mockVerifyPermission,
 } = vi.hoisted(() => ({
   mockDbInsert: vi.fn(),
   mockDbSelect: vi.fn(),
   mockValues: vi.fn(),
+  // The auto-approve receipt insert now `.returning({ id })`s so its id can be
+  // stamped onto the write's `.completed` event (events.proposal_id, 0231).
+  mockReturning: vi.fn(),
   mockGov: vi.fn(),
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
 vi.mock("@synap/database", async () => {
-  mockValues.mockResolvedValue(undefined);
+  mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
+  mockValues.mockReturnValue({ returning: mockReturning });
   mockDbInsert.mockImplementation(() => ({ values: mockValues }));
   mockDbSelect.mockImplementation(() => {
     const b: Record<string, unknown> = {
@@ -115,7 +120,8 @@ const OPTS = {
 describe("checkPermissionOrPropose — auto-approve receipt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockValues.mockResolvedValue(undefined);
+    mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
+    mockValues.mockReturnValue({ returning: mockReturning });
     mockDbInsert.mockImplementation(() => ({ values: mockValues }));
     mockVerifyPermission.mockResolvedValue({ allowed: true });
     mockGov.mockResolvedValue({
@@ -127,7 +133,12 @@ describe("checkPermissionOrPropose — auto-approve receipt", () => {
   it("writes provenance as indexed COLUMNS, not only inside data", async () => {
     const result = await checkPermissionOrPropose(OPTS);
 
-    expect(result).toEqual({ granted: true });
+    // The receipt id is threaded back so the caller can stamp it onto the
+    // write's `.completed` event (events.proposal_id, 0231).
+    expect(result).toEqual({
+      granted: true,
+      autoApprovedProposalId: "receipt-1",
+    });
     expect(mockValues).toHaveBeenCalledTimes(1);
 
     const row = mockValues.mock.calls[0]![0] as Record<string, unknown>;
@@ -169,12 +180,14 @@ describe("checkPermissionOrPropose — auto-approve receipt", () => {
 
   it("AWAITS the receipt — it has landed before the grant is returned", async () => {
     let landed = false;
-    mockValues.mockImplementation(
+    // The awaited DB op is now `.values(...).returning(...)` — assert the timing
+    // on the returning() promise (the value the code awaits).
+    mockReturning.mockImplementation(
       () =>
-        new Promise<void>((resolve) =>
+        new Promise((resolve) =>
           setTimeout(() => {
             landed = true;
-            resolve();
+            resolve([{ id: "receipt-1" }]);
           }, 5)
         )
     );
@@ -183,12 +196,16 @@ describe("checkPermissionOrPropose — auto-approve receipt", () => {
 
     // Fire-and-forget would return granted with `landed` still false.
     expect(landed).toBe(true);
-    expect(result).toEqual({ granted: true });
+    expect(result).toEqual({
+      granted: true,
+      autoApprovedProposalId: "receipt-1",
+    });
   });
 
   it("still GRANTS the write when the receipt insert throws (audit failure ≠ user-write failure)", async () => {
-    mockValues.mockRejectedValue(new Error("receipt insert exploded"));
+    mockReturning.mockRejectedValue(new Error("receipt insert exploded"));
 
+    // Grant stands; the receipt id is simply absent (no proposal_id to stamp).
     await expect(checkPermissionOrPropose(OPTS)).resolves.toEqual({
       granted: true,
     });

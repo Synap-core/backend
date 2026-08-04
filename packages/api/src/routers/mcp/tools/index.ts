@@ -218,7 +218,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List proposals — the audit trail of AI writes. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected', 'auto_approved' (the write EXECUTED immediately under governance and filed this row as its receipt — use this to show the user what you did without asking), 'reverted', 'approval_failed', 'withdrawn'. Use to show the user their pending changes, or to account for the ones that went through automatically. userId is auto-injected from the API key if not provided.",
+          "List proposals — the audit trail of AI writes. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected', 'auto_approved' (the write EXECUTED immediately under governance and filed this row as its receipt — use this to show the user what you did without asking), 'reverted', 'approval_failed', 'withdrawn'. Pass sessionId to load the **session review pack** (proposals for one focus session). userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
@@ -228,6 +228,11 @@ export const tools = {
                 "User ID (optional, auto-injected from API key if not provided)",
             },
             workspaceId: { type: "string" },
+            sessionId: {
+              type: "string",
+              description:
+                "Focus session UUID — list only proposals attributed to this session (the review pack).",
+            },
             status: {
               type: "string",
               enum: [
@@ -1223,7 +1228,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Close a focus session with a summary and optional reports; also closes any running playbook_run.",
+          "Close a focus session with a summary and optional reports; also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1253,14 +1258,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Re-find a focus session — read-only. Call it with NO arguments to get YOUR CURRENT session (the most recent non-closed one) when you've lost the id that synap_start_session returned; pass sessionId to fetch a specific one. Returns the session with its goal, status, progress, stage and expectedOutputs, or { session: null } when there is none. Always yours: sessions are scoped to the calling user.",
+          "Re-find a focus session — read-only. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: {
               type: "string",
               description:
-                "Optional focus session UUID. Omit to get your current (most recent non-closed) session.",
+                "Optional focus session UUID. Omit only when exactly one session is open; if multiple are open you must pass sessionId.",
             },
           },
           required: [],

@@ -119,7 +119,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List proposals — the audit trail of AI writes. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected', 'auto_approved' (the write EXECUTED immediately under governance and filed this row as its receipt — use this to show the user what you did without asking), 'reverted', 'approval_failed', 'withdrawn'. Use to show the user their pending changes, or to account for the ones that went through automatically. userId is auto-injected from the API key if not provided.",
+      "description": "List proposals — the audit trail of AI writes. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected', 'auto_approved' (the write EXECUTED immediately under governance and filed this row as its receipt — use this to show the user what you did without asking), 'reverted', 'approval_failed', 'withdrawn'. Pass sessionId to load the **session review pack** (proposals for one focus session). userId is auto-injected from the API key if not provided.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -129,6 +129,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Focus session UUID — list only proposals attributed to this session (the review pack)."
           },
           "status": {
             "type": "string",
@@ -410,7 +414,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates.",
+      "description": "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -435,6 +439,10 @@
           "projectId": {
             "type": "string",
             "description": "Optional project id to file the created entity into — stamps belongs_to_project membership."
+          },
+          "forceCreate": {
+            "type": "boolean",
+            "description": "Bypass the weak same-name gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does NOT bypass strong-signal auto-merge (email/phone/url). Default false."
           },
           "facets": {
             "type": "array",
@@ -755,6 +763,10 @@
             "type": "string",
             "description": "Optional icon hint for the role."
           },
+          "roleCategory": {
+            "type": "string",
+            "description": "Optional grouping key so an automation can select entities wearing ANY role in this category via entity.query { roleCategory } — e.g. tag every supply role 'provider'. Future roles tagged the same category qualify with no query change."
+          },
           "properties": {
             "type": "object",
             "description": "Optional default property values for facets of this role."
@@ -1067,7 +1079,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Close a focus session with a summary and optional reports; also closes any running playbook_run.",
+      "description": "Close a focus session with a summary and optional reports; also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1094,13 +1106,13 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Re-find a focus session — read-only. Call it with NO arguments to get YOUR CURRENT session (the most recent non-closed one) when you've lost the id that synap_start_session returned; pass sessionId to fetch a specific one. Returns the session with its goal, status, progress, stage and expectedOutputs, or { session: null } when there is none. Always yours: sessions are scoped to the calling user.",
+      "description": "Re-find a focus session — read-only. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "Optional focus session UUID. Omit to get your current (most recent non-closed) session."
+            "description": "Optional focus session UUID. Omit only when exactly one session is open; if multiple are open you must pass sessionId."
           }
         },
         "required": []
@@ -1797,6 +1809,30 @@
       }
     },
     {
+      "name": "synap_reject_proposal",
+      "annotations": {
+        "title": "Reject proposal",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "description": "Reject a pending proposal so the queued change never lands — withdraw a write you now know is wrong (a duplicate, a superseded plan, a mistaken read) instead of leaving it in the user's review queue. Give a `reason`: it is recorded on the proposal and feeds your agent scorecard. There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a pending change from landing, so it carries no self-approval or undo risk. Only a still-pending proposal can be rejected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "description": "Proposal UUID, or the 8-char short id printed by synap_list_proposals / the CLI."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why you are rejecting it (recorded on the proposal). Always give one."
+          }
+        },
+        "required": ["proposalId"]
+      }
+    },
+    {
       "name": "synap_list_capabilities",
       "annotations": {
         "title": "List capabilities",
@@ -2006,7 +2042,7 @@
           },
           "flowDefinition": {
             "type": "object",
-            "description": "The THEN flow: { nodes: [...], edges: [...] }. Nodes are the steps; edges wire them in order. A step of type 'capability' MUST name a verb that actually exists \u2014 data.verbId is the backing skill's NAME (e.g. 'ai.generate'), not a UUID, and the create is REJECTED if it does not resolve for you (data.capabilityId is optional; omit it and the verb alone resolves). Check with synap_list_capabilities before authoring capability steps.",
+            "description": "The THEN flow: { nodes: [...], edges: [...] }. Nodes are the steps; edges wire them in order. A step of type 'capability' MUST name a verb that actually exists — data.verbId is the backing skill's NAME (e.g. 'ai.generate'), not a UUID, and the create is REJECTED if it does not resolve for you (data.capabilityId is optional; omit it and the verb alone resolves). Check with synap_list_capabilities before authoring capability steps.",
             "properties": {
               "nodes": {
                 "type": "array",

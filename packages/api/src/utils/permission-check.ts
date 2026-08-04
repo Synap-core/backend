@@ -51,6 +51,7 @@ import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
+import { resolvePodAdminUserIds } from "../services/capabilities/pod-owner.js";
 import {
   AccessContext,
   makeRequestProvenance,
@@ -146,7 +147,22 @@ export function requestedEventTypeFor(
 // @synap/governance-policy (single source of truth).
 
 export type PermissionResult =
-  | { granted: true }
+  | {
+      granted: true;
+      /**
+       * The AUTO_APPROVED `proposals` row minted for this agent write when the
+       * governance ladder auto-approved it (a durable receipt). Present ONLY on
+       * the agent auto-approve path; absent for a human/owner write, a legacy
+       * AI-source auto-approve, or when the receipt insert failed.
+       *
+       * DELIBERATELY NOT named `proposalId`: callers discriminate the "proposed"
+       * (not-granted) result via `"proposalId" in perm`, so a `proposalId` key on
+       * the granted variant would misroute an auto-approved write as proposed.
+       * Callers thread THIS into their `.completed` event emit (`proposalId`) so
+       * the write is NOT miscounted as an "ungoverned AI write" (0231).
+       */
+      autoApprovedProposalId?: string;
+    }
   | {
       granted: false;
       proposalId: string;
@@ -486,6 +502,12 @@ export interface PermissionCheckOpts {
    * precedence over the forced proposal.
    */
   forcePropose?: boolean;
+  /**
+   * Skip session-metadata forceProposeWrites (pack mode). Used for lifecycle
+   * complete so an agent can close a pack-mode session and surface the pack.
+   * Does not bypass explicit opts.forcePropose or RBAC denials.
+   */
+  ignoreSessionForcePropose?: boolean;
 }
 
 /**
@@ -807,7 +829,7 @@ export async function checkPermissionOrPropose(
     const effectiveForcePropose =
       opts.forcePropose === true
         ? true
-        : isAiWrite && sessionId
+        : isAiWrite && sessionId && !opts.ignoreSessionForcePropose
           ? await deriveSessionForceProposeGovernance(sessionId)
           : false;
 
@@ -892,43 +914,51 @@ export async function checkPermissionOrPropose(
         // with existing readers of the JSONB.
         const eventKey = `${subjectType}.${action}`;
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
+        let autoApprovedProposalId: string | undefined;
         try {
-          await db.insert(proposals).values({
-            workspaceId: workspaceId ?? null,
-            targetType: subjectType,
-            targetId: String(data?.id ?? randomUUID()),
-            proposalType: `${subjectType}.${action}`,
-            data: {
-              ...data,
-              agentUserId,
-              ...(authorshipMode ? { authorshipMode } : {}),
-              ...(correlationId ? { correlationId } : {}),
-              ...(requestedEventId ? { requestedEventId } : {}),
-              // The model sometimes VOLUNTEERS a rationale for a write that
-              // auto-approves; this path used to drop it on the floor while the
-              // propose path stored it. Threaded through when present — never
-              // synthesised, and never required (a deliberate decision).
-              ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
-              _autoApprove: {
-                matchedPattern: findMatchingPattern(
-                  eventKey,
-                  gov.explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
-                ),
-                approvedAt: new Date().toISOString(),
-                approvedBy: "system:auto_approve",
+          const [receipt] = await db
+            .insert(proposals)
+            .values({
+              workspaceId: workspaceId ?? null,
+              targetType: subjectType,
+              targetId: String(data?.id ?? randomUUID()),
+              proposalType: `${subjectType}.${action}`,
+              data: {
+                ...data,
+                agentUserId,
+                ...(authorshipMode ? { authorshipMode } : {}),
+                ...(correlationId ? { correlationId } : {}),
+                ...(requestedEventId ? { requestedEventId } : {}),
+                // The model sometimes VOLUNTEERS a rationale for a write that
+                // auto-approves; this path used to drop it on the floor while the
+                // propose path stored it. Threaded through when present — never
+                // synthesised, and never required (a deliberate decision).
+                ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
+                _autoApprove: {
+                  matchedPattern: findMatchingPattern(
+                    eventKey,
+                    gov.explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
+                  ),
+                  approvedAt: new Date().toISOString(),
+                  approvedBy: "system:auto_approve",
+                },
               },
-            },
-            status: ProposalStatus.AUTO_APPROVED,
-            createdBy: agentUserId,
-            ...(agentUserId ? { agentUserId } : {}),
-            threadId: threadId ?? undefined,
-            commandRunId: commandRunId ?? undefined,
-            correlationId: correlationId ?? undefined,
-            requestedEventId: requestedEventId ?? undefined,
-            sessionId: sessionId ?? undefined,
-            sourceMessageId: sourceMessageId ?? undefined,
-            projectId: projectId ?? undefined,
-          });
+              status: ProposalStatus.AUTO_APPROVED,
+              createdBy: agentUserId,
+              ...(agentUserId ? { agentUserId } : {}),
+              threadId: threadId ?? undefined,
+              commandRunId: commandRunId ?? undefined,
+              correlationId: correlationId ?? undefined,
+              requestedEventId: requestedEventId ?? undefined,
+              sessionId: sessionId ?? undefined,
+              sourceMessageId: sourceMessageId ?? undefined,
+              projectId: projectId ?? undefined,
+            })
+            .returning({ id: proposals.id });
+          // Thread the receipt id back so the caller can stamp it onto the
+          // `.completed` event (events.proposal_id, 0231) — proving this agent
+          // write WAS governed (auto-approved), not an ungoverned direct write.
+          autoApprovedProposalId = receipt?.id;
         } catch (err) {
           logger.error(
             { err, workspaceId, agentUserId, eventKey },
@@ -936,7 +966,7 @@ export async function checkPermissionOrPropose(
           );
         }
 
-        return { granted: true };
+        return { granted: true, autoApprovedProposalId };
       }
 
       // gov.decision === "not-agent": the user row is not an agent (defence-in-
@@ -1200,6 +1230,25 @@ async function notifyProposalCreated(
         `${input.proposalType} ${input.targetType}`,
       agentUserId: input.agentUserId ?? undefined,
     }).catch(() => {});
+  } else {
+    // Pod-wide proposal (workspaceId === null): no workspace membership to
+    // notify, so route the "needs you" attention to the pod owner + pod admins
+    // (pod-wide governance is an owner/admin concern — NOT every user). Same
+    // "proposal.created"/governance shape as the workspace path above. Fire-and-
+    // forget: notification failure is non-critical, exactly like the branch above.
+    void (async () => {
+      const recipients = await resolvePodAdminUserIds();
+      if (recipients.length === 0) return;
+      await NotificationService.fromPodWideProposal({
+        proposalId: proposal.id,
+        recipientUserIds: recipients,
+        proposalType: `${input.targetType}.${input.proposalType}`,
+        description:
+          input.notificationDescription ??
+          `${input.proposalType} ${input.targetType}`,
+        agentUserId: input.agentUserId ?? undefined,
+      });
+    })().catch(() => {});
   }
 }
 

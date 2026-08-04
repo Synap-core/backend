@@ -89,6 +89,12 @@ export interface EventRecord {
   // Populated from the events table's real `workspace_id` column. Undefined for
   // pod-wide / hydration events and for rows written before the column existed.
   workspaceId?: string;
+
+  // ── Governance linkage (0231) ───────────────────────────────────────────────
+  // The proposal an AGENT write went through (auto-approved OR pending→approved).
+  // Undefined when the write executed with no proposal — an "ungoverned AI write"
+  // is `isAgent && proposalId == null` on the `.completed` event.
+  proposalId?: string;
 }
 
 export interface EventStreamOptions {
@@ -235,10 +241,11 @@ export class EventRepository {
           tool_count,
           run_status,
           finish_reason,
-          workspace_id
+          workspace_id,
+          proposal_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
         )
         RETURNING *
       `,
@@ -273,6 +280,9 @@ export class EventRepository {
           // hydration events. Still folded into `data` by the writer for
           // back-compat, so readers COALESCE the two.
           validated.workspaceId ?? null,
+          // Governance linkage (0231). The proposal an agent write went through;
+          // null for a direct/ungoverned write or any human write.
+          validated.proposalId ?? null,
         ]
       );
 
@@ -653,6 +663,17 @@ export class EventRepository {
        * column, so `false` must include NULL or it silently hides them).
        */
       isAgent?: boolean;
+      /**
+       * The "ungoverned AI write" blind spot (0231): agent writes that EXECUTED
+       * without ever going through a proposal — `is_agent = true AND proposal_id
+       * IS NULL`, restricted to the executed-write event (`.completed`) so the
+       * pre-gate `.requested` intent events (which never carry a proposal_id)
+       * are not counted. A governed agent write (auto-approved OR pending→
+       * approved) carries the proposal id and is excluded; a proposed-but-pending
+       * write emits no `.completed` and is naturally excluded too. Combine with
+       * `agentUserId` to scope to one agent. Backed by `idx_events_ungoverned_agent`.
+       */
+      ungoverned?: boolean;
     } = {}
   ): Promise<EventRecord[]> {
     let query = "SELECT * FROM events WHERE 1=1";
@@ -744,6 +765,15 @@ export class EventRepository {
         .join(", ");
       query += ` AND split_part(type, '.', 2) IN (${placeholders})`;
       params.push(...filters.actions);
+    }
+
+    if (filters.ungoverned) {
+      // "Ungoverned AI write": an agent write that EXECUTED (`.completed`) with
+      // no proposal behind it. `.requested` intent events are excluded — they
+      // fire before the governance gate and never carry a proposal_id, so they
+      // would otherwise be constant false positives. No param binding needed.
+      query +=
+        " AND is_agent = true AND proposal_id IS NULL AND type LIKE '%.completed'";
     }
 
     if (filters.fromDate) {
@@ -942,6 +972,8 @@ export class EventRepository {
       finishReason: (row.finish_reason as string | null) ?? undefined,
       // Workspace context real column (0223). Absent on pre-migration rows.
       workspaceId: (row.workspace_id as string | null) ?? undefined,
+      // Governance linkage real column (0231). Absent on pre-migration rows.
+      proposalId: (row.proposal_id as string | null) ?? undefined,
     };
   }
 }

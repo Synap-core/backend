@@ -130,6 +130,18 @@ export function registerEventsRoutes(app: HubHono): void {
     const isAgent =
       isAgentRaw === undefined ? undefined : isAgentRaw === "true";
 
+    // "Ungoverned AI write" blind spot (0231): agent writes that executed with
+    // no proposal behind them (is_agent = true AND proposal_id IS NULL, on the
+    // `.completed` event). Reuses this route's existing owner-pinned scoping.
+    const ungovernedRaw = c.req.query("ungoverned");
+    if (
+      ungovernedRaw !== undefined &&
+      !["true", "false"].includes(ungovernedRaw)
+    ) {
+      return c.json({ error: "ungoverned must be 'true' or 'false'" }, 400);
+    }
+    const ungoverned = ungovernedRaw === "true";
+
     if (!userId) return c.json({ error: "userId is required" }, 400);
 
     try {
@@ -141,6 +153,7 @@ export function registerEventsRoutes(app: HubHono): void {
         agentUserId,
         correlationId,
         isAgent,
+        ungoverned,
         fromDate: fromDateStr
           ? new Date(fromDateStr)
           : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),

@@ -970,12 +970,9 @@ export function registerApproveExecutors(): void {
   // scope by the operator userId) could never find it. Structure mirrors
   // entity/create; the insert mirrors services/focus-sessions/create-session.ts.
   //
-  // CONSERVATIVE NOTE: createFocusSession only persists { goal, templateId } into
-  // the permission `data` at propose time, so subjectEntityId / channelId /
-  // expectedOutputs / agentIds are NOT carried through the proposal — they default
-  // to null/[] here. Preserving them would require widening the gate `data` in
-  // create-session.ts (flagged for review). workspaceId / projectId come from the
-  // proposal row.
+  // Gate data may include subjectEntityId / channelId / expectedOutputs / agentIds
+  // (create-session.ts). workspaceId / projectId come from the proposal row.
+  // After insert, ensureSessionChannel mints a room if channelId is still null.
   registerProposalExecutor({
     key: "focus_session/create",
     async execute({ proposal, userId, input, deps }) {
@@ -1022,7 +1019,19 @@ export function registerApproveExecutors(): void {
         .onConflictDoNothing()
         .returning();
 
-      // Mirror create-session.ts:134 so the browser mirrors the new session live.
+      // Gate 2: mint work channel if none (parity with createFocusSession).
+      if (created && !created.channelId) {
+        const { ensureSessionChannel } =
+          await import("../../services/focus-sessions/ensure-session-channel.js");
+        await ensureSessionChannel({
+          sessionId: created.id,
+          userId,
+          workspaceId: created.workspaceId,
+          goal: created.goal,
+        });
+      }
+
+      // Mirror create-session so the browser mirrors the new session live.
       if (created) {
         emitHubRealtimeEvent({
           eventType: "focus_session.create.completed",

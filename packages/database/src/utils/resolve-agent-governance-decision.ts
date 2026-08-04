@@ -151,6 +151,83 @@ function scoreRuleTarget(
     : undefined;
 }
 
+/**
+ * A DRAFT (unsaved) governance rule's target, as the Calibration UI holds it
+ * before `governanceRules.create`. Same fields the resolver reads off a stored
+ * `governance_rules` row, minus persistence columns.
+ */
+export interface DraftGovernanceRuleTarget {
+  principalKind: "any" | "agent";
+  agentUserId?: string | null;
+  scopeKind: "pod" | "workspace";
+  workspaceId?: string | null;
+  targetKind: "action" | "profile" | "capability";
+  targetPattern: string;
+  targetProfile?: string | null;
+  verdict: "auto" | "propose";
+}
+
+/**
+ * One governed write, reconstructed from a historical proposal row, in the exact
+ * tuple `resolveGovernanceRule` matches against.
+ */
+export interface GovernedWriteDescriptor {
+  subjectType: string;
+  action: string;
+  profileSlug?: string | null;
+  agentUserId?: string | null;
+  workspaceId?: string | null;
+  capabilityId?: string | null;
+  capabilityVerbName?: string | null;
+}
+
+/**
+ * Would this DRAFT rule's target MATCH a given governed write? Reuses the exact
+ * `scoreRuleTarget` matcher the live rung-2.8 resolver (`resolveGovernanceRule`)
+ * ranks with, plus the SAME principal/scope eligibility that resolver's SQL
+ * encodes — so a "would-have-caught-N" retro preview can never drift from real
+ * enforcement. Pure; no I/O.
+ *
+ * SCOPE CAVEAT: this answers "does the rule's TARGET match", NOT "would the write
+ * ultimately auto-approve" — it does NOT re-run the floors (rungs 2–2.6, which
+ * force a proposal regardless of any rule). A caller comparing against a
+ * recorded outcome must account for that (a `verdict:"propose"` draft is always
+ * honorable — it only ever tightens; a `verdict:"auto"` draft may be overridden
+ * by a floor, so a matched-review row is not guaranteed to have flipped).
+ */
+export function draftRuleMatchesWrite(
+  rule: DraftGovernanceRuleTarget,
+  write: GovernedWriteDescriptor
+): boolean {
+  // Principal eligibility — mirrors `principalCondition` in resolveGovernanceRule:
+  // an "agent" rule only matches its own agent's writes; "any" matches all.
+  if (rule.principalKind === "agent") {
+    if (!write.agentUserId || rule.agentUserId !== write.agentUserId) {
+      return false;
+    }
+  }
+  // Scope eligibility — mirrors the pod-vs-workspace branch: a "pod" rule is
+  // eligible for any write; a "workspace" rule only for its own workspace.
+  if (rule.scopeKind === "workspace") {
+    if (!write.workspaceId || rule.workspaceId !== write.workspaceId) {
+      return false;
+    }
+  }
+  // Target match — the SAME scorer the resolver uses (undefined = no match).
+  const score = scoreRuleTarget(
+    {
+      targetKind: rule.targetKind,
+      targetPattern: rule.targetPattern,
+      targetProfile: rule.targetProfile ?? null,
+    },
+    `${write.subjectType}.${write.action}`,
+    write.profileSlug ?? null,
+    write.capabilityId,
+    write.capabilityVerbName
+  );
+  return score !== undefined;
+}
+
 export interface ResolveGovernanceRuleInput {
   /** Injected Drizzle handle. */
   db: DbHandle;

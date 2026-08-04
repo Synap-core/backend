@@ -2840,8 +2840,15 @@ export const proposalsRouter = router({
    * user floor + the same workspaceId three-state + optional agentUserId filter,
    * and the same editor+ gate when a concrete workspace is named. No new access
    * logic: a cluster never counts a proposal the caller can't already see in
-   * `list`. Grouping is defined over the PENDING actionable queue (PENDING +
+   * `list`. Grouping defaults to the PENDING actionable queue (PENDING +
    * APPROVAL_FAILED), the same set `list`'s default `status: "pending"` returns.
+   *
+   * `status: "rejected"` is the same clustering over REJECTED rows instead —
+   * the governance "rejection patterns" panel's read. That lens is always
+   * agent-authored (mirrors how `agent-scorecard.ts`'s `allAgentsScorecard`
+   * excludes humans via `isNotNull(agentUserId)`): a human's own rejected
+   * drafts aren't a "pattern" an agent needs to learn from, so it is forced
+   * regardless of the `agentOnly` input.
    */
   groups: protectedProcedure
     .input(
@@ -2853,9 +2860,12 @@ export const proposalsRouter = router({
         agentUserId: z.string().optional(),
         /** Only agent-authored proposals (agentUserId not null). */
         agentOnly: z.boolean().optional(),
+        /** Which queue to cluster: the actionable pending queue (default), or
+         *  the terminal rejected queue for the rejection-patterns panel. */
+        status: z.enum(["pending", "rejected"]).default("pending"),
         /** Max clusters returned (newest-active first). */
         limit: z.number().min(1).max(100).optional(),
-        /** Max pending proposals scanned before grouping — guards a huge inbox. */
+        /** Max proposals scanned before grouping — guards a huge inbox. */
         scanLimit: z.number().min(1).max(2000).optional(),
       })
     )
@@ -2879,15 +2889,22 @@ export const proposalsRouter = router({
       if (input.agentOnly) {
         conditions.push(isNotNull(proposals.agentUserId));
       }
-      // The actionable pending queue — identical membership to `list`'s
-      // `status: "pending"` branch (PENDING keeps a user's Approve intent
-      // visible even when execution later failed).
-      conditions.push(
-        inArray(proposals.status, [
-          ProposalStatus.PENDING,
-          ProposalStatus.APPROVAL_FAILED,
-        ])
-      );
+      if (input.status === "rejected") {
+        conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
+        // Forced agent-only for the rejection-patterns lens — see the doc
+        // comment above. Redundant (harmless) if `agentOnly` was already set.
+        conditions.push(isNotNull(proposals.agentUserId));
+      } else {
+        // The actionable pending queue — identical membership to `list`'s
+        // `status: "pending"` branch (PENDING keeps a user's Approve intent
+        // visible even when execution later failed).
+        conditions.push(
+          inArray(proposals.status, [
+            ProposalStatus.PENDING,
+            ProposalStatus.APPROVAL_FAILED,
+          ])
+        );
+      }
       // NOTE: no expiry filter — see the matching note in `list` (C2 fix).
 
       // Same editor+ gate as `list` when a concrete workspace is named.
@@ -2984,6 +3001,7 @@ export const proposalsRouter = router({
         agentLabel: r.agentUserId
           ? (agentLabelById.get(r.agentUserId) ?? null)
           : null,
+        agentUserId: r.agentUserId ?? null,
         sessionId: r.sessionId ?? null,
         automationId: r.stepRunId
           ? (automationByStepRun.get(r.stepRunId) ?? null)

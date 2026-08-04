@@ -1,11 +1,22 @@
 /**
- * completeFocusSession — shared service behind both Hub REST and MCP adapter.
+ * completeFocusSession — lifecycle close for a focus session.
  *
- * Closes the running playbook_run for the session and updates the session record
- * (status → closed, reports, summary). Best-effort on the run close — no running
- * run is not an error.
+ * Callers today: MCP `synap_complete_session`, session-recap. Hub REST PATCH
+ * and tRPC `close` still flip status without this service (known dual path —
+ * consolidate later). Closes running playbook_run, stamps closed + report.
+ *
+ * Gate 2: returns a **proposal pack** (pending proposals for this session).
  */
-import { db, focusSessions, playbookRuns, eq, and } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  playbookRuns,
+  proposals,
+  ProposalStatus,
+  eq,
+  and,
+  desc,
+} from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
@@ -18,13 +29,50 @@ export interface CompleteFocusSessionParams {
   verificationReport?: Record<string, unknown> | null;
 }
 
+export type ProposalPackItem = {
+  id: string;
+  status: string;
+  proposalType: string | null;
+  summary: string | null;
+  workspaceId: string | null;
+  createdAt: Date | null;
+};
+
+export type CompleteFocusSessionResult = {
+  session: FocusSession;
+  /** Pending proposals attributed to this session (review pack). */
+  pendingProposals: ProposalPackItem[];
+  counts: {
+    pending: number;
+    /** expectedOutputs still status !== done (warn only — does not block close). */
+    unfinishedOutputs: number;
+  };
+  warnings: string[];
+};
+
+function packItem(row: typeof proposals.$inferSelect): ProposalPackItem {
+  const data = (row.data ?? {}) as Record<string, unknown>;
+  const summary =
+    typeof data.summary === "string"
+      ? data.summary
+      : typeof data.targetName === "string"
+        ? data.targetName
+        : null;
+  return {
+    id: row.id,
+    status: row.status,
+    proposalType: row.proposalType ?? null,
+    summary,
+    workspaceId: row.workspaceId ?? null,
+    createdAt: row.createdAt ?? null,
+  };
+}
+
 export async function completeFocusSession(
   params: CompleteFocusSessionParams
-): Promise<FocusSession | null> {
+): Promise<CompleteFocusSessionResult | null> {
   const { sessionId, summary, verificationReport } = params;
 
-  // Load the session — scoping is the caller's responsibility (REST resolves
-  // acting context; MCP passes the operator userId).
   const session = await db.query.focusSessions.findFirst({
     where: and(
       eq(focusSessions.id, sessionId),
@@ -33,32 +81,32 @@ export async function completeFocusSession(
   });
   if (!session) return null;
 
-  // Governance membrane — AI callers route through proposals.
-  // Completing a session is an update action, consistent with the REST PATCH path.
+  // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
+  // ignoreSessionForcePropose keeps auto-approve / execute path for complete only.
   const perm = await checkPermissionOrPropose({
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: session.workspaceId,
+    // Attribute + honor pack-mode escape: stamp would force-propose without
+    // ignoreSessionForcePropose; both must be set for lifecycle complete.
+    sessionId,
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
     data: { id: sessionId, status: "closed" },
+    ignoreSessionForcePropose: true,
   });
 
   if ("denied" in perm && perm.denied) {
     throw Object.assign(new Error(perm.reason), { code: "FORBIDDEN" });
   }
   if ("proposalId" in perm) {
-    // Completion via proposal is not supported — the MCP tool needs a synchronous
-    // result. If governance proposes, reject with FORBIDDEN so the agent can
-    // communicate that the action requires manual review.
     throw Object.assign(
       new Error("Session completion proposed for review — approval required"),
       { code: "FORBIDDEN" }
     );
   }
 
-  // Close any running playbook_run for this session.
   const [run] = await db
     .select()
     .from(playbookRuns)
@@ -77,7 +125,17 @@ export async function completeFocusSession(
       .where(eq(playbookRuns.id, run.id));
   }
 
-  // Update the session.
+  const unfinishedOutputs = (
+    (session.expectedOutputs as Array<{ status?: string }> | null) ?? []
+  ).filter((o) => o.status !== "done").length;
+
+  const warnings: string[] = [];
+  if (unfinishedOutputs > 0) {
+    warnings.push(
+      `${unfinishedOutputs} expected output(s) still not marked done — session closed anyway (warn-only).`
+    );
+  }
+
   const [updated] = await db
     .update(focusSessions)
     .set({
@@ -88,16 +146,47 @@ export async function completeFocusSession(
             verificationReport: {
               ...(summary !== undefined ? { summary } : {}),
               ...(verificationReport as Record<string, unknown>),
+              ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
             },
           }
         : summary !== undefined
-          ? { verificationReport: { summary } }
+          ? {
+              verificationReport: {
+                summary,
+                ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
+              },
+            }
           : verificationReport === null
-            ? { verificationReport: null } // explicit null clears the field
-            : {}),
+            ? { verificationReport: null }
+            : unfinishedOutputs > 0
+              ? { verificationReport: { unfinishedOutputs } }
+              : {}),
     })
     .where(eq(focusSessions.id, sessionId))
     .returning();
 
-  return updated;
+  // Proposal pack — pending rows attributed to this session.
+  const pendingRows = await db
+    .select()
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.sessionId, sessionId),
+        eq(proposals.status, ProposalStatus.PENDING)
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(100);
+
+  const pendingProposals = pendingRows.map(packItem);
+
+  return {
+    session: updated,
+    pendingProposals,
+    counts: {
+      pending: pendingProposals.length,
+      unfinishedOutputs,
+    },
+    warnings,
+  };
 }

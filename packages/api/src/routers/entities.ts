@@ -1862,6 +1862,10 @@ export const entitiesRouter = router({
         subjectId: createdEntity.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
+        // Governance linkage (0231): stamp the auto-approve receipt so this agent
+        // write reads as GOVERNED, not an "ungoverned AI write". `perm` is the
+        // granted result here (denied + proposed already returned above).
+        proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
@@ -2956,6 +2960,8 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
+        // Governance linkage (0231): auto-approve receipt (perm is granted here).
+        proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
@@ -3329,6 +3335,8 @@ export const entitiesRouter = router({
         subjectId: facet.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
+        // Governance linkage (0231): auto-approve receipt (perm is granted here).
+        proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: { entityId: input.entityId, facetId: facet.id },

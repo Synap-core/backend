@@ -4740,6 +4740,10 @@ export type BranchTreeNode = {
 /** One distinct origin behind a cluster's proposals. */
 export interface ProposalClusterSource {
 	agentLabel?: string;
+	/** Stable agent id, carried alongside agentLabel for deep-linking (e.g. the
+	 *  agent dossier) — optional so existing callers that never populated it on
+	 *  `ClusterInputRow` keep compiling unchanged. */
+	agentUserId?: string;
 	sessionId?: string;
 	automationId?: string;
 }
@@ -10030,6 +10034,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
+				status?: "pending" | "rejected" | undefined;
 				limit?: number | undefined;
 				scanLimit?: number | undefined;
 			};
@@ -13786,20 +13791,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				result: {} | null;
 				dryRunEffects: unknown[];
 				message?: undefined;
-			};
-			meta: object;
-		}>;
-		createFromVerbCapability: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				verbId: string;
-				capabilityName: string;
-				verbLabel: string;
-				workspaceId: string;
-				capabilityId?: string | undefined;
-				verbKind?: "action" | "read" | "write" | undefined;
-			};
-			output: {
-				automationId: string;
 			};
 			meta: object;
 		}>;
@@ -18728,6 +18719,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sourceProposalId: string | null;
 					expiresAt: Date | null;
 				} | null;
+			};
+			meta: object;
+		}>;
+		retroImpact: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				principalKind: "agent" | "any";
+				scopeKind: "workspace" | "pod";
+				targetKind: "action" | "profile" | "capability";
+				targetPattern: string;
+				verdict: "auto" | "propose";
+				agentUserId?: string | undefined;
+				workspaceId?: string | undefined;
+				targetProfile?: string | undefined;
+				window?: number | undefined;
+			};
+			output: {
+				matched: number;
+				wouldFlip: number;
+				sampled: number;
+				scope: string;
 			};
 			meta: object;
 		}>;

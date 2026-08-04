@@ -11,6 +11,7 @@
 import {
   db,
   proposals,
+  focusSessions,
   ProposalStatus,
   eq,
   and,
@@ -36,6 +37,12 @@ import { isNestedEnvelope } from "@synap-core/types/proposals";
 export async function listCreatedProposals(params: {
   createdBy: string;
   workspaceId?: string;
+  /**
+   * Gate 2: session review pack. When set, floors by **session ownership**
+   * (caller owns the focus_session) and lists all proposals for that session —
+   * not only rows createdBy the agent key (agent vs human createdBy mismatch).
+   */
+  sessionId?: string;
   status?: string;
   limit?: number;
 }): Promise<Array<typeof proposals.$inferSelect>> {
@@ -50,6 +57,30 @@ export async function listCreatedProposals(params: {
     withdrawn: ProposalStatus.WITHDRAWN,
   };
   const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
+
+  // Session pack path: verify ownership then list by sessionId only.
+  if (params.sessionId) {
+    const [owned] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.id, params.sessionId),
+          eq(focusSessions.userId, params.createdBy)
+        )
+      )
+      .limit(1);
+    if (!owned) return [];
+
+    const conditions = [eq(proposals.sessionId, params.sessionId)];
+    if (statusArg !== "all") conditions.push(eq(proposals.status, status));
+    return db
+      .select()
+      .from(proposals)
+      .where(and(...conditions))
+      .orderBy(desc(proposals.createdAt))
+      .limit(params.limit ?? 20);
+  }
 
   const conditions = [eq(proposals.createdBy, params.createdBy)];
   if (params.workspaceId)

@@ -405,6 +405,15 @@ export const ListEventsQuerySchema = z
       .optional()
       .describe("ISO timestamp. Defaults to 7 days ago."),
     limit: z.string().optional().describe("Default 50, hard-capped at 200."),
+    ungoverned: z
+      .enum(["true", "false"])
+      .optional()
+      .describe(
+        "When 'true', return only 'ungoverned AI writes' — agent writes that " +
+          "EXECUTED with no proposal behind them (is_agent = true AND " +
+          "proposal_id IS NULL, on the .completed event). Governed (auto-approved " +
+          "or approved) agent writes carry a proposal id and are excluded."
+      ),
   })
   .openapi("ListEventsQuery");
 

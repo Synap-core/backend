@@ -32,12 +32,24 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, isNull, gt, desc, inArray } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  isNull,
+  isNotNull,
+  gt,
+  desc,
+  inArray,
+  ProposalStatus,
+} from "@synap/database";
 import {
   governanceRules,
   workspaceMembers,
   workspaces,
   users,
+  proposals,
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
@@ -369,6 +381,123 @@ export const governanceRulesRouter = router({
         rung: result.rung,
         reason: result.reason,
         winningRule,
+      };
+    }),
+
+  /**
+   * "Would-have-caught-N": for a DRAFT rule (pre-`create`), how many recent
+   * historical proposals would its target MATCH, and of those, how many would
+   * the draft's verdict CHANGE? Powers the Calibration UI's retro-impact number
+   * next to the dry-run verdict.
+   *
+   * Pure read. Scans the most-recent agent-authored proposals the caller can see
+   * (`userVisibleWhere`, capped at 500 — the same window + floor the agent
+   * scorecard uses), reconstructs each into the exact tuple the live rung-2.8
+   * resolver matched (`targetType`→subject, `proposalType`→action,
+   * `data.profileSlug`→profile), and tests it with `draftRuleMatchesWrite` — the
+   * SAME `scoreRuleTarget` matcher `resolveGovernanceRule` ranks with, so the
+   * preview can't lie about what the rule targets.
+   *
+   * `wouldFlip` compares the draft `verdict` against each matched proposal's
+   * RECORDED outcome (`auto_approved` → currently "auto"; every other status →
+   * routed to review). HONEST SCOPE: this is over the SAMPLED window, not
+   * lifetime, and it does NOT re-run the floors (destructive/admin/scope always
+   * force review). So a `verdict:"propose"` draft's count is exact (a rule can
+   * always pin an auto-approve to review), but a `verdict:"auto"` draft's count
+   * is an UPPER BOUND — a floored review row is counted as a flip though a floor
+   * would still hold it. The `scope` string states this.
+   */
+  retroImpact: protectedProcedure
+    .input(
+      z.object({
+        principalKind: z.enum(["any", "agent"]),
+        agentUserId: z.string().min(1).optional(),
+        scopeKind: z.enum(["pod", "workspace"]),
+        workspaceId: z.string().uuid().optional(),
+        targetKind: z.enum(["action", "profile", "capability"]),
+        targetPattern: z.string().min(1),
+        targetProfile: z.string().min(1).optional(),
+        verdict: z.enum(["auto", "propose"]),
+        /** Cap the scan window (defaults to, and is clamped to, 500). */
+        window: z.number().int().min(1).max(500).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      if (input.scopeKind === "workspace" && input.workspaceId) {
+        await assertWorkspaceVisible(ctx.userId, input.workspaceId);
+      }
+
+      const SCAN_LIMIT = 500;
+      const limit = Math.min(input.window ?? SCAN_LIMIT, SCAN_LIMIT);
+
+      // USER floor + agent-only: rung 2.8 governs AGENT writes, so a human-filed
+      // proposal (agentUserId NULL) was never subject to a rule — exclude it.
+      const rows = await db
+        .select({
+          targetType: proposals.targetType,
+          proposalType: proposals.proposalType,
+          data: proposals.data,
+          status: proposals.status,
+          agentUserId: proposals.agentUserId,
+          workspaceId: proposals.workspaceId,
+        })
+        .from(proposals)
+        .where(
+          and(
+            isNotNull(proposals.agentUserId),
+            userVisibleWhere(proposals.workspaceId, ctx.userId)
+          )
+        )
+        .orderBy(desc(proposals.createdAt))
+        .limit(limit);
+
+      const { draftRuleMatchesWrite } =
+        await import("@synap/database/agent-governance");
+
+      const draft = {
+        principalKind: input.principalKind,
+        agentUserId: input.agentUserId,
+        scopeKind: input.scopeKind,
+        workspaceId: input.workspaceId,
+        targetKind: input.targetKind,
+        targetPattern: input.targetPattern,
+        targetProfile: input.targetProfile,
+        verdict: input.verdict,
+      };
+
+      let matched = 0;
+      let wouldFlip = 0;
+      for (const row of rows) {
+        const data = (row.data ?? {}) as Record<string, unknown>;
+        const profileSlug =
+          typeof data.profileSlug === "string" ? data.profileSlug : null;
+        if (
+          !draftRuleMatchesWrite(draft, {
+            subjectType: row.targetType,
+            action: row.proposalType,
+            profileSlug,
+            agentUserId: row.agentUserId,
+            workspaceId: row.workspaceId,
+          })
+        ) {
+          continue;
+        }
+        matched++;
+        const currentOutcome =
+          row.status === ProposalStatus.AUTO_APPROVED ? "auto" : "propose";
+        if (currentOutcome !== input.verdict) wouldFlip++;
+      }
+
+      return {
+        matched,
+        wouldFlip,
+        sampled: rows.length,
+        scope:
+          `matched over the last ${rows.length} agent proposal(s) visible to you ` +
+          `(newest first, capped at ${SCAN_LIMIT}) — not lifetime. ` +
+          (input.verdict === "auto"
+            ? "wouldFlip is an UPPER BOUND: floors (destructive/admin/scope) are not re-evaluated, so a floored review row is still counted."
+            : "wouldFlip is exact: a rule can always pin an auto-approve to review."),
       };
     }),
 
