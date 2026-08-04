@@ -54,3 +54,10 @@ unlocks; a slug missing from that list but present in the browse catalog is
 locked for them — `market.install` pre-checks this and fails before touching
 governance, so surface the tier requirement rather than treating it as a
 generic install error.
+
+The **server pre-check is the authoritative floor** (`assertPackageTierAccess`,
+wired at every install site). The browser UI is **display-only**: it threads
+`requiredTier` through to a "requires <tier>" badge but does NOT hard-block, and
+its lock/upgrade CTA only engages once a host wires a billing destination — so
+don't add a UI-side gate expecting it to enforce anything, and don't rebuild the
+badge thread (it exists). Full current-state: repo `TEMPLATE-DEV-GUIDE.md`.

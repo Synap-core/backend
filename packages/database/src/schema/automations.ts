@@ -694,8 +694,13 @@ export const automations = pgTable(
       .notNull(),
 
     // Status
+    // "archived" is a terminal soft-delete state (0230): a name-dedup casualty
+    // or a retired automation. It is EXCLUDED from the name-uniqueness index
+    // (archived rows free the name) and from scheduling/matching (both filter
+    // status = 'active'), so it never fires. Not a user-selectable input value —
+    // the create/update/list zod enums stay draft|active|paused|error.
     status: text("status", {
-      enum: ["draft", "active", "paused", "error"],
+      enum: ["draft", "active", "paused", "error", "archived"],
     })
       .notNull()
       .default("draft"),
@@ -752,6 +757,20 @@ export const automations = pgTable(
     triggerTypeIdx: index("automations_trigger_type_idx").on(table.triggerType),
     nextRunAtIdx: index("automations_next_run_at_idx").on(table.nextRunAt),
     createdByIdx: index("automations_created_by_idx").on(table.createdBy),
+    // Name-identity backstop (0230, mirrors playbooks_workspace_name_active_uq /
+    // 0227): at-most-one non-archived automation per (workspace | pod-wide,
+    // lower(name)). MCP create_automation re-authored the SAME automation into a
+    // 2nd row on every run (`Stellar Grant ×4` live) because there was no name
+    // identity. Expression index — the create door recovers SQLSTATE 23505 by
+    // re-selecting the winner (reuse-by-name), NOT ON CONFLICT (which cannot
+    // target an expression index cleanly via drizzle). NULL workspace coalesced
+    // to a sentinel UUID so pod-wide rows participate in uniqueness.
+    workspaceNameActiveUniq: uniqueIndex("automations_workspace_name_active_uq")
+      .on(
+        sql`COALESCE(${table.workspaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+        sql`lower(${table.name})`
+      )
+      .where(sql`${table.status} <> 'archived'`),
   })
 );
 

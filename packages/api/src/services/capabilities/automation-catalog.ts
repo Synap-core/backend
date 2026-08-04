@@ -30,7 +30,7 @@
  * fewer cards, never a throw.
  */
 
-import { db, eq, and, or, isNull } from "@synap/database";
+import { db, eq, ne, and, or, isNull } from "@synap/database";
 import { automations } from "@synap/database/schema";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -181,6 +181,9 @@ export async function buildAutomationCatalog(
                 eq(automations.workspaceId, workspaceId)
               )
             : isNull(automations.workspaceId),
+          // Exclude soft-archived (0230) automations — a name-dedup casualty is
+          // NOT an installed capability member and must never surface as a card.
+          ne(automations.status, "archived"),
           userVisibleWhere(automations.workspaceId, userId)
         )
       );
@@ -188,7 +191,10 @@ export async function buildAutomationCatalog(
       id: r.id,
       name: r.name,
       description: r.description,
-      status: r.status,
+      // WHERE excludes 'archived', so the runtime value is always one of the
+      // narrow InstalledAutomationInput states — the column type just can't
+      // express that the filter already removed it.
+      status: r.status as InstalledAutomationInput["status"],
       triggerType: r.triggerType,
     }));
   } catch {

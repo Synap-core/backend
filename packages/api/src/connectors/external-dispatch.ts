@@ -34,6 +34,7 @@ import {
   ChannelType,
   mcpServers,
   secrets,
+  CONNECTION_REAUTH_FAILURE_THRESHOLD,
   providerIntegrations,
   providers,
   links,
@@ -55,6 +56,72 @@ import { isConnectionAuthError } from "../services/connection-health/notify-conn
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "external-dispatch" });
+
+/**
+ * Mirror a dispatched call's auth outcome onto the connection-health store
+ * (`secrets.connection_state` keyed by `accountHint` = the Nango connectionId).
+ *
+ * This is the W-B1 reactive health signal — a REUSE of the dispatch
+ * `errorClass:"auth"` classification, NOT a probe (providers give no proactive
+ * expiry signal; you only learn on the next call). A single auth failure can be a
+ * concurrent-refresh race, so we flip to `needs_reauth` only at the
+ * CONNECTION_REAUTH_FAILURE_THRESHOLD consecutive failures; any success clears the
+ * counter. Best-effort and non-blocking — health is eventually-consistent and must
+ * never fail (or slow) the actual call. Only touches capability-connection rows.
+ */
+async function mirrorConnectionAuthOutcome(
+  connectionId: string,
+  outcome: "ok" | "auth_fail"
+): Promise<void> {
+  try {
+    if (outcome === "ok") {
+      // Reset ONLY when there is something to clear — a no-op UPDATE on every
+      // successful call would be needless write load.
+      await db
+        .update(secrets)
+        .set({
+          authFailCount: 0,
+          connectionState: "connected",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            // `account_hint` is the FULL Nango connectionId, which is unique per
+            // end-user — so keying on it already targets THIS user's row without a
+            // userId scope (Nango OAuth connections are never pod-wide shared; only
+            // vault keys are). Parity with the failure path's `deletedAt` guard.
+            eq(secrets.accountHint, connectionId),
+            isNotNull(secrets.capabilityId),
+            isNull(secrets.deletedAt),
+            gt(secrets.authFailCount, 0)
+          )
+        );
+      return;
+    }
+    // auth_fail: increment + flip to needs_reauth AT the threshold, atomically in
+    // SQL (read-modify-write in JS would race concurrent calls on the same conn).
+    await db
+      .update(secrets)
+      .set({
+        authFailCount: drizzleSql`${secrets.authFailCount} + 1`,
+        lastAuthErrorAt: new Date(),
+        connectionState: drizzleSql`CASE WHEN ${secrets.authFailCount} + 1 >= ${CONNECTION_REAUTH_FAILURE_THRESHOLD} THEN 'needs_reauth' ELSE ${secrets.connectionState} END`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(secrets.accountHint, connectionId),
+          isNotNull(secrets.capabilityId),
+          isNull(secrets.deletedAt)
+        )
+      );
+  } catch (err) {
+    logger.warn(
+      { err, connectionId },
+      "connection-health mirror failed (non-fatal)"
+    );
+  }
+}
 
 /**
  * P1 "every failure carries a next action" — the machine-readable failure class a
@@ -2105,6 +2172,18 @@ export async function triggerProviderAction(
         typeof cfgKey === "string" && cfgKey
           ? cfgKey
           : credentialRef.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "") || undefined;
+    }
+  }
+
+  // W-B1 — mirror this call's AUTH outcome onto the connection-health store so the
+  // catalog's "connected" means USABLE. Only auth-class failures move the counter
+  // (a provider/transient 500 is not a credential problem); a success clears it.
+  // Fire-and-forget: health is eventually-consistent and must not add latency.
+  if (result.connectionId) {
+    if (result.success) {
+      void mirrorConnectionAuthOutcome(result.connectionId, "ok");
+    } else if (result.errorClass === "auth") {
+      void mirrorConnectionAuthOutcome(result.connectionId, "auth_fail");
     }
   }
 

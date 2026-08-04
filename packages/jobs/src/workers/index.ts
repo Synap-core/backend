@@ -52,6 +52,10 @@ import {
   FOCUS_SESSION_REAPER_QUEUE,
 } from "./focus-session-reaper.js";
 import {
+  handlePlaybookRunReaper,
+  PLAYBOOK_RUN_REAPER_QUEUE,
+} from "./playbook-run-reaper.js";
+import {
   handleChatTurnReaper,
   CHAT_TURN_REAPER_QUEUE,
 } from "./chat-turn-reaper.js";
@@ -209,6 +213,7 @@ const ALL_QUEUES = [
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
+  PLAYBOOK_RUN_REAPER_QUEUE,
   CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
@@ -526,6 +531,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleFocusSessionReaper()
   );
   logger.info("Registered worker: focus-session-reaper");
+
+  // Playbook run reaper (cron: every ~30min — force-fails playbook_runs stuck
+  // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS with a quiet session; the
+  // gap automation-run-reaper never covered)
+  await boss.work(PLAYBOOK_RUN_REAPER_QUEUE, async () =>
+    handlePlaybookRunReaper()
+  );
+  logger.info("Registered worker: playbook-run-reaper");
 
   // Chat turn reaper (cron: every ~15min — fails chat_turns stuck in "running"
   // after a mid-stream crash; threshold via CHAT_TURN_STUCK_HOURS, default 2h)

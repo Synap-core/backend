@@ -81,6 +81,17 @@ const MAX_ENTITIES_PER_KIND = 500;
 /** Global per-user daily proposal budget (UTC day). */
 const MAX_PROPOSALS_PER_USER_PER_DAY = 10;
 
+/**
+ * Cooldown after a NEGATIVE decision on a pair. loadPendingPairKeys only skips
+ * PENDING proposals, so a rejected/withdrawn "Merge A into B" freed the pair and
+ * the very next nightly scan re-proposed the SAME merge — a self-repeating loop
+ * that spammed the inbox with a decision the user already made. A pair whose
+ * merge was rejected/withdrawn within this window is suppressed. Approved merges
+ * soft-delete the loser (isNull(deletedAt) drops it from the sample), so they
+ * need no cooldown.
+ */
+const RESOLVED_PAIR_COOLDOWN_DAYS = 30;
+
 /** Cap pairs considered per user before ranking (extra safety). */
 const MAX_PAIRS_CONSIDERED = 200;
 
@@ -635,6 +646,42 @@ async function loadPendingPairKeys(userId: string): Promise<Set<string>> {
   return keys;
 }
 
+/**
+ * Pairs whose merge was REJECTED or WITHDRAWN within the cooldown window — the
+ * user (or proposer) already said "no", so re-proposing them is noise. This is
+ * the missing half of the dedup: pending-only skipping let the next scan re-file
+ * a just-rejected merge. Ordering is unordered pairKey, same as the pending set.
+ */
+async function loadRecentlyResolvedPairKeys(
+  userId: string
+): Promise<Set<string>> {
+  const cutoff = new Date(
+    Date.now() - RESOLVED_PAIR_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
+  );
+  const rows = await db
+    .select({ data: proposals.data })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.createdBy, userId),
+        eq(proposals.proposalType, "merge"),
+        inArray(proposals.status, [
+          ProposalStatus.REJECTED,
+          ProposalStatus.WITHDRAWN,
+        ]),
+        // updatedAt is bumped on the status transition — the decision time.
+        gte(proposals.updatedAt, cutoff)
+      )
+    );
+
+  const keys = new Set<string>();
+  for (const row of rows) {
+    if (!isEntityMergeProposalData(row.data)) continue;
+    keys.add(pairKey(row.data.winnerId, row.data.loserId));
+  }
+  return keys;
+}
+
 async function scanUser(userId: string): Promise<number> {
   const alreadyToday = await countTodayMergeProposals(userId);
   if (alreadyToday >= MAX_PROPOSALS_PER_USER_PER_DAY) {
@@ -646,7 +693,12 @@ async function scanUser(userId: string): Promise<number> {
   }
 
   let remaining = MAX_PROPOSALS_PER_USER_PER_DAY - alreadyToday;
+  // Skip set = still-open proposals (any age) ∪ recently rejected/withdrawn.
+  // The second half stops the self-repeating loop: without it a rejected merge
+  // was re-proposed on the next run because the pending peek no longer saw it.
   const pendingKeys = await loadPendingPairKeys(userId);
+  const resolvedKeys = await loadRecentlyResolvedPairKeys(userId);
+  const suppressedKeys = new Set<string>([...pendingKeys, ...resolvedKeys]);
 
   // Collect pairs across kinds, then rank globally so high-confidence signal
   // matches beat weak title/embedding matches when the daily budget is tight.
@@ -678,8 +730,18 @@ async function scanUser(userId: string): Promise<number> {
     if (remaining <= 0) break;
 
     const data = buildMergeProposalData(pair);
+    // Self-merge guard: winner === loser is a no-op "Merge X into X" that would
+    // never resolve. Pairs are distinct entities by construction, but a data
+    // glitch (same id sampled twice, an alias collision) must never file one.
+    if (data.winnerId === data.loserId) {
+      logger.warn(
+        { userId, entityId: data.winnerId },
+        "pod-hygiene.near-dup: skipping self-merge (winner === loser)"
+      );
+      continue;
+    }
     const key = pairKey(data.winnerId, data.loserId);
-    if (pendingKeys.has(key) || seenThisRun.has(key)) continue;
+    if (suppressedKeys.has(key) || seenThisRun.has(key)) continue;
     seenThisRun.add(key);
 
     // Workspace of the winner (entities are same-ws by construction).

@@ -20,7 +20,7 @@
  * 500 — the catalog always renders.
  */
 
-import { db, eq, and, or, isNull, inArray } from "@synap/database";
+import { db, eq, and, or, isNull, isNotNull, inArray } from "@synap/database";
 import {
   capabilities,
   tools,
@@ -361,6 +361,13 @@ interface ConnState {
   providerAvailable: Set<string> | null;
   /** Real `vault://<id>` secret ids that exist (not soft-deleted). */
   vaultExists: Set<string>;
+  /**
+   * Nango connectionIds (`secrets.account_hint`) whose connection-health mirror
+   * reads `needs_reauth` (dispatch saw ≥2 auth failures). A provider that is
+   * LISTED in Nango but whose connection is here reads `expired`, not `connected` —
+   * this is what finally makes "connected" mean USABLE instead of merely listed.
+   */
+  reauthConnIds: Set<string>;
 }
 
 /**
@@ -373,8 +380,12 @@ interface ConnState {
  * template-local vault ref (e.g. "apiKeySecret", not yet materialized) or a
  * declared `vault[]` => a vault requirement that is necessarily `missing` until
  * installed. No credentialed tool => no connection required.
+ *
+ * Exported for unit testing (pure over its `ConnState` arg) — mirrors
+ * `extractParamsSchema` above. It carries the health-derivation branch
+ * (`reauthConnIds` → `expired`), the wave's core logic.
  */
-function deriveConnection(
+export function deriveConnection(
   credentialRefs: Array<string | null | undefined>,
   hasVaultRequirement: boolean,
   conn: ConnState
@@ -388,11 +399,15 @@ function deriveConnection(
       const provider = m[1];
       const connectionId = conn.providerConn.get(provider);
       if (connectionId) {
+        // Listed in Nango — but "connected" must mean USABLE. If the health mirror
+        // flagged this connection `needs_reauth` (dispatch saw repeated auth
+        // failures), report `expired` so the surface offers a reconnect instead of
+        // letting the next run 500 on a dead token.
         return {
           required: true,
           kind: "provider",
           provider,
-          state: "connected",
+          state: conn.reauthConnIds.has(connectionId) ? "expired" : "connected",
           account: connectionId,
         };
       }
@@ -472,6 +487,15 @@ function nextActionFor(
       return { kind: "add", hint: `Add "${name}" to install its verbs.` };
     case "needs_connection": {
       const prov = connection?.provider;
+      // `expired` = previously connected, token now dead → RECONNECT, not connect.
+      if (connection?.state === "expired") {
+        return {
+          kind: "connect",
+          hint: prov
+            ? `Reconnect ${prov} — its access expired or was revoked.`
+            : `Reconnect the credential for "${name}" — it expired or was revoked.`,
+        };
+      }
       return {
         kind: "connect",
         hint: prov
@@ -543,6 +567,31 @@ async function loadConnState(
     // Degrade: no provider connections known → providers read as "missing".
   }
 
+  // Connection-health mirror (0229): which of this user's capability connections
+  // have been marked `needs_reauth` by the dispatch auth-failure signal. Read from
+  // the SAME store the CRUD registry owns (`secrets`), so "connected" reflects
+  // health, not raw Nango existence. Degrades to empty (all healthy) on failure —
+  // the catalog must always render.
+  const reauthConnIds = new Set<string>();
+  try {
+    const unhealthy = await db
+      .select({ accountHint: secrets.accountHint })
+      .from(secrets)
+      .where(
+        and(
+          isNotNull(secrets.capabilityId),
+          eq(secrets.connectionState, "needs_reauth"),
+          or(eq(secrets.userId, userId), eq(secrets.isPodWide, true)),
+          isNull(secrets.deletedAt)
+        )
+      );
+    for (const r of unhealthy) {
+      if (r.accountHint) reauthConnIds.add(r.accountHint);
+    }
+  } catch {
+    // Degrade: no health signal → connections read by existence alone (prior behavior).
+  }
+
   const vaultExists = new Set<string>();
   if (vaultSecretIds.length > 0) {
     try {
@@ -568,7 +617,7 @@ async function loadConnState(
     }
   }
 
-  return { providerConn, providerAvailable, vaultExists };
+  return { providerConn, providerAvailable, vaultExists, reauthConnIds };
 }
 
 // ── Template loading (DB rows + on-disk family templates) ─────────────────────

@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -24,6 +25,7 @@ import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   getDb,
   eq,
+  ne,
   and,
   or,
   isNull,
@@ -55,6 +57,8 @@ import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
+
+const logger = createLogger({ module: "automations-router" });
 
 const automationDataContractItemBase = {
   id: z.string().min(1),
@@ -542,6 +546,43 @@ async function prepareAutomationForMaterialization(
   );
 }
 
+/** Postgres unique-violation SQLSTATE — raised by automations_workspace_name_active_uq. */
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e.code === "23505" || e.cause?.code === "23505";
+}
+
+/**
+ * Load the surviving non-archived automation for (workspaceId, name).
+ * Case-insensitive on name; NULL workspace = pod-wide (matches the unique index
+ * COALESCE sentinel). Newest-wins (updated_at DESC) so concurrent 23505 recovery
+ * agrees with 0230's soft-archive keep-most-recently-updated rule.
+ */
+async function findNonArchivedAutomationByName(
+  database: AutomationDatabase,
+  workspaceId: string | null | undefined,
+  name: string
+): Promise<{ id: string } | null> {
+  const scope =
+    workspaceId == null || workspaceId === ""
+      ? isNull(automations.workspaceId)
+      : eq(automations.workspaceId, workspaceId);
+  const [row] = await database
+    .select({ id: automations.id })
+    .from(automations)
+    .where(
+      and(
+        scope,
+        drizzleSql`lower(${automations.name}) = lower(${name})`,
+        ne(automations.status, "archived")
+      )
+    )
+    .orderBy(desc(automations.updatedAt), desc(automations.id))
+    .limit(1);
+  return row ?? null;
+}
+
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
@@ -554,32 +595,61 @@ async function insertAutomationAfterGovernance(
     if (expression) nextRunAt = computeNextCronRunAt(expression, new Date());
   }
 
-  const [row] = await database
-    .insert(automations)
-    .values({
-      ...(stableId ? { id: stableId } : {}),
-      workspaceId: input.workspaceId ?? null,
-      createdBy,
-      name: input.name,
-      description: input.description,
-      triggerType: input.triggerType,
-      triggerConfig: input.triggerConfig,
-      flowDefinition: input.flowDefinition as unknown as FlowDefinition,
-      status: input.status,
-      ...(nextRunAt ? { nextRunAt } : {}),
-      state: input.state ?? {},
-      metadata: {
-        ...(input.metadata ?? {}),
-        createdVia:
-          input.source === "agent" || input.source === "ai"
-            ? ("ai" as const)
-            : ("manual" as const),
-      },
-    })
-    .onConflictDoNothing({ target: automations.id })
-    .returning({ id: automations.id });
+  // Insert with 23505 recovery against automations_workspace_name_active_uq
+  // (0230). Re-authoring the same automation (MCP create_automation, a capability
+  // re-seeding "Enrich the lead" on reconcile) used to clone a 2nd row — the
+  // name-unique index makes the loser a unique-violation, and we return the
+  // existing winner instead of a 500 or a duplicate (mirrors playbooks.create).
+  // onConflictDoNothing({target: id}) still absorbs the stableId re-materialize
+  // retry (same primary key); the name index is a DIFFERENT constraint, so a
+  // same-name / different-id clone throws 23505 and is caught below.
+  try {
+    const [row] = await database
+      .insert(automations)
+      .values({
+        ...(stableId ? { id: stableId } : {}),
+        workspaceId: input.workspaceId ?? null,
+        createdBy,
+        name: input.name,
+        description: input.description,
+        triggerType: input.triggerType,
+        triggerConfig: input.triggerConfig,
+        flowDefinition: input.flowDefinition as unknown as FlowDefinition,
+        status: input.status,
+        ...(nextRunAt ? { nextRunAt } : {}),
+        state: input.state ?? {},
+        metadata: {
+          ...(input.metadata ?? {}),
+          createdVia:
+            input.source === "agent" || input.source === "ai"
+              ? ("ai" as const)
+              : ("manual" as const),
+        },
+      })
+      .onConflictDoNothing({ target: automations.id })
+      .returning({ id: automations.id });
 
-  return row?.id ?? stableId ?? null;
+    // row is undefined only when onConflictDoNothing swallowed a primary-key
+    // conflict (stableId re-materialize) — the row already exists under stableId.
+    return row?.id ?? stableId ?? null;
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const winner = await findNonArchivedAutomationByName(
+      database,
+      input.workspaceId ?? null,
+      input.name
+    );
+    if (!winner) throw err;
+    logger.info(
+      {
+        automationId: winner.id,
+        workspaceId: input.workspaceId ?? null,
+        name: input.name,
+      },
+      "automations.create: unique violation — returning existing non-archived automation"
+    );
+    return winner.id;
+  }
 }
 
 /**

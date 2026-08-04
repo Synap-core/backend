@@ -2173,6 +2173,18 @@ CREATE INDEX IF NOT EXISTS "automations_next_run_at_idx"
 CREATE INDEX IF NOT EXISTS "automations_created_by_idx"
   ON "automations" ("created_by");
 
+-- Name-identity backstop (0230): at-most-one non-archived automation per
+-- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
+-- pod-wide rows participate. Soft-archive of pre-existing name clones (keep
+-- most-recently-updated) is only in 0230_automations_workspace_name_unique.sql
+-- (baseline assumes clean seed).
+CREATE UNIQUE INDEX IF NOT EXISTS "automations_workspace_name_active_uq"
+  ON "automations" (
+    COALESCE(workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    lower(name)
+  )
+  WHERE status <> 'archived';
+
 CREATE TABLE IF NOT EXISTS "automation_runs" (
   "id"              uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "automation_id"   uuid  NOT NULL REFERENCES "automations"("id") ON DELETE CASCADE,

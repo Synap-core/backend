@@ -40,6 +40,10 @@ import {
   FOCUS_SESSION_REAPER_CRON,
 } from "./workers/focus-session-reaper.js";
 import {
+  PLAYBOOK_RUN_REAPER_QUEUE,
+  PLAYBOOK_RUN_REAPER_CRON,
+} from "./workers/playbook-run-reaper.js";
+import {
   CHAT_TURN_REAPER_QUEUE,
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
@@ -150,6 +154,17 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: focus-session-reaper (every hour)");
+
+  // Playbook run reaper (every ~30min — force-fails playbook_runs stuck
+  // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS whose session went quiet;
+  // orphaned by worker death or an external agent that never captured back)
+  await scheduleSafe(
+    boss,
+    PLAYBOOK_RUN_REAPER_QUEUE,
+    PLAYBOOK_RUN_REAPER_CRON,
+    {}
+  );
+  logger.info("Registered cron: playbook-run-reaper (every 30min)");
 
   // Chat turn reaper (every ~15min — fails chat_turns stuck in "running" past
   // CHAT_TURN_STUCK_HOURS, default 2h; process-crash mid-stream failsafe)

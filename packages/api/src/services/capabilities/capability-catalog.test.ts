@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractParamsSchema } from "./capability-catalog.js";
+import { extractParamsSchema, deriveConnection } from "./capability-catalog.js";
 
 /**
  * `extractParamsSchema` — the projection every run form / inspector reads.
@@ -117,5 +117,78 @@ describe("extractParamsSchema — JSON-schema shape is unchanged", () => {
     expect(
       extractParamsSchema({ properties: { q: { type: "string?" } } })
     ).toEqual([{ name: "q", type: "string?", required: false }]);
+  });
+});
+
+/**
+ * `deriveConnection` — the connection state machine, incl. the 0229 health branch.
+ *
+ * The wave's core promise: "connected" must mean USABLE, not merely LISTED. A
+ * provider that Nango still lists but whose health mirror flagged `needs_reauth`
+ * (its connectionId in `reauthConnIds`) must read `expired`, NOT `connected` — else
+ * the surface hides a dead token and the next run 500s. These pin that branch plus
+ * the surrounding derivations so a regression can't silently un-wire it.
+ */
+describe("deriveConnection — provider connection health", () => {
+  const CONN = "prod-nango-connection-id-abc123";
+  const base = {
+    providerAvailable: new Set<string>(["google"]),
+    vaultExists: new Set<string>(),
+    reauthConnIds: new Set<string>(),
+  };
+
+  it("listed + healthy → connected", () => {
+    const conn = {
+      ...base,
+      providerConn: new Map([["google", CONN]]),
+      reauthConnIds: new Set<string>(),
+    };
+    expect(deriveConnection(["nango://google"], false, conn)).toMatchObject({
+      kind: "provider",
+      provider: "google",
+      state: "connected",
+      account: CONN,
+    });
+  });
+
+  it("listed but health-mirror says needs_reauth → expired (the 0229 fix)", () => {
+    const conn = {
+      ...base,
+      providerConn: new Map([["google", CONN]]),
+      reauthConnIds: new Set<string>([CONN]),
+    };
+    expect(deriveConnection(["nango://google"], false, conn)).toMatchObject({
+      state: "expired",
+      account: CONN,
+    });
+  });
+
+  it("not listed, provider declared → missing (connectable), never expired", () => {
+    const conn = { ...base, providerConn: new Map<string, string>() };
+    expect(deriveConnection(["nango://google"], false, conn)).toMatchObject({
+      state: "missing",
+    });
+  });
+
+  it("not listed, availability KNOWN-absent → unavailable", () => {
+    const conn = {
+      ...base,
+      providerConn: new Map<string, string>(),
+      providerAvailable: new Set<string>(["slack"]), // google not declared
+    };
+    expect(deriveConnection(["nango://google"], false, conn)).toMatchObject({
+      state: "unavailable",
+    });
+  });
+
+  it("not listed, availability UNKNOWN (null) → missing, not unavailable", () => {
+    const conn = {
+      ...base,
+      providerConn: new Map<string, string>(),
+      providerAvailable: null,
+    };
+    expect(deriveConnection(["nango://google"], false, conn)).toMatchObject({
+      state: "missing",
+    });
   });
 });
