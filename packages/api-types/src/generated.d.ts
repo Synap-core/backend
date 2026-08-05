@@ -6424,6 +6424,46 @@ export type PaginatedResponse<T> = {
 		offset: number;
 	};
 };
+/** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
+export type RendererBindingStore = "workspace" | "profile" | "view";
+/** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
+export type RendererKeyKind = "cell" | "view-adapter" | "view" | "other";
+export interface RendererBinding {
+	store: RendererBindingStore;
+	/** The BINDER's id — the workspace / profile / view that carries the ref. */
+	id: string;
+	/** The binder's display name. */
+	name: string;
+	/** Set for workspace-overlay + profile bindings. */
+	profileSlug?: string;
+	/** The ContentKind (or legacy slot key) the ref is bound under. */
+	contentKind?: string;
+	/** True when the ref sits under a deprecated slot key / column. */
+	legacy?: boolean;
+	workspaceId: string | null;
+}
+export interface RendererUsage {
+	/** `cellKey` | `adapterKey` | `view:<uuid>` | `<refKind>:<appId>`. */
+	key: string;
+	kind: RendererKeyKind;
+	registered: "yes" | "no" | "unknown";
+	bindings: RendererBinding[];
+	health: {
+		status: "ok" | "degraded" | "unknown";
+		bindingCount: number;
+		staleCount: number;
+	};
+	gaps: string[];
+}
+export interface RendererUsageReport {
+	usage: RendererUsage[];
+	/**
+	 * How many entities carry a per-entity renderer override
+	 * (`system_data ? 'renderer'`), counted once over the caller's owner-safe
+	 * entity floor. `null` when the count could not be taken.
+	 */
+	perEntityOverrideCount: number | null;
+}
 /** A column→property routing decision for ONE CSV header. Mirrors the IS plan's
  *  `ColumnMappingProposal` but only the fields ingestion needs. */
 export interface CsvColumnPlan {
@@ -7570,6 +7610,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		countByProfile: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
+			output: {
+				counts: Record<string, number>;
+			};
+			meta: object;
+		}>;
+		countByProfileAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+			} | undefined;
 			output: {
 				counts: Record<string, number>;
 			};
@@ -18180,6 +18229,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | null;
+				scope?: "workspace" | "pod" | undefined;
 			};
 			output: {
 				success: boolean;
@@ -18216,6 +18266,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewId: string;
 				config: unknown;
 			};
+			meta: object;
+		}>;
+	}>>;
+	surfaces: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				cellKey?: string | undefined;
+				includeEntityBindings?: boolean | undefined;
+			} | undefined;
+			output: RendererUsageReport;
 			meta: object;
 		}>;
 	}>>;

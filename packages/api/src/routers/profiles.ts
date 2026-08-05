@@ -1284,6 +1284,10 @@ export const profilesRouter = router({
         profileSlug: z.string(),
         contentKind: ProfileContentKindSchema,
         ref: RendererRefSchema.nullable(),
+        // WHERE the binding is written: 'workspace' overlays this kind for this
+        // workspace; 'pod' sets the profile-wide default across every workspace.
+        // The per-entity door is `entities.setEntityRenderer`.
+        scope: z.enum(["workspace", "pod"]).default("workspace"),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1301,7 +1305,7 @@ export const profilesRouter = router({
         data: {
           profileSlug: input.profileSlug,
           slot,
-          scope: "workspace",
+          scope: input.scope,
           ref: input.ref,
         },
       });
@@ -1323,7 +1327,7 @@ export const profilesRouter = router({
         profileSlug: input.profileSlug,
         slot,
         ref: input.ref,
-        scope: "workspace",
+        scope: input.scope,
       });
 
       logger.info(

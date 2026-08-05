@@ -76,6 +76,69 @@ describe("installCellFromDefinition", () => {
     expect(arg.viewTypes).toBeUndefined();
   });
 
+  it("threads contentKind through — the slot `renderersForType` filters on", async () => {
+    // Without it the row lands as the column default `widget`, which
+    // `renderersForType('entity-detail'|'entity-profile'|'collection')` never
+    // returns: installed, and unpickable as a renderer forever.
+    await installCellFromDefinition({
+      definition: { ...BASE, contentKind: "entity-detail" },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().contentKind).toBe("entity-detail");
+  });
+
+  it("derives contentKind=collection from viewTypes when the package predates the field", async () => {
+    await installCellFromDefinition({
+      definition: { ...BASE, viewTypes: ["table"] },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().contentKind).toBe("collection");
+  });
+
+  it("an explicit contentKind wins over the viewTypes derivation", async () => {
+    await installCellFromDefinition({
+      definition: {
+        ...BASE,
+        viewTypes: ["table"],
+        contentKind: "entity-profile",
+      },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().contentKind).toBe("entity-profile");
+  });
+
+  it("passes contentKind as UNDEFINED on no signal, and ignores a bogus value", async () => {
+    // Same omit-is-silence rule as viewTypes: an upsert must not stamp `widget`
+    // over a kind a previous install declared, and an unknown string must not
+    // reach a column typed by a union.
+    await installCellFromDefinition({
+      definition: BASE,
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().contentKind).toBeUndefined();
+
+    await installCellFromDefinition({
+      definition: { ...BASE, contentKind: "not-a-kind" },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg(1).contentKind).toBeUndefined();
+  });
+
   it("an explicit cellKey overrides the definition's own key", async () => {
     await installCellFromDefinition({
       definition: BASE,

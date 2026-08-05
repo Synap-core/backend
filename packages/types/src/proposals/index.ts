@@ -8,6 +8,12 @@ import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
 export { isLikelyUUID };
 
+// Governance grant-option derivation (pure, browser-safe) — the SSOT the
+// GovernanceMenu consumes. Was authored but never re-exported from the barrel,
+// so `@synap-core/types` didn't provide `deriveGovernanceGrantOptions` at the
+// package root and the browser failed to load.
+export * from "./governance-grant-options.js";
+
 // Re-export database types for proposals
 export type { Proposal, NewProposal } from "@synap/database";
 

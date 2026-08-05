@@ -34,6 +34,7 @@ import { skillsRouter } from "./routers/skills.js";
 import { toolsRouter } from "./routers/tools.js";
 import { messageLinksRouter } from "./routers/message-links.js";
 import { profilesRouter } from "./routers/profiles.js";
+import { surfacesRouter } from "./routers/surfaces.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { relationDefsRouter } from "./routers/relation-defs.js";
@@ -80,6 +81,7 @@ import { onboardingRouter } from "./routers/onboarding.js";
 // were served but invisible to codegen). Folded into coreRouter so root.ts is
 // the SINGLE source of truth for the served + typed API surface.
 import { diagnoseRouter } from "./routers/diagnose.js";
+import { signalRouter } from "./routers/signal.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
@@ -126,6 +128,8 @@ export const coreRouter = router({
   messageLinks: messageLinksRouter,
   // Dynamic Schema System
   profiles: profilesRouter,
+  // Surfaces plane — renderer usage-health (how each record type is displayed)
+  surfaces: surfacesRouter,
   propertyDefs: propertyDefsRouter,
   profileProperties: profilePropertiesRouter,
   relationDefs: relationDefsRouter,
@@ -167,6 +171,7 @@ export const coreRouter = router({
   projects: projectsRouter,
   onboarding: onboardingRouter,
   diagnose: diagnoseRouter,
+  signal: signalRouter,
   typesense: typesenseRouter,
   n8nActions: n8nActionsRouter,
   users: usersRouter,

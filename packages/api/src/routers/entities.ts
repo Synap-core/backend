@@ -563,12 +563,97 @@ function emitFacetSideEffects(opts: {
   });
 }
 
+/**
+ * Count entities grouped by profile slug, under the caller's floor.
+ *
+ * ONE implementation behind BOTH altitudes (`countByProfile`, workspace-scoped,
+ * and `countByProfileAll`, pod-capable) so a badge can never tell two stories:
+ *
+ *  - FLOOR (always applied): the canonical entity floor `entityWriteVisibleWhere`
+ *    (`accessScopeWhere`, no lens) — a NULL-workspace row is OWNER-private, a
+ *    workspace row needs membership/exposure. Plain `userVisibleWhere` is
+ *    owner-BLIND on the NULL branch and would leak other users' pod-personal
+ *    rows at pod altitude; that is why this never hand-rolls a predicate.
+ *  - LENS (`workspaceId`): NARROWS the floor to that workspace + pod-wide
+ *    (NULL-workspace) rows. It is ANDed with the floor, so an unverified
+ *    caller-supplied workspaceId can never widen what the caller already sees.
+ *    Omitted ⇒ the whole floor (every visible workspace + globals).
+ *
+ * The facet pass exists because a profile converted from a primary kind into an
+ * attachable role no longer matches `entities.type` — its entities now carry it
+ * as a live facet, so the kind count is 0 for that slug. Counting DISTINCT
+ * entities per role-profile slug under the SAME lens keeps a role profile's
+ * badge truthful after conversion. That pass goes through
+ * `resolveFacetVisibilityScope` (which INTERSECTS an explicit lens with the
+ * caller's access) + `facetVisibilityConditions`, the shared facet-read
+ * predicate — `facetVisibilityConditions` does no membership check of its own.
+ */
+async function countEntitiesByProfile(opts: {
+  userId: string;
+  workspaceId: string | null;
+}): Promise<Record<string, number>> {
+  const { userId, workspaceId } = opts;
+
+  const entityFloor = entityWriteVisibleWhere(userId);
+  const entityScope = workspaceId
+    ? and(
+        entityFloor,
+        or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
+      )
+    : entityFloor;
+
+  const rows = await db
+    .select({
+      profileSlug: entities.type,
+      count: drizzleSql<number>`cast(count(*) as integer)`,
+    })
+    .from(entities)
+    .where(and(entityScope, isNull(entities.deletedAt)))
+    .groupBy(entities.type);
+
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.profileSlug) {
+      counts[row.profileSlug] = row.count;
+    }
+  }
+
+  const facetVisibilityScope = await resolveFacetVisibilityScope(
+    userId,
+    workspaceId ?? undefined
+  );
+
+  const facetRows = await db
+    .select({
+      profileSlug: profiles.slug,
+      count: drizzleSql<number>`cast(count(distinct ${entityFacets.entityId}) as integer)`,
+    })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+    .where(
+      and(
+        isNull(entityFacets.deletedAt),
+        ...facetVisibilityConditions(facetVisibilityScope)
+      )
+    )
+    .groupBy(profiles.slug);
+
+  for (const row of facetRows) {
+    if (row.profileSlug) {
+      counts[row.profileSlug] = (counts[row.profileSlug] ?? 0) + row.count;
+    }
+  }
+
+  return counts;
+}
+
 export const entitiesRouter = router({
   /**
    * Count entities grouped by profile slug.
    *
    * Returns a map of { [profileSlug]: count } for the active workspace
-   * (including global entities). Useful for data-structure visualisation badges.
+   * (including the caller's own global entities). Useful for data-structure
+   * visualisation badges. Pod altitude: `countByProfileAll`.
    */
   countByProfile: workspaceProcedure
     .output(
@@ -577,65 +662,40 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ ctx }) => {
-      const rows = await db
-        .select({
-          profileSlug: entities.type,
-          count: drizzleSql<number>`cast(count(*) as integer)`,
-        })
-        .from(entities)
-        .where(
-          and(
-            // Pod-personal (workspaceId IS NULL) entities are per-user —
-            // count only the caller's own globals, not all users' pod-personal rows.
-            or(
-              eq(entities.workspaceId, ctx.workspaceId),
-              and(isNull(entities.workspaceId), eq(entities.userId, ctx.userId))
-            ),
-            isNull(entities.deletedAt)
-          )
-        )
-        .groupBy(entities.type);
+      const counts = await countEntitiesByProfile({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+      return { counts };
+    }),
 
-      const counts: Record<string, number> = {};
-      for (const row of rows) {
-        if (row.profileSlug) {
-          counts[row.profileSlug] = row.count;
-        }
-      }
-
-      // Kind + Facets: a profile converted from a primary kind into an
-      // attachable role no longer matches `entities.type` — its entities now
-      // carry it as a live facet, so the count above is 0 for that slug. Count
-      // DISTINCT entities per role-profile slug (same workspace lens as the
-      // kind counts) in ONE grouped query and merge, so a role profile keeps a
-      // truthful badge instead of dropping to zero after conversion.
-      const facetRows = await db
-        .select({
-          profileSlug: profiles.slug,
-          count: drizzleSql<number>`cast(count(distinct ${entityFacets.entityId}) as integer)`,
-        })
-        .from(entityFacets)
-        .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
-        .where(
-          and(
-            isNull(entityFacets.deletedAt),
-            or(
-              eq(entityFacets.workspaceId, ctx.workspaceId),
-              and(
-                isNull(entityFacets.workspaceId),
-                eq(entityFacets.userId, ctx.userId)
-              )
-            )
-          )
-        )
-        .groupBy(profiles.slug);
-
-      for (const row of facetRows) {
-        if (row.profileSlug) {
-          counts[row.profileSlug] = (counts[row.profileSlug] ?? 0) + row.count;
-        }
-      }
-
+  /**
+   * Pod-capable sibling of `countByProfile` — same counts, same facet merge,
+   * one altitude higher.
+   *
+   * ALTITUDE: `protectedProcedure` with an OPTIONAL `workspaceId` (mirrors
+   * `capabilities.compositions`). The Surfaces "Renderers" tab and every other
+   * pod-altitude surface runs with NO active workspace, where the
+   * `workspaceProcedure`-built `countByProfile` 400s ("Workspace ID required")
+   * — a badge that cannot render at the altitude its app lives at.
+   *
+   * `workspaceId` NARROWS, it never widens: the owner-private floor is applied
+   * FIRST and unconditionally (see `countEntitiesByProfile`), so passing a
+   * workspace the caller cannot see yields zero rows rather than a leak. Omit
+   * it for the pod floor.
+   */
+  countByProfileAll: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
+    .output(
+      z.object({
+        counts: z.record(z.string(), z.number()),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const counts = await countEntitiesByProfile({
+        userId: ctx.userId,
+        workspaceId: input?.workspaceId ?? null,
+      });
       return { counts };
     }),
 

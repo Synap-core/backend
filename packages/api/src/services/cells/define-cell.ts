@@ -10,6 +10,7 @@
 
 import { getDb, and, eq, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import type { ContentKind } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 
 // deps are spliced into esm.sh import-map URLs inside the sandboxed iframe
@@ -62,6 +63,15 @@ export interface DefineCellInput {
    * explicit `[]` or `null` to clear it.
    */
   viewTypes?: string[] | null;
+  /**
+   * WHAT this cell renders — the de-conflated taxonomy that decides which
+   * profile-renderer slots it can fill (`renderersForType` in the browser's
+   * cell registry). OMITTED ⇒ the column default `widget`, which is placeable
+   * but is NEVER offered as an entity-detail / entity-profile / collection
+   * renderer. Same omit-is-silence rule as `viewTypes`: undefined on an upsert
+   * of an EXISTING row leaves the stored kind untouched.
+   */
+  contentKind?: ContentKind;
   /** Acting user — stamped on the realtime event. */
   userId: string;
 }
@@ -107,6 +117,9 @@ export async function defineCell(
   // affinity — see `DefineCellInput.viewTypes`.
   const viewTypesUpdate =
     viewTypes === undefined ? {} : { viewRendererViewTypes: viewTypes };
+  // Same omit-is-silence rule as `viewTypesUpdate` — see `DefineCellInput.contentKind`.
+  const contentKindUpdate =
+    input.contentKind === undefined ? {} : { contentKind: input.contentKind };
 
   const values = {
     typeKey,
@@ -123,6 +136,10 @@ export async function defineCell(
     isActive: true,
     trustLevel: "generated" as const,
     viewRendererViewTypes: viewTypes ?? null,
+    // INSERT branch: omitted ⇒ let the column default (`widget`) apply.
+    ...(input.contentKind === undefined
+      ? {}
+      : { contentKind: input.contentKind }),
   };
 
   let changeType: "created" | "updated" = "created";
@@ -141,6 +158,7 @@ export async function defineCell(
           deps: (input.deps ?? {}) as Record<string, string>,
           isActive: true,
           ...viewTypesUpdate,
+          ...contentKindUpdate,
           updatedAt: new Date(),
         },
       })
@@ -170,6 +188,7 @@ export async function defineCell(
         deps: (input.deps ?? {}) as Record<string, string>,
         isActive: true,
         ...viewTypesUpdate,
+        ...contentKindUpdate,
         updatedAt: new Date(),
       })
       .where(

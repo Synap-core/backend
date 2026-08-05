@@ -20,6 +20,41 @@
  */
 
 import { defineCell } from "./define-cell.js";
+import type { ContentKind } from "@synap/database/schema";
+
+const CONTENT_KINDS: readonly string[] = [
+  "entity-detail",
+  "entity-profile",
+  "collection",
+  "widget",
+];
+
+/**
+ * The renderer SLOT to store for an installed cell — the same drop as
+ * `viewTypes`, one column over.
+ *
+ * `renderersForType('entity-detail'|'entity-profile'|'collection')` (the browser
+ * cell registry, and therefore the renderer picker) filters on `contentKind`. A
+ * row written without one lands as the column default `widget`, so the cell
+ * installs fine and is then invisible to every renderer assignment — installed
+ * but unpickable.
+ *
+ * Prefer the package's explicit `contentKind`. Fall back to DERIVING
+ * `collection` from a non-empty `viewTypes`: a cell that declares which view
+ * types it renders IS a collection renderer, and every package published before
+ * the CP carried `contentKind` has only that signal. No signal at all ⇒
+ * `undefined`, which leaves `defineCell` to apply the column default on insert
+ * and to leave an existing row's kind untouched (the same omit-is-silence rule
+ * as `viewTypes`).
+ */
+export function resolveCellContentKind(
+  raw: string | undefined,
+  viewTypes: string[] | undefined
+): ContentKind | undefined {
+  if (raw && CONTENT_KINDS.includes(raw)) return raw as ContentKind;
+  if (Array.isArray(viewTypes) && viewTypes.length > 0) return "collection";
+  return undefined;
+}
 
 /** A cell as authored inside a package definition (CP `cells[]` entry). */
 export interface PackageCellDefinition {
@@ -32,12 +67,19 @@ export interface PackageCellDefinition {
   packageSlug?: string;
   /** View types this cell can render — see the header. */
   viewTypes?: string[];
+  /** Renderer slot this cell fills — see `resolveCellContentKind`. */
+  contentKind?: string;
 }
 
 export interface InstallCellFromDefinitionInput {
   definition: PackageCellDefinition;
   /** Display name for the widget-definition row. */
   name: string;
+  /**
+   * Description for the row. Omitted ⇒ `defineCell` writes NULL (its existing
+   * behaviour for every caller that has no description to give).
+   */
+  description?: string | null;
   /** Owning package slug — first segment of the typeKey. */
   packageSlug: string;
   /** Cell key within the package — second segment. Defaults to `definition.key`. */
@@ -77,6 +119,7 @@ export async function installCellFromDefinition(
   }
   return defineCell({
     name: input.name,
+    description: input.description,
     rendererSource: definition.code,
     workspaceId: input.workspaceId,
     typeKey: packageCellTypeKey(input.packageSlug, cellKey),
@@ -88,6 +131,10 @@ export async function installCellFromDefinition(
     viewTypes: Array.isArray(definition.viewTypes)
       ? definition.viewTypes
       : undefined,
+    contentKind: resolveCellContentKind(
+      definition.contentKind,
+      definition.viewTypes
+    ),
     userId: input.userId,
   });
 }

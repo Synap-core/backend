@@ -14,6 +14,10 @@ import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { getDb, and, eq } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import {
+  installCellFromDefinition,
+  packageCellTypeKey,
+} from "../services/cells/install-cell-from-definition.js";
 
 function requireAdminRole(role: string | undefined | null) {
   if (!["owner", "admin"].includes(role ?? "")) {
@@ -68,6 +72,10 @@ export const cellsRouter = router({
             deps?: Record<string, string>;
             description?: string;
             defaultSize?: { w: number; h: number };
+            /** Renderer slot — see CP `PackageCellDef.contentKind`. */
+            contentKind?: string;
+            /** View-renderer affinity — see CP `PackageCellDef.viewTypes`. */
+            viewTypes?: string[];
           }
         | undefined;
 
@@ -82,8 +90,7 @@ export const cellsRouter = router({
           });
         }
         const data = (await resp.json()) as
-          | { cells?: (typeof cell)[] }
-          | (typeof cell)[];
+          { cells?: (typeof cell)[] } | (typeof cell)[];
         const list = Array.isArray(data)
           ? data
           : ((data as { cells?: (typeof cell)[] }).cells ?? []);
@@ -116,38 +123,38 @@ export const cellsRouter = router({
         });
       }
 
-      const typeKey = `cell:${packageSlug}:${cellKey}`;
+      // Route through the SHARED package-cell mapper (→ the one write door
+      // `defineCell`) instead of a third hand-rolled insert. That raw insert
+      // skipped everything the door owns: `validateDeps` (deps are spliced into
+      // esm.sh import-map URLs inside the sandboxed frame — the door's docblock
+      // already named "marketplace install" as a caller that must not bypass
+      // it), the `widget_definition.changed` realtime emit (so an install only
+      // reached the browser on its 60s poll), `viewRendererViewTypes`, and — the
+      // defect this fixes — `contentKind`. Without a contentKind the row lands as
+      // the column default `widget`, which `renderersForType` never offers for
+      // 'entity-detail' | 'entity-profile' | 'collection': the cell installed
+      // fine and could never be chosen as a renderer.
+      await installCellFromDefinition({
+        definition: {
+          key: cellKey,
+          code: cell.code,
+          deps: cell.deps,
+          defaultSize: cell.defaultSize,
+          viewTypes: cell.viewTypes,
+          contentKind: cell.contentKind,
+        },
+        name: cell.name,
+        description: cell.description ?? null,
+        packageSlug,
+        cellKey,
+        workspaceId,
+        userId: ctx.userId,
+      });
 
-      const db = await getDb();
-      await db
-        .insert(widgetDefinitions)
-        .values({
-          typeKey,
-          workspaceId,
-          name: cell.name,
-          description: cell.description,
-          category: "installed",
-          rendererType: "frame",
-          rendererSource: cell.code,
-          deps: cell.deps ?? {},
-          configSchema: {},
-          defaultConfig: {},
-          defaultSize: cell.defaultSize ?? { w: 6, h: 4 },
-          isActive: true,
-        })
-        .onConflictDoUpdate({
-          target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
-          set: {
-            name: cell.name,
-            description: cell.description ?? null,
-            rendererSource: cell.code,
-            deps: cell.deps ?? {},
-            isActive: true,
-            updatedAt: new Date(),
-          },
-        });
-
-      return { success: true, typeKey };
+      return {
+        success: true,
+        typeKey: packageCellTypeKey(packageSlug, cellKey),
+      };
     }),
 
   /**
