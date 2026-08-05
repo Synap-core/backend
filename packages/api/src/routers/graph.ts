@@ -21,12 +21,19 @@ import {
   isNull,
   isNotNull,
   desc,
+  drizzleSql,
   profileSlugScopeConditionFromRows,
   loadFacetSlugsBatch,
 } from "@synap/database";
-import { entities, relations } from "@synap/database/schema";
+import {
+  entities,
+  entityPropertyIndex,
+  propertyDefs,
+  relations,
+} from "@synap/database/schema";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import {
   getObjectGraph,
   connectionsToNeighbors,
@@ -35,6 +42,10 @@ import {
   type GraphNeighbor,
   type GraphEnvelope,
 } from "../services/object-graph/graph-service.js";
+import {
+  buildSystemMapOverview,
+  type SystemMapOverview,
+} from "../services/object-graph/system-map.js";
 import { relationsRouter } from "./relations.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
@@ -68,12 +79,248 @@ function graphRelationsFloor(userId: string) {
 }
 
 /**
+ * The System Map follows Library's active-lens policy: a specific workspace
+ * shows its rows only unless the caller explicitly asks to include pod-wide
+ * entities. This is the same data-table resolver used by entity lists, with
+ * the role-as-lens branch needed for Kind + Facets clusters.
+ */
+function systemMapEntityScope(
+  userId: string,
+  workspaceLens: string | null | undefined,
+  includePodWide: boolean
+) {
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId,
+    workspaceLens,
+    facetLens: true,
+    includeGlobalsInLens: includePodWide,
+  });
+}
+
+function systemMapWorkspaceLens(
+  inputWorkspaceId: string | null | undefined,
+  contextWorkspaceId: string | null | undefined,
+  allData: boolean
+) {
+  // `null` is a deliberate globals-only lens in Synap. Library's All data
+  // mode therefore needs an explicit user-wide request, not a null lens.
+  if (allData) return undefined;
+  return inputWorkspaceId !== undefined
+    ? inputWorkspaceId
+    : (contextWorkspaceId ?? undefined);
+}
+
+/**
+ * Structural links are meaningful only through the active effective-property
+ * lens. In All data there is no single workspace overlay, so only base defs
+ * participate; a focused workspace can add only its own overlay defs.
+ */
+function systemMapPropertyDefScope(workspaceLens: string | null | undefined) {
+  return workspaceLens
+    ? or(
+        isNull(propertyDefs.workspaceId),
+        eq(propertyDefs.workspaceId, workspaceLens)
+      )
+    : isNull(propertyDefs.workspaceId);
+}
+
+/**
  * Get a single node with full graph context
  *
  * Returns entity + all relations + related entity previews in one call.
  * Essential for graph view performance.
  */
 export const graphRouter = router({
+  /**
+   * A compact, truthful overview of the visible entity graph for Library's
+   * System Map. This reads and aggregates the complete server-side lens — it
+   * never derives counts or bundles from a paginated entities.list response.
+   *
+   * Semantic relations come from `relations`; structural links come from the
+   * indexed entity_id-property projection. The two sources remain distinct so
+   * clients never mistake schema wiring for an emergent graph relationship.
+   */
+  getSystemMapOverview: podProcedure
+    .input(
+      z.object({
+        /** Explicit lens; omitted uses the caller's active workspace. */
+        workspaceId: z.string().uuid().nullable().optional(),
+        /** Deliberately bypass the active workspace lens for Library All data. */
+        allData: z.boolean().default(false),
+        /** Opt into the active workspace + pod-wide entity union. */
+        includePodWide: z.boolean().default(false),
+      })
+    )
+    .query(async ({ input, ctx }): Promise<SystemMapOverview> => {
+      const workspaceLens = systemMapWorkspaceLens(
+        input.workspaceId,
+        ctx.workspaceId,
+        input.allData
+      );
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        workspaceLens
+      );
+      if (
+        typeof workspaceLens === "string" &&
+        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace is not available in this map lens",
+        });
+      }
+      const entityRows = await db.query.entities.findMany({
+        where: and(
+          isNull(entities.deletedAt),
+          systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+        ),
+        columns: { id: true, type: true },
+      });
+
+      if (entityRows.length === 0) {
+        return buildSystemMapOverview({
+          entities: [],
+          facetSlugsByEntity: new Map(),
+          semanticRelations: [],
+          structuralLinks: [],
+        });
+      }
+
+      const entityIds = entityRows.map((entity) => entity.id);
+      const [facetSlugsByEntity, semanticRelations, structuralLinks] =
+        await Promise.all([
+          loadFacetSlugsBatch(db, entityIds, facetVisibilityScope),
+          // Reuse the relations registry's canonical visibility rule. It has
+          // the important asymmetry: workspace edges follow membership, while
+          // pod-wide edges remain author-private.
+          scopedDb(AccessContext.from(ctx).withLens(workspaceLens)).findMany<
+            typeof relations.$inferSelect
+          >(relations, {
+            where: and(
+              inArray(relations.sourceEntityId, entityIds),
+              inArray(relations.targetEntityId, entityIds)
+            ),
+            columns: {
+              sourceEntityId: true,
+              targetEntityId: true,
+              type: true,
+            },
+          }),
+          // entity_property_index is a projection of schema-defined entity_id
+          // links. Both ids must already be visible nodes, matching the graph
+          // relation anti-dangling rule above.
+          db
+            .select({
+              sourceEntityId: entityPropertyIndex.entityId,
+              targetEntityId: entityPropertyIndex.valueEntityId,
+              propertySlug: propertyDefs.slug,
+            })
+            .from(entityPropertyIndex)
+            .innerJoin(
+              propertyDefs,
+              eq(entityPropertyIndex.propertyDefId, propertyDefs.id)
+            )
+            .where(
+              and(
+                isNotNull(entityPropertyIndex.valueEntityId),
+                inArray(entityPropertyIndex.entityId, entityIds),
+                inArray(entityPropertyIndex.valueEntityId, entityIds),
+                systemMapPropertyDefScope(workspaceLens)
+              )
+            ),
+        ]);
+
+      return buildSystemMapOverview({
+        entities: entityRows,
+        facetSlugsByEntity,
+        semanticRelations,
+        structuralLinks,
+      });
+    }),
+
+  /**
+   * Lazy, paginated detail for one System Map kind cluster. Unlike the overview
+   * aggregate, this intentionally pages entity previews for an expanded cluster.
+   */
+  getSystemMapKindDrilldown: podProcedure
+    .input(
+      z.object({
+        kind: z.string().min(1),
+        workspaceId: z.string().uuid().nullable().optional(),
+        allData: z.boolean().default(false),
+        includePodWide: z.boolean().default(false),
+        limit: z.number().int().min(1).max(100).default(50),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const workspaceLens = systemMapWorkspaceLens(
+        input.workspaceId,
+        ctx.workspaceId,
+        input.allData
+      );
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        workspaceLens
+      );
+      if (
+        typeof workspaceLens === "string" &&
+        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace is not available in this map lens",
+        });
+      }
+      const where = and(
+        isNull(entities.deletedAt),
+        eq(entities.type, input.kind),
+        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+      );
+      const [items, totalRows] = await Promise.all([
+        db.query.entities.findMany({
+          where,
+          columns: {
+            id: true,
+            type: true,
+            title: true,
+            preview: true,
+            workspaceId: true,
+          },
+          orderBy: [desc(entities.updatedAt)],
+          limit: input.limit,
+          offset: input.offset,
+        }),
+        db
+          .select({ count: drizzleSql<number>`count(*)::int` })
+          .from(entities)
+          .where(where),
+      ]);
+      const facetSlugsByEntity = await loadFacetSlugsBatch(
+        db,
+        items.map((item) => item.id),
+        facetVisibilityScope
+      );
+      const total = totalRows[0]?.count ?? 0;
+
+      return {
+        items: items.map((item) => ({
+          ...item,
+          facetSlugs: facetSlugsByEntity.get(item.id) ?? [],
+        })),
+        total,
+        pagination: {
+          limit: input.limit,
+          offset: input.offset,
+          hasMore: input.offset + items.length < total,
+        },
+      };
+    }),
+
   /**
    * THE unified graph envelope — fetch ANY object kind + its typed neighbourhood
    * (links graph for every kind, + relations/property/channel data graph for

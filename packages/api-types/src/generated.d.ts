@@ -6319,6 +6319,34 @@ export interface EntityConnection {
 	focusSessionWorkspaceId?: string | null;
 	createdAt?: Date | null;
 }
+export interface SystemMapKindCluster {
+	kind: string;
+	count: number;
+	/** Live, visible role facets attached to entities of this kind. */
+	roles: Array<{
+		role: string;
+		count: number;
+	}>;
+}
+export interface SystemMapRelationBundle {
+	/** Emergent relations table edge, or schema-defined entity_id property. */
+	edgeClass: "semantic" | "structural";
+	/** Relation type for semantic edges; property slug for structural links. */
+	type: string;
+	sourceKind: string;
+	targetKind: string;
+	count: number;
+}
+export interface SystemMapOverview {
+	kindClusters: SystemMapKindCluster[];
+	relationBundles: SystemMapRelationBundle[];
+	totals: {
+		entities: number;
+		semanticRelations: number;
+		structuralLinks: number;
+		relationBundles: number;
+	};
+}
 /** A node in the pod graph — uniform across every object kind. */
 export interface GraphNode {
 	/** The object's table/kind (the link-endpoint type). */
@@ -6854,6 +6882,56 @@ export interface AgentProfile {
 		id: string;
 		name: string | null;
 	}>;
+}
+/**
+ * Channel deep link — the NATIVE url that opens this conversation in the app it
+ * came from (Discord, Telegram, …).
+ *
+ * CHANNEL-LEVEL only. A message-level permalink needs the native message id AND
+ * the same channel coordinates; the channel link is what a user actually wants
+ * ("take me to this thread"), and it is derivable from ids the pod already
+ * stores, so it ships first. Message-level is deliberately deferred.
+ *
+ * Pure + total: every input shape either yields a url or `null`. NEVER guess —
+ * a Discord channel with no guild id has NO derivable url, and returning a
+ * broken link would be worse than returning none.
+ */
+export type ChannelDeepLinkKind = "discord" | "telegram" | "slack" | "web";
+/** The producer kinds a channel origin can name (the channel-stack contract). */
+export type ChannelProducerType = "capability" | "tool" | "source" | "agent";
+export type ChannelAutomationBinding = "channel" | "entity" | "workspace" | "capability";
+export interface ChannelStackOrigin {
+	producerType: ChannelProducerType | null;
+	producerId: string | null;
+	producerName: string | null;
+	/** The coarse `channels.metadata.origin` category, when the channel has one. */
+	label: string | null;
+}
+export interface ChannelStackExternal {
+	source: string | null;
+	externalChannelId: string | null;
+	/** CHANNEL-level native url, or null when the ids can't produce an honest one. */
+	deepLink: string | null;
+	deepLinkKind: ChannelDeepLinkKind | null;
+}
+export interface ChannelStackAutomation {
+	id: string;
+	name: string | null;
+	/** True only for `status === "active"` — a paused binding is still reported. */
+	enabled: boolean;
+	binding: ChannelAutomationBinding;
+	/** e.g. "external_message.received" — the trigger in one line. */
+	triggerSummary: string | null;
+}
+export interface ChannelStackResult {
+	channelId: string;
+	origin: ChannelStackOrigin | null;
+	external: ChannelStackExternal;
+	capabilities: Array<{
+		id: string;
+		name: string | null;
+	}>;
+	automations: ChannelStackAutomation[];
 }
 /**
  * The outcome of a signal unit — WHAT happened to an inbound message.
@@ -14444,6 +14522,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		getSystemMapOverview: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				allData?: boolean | undefined;
+				includePodWide?: boolean | undefined;
+			};
+			output: SystemMapOverview;
+			meta: object;
+		}>;
+		getSystemMapKindDrilldown: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: string;
+				workspaceId?: string | null | undefined;
+				allData?: boolean | undefined;
+				includePodWide?: boolean | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				items: {
+					facetSlugs: string[];
+					workspaceId: string | null;
+					id: string;
+					type: string;
+					title: string | null;
+					preview: string | null;
+				}[];
+				total: number;
+				pagination: {
+					limit: number;
+					offset: number;
+					hasMore: boolean;
+				};
+			};
+			meta: object;
+		}>;
 		getObjectGraph: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -24444,6 +24558,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automationId?: string | undefined;
 			} | undefined;
 			output: QualityByVersionResult;
+			meta: object;
+		}>;
+		channelStack: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: ChannelStackResult;
+			meta: object;
+		}>;
+		channelRerun: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				automationId?: string | undefined;
+				params?: Record<string, unknown> | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string | undefined;
+				scanned: number;
+				message: string;
+				runId?: undefined;
+			} | {
+				status: "started";
+				runId: string | undefined;
+				scanned: number;
+				message: string;
+				proposalId?: undefined;
+			};
 			meta: object;
 		}>;
 	}>>;
