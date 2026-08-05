@@ -49,13 +49,6 @@ vi.mock("../../access/scoped-db.js", () => ({
   scopedDb: () => ({ findMany: mockScopedFindMany }),
 }));
 
-// The router-side visibility helper is a pure predicate builder; the mocked
-// `db.select().where()` ignores it, but importing views.ts would drag the whole
-// router graph into the test, so stub it.
-vi.mock("../../routers/views.js", () => ({
-  viewVisibleWhere: () => undefined,
-}));
-
 import { buildRendererUsage } from "./renderer-usage.js";
 import { workspaces, views, entities } from "@synap/database";
 import type { AccessContext } from "../../access/context.js";

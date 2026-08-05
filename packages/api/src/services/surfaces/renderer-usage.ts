@@ -60,7 +60,6 @@ import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
-import { viewVisibleWhere } from "../../routers/views.js";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 
@@ -413,7 +412,12 @@ async function readViewBindings(
       config: views.config,
     })
     .from(views)
-    .where(and(lens, viewVisibleWhere(userId)));
+    .where(
+      and(
+        lens,
+        ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)
+      )
+    );
 
   const out: FoundBinding[] = [];
   for (const row of rows) {
