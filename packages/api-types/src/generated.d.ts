@@ -6856,6 +6856,133 @@ export interface AgentProfile {
 	}>;
 }
 /**
+ * The outcome of a signal unit — WHAT happened to an inbound message.
+ *
+ *   extracted           — an extraction run produced ≥1 entity/proposal.
+ *   no_insight          — a run ran to a terminal, non-error end but produced
+ *                         nothing (completed/skipped with 0 proposals; a still-
+ *                         running run also folds here until it produces).
+ *   no_run              — the message landed on a channel that IS bound to a
+ *                         context entity (wired to a client), but NO extraction
+ *                         run consumed it. A real miss: the wiring exists, yet
+ *                         nothing ran.
+ *   unprocessed_unbound — the message landed but NO extraction run consumed it
+ *                         AND the channel is not bound to any context entity
+ *                         (never wired to a client). THE structural-gap view.
+ *   failed              — the run errored or was cancelled before producing.
+ */
+export type SignalFate = "extracted" | "no_insight" | "no_run" | "unprocessed_unbound" | "failed";
+export interface SignalLinks {
+	/** The extraction run this message opened (null when unprocessed_unbound). */
+	runId: string | null;
+	/** The run's correlationId (== runId for a root automation run); null if none. */
+	correlationId: string | null;
+	/** Entities the run's proposals target/materialized (capped). */
+	producedEntityIds: string[];
+	/** The run's produced proposals (`correlationId = runId`), capped. */
+	proposalIds: string[];
+	/** The inbound message row this unit is about (`messages.id`). */
+	sourceMessageId: string;
+}
+export interface SignalUnit {
+	/** Stable id for the unit = the source message id. */
+	id: string;
+	/** Provider the inbound came from (channels.externalSource). */
+	source: string | null;
+	channel: {
+		id: string;
+		name: string | null;
+		/** The context entity the channel is bound to, if any. */
+		boundEntityId: string | null;
+		/** True when the channel is bound to a context entity. */
+		bound: boolean;
+	};
+	/** When the inbound message landed. */
+	ts: Date;
+	fate: SignalFate;
+	links: SignalLinks;
+	/** One-line preview of the inbound content. */
+	summary: string | null;
+}
+export interface SignalPipelinePage {
+	units: SignalUnit[];
+	/**
+	 * Composite cursor for the next page — `"<iso>|<lastMessageId>"`; null at the
+	 * end. Carries the tie-breaker id so equal-timestamp rows never straddle a
+	 * page boundary (dropped or duplicated).
+	 */
+	nextCursor: string | null;
+}
+export interface SignalChannelRollup {
+	channelId: string;
+	name: string | null;
+	provider: string | null;
+	/** True when the channel is bound to a context entity. */
+	bound: boolean;
+	boundEntityId: string | null;
+	/** Inbound external messages seen for this channel within the scan prefix. */
+	messageCount: number;
+	/** `extracted / messageCount * 100`, rounded to an integer (0 when empty). */
+	extractionRatePct: number;
+	/** Per-fate counts over the same units — sums to `messageCount`. */
+	fate: Record<SignalFate, number>;
+	/** Most recent inbound message on the channel within the scan prefix. */
+	lastActivityAt: Date;
+}
+export interface ProvenanceMessage {
+	id: string;
+	channelId: string;
+	channelName: string | null;
+	provider: string | null;
+	ts: Date;
+	preview: string | null;
+	boundEntityId: string | null;
+}
+export interface ProvenanceResult {
+	/** The run the ref resolved through (when one exists). */
+	runId: string | null;
+	correlationId: string | null;
+	/** The source message(s) that fed the run/proposal. */
+	messages: ProvenanceMessage[];
+}
+/**
+ * Pod-wide signal aggregates for the attention band. The band must show GLOBAL
+ * totals, not a rollup over the units currently paged in (which reads as global
+ * but isn't). Each field is an independent, cheap COUNT, floored by the SAME
+ * predicates the pipeline uses — `channelVisibilityWhere` for message/channel
+ * reads, `userVisibleWhere` for run/proposal reads. They are NOT a partition of
+ * `messages24h` (each answers its own question); the browser presents them as
+ * distinct tiles, not a stacked bar.
+ */
+export interface SignalSummary {
+	/** Inbound external messages that landed in the last 24h. */
+	messages24h: number;
+	/**
+	 * External-message-triggered runs in the last 24h that produced ≥1 proposal
+	 * (the pipeline yielded insight). Includes bookmark runs — documented
+	 * contract; the UI copy caveats it.
+	 */
+	extracted: number;
+	/** External-message-triggered runs that ran at all in the last 24h. */
+	processed: number;
+	/**
+	 * Proposals awaiting the caller's decision (PENDING + APPROVAL_FAILED),
+	 * pod-wide — the same actionable set `notif-center.pendingDecisionCount` and
+	 * `proposals.list` (default status) return.
+	 */
+	needsYou: number;
+	/**
+	 * Channels receiving external signal in the last 24h that are NOT bound to a
+	 * context entity — the structural wiring gap (`unprocessed_unbound` fate).
+	 */
+	unboundChannels: number;
+	/**
+	 * Inbound external messages (last 24h) on BOUND channels for which no
+	 * external-message run exists on that channel — the `no_run` miss, pod-wide.
+	 */
+	noRun: number;
+}
+/**
  * Core API Router
  */
 export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
@@ -24210,6 +24337,47 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				action: string;
 				at: string;
 			}[];
+			meta: object;
+		}>;
+	}>>;
+	signal: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		pipeline: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				cursor?: string | undefined;
+				order?: "recent" | "problems" | undefined;
+				channelId?: string | undefined;
+			};
+			output: SignalPipelinePage;
+			meta: object;
+		}>;
+		channels: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				order?: "recent" | "problems" | undefined;
+			};
+			output: SignalChannelRollup[];
+			meta: object;
+		}>;
+		summary: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: SignalSummary;
+			meta: object;
+		}>;
+		provenance: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "entity" | "proposal" | "run";
+				id: string;
+			};
+			output: ProvenanceResult;
 			meta: object;
 		}>;
 	}>>;

@@ -19,6 +19,9 @@ import {
   listPipeline,
   resolveProvenance,
   getSignalSummary,
+  listChannels,
+  resolveTuneTarget,
+  getQualityByVersion,
 } from "../services/signal/index.js";
 
 export const signalRouter = router({
@@ -34,6 +37,8 @@ export const signalRouter = router({
          */
         cursor: z.string().optional(),
         order: z.enum(["recent", "problems"]).optional(),
+        /** Drill-down: scope the stream to a single channel (channel-detail view). */
+        channelId: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -47,7 +52,24 @@ export const signalRouter = router({
         before: iso ? new Date(iso) : undefined,
         beforeId: beforeId || undefined,
         order: input.order,
+        channelId: input.channelId,
       });
+    }),
+
+  /**
+   * Per-channel rollup for the channel-first navigation spine. Same window +
+   * floors as `pipeline`; `problems` (default) floats channels needing attention
+   * first, `recent` orders by last activity.
+   */
+  channels: protectedProcedure
+    .input(
+      z.object({
+        order: z.enum(["problems", "recent"]).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return listChannels({ userId, order: input.order });
     }),
 
   /** Pod-wide signal aggregates for the attention band (cheap COUNTs). */
@@ -67,5 +89,27 @@ export const signalRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       return resolveProvenance({ userId, kind: input.kind, id: input.id });
+    }),
+
+  /**
+   * Feedback loop — resolve a run to its "Tune extraction" target: the owning
+   * automation + the `ai.generate` flow node the user would edit to fix a miss.
+   */
+  tuneTarget: protectedProcedure
+    .input(z.object({ runId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return resolveTuneTarget(userId, input.runId);
+    }),
+
+  /**
+   * Feedback loop — extraction quality grouped by automation version (before/after
+   * a prompt change). Optionally scoped to one automation.
+   */
+  qualityByVersion: protectedProcedure
+    .input(z.object({ automationId: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getQualityByVersion({ userId, automationId: input?.automationId });
     }),
 });

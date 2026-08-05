@@ -78,6 +78,56 @@ const KanbanColumnSchema = z.object({
   limit: z.number().optional(),
 });
 
+const SheetCanvasPositionSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  w: z.number().int().min(2),
+  h: z.number().int().min(2),
+});
+
+/**
+ * References only: a Sheet must never store copied entity, view, or cell data.
+ * `props` is deliberately open because the registered cell owns that schema.
+ */
+const SheetCanvasBlockSchema = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("table"),
+    source: z.literal("current-view"),
+    title: z.string().max(200).optional(),
+    position: SheetCanvasPositionSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("view"),
+    viewId: z.string().uuid(),
+    title: z.string().max(200).optional(),
+    position: SheetCanvasPositionSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("entity"),
+    entityId: z.string().uuid(),
+    title: z.string().max(200).optional(),
+    position: SheetCanvasPositionSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("cell"),
+    cellKey: z.string().min(1).max(200),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().max(200).optional(),
+    position: SheetCanvasPositionSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("note"),
+    content: z.string().max(100_000),
+    title: z.string().max(200).optional(),
+    position: SheetCanvasPositionSchema,
+  }),
+]);
+
 /**
  * Structured view configuration schema
  */
@@ -106,6 +156,10 @@ export const RenderSettingsSchema = z
     filters: z.array(z.any()).optional(), // Legacy UI filters
     sorts: z.array(z.any()).optional(), // Legacy UI sorts
     groupByColumnId: z.string().optional(),
+
+    // Sheet canvas: validated references and bounded authored notes.
+    sheetSurface: z.enum(["canvas", "table"]).optional(),
+    sheetBlocks: z.array(SheetCanvasBlockSchema).optional(),
 
     // Layout-specific fields
     kanbanColumns: z.array(KanbanColumnSchema).optional(),

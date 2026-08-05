@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { RenderSettingsSchema } from "./schemas.js";
 
 // =============================================================================
 // Base Config Schema (Common Fields for Structured Views)
@@ -121,6 +122,13 @@ export const GraphViewConfigSchema = BaseViewConfigSchema.extend({
   nodeColorField: z.string().optional(),
   edgeLabelField: z.string().optional(),
 });
+
+/**
+ * Sheet persists the structured render contract, including its validated
+ * live-block references. Reuse RenderSettingsSchema so the API config write
+ * door applies the same validation as view-content parsing.
+ */
+export const SheetViewConfigSchema = RenderSettingsSchema;
 
 /**
  * Bento grid view config
@@ -249,6 +257,7 @@ export const VIEW_CONFIG_SCHEMAS: Record<string, z.ZodSchema> = {
   gantt: GanttViewConfigSchema,
   timeline: TimelineViewConfigSchema,
   graph: GraphViewConfigSchema,
+  sheet: SheetViewConfigSchema,
   bento: BentoViewConfigSchema,
   whiteboard: WhiteboardViewConfigSchema,
   mindmap: MindmapViewConfigSchema,

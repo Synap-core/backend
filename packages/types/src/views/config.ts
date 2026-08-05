@@ -72,6 +72,58 @@ export interface FormattingRule {
 // Render Settings
 // =============================================================================
 
+/**
+ * The composable, coordinate-based Sheet contract. Content references remain
+ * live: views, entities and cells are IDs/keys, never copied payloads.
+ */
+export type SheetSurface = "canvas" | "table";
+
+export interface SheetCanvasPosition {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface SheetCanvasBlockBase {
+  id: string;
+  title?: string;
+  position: SheetCanvasPosition;
+}
+
+export interface SheetTableBlock extends SheetCanvasBlockBase {
+  kind: "table";
+  source: "current-view";
+}
+
+export interface SheetViewBlock extends SheetCanvasBlockBase {
+  kind: "view";
+  viewId: string;
+}
+
+export interface SheetEntityBlock extends SheetCanvasBlockBase {
+  kind: "entity";
+  entityId: string;
+}
+
+export interface SheetCellBlock extends SheetCanvasBlockBase {
+  kind: "cell";
+  cellKey: string;
+  props?: Record<string, unknown>;
+}
+
+export interface SheetNoteBlock extends SheetCanvasBlockBase {
+  kind: "note";
+  content: string;
+}
+
+export type SheetCanvasBlock =
+  | SheetTableBlock
+  | SheetViewBlock
+  | SheetEntityBlock
+  | SheetCellBlock
+  | SheetNoteBlock;
+
 export interface RenderSettings {
   // Common
   rowHeight?: "compact" | "default" | "tall";
@@ -79,6 +131,16 @@ export interface RenderSettings {
 
   // Table/List settings
   columns?: ColumnConfig[];
+
+  // Sheet presentation and canvas composition
+  sheetSurface?: SheetSurface;
+  sheetBlocks?: SheetCanvasBlock[];
+  columnOrder?: string[];
+  hiddenColumns?: string[];
+  columnWidths?: Record<string, number>;
+  density?: "compact" | "normal" | "spacious";
+  frozenColumnIds?: string[];
+  showRowNumbers?: boolean;
 
   // Kanban settings
   groupByField?: string;

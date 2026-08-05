@@ -54,10 +54,12 @@ import {
   messages,
   channels,
   automationRuns,
+  automations,
   proposals,
   MessageAuthorType,
   ProposalStatus,
 } from "@synap/database";
+import type { FlowDefinition } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import type { RunStatus } from "../runs/types.js";
@@ -248,6 +250,12 @@ export interface ListPipelineInput {
   beforeId?: string;
   /** `recent` = newest-first (default). `problems` = failed/misses first (page-local). */
   order?: "recent" | "problems";
+  /**
+   * Drill-down: scope the returned units to a SINGLE channel. When set, the
+   * keyset + order behavior is preserved within that channel's message set —
+   * everything downstream (run attribution, proposal join, fate) is unchanged.
+   */
+  channelId?: string;
 }
 
 export interface SignalPipelinePage {
@@ -258,6 +266,214 @@ export interface SignalPipelinePage {
    * page boundary (dropped or duplicated).
    */
   nextCursor: string | null;
+}
+
+/**
+ * The floored message row shape every signal read starts from — an inbound
+ * external message joined to its channel's provider + binding. Both `listPipeline`
+ * and `listChannels` produce this same shape, then hand it to `assembleUnits`.
+ */
+interface PipelineMessageRow {
+  id: string;
+  channelId: string;
+  ts: Date;
+  content: string | null;
+  channelName: string | null;
+  provider: string | null;
+  boundEntityId: string | null;
+}
+
+/**
+ * Attribute each floored message to its extraction run + produced proposals and
+ * derive its fate — the shared core of `listPipeline` (the flat stream) and
+ * `listChannels` (the per-channel rollup). Keeping this ONE function guarantees
+ * a channel's fate-mix agrees unit-for-unit with the pipeline's per-unit fate
+ * (`classifySignalFate` stays the single fate source), and both readings reuse
+ * the SAME run/proposal floor (`userVisibleWhere`) — no floor divergence.
+ *
+ * The caller supplies the message rows already floored by `channelVisibilityWhere`,
+ * so an unseeable channel/message never reaches here.
+ */
+async function assembleUnits(
+  msgRows: PipelineMessageRow[],
+  userId: string
+): Promise<SignalUnit[]> {
+  if (msgRows.length === 0) return [];
+
+  const channelIds = [...new Set(msgRows.map((m) => m.channelId))];
+
+  // Time-window the candidate runs to the span of the messages we're classifying.
+  // Without this the fetch is unbounded in time AND rows — it pulls EVERY
+  // external-message run ever recorded on these channels (latent in listPipeline,
+  // badly amplified by listChannels, which scans up to CHANNEL_SCAN_CAP messages
+  // across the whole channel set). A run relevant to any message here must have
+  // started within the attribution window of some message: attribution pins a
+  // run to a message when `startedAt ∈ [msg.ts − ATTRIBUTION_SKEW_MS, msg.ts +
+  // lag)`, and the matcher lag is bounded by PROVENANCE_WINDOW_MS. So across all
+  // messages, only runs in `[minMsgTs − ATTRIBUTION_SKEW_MS, maxMsgTs +
+  // PROVENANCE_WINDOW_MS]` can attribute. This is the INVERSE of
+  // resolveProvenance's window (which anchors on a run and searches messages, so
+  // its bounds are −window/+skew); here we anchor on messages and search runs, so
+  // the run may start slightly BEFORE (skew) or up to a lag AFTER each message.
+  const msgTimes = msgRows.map((m) => m.ts.getTime());
+  const runWindowLo = new Date(Math.min(...msgTimes) - ATTRIBUTION_SKEW_MS);
+  const runWindowHi = new Date(Math.max(...msgTimes) + PROVENANCE_WINDOW_MS);
+
+  // Candidate extraction runs: external-message-triggered automation runs on
+  // those channels, user-floored (same predicate listRuns uses). The trigger
+  // payload records the triggering channel under `data.channelId`.
+  //
+  // NOTE: do NOT use `->>'channelId' = ANY(${channelIds})` — binding a JS
+  // array into the SQL template serializes it as a Postgres array literal,
+  // which the pod image's postgres.js driver FAULTS on (same class of gotcha
+  // as `sql.json()`). An OR of scalar `=` params is the portable form
+  // (mirrors playbooks.matchForEntity / automations.matchForEntity).
+  // `channelIds` is always non-empty here (msgRows short-circuited above),
+  // but guard anyway so a future caller can't produce an empty `or()` that
+  // silently drops the channel filter and returns EVERY run.
+  const runRows =
+    channelIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: automationRuns.id,
+            status: automationRuns.status,
+            startedAt: automationRuns.startedAt,
+            channelId: drizzleSql<
+              string | null
+            >`${automationRuns.triggerPayload}->'data'->>'channelId'`,
+          })
+          .from(automationRuns)
+          .where(
+            and(
+              userVisibleWhere(automationRuns.workspaceId, userId),
+              drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE 'external_message.received%'`,
+              // Bound to the message span (see runWindowLo/Hi above) — the fetch
+              // is now proportional to the data being classified, not all history.
+              gte(automationRuns.startedAt, runWindowLo),
+              lte(automationRuns.startedAt, runWindowHi),
+              or(
+                ...channelIds.map(
+                  (id) =>
+                    drizzleSql`${automationRuns.triggerPayload}->'data'->>'channelId' = ${id}`
+                )
+              )
+            )
+          )
+          .orderBy(desc(automationRuns.startedAt));
+
+  const runs: AttributableRun[] = runRows
+    .filter((r): r is typeof r & { channelId: string } => !!r.channelId)
+    .map((r) => ({ id: r.id, channelId: r.channelId, startedAt: r.startedAt }));
+  const runStatusById = new Map<string, RunStatus>(
+    runRows.map((r) => [r.id, r.status as RunStatus])
+  );
+
+  // Attribute each message to its run (channel + time-window, pure).
+  const msgToRun = attributeRunsToMessages(
+    msgRows.map((m) => ({ id: m.id, channelId: m.channelId, ts: m.ts })),
+    runs
+  );
+  const attributedRunIds = [...new Set(msgToRun.values())];
+
+  // What each attributed run PRODUCED — proposals keyed by correlationId=runId
+  // (the executor's stamp). User-floored. Entity targets are the produced
+  // entities (create/update proposals whose target IS an entity).
+  const proposalsByRun = new Map<
+    string,
+    { proposalIds: string[]; entityIds: Set<string> }
+  >();
+  if (attributedRunIds.length > 0) {
+    // Per-run cap at the DB layer via a windowed row_number, NOT a global
+    // `ORDER BY correlationId LIMIT cap*numRuns`. A global limit lets ONE
+    // high-volume run (lowest correlationId sorts first) consume the whole
+    // budget, starving every later run to zero proposals — which misclassifies
+    // an `extracted` signal as `no_insight`. row_number() PARTITIONed per run
+    // guarantees each run gets its own PRODUCED_CAP slice, oldest-first.
+    const ranked = db
+      .select({
+        id: proposals.id,
+        correlationId: proposals.correlationId,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        data: proposals.data,
+        rn: drizzleSql<number>`row_number() over (partition by ${proposals.correlationId} order by ${proposals.createdAt} asc)`.as(
+          "rn"
+        ),
+      })
+      .from(proposals)
+      .where(
+        and(
+          inArray(proposals.correlationId, attributedRunIds),
+          userVisibleWhere(proposals.workspaceId, userId)
+        )
+      )
+      .as("ranked");
+    const propRows = await db
+      .select({
+        id: ranked.id,
+        correlationId: ranked.correlationId,
+        targetType: ranked.targetType,
+        targetId: ranked.targetId,
+        data: ranked.data,
+      })
+      .from(ranked)
+      .where(lte(ranked.rn, PRODUCED_CAP));
+    for (const p of propRows) {
+      if (!p.correlationId) continue;
+      const bucket = proposalsByRun.get(p.correlationId) ?? {
+        proposalIds: [],
+        entityIds: new Set<string>(),
+      };
+      if (bucket.proposalIds.length < PRODUCED_CAP)
+        bucket.proposalIds.push(p.id);
+      if (p.targetType === "entity" && p.targetId)
+        bucket.entityIds.add(p.targetId);
+      // Capture-graph proposals carry their materialized entities in the blob.
+      const materialized = (
+        p.data as { materialized?: { entityIds?: unknown } }
+      )?.materialized;
+      if (Array.isArray(materialized?.entityIds)) {
+        for (const eid of materialized.entityIds)
+          if (typeof eid === "string") bucket.entityIds.add(eid);
+      }
+      proposalsByRun.set(p.correlationId, bucket);
+    }
+  }
+
+  // Assemble the units + derive fate.
+  return msgRows.map((m) => {
+    const runId = msgToRun.get(m.id) ?? null;
+    const produced = runId ? proposalsByRun.get(runId) : undefined;
+    const producedCount = produced?.proposalIds.length ?? 0;
+    const fate = classifySignalFate({
+      hasRun: runId != null,
+      bound: m.boundEntityId != null,
+      runStatus: runId ? (runStatusById.get(runId) ?? null) : null,
+      producedCount,
+    });
+    return {
+      id: m.id,
+      source: m.provider ?? null,
+      channel: {
+        id: m.channelId,
+        name: m.channelName ?? null,
+        boundEntityId: m.boundEntityId ?? null,
+        bound: m.boundEntityId != null,
+      },
+      ts: m.ts,
+      fate,
+      links: {
+        runId,
+        // A root automation run's produced proposals carry correlationId=runId.
+        correlationId: runId,
+        producedEntityIds: produced ? [...produced.entityIds] : [],
+        proposalIds: produced?.proposalIds ?? [],
+        sourceMessageId: m.id,
+      },
+      summary: m.content ? m.content.slice(0, 120) : null,
+    };
+  });
 }
 
 /**
@@ -290,6 +506,9 @@ export async function listPipeline(
         eq(messages.authorType, MessageAuthorType.EXTERNAL),
         isNull(messages.deletedAt),
         eq(messages.ephemeral, false),
+        // Drill-down: scope to one channel (the channel-detail view). The floor
+        // below still applies, so an unseeable channelId returns nothing.
+        input.channelId ? eq(messages.channelId, input.channelId) : undefined,
         // Composite keyset on (timestamp, id): strictly-earlier timestamps, plus
         // the equal-timestamp rows whose id sorts before the cursor's — so a page
         // boundary that lands mid-way through a block of equal-timestamp rows
@@ -314,144 +533,7 @@ export async function listPipeline(
 
   if (msgRows.length === 0) return { units: [], nextCursor: null };
 
-  const channelIds = [...new Set(msgRows.map((m) => m.channelId))];
-
-  // 2. Candidate extraction runs: external-message-triggered automation runs on
-  //    those channels, user-floored (same predicate listRuns uses). The trigger
-  //    payload records the triggering channel under `data.channelId`.
-  //
-  //    NOTE: do NOT use `->>'channelId' = ANY(${channelIds})` — binding a JS
-  //    array into the SQL template serializes it as a Postgres array literal,
-  //    which the pod image's postgres.js driver FAULTS on (same class of gotcha
-  //    as `sql.json()`). An OR of scalar `=` params is the portable form
-  //    (mirrors playbooks.matchForEntity / automations.matchForEntity).
-  //    `channelIds` is always non-empty here (msgRows short-circuited above),
-  //    but guard anyway so a future caller can't produce an empty `or()` that
-  //    silently drops the channel filter and returns EVERY run.
-  const runRows =
-    channelIds.length === 0
-      ? []
-      : await db
-          .select({
-            id: automationRuns.id,
-            status: automationRuns.status,
-            startedAt: automationRuns.startedAt,
-            channelId: drizzleSql<
-              string | null
-            >`${automationRuns.triggerPayload}->'data'->>'channelId'`,
-          })
-          .from(automationRuns)
-          .where(
-            and(
-              userVisibleWhere(automationRuns.workspaceId, userId),
-              drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE 'external_message.received%'`,
-              or(
-                ...channelIds.map(
-                  (id) =>
-                    drizzleSql`${automationRuns.triggerPayload}->'data'->>'channelId' = ${id}`
-                )
-              )
-            )
-          )
-          .orderBy(desc(automationRuns.startedAt));
-
-  const runs: AttributableRun[] = runRows
-    .filter((r): r is typeof r & { channelId: string } => !!r.channelId)
-    .map((r) => ({ id: r.id, channelId: r.channelId, startedAt: r.startedAt }));
-  const runStatusById = new Map<string, RunStatus>(
-    runRows.map((r) => [r.id, r.status as RunStatus])
-  );
-
-  // 3. Attribute each message to its run (channel + time-window, pure).
-  const msgToRun = attributeRunsToMessages(
-    msgRows.map((m) => ({ id: m.id, channelId: m.channelId, ts: m.ts })),
-    runs
-  );
-  const attributedRunIds = [...new Set(msgToRun.values())];
-
-  // 4. What each attributed run PRODUCED — proposals keyed by correlationId=runId
-  //    (the executor's stamp). User-floored. Entity targets are the produced
-  //    entities (create/update proposals whose target IS an entity).
-  const proposalsByRun = new Map<
-    string,
-    { proposalIds: string[]; entityIds: Set<string> }
-  >();
-  if (attributedRunIds.length > 0) {
-    const propRows = await db
-      .select({
-        id: proposals.id,
-        correlationId: proposals.correlationId,
-        targetType: proposals.targetType,
-        targetId: proposals.targetId,
-        data: proposals.data,
-      })
-      .from(proposals)
-      .where(
-        and(
-          inArray(proposals.correlationId, attributedRunIds),
-          userVisibleWhere(proposals.workspaceId, userId)
-        )
-      )
-      // Deterministic order: an UNORDERED limit lets Postgres return an
-      // arbitrary slice, which can zero out a run's proposals and misclassify
-      // an extracted signal as `no_insight`. Group by run, oldest-first within.
-      .orderBy(proposals.correlationId, proposals.createdAt)
-      .limit(PRODUCED_CAP * Math.max(attributedRunIds.length, 1));
-    for (const p of propRows) {
-      if (!p.correlationId) continue;
-      const bucket = proposalsByRun.get(p.correlationId) ?? {
-        proposalIds: [],
-        entityIds: new Set<string>(),
-      };
-      if (bucket.proposalIds.length < PRODUCED_CAP)
-        bucket.proposalIds.push(p.id);
-      if (p.targetType === "entity" && p.targetId)
-        bucket.entityIds.add(p.targetId);
-      // Capture-graph proposals carry their materialized entities in the blob.
-      const materialized = (
-        p.data as { materialized?: { entityIds?: unknown } }
-      )?.materialized;
-      if (Array.isArray(materialized?.entityIds)) {
-        for (const eid of materialized.entityIds)
-          if (typeof eid === "string") bucket.entityIds.add(eid);
-      }
-      proposalsByRun.set(p.correlationId, bucket);
-    }
-  }
-
-  // 5. Assemble the units + derive fate.
-  const units: SignalUnit[] = msgRows.map((m) => {
-    const runId = msgToRun.get(m.id) ?? null;
-    const produced = runId ? proposalsByRun.get(runId) : undefined;
-    const producedCount = produced?.proposalIds.length ?? 0;
-    const fate = classifySignalFate({
-      hasRun: runId != null,
-      bound: m.boundEntityId != null,
-      runStatus: runId ? (runStatusById.get(runId) ?? null) : null,
-      producedCount,
-    });
-    return {
-      id: m.id,
-      source: m.provider ?? null,
-      channel: {
-        id: m.channelId,
-        name: m.channelName ?? null,
-        boundEntityId: m.boundEntityId ?? null,
-        bound: m.boundEntityId != null,
-      },
-      ts: m.ts,
-      fate,
-      links: {
-        runId,
-        // A root automation run's produced proposals carry correlationId=runId.
-        correlationId: runId,
-        producedEntityIds: produced ? [...produced.entityIds] : [],
-        proposalIds: produced?.proposalIds ?? [],
-        sourceMessageId: m.id,
-      },
-      summary: m.content ? m.content.slice(0, 120) : null,
-    };
-  });
+  const units = await assembleUnits(msgRows, userId);
 
   if (input.order === "problems") {
     // Page-local reorder: surface failures + misses first, then newest-first.
@@ -469,6 +551,171 @@ export async function listPipeline(
     msgRows.length === limit ? `${oldest.ts.toISOString()}|${oldest.id}` : null;
 
   return { units, nextCursor };
+}
+
+// ── Door: per-channel rollup (channel-first navigation spine) ─────────────────
+
+/**
+ * How many recent inbound external messages the channel rollup scans. A bounded,
+ * cheap prefix of the SAME floored stream `listPipeline` pages — one indexed
+ * `ORDER BY timestamp DESC LIMIT` read — grouped by channel in-memory. Channels
+ * whose most recent activity falls entirely outside this prefix don't surface;
+ * the rollup is an attention aid over recent signal, not a full historical census.
+ */
+const CHANNEL_SCAN_CAP = 1000;
+
+export type SignalChannelOrder = "problems" | "recent";
+
+export interface SignalChannelRollup {
+  channelId: string;
+  name: string | null;
+  provider: string | null;
+  /** True when the channel is bound to a context entity. */
+  bound: boolean;
+  boundEntityId: string | null;
+  /** Inbound external messages seen for this channel within the scan prefix. */
+  messageCount: number;
+  /** `extracted / messageCount * 100`, rounded to an integer (0 when empty). */
+  extractionRatePct: number;
+  /** Per-fate counts over the same units — sums to `messageCount`. */
+  fate: Record<SignalFate, number>;
+  /** Most recent inbound message on the channel within the scan prefix. */
+  lastActivityAt: Date;
+}
+
+export interface ListChannelsInput {
+  userId: string;
+  order?: SignalChannelOrder;
+}
+
+export interface ListChannelsResult {
+  channels: SignalChannelRollup[];
+  /** Inbound external messages actually scanned to build this rollup. */
+  scanned: number;
+  /**
+   * True when the scan hit `CHANNEL_SCAN_CAP` — the rollup covers only the most
+   * recent `scanned` messages, so per-channel counts/rates are a partial recent
+   * census, not a whole-history total, and a channel active only OUTSIDE the
+   * prefix may be absent. The caller MUST disclose this ("showing recent N")
+   * rather than presenting the numbers as complete.
+   */
+  truncated: boolean;
+}
+
+/**
+ * Per-channel rollup over the same window/floors as `listPipeline`: group the
+ * recent floored signal units by channel and summarize each channel's fate-mix,
+ * message volume, extraction rate, and binding.
+ *
+ * A channel is a "problem" when it is unbound (no context entity) OR carries ≥1
+ * `failed` unit. `problems` order (default) floats problems first, then lowest
+ * extraction rate, then most recent; `recent` orders purely by last activity.
+ *
+ * Returns `{ channels, scanned, truncated }` — `truncated` is the honesty
+ * signal: the rollup scans at most `CHANNEL_SCAN_CAP` recent messages, so on a
+ * high-volume pod the per-channel numbers are a partial recent census and the
+ * caller must say so.
+ */
+export async function listChannels(
+  input: ListChannelsInput
+): Promise<ListChannelsResult> {
+  const { userId } = input;
+
+  // Same floored message read as listPipeline — a bounded recent prefix, no
+  // cursor. `channelVisibilityWhere` is the ONLY channel/message floor, so an
+  // unseeable channel never enters the rollup.
+  const msgRows = await db
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      ts: messages.timestamp,
+      content: messages.content,
+      channelName: channels.title,
+      provider: channels.externalSource,
+      boundEntityId: channels.contextObjectId,
+    })
+    .from(messages)
+    .innerJoin(channels, eq(channels.id, messages.channelId))
+    .where(
+      and(
+        eq(messages.authorType, MessageAuthorType.EXTERNAL),
+        isNull(messages.deletedAt),
+        eq(messages.ephemeral, false),
+        channelVisibilityWhere(userId)
+      )
+    )
+    .orderBy(desc(messages.timestamp), desc(messages.id))
+    .limit(CHANNEL_SCAN_CAP);
+
+  const scanned = msgRows.length;
+  const truncated = scanned === CHANNEL_SCAN_CAP;
+
+  if (msgRows.length === 0)
+    return { channels: [], scanned: 0, truncated: false };
+
+  // Reuse the EXACT same attribution + fate classification as the flat stream,
+  // so a channel's fate-mix agrees unit-for-unit with signal.pipeline.
+  const units = await assembleUnits(msgRows, userId);
+
+  const byChannel = new Map<string, SignalChannelRollup>();
+  for (const u of units) {
+    let roll = byChannel.get(u.channel.id);
+    if (!roll) {
+      roll = {
+        channelId: u.channel.id,
+        name: u.channel.name,
+        provider: u.source,
+        bound: u.channel.bound,
+        boundEntityId: u.channel.boundEntityId,
+        messageCount: 0,
+        extractionRatePct: 0,
+        fate: {
+          extracted: 0,
+          no_insight: 0,
+          no_run: 0,
+          unprocessed_unbound: 0,
+          failed: 0,
+        },
+        lastActivityAt: u.ts,
+      };
+      byChannel.set(u.channel.id, roll);
+    }
+    roll.messageCount += 1;
+    roll.fate[u.fate] += 1;
+    if (u.ts.getTime() > roll.lastActivityAt.getTime())
+      roll.lastActivityAt = u.ts;
+  }
+
+  const rollups = [...byChannel.values()];
+  for (const r of rollups) {
+    r.extractionRatePct =
+      r.messageCount === 0
+        ? 0
+        : Math.round((r.fate.extracted / r.messageCount) * 100);
+  }
+
+  // A channel needs attention when it is UNBOUND (structural wiring gap) OR has
+  // ≥1 failed unit (the pipeline broke on it).
+  const isProblem = (r: SignalChannelRollup) => !r.bound || r.fate.failed > 0;
+
+  if (input.order === "recent") {
+    rollups.sort(
+      (a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime()
+    );
+  } else {
+    // problems (default): problems first, then lowest extraction rate, then most
+    // recent activity.
+    rollups.sort((a, b) => {
+      const ap = isProblem(a) ? 0 : 1;
+      const bp = isProblem(b) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (a.extractionRatePct !== b.extractionRatePct)
+        return a.extractionRatePct - b.extractionRatePct;
+      return b.lastActivityAt.getTime() - a.lastActivityAt.getTime();
+    });
+  }
+
+  return { channels: rollups, scanned, truncated };
 }
 
 // ── Door 2: reverse provenance ────────────────────────────────────────────────
@@ -887,4 +1134,264 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
     unboundChannels: unboundChannelsRow[0]?.value ?? 0,
     noRun: noRunRow[0]?.value ?? 0,
   };
+}
+
+// ── Door 4: tune target (the feedback-loop deep-link) ─────────────────────────
+
+export interface TuneTargetResult {
+  /** The automation whose flow feeds this run (null if the run/automation is gone). */
+  automationId: string | null;
+  /** The automation's display name. */
+  automationName: string | null;
+  /**
+   * The flow node to focus in the editor — the extraction step (an `ai.generate`
+   * capability node). Null when the flow has no such node; the caller then opens
+   * the flow without a focused node rather than guessing.
+   */
+  nodeId: string | null;
+}
+
+/**
+ * The extraction node in a flow: the capability node running `ai.generate` (the
+ * assessment/extraction step — e.g. arch-client-intelligence's `assess` node).
+ * Falls back to the first capability/skill node, then null. NOT hardcoded to a
+ * node id, so it works for any external-message extraction automation.
+ */
+export function findExtractionNodeId(
+  flow: FlowDefinition | null | undefined
+): string | null {
+  const nodes = flow?.nodes;
+  if (!nodes?.length) return null;
+  const aiNode = nodes.find(
+    (n) => n.type === "capability" && n.data?.verbId === "ai.generate"
+  );
+  if (aiNode) return aiNode.id;
+  const anyStep = nodes.find(
+    (n) => n.type === "capability" || n.type === "skill"
+  );
+  return anyStep?.id ?? null;
+}
+
+/**
+ * Resolve a run to the flow node the user would edit to fix its extraction — the
+ * "Tune extraction" deep-link target. Reads the run's owning automation (floored
+ * by userVisibleWhere) and locates the `ai.generate` node in the automation's
+ * CURRENT flow (not the run's snapshot — the user edits the live definition).
+ * A run the caller cannot see, or one whose automation was deleted, resolves to
+ * all-nulls rather than leaking.
+ */
+export async function resolveTuneTarget(
+  userId: string,
+  runId: string
+): Promise<TuneTargetResult> {
+  const [row] = await db
+    .select({
+      automationId: automations.id,
+      automationName: automations.name,
+      flowDefinition: automations.flowDefinition,
+    })
+    .from(automationRuns)
+    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+    .where(
+      and(
+        eq(automationRuns.id, runId),
+        userVisibleWhere(automationRuns.workspaceId, userId)
+      )
+    )
+    .limit(1);
+
+  if (!row) return { automationId: null, automationName: null, nodeId: null };
+  return {
+    automationId: row.automationId,
+    automationName: row.automationName,
+    nodeId: findExtractionNodeId(row.flowDefinition),
+  };
+}
+
+// ── Door 5: quality-by-version (before/after the prompt change) ────────────────
+
+/**
+ * How many recent external-message runs the quality slice scans. Ordered newest-
+ * first; on a high-volume pod an old version may fall outside the prefix, so the
+ * result carries `truncated` for the caller to disclose (same honesty contract as
+ * `listChannels`). Versions are usually days/weeks apart, so a generous cap keeps
+ * both the before and after version in view without an unbounded scan.
+ */
+const QUALITY_RUN_SCAN_CAP = 2000;
+
+export interface QualityVersionSlice {
+  /** Automation `version` at run time (null for legacy/unsnapshotted runs). */
+  version: number | null;
+  /** External-message runs on this version within the scan prefix. */
+  runs: number;
+  /** Runs that produced ≥1 visible proposal. */
+  extracted: number;
+  /** `extracted / runs * 100`, rounded (0 when empty). */
+  extractionRatePct: number;
+  firstRunAt: Date;
+  lastRunAt: Date;
+}
+
+export interface AutomationQuality {
+  automationId: string;
+  name: string | null;
+  /** The automation's CURRENT version — the slice with this version is "now". */
+  currentVersion: number | null;
+  /** Version slices, newest version first; a null-version slice sorts last. */
+  versions: QualityVersionSlice[];
+}
+
+export interface QualityByVersionResult {
+  automations: AutomationQuality[];
+  /** External-message runs scanned to build the slice. */
+  scanned: number;
+  /** True when the scan hit the cap — an older version may be under-counted. */
+  truncated: boolean;
+}
+
+export interface QualityByVersionInput {
+  userId: string;
+  /** Scope to one automation; omit for all external-message automations. */
+  automationId?: string;
+}
+
+/**
+ * Extraction quality grouped by automation VERSION — the before/after proof that
+ * a prompt change helped. For each external-message-triggered automation, split
+ * its runs by the `definitionSnapshot.version` stamped at run time and report the
+ * extraction rate per version. Reusing the version already stamped on every run
+ * (no new ledger): after the user bumps the prompt (version++), the new version's
+ * slice shows whether the rate moved. User-floored on runs AND proposals.
+ */
+export async function getQualityByVersion(
+  input: QualityByVersionInput
+): Promise<QualityByVersionResult> {
+  const { userId, automationId } = input;
+  const externalRun = drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE 'external_message.received%'`;
+
+  // 1. Recent external-message runs (floored), newest-first, capped.
+  const runRows = await db
+    .select({
+      id: automationRuns.id,
+      automationId: automationRuns.automationId,
+      version: drizzleSql<
+        number | null
+      >`(${automationRuns.definitionSnapshot}->>'version')::int`,
+      startedAt: automationRuns.startedAt,
+    })
+    .from(automationRuns)
+    .where(
+      and(
+        userVisibleWhere(automationRuns.workspaceId, userId),
+        externalRun,
+        automationId ? eq(automationRuns.automationId, automationId) : undefined
+      )
+    )
+    .orderBy(desc(automationRuns.startedAt))
+    .limit(QUALITY_RUN_SCAN_CAP);
+
+  const scanned = runRows.length;
+  const truncated = scanned === QUALITY_RUN_SCAN_CAP;
+  if (scanned === 0) return { automations: [], scanned: 0, truncated: false };
+
+  // 2. Which of those runs produced ≥1 visible proposal (distinct correlationId).
+  const runIds = runRows.map((r) => r.id);
+  const producedRows = await db
+    .select({ correlationId: proposals.correlationId })
+    .from(proposals)
+    .where(
+      and(
+        inArray(proposals.correlationId, runIds),
+        userVisibleWhere(proposals.workspaceId, userId)
+      )
+    )
+    .groupBy(proposals.correlationId);
+  const producedRunIds = new Set(
+    producedRows.map((r) => r.correlationId).filter((c): c is string => !!c)
+  );
+
+  // 3. Group in-memory by (automationId, version).
+  interface Bucket {
+    runs: number;
+    extracted: number;
+    firstRunAt: Date;
+    lastRunAt: Date;
+  }
+  const byAutomation = new Map<string, Map<string, Bucket>>();
+  for (const r of runRows) {
+    const versionKey = r.version == null ? "null" : String(r.version);
+    let versions = byAutomation.get(r.automationId);
+    if (!versions) {
+      versions = new Map();
+      byAutomation.set(r.automationId, versions);
+    }
+    let b = versions.get(versionKey);
+    if (!b) {
+      b = {
+        runs: 0,
+        extracted: 0,
+        firstRunAt: r.startedAt,
+        lastRunAt: r.startedAt,
+      };
+      versions.set(versionKey, b);
+    }
+    b.runs += 1;
+    if (producedRunIds.has(r.id)) b.extracted += 1;
+    if (r.startedAt.getTime() < b.firstRunAt.getTime())
+      b.firstRunAt = r.startedAt;
+    if (r.startedAt.getTime() > b.lastRunAt.getTime())
+      b.lastRunAt = r.startedAt;
+  }
+
+  // 4. Attach automation names + current version.
+  const automationIds = [...byAutomation.keys()];
+  const metaRows =
+    automationIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: automations.id,
+            name: automations.name,
+            version: automations.version,
+          })
+          .from(automations)
+          .where(inArray(automations.id, automationIds));
+  const metaById = new Map(metaRows.map((m) => [m.id, m]));
+
+  const result: AutomationQuality[] = automationIds.map((aid) => {
+    const meta = metaById.get(aid);
+    const versions: QualityVersionSlice[] = [
+      ...byAutomation.get(aid)!.entries(),
+    ]
+      .map(([vKey, b]) => ({
+        version: vKey === "null" ? null : Number(vKey),
+        runs: b.runs,
+        extracted: b.extracted,
+        extractionRatePct:
+          b.runs === 0 ? 0 : Math.round((b.extracted / b.runs) * 100),
+        firstRunAt: b.firstRunAt,
+        lastRunAt: b.lastRunAt,
+      }))
+      // Newest version first; the null-version (legacy) slice sorts last.
+      .sort((a, b) => {
+        if (a.version == null) return 1;
+        if (b.version == null) return -1;
+        return b.version - a.version;
+      });
+    return {
+      automationId: aid,
+      name: meta?.name ?? null,
+      currentVersion: meta?.version ?? null,
+      versions,
+    };
+  });
+
+  // Automations with the most recent activity first.
+  result.sort((a, b) => {
+    const aLast = Math.max(...a.versions.map((v) => v.lastRunAt.getTime()));
+    const bLast = Math.max(...b.versions.map((v) => v.lastRunAt.getTime()));
+    return bLast - aLast;
+  });
+
+  return { automations: result, scanned, truncated };
 }

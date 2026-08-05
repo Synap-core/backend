@@ -33,7 +33,13 @@ vi.mock("@synap/database", async (importOriginal) => {
     isNull: vi.fn((col: unknown) => ({ isNull: col })),
     inArray: vi.fn((col: unknown, vals: unknown) => ({ inArray: [col, vals] })),
     drizzleSql: Object.assign(
-      vi.fn((strings: TemplateStringsArray) => ({ sql: strings.join("?") })),
+      vi.fn((strings: TemplateStringsArray) => ({
+        sql: strings.join("?"),
+        // `.as(alias)` — the windowed row_number() column in assembleUnits aliases
+        // its SQL. The real drizzle `sql` template carries `.as`; mirror it so the
+        // structural mock doesn't fault where live Postgres wouldn't.
+        as: (alias: string) => ({ sql: strings.join("?"), alias }),
+      })),
       { raw: vi.fn() }
     ),
   };
@@ -50,7 +56,11 @@ import {
   classifySignalFate,
   attributeRunsToMessages,
   listPipeline,
+  listChannels,
   resolveProvenance,
+  findExtractionNodeId,
+  resolveTuneTarget,
+  getQualityByVersion,
 } from "./index.js";
 
 /**
@@ -63,13 +73,23 @@ function makeQueryHarness() {
   const wheres: unknown[] = [];
   function builder() {
     const b: Record<string, unknown> = {};
-    for (const m of ["from", "innerJoin", "orderBy", "limit"]) {
+    for (const m of ["from", "innerJoin", "orderBy", "limit", "groupBy"]) {
       b[m] = () => b;
     }
     b.where = (w: unknown) => {
       wheres.push(w);
       return b;
     };
+    // `.as(alias)` — turn this builder into a subquery handle (the per-run
+    // proposal cap in assembleUnits: `db.select(...).as("ranked")` then
+    // `db.select({ id: ranked.id, ... }).from(ranked)`). Any column access on the
+    // handle returns a fake column ref so the outer select + real `lte` don't
+    // fault; the handle is never awaited (only the outer select pops a result).
+    b.as = (alias: string) =>
+      new Proxy(
+        {},
+        { get: (_t, prop) => ({ subqueryCol: `${alias}.${String(prop)}` }) }
+      );
     (b as { then: unknown }).then = (resolve: (v: unknown) => void) =>
       resolve(results.shift() ?? []);
     return b;
@@ -543,5 +563,389 @@ describe("resolveProvenance", () => {
 
     expect(res.runId).toBe("run-1");
     expect(res.messages.map((m) => m.id)).toContain("src-1");
+  });
+});
+
+// ── Query layer: pipeline channelId drill-down filter ─────────────────────────
+
+describe("listPipeline channelId filter", () => {
+  it("lands an `eq(messages.channelId, channelId)` predicate on the message read", async () => {
+    const h = makeQueryHarness();
+    h.queue([]); // empty page — inspect the composed where-tree only.
+
+    await listPipeline({ userId: "u1", channelId: "chan-only" });
+
+    const leaves = flattenWhere(h.wheres[0]);
+    // The drill-down predicate must be present, scoping to exactly one channel…
+    expect(
+      leaves.some(
+        (l) =>
+          !!l &&
+          typeof l === "object" &&
+          "eq" in l &&
+          (l as { eq: unknown[] }).eq[1] === "chan-only"
+      )
+    ).toBe(true);
+    // …AND the access floor still lands (drill-down never widens visibility).
+    expect(leaves).toContainEqual({ channelFloor: "u1" });
+  });
+
+  it("adds NO channel predicate when channelId is omitted (full stream)", async () => {
+    const h = makeQueryHarness();
+    h.queue([]);
+
+    await listPipeline({ userId: "u1" });
+
+    const leaves = flattenWhere(h.wheres[0]);
+    // No `eq` leaf carries a bare channel-id string value (only the floor +
+    // authorType/ephemeral/deletedAt predicates, none scoping messages.channelId).
+    const channelIdEq = leaves.filter(
+      (l): l is { eq: unknown[] } => !!l && typeof l === "object" && "eq" in l
+    );
+    expect(channelIdEq.some((l) => l.eq[1] === "chan-only")).toBe(false);
+  });
+});
+
+// ── Query layer: per-channel rollup (signal.channels) ─────────────────────────
+
+/**
+ * Three channels over one scan prefix:
+ *   cA (bound)   — 2 msgs: one extracted (run+proposal) + one no_run → rate 50%.
+ *   cB (bound)   — 1 msg: run FAILED → a "problem" (≥1 failed).
+ *   cC (unbound) — 1 msg: no run → unprocessed_unbound → a "problem" (unbound).
+ */
+function queueChannelsFixture(h: ReturnType<typeof makeQueryHarness>) {
+  // Query 1: floored message scan (DESC by timestamp), 4 rows across 3 channels.
+  h.queue([
+    {
+      id: "m_a2",
+      channelId: "cA",
+      ts: new Date(4000),
+      content: "a2",
+      channelName: "Alpha",
+      provider: "discord",
+      boundEntityId: "entity-A",
+    },
+    {
+      id: "m_a1",
+      channelId: "cA",
+      ts: new Date(3000),
+      content: "a1",
+      channelName: "Alpha",
+      provider: "discord",
+      boundEntityId: "entity-A",
+    },
+    {
+      id: "m_c1",
+      channelId: "cC",
+      ts: new Date(2000),
+      content: "c1",
+      channelName: "Gamma",
+      provider: "whatsapp",
+      boundEntityId: null,
+    },
+    {
+      id: "m_b1",
+      channelId: "cB",
+      ts: new Date(1000),
+      content: "b1",
+      channelName: "Beta",
+      provider: "slack",
+      boundEntityId: "entity-B",
+    },
+  ]);
+  // Query 2 (assembleUnits runs): rA completed on cA, rB failed on cB. None on cC.
+  h.queue([
+    {
+      id: "rA",
+      status: "completed",
+      startedAt: new Date(3500),
+      channelId: "cA",
+    },
+    { id: "rB", status: "failed", startedAt: new Date(1200), channelId: "cB" },
+  ]);
+  // Query 3 (assembleUnits proposals): only rA produced (correlationId = rA).
+  h.queue([
+    {
+      id: "prop-a",
+      correlationId: "rA",
+      targetType: "entity",
+      targetId: "ent-1",
+      data: {},
+    },
+  ]);
+}
+
+describe("listChannels rollup", () => {
+  it("groups units by channel: fate-mix sums to messageCount, extraction rate, bound flag", async () => {
+    const h = makeQueryHarness();
+    queueChannelsFixture(h);
+
+    const result = await listChannels({ userId: "u1", order: "recent" });
+    const rollups = result.channels;
+    // Truncation honesty: the fixture is 4 messages, far under CHANNEL_SCAN_CAP,
+    // so the caller is told the scan was complete (not a partial recent census).
+    expect(result.scanned).toBe(4);
+    expect(result.truncated).toBe(false);
+    const by = new Map(rollups.map((r) => [r.channelId, r]));
+
+    const cA = by.get("cA")!;
+    expect(cA.messageCount).toBe(2);
+    // fate-mix must sum to messageCount (single fate source, no double-count).
+    expect(
+      cA.fate.extracted +
+        cA.fate.no_insight +
+        cA.fate.no_run +
+        cA.fate.unprocessed_unbound +
+        cA.fate.failed
+    ).toBe(cA.messageCount);
+    expect(cA.fate.extracted).toBe(1);
+    expect(cA.fate.no_run).toBe(1); // bound channel, second msg had no run
+    expect(cA.extractionRatePct).toBe(50); // 1 of 2 extracted
+    expect(cA.bound).toBe(true);
+    expect(cA.boundEntityId).toBe("entity-A");
+    expect(cA.lastActivityAt).toEqual(new Date(4000));
+
+    const cB = by.get("cB")!;
+    expect(cB.fate.failed).toBe(1);
+    expect(cB.extractionRatePct).toBe(0);
+    expect(cB.bound).toBe(true);
+
+    const cC = by.get("cC")!;
+    expect(cC.fate.unprocessed_unbound).toBe(1);
+    expect(cC.bound).toBe(false);
+    expect(cC.boundEntityId).toBeNull();
+    expect(cC.extractionRatePct).toBe(0);
+  });
+
+  it("problems order floats an unbound + a failed channel to the top (over a healthy one)", async () => {
+    const h = makeQueryHarness();
+    queueChannelsFixture(h);
+
+    const { channels: rollups } = await listChannels({
+      userId: "u1",
+      order: "problems",
+    });
+
+    // cC (unbound, ts2000) and cB (failed, ts1000) are problems; both rate 0 so
+    // ordered by lastActivity desc → cC before cB. cA (healthy, rate 50) is last.
+    expect(rollups.map((r) => r.channelId)).toEqual(["cC", "cB", "cA"]);
+  });
+
+  it("problems is the default order", async () => {
+    const h = makeQueryHarness();
+    queueChannelsFixture(h);
+
+    const { channels: rollups } = await listChannels({ userId: "u1" });
+    expect(rollups[0].channelId).toBe("cC");
+    expect(rollups[rollups.length - 1].channelId).toBe("cA");
+  });
+
+  it("recent order sorts purely by lastActivityAt desc", async () => {
+    const h = makeQueryHarness();
+    queueChannelsFixture(h);
+
+    const { channels: rollups } = await listChannels({
+      userId: "u1",
+      order: "recent",
+    });
+    // cA (4000) > cC (2000) > cB (1000).
+    expect(rollups.map((r) => r.channelId)).toEqual(["cA", "cC", "cB"]);
+  });
+
+  it("floors the channel scan with channelVisibilityWhere — an unseeable channel is excluded", async () => {
+    const h = makeQueryHarness();
+    // Empty scan (as the floor would yield for a caller who can see nothing).
+    h.queue([]);
+
+    const { channels: rollups } = await listChannels({ userId: "user-77" });
+
+    expect(rollups).toEqual([]);
+    // The SAME floor the pipeline uses must land in the composed message read —
+    // no separate resolver, no floor divergence.
+    expect(mockChannelVisibility).toHaveBeenCalledWith("user-77");
+    const leaves = flattenWhere(h.wheres[0]);
+    expect(leaves).toContainEqual({ channelFloor: "user-77" });
+  });
+});
+
+// ── Pure: extraction-node resolution (the Tune deep-link target) ──────────────
+
+describe("findExtractionNodeId", () => {
+  it("picks the ai.generate capability node (arch 'assess')", () => {
+    const flow = {
+      nodes: [
+        { id: "trigger", type: "trigger", data: {} },
+        { id: "gather", type: "messages_query", data: {} },
+        { id: "assess", type: "capability", data: { verbId: "ai.generate" } },
+        { id: "enrich", type: "output", data: {} },
+      ],
+      edges: [],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(findExtractionNodeId(flow as any)).toBe("assess");
+  });
+
+  it("falls back to the first capability/skill node when no ai.generate node", () => {
+    const flow = {
+      nodes: [
+        { id: "trigger", type: "trigger", data: {} },
+        { id: "step-1", type: "skill", data: { skillId: "x" } },
+      ],
+      edges: [],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(findExtractionNodeId(flow as any)).toBe("step-1");
+  });
+
+  it("returns null for an empty/absent flow (caller opens without a focused node)", () => {
+    expect(findExtractionNodeId(null)).toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(findExtractionNodeId({ nodes: [], edges: [] } as any)).toBeNull();
+  });
+});
+
+// ── resolveTuneTarget (run → automation + extraction node, floored) ───────────
+
+describe("resolveTuneTarget", () => {
+  it("resolves the owning automation + its ai.generate node from a run", async () => {
+    const h = makeQueryHarness();
+    h.queue([
+      {
+        automationId: "auto-1",
+        automationName: "Arch — Client Re-Synthesis",
+        flowDefinition: {
+          nodes: [
+            {
+              id: "assess",
+              type: "capability",
+              data: { verbId: "ai.generate" },
+            },
+          ],
+          edges: [],
+        },
+      },
+    ]);
+
+    const out = await resolveTuneTarget("u1", "run-1");
+    expect(out).toEqual({
+      automationId: "auto-1",
+      automationName: "Arch — Client Re-Synthesis",
+      nodeId: "assess",
+    });
+    // Floored on the run's workspace — a run the caller can't see resolves to nothing.
+    expect(mockUserVisible).toHaveBeenCalledWith(expect.anything(), "u1");
+    const leaves = flattenWhere(h.wheres[0]);
+    expect(leaves).toContainEqual({ userFloor: "u1" });
+  });
+
+  it("returns all-nulls when the run is not visible / gone (no leak)", async () => {
+    const h = makeQueryHarness();
+    h.queue([]); // floored join yields nothing.
+    const out = await resolveTuneTarget("u1", "missing");
+    expect(out).toEqual({
+      automationId: null,
+      automationName: null,
+      nodeId: null,
+    });
+  });
+});
+
+// ── getQualityByVersion (before/after a prompt change) ────────────────────────
+
+describe("getQualityByVersion", () => {
+  it("groups external-message runs by version and computes extraction rate", async () => {
+    const h = makeQueryHarness();
+    // Query 1: runs (newest-first). auto-1 v2: 2 runs; auto-1 v1: 2 runs; legacy null: 1.
+    h.queue([
+      {
+        id: "r5",
+        automationId: "auto-1",
+        version: 2,
+        startedAt: new Date(5000),
+      },
+      {
+        id: "r4",
+        automationId: "auto-1",
+        version: 2,
+        startedAt: new Date(4000),
+      },
+      {
+        id: "r3",
+        automationId: "auto-1",
+        version: 1,
+        startedAt: new Date(3000),
+      },
+      {
+        id: "r2",
+        automationId: "auto-1",
+        version: 1,
+        startedAt: new Date(2000),
+      },
+      {
+        id: "r1",
+        automationId: "auto-1",
+        version: null,
+        startedAt: new Date(1000),
+      },
+    ]);
+    // Query 2: runs that produced ≥1 proposal (distinct correlationId). v2: both
+    // produced (100%); v1: one of two (50%); legacy: none (0%).
+    h.queue([
+      { correlationId: "r5" },
+      { correlationId: "r4" },
+      { correlationId: "r3" },
+    ]);
+    // Query 3: automation meta (current version = 2).
+    h.queue([{ id: "auto-1", name: "Arch — Client Re-Synthesis", version: 2 }]);
+
+    const out = await getQualityByVersion({ userId: "u1" });
+    expect(out.scanned).toBe(5);
+    expect(out.truncated).toBe(false);
+    expect(out.automations).toHaveLength(1);
+
+    const a = out.automations[0];
+    expect(a.automationId).toBe("auto-1");
+    expect(a.currentVersion).toBe(2);
+    // Newest version first, null-version slice last.
+    expect(a.versions.map((v) => v.version)).toEqual([2, 1, null]);
+    const [v2, v1, vNull] = a.versions;
+    expect(v2).toMatchObject({ runs: 2, extracted: 2, extractionRatePct: 100 });
+    expect(v1).toMatchObject({ runs: 2, extracted: 1, extractionRatePct: 50 });
+    expect(vNull).toMatchObject({
+      runs: 1,
+      extracted: 0,
+      extractionRatePct: 0,
+    });
+  });
+
+  it("floors runs AND proposals with userVisibleWhere", async () => {
+    const h = makeQueryHarness();
+    h.queue([
+      {
+        id: "r1",
+        automationId: "auto-1",
+        version: 1,
+        startedAt: new Date(1000),
+      },
+    ]);
+    h.queue([]); // no visible proposals for this caller
+    h.queue([{ id: "auto-1", name: "A", version: 1 }]);
+
+    const out = await getQualityByVersion({ userId: "u9" });
+    expect(out.automations[0].versions[0]).toMatchObject({
+      runs: 1,
+      extracted: 0,
+    });
+    // The floor lands in BOTH the run read (wheres[0]) and the proposal read (wheres[1]).
+    expect(flattenWhere(h.wheres[0])).toContainEqual({ userFloor: "u9" });
+    expect(flattenWhere(h.wheres[1])).toContainEqual({ userFloor: "u9" });
+  });
+
+  it("empty scan → no automations, not truncated", async () => {
+    const h = makeQueryHarness();
+    h.queue([]);
+    const out = await getQualityByVersion({ userId: "u1" });
+    expect(out).toEqual({ automations: [], scanned: 0, truncated: false });
   });
 });
