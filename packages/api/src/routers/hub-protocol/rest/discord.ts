@@ -51,6 +51,7 @@ import {
 import { resolveClientBinding } from "../../../utils/resolve-client-binding.js";
 import type { AIStep } from "@synap-core/types";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
+import type { ChannelOrigin } from "../../../services/channels/channel-origin.js";
 import {
   createOrGetChatTurn,
   decideChatTurnClaimAction,
@@ -109,6 +110,18 @@ const AgentTurnStepSchema = z
   })
   .passthrough();
 
+/**
+ * ORIGIN of every channel this bridge creates. The Discord gateway bridge has
+ * no `tools`/`sources` registry row, so per the channel-origin convention its
+ * producer is the PROVIDER SLUG under the `source` kind (never an invented
+ * uuid). See services/channels/channel-origin.ts.
+ */
+const DISCORD_BRIDGE_ORIGIN: ChannelOrigin = {
+  producerType: "source",
+  producerId: "discord",
+  producerName: "Discord bridge",
+};
+
 // Re-export for tests / callers that import from the route module.
 export { accumulateAgentTurnStream } from "./discord-agent-turn-stream.js";
 export type { AgentTurnStreamResult } from "./discord-agent-turn-stream.js";
@@ -136,6 +149,10 @@ const IngestRequestSchema = z
     // being pinned to one workspace. Provided → workspace-scoped, unchanged.
     workspaceId: z.string().uuid().optional(),
     discordChannelId: z.string().min(1),
+    // Discord SERVER (guild) id. Optional — a DM has none. Cached at
+    // `channels.metadata.external.guildId`; it is the missing half of the
+    // channel-level https://discord.com/channels/{guild}/{channel} deep link.
+    guildId: z.string().min(1).max(64).optional(),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1).optional(),
     // Relaxed from min(1): an attachment-only message (photo, no caption) is a
@@ -166,6 +183,8 @@ const AgentTurnRequestSchema = z
     // current pinned Discord bridge always passes it).
     workspaceId: z.string().uuid().optional(),
     discordChannelId: z.string().min(1),
+    /** Discord SERVER (guild) id — see DiscordIngestRequest.guildId. */
+    guildId: z.string().min(1).max(64).optional(),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1),
     // Relaxed from min(1): an attachment-only message (photo, no caption) is a
@@ -335,6 +354,10 @@ export function registerDiscordRoutes(app: HubHono): void {
         senderKeyId: callerKeyId,
         messageId: body.messageId,
         attachments: body.attachments,
+        origin: DISCORD_BRIDGE_ORIGIN,
+        ...(body.guildId
+          ? { externalCoordinates: { guildId: body.guildId } }
+          : {}),
       });
       return c.json({ recorded }, 200);
     } catch (err) {
@@ -472,6 +495,10 @@ export function registerDiscordRoutes(app: HubHono): void {
           senderKeyId: callerKeyId,
           messageId: body.messageId,
           attachments: body.attachments,
+          origin: DISCORD_BRIDGE_ORIGIN,
+          ...(body.guildId
+            ? { externalCoordinates: { guildId: body.guildId } }
+            : {}),
         });
 
       // Stable request key for chat_turns (UUID column; Discord snowflakes are

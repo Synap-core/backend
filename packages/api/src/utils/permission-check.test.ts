@@ -738,6 +738,88 @@ describe("checkPermissionOrPropose — session force-propose governance", () => 
 });
 
 // ---------------------------------------------------------------------------
+// Tests: lifecycle complete escape (ignoreSessionForcePropose + focus_session close)
+//
+// Agent all-writes (`writesRequireProposal: true`) proposes focus_session.update
+// at decideAgentPolicy rung 5 before DEFAULT_AUTO_APPROVE. Approving that
+// proposal does not close the session (no focus_session/update executor).
+// completeFocusSession sets ignoreSessionForcePropose so the close executes.
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — focus_session lifecycle close escape", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("agent writesRequireProposal + focus_session close + ignoreSessionForcePropose → execute/granted", async () => {
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-all-writes-1",
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: "sess-1", status: "closed" },
+      sessionId: "sess-1",
+      ignoreSessionForcePropose: true,
+    });
+
+    expect(result).toMatchObject({ granted: true });
+    expect("proposalId" in result).toBe(false);
+  });
+
+  it("agent writesRequireProposal + focus_session close WITHOUT flag → still propose", async () => {
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-all-writes-1",
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: "sess-1", status: "closed" },
+      sessionId: "sess-1",
+      // ignoreSessionForcePropose omitted
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("flag does not escape non-close focus_session updates", async () => {
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-all-writes-1",
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: "sess-1", status: "active", progress: 50 },
+      ignoreSessionForcePropose: true,
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("flag does not escape entity.update (not a focus_session close)", async () => {
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-all-writes-1",
+      subjectType: "entity",
+      action: "update",
+      data: { id: "ent-1", status: "closed" },
+      ignoreSessionForcePropose: true,
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: ADMIN_ACTIONS always-propose gate
 // ---------------------------------------------------------------------------
 

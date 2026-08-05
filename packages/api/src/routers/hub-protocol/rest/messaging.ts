@@ -35,6 +35,7 @@ import { getMessagingConnector } from "../../../connectors/index.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
+import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono } from "./_shared.js";
@@ -1075,7 +1076,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         // (dedups on (externalSource, externalId), upgrades a NULL subject binding,
         // never repoints an already-linked channel). Replaces the hand-rolled 4th
         // copy of external resolve — and hardens the dedup key to include provider.
-        const { channelId } = await ensureExternalChannel({
+        const { channelId, created } = await ensureExternalChannel({
           provider,
           externalId: externalThreadId,
           userId,
@@ -1088,6 +1089,20 @@ export function registerMessagingRoutes(app: HubHono): void {
             linkedByUserId: userId,
           },
         });
+        // ORIGIN at birth — the messaging bridge has no registry row, so the
+        // producer is the provider slug under the `source` kind. Stamped by the
+        // CALLER because the @synap/database door can't reach `createLinks`.
+        if (created) {
+          await recordChannelOrigin({
+            channelId,
+            workspaceId: null,
+            origin: {
+              producerType: "source",
+              producerId: provider,
+              producerName: provider,
+            },
+          });
+        }
 
         return c.json({ channelId }, 200);
       } catch (err) {

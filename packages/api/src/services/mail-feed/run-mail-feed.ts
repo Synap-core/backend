@@ -28,6 +28,7 @@
 
 import { db, tools, eq, drizzleSql } from "@synap/database";
 import { ensureExternalChannel, insertChannelMessage } from "@synap/database";
+import { recordChannelOrigin } from "../channels/channel-origin.js";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import {
@@ -300,14 +301,30 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
   // Resolve the Discord-bound feed channel ONCE (find-or-create), reused for
   // every post below. `branchPurpose:'team'` is what the mirror's fail-closed
   // allowlist requires; ensureExternalChannel upgrades a null-purpose row to team.
-  const { channelId: feedChannelId } = await ensureExternalChannel({
-    provider: "discord",
-    externalId: mailFeed.channelId,
-    userId: owner,
-    workspaceId,
-    title: "Mail feed",
-    branchPurpose: "team",
-  });
+  const { channelId: feedChannelId, created: feedChannelCreated } =
+    await ensureExternalChannel({
+      provider: "discord",
+      externalId: mailFeed.channelId,
+      userId: owner,
+      workspaceId,
+      title: "Mail feed",
+      branchPurpose: "team",
+    });
+  // ORIGIN at birth — `source(mail-feed) --produced--> channel`. The second
+  // external door (`ensureExternalChannel`) lives in @synap/database and cannot
+  // reach the api-side `createLinks` one door, so the api-side CALLER stamps the
+  // edge using the `created` flag that door already returns.
+  if (feedChannelCreated) {
+    await recordChannelOrigin({
+      channelId: feedChannelId,
+      workspaceId: workspaceId ?? null,
+      origin: {
+        producerType: "source",
+        producerId: "mail-feed",
+        producerName: "Mail feed",
+      },
+    });
+  }
 
   // 5. post one message per relevant, non-muted email.
   let posted = 0;

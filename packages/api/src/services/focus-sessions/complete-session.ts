@@ -101,9 +101,19 @@ export async function completeFocusSession(
     throw Object.assign(new Error(perm.reason), { code: "FORBIDDEN" });
   }
   if ("proposalId" in perm) {
+    // Hub REST surfaces proposalId/summary/review* when present; approval does
+    // not run a focus_session/update executor — complete should normally execute
+    // via ignoreSessionForcePropose lifecycle escape (permission-check).
     throw Object.assign(
       new Error("Session completion proposed for review — approval required"),
-      { code: "FORBIDDEN" }
+      {
+        code: "FORBIDDEN",
+        proposalId: perm.proposalId,
+        summary: perm.summary,
+        reasoning: perm.reasoning,
+        reviewPath: perm.reviewPath,
+        reviewUrl: perm.reviewUrl,
+      }
     );
   }
 

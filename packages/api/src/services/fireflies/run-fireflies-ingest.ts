@@ -108,6 +108,12 @@ export async function runFirefliesIngest(
     idempotencySeed: meetingId,
     sentAt: mapped.sentAt,
     messageId: meetingId,
+    // Origin: the Fireflies connector TOOL row that polled this transcript.
+    origin: {
+      producerType: "tool",
+      producerId: toolId,
+      producerName: "Fireflies",
+    },
   });
 
   // 4) Mark seen only now that the message landed (idempotent duplicate counts as

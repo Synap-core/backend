@@ -86,6 +86,22 @@ export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 const logger = createLogger({ module: "permission-check" });
 
 /**
+ * Lifecycle close for a focus session: `completeFocusSession` gates with
+ * `subjectType: "focus_session"`, `action: "update"`, and
+ * `data: { id, status: "closed" }` (optionally other close-only fields).
+ * Used by the `ignoreSessionForcePropose` escape so agent all-writes can finish
+ * a session without a non-executable proposal.
+ */
+function isFocusSessionLifecycleClose(
+  subjectType: string,
+  action: string,
+  data: Record<string, unknown> | undefined
+): boolean {
+  if (subjectType !== "focus_session" || action !== "update") return false;
+  return data?.status === "closed";
+}
+
+/**
  * Session-scoped force-propose governance. A focus session opened for an
  * unattended, propose-only playbook (e.g. the CRM hygiene maintenance agent) is
  * stamped with `metadata.governance.forceProposeWrites: true` by
@@ -503,9 +519,21 @@ export interface PermissionCheckOpts {
    */
   forcePropose?: boolean;
   /**
-   * Skip session-metadata forceProposeWrites (pack mode). Used for lifecycle
-   * complete so an agent can close a pack-mode session and surface the pack.
-   * Does not bypass explicit opts.forcePropose or RBAC denials.
+   * Lifecycle complete escape for focus sessions (pack mode).
+   *
+   * Two effects when true:
+   *   1. Skip session-metadata `forceProposeWrites` (deriveSessionForceProposeGovernance).
+   *   2. After the agent governance ladder returns `propose`, re-treat a
+   *      focus_session update that closes the session (`data.status === "closed"`)
+   *      as **execute** (receipt + grant). Without this, agent
+   *      `writesRequireProposal: true` proposes at decideAgentPolicy rung 5
+   *      *before* DEFAULT_AUTO_APPROVE (`focus_session.update`), and approving
+   *      that proposal does not close the session (no focus_session/update
+   *      executor) — complete would be stuck forever under agent all-writes.
+   *
+   * NOT a general bypass: still honors **deny** (RBAC/CBAC), ADMIN_ACTIONS,
+   * destructive floors, and explicit `opts.forcePropose`. Only the lifecycle
+   * close write for completeFocusSession should set this flag.
    */
   ignoreSessionForcePropose?: boolean;
 }
@@ -879,7 +907,18 @@ export async function checkPermissionOrPropose(
         return { denied: true, reason: gov.reason };
       }
 
-      if (gov.decision === "propose") {
+      // Lifecycle complete escape: `ignoreSessionForcePropose` means "allow the
+      // focus_session close write to execute under agent all-writes / pack mode"
+      // — NOT a general bypass of deny, destructive, admin, or explicit
+      // opts.forcePropose. writesRequireProposal (rung 5) proposes
+      // focus_session.update before DEFAULT_AUTO_APPROVE (rung 8); without this
+      // escape, complete never closes the session (no update executor).
+      const lifecycleCloseEscape =
+        opts.ignoreSessionForcePropose === true &&
+        opts.forcePropose !== true &&
+        isFocusSessionLifecycleClose(subjectType, action, data);
+
+      if (gov.decision === "propose" && !lifecycleCloseEscape) {
         return createProposal({
           envelope: writeEnvelope,
           workspaceId,
@@ -893,8 +932,8 @@ export async function checkPermissionOrPropose(
         });
       }
 
-      if (gov.decision === "execute") {
-        // Auto-approved. Record the RECEIPT row, then grant.
+      if (gov.decision === "execute" || lifecycleCloseEscape) {
+        // Auto-approved (or lifecycle close escape). Record the RECEIPT row, then grant.
         //
         // AWAITED, not fire-and-forget: a receipt that races the response is not
         // a receipt — the caller could observe (and report) a completed write
@@ -937,7 +976,12 @@ export async function checkPermissionOrPropose(
                 _autoApprove: {
                   matchedPattern: findMatchingPattern(
                     eventKey,
-                    gov.explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
+                    // This block is entered on `execute` OR `lifecycleCloseEscape`,
+                    // so `gov` is NOT narrowed to the execute variant — read
+                    // `explicitAutoApproveFor` only when it actually is one.
+                    (gov.decision === "execute"
+                      ? gov.explicitAutoApproveFor
+                      : undefined) ?? DEFAULT_AUTO_APPROVE
                   ),
                   approvedAt: new Date().toISOString(),
                   approvedBy: "system:auto_approve",
@@ -1058,6 +1102,16 @@ export async function checkPermissionOrPropose(
         effectiveForcePropose ||
         isUnvalidatedUserObservation
       ) {
+        // Mirror agent-path lifecycle complete escape for intelligence/AI source
+        // without an agent user row (e.g. session-recap). Same flag + close pattern;
+        // still honors deny (already returned) and explicit opts.forcePropose.
+        if (
+          opts.ignoreSessionForcePropose === true &&
+          opts.forcePropose !== true &&
+          isFocusSessionLifecycleClose(subjectType, action, data)
+        ) {
+          return { granted: true };
+        }
         return createProposal({
           envelope: writeEnvelope,
           workspaceId,

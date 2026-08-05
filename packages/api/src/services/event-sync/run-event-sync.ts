@@ -37,6 +37,7 @@ import {
   ensureExternalChannel,
   insertChannelMessage,
 } from "@synap/database";
+import { recordChannelOrigin } from "../channels/channel-origin.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "event-sync" });
@@ -337,7 +338,7 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
 
       // Optional announce card into the bound Synap channel (auto-mirrors).
       if (eventSync.announceChannelId) {
-        const { channelId } = await ensureExternalChannel({
+        const { channelId, created } = await ensureExternalChannel({
           provider: "discord",
           externalId: eventSync.announceChannelId,
           userId: owner,
@@ -345,6 +346,18 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
           title: "Events",
           branchPurpose: "team",
         });
+        // ORIGIN at birth (see run-mail-feed for why the CALLER stamps it).
+        if (created) {
+          await recordChannelOrigin({
+            channelId,
+            workspaceId: workspaceId ?? null,
+            origin: {
+              producerType: "source",
+              producerId: "event-sync",
+              producerName: "Event sync",
+            },
+          });
+        }
         await insertChannelMessage({
           channelId,
           content: buildEventAnnouncement(evt),

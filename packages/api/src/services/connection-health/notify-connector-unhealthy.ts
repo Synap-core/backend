@@ -18,6 +18,7 @@ import {
   ensureExternalChannel,
   insertChannelMessage,
 } from "@synap/database";
+import { recordChannelOrigin } from "../channels/channel-origin.js";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
 
@@ -143,7 +144,7 @@ export async function notifyConnectorUnhealthy(
   //    best-effort, only when the caller knows an internal channel to post to.
   if (opts.discordTeamChannelId) {
     try {
-      const { channelId } = await ensureExternalChannel({
+      const { channelId, created } = await ensureExternalChannel({
         provider: "discord",
         externalId: opts.discordTeamChannelId,
         userId: opts.userId,
@@ -151,6 +152,18 @@ export async function notifyConnectorUnhealthy(
         title: "Notices",
         branchPurpose: "team",
       });
+      // ORIGIN at birth (see run-mail-feed for why the CALLER stamps it).
+      if (created) {
+        await recordChannelOrigin({
+          channelId,
+          workspaceId: opts.workspaceId ?? null,
+          origin: {
+            producerType: "source",
+            producerId: "connection-health",
+            producerName: "Connection health",
+          },
+        });
+      }
       await insertChannelMessage({
         channelId,
         content: `⚠️ **${opts.connectorName} connection needs reconnect** — syncing is paused until it's restored.\n${opts.reconnectHint}`,

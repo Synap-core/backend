@@ -39,6 +39,10 @@ import {
   ensureProactiveFeedChannel,
 } from "./personal-channel.js";
 import { ensureExternalChannel } from "@synap/database";
+import {
+  recordChannelOrigin,
+  type ChannelOrigin,
+} from "../services/channels/channel-origin.js";
 import { assertProposalVisibleTo } from "./proposal-visibility.js";
 import { randomUUID } from "crypto";
 
@@ -109,6 +113,14 @@ export interface ResolveOrCreateChannelParams {
   externalId?: string;
   /** Optional title for EXTERNAL channels. */
   title?: string;
+  /**
+   * WHO is creating this channel. Recorded as a `producer --produced--> channel`
+   * edge at BIRTH only (services/channels/channel-origin.ts). `ensureExternalChannel`
+   * lives in @synap/database and cannot reach the api-side `createLinks` one
+   * door, so this api-side wrapper stamps the edge using the `created` flag that
+   * door already returns.
+   */
+  origin?: ChannelOrigin;
 }
 
 /**
@@ -132,6 +144,7 @@ export async function resolveOrCreateChannel(
     externalSource,
     externalId,
     title,
+    origin,
   } = params;
 
   // ── PERSONAL ───────────────────────────────────────────────────────────────
@@ -291,7 +304,7 @@ export async function resolveOrCreateChannel(
     // firewall-role + subject-binding upgrades. Bind at birth when the caller
     // supplies the subject (contextObjectId), so a Discord/Telegram channel lands
     // linked to its real-world entity instead of orphaned.
-    const { channelId } = await ensureExternalChannel({
+    const { channelId, created } = await ensureExternalChannel({
       provider: externalSource,
       externalId,
       userId,
@@ -301,6 +314,13 @@ export async function resolveOrCreateChannel(
       contextObjectType,
       contextObjectId,
     });
+    if (created && origin) {
+      await recordChannelOrigin({
+        channelId,
+        workspaceId: workspaceId ?? null,
+        origin,
+      });
+    }
     const channel = await db.query.channels.findFirst({
       where: eq(channels.id, channelId),
     });

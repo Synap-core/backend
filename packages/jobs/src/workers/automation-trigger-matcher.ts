@@ -208,6 +208,24 @@ function matchTriggerSpecificFilters(
     }
   }
 
+  // ── external_message trigger ────────────────────────────────────────────
+  // SYMMETRIC with channel_message above. `external_message.received` carries
+  // `data.channelId` (inbound-recorder's emitSideEffects), but without this
+  // branch a `triggerConfig.channelId` was IGNORED for external messages — so an
+  // extraction automation could not be bound to ONE inbound channel and fired
+  // for every channel in the lens. Absent `channelId` still matches everything,
+  // so every existing workspace-wide external_message automation is unchanged.
+  if (eventType.startsWith("external_message.")) {
+    if (config.channelId && eventData?.channelId !== config.channelId) {
+      return false;
+    }
+    // Deliberately channelId-ONLY. A `provider` filter would be symmetric too,
+    // but `triggerConfig.provider` is the connector_sync field and some existing
+    // external_message automations carry it as leftover config — honoring it
+    // here would silently STOP them from firing. Binding by channel is the gap
+    // this fixes; provider filtering stays available via `triggerConfig.filters`.
+  }
+
   // ── connector_sync trigger ──────────────────────────────────────────────
   if (eventType.startsWith("connector_sync.")) {
     // Filter by connector provider (e.g. "google-calendar", "github")

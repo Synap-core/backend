@@ -31,6 +31,7 @@ import {
   recordInboundMessage,
   type RecordInboundMessageResult,
 } from "./inbound-recorder.js";
+import type { ChannelOrigin } from "../channels/channel-origin.js";
 
 const logger = createLogger({ module: "land-inbound-message" });
 
@@ -83,6 +84,17 @@ export interface LandInboundMessageArgs {
   headerMessageId?: string;
   inReplyTo?: string;
   references?: string[];
+  /**
+   * WHO produced this channel (the bridge/tool/capability behind the ingest).
+   * Recorded as a `producer --produced--> channel` edge at channel birth.
+   */
+  origin?: ChannelOrigin;
+  /**
+   * Provider-native channel coordinates (Discord `guildId`, Slack `teamId`) →
+   * `channels.metadata.external.*`; the channel-level deep link is built from
+   * them.
+   */
+  externalCoordinates?: { guildId?: string; teamId?: string };
 }
 
 export type LandInboundMessageResult = RecordInboundMessageResult & {
@@ -154,6 +166,13 @@ export async function landInboundMessage(
     headerMessageId: args.headerMessageId,
     inReplyTo: args.inReplyTo,
     references: args.references,
+    // Conditional spreads (not `key: undefined`): the Discord-parity test
+    // asserts the forwarded arg object DEEP-EQUALS what the pre-migration call
+    // built, so an always-present `undefined` key would widen that drift.
+    ...(args.origin ? { origin: args.origin } : {}),
+    ...(args.externalCoordinates
+      ? { externalCoordinates: args.externalCoordinates }
+      : {}),
     ...(args.sentAt !== undefined ? { sentAt: args.sentAt } : {}),
   });
 

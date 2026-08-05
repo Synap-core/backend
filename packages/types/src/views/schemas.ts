@@ -85,48 +85,98 @@ const SheetCanvasPositionSchema = z.object({
   h: z.number().int().min(2),
 });
 
+const SheetGridAddressSchema = z.object({
+  row: z.number().int().nonnegative(),
+  column: z.number().int().nonnegative(),
+});
+
+/** Endpoints are inclusive so a 1x1 placement is start === end. */
+const SheetGridRangeSchema = z
+  .object({
+    start: SheetGridAddressSchema,
+    end: SheetGridAddressSchema,
+  })
+  .superRefine(({ start, end }, context) => {
+    if (end.row < start.row) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end", "row"],
+        message: "Range end row must not precede its start row",
+      });
+    }
+    if (end.column < start.column) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end", "column"],
+        message: "Range end column must not precede its start column",
+      });
+    }
+  });
+
+const SheetGridDimensionOverridesSchema = z.record(
+  z
+    .string()
+    .regex(/^(0|[1-9]\d*)$/, "Grid axis keys must be non-negative integers"),
+  z.number().finite().positive()
+);
+
+const SheetGridDimensionsSchema = z.object({
+  columnWidths: SheetGridDimensionOverridesSchema.optional(),
+  rowHeights: SheetGridDimensionOverridesSchema.optional(),
+});
+
+const SheetBlockBaseSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().max(200).optional(),
+  range: SheetGridRangeSchema.optional(),
+  position: SheetCanvasPositionSchema.optional(),
+});
+
 /**
  * References only: a Sheet must never store copied entity, view, or cell data.
  * `props` is deliberately open because the registered cell owns that schema.
  */
-const SheetCanvasBlockSchema = z.discriminatedUnion("kind", [
-  z.object({
-    id: z.string().min(1),
-    kind: z.literal("table"),
-    source: z.literal("current-view"),
-    title: z.string().max(200).optional(),
-    position: SheetCanvasPositionSchema,
-  }),
-  z.object({
-    id: z.string().min(1),
-    kind: z.literal("view"),
-    viewId: z.string().uuid(),
-    title: z.string().max(200).optional(),
-    position: SheetCanvasPositionSchema,
-  }),
-  z.object({
-    id: z.string().min(1),
-    kind: z.literal("entity"),
-    entityId: z.string().uuid(),
-    title: z.string().max(200).optional(),
-    position: SheetCanvasPositionSchema,
-  }),
-  z.object({
-    id: z.string().min(1),
-    kind: z.literal("cell"),
-    cellKey: z.string().min(1).max(200),
-    props: z.record(z.string(), z.unknown()).optional(),
-    title: z.string().max(200).optional(),
-    position: SheetCanvasPositionSchema,
-  }),
-  z.object({
-    id: z.string().min(1),
-    kind: z.literal("note"),
-    content: z.string().max(100_000),
-    title: z.string().max(200).optional(),
-    position: SheetCanvasPositionSchema,
-  }),
-]);
+const SheetCanvasBlockSchema = z
+  .discriminatedUnion("kind", [
+    SheetBlockBaseSchema.extend({
+      kind: z.literal("table"),
+      source: z.literal("current-view"),
+    }),
+    SheetBlockBaseSchema.extend({
+      kind: z.literal("view"),
+      viewId: z.string().uuid(),
+    }),
+    SheetBlockBaseSchema.extend({
+      kind: z.literal("entity"),
+      entityId: z.string().uuid(),
+    }),
+    SheetBlockBaseSchema.extend({
+      kind: z.literal("cell"),
+      cellKey: z.string().min(1).max(200),
+      props: z.record(z.string(), z.unknown()).optional(),
+    }),
+    SheetBlockBaseSchema.extend({
+      kind: z.literal("note"),
+      content: z.string().max(100_000),
+    }),
+  ])
+  .superRefine(({ range, position }, context) => {
+    if (!range && !position) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["range"],
+        message: "A Sheet block needs a grid range or a legacy position",
+      });
+    }
+    if (range && position) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["position"],
+        message:
+          "A Sheet block cannot persist both range and legacy position; migrate it to range first",
+      });
+    }
+  });
 
 /**
  * Structured view configuration schema
@@ -158,8 +208,11 @@ export const RenderSettingsSchema = z
     groupByColumnId: z.string().optional(),
 
     // Sheet canvas: validated references and bounded authored notes.
-    sheetSurface: z.enum(["canvas", "table"]).optional(),
+    // `canvas` is accepted for saved layouts. New clients normalize it to
+    // `composition` before writing so only the three canonical modes spread.
+    sheetSurface: z.enum(["grid", "composition", "table", "canvas"]).optional(),
     sheetBlocks: z.array(SheetCanvasBlockSchema).optional(),
+    sheetGridDimensions: SheetGridDimensionsSchema.optional(),
 
     // Layout-specific fields
     kanbanColumns: z.array(KanbanColumnSchema).optional(),

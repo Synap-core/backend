@@ -9,6 +9,9 @@
  *   GET    /focus-sessions/:id      — get a single session by id
  *   POST   /focus-sessions          — create/upsert a session (by correlationId)
  *   PATCH  /focus-sessions/:id      — update progress / status / correlationId
+ *   POST   /focus-sessions/:id/complete — lifecycle close + proposal pack
+ *   POST   /focus-sessions/:id/used — record capability usage link
+ *   POST   /focus-sessions/:sessionId/complete-run — close running playbook_run
  *
  * Uses Drizzle directly — focusSessions lives on coreRouter, not hubProtocolRouter,
  * so getCaller() (which creates a hubProtocolRouter caller) cannot reach it.
@@ -28,6 +31,7 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
+import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -125,6 +129,11 @@ const UsedCapabilityBodySchema = z.object({
   capabilityId: z.string().min(1),
 });
 
+const CompleteBodySchema = z.object({
+  summary: z.string().optional(),
+  verificationReport: z.record(z.string(), z.unknown()).optional(),
+});
+
 // ── Registration ───────────────────────────────────────────────────────────
 
 export function registerFocusSessionsRoutes(app: HubHono): void {
@@ -168,11 +177,37 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     summary: "Get a focus session by ID",
     request: {
       params: z.object({ id: z.string().uuid() }),
-      query: z.object({ workspaceId: z.string() }),
+      // workspaceId optional: when omitted, floor on owner/user (project-scoped OK).
+      query: z.object({ workspaceId: z.string().optional() }),
     },
     responses: {
       200: { description: "Session", schema: FocusSessionWireSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/complete",
+    tags: ["FocusSessions"],
+    summary: "Complete (close) a focus session and return the proposal pack",
+    description:
+      "Lifecycle close via completeFocusSession — stamps closed, finishes any " +
+      "running playbook_run, returns pendingProposals + counts + warnings. " +
+      "Distinct from POST .../complete-run (playbook run only).",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: CompleteBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Closed session + proposal pack",
+        schema: z.object({}).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden or proposed", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
@@ -299,7 +334,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
   /**
    * GET /focus-sessions/:id?workspaceId=...
-   * workspaceId is required to prevent cross-workspace reads.
+   *
+   * workspaceId is optional. When provided: membership check + workspace floor
+   * (legacy callers). When omitted: owner/user floor only — same as MCP
+   * synap_get_session — so project-scoped sessions (workspaceId NULL) resolve.
    */
   app.get("/focus-sessions/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -308,24 +346,23 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
     const id = c.req.param("id");
     const workspaceIdParam = c.req.query("workspaceId");
-    if (!workspaceIdParam) {
-      return c.json({ error: "workspaceId query param is required" }, 400);
-    }
-    // Membership-validate the workspace + bind the acting user (userId floor) —
-    // see the list route above; without it any agent key could read any user's
-    // session in any workspace.
+    // Bind acting user; optional workspace membership when a lens is supplied.
     const acting = await resolveActingContext(c, {
-      workspaceId: workspaceIdParam,
+      workspaceId: workspaceIdParam || undefined,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
     try {
+      const conditions = [
+        eq(focusSessions.id, id),
+        eq(focusSessions.userId, acting.userId),
+      ];
+      if (workspaceIdParam) {
+        conditions.push(eq(focusSessions.workspaceId, workspaceIdParam));
+      }
+
       const row = await db.query.focusSessions.findFirst({
-        where: and(
-          eq(focusSessions.id, id),
-          eq(focusSessions.workspaceId, workspaceIdParam),
-          eq(focusSessions.userId, acting.userId)
-        ),
+        where: and(...conditions),
       });
 
       if (!row) {
@@ -628,6 +665,114 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(updated);
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.update failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/complete
+   *
+   * Lifecycle close via completeFocusSession (same service as MCP
+   * synap_complete_session). Returns the proposal pack (pendingProposals,
+   * counts, warnings). Does not reimplement close — leave complete-run alone.
+   */
+  app.post("/focus-sessions/:id/complete", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const id = c.req.param("id");
+    const raw = await c.req.json().catch(() => ({}));
+    const parsed = CompleteBodySchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      const message = parsed.error.issues
+        .map((i) =>
+          i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message
+        )
+        .join(", ");
+      return c.json({ error: message }, 400);
+    }
+
+    try {
+      // Load by id alone — workspace from the ROW (write-gate: never trust body).
+      const existing = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!existing) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      // Project-scoped sessions have null workspaceId — resolveActingContext
+      // falls back to pod-level owner floor (same as PATCH).
+      const acting = await resolveActingContext(c, {
+        workspaceId: existing.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const { userId, workspaceId } = acting;
+
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
+        workspaceId,
+      });
+
+      const result = await completeFocusSession({
+        sessionId: id,
+        userId,
+        agentUserId,
+        summary: parsed.data.summary,
+        verificationReport: parsed.data.verificationReport,
+      });
+
+      if (!result) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      return c.json({
+        status: "closed" as const,
+        session: result.session,
+        pendingProposals: result.pendingProposals,
+        counts: result.counts,
+        warnings: result.warnings,
+      });
+    } catch (err) {
+      const code = (err as { code?: unknown })?.code;
+      if (code === "FORBIDDEN") {
+        const e = err as {
+          message?: string;
+          proposalId?: string;
+          summary?: string;
+          reasoning?: string;
+          reviewPath?: string;
+          reviewUrl?: string;
+        };
+        // Proposed shape (consistent with PATCH/create) — 403 when governance
+        // still forced a proposal (lifecycle escape should normally prevent this).
+        if (e.proposalId) {
+          return c.json(
+            {
+              status: "proposed" as const,
+              message:
+                e.message ??
+                "Session completion proposed for review — approval required",
+              proposalId: e.proposalId,
+              summary: e.summary,
+              reasoning: e.reasoning,
+              reviewPath: e.reviewPath,
+              reviewUrl: e.reviewUrl,
+              session: null,
+            },
+            403
+          );
+        }
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      }
+      logger.error({ err, id }, "focus-sessions.complete failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

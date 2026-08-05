@@ -6929,6 +6929,19 @@ export interface SignalChannelRollup {
 	/** Most recent inbound message on the channel within the scan prefix. */
 	lastActivityAt: Date;
 }
+export interface ListChannelsResult {
+	channels: SignalChannelRollup[];
+	/** Inbound external messages actually scanned to build this rollup. */
+	scanned: number;
+	/**
+	 * True when the scan hit `CHANNEL_SCAN_CAP` — the rollup covers only the most
+	 * recent `scanned` messages, so per-channel counts/rates are a partial recent
+	 * census, not a whole-history total, and a channel active only OUTSIDE the
+	 * prefix may be absent. The caller MUST disclose this ("showing recent N")
+	 * rather than presenting the numbers as complete.
+	 */
+	truncated: boolean;
+}
 export interface ProvenanceMessage {
 	id: string;
 	channelId: string;
@@ -6981,6 +6994,45 @@ export interface SignalSummary {
 	 * external-message run exists on that channel — the `no_run` miss, pod-wide.
 	 */
 	noRun: number;
+}
+export interface TuneTargetResult {
+	/** The automation whose flow feeds this run (null if the run/automation is gone). */
+	automationId: string | null;
+	/** The automation's display name. */
+	automationName: string | null;
+	/**
+	 * The flow node to focus in the editor — the extraction step (an `ai.generate`
+	 * capability node). Null when the flow has no such node; the caller then opens
+	 * the flow without a focused node rather than guessing.
+	 */
+	nodeId: string | null;
+}
+export interface QualityVersionSlice {
+	/** Automation `version` at run time (null for legacy/unsnapshotted runs). */
+	version: number | null;
+	/** External-message runs on this version within the scan prefix. */
+	runs: number;
+	/** Runs that produced ≥1 visible proposal. */
+	extracted: number;
+	/** `extracted / runs * 100`, rounded (0 when empty). */
+	extractionRatePct: number;
+	firstRunAt: Date;
+	lastRunAt: Date;
+}
+export interface AutomationQuality {
+	automationId: string;
+	name: string | null;
+	/** The automation's CURRENT version — the slice with this version is "now". */
+	currentVersion: number | null;
+	/** Version slices, newest version first; a null-version slice sorts last. */
+	versions: QualityVersionSlice[];
+}
+export interface QualityByVersionResult {
+	automations: AutomationQuality[];
+	/** External-message runs scanned to build the slice. */
+	scanned: number;
+	/** True when the scan hit the cap — an older version may be under-counted. */
+	truncated: boolean;
 }
 /**
  * Core API Router
@@ -24364,7 +24416,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				order?: "recent" | "problems" | undefined;
 			};
-			output: SignalChannelRollup[];
+			output: ListChannelsResult;
 			meta: object;
 		}>;
 		summary: import("@trpc/server").TRPCQueryProcedure<{
@@ -24378,6 +24430,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: ProvenanceResult;
+			meta: object;
+		}>;
+		tuneTarget: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				runId: string;
+			};
+			output: TuneTargetResult;
+			meta: object;
+		}>;
+		qualityByVersion: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				automationId?: string | undefined;
+			} | undefined;
+			output: QualityByVersionResult;
 			meta: object;
 		}>;
 	}>>;

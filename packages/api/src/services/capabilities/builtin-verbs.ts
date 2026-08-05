@@ -87,6 +87,16 @@ export interface BuiltinVerbContext {
    * today (see marketplace-install.ts's runMarketInstall doc for the known gap).
    */
   agentUserId?: string | null;
+  /**
+   * The VERB being executed — the `skills` row id + name resolved one frame up
+   * in `execute-capability.ts`. Handlers that create durable objects stamp it
+   * as the producer (e.g. `channel.ingest` writes a
+   * `skill --produced--> channel` origin edge), so a channel created by a
+   * capability run is attributable to the exact verb that made it. Optional:
+   * a handler must still work when the caller did not supply it.
+   */
+  verbId?: string | null;
+  verbName?: string | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -1964,6 +1974,16 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
       externalId: input.externalId,
       userId: ctx.userId,
       workspaceId,
+      // ORIGIN: this channel was produced by the capability VERB that ran.
+      ...(ctx.verbId
+        ? {
+            origin: {
+              producerType: "capability" as const,
+              producerId: ctx.verbId,
+              ...(ctx.verbName ? { producerName: ctx.verbName } : {}),
+            },
+          }
+        : {}),
       text: args.text,
       // An OUTBOUND row (the operator's own sent message) is recorded as
       // HUMAN/ASSISTANT so the inbox attributes it to the operator, not the

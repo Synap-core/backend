@@ -76,7 +76,42 @@ export interface FormattingRule {
  * The composable, coordinate-based Sheet contract. Content references remain
  * live: views, entities and cells are IDs/keys, never copied payloads.
  */
-export type SheetSurface = "canvas" | "table";
+/**
+ * Persisted renderer choice for a Sheet. `canvas` is intentionally retained as
+ * an input compatibility alias for Sheets saved before the composition renderer
+ * had a canonical name. New writes must use `composition`.
+ */
+export type SheetSurface = "grid" | "composition" | "table" | "canvas";
+
+/** The renderer values emitted by new Sheet clients. */
+export type CanonicalSheetSurface = Exclude<SheetSurface, "canvas">;
+
+export function normalizeSheetSurface(
+  surface: SheetSurface | undefined
+): CanonicalSheetSurface {
+  if (surface === "canvas") return "composition";
+  return surface ?? "grid";
+}
+
+/**
+ * A zero-indexed, inclusive rectangular range in the Sheet's canonical grid.
+ * Every table and embedded block occupies one of these ranges; renderers may
+ * differ, but they must all use the same row/column coordinates.
+ */
+export interface SheetGridRange {
+  start: { row: number; column: number };
+  end: { row: number; column: number };
+}
+
+/**
+ * Persisted global Sheet axis dimensions. Keys are zero-indexed logical grid
+ * coordinates (serialised as JSON object keys), never a property ID or a
+ * table-local index.
+ */
+export interface SheetGridDimensions {
+  columnWidths?: Record<number, number>;
+  rowHeights?: Record<number, number>;
+}
 
 export interface SheetCanvasPosition {
   x: number;
@@ -88,7 +123,13 @@ export interface SheetCanvasPosition {
 interface SheetCanvasBlockBase {
   id: string;
   title?: string;
-  position: SheetCanvasPosition;
+  /** Canonical placement for all new Sheet blocks. */
+  range?: SheetGridRange;
+  /**
+   * Legacy canvas placement. Kept while saved Sheets are migrated lazily. A
+   * block must contain either `range` or `position`; new writers use `range`.
+   */
+  position?: SheetCanvasPosition;
 }
 
 export interface SheetTableBlock extends SheetCanvasBlockBase {
@@ -137,7 +178,10 @@ export interface RenderSettings {
   sheetBlocks?: SheetCanvasBlock[];
   columnOrder?: string[];
   hiddenColumns?: string[];
+  /** Legacy, table-property width preferences. */
   columnWidths?: Record<string, number>;
+  /** Sheet-owned global row/column geometry. */
+  sheetGridDimensions?: SheetGridDimensions;
   density?: "compact" | "normal" | "spacious";
   frozenColumnIds?: string[];
   showRowNumbers?: boolean;

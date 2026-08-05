@@ -628,6 +628,12 @@ webhooksInboundRouter.post("/mailgun/:token", async (c) => {
     title: mapped.senderEmail,
     idempotencySeed: mapped.messageId,
     messageId: mapped.messageId,
+    // Origin: the Mailgun connector TOOL row is a real registry id.
+    origin: {
+      producerType: "tool",
+      producerId: mgTool.id,
+      producerName: "Mailgun inbound",
+    },
   });
 
   // Mark seen via the shared race-safe single-leaf writer.
@@ -702,6 +708,14 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         title: senderName,
         idempotencySeed: `${event.threadId}:${event.message.sentAt}:${event.message.body}`,
         sentAt: event.message.sentAt,
+        // Origin: the Unipile messaging bridge has no tools/sources registry
+        // row, so the producer is the provider slug under the `source` kind
+        // (channel-origin convention).
+        origin: {
+          producerType: "source",
+          producerId: event.provider,
+          producerName: `${event.provider} (Unipile)`,
+        },
       });
     } else if (event.type === "account.created") {
       // notify_url callback: auto-sync the newly connected account into our DB

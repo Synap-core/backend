@@ -723,6 +723,11 @@ export async function runResolvedSkill(
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       agentUserId: ctx.agentUserId ?? null,
+      // The verb identity is known HERE and was previously dropped at the
+      // handler boundary. Handlers that create durable objects need it to stamp
+      // provenance (channel origin), so it is threaded rather than re-derived.
+      verbId: skill.id,
+      verbName: skill.name,
     });
     return { kind: "run", skillId: skill.id, result };
   }

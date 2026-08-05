@@ -64,6 +64,27 @@ import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import type { RunStatus } from "../runs/types.js";
 
+// ── Channel-object doors (the Stack + Rerun facets) ───────────────────────────
+export {
+  getChannelStack,
+  summarizeAutomationTrigger,
+  type ChannelStackResult,
+  type ChannelStackAutomation,
+  type ChannelStackOrigin,
+  type ChannelStackExternal,
+} from "./channel-stack.js";
+export {
+  resolveChannelRerun,
+  pickPrimaryChannelAutomation,
+  type ResolvedChannelRerun,
+} from "./channel-rerun.js";
+export {
+  classifyChannelAutomationBinding,
+  matchesEventPattern,
+  CHANNEL_EVENT_TYPES,
+  type ChannelAutomationBinding,
+} from "./channel-automation-binding.js";
+
 /**
  * The outcome of a signal unit — WHAT happened to an inbound message.
  *

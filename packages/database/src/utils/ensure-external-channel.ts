@@ -6,6 +6,14 @@
  * can create the Synap channel they post into. Both paths target the SAME partial
  * unique index on (externalSource, externalId), so they converge on one row.
  *
+ * ORIGIN EDGE: this door does NOT write the `producer --produced--> channel`
+ * origin edge, because the `createLinks` ONE door lives in @synap/api and this
+ * module lives in @synap/database (importing upward would be circular). It
+ * returns `created`, and the api-side CALLERS stamp the edge via
+ * `recordChannelOrigin` (api/src/services/channels/channel-origin.ts) on a fresh
+ * create. The api-side inbound path (`resolveOrCreateExternalChannel`) writes it
+ * inline instead.
+ *
  * Unlike the inbound path this does NOT cache per-message metadata — it is for
  * feed/system channels created by a worker, where an optional `branchPurpose`
  * (e.g. 'team') documents the firewall role.

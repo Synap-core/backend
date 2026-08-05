@@ -632,8 +632,17 @@ export function registerApproveExecutors(): void {
   registerProposalExecutor({
     key: "entity/create",
     async execute({ proposal, payload, userId, input, deps }) {
-      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
-        {}) as Record<string, unknown>;
+      // NESTED-FIRST with a FLAT fallback (same posture as `channel/bind`).
+      // The canonical envelope is request-shaped (`proposal.data.data`), which
+      // the automation door now also emits (jobs/src/utils/automation-governance.ts).
+      // Proposals that were already PENDING when that fix landed carry the old
+      // FLAT payload — without this fallback they would stay permanently
+      // un-approvable ("missing profileSlug").
+      const outerData = (proposal.data ?? {}) as Record<string, unknown>;
+      const innerData = (outerData.data ?? outerData) as Record<
+        string,
+        unknown
+      >;
       const profileSlug = innerData.profileSlug as string | undefined;
       if (!profileSlug) {
         throw new TRPCError({
@@ -2400,8 +2409,12 @@ export function registerApproveExecutors(): void {
     key: "entity/update",
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
-      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
-        {}) as Record<string, unknown>;
+      // Nested-first with a flat fallback — see `entity/create` for why.
+      const outerUpdateData = (proposal.data ?? {}) as Record<string, unknown>;
+      const innerData = (outerUpdateData.data ?? outerUpdateData) as Record<
+        string,
+        unknown
+      >;
       const entityId = (innerData.id as string) || proposal.targetId;
       const membership = await getWorkspaceMembership(
         db,

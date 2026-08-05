@@ -47,6 +47,10 @@ import {
   type InboundAttachmentJobData,
 } from "@synap/jobs/workers/inbound-attachment-worker.js";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
+import {
+  recordChannelOrigin,
+  type ChannelOrigin,
+} from "../channels/channel-origin.js";
 
 const logger = createLogger({ module: "inbound-recorder" });
 
@@ -121,6 +125,21 @@ export interface ResolveOrCreateExternalChannelArgs {
    * relink flows leave this false and make that move separately.
    */
   requireExistingWorkspace?: boolean;
+  /**
+   * WHO produced this channel (the capability / tool / source / agent behind the
+   * ingest). Written as a `producer --produced--> channel` edge at BIRTH only —
+   * an existing channel keeps the origin it was born with. Absent = unknown
+   * origin (every legacy channel), which reads back as `origin: null`.
+   */
+  origin?: ChannelOrigin;
+  /**
+   * Provider-native channel coordinates cached under
+   * `channels.metadata.external.*` — additive JSONB, no migration. Today:
+   * Discord `guildId` (required to build a channel-level discord.com deep link)
+   * and Slack `teamId`. Backfilled onto EXISTING channels too, because a channel
+   * born before the bridge sent the guild id would otherwise never get a link.
+   */
+  externalCoordinates?: { guildId?: string; teamId?: string };
 }
 
 export class ExternalChannelOwnershipError extends Error {
@@ -150,6 +169,21 @@ function assertExternalChannelOwner(
 }
 
 /**
+ * Bounded `channels.metadata.external.*` patch — only the keys actually present.
+ * Returns undefined when the caller supplied no coordinates, so a channel
+ * without them keeps a metadata object byte-identical to before.
+ */
+function externalMetadataPatch(
+  coords: { guildId?: string; teamId?: string } | undefined
+): Record<string, string> | undefined {
+  if (!coords) return undefined;
+  const patch: Record<string, string> = {};
+  if (coords.guildId) patch.guildId = coords.guildId;
+  if (coords.teamId) patch.teamId = coords.teamId;
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+/**
  * Resolve-or-create the canonical EXTERNAL channel for (provider, externalId),
  * race-safe. On an existing row, refreshes the last-message metadata cache.
  * Returns the channel id + any bound context entity.
@@ -158,6 +192,7 @@ export async function resolveOrCreateExternalChannel(
   args: ResolveOrCreateExternalChannelArgs
 ): Promise<{ channelId: string; contextObjectId: string | null }> {
   const lastMessageAt = args.lastMessageAt ?? new Date().toISOString();
+  const externalPatch = externalMetadataPatch(args.externalCoordinates);
 
   const existing = await resolveExternalChannel({
     provider: args.provider,
@@ -166,22 +201,33 @@ export async function resolveOrCreateExternalChannel(
 
   if (existing) {
     assertExternalChannelOwner(existing, args);
+    const cacheMerge = drizzleSql`${channels.metadata} || ${JSON.stringify({
+      ...(args.participant ? { participantName: args.participant } : {}),
+      // Backfill the participant external-id (e.g. an email sender address) on
+      // EXISTING channels too, not just at birth — the send side resolves a
+      // reply recipient from it, and a channel born before it was supplied (or
+      // keyed on an entity UUID) would otherwise never cache it.
+      ...(args.participantExternalId
+        ? { participantExternalId: args.participantExternalId }
+        : {}),
+      lastMessageAt,
+      lastMessagePreview: args.preview,
+      unread: true,
+    })}::jsonb`;
+    // Provider coordinates are backfilled onto existing channels too (same
+    // rationale as participantExternalId above — a channel born before the
+    // bridge sent its guild id would otherwise never get a deep link). A plain
+    // top-level `||` would REPLACE the whole `external` object and drop a
+    // sibling key, so `external` is merged into its own prior value.
+    const metadataExpr = externalPatch
+      ? drizzleSql`jsonb_set(coalesce(${cacheMerge}, '{}'::jsonb), '{external}', coalesce(${channels.metadata}->'external', '{}'::jsonb) || ${JSON.stringify(
+          externalPatch
+        )}::jsonb)`
+      : cacheMerge;
     await db
       .update(channels)
       .set({
-        metadata: drizzleSql`${channels.metadata} || ${JSON.stringify({
-          ...(args.participant ? { participantName: args.participant } : {}),
-          // Backfill the participant external-id (e.g. an email sender address) on
-          // EXISTING channels too, not just at birth — the send side resolves a
-          // reply recipient from it, and a channel born before it was supplied (or
-          // keyed on an entity UUID) would otherwise never cache it.
-          ...(args.participantExternalId
-            ? { participantExternalId: args.participantExternalId }
-            : {}),
-          lastMessageAt,
-          lastMessagePreview: args.preview,
-          unread: true,
-        })}::jsonb`,
+        metadata: metadataExpr,
         updatedAt: new Date(),
       })
       .where(eq(channels.id, existing.id));
@@ -249,6 +295,10 @@ export async function resolveOrCreateExternalChannel(
         lastMessageAt,
         lastMessagePreview: args.preview,
         unread: true,
+        // Provider-native coordinates (Discord guild id, Slack team id) — the
+        // ids the channel-level deep link is built from. Omitted entirely when
+        // the caller has none, so the stored shape is unchanged for them.
+        ...(externalPatch ? { external: externalPatch } : {}),
       },
     })
     .onConflictDoNothing({
@@ -261,6 +311,14 @@ export async function resolveOrCreateExternalChannel(
     .returning({ id: channels.id });
 
   if (inserted) {
+    // ORIGIN AT BIRTH — `producer --produced--> channel` via the createLinks one
+    // door. Only on a FRESH create: an origin is a fact about creation, and the
+    // race loser below must not overwrite the winner's producer. Non-fatal.
+    await recordChannelOrigin({
+      channelId: inserted.id,
+      workspaceId: args.workspaceId,
+      origin: args.origin,
+    });
     logger.info(
       {
         channelId: inserted.id,
@@ -391,6 +449,17 @@ export interface RecordInboundMessageArgs {
    * auto-reply automation. Live inbound (the default) keeps firing the event.
    */
   suppressSideEffects?: boolean;
+  /**
+   * WHO produced this channel — forwarded to `resolveOrCreateExternalChannel`
+   * and written as a `produced` edge on a FRESH channel only. See
+   * services/channels/channel-origin.ts for the producer-id convention.
+   */
+  origin?: ChannelOrigin;
+  /**
+   * Provider-native channel coordinates (Discord `guildId`, Slack `teamId`) →
+   * `channels.metadata.external.*`. Feeds the channel-level deep link.
+   */
+  externalCoordinates?: { guildId?: string; teamId?: string };
 }
 
 export interface RecordInboundMessageResult {
@@ -434,6 +503,8 @@ export async function recordInboundMessage(
     preview,
     lastMessageAt:
       typeof args.sentAt === "string" ? args.sentAt : sentAt.toISOString(),
+    origin: args.origin,
+    externalCoordinates: args.externalCoordinates,
   });
 
   // Dual-use note: this is an inbound *delivery* fingerprint
@@ -499,10 +570,20 @@ export async function recordInboundMessage(
       // ConversationMessageMetadataSchema.attachments (AttachmentSchema drops
       // `name`) and bounded to 4. Written only when at least one is present so a
       // plain text message keeps a null metadata column as before.
-      ...(senderMetadata || args.attachments?.length || rfcHeaders
+      ...(senderMetadata ||
+      args.attachments?.length ||
+      rfcHeaders ||
+      args.messageId
         ? {
             metadata: {
               ...(senderMetadata ? { sender: senderMetadata } : {}),
+              // The provider's NATIVE message id, stored so a message can later
+              // be pinned/permalinked back to its source. ADDITIVE METADATA:
+              // `computeMessageHash` (@synap/database) hashes id + content only
+              // — metadata is NOT in the tamper-hash preimage — and the
+              // idempotency hash is sha256(provider:idempotencySeed), so this
+              // touches NEITHER chain.
+              ...(args.messageId ? { externalMessageId: args.messageId } : {}),
               ...(args.attachments?.length
                 ? {
                     attachments: args.attachments

@@ -22,7 +22,10 @@ import {
   listChannels,
   resolveTuneTarget,
   getQualityByVersion,
+  getChannelStack,
+  resolveChannelRerun,
 } from "../services/signal/index.js";
+import { automationsRouter } from "./automations.js";
 
 export const signalRouter = router({
   /** Newest-first (or problems-first) stream of inbound signals + their fate. */
@@ -111,5 +114,83 @@ export const signalRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       return getQualityByVersion({ userId, automationId: input?.automationId });
+    }),
+
+  /**
+   * The channel object's Stack facet: origin, external identity + channel-level
+   * deep link, capabilities targeting the channel, and every automation that can
+   * fire for it (with HOW it is bound). Dual-floored inside the service.
+   */
+  channelStack: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getChannelStack({ userId, channelId: input.channelId });
+    }),
+
+  /**
+   * Per-channel sweep: re-run the channel's extraction automation over its
+   * recent inbound messages.
+   *
+   * GOVERNED BY DELEGATION — the run is opened through the canonical
+   * `automations.trigger` door, which owns `assertWorkspaceWrite` (operator) and
+   * `checkPermissionOrPropose` (agent → `automation.execute`, not in
+   * DEFAULT_AUTO_APPROVE → a proposal). This procedure never inserts a run.
+   * `"proposed"` is a normal outcome, not an error.
+   */
+  channelRerun: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        automationId: z.string().uuid().optional(),
+        params: z.record(z.string(), z.unknown()).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const resolved = await resolveChannelRerun({
+        userId,
+        channelId: input.channelId,
+        automationId: input.automationId,
+        limit: input.limit,
+      });
+
+      const result = await automationsRouter.createCaller(ctx).trigger({
+        id: resolved.automationId,
+        // The trigger door rejects a mismatch against the automation's own
+        // workspace, so we pass nothing and let it use the row's workspace.
+        ...(resolved.boundEntityId
+          ? { subjectEntityId: resolved.boundEntityId }
+          : {}),
+        payload: {
+          // Caller params first, then the RESOLVED/authorized keys last so a
+          // client can't override channelId/limit/entityId to redirect the run
+          // at a channel `resolveChannelRerun` never floored (`channelVisibilityWhere`).
+          ...(input.params ?? {}),
+          type: "channel_rerun",
+          channelId: resolved.channelId,
+          entityId: resolved.boundEntityId,
+          limit: resolved.scanned,
+        },
+        reasoning: `Re-running "${
+          resolved.automationName ?? resolved.automationId
+        }" over ${resolved.scanned} message(s) on this channel`,
+      });
+
+      if (result.status === "proposed") {
+        return {
+          status: "proposed" as const,
+          proposalId: result.proposalId ?? undefined,
+          scanned: resolved.scanned,
+          message: `Re-run proposed for review (${resolved.scanned} message(s) in scope)`,
+        };
+      }
+      return {
+        status: "started" as const,
+        runId: result.runId ?? undefined,
+        scanned: resolved.scanned,
+        message: `Re-run started over ${resolved.scanned} message(s)`,
+      };
     }),
 });

@@ -280,13 +280,28 @@ async function proposeAutomationWrite(opts: {
   // shape the chat-AI path uses via createPendingProposal. The hand-mirrored
   // insert that used to live here (with its documented drift risk) is gone; the
   // automation-specific `data` payload + side effects below stay here.
+  // ENVELOPE SHAPE (bug fix): the approve executors read the write payload from
+  // the REQUEST-SHAPED envelope `proposal.data.data` — the shape the canonical
+  // chat door (`checkPermissionOrPropose` → `createProposal`) stores. This door
+  // used to persist the payload FLAT, so approving a proposal-gated automation
+  // `entity.create` threw "Entity proposal is missing profileSlug" and the
+  // proposal could never be applied. We now emit the same request-shaped
+  // envelope: `{ targetType, targetId, changeType, data: <payload>, reasoning,
+  // correlationId }`. The automation-specific top-level keys (`source`,
+  // `agentUserId`, `authorshipMode`, `automationRunId`) are UNCHANGED and stay
+  // at the top level, so every existing reader of those keys is unaffected — the
+  // only keys that moved are the write payload's own, which is exactly what the
+  // approve side was already looking for one level down.
   const { proposal, deduped } = await insertPendingProposal({
     workspaceId,
     targetType: singularType,
     targetId,
     proposalType: action,
     data: {
-      ...data,
+      targetType: singularType,
+      targetId,
+      changeType: action,
+      data,
       source: "automation",
       agentUserId,
       // autonomous: an agent acted on its own (no human in the loop for

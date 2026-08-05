@@ -148,4 +148,59 @@ describe("checkAutomationWriteOrPropose → proposeAutomationWrite", () => {
     const inserted = insertPendingProposalMock.mock.calls[0][0];
     expect(inserted.sessionId).toBeNull();
   });
+
+  /**
+   * ENVELOPE SHAPE. The approve executors (`api` — routers/proposals/
+   * approve-executors.ts `entity/create`) read the write payload from
+   * `proposal.data.data` — the REQUEST-SHAPED envelope the canonical chat door
+   * (`checkPermissionOrPropose` → `createProposal`) stores. This door used to
+   * persist the payload FLAT, so approving a proposal-gated automation
+   * `entity.create` threw "Entity proposal is missing profileSlug" and the
+   * proposal could never be applied.
+   */
+  it("persists the write payload in the REQUEST-SHAPED envelope the approve path reads", async () => {
+    selectQueue.rows = [
+      [{ userType: "agent", agentMetadata: null }],
+      [{ settings: {}, workspaceType: "workspace" }],
+    ];
+
+    await checkAutomationWriteOrPropose({
+      ownerId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      data: {
+        profileSlug: "note",
+        title: "Test",
+        properties: { url: "https://x" },
+        content: "long body",
+      },
+      automationRunId: "run-1",
+      correlationId: "root-run-1",
+    });
+
+    const inserted = insertPendingProposalMock.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    const inner = inserted.data.data as Record<string, unknown>;
+    // The payload the approve executor reads.
+    expect(inner).toEqual({
+      profileSlug: "note",
+      title: "Test",
+      properties: { url: "https://x" },
+      content: "long body",
+    });
+    // The request-shaped siblings.
+    expect(inserted.data.targetType).toBe("entity");
+    expect(inserted.data.changeType).toBe("create");
+    expect(typeof inserted.data.targetId).toBe("string");
+    // The automation-specific top-level keys are UNCHANGED (existing readers).
+    expect(inserted.data.source).toBe("automation");
+    expect(inserted.data.agentUserId).toBe("agent-1");
+    expect(inserted.data.authorshipMode).toBe("autonomous");
+    expect(inserted.data.automationRunId).toBe("run-1");
+    expect(inserted.data.correlationId).toBe("root-run-1");
+    // …and the payload keys no longer sit at the TOP level (the old flat shape).
+    expect(inserted.data.profileSlug).toBeUndefined();
+  });
 });
