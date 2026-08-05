@@ -3830,6 +3830,7 @@ export interface EventRecord {
 	runStatus?: string;
 	finishReason?: string;
 	workspaceId?: string;
+	proposalId?: string;
 }
 /** Minimal message fields for list/preview */
 export interface LinkedMessagePreview {
@@ -8774,7 +8775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9475,7 +9476,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9576,7 +9577,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9687,7 +9688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9974,6 +9975,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					nodeId: string | null;
 					dedupHash: string | null;
 					externalDispatchedAt: Date | null;
+					reasonCode: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
@@ -10019,6 +10021,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					nodeId: string | null;
 					dedupHash: string | null;
 					externalDispatchedAt: Date | null;
+					reasonCode: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
@@ -10040,6 +10043,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				groups: ProposalCluster[];
+			};
+			meta: object;
+		}>;
+		muteRejectionCluster: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				fingerprint: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		unmuteRejectionCluster: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				fingerprint: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		listRejectionMutes: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				mutes: {
+					fingerprint: string;
+					createdBy: string;
+					createdAt: Date;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -10075,6 +10107,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				nodeId: string | null;
 				dedupHash: string | null;
 				externalDispatchedAt: Date | null;
+				reasonCode: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
 				request: UpdateRequest;
@@ -17070,6 +17103,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executionMode?: "sync" | "async" | undefined;
 				timeoutSeconds?: number | undefined;
 				agentUserId?: string | undefined;
+				metadata?: Record<string, unknown> | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
@@ -17097,6 +17131,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category?: string | undefined;
 				executionMode?: "sync" | "async" | undefined;
 				timeoutSeconds?: number | undefined;
+				metadata?: Record<string, unknown> | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -24089,6 +24124,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: AgentProfile | {
 				error: string;
 			};
+			meta: object;
+		}>;
+		ungovernedWrites: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentUserId?: string | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				id: string;
+				agentUserId: string | null;
+				agentType: string | null;
+				subjectType: string;
+				subjectId: string;
+				action: string;
+				at: string;
+			}[];
 			meta: object;
 		}>;
 	}>>;

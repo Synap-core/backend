@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { automationDataContractSchema } from "../../automations.js";
 
 /**
@@ -2002,6 +2003,12 @@ export const tools = {
               type: "string",
               description:
                 "Why you are rejecting it (recorded on the proposal). Always give one.",
+            },
+            reasonCode: {
+              type: "string",
+              enum: [...PROPOSAL_REJECTION_REASONS],
+              description:
+                "Optional structured cause, one of the fixed set — recorded alongside `reason` and fed to the calibration/scorecard loop. Use `other` (or omit) when none fits and rely on the free-text `reason`.",
             },
           },
           required: ["proposalId"],

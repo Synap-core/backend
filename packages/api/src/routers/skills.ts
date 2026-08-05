@@ -456,6 +456,10 @@ export const skillsRouter = router({
          *  skill is gated by the agent's grant/role, not silently evaluated
          *  as if the human owner created it directly. */
         agentUserId: z.string().uuid().optional(),
+        /** Free-form metadata bag persisted on the skill row — e.g. the
+         *  marketplace source-link (`marketSource`) a standalone-install stamps
+         *  so a published fix can reconcile the installed skill. */
+        metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -566,6 +570,9 @@ export const skillsRouter = router({
           category: input.category,
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
+          // Persist the caller-supplied metadata bag (e.g. the marketplace
+          // source-link); omitted → the column default `{}` applies.
+          ...(input.metadata ? { metadata: input.metadata } : {}),
           status: "active",
           approved: kind === "instruction",
         })
@@ -626,13 +633,27 @@ export const skillsRouter = router({
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).optional(),
         timeoutSeconds: z.number().min(1).max(300).optional(),
+        /**
+         * Free-form metadata patch — SHALLOW-MERGED onto the existing row bag
+         * (mirrors `views`/`automations` update; never a wholesale replace). The
+         * standalone-config reconcile uses this to advance `metadata.marketSource`
+         * (source-link + baseline) after applying a template update; without it a
+         * skill's baseline could never advance past the first reconcile.
+         */
+        metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       // `agentUserId` is attribution, NOT a column — peel it off so the spread
-      // below never carries it into the skills UPDATE.
-      const { id, agentUserId: _agentUserId, ...updateData } = input;
+      // below never carries it into the skills UPDATE. `metadata` is peeled too:
+      // it is MERGED onto the existing bag below, not spread-replaced.
+      const {
+        id,
+        agentUserId: _agentUserId,
+        metadata: metadataPatch,
+        ...updateData
+      } = input;
 
       // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
       // that re-points a skill's code to reference an unprovided global (fetch/
@@ -715,6 +736,17 @@ export const skillsRouter = router({
         .update(skills)
         .set({
           ...updateData,
+          // Shallow-merge the metadata patch onto the existing bag (never replace)
+          // — same semantics as views/automations update.
+          ...(metadataPatch
+            ? {
+                metadata: {
+                  ...((existingSkill.metadata as Record<string, unknown>) ??
+                    {}),
+                  ...metadataPatch,
+                },
+              }
+            : {}),
           ...(execChanged ? { approved: false } : {}),
           updatedAt: new Date(),
         })

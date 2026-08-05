@@ -32,6 +32,7 @@ import {
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 
 export function registerProposalsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /proposals* routes ──────────────────────────────
@@ -183,7 +184,10 @@ export function registerProposalsRoutes(app: HubHono): void {
       "Rejects a pending proposal. Delegates to the canonical `proposals.reject` tRPC mutation.",
     request: {
       params: z.object({ id: z.string() }),
-      body: z.object({ reason: z.string().optional() }),
+      body: z.object({
+        reason: z.string().optional(),
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
+      }),
     },
     responses: {
       200: {
@@ -520,13 +524,18 @@ export function registerProposalsRoutes(app: HubHono): void {
     }
     const proposalId = c.req.param("id");
     let reason: string | undefined;
+    let reasonCode: string | undefined;
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
         reason?: string;
+        reasonCode?: string;
       };
       reason = typeof body.reason === "string" ? body.reason : undefined;
+      reasonCode =
+        typeof body.reasonCode === "string" ? body.reasonCode : undefined;
     } catch {
       reason = undefined;
+      reasonCode = undefined;
     }
     try {
       const userId = c.get("userId") as string;
@@ -536,7 +545,14 @@ export function registerProposalsRoutes(app: HubHono): void {
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      await caller.reject({ proposalId: resolvedId, reason });
+      // reasonCode validated against PROPOSAL_REJECTION_REASONS by the
+      // reject procedure's zod enum; an unknown value is rejected there.
+      await caller.reject({
+        proposalId: resolvedId,
+        reason,
+        reasonCode: reasonCode as
+          (typeof PROPOSAL_REJECTION_REASONS)[number] | undefined,
+      });
       return c.json({ success: true, proposalId: resolvedId }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "rejectProposal failed");

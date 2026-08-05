@@ -153,7 +153,23 @@ export const toolsRouter = router({
         action: "create",
         source: input.source,
         reasoning: input.reasoning,
-        data: { name: input.name, kind: input.kind },
+        // Widened (mirrors skills.create): carry the FULL resolved insert shape
+        // so the `tool/create` approve-executor can MATERIALIZE a real tool.
+        // Storing only {name, kind} meant an approved tool proposal flipped
+        // APPROVED via the `*/*` catch-all with nothing ever inserted — the
+        // request was unrecoverable and reported as success. Only the PROPOSED
+        // row's stored data widens; the granted-path insert below is untouched.
+        data: {
+          name: input.name,
+          kind: input.kind,
+          description: input.description ?? null,
+          inputSchema: input.inputSchema ?? {},
+          credentialRef: input.credentialRef ?? null,
+          executor: input.executor,
+          config: input.config ?? {},
+          metadata: input.metadata ?? {},
+          workspaceId: input.workspaceId ?? null,
+        },
       });
       if ("denied" in perm && perm.denied)
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

@@ -29,6 +29,7 @@ import {
   ensureSystemSkills,
   ensureCaptureAgent,
   reconcileCapabilitiesToTemplates,
+  reconcileStandaloneConfigsToTemplates,
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
   fetchFederationMetadata,
@@ -694,6 +695,20 @@ export async function runStartupHooks(): Promise<void> {
     logger.warn(
       { err },
       "Failed to reconcile capabilities to templates on startup (non-fatal)"
+    );
+  }
+
+  // Converge every standalone-installed VIEW / SKILL / AUTOMATION to its source
+  // marketplace template (the lighter-config counterpart to the capability +
+  // workspace reconciles above). Field-level 3-way merge — never overwrites a
+  // user-edited field; a cache miss (private package) is skipped, not an error.
+  // Idempotent + non-fatal, same stance as every reconcile here.
+  try {
+    await reconcileStandaloneConfigsToTemplates();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to reconcile standalone configs to templates on startup (non-fatal)"
     );
   }
 

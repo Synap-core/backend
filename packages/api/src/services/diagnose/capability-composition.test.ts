@@ -91,6 +91,7 @@ describe("buildCapabilityComposition", () => {
           memberLink("tool", "t1"),
           memberLink("skill", "s1"),
           memberLink("skill", "s2"),
+          memberLink("skill", "s3"),
           memberLink("playbook", "p1"),
           memberLink("automation", "a1"),
           // Noise that must be IGNORED (wrong linkType / wrong direction).
@@ -108,8 +109,10 @@ describe("buildCapabilityComposition", () => {
 
     rowsByTable.set(tools, [{ id: "t1", name: "Linear" }]);
     rowsByTable.set(skills, [
-      { id: "s1", name: "list_issues" },
-      { id: "s2", name: "orphan_verb" },
+      { id: "s1", name: "list_issues", kind: "declarative" },
+      { id: "s2", name: "orphan_verb", kind: "declarative" },
+      // A builtin `code` verb: self-standing, needs NO parent tool → wired, no gap.
+      { id: "s3", name: "entity.create", kind: "code" },
     ]);
     rowsByTable.set(playbooks, [
       { id: "p1", name: "Qualify lead", status: "active" },
@@ -153,11 +156,13 @@ describe("buildCapabilityComposition", () => {
         { kind: "tool", id: "t1", name: "Linear", wired: true },
         { kind: "skill", id: "s1", name: "list_issues", wired: true },
         { kind: "skill", id: "s2", name: "orphan_verb", wired: false },
+        // Builtin code verb: wired despite no parent tool (self-standing).
+        { kind: "skill", id: "s3", name: "entity.create", wired: true },
         { kind: "playbook", id: "p1", name: "Qualify lead", wired: true },
         { kind: "automation", id: "a1", name: "Enrich", wired: false },
       ])
     );
-    expect(result.members).toHaveLength(5); // the `grants` noise link is dropped
+    expect(result.members).toHaveLength(6); // the `grants` noise link is dropped
 
     // Gaps: the orphaned verb and the archived automation, in human language.
     expect(result.gaps).toContain(

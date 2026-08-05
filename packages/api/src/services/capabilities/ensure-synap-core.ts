@@ -593,6 +593,17 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "governance.recommend_tighten",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Governance calibration: scan recent REJECTED agent proposals, cluster them by shape, and file a pending governance.tighten_lane proposal for any shape the humans reject consistently (conservative floor). The mirror of the trusted-lane widen scanner — approving a tighten proposal pins that agent write-motif to review (a governance_rules row, verdict:'propose'). Takes NO params (scans pod-wide agent behaviour). Read-only w.r.t. graph data (files review items only): auto-runs inside the daily calibration cron. Returns { proposalsFiled, proposalIds }.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
   ],
 };
 

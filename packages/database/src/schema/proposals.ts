@@ -149,6 +149,11 @@ export const proposals = pgTable(
       withTimezone: true,
     }),
     rejectionReason: text("rejection_reason"),
+    // Structured rejection cause (0232) — an app-level code from
+    // PROPOSAL_REJECTION_REASONS (@synap/types), NOT a DB enum, so the set can
+    // extend without a migration. Nullable + additive: it pairs with (never
+    // replaces) the free-text `rejectionReason`.
+    reasonCode: text("reason_code"),
     comments: jsonb("comments").default("[]"),
     // Revision history (D3b): append-only before/after snapshots of every
     // reviseProposal edit — the "human corrected the AI" quality signal the
@@ -242,6 +247,7 @@ export interface Proposal {
   externalDispatchedAt: Date | null;
   dedupHash: string | null;
   rejectionReason: string | null;
+  reasonCode: string | null;
   comments: unknown;
   revisionHistory: ProposalRevision[];
   createdAt: Date;

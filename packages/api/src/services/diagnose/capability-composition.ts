@@ -5,9 +5,11 @@
  * Reuses existing primitives, invents no new store:
  *   · members  — `getLinksFor(capability)`, the `member_of` graph (complete with
  *                playbook/automation after the T5 wiring);
- *   · wired    — per-member: a skill needs its `requires --> tool` edge (an
- *                orphaned verb has none — the exact T4 bug); a playbook/automation
- *                must not be archived; a dangling link resolves to no row;
+ *   · wired    — per-member: a DECLARATIVE verb needs its `requires --> tool` edge
+ *                (an orphaned verb has none — the exact T4 bug); a builtin `code`/
+ *                `instruction` skill is self-standing (no parent tool, never a gap);
+ *                a playbook/automation must not be archived; a dangling link
+ *                resolves to no row;
  *   · health   — `listRuns` per materialized playbook/automation flow, rolled up
  *                to failed / stuck / lastRunAt;
  *   · gaps     — the human-readable list of what is unwired.
@@ -88,7 +90,7 @@ export async function buildCapabilityComposition(
 
   // Resolve names (+ the per-kind wiring signal) in one batched read per kind.
   const toolNames = await loadNames(tools, idsByKind.tool);
-  const skillNames = await loadNames(skills, idsByKind.skill);
+  const skillRows = await loadSkillRows(idsByKind.skill);
   const playbookRows = await loadStatusRows(playbooks, idsByKind.playbook);
   const automationRows = await loadStatusRows(
     automations,
@@ -124,11 +126,17 @@ export async function buildCapabilityComposition(
     members.push({ kind: "tool", id, name, wired: toolNames.has(id) });
   }
   for (const id of idsByKind.skill) {
-    const name = skillNames.get(id) ?? id.slice(0, 8);
-    const wired = skillNames.has(id) && wiredSkillIds.has(id);
+    const row = skillRows.get(id);
+    const name = row?.name ?? id.slice(0, 8);
+    // Only a DECLARATIVE verb requires a `requires-->tool` edge; a builtin
+    // `code`/`instruction` skill is self-standing, so a missing parent tool is
+    // NOT a gap (else every core verb reads as "broken").
+    const needsTool = row?.kind === "declarative";
+    const wired = !!row && (!needsTool || wiredSkillIds.has(id));
     members.push({ kind: "skill", id, name, wired });
-    if (!skillNames.has(id)) gaps.push(`Verb member ${id} not found`);
-    else if (!wired) gaps.push(`Verb "${name}" has no parent tool (unwired)`);
+    if (!row) gaps.push(`Verb member ${id} not found`);
+    else if (needsTool && !wiredSkillIds.has(id))
+      gaps.push(`Verb "${name}" has no parent tool (unwired)`);
   }
   for (const id of idsByKind.playbook) {
     const row = playbookRows.get(id);
@@ -255,6 +263,20 @@ async function loadNames(
     .from(table)
     .where(inArray(table.id, ids));
   for (const r of rows) out.set(r.id, r.name);
+  return out;
+}
+
+/** id → { name, kind }, batched — skills carry the declarative/code/instruction axis. */
+async function loadSkillRows(
+  ids: string[]
+): Promise<Map<string, { name: string; kind: string }>> {
+  const out = new Map<string, { name: string; kind: string }>();
+  if (ids.length === 0) return out;
+  const rows = await db
+    .select({ id: skills.id, name: skills.name, kind: skills.kind })
+    .from(skills)
+    .where(inArray(skills.id, ids));
+  for (const r of rows) out.set(r.id, { name: r.name, kind: r.kind });
   return out;
 }
 

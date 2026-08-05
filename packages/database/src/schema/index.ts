@@ -76,6 +76,7 @@ export {
 
 // NEW: Universal Proposals
 export * from "./proposals.js";
+export * from "./proposal-cluster-mutes.js";
 
 // NEW: Entity Templates
 export * from "./entity-templates.js";

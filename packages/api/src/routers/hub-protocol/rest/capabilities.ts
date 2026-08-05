@@ -26,6 +26,10 @@ import {
 } from "../../../services/capabilities/create-from-definition.js";
 import { scoreTextMatch } from "../../../services/capabilities/capability-registry.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
+import {
+  reconcileStandaloneConfigsToTemplates,
+  detachStandaloneConfigSource,
+} from "../../../services/capabilities/reconcile-standalone-configs-to-templates.js";
 import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -243,6 +247,42 @@ const ReconcileCapabilitiesResponseSchema = z.object({
   skipped: z.array(CapabilityReconcileEntrySchema),
   updatesAvailable: z.array(CapabilityReconcileEntrySchema),
   conflicts: z.array(CapabilityReconcileEntrySchema),
+});
+
+const StandaloneKindSchema = z.enum(["view", "skill", "automation"]);
+
+const ReconcileConfigsRequestSchema = z.object({
+  dryRun: z.boolean().optional(),
+});
+
+const StandaloneReconcileEntrySchema = z.object({
+  kind: StandaloneKindSchema,
+  id: z.string(),
+  name: z.string(),
+  packageSlug: z.string().optional(),
+  reason: z.string(),
+});
+
+const ReconcileConfigsResponseSchema = z.object({
+  checked: z.number(),
+  dryRun: z.boolean(),
+  updated: z.array(StandaloneReconcileEntrySchema),
+  ownerOwnedSkipped: z.array(StandaloneReconcileEntrySchema),
+  skipped: z.array(StandaloneReconcileEntrySchema),
+  conflicts: z.array(StandaloneReconcileEntrySchema),
+});
+
+const DetachConfigRequestSchema = z.object({
+  kind: StandaloneKindSchema,
+  id: z.string().uuid(),
+});
+
+const DetachConfigResponseSchema = z.object({
+  detached: z.boolean(),
+  kind: StandaloneKindSchema,
+  id: z.string(),
+  outcome: z.enum(["updated", "proposed"]).optional(),
+  reason: z.string().optional(),
 });
 
 // ── Register function ──────────────────────────────────────────────────────
@@ -728,6 +768,160 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       return c.json(report, 200);
     } catch (err) {
       logger.error({ err }, "capabilities reconcile failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /configs/reconcile ────────────────────────────────────────────────
+  // On-demand trigger for the STANDALONE-CONFIG reconcile (views / skills /
+  // automations) — the lighter-config counterpart to POST /capabilities/reconcile
+  // and the same pass the boot hook runs. Field-level 3-way merge: never
+  // overwrites a user-edited field. `dryRun:true` computes the report without
+  // writing. Requires hub-protocol.write scope.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/configs/reconcile",
+    tags: ["Capabilities"],
+    summary:
+      "Reconcile standalone-installed views/skills/automations to their templates",
+    description:
+      "Advances each standalone-installed view/skill/automation's untouched " +
+      "fields to its source marketplace template through the governed per-kind " +
+      "`.update` door. A user-edited field is owner-owned — left alone and " +
+      "reported. A private/unsynced package is skipped. `dryRun:true` computes " +
+      "the report without writing. Requires hub-protocol.write scope.",
+    request: { body: ReconcileConfigsRequestSchema },
+    responses: {
+      200: {
+        description: "Reconcile report",
+        schema: ReconcileConfigsResponseSchema,
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/configs/reconcile", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const parsed = ReconcileConfigsRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+
+    // A non-dryRun reconcile fans out convergence writes across every installed
+    // standalone config pod-wide — an operator/admin action, NOT an agent one
+    // (same stance as the capability reconcile above). A dryRun is read-only and
+    // allowed for anyone with the scope.
+    const agentUserId = c.get("agentUserId");
+    if (agentUserId && !parsed.data.dryRun) {
+      logger.warn(
+        { agentUserId },
+        "agent credential attempted a pod-wide config reconcile — blocked (operator action)"
+      );
+      return c.json(
+        {
+          error:
+            "An agent credential cannot trigger a pod-wide config reconcile. Run it from a human/operator session, or pass { dryRun: true } to preview.",
+        },
+        403
+      );
+    }
+    // Resolve a trusted acting identity (not just a bearer scope).
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      const report = await reconcileStandaloneConfigsToTemplates({
+        dryRun: parsed.data.dryRun,
+      });
+      return c.json(report, 200);
+    } catch (err) {
+      logger.error({ err }, "configs reconcile failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /configs/detach ───────────────────────────────────────────────────
+  // Sever a standalone config's marketplace source-link so it stops reconciling.
+  // Persists through the governed per-kind `.update` door (attributed to the
+  // acting user). Requires hub-protocol.write scope.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/configs/detach",
+    tags: ["Capabilities"],
+    summary: "Detach a view/skill/automation from its marketplace template",
+    description:
+      "Clears the `marketSource` source-link on a standalone-installed " +
+      "view/skill/automation so a future template change no longer reconciles " +
+      "onto it. Persisted through the governed per-kind `.update` door. Requires " +
+      "hub-protocol.write scope.",
+    request: { body: DetachConfigRequestSchema },
+    responses: {
+      200: { description: "Detach result", schema: DetachConfigResponseSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/configs/detach", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const parsed = DetachConfigRequestSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+
+    // Detach is a mutating config-lifecycle action — an operator one, NOT an agent
+    // one (same stance as /configs/reconcile above). Block a bare agent credential
+    // so the write can't skip the AI-governance ladder by being attributed to the
+    // acting human at the downstream .update door.
+    const agentUserId = c.get("agentUserId");
+    if (agentUserId) {
+      logger.warn(
+        { agentUserId, ...parsed.data },
+        "agent credential attempted a config detach — blocked (operator action)"
+      );
+      return c.json(
+        {
+          error:
+            "An agent credential cannot detach a config from its template. Run it from a human/operator session.",
+        },
+        403
+      );
+    }
+
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      const result = await detachStandaloneConfigSource({
+        kind: parsed.data.kind,
+        id: parsed.data.id,
+        userId: acting.userId,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err }, "config detach failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

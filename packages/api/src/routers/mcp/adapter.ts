@@ -28,6 +28,7 @@ import {
 } from "../../services/object-graph/graph-service.js";
 import { entityDataNeighbors } from "../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
+import type { ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { ask } from "../../services/knowledge/ask.js";
 // Type-only: keeps `remember-fact.js` lazily imported at the call site while
 // letting the `category` arg be narrowed to the seeded `uo_category` enum.
@@ -3483,6 +3484,9 @@ export async function executeMCPToolViaHubProtocol(
       await rejectCaller.reject({
         proposalId: resolvedProposalId,
         reason: args.reason as string | undefined,
+        // Structured cause (0232) — validated against PROPOSAL_REJECTION_REASONS
+        // by the reject procedure's zod enum; an unknown value is rejected there.
+        reasonCode: args.reasonCode as ProposalRejectionReasonCode | undefined,
       });
       return ok({ success: true, proposalId: resolvedProposalId });
     }

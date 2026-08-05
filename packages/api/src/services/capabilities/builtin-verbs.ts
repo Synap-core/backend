@@ -65,6 +65,7 @@ import {
 } from "./place-artboard-deck.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { generateViaIS } from "../mail-feed/generate.js";
+import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
 // catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
 // via capability-registry.ts's scoreTextMatch dependency) and marketplace-
 // install.ts pulls in the full router graph (create-from-definition.ts imports
@@ -1679,6 +1680,12 @@ const marketInstallParams = z.object({
   ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
+  // RC4 payload-in: an already-CP-authenticated client can hand us the FULL
+  // package definition so the pod installs a PRIVATE package WITHOUT re-fetching
+  // the CP by slug (that fetch is unauthenticated → 404s for private packages).
+  // When present it IS the resolved definition; when absent the fetch path is
+  // unchanged (fallback).
+  definition: z.record(z.string(), z.unknown()).optional(),
 });
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -1689,6 +1696,7 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     kind: input.kind,
     version: input.version,
     params: input.params,
+    definition: input.definition,
     userId: ctx.userId,
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
@@ -2187,6 +2195,27 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * governance.recommend_tighten — scan recent REJECTED agent proposals, cluster
+ * by shape, and file a pending `governance.tighten_lane` proposal for any shape
+ * the humans reject consistently (the mirror of the trusted-lane WIDEN scanner).
+ *
+ * Takes NO params: it scans pod-wide agent behaviour, exactly like the widen
+ * scanner job — the run's only side effect is filing PENDING review items via
+ * the one door `insertPendingProposal`. The verb RUNS (files rows), it is not a
+ * governed graph mutation, so it is READ-ONLY w.r.t. graph data and auto-runs
+ * inside a cron automation (same rationale as connector.health_check — a propose
+ * verdict on the verb itself would stall the flow).
+ */
+const governanceRecommendTightenParams = z.object({});
+
+const governanceRecommendTightenHandler: BuiltinVerbHandler = async () => {
+  // Pod-wide by design: scans every agent-user's recent proposals. `ctx` is
+  // intentionally unused — the recommender resolves each agent's owner itself
+  // (createdBy on the filed proposals), like the widen scanner.
+  return recommendTightenForAllAgents();
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -2233,6 +2262,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // ONE governed send door (sendExternalMessage). Agent sends propose; owner
   // sends go direct. Provider-agnostic (routes by the channel's externalSource).
   "messaging.send": messagingSendHandler,
+  // Governance TIGHTEN recommender — mirror of the widen scanner. Scans rejected
+  // agent proposals and files governance.tighten_lane review items. No params.
+  "governance.recommend_tighten": governanceRecommendTightenHandler,
 };
 
 /**
@@ -2276,6 +2308,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "connector.health_check": connectorHealthCheckParams,
   "channel.ingest": channelIngestParams,
   "messaging.send": messagingSendParams,
+  "governance.recommend_tighten": governanceRecommendTightenParams,
 };
 
 /**
@@ -2312,4 +2345,11 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // NOTICE (in-app + Discord nudge) via the shared best-effort helper. Same
   // "no mutation → auto-run" rationale as ai.generate.
   "connector.health_check",
+  // governance.recommend_tighten — auto-run so the daily calibration cron can
+  // call it unattended (a propose verdict would stall the flow). It mutates NO
+  // graph data: its only side effect is filing PENDING governance.tighten_lane
+  // review items (themselves human-governed) via insertPendingProposal. Same
+  // "produces review items / notices, not a data write → auto-run" rationale as
+  // connector.health_check.
+  "governance.recommend_tighten",
 ]);

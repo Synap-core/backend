@@ -50,7 +50,7 @@ import {
   getWorkspaceMembership,
   automations as automationsTable,
 } from "@synap/database";
-import { cpCatalogCache, profiles } from "@synap/database/schema";
+import { cpCatalogCache, profiles, views } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import type { WorkspaceDefinitionInput } from "@synap/database";
@@ -62,6 +62,11 @@ import { createCapabilityFromDefinition } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../workspace-creation-service.js";
 import { installCellFromDefinition } from "../cells/install-cell-from-definition.js";
+import {
+  buildMarketSource,
+  stampMarketSource,
+  readMarketSource,
+} from "./market-source.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -192,6 +197,14 @@ export interface ApplyMarketInstallInput {
   params?: Record<string, unknown>;
   userId: string;
   workspaceId: string | null;
+  /**
+   * RC4 payload-in: the FULL package definition supplied by an
+   * already-CP-authenticated client. When present it IS the resolved definition
+   * and EVERY catalog lookup/fetch is skipped (no `cp_catalog_cache` row, no
+   * by-slug/by-key CP fetch) — the door that installs a PRIVATE package the pod
+   * cannot fetch unauthenticated. When absent, resolution is unchanged (fetch).
+   */
+  definition?: Record<string, unknown>;
 }
 
 /**
@@ -202,7 +215,16 @@ export interface ApplyMarketInstallInput {
 export async function applyMarketInstall(
   input: ApplyMarketInstallInput
 ): Promise<Record<string, unknown>> {
-  const entry = await lookupCatalogEntry(input.kind, input.slug);
+  // RC4 payload-in: when the caller supplies the definition, it IS the resolved
+  // definition — skip lookupCatalogEntry AND every resolve/fetch path below (so
+  // a PRIVATE package the pod can't fetch unauthenticated still installs). With
+  // `entry` left null, each kind branch's existing `entry ? … : …` fetch is
+  // bypassed in favour of `supplied`, while the `entry?.name`/`entry?.version`
+  // display fallbacks degrade harmlessly (same as the by-key re-resolve path).
+  const supplied = input.definition ?? null;
+  const entry = supplied
+    ? null
+    : await lookupCatalogEntry(input.kind, input.slug);
 
   // A CAPABILITY is resolvable WITHOUT a cache row. Opt-in capabilities
   // (syncByDefault:false, e.g. unipile-linkedin, arch-backend) never enter
@@ -215,11 +237,13 @@ export async function applyMarketInstall(
   // Capability is handled BEFORE the cache-row requirement because it resolves
   // by key, cache-row or not.
   if (input.kind === "capability") {
-    const definition = (entry
-      ? await resolveDefinition(entry, input.version)
-      : await fetchCPCapabilityTemplate(
-          input.slug
-        )) as unknown as CapabilityDefinition | null;
+    const definition = (supplied
+      ? supplied
+      : entry
+        ? await resolveDefinition(entry, input.version)
+        : await fetchCPCapabilityTemplate(
+            input.slug
+          )) as unknown as CapabilityDefinition | null;
     if (!definition) {
       throw new TRPCError({
         code: "NOT_FOUND",
@@ -255,7 +279,7 @@ export async function applyMarketInstall(
   // row is missing — mirroring the capability by-key fallback above — so an
   // opt-in / just-authored package that never entered cp_catalog_cache installs
   // instead of dead-ending in NOT_FOUND.
-  if (!entry && input.kind === "cell") {
+  if (!entry && !supplied && input.kind === "cell") {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `Marketplace entry "${input.slug}" (cell) is no longer in the catalog cache — search again with market.search({query, kind:"cell"}).`,
@@ -264,9 +288,10 @@ export async function applyMarketInstall(
 
   switch (input.kind) {
     case "cell": {
-      // Narrowed non-null by the cell-specific guard above.
-      const cellEntry = entry!;
-      const def = cellEntry.definition as {
+      // RC4: a supplied payload carries the renderer source inline (its `code`);
+      // otherwise the cache row is required (narrowed non-null by the guard
+      // above — the by-slug packages endpoint doesn't serve cell source).
+      const def = (supplied ?? entry?.definition) as {
         key?: string;
         code?: string;
         deps?: Record<string, string>;
@@ -289,7 +314,7 @@ export async function applyMarketInstall(
       // between the two install doors. See `install-cell-from-definition.ts`.
       const result = await installCellFromDefinition({
         definition: def,
-        name: cellEntry.name,
+        name: entry?.name ?? input.slug,
         packageSlug: slugPackage as string,
         cellKey: slugCellKey as string,
         workspaceId: input.workspaceId,
@@ -303,14 +328,17 @@ export async function applyMarketInstall(
     }
 
     case "template": {
-      // Cache row present → resolve inline/by-slug from the row; row MISSING →
-      // by-key re-resolve from the CP (opt-in / just-authored template).
-      const definition = (entry
-        ? await resolveDefinition(entry, input.version)
-        : await resolveDefinitionByKey(
-            input.slug,
-            input.version
-          )) as unknown as WorkspaceDefinitionInput & {
+      // Supplied payload (RC4) → use directly; else cache row present → resolve
+      // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
+      // just-authored template).
+      const definition = (supplied
+        ? supplied
+        : entry
+          ? await resolveDefinition(entry, input.version)
+          : await resolveDefinitionByKey(
+              input.slug,
+              input.version
+            )) as unknown as WorkspaceDefinitionInput & {
         workspaceName?: string;
       };
       // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
@@ -354,13 +382,13 @@ export async function applyMarketInstall(
           message: "No access to the acting workspace.",
         });
       }
-      // Cache row present → resolve inline/by-slug; row MISSING → by-key
-      // re-resolve from the CP (opt-in / just-authored automation package).
-      const definition = (
-        entry
+      // Supplied payload (RC4) → use directly; else cache row present → resolve
+      // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
+      // just-authored automation package).
+      const definition = (supplied ??
+        (entry
           ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version)
-      ) as {
+          : await resolveDefinitionByKey(input.slug, input.version))) as {
         automations?: Array<{
           name: string;
           description?: string;
@@ -414,14 +442,35 @@ export async function applyMarketInstall(
             results.push({ name: a.name, status: "reused", id: existing.id });
             continue;
           }
+          // W4a source-link: stamp the reconcilable fields AS INSTALLED (the base
+          // of every future 3-way merge) so a published fix can self-heal this
+          // automation and a re-install can't silently duplicate it. `fields`
+          // MUST equal exactly the values passed to create() for the baseline to
+          // be an honest merge base — reuse the same vars below.
+          const triggerConfig = a.triggerConfig ?? {};
+          const flowDefinition = a.flowDefinition ?? { nodes: [], edges: [] };
+          const fields = {
+            name: a.name,
+            description: a.description,
+            triggerType: a.triggerType,
+            triggerConfig,
+            flowDefinition,
+          };
+          const source = buildMarketSource(fields, {
+            packageSlug: input.slug,
+            packageVersion: entry?.version ?? input.version ?? null,
+            installedAt: new Date().toISOString(),
+          });
+          const metadata = stampMarketSource(undefined, source);
           const r = await caller.create({
             workspaceId: input.workspaceId,
             name: a.name,
             description: a.description,
             triggerType: a.triggerType,
-            triggerConfig: a.triggerConfig ?? {},
-            flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
+            triggerConfig,
+            flowDefinition,
             status: a.status ?? "active",
+            metadata,
             source: "intelligence",
           });
           results.push({
@@ -446,15 +495,15 @@ export async function applyMarketInstall(
       // SAME governed door the direct create + MCP `synap_create_skill` use —
       // `skillsRouter.create` (its checkPermissionOrPropose gate handles
       // approval; a `code` skill is born unapproved, an `instruction` skill
-      // born approved). Cache row present → resolve inline/by-slug; row MISSING
-      // → by-key re-resolve from the CP (opt-in / just-authored skill package),
-      // mirroring the automation/template kinds. workspaceId is optional (a
-      // skill is pod-wide when the caller has no acting workspace).
-      const definition = (
-        entry
+      // born approved). Supplied payload (RC4) → use directly; else cache row
+      // present → resolve inline/by-slug; row MISSING → by-key re-resolve from
+      // the CP (opt-in / just-authored skill package), mirroring the
+      // automation/template kinds. workspaceId is optional (a skill is pod-wide
+      // when the caller has no acting workspace).
+      const definition = (supplied ??
+        (entry
           ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version)
-      ) as {
+          : await resolveDefinitionByKey(input.slug, input.version))) as {
         name?: string;
         displayName?: string;
         description?: string;
@@ -481,8 +530,10 @@ export async function applyMarketInstall(
         workspaceRole,
       } as unknown as Context;
       const { skillsRouter } = await import("../../routers/skills.js");
-      const result = await skillsRouter.createCaller(ctx).create({
-        workspaceId: input.workspaceId ?? undefined,
+      // W4a source-link: `skillFields` = the resolved values written from the
+      // definition; they become the merge baseline, so `fields` MUST equal what
+      // create() receives (spread below) for the 3-way merge to be honest.
+      const skillFields = {
         name:
           definition.name ??
           definition.displayName ??
@@ -499,6 +550,17 @@ export async function applyMarketInstall(
         category: definition.category,
         executionMode: definition.executionMode ?? "sync",
         timeoutSeconds: definition.timeoutSeconds ?? 30,
+      };
+      const source = buildMarketSource(skillFields, {
+        packageSlug: input.slug,
+        packageVersion: entry?.version ?? input.version ?? null,
+        installedAt: new Date().toISOString(),
+      });
+      const metadata = stampMarketSource(undefined, source);
+      const result = await skillsRouter.createCaller(ctx).create({
+        workspaceId: input.workspaceId ?? undefined,
+        ...skillFields,
+        metadata,
       });
       return { kind: "skill", ...result };
     }
@@ -511,12 +573,13 @@ export async function applyMarketInstall(
       // (`scopeProfileSlugs`), NOT the per-pod profile UUIDs `viewsRouter.create`
       // needs. So: normalize to a list of views → resolve each view's scope slugs
       // to THIS pod's profile ids → create each through the SAME governed door
-      // the direct create + MCP `synap_create_view` use.
-      const definition = (
-        entry
+      // the direct create + MCP `synap_create_view` use. Supplied payload (RC4)
+      // → use directly; else cache row present → resolve inline/by-slug; row
+      // MISSING → by-key re-resolve from the CP.
+      const definition = (supplied ??
+        (entry
           ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version)
-      ) as {
+          : await resolveDefinitionByKey(input.slug, input.version))) as {
         name?: string;
         displayName?: string;
         views?: Array<{
@@ -610,7 +673,31 @@ export async function applyMarketInstall(
       const { viewsRouter } = await import("../../routers/views.js");
       const viewCaller = viewsRouter.createCaller(ctx);
 
+      // W4d dedup: a re-install must not clone views. Load the workspace's views
+      // already source-linked to THIS package (metadata.marketSource.packageSlug)
+      // and index them by name — the install identity for a view. A matching
+      // (slug, name) row is UPDATED through the governed views door instead of
+      // creating a duplicate.
+      const existingViews = await db
+        .select({
+          id: views.id,
+          name: views.name,
+          metadata: views.metadata,
+        })
+        .from(views)
+        .where(eq(views.workspaceId, input.workspaceId));
+      const linkedByName = new Map<string, string>();
+      for (const ev of existingViews) {
+        if (
+          readMarketSource(ev.metadata as Record<string, unknown> | null)
+            ?.packageSlug === input.slug
+        ) {
+          linkedByName.set(ev.name, ev.id);
+        }
+      }
+
       const created: string[] = [];
+      const updated: string[] = [];
       const failed: Array<{ name: string; error: string }> = [];
       for (const v of viewDefs) {
         const name =
@@ -621,20 +708,51 @@ export async function applyMarketInstall(
             : (v.scopeProfileSlugs ?? [])
                 .map((s) => slugToProfileId.get(s))
                 .filter((id): id is string => Boolean(id));
+        // W4a source-link: `fields` = the reconcilable values written from the
+        // definition (the merge baseline) — MUST equal what create()/update()
+        // receives for an honest 3-way merge.
+        const fields = {
+          name,
+          type: v.type,
+          query: v.query,
+          config: v.config,
+        };
+        const source = buildMarketSource(fields, {
+          packageSlug: input.slug,
+          packageVersion: entry?.version ?? input.version ?? null,
+          installedAt: new Date().toISOString(),
+        });
+        const metadata = stampMarketSource(v.metadata, source);
         try {
-          // `type` is runtime-validated by the door's ViewTypeEnum; cast to the
-          // caller's input shape (an invalid type is rejected by zod there).
-          await viewCaller.create({
-            workspaceId: input.workspaceId,
-            name,
-            description: v.description,
-            type: v.type,
-            scopeProfileIds,
-            query: v.query,
-            config: v.config,
-            metadata: v.metadata,
-          } as Parameters<typeof viewCaller.create>[0]);
-          created.push(name);
+          const existingId = linkedByName.get(name);
+          if (existingId) {
+            // Re-install of an already-linked view → UPDATE in place through the
+            // governed views door (no duplicate). `type` is runtime-validated by
+            // the door's ViewTypeEnum.
+            await viewCaller.update({
+              id: existingId,
+              name,
+              type: v.type,
+              query: v.query,
+              config: v.config,
+              metadata,
+            } as Parameters<typeof viewCaller.update>[0]);
+            updated.push(name);
+          } else {
+            // `type` is runtime-validated by the door's ViewTypeEnum; cast to the
+            // caller's input shape (an invalid type is rejected by zod there).
+            await viewCaller.create({
+              workspaceId: input.workspaceId,
+              name,
+              description: v.description,
+              type: v.type,
+              scopeProfileIds,
+              query: v.query,
+              config: v.config,
+              metadata,
+            } as Parameters<typeof viewCaller.create>[0]);
+            created.push(name);
+          }
         } catch (err) {
           failed.push({
             name,
@@ -643,9 +761,9 @@ export async function applyMarketInstall(
         }
       }
 
-      // If NOTHING installed, surface why (most often: a scope profile absent on
-      // this pod). A partial success returns both lists so the caller can see it.
-      if (created.length === 0) {
+      // If NOTHING installed OR updated, surface why (most often: a scope profile
+      // absent on this pod). A partial success returns all lists for the caller.
+      if (created.length === 0 && updated.length === 0) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `View package "${input.slug}" installed no views: ${failed
@@ -653,7 +771,7 @@ export async function applyMarketInstall(
             .join("; ")}`,
         });
       }
-      return { kind: "view", created, failed };
+      return { kind: "view", created, updated, failed };
     }
   }
 }
@@ -663,6 +781,13 @@ export interface RunMarketInstallInput {
   kind: CatalogKind;
   version?: string | null;
   params?: Record<string, unknown>;
+  /**
+   * RC4 payload-in: the FULL package definition supplied by an
+   * already-CP-authenticated client (see ApplyMarketInstallInput.definition).
+   * Threaded straight into the direct-execute path so an operator installs a
+   * PRIVATE package the pod cannot fetch unauthenticated.
+   */
+  definition?: Record<string, unknown>;
   userId: string;
   workspaceId: string | null;
   /** The acting AGENT (agent-user id), when this call originates from an agent. */
@@ -691,8 +816,9 @@ export async function runMarketInstall(
   // cache never saw re-resolves by slug from the CP (resolveDefinitionByKey)
   // instead of dead-ending here. Only `cell` still REQUIRES the row (its renderer
   // source is inline-only). Requiring a row for automation/template was the
-  // cache-miss dead-end this wave removes.
-  if (!entry && input.kind === "cell") {
+  // cache-miss dead-end this wave removes. RC4: a supplied `definition` carries
+  // the cell's renderer source inline, so it too satisfies the cell requirement.
+  if (!entry && !input.definition && input.kind === "cell") {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `Marketplace entry "${input.slug}" (cell) not found in the catalog cache. Search first with market.search({query, kind:"cell"}).`,
@@ -735,6 +861,7 @@ export async function runMarketInstall(
     slug: input.slug,
     version: input.version,
     params: input.params,
+    definition: input.definition,
     userId: input.userId,
     workspaceId: input.workspaceId,
   });

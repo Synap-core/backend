@@ -1266,7 +1266,7 @@ function deriveToolVerbs(
 // (`assertGrantScoped`: never both null) is satisfied. `execMode: "propose"` is
 // the conservative default for a side-effecting tool/skill — the capability
 // runs through review unless an explicit auto grant is later issued.
-async function issueCapabilityGrant(
+export async function issueCapabilityGrant(
   grantableType: "tool" | "skill",
   grantableId: string,
   userId: string,

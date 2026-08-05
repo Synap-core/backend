@@ -1847,6 +1847,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "external_dispatched_at" timestamp with time zone;  -- 0209 (at-most-once external dispatch claim)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -4169,6 +4170,27 @@ CREATE INDEX IF NOT EXISTS "governance_rules_agent_active_idx"
   WHERE "revoked_at" IS NULL;
 CREATE INDEX IF NOT EXISTS "governance_rules_source_proposal_idx"
   ON "governance_rules" ("source_proposal_id");
+
+-- proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
+-- (0233). The calibration "Mark expected" was session-only; a row here persists
+-- it so a muted rejection cluster stops surfacing in the rejected-clusters read.
+-- fingerprint = the SAME computeProposalFingerprint the read produces.
+-- Pod-scoped (no workspace). revoked_at NULL = active (soft unmute).
+CREATE TABLE IF NOT EXISTS "proposal_cluster_mutes" (
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "fingerprint"  text NOT NULL,
+  "created_by"   text NOT NULL,
+  "created_at"   timestamp with time zone NOT NULL DEFAULT now(),
+  "revoked_at"   timestamp with time zone
+);
+ALTER TABLE "proposal_cluster_mutes" ADD COLUMN IF NOT EXISTS "fingerprint" text;
+ALTER TABLE "proposal_cluster_mutes" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "proposal_cluster_mutes" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "proposal_cluster_mutes" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
+-- At most ONE active mute per fingerprint (pod-wide); a revoke frees it to re-mute.
+CREATE UNIQUE INDEX IF NOT EXISTS "proposal_cluster_mutes_active_uq"
+  ON "proposal_cluster_mutes" ("fingerprint")
+  WHERE "revoked_at" IS NULL;
 
 -- capability_run_receipts — at-most-once claim for a DIRECT-run WRITE/external
 -- capability verb (0219). The DIRECT path's analog of proposals.external_dispatched_at

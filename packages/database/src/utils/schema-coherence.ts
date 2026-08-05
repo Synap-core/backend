@@ -121,6 +121,22 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "dedup_hash",
     addedBy: "0208_proposals_dedup_hash.sql",
   },
+  // proposals — structured rejection cause code (0232). App-level enum
+  // (PROPOSAL_REJECTION_REASONS in @synap-core/types), free-text
+  // `rejection_reason` stays; the reject door persists this alongside it.
+  {
+    table: "proposals",
+    column: "reason_code",
+    addedBy: "0232_proposals_reason_code.sql",
+  },
+  // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
+  // (0233). If the table/column is missing, the mute door + the rejected-clusters
+  // read's active-mute filter throw. Column check confirms the table exists.
+  {
+    table: "proposal_cluster_mutes",
+    column: "fingerprint",
+    addedBy: "0233_proposal_cluster_mutes.sql",
+  },
 
   // property_defs — audit flagged these (0057 / 0064 / 0065)
   {

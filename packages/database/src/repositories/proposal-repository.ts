@@ -15,6 +15,9 @@ export interface UpdateProposalInput {
   reviewedBy?: string;
   reviewedAt?: Date;
   rejectionReason?: string;
+  /** Structured rejection cause (0232) — a PROPOSAL_REJECTION_REASONS code,
+   *  persisted alongside the free-text `rejectionReason`. Optional/back-compat. */
+  reasonCode?: string;
 }
 
 export class ProposalRepository {
@@ -50,13 +53,15 @@ export class ProposalRepository {
     id: string,
     status: "approved" | "rejected",
     reviewedBy: string,
-    reviewNotes?: string
+    reviewNotes?: string,
+    reasonCode?: string
   ): Promise<any> {
     return this.update(id, {
       status,
       reviewedBy,
       reviewedAt: new Date(),
       rejectionReason: reviewNotes,
+      reasonCode,
     });
   }
 
@@ -128,7 +133,12 @@ export class ProposalRepository {
   /**
    * Reject proposal
    */
-  async reject(id: string, reviewedBy: string, reason: string): Promise<any> {
-    return this.updateStatus(id, "rejected", reviewedBy, reason);
+  async reject(
+    id: string,
+    reviewedBy: string,
+    reason: string,
+    reasonCode?: string
+  ): Promise<any> {
+    return this.updateStatus(id, "rejected", reviewedBy, reason, reasonCode);
   }
 }

@@ -14,6 +14,7 @@ import {
   db,
   EventRepository,
   proposals,
+  proposalClusterMutes,
   documents,
   eq,
   and,
@@ -1813,6 +1814,31 @@ export interface GovernanceWidenLaneProposalData {
   };
 }
 
+/**
+ * `governance.tighten_lane` proposal payload — the TIGHTEN mirror of
+ * `GovernanceWidenLaneProposalData`. Emitted ONLY by the tighten recommender
+ * (`services/proposals/recommend-tighten.ts`); approval here is the ONE door
+ * that turns it into a `governance_rules` row. `verdict` is always "propose": a
+ * tighten proposal only ever pins a motif to review, never widens (floor-safe by
+ * construction — rung 2.8 sits below every floor). `evidence` differs from widen
+ * (per-shape reject signal, not per-agent scorecard) and is not read here.
+ */
+export interface GovernanceTightenLaneProposalData {
+  agentUserId: string;
+  targetKind: GovernanceTarget;
+  targetPattern: string;
+  targetProfile?: string | null;
+  scopeKind: GovernanceScope;
+  workspaceId?: string | null;
+  verdict: "propose";
+  evidence: {
+    clusterSize: number;
+    rejectRate: number;
+    totalForShape: number;
+    sampleProposalIds: string[];
+  };
+}
+
 async function applyProposalApproval(args: {
   proposal: NonNullable<
     Awaited<ReturnType<typeof db.query.proposals.findFirst>>
@@ -2360,6 +2386,76 @@ async function applyProposalApproval(args: {
       targetPattern: widenData.targetPattern,
       targetProfile: widenData.targetProfile ?? null,
       verdict: "auto",
+      sourceProposalId: proposal.id,
+      createdBy: userId,
+    });
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // B4b: governance.tighten_lane — the TIGHTEN mirror of B4. Approving inserts
+  // ONE governance_rules row with `verdict:'propose'` (vs widen's 'auto') +
+  // source_proposal_id lineage — an EXACT mirror of the widen branch above,
+  // differing only in the verdict. Floor-safe by construction: a rule resolves
+  // at rung 2.8, BELOW every floor, so a propose rule can only pin-to-review,
+  // never widen a delete/admin/scope-change. Keyed off proposalType (not payload
+  // shape), inline like widen — the recommender that emits this type never
+  // writes governance_rules directly.
+  if (proposal.proposalType === "governance.tighten_lane") {
+    const tightenData = payload as GovernanceTightenLaneProposalData | null;
+    if (
+      !tightenData ||
+      typeof tightenData !== "object" ||
+      !tightenData.agentUserId ||
+      !tightenData.targetKind ||
+      !tightenData.targetPattern ||
+      !tightenData.scopeKind
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.tighten_lane proposal data.",
+      });
+    }
+
+    await db.insert(governanceRules).values({
+      principalKind: "agent",
+      agentUserId: tightenData.agentUserId,
+      scopeKind: tightenData.scopeKind,
+      workspaceId:
+        tightenData.scopeKind === "workspace"
+          ? (tightenData.workspaceId ?? null)
+          : null,
+      targetKind: tightenData.targetKind,
+      targetPattern: tightenData.targetPattern,
+      targetProfile: tightenData.targetProfile ?? null,
+      verdict: "propose",
       sourceProposalId: proposal.id,
       createdBy: userId,
     });
@@ -3008,9 +3104,93 @@ export const proposalsRouter = router({
           : null,
       }));
 
-      const groups = collapseProposalsToClusters(clusterRows).slice(0, limit);
+      let clusters = collapseProposalsToClusters(clusterRows);
+
+      // Rejection-patterns lens only: drop clusters the pod has actively MUTED
+      // ("Mark expected"). The mute is keyed on the SAME canonical fingerprint
+      // these clusters carry, so a muted shape stops surfacing here. Pod-wide
+      // (no workspace) — mirrors the rejected-clusters read's own pod-wide lens.
+      if (input.status === "rejected") {
+        const activeMutes = await db
+          .select({ fingerprint: proposalClusterMutes.fingerprint })
+          .from(proposalClusterMutes)
+          .where(isNull(proposalClusterMutes.revokedAt));
+        if (activeMutes.length > 0) {
+          const muted = new Set(activeMutes.map((m) => m.fingerprint));
+          clusters = clusters.filter((c) => !muted.has(c.fingerprint));
+        }
+      }
+
+      const groups = clusters.slice(0, limit);
       return { groups };
     }),
+
+  /**
+   * Durably MUTE a rejection SHAPE-cluster ("Mark expected") — the persistent
+   * form of the calibration inbox's previously session-only mute. `fingerprint`
+   * is the SAME canonical value `groups({ status: 'rejected' })` returns, so a
+   * mute matches a cluster exactly and stops it surfacing there.
+   *
+   * POD-SCOPED (no workspace) — a rejection shape is pod-wide, like the
+   * duplicate-cluster recommender. Idempotent: re-muting an already-active
+   * fingerprint is a no-op (ON CONFLICT DO NOTHING against the partial unique
+   * index). Mirrors the governance-rules door style.
+   */
+  muteRejectionCluster: protectedProcedure
+    .input(z.object({ fingerprint: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      await db
+        .insert(proposalClusterMutes)
+        .values({ fingerprint: input.fingerprint, createdBy: userId })
+        // Already-active mute for this fingerprint → no-op (the partial unique
+        // index `WHERE revoked_at IS NULL` is the conflict target).
+        .onConflictDoNothing({
+          target: proposalClusterMutes.fingerprint,
+          where: isNull(proposalClusterMutes.revokedAt),
+        });
+      return { success: true };
+    }),
+
+  /**
+   * Soft-UNMUTE a rejection cluster — revoke the active mute so the cluster
+   * resurfaces in the rejected-clusters read. Stamps `revoked_at` (never
+   * deletes), keeping the audit trail. No-op if nothing is actively muted.
+   */
+  unmuteRejectionCluster: protectedProcedure
+    .input(z.object({ fingerprint: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      requireUserId(ctx.userId);
+      await db
+        .update(proposalClusterMutes)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(proposalClusterMutes.fingerprint, input.fingerprint),
+            isNull(proposalClusterMutes.revokedAt)
+          )
+        );
+      return { success: true };
+    }),
+
+  /**
+   * List the pod's ACTIVE rejection-cluster mutes (pod-wide). Complements the
+   * `groups({ status: 'rejected' })` filter — lets a surface show which shapes
+   * are currently muted and offer an unmute.
+   */
+  listRejectionMutes: protectedProcedure.query(async ({ ctx }) => {
+    requireUserId(ctx.userId);
+    const rows = await db
+      .select({
+        fingerprint: proposalClusterMutes.fingerprint,
+        createdBy: proposalClusterMutes.createdBy,
+        createdAt: proposalClusterMutes.createdAt,
+      })
+      .from(proposalClusterMutes)
+      .where(isNull(proposalClusterMutes.revokedAt))
+      .orderBy(desc(proposalClusterMutes.createdAt));
+    return { mutes: rows };
+  }),
 
   /**
    * Fetch a single proposal by ID.
@@ -3522,6 +3702,9 @@ export const proposalsRouter = router({
         .set({
           status: ProposalStatus.REJECTED,
           rejectionReason: input.reason,
+          // Structured cause (0232) persisted ALONGSIDE the free-text reason —
+          // null when the caller omits it (back-compat).
+          reasonCode: input.reasonCode ?? null,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { eventRepository } from "@synap/database";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { diagnoseGlobal } from "../services/diagnose/index.js";
@@ -82,5 +83,49 @@ export const diagnoseRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       return agentProfile({ userId, agentId: input.agentId });
+    }),
+
+  /**
+   * The "ungoverned AI writes" blind spot (0231) over tRPC — agent writes that
+   * EXECUTED with no proposal at all (`is_agent = true AND proposal_id IS NULL`
+   * on the `.completed` event). The browser-native twin of `GET /api/hub/events
+   * ?ungoverned=true`, reusing the SAME `eventRepository.searchEvents` predicate
+   * and the SAME owner-pinned `userId` scoping (ctx floor, never client-supplied)
+   * — one repository fn, two doors, no divergent scoping. HONEST-EMPTY: returns
+   * [] when every agent write went through a proposal. Coverage note: accurate
+   * for the instrumented (entity) agent path; surfaces that do not agent-attribute
+   * their completed events are `is_agent = false` and simply absent, never a false
+   * positive.
+   */
+  ungovernedWrites: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Scope to one agent's ungoverned writes. */
+          agentUserId: z.string().optional(),
+          limit: z.number().int().positive().max(200).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const rows = await eventRepository.searchEvents({
+        ungoverned: true,
+        userId,
+        agentUserId: input?.agentUserId,
+        limit: input?.limit ?? 50,
+      });
+      return rows.map((e) => ({
+        id: e.id,
+        agentUserId: e.agentUserId ?? null,
+        agentType: e.agentType ?? null,
+        subjectType: e.subjectType,
+        subjectId: e.subjectId,
+        action: e.eventType,
+        at:
+          e.timestamp instanceof Date
+            ? e.timestamp.toISOString()
+            : String(e.timestamp),
+      }));
     }),
 });

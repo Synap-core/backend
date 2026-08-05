@@ -80,6 +80,14 @@ export {
   CAPABILITY_UPDATE_GROUP_KEY,
 } from "./services/capabilities/notify-capability-updates.js";
 export {
+  reconcileStandaloneConfigsToTemplates,
+  detachStandaloneConfigSource,
+  type StandaloneReconcileReport,
+  type StandaloneReconcileEntry,
+  type StandaloneKind,
+  type DetachResult,
+} from "./services/capabilities/reconcile-standalone-configs-to-templates.js";
+export {
   orderWorkspacesByTemplateDependencies,
   type OrderableWorkspaceRow,
   type TemplateForOrdering,
