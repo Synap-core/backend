@@ -83,6 +83,8 @@ export async function completeFocusSession(
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
   // ignoreSessionForcePropose keeps auto-approve / execute path for complete only.
+  // When a proposal is still required, gate data carries goal + summary so the
+  // proposal card and focus_session/update executor can complete the session.
   const perm = await checkPermissionOrPropose({
     userId: params.userId,
     agentUserId: params.agentUserId,
@@ -93,7 +95,14 @@ export async function completeFocusSession(
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
-    data: { id: sessionId, status: "closed" },
+    data: {
+      id: sessionId,
+      status: "closed",
+      goal: session.goal,
+      previousStatus: session.status,
+      ...(summary !== undefined ? { sessionSummary: summary } : {}),
+      ...(verificationReport != null ? { verificationReport } : {}),
+    },
     ignoreSessionForcePropose: true,
   });
 
@@ -101,9 +110,8 @@ export async function completeFocusSession(
     throw Object.assign(new Error(perm.reason), { code: "FORBIDDEN" });
   }
   if ("proposalId" in perm) {
-    // Hub REST surfaces proposalId/summary/review* when present; approval does
-    // not run a focus_session/update executor — complete should normally execute
-    // via ignoreSessionForcePropose lifecycle escape (permission-check).
+    // Hub REST surfaces proposalId/summary/review*; human approve runs
+    // focus_session/update which reuses completeFocusSession (no agentUserId).
     throw Object.assign(
       new Error("Session completion proposed for review — approval required"),
       {

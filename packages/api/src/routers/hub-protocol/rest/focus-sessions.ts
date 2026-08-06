@@ -538,6 +538,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         patch.agentUserId ??
         (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
 
+      // Gate data: always include goal from the row (proposal summary label) plus
+      // every field being patched so focus_session/update can materialize on approve.
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId,
@@ -548,8 +550,26 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         reasoning: patch.reasoning,
         data: {
           id,
-          status: patch.status,
-          progress: patch.progress,
+          goal: patch.goal !== undefined ? patch.goal : existing.goal,
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
+          ...(patch.channelId !== undefined
+            ? { channelId: patch.channelId }
+            : {}),
+          ...(patch.correlationId !== undefined
+            ? { correlationId: patch.correlationId }
+            : {}),
+          ...(patch.agentIds !== undefined ? { agentIds: patch.agentIds } : {}),
+          ...(patch.expectedOutputs !== undefined
+            ? { expectedOutputs: patch.expectedOutputs }
+            : {}),
+          ...(patch.verificationReport !== undefined
+            ? { verificationReport: patch.verificationReport }
+            : {}),
+          ...(patch.currentStage !== undefined
+            ? { currentStage: patch.currentStage }
+            : {}),
+          ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
         },
       });
 

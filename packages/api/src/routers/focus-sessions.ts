@@ -43,6 +43,7 @@ const expectedOutputItemSchema = z.object({
   kind: z.string(),
   label: z.string(),
   icon: z.string().optional(),
+  status: z.enum(["pending", "done"]).optional(),
 });
 
 const statusFilterSchema = z
@@ -340,9 +341,48 @@ export const focusSessionsRouter = router({
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
 
-      // If transitioning to closed, stamp closedAt
+      // Closing via update: funnel through completeFocusSession (pack + run close).
       if (patch.status === "closed" && existing.status !== "closed") {
-        set.closedAt = new Date();
+        const { completeFocusSession } =
+          await import("../services/focus-sessions/complete-session.js");
+        try {
+          const result = await completeFocusSession({
+            sessionId: input.id,
+            userId: ctx.userId,
+          });
+          if (!result) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: `Focus session ${input.id} not found`,
+            });
+          }
+          // Apply any non-status fields still in the patch onto the closed row.
+          const extra: Partial<typeof focusSessions.$inferInsert> = {
+            updatedAt: new Date(),
+          };
+          if (patch.progress !== undefined) extra.progress = patch.progress;
+          if (patch.goal !== undefined) extra.goal = patch.goal;
+          if (patch.expectedOutputs !== undefined)
+            extra.expectedOutputs = patch.expectedOutputs;
+          if (Object.keys(extra).length > 1) {
+            const [merged] = await db
+              .update(focusSessions)
+              .set(extra)
+              .where(eq(focusSessions.id, input.id))
+              .returning();
+            return (merged ?? result.session) as FocusSession;
+          }
+          return result.session as FocusSession;
+        } catch (err) {
+          const e = err as { code?: string; message?: string };
+          if (e.code === "FORBIDDEN") {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: e.message ?? "Session completion not allowed",
+            });
+          }
+          throw err;
+        }
       }
 
       const [updated] = await db
@@ -380,37 +420,44 @@ export const focusSessionsRouter = router({
     }),
 
   /**
-   * Close a focus session.
+   * Complete a focus session (canonical close).
+   * Delegates to completeFocusSession — pack + playbook_run + verification recap.
+   * Prefer this over update({ status: "closed" }).
    */
   close: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        /** Short human recap — stored on verificationReport.summary */
+        summary: z.string().max(4000).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      const existing = await db.query.focusSessions.findFirst({
-        where: and(
-          eq(focusSessions.id, input.id),
-          eq(focusSessions.userId, ctx.userId)
-        ),
-      });
-
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Focus session ${input.id} not found`,
+      const { completeFocusSession } =
+        await import("../services/focus-sessions/complete-session.js");
+      try {
+        const result = await completeFocusSession({
+          sessionId: input.id,
+          userId: ctx.userId,
+          summary: input.summary,
         });
+        if (!result) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.id} not found`,
+          });
+        }
+        return result.session as FocusSession;
+      } catch (err) {
+        const e = err as { code?: string; message?: string };
+        if (e.code === "FORBIDDEN") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: e.message ?? "Session completion not allowed",
+          });
+        }
+        throw err;
       }
-
-      if (existing.status === "closed") {
-        return existing;
-      }
-
-      const now = new Date();
-      const [closed] = await db
-        .update(focusSessions)
-        .set({ status: "closed", closedAt: now, updatedAt: now })
-        .where(eq(focusSessions.id, input.id))
-        .returning();
-
-      return closed as FocusSession;
     }),
 
   /**

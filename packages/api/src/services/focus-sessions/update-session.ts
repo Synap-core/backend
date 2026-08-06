@@ -72,7 +72,9 @@ export async function updateFocusSession(
   }
 
   // Governance membrane — AI callers route through proposals (same gate the
-  // Hub PATCH /focus-sessions/:id and synap_complete_session use).
+  // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
+  // goal (for proposal summary / targetName) plus every intended mutation so
+  // the focus_session/update executor can materialize the full patch on approve.
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
   const perm = await checkPermissionOrPropose({
@@ -84,8 +86,22 @@ export async function updateFocusSession(
     source: "intelligence",
     data: {
       id: sessionId,
-      status: params.status,
-      progress: params.progress,
+      // Always include goal so summaries resolve even when goal is not changing.
+      goal: params.goal !== undefined ? params.goal : existing.goal,
+      ...(params.status !== undefined ? { status: params.status } : {}),
+      ...(params.progress !== undefined ? { progress: params.progress } : {}),
+      ...(params.currentStage !== undefined
+        ? { currentStage: params.currentStage }
+        : {}),
+      ...(params.expectedOutputs !== undefined
+        ? { expectedOutputs: params.expectedOutputs }
+        : {}),
+      ...(params.addOutput !== undefined
+        ? { addOutput: params.addOutput }
+        : {}),
+      ...(params.completeOutput !== undefined
+        ? { completeOutput: params.completeOutput }
+        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {

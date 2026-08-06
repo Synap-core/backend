@@ -7,7 +7,7 @@
  * all" (ProposalsCell / ProposalReviewBoard, rendered in the browser's
  * Sessions/Workflows ground cell) silently did NOTHING for every proposal type
  * whose subject the materializer worker has no case for — automation/execute,
- * document/create, channel/*, property_def/create, focus_session/create,
+ * document/create, channel/*, property_def/create, focus_session/create|update,
  * project/create|archive, skill/create, automation/create, playbook/*,
  * messaging.external.send, capability.run|install|enable, provider.action —
  * and ran the WRONG (generic) path for the ~13 subjects it does handle.
@@ -169,6 +169,7 @@ describe("(a) a key with no materializer case runs its specific executor", () =>
       "channel/bind",
       "property_def/create",
       "focus_session/create",
+      "focus_session/update",
       "project/create",
       "project/archive",
       "skill/create",
@@ -203,6 +204,7 @@ describe("(a) a key with no materializer case runs its specific executor", () =>
       ["channel", "bind"],
       ["property_def", "create"],
       ["focus_session", "create"],
+      ["focus_session", "update"],
       ["project", "create"],
       ["project", "archive"],
       ["skill", "create"],
@@ -230,7 +232,7 @@ describe("(a) a key with no materializer case runs its specific executor", () =>
     }
 
     expect(registered.has("catch-all")).toBe(false);
-    expect(registered.size).toBe(20);
+    expect(registered.size).toBe(21);
   });
 
   it("an unregistered key still throws NOT_IMPLEMENTED (no silent success)", async () => {
@@ -376,7 +378,10 @@ describe("(c/d) partial failure is isolated and visible", () => {
     // scrubbed to a generic message for a non-TRPCError, so raw pg/provider text
     // never lands in the stored proposal.
     expect(failed).toEqual([
-      { proposalId: "p3", reason: "Couldn't apply — an internal error occurred." },
+      {
+        proposalId: "p3",
+        reason: "Couldn't apply — an internal error occurred.",
+      },
     ]);
     // …and in the payload the client renders. The error is RE-THROWN unchanged
     // (dispatchProposalApproval does `throw err`), so the per-item batch error
@@ -486,9 +491,9 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
 
     const onApprovalFailed = vi.fn(async () => {});
 
-    await expect(
-      dispatchProposalApproval(a, onApprovalFailed)
-    ).rejects.toThrow("automation was deleted");
+    await expect(dispatchProposalApproval(a, onApprovalFailed)).rejects.toThrow(
+      "automation was deleted"
+    );
 
     // The DB write proposals.ts's onApprovalFailed performs (status flip to
     // APPROVAL_FAILED + rejectionReason) is driven by exactly these args.
@@ -525,9 +530,9 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     const a = args(proposalRow("p1", "automation", "execute"));
     const onApprovalFailed = vi.fn(async () => {});
 
-    await expect(
-      dispatchProposalApproval(a, onApprovalFailed)
-    ).rejects.toThrow("Couldn't apply — target no longer exists");
+    await expect(dispatchProposalApproval(a, onApprovalFailed)).rejects.toThrow(
+      "Couldn't apply — target no longer exists"
+    );
 
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
     // P1: 3rd `failure` arg is undefined for a plain (non-provider) TRPCError.

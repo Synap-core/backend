@@ -167,6 +167,7 @@ declare const ChannelType: {
 	readonly EXTERNAL: "external";
 	readonly AGENT_COLLAB: "agent_collab";
 	readonly GROUP: "group";
+	readonly RUN: "run";
 };
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 declare const ChannelScope: {
@@ -4696,6 +4697,60 @@ export interface ImportAnalysisPlan {
 	warnings: string[];
 	overallConfidence: number;
 }
+/**
+ * Acknowledgment integrity for the single-write MCP doors (C1).
+ *
+ * THE BUG CLASS THIS CLOSES: a write LANDS on the server, but the CLIENT perceives
+ * a failure (a dropped connection, a timeout, a torn response). The agent, seeing
+ * "failure", RE-EMITS the same call — and a second row is written. Graph-capture
+ * already closed this with a content-hash idempotency key
+ * (`pending-capture-dedup.ts` `computeCaptureGraphIdempotencyKey`), and the
+ * proposal SSOT hash-dedups identical AGENT proposals. But the single-write doors
+ * (`post_message`, `remember_fact`, `create_document`, direct `run_capability`)
+ * still duplicated on the AUTO-APPROVED / operator DIRECT-WRITE path — no proposal,
+ * so no SSOT dedup — and no door told the caller "this was a replay, here's the
+ * prior id" so it could stop retrying.
+ *
+ * This module is the shared half: (1) a canonical, order-independent content-hash
+ * derivation — the SAME idiom as `computeCaptureGraphIdempotencyKey`, generalized
+ * so every door folds every content field the same way; (2) the `WriteAckState`
+ * contract each door stamps on its receipt so the client can tell `applied` from
+ * `proposed` from `duplicate-ignored`. The STORAGE/lookup is per-door (each door
+ * already has a queryable surface — the message row, the fact row, the document
+ * row / proposal, all owner-floored) and lives in the door itself.
+ *
+ * TWO WRITES CAN'T COLLIDE: `computeWriteContentHash` folds every content-bearing
+ * field through the recursive key-sort, so any difference in any field changes the
+ * digest → a different key → a separate write. A byte-identical re-submit
+ * reproduces the SAME key → the door's lookup returns the prior row instead of
+ * writing again. The key is NEVER derived from a random id or a timestamp (a retry
+ * would mint a new one → not idempotent) — that is the whole point.
+ *
+ * BEST-EFFORT: every door wraps its idempotency lookup so a lookup hiccup DEGRADES
+ * to a normal write — it must never block a real write. Idempotency is orthogonal
+ * to governance: a governed write still proposes; this is about the re-submit, not
+ * about the approval.
+ */
+/**
+ * The client-vs-server truth of a write, stamped on every single-write door's
+ * receipt so a caller can distinguish a fresh write from an idempotent replay
+ * WITHOUT diffing ids:
+ *   - `applied`          — the write executed and materialized now.
+ *   - `proposed`         — a governed write was queued for review (NOT a failure).
+ *   - `duplicate-ignored`— an idempotent replay of a prior write; no second row.
+ *                          The receipt still carries the prior id (same shape as a
+ *                          first write) so the caller lands on the real record.
+ */
+export type WriteAckState = "applied" | "proposed" | "duplicate-ignored";
+export interface PostChannelMessageResult {
+	success: true;
+	messageId: string;
+	channelId: string;
+	/** applied = inserted now; duplicate-ignored = idempotent replay of a prior post. */
+	ackState: WriteAckState;
+	/** Present on a duplicate hit — the prior message id (same as `messageId`). */
+	priorMessageId?: string;
+}
 export interface PersonalConversationTransition {
 	channel: Channel;
 	archivedChannelIds: string[];
@@ -6208,51 +6263,6 @@ export interface CapabilityReconcileReport {
 	 *  param the reconcile has no value for) — reported, never forced. */
 	conflicts: CapabilityReconcileEntry[];
 }
-/**
- * Acknowledgment integrity for the single-write MCP doors (C1).
- *
- * THE BUG CLASS THIS CLOSES: a write LANDS on the server, but the CLIENT perceives
- * a failure (a dropped connection, a timeout, a torn response). The agent, seeing
- * "failure", RE-EMITS the same call — and a second row is written. Graph-capture
- * already closed this with a content-hash idempotency key
- * (`pending-capture-dedup.ts` `computeCaptureGraphIdempotencyKey`), and the
- * proposal SSOT hash-dedups identical AGENT proposals. But the single-write doors
- * (`post_message`, `remember_fact`, `create_document`, direct `run_capability`)
- * still duplicated on the AUTO-APPROVED / operator DIRECT-WRITE path — no proposal,
- * so no SSOT dedup — and no door told the caller "this was a replay, here's the
- * prior id" so it could stop retrying.
- *
- * This module is the shared half: (1) a canonical, order-independent content-hash
- * derivation — the SAME idiom as `computeCaptureGraphIdempotencyKey`, generalized
- * so every door folds every content field the same way; (2) the `WriteAckState`
- * contract each door stamps on its receipt so the client can tell `applied` from
- * `proposed` from `duplicate-ignored`. The STORAGE/lookup is per-door (each door
- * already has a queryable surface — the message row, the fact row, the document
- * row / proposal, all owner-floored) and lives in the door itself.
- *
- * TWO WRITES CAN'T COLLIDE: `computeWriteContentHash` folds every content-bearing
- * field through the recursive key-sort, so any difference in any field changes the
- * digest → a different key → a separate write. A byte-identical re-submit
- * reproduces the SAME key → the door's lookup returns the prior row instead of
- * writing again. The key is NEVER derived from a random id or a timestamp (a retry
- * would mint a new one → not idempotent) — that is the whole point.
- *
- * BEST-EFFORT: every door wraps its idempotency lookup so a lookup hiccup DEGRADES
- * to a normal write — it must never block a real write. Idempotency is orthogonal
- * to governance: a governed write still proposes; this is about the re-submit, not
- * about the approval.
- */
-/**
- * The client-vs-server truth of a write, stamped on every single-write door's
- * receipt so a caller can distinguish a fresh write from an idempotent replay
- * WITHOUT diffing ids:
- *   - `applied`          — the write executed and materialized now.
- *   - `proposed`         — a governed write was queued for review (NOT a failure).
- *   - `duplicate-ignored`— an idempotent replay of a prior write; no second row.
- *                          The receipt still carries the prior id (same shape as a
- *                          first write) so the caller lands on the real record.
- */
-export type WriteAckState = "applied" | "proposed" | "duplicate-ignored";
 export type ExecuteCapabilityResult = {
 	kind: "run";
 	skillId: string;
@@ -8922,7 +8932,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9091,7 +9101,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9142,7 +9152,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9258,7 +9268,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				projectId?: string | undefined;
-				channelType?: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | undefined;
+				channelType?: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run" | undefined;
 				limit?: number | undefined;
 				contextObjectId?: string | undefined;
 				contextObjectType?: "entity" | "document" | "view" | "proposal" | undefined;
@@ -9274,6 +9284,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					counterpartUserId?: string | null;
 				})[];
 			};
+			meta: object;
+		}>;
+		openProcessChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				flowType: string;
+				flowId: string;
+				workspaceId?: string | undefined;
+				title?: string | undefined;
+				seedMessages?: {
+					role: "user" | "system" | "assistant";
+					content: string;
+					metadata?: Record<string, unknown> | undefined;
+					idempotencyKey?: string | undefined;
+				}[] | undefined;
+				channelMetadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				channelId: string;
+				channel: Channel;
+				created: boolean;
+				messageIds: string[];
+			};
+			meta: object;
+		}>;
+		narrate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				content: string;
+				role?: "user" | "system" | "assistant" | undefined;
+				metadata?: Record<string, unknown> | undefined;
+				triggerAI?: boolean | undefined;
+				idempotencyKey?: string | undefined;
+			};
+			output: PostChannelMessageResult;
 			meta: object;
 		}>;
 		startNewPersonalConversation: import("@trpc/server").TRPCMutationProcedure<{
@@ -9444,7 +9488,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9511,7 +9555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9624,7 +9668,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9655,7 +9699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9686,7 +9730,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -9843,7 +9887,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9944,7 +9988,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -10055,7 +10099,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -10161,7 +10205,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -24618,7 +24662,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		provenance: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "entity" | "proposal" | "run";
+				kind: "entity" | "run" | "proposal";
 				id: string;
 			};
 			output: ProvenanceResult;

@@ -527,9 +527,10 @@ export interface PermissionCheckOpts {
    *      focus_session update that closes the session (`data.status === "closed"`)
    *      as **execute** (receipt + grant). Without this, agent
    *      `writesRequireProposal: true` proposes at decideAgentPolicy rung 5
-   *      *before* DEFAULT_AUTO_APPROVE (`focus_session.update`), and approving
-   *      that proposal does not close the session (no focus_session/update
-   *      executor) — complete would be stuck forever under agent all-writes.
+   *      *before* DEFAULT_AUTO_APPROVE (`focus_session.update`). Approving a
+   *      close proposal does run `focus_session/update` → completeFocusSession,
+   *      but the escape still prefers auto-execute so complete is not blocked
+   *      under agent all-writes / pack mode.
    *
    * NOT a general bypass: still honors **deny** (RBAC/CBAC), ADMIN_ACTIONS,
    * destructive floors, and explicit `opts.forcePropose`. Only the lifecycle
@@ -911,8 +912,9 @@ export async function checkPermissionOrPropose(
       // focus_session close write to execute under agent all-writes / pack mode"
       // — NOT a general bypass of deny, destructive, admin, or explicit
       // opts.forcePropose. writesRequireProposal (rung 5) proposes
-      // focus_session.update before DEFAULT_AUTO_APPROVE (rung 8); without this
-      // escape, complete never closes the session (no update executor).
+      // focus_session.update before DEFAULT_AUTO_APPROVE (rung 8). Approve can
+      // now run focus_session/update → complete, but the escape still prefers
+      // auto-execute so complete is not blocked under agent all-writes.
       const lifecycleCloseEscape =
         opts.ignoreSessionForcePropose === true &&
         opts.forcePropose !== true &&
@@ -1142,9 +1144,40 @@ export function buildProposalSummary(
   action: string,
   data: Record<string, unknown>
 ): string {
+  // focus_session lifecycle close — human-readable "Complete session …"
+  if (
+    subjectType === "focus_session" &&
+    action === "update" &&
+    data.status === "closed"
+  ) {
+    const goal =
+      (typeof data.goal === "string" && data.goal.trim()
+        ? data.goal
+        : undefined) ??
+      (typeof data.targetName === "string" && data.targetName.trim()
+        ? data.targetName
+        : undefined);
+    return goal ? `Complete session "${goal}"` : "Complete focus session";
+  }
+  // focus_session create — "Start session …" when a goal is present
+  if (subjectType === "focus_session" && action === "create") {
+    const goal =
+      (typeof data.goal === "string" && data.goal.trim()
+        ? data.goal
+        : undefined) ??
+      (typeof data.targetName === "string" && data.targetName.trim()
+        ? data.targetName
+        : undefined);
+    if (goal) return `Start session "${goal}"`;
+  }
+
   const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
-  const label = (data.targetName || data.title || data.name || data.slug) as
-    string | undefined;
+  // goal is a first-class label for focus_session (and harmless elsewhere)
+  const label = (data.targetName ||
+    data.title ||
+    data.name ||
+    data.goal ||
+    data.slug) as string | undefined;
   if (label) return `${actionVerb} ${subjectType} "${label}"`;
   if (action === "delete" && data.id) return `${actionVerb} ${subjectType}`;
   return `${actionVerb} ${subjectType}`;
@@ -1999,24 +2032,41 @@ async function resolveProposalTargetName(
   data: Record<string, unknown>
 ): Promise<string | undefined> {
   const inline =
+    stringField(data, "goal") ??
     stringField(data, "title") ??
     stringField(data, "name") ??
     stringField(data, "displayName") ??
     stringField(data, "label");
   if (inline) return inline;
 
-  if (subjectType !== "entity" || !isLikelyUUID(targetId)) return undefined;
-
-  try {
-    const [entity] = await db
-      .select({ title: entities.title, preview: entities.preview })
-      .from(entities)
-      .where(eq(entities.id, targetId))
-      .limit(1);
-    return entity?.title ?? entity?.preview ?? undefined;
-  } catch {
-    return undefined;
+  if (subjectType === "entity" && isLikelyUUID(targetId)) {
+    try {
+      const [entity] = await db
+        .select({ title: entities.title, preview: entities.preview })
+        .from(entities)
+        .where(eq(entities.id, targetId))
+        .limit(1);
+      return entity?.title ?? entity?.preview ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
+
+  // Mirror entity title lookup for focus sessions (goal is the display name).
+  if (subjectType === "focus_session" && isLikelyUUID(targetId)) {
+    try {
+      const [session] = await db
+        .select({ goal: focusSessions.goal })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, targetId))
+        .limit(1);
+      return session?.goal ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
 }
 
 function stringField(

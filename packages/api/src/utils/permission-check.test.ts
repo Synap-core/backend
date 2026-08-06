@@ -225,6 +225,36 @@ describe("buildProposalSummary", () => {
     const summary = buildProposalSummary("profile", "create", { slug: "crm" });
     expect(summary).toBe('Create profile "crm"');
   });
+
+  it("uses goal as label on the generic path", () => {
+    const summary = buildProposalSummary("focus_session", "update", {
+      goal: "Ship phase A",
+      progress: 50,
+    });
+    expect(summary).toBe('Update focus_session "Ship phase A"');
+  });
+
+  it("focus_session create with goal → Start session", () => {
+    const summary = buildProposalSummary("focus_session", "create", {
+      goal: "Triage inbox",
+    });
+    expect(summary).toBe('Start session "Triage inbox"');
+  });
+
+  it("focus_session update closed with goal → Complete session", () => {
+    const summary = buildProposalSummary("focus_session", "update", {
+      status: "closed",
+      goal: "Triage inbox",
+    });
+    expect(summary).toBe('Complete session "Triage inbox"');
+  });
+
+  it("focus_session update closed without goal → Complete focus session", () => {
+    const summary = buildProposalSummary("focus_session", "update", {
+      status: "closed",
+    });
+    expect(summary).toBe("Complete focus session");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -741,9 +771,9 @@ describe("checkPermissionOrPropose — session force-propose governance", () => 
 // Tests: lifecycle complete escape (ignoreSessionForcePropose + focus_session close)
 //
 // Agent all-writes (`writesRequireProposal: true`) proposes focus_session.update
-// at decideAgentPolicy rung 5 before DEFAULT_AUTO_APPROVE. Approving that
-// proposal does not close the session (no focus_session/update executor).
-// completeFocusSession sets ignoreSessionForcePropose so the close executes.
+// at decideAgentPolicy rung 5 before DEFAULT_AUTO_APPROVE. Approve now runs
+// focus_session/update → completeFocusSession, but complete still prefers
+// ignoreSessionForcePropose so the close auto-executes under all-writes.
 // ---------------------------------------------------------------------------
 
 describe("checkPermissionOrPropose — focus_session lifecycle close escape", () => {
