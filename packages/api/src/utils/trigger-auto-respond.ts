@@ -8,12 +8,12 @@
  * the playbook executor (P3) — uses the SAME path, never a side-channel
  * reimplementation (a bare websocket broadcast does NOT enqueue the IS).
  *
- * IS-eligible channels: THREAD / AGENT_COLLAB / PERSONAL. PERSONAL channels are
- * pod-scoped (no workspaceId) — the IS resolves the user's default chat service
- * and runs the turn in personal context (workspaceId omitted, exactly like the
- * interactive `channels.sendMessage` path does for personal channels). This is
- * what makes the documented headless flow (get personal channel → post with
- * triggerAI) actually dispatch instead of silently no-op'ing.
+ * IS-eligible channels: THREAD / AGENT_COLLAB / PERSONAL / RUN. PERSONAL channels
+ * are pod-scoped (no workspaceId) — the IS resolves the user's default chat
+ * service and runs the turn in personal context (workspaceId omitted, exactly
+ * like the interactive `channels.sendMessage` path does for personal channels).
+ * RUN channels are live process narration (capture, automation, …): system posts
+ * progress; a user free-text flip must still enqueue a real agent turn.
  * Best-effort: the triggering message is already persisted; a failed trigger is
  * logged and swallowed. Returns true iff the job was enqueued.
  */
@@ -46,7 +46,8 @@ export async function triggerAutoRespond(params: {
   const isEligibleType =
     channel?.channelType === ChannelType.THREAD ||
     channel?.channelType === ChannelType.AGENT_COLLAB ||
-    channel?.channelType === ChannelType.PERSONAL;
+    channel?.channelType === ChannelType.PERSONAL ||
+    channel?.channelType === ChannelType.RUN;
   if (!channel || !isEligibleType) {
     return false;
   }

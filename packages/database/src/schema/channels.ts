@@ -2,9 +2,10 @@
  * Channels Schema — V2
  *
  * A channel is a conversation surface with a context scope.
- * 7 canonical types (V2 spec) replace legacy chat channel variants:
- * personal, thread, sub_thread, feed, external, agent_collab, group
- * (`group` — multi-human + multi-AI — was added after the original V2 6).
+ * 8 canonical types replace legacy chat channel variants:
+ * personal, thread, sub_thread, feed, external, agent_collab, group, run
+ * (`group` — multi-human + multi-AI — was added after the original V2 6;
+ *  `run` — live process narration shell, Companion-first).
  * `channelPurpose` is removed — absorbed into channelType.
  * `scope` and `feedScope` are new.
  *
@@ -27,8 +28,8 @@ import { agents } from "./agents.js";
 import { projects } from "./projects.js";
 
 /**
- * Channel Types (V2) — 7 canonical types per the channel-system spec
- * (the original 6 plus GROUP, added for multi-human + multi-AI rooms).
+ * Channel Types (V2) — 8 canonical types per the channel-system spec
+ * (original 6 + GROUP for multi-human rooms + RUN for live process narration).
  *
  * PERSONAL     — The user's permanent AI assistant channel — pod-wide. One per
  *                user across the entire data pod. AI always active.
@@ -45,6 +46,10 @@ import { projects } from "./projects.js";
  *                Reply routing is capability/toggle-based and only active when connector is live.
  * AGENT_COLLAB — Internal multi-agent collaboration channel (persistent, workspace-scoped).
  *                Visibility is restricted to workspace admin/owner for now.
+ * GROUP        — Multi-human + multi-AI channel (humans writable, AI on @mention).
+ * RUN          — Live process narration (capture, automation, import, session…).
+ *                Backend posts system status; user free-text flips to an agent turn.
+ *                Companion is the default shell; Room can list later.
  */
 export const ChannelType = {
   THREAD: "thread",
@@ -54,6 +59,7 @@ export const ChannelType = {
   EXTERNAL: "external",
   AGENT_COLLAB: "agent_collab",
   GROUP: "group", // multi-human + multi-AI channel (humans writable, AI on @mention)
+  RUN: "run", // live process narration — Companion-first infrastructure talk
 } as const;
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
@@ -176,6 +182,7 @@ export const channels = pgTable(
         ChannelType.EXTERNAL,
         ChannelType.AGENT_COLLAB,
         ChannelType.GROUP,
+        ChannelType.RUN,
       ],
     })
       .notNull()

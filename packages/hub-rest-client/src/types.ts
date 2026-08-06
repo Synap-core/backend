@@ -55,7 +55,14 @@ export interface HubChannel {
   id: string;
   name: string;
   type:
-    "personal" | "thread" | "sub_thread" | "feed" | "external" | "agent_collab";
+    | "personal"
+    | "thread"
+    | "sub_thread"
+    | "feed"
+    | "external"
+    | "agent_collab"
+    | "group"
+    | "run";
   workspaceId: string | null;
   agentType?: string;
   contextObjectType?:
@@ -749,7 +756,14 @@ export interface HubThread {
   id: string;
   name?: string;
   type:
-    "personal" | "thread" | "sub_thread" | "feed" | "external" | "agent_collab";
+    | "personal"
+    | "thread"
+    | "sub_thread"
+    | "feed"
+    | "external"
+    | "agent_collab"
+    | "group"
+    | "run";
   workspaceId?: string;
   agentType?: string;
   contextObjectType?:

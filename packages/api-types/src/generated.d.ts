@@ -6319,6 +6319,19 @@ export interface EntityConnection {
 	focusSessionWorkspaceId?: string | null;
 	createdAt?: Date | null;
 }
+/**
+ * System Map aggregate — a deliberately small, server-side projection of the
+ * entity graph for overview surfaces. The router owns the scoped reads; this
+ * module owns only the deterministic folding of already-visible rows.
+ *
+ * Keeping the fold pure makes the visibility invariant explicit: a bundle is
+ * emitted only when BOTH endpoint entities are present in the visible node set.
+ * An edge is never itself a permission grant.
+ */
+export interface SystemMapEntity {
+	id: string;
+	type: string;
+}
 export interface SystemMapKindCluster {
 	kind: string;
 	count: number;
@@ -6346,6 +6359,54 @@ export interface SystemMapOverview {
 		structuralLinks: number;
 		relationBundles: number;
 	};
+}
+/** A concrete entity node for the bounded force-graph view. */
+export interface SystemMapEntityGraphNode extends SystemMapEntity {
+	title: string | null;
+	preview: string | null;
+	workspaceId: string | null;
+	/** Live role slugs already filtered through the caller's facet lens. */
+	facetSlugs: string[];
+}
+/** A raw, visible relation row between two returned force-graph nodes. */
+export interface SystemMapEntityGraphSemanticEdge {
+	edgeClass: "semantic";
+	sourceEntityId: string;
+	targetEntityId: string;
+	type: string;
+}
+/** A raw indexed entity_id-property link between two returned nodes. */
+export interface SystemMapEntityGraphStructuralEdge {
+	edgeClass: "structural";
+	sourceEntityId: string;
+	targetEntityId: string;
+	propertySlug: string;
+}
+export type SystemMapEntityGraphEdge = SystemMapEntityGraphSemanticEdge | SystemMapEntityGraphStructuralEdge;
+export interface SystemMapEntityGraph {
+	nodes: SystemMapEntityGraphNode[];
+	/** Individual edges, never kind-level aggregates. */
+	edges: SystemMapEntityGraphEdge[];
+	/** Exact number of entities matching the scoped filter, before the cap. */
+	total: number;
+	totals: {
+		returnedEntities: number;
+		/** Exact edge totals for the returned node set, before each edge cap. */
+		semanticRelations: number;
+		structuralLinks: number;
+		edges: number;
+		returnedSemanticRelations: number;
+		returnedStructuralLinks: number;
+		returnedEdges: number;
+	};
+	pagination: {
+		limit: number;
+		offset: number;
+		hasMore: boolean;
+	};
+	/** False whenever node paging, edge caps, or a nonzero offset omits graph data. */
+	complete: boolean;
+	truncationReason: "node_limit" | "edge_limit" | "offset" | null;
 }
 /** A node in the pod graph — uniform across every object kind. */
 export interface GraphNode {
@@ -14534,6 +14595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getSystemMapKindDrilldown: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				kind: string;
+				role?: string | null | undefined;
 				workspaceId?: string | null | undefined;
 				allData?: boolean | undefined;
 				includePodWide?: boolean | undefined;
@@ -14555,7 +14617,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					offset: number;
 					hasMore: boolean;
 				};
+				complete: boolean;
+				truncationReason: string | null;
 			};
+			meta: object;
+		}>;
+		getSystemMapEntityGraph: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind?: string | undefined;
+				role?: string | null | undefined;
+				workspaceId?: string | null | undefined;
+				allData?: boolean | undefined;
+				includePodWide?: boolean | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+				edgeLimit?: number | undefined;
+			};
+			output: SystemMapEntityGraph;
 			meta: object;
 		}>;
 		getObjectGraph: import("@trpc/server").TRPCQueryProcedure<{

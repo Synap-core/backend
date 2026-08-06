@@ -19,7 +19,7 @@ import * as channelsSchema from "../schema/channels.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Canonical V2 spec — the single source of truth this test guards.
+// Canonical V2+ vocabulary — original 6 + group (rooms) + run (process narration).
 const SPEC_CHANNEL_TYPES = [
   "personal",
   "thread",
@@ -27,10 +27,12 @@ const SPEC_CHANNEL_TYPES = [
   "feed",
   "external",
   "agent_collab",
+  "group",
+  "run",
 ] as const;
 
 describe("Channel V2 type vocabulary — drift guard", () => {
-  test("ChannelType TS enum matches the V2 spec — 6 canonical types", () => {
+  test("ChannelType TS enum matches the V2+ spec — 8 canonical types", () => {
     const tsValues = Object.values(ChannelType).sort();
     const specValues = [...SPEC_CHANNEL_TYPES].sort();
     expect(tsValues).toEqual(specValues);
@@ -54,23 +56,29 @@ describe("Channel V2 type vocabulary — drift guard", () => {
     expect(sql).not.toMatch(/thread_kind/);
   });
 
-  test("0023_channel_v2_restore migration references all 6 canonical channel types", () => {
+  test("0023_channel_v2_restore migration references the original V2 six", () => {
     // 0000_baseline_schema.sql has no CHECK constraint on channel_type (it's
-    // a plain TEXT column — Drizzle's `enum:[]` is TS-only). The migration
-    // that restores the V2 vocabulary is 0023; this is where the 6 canonical
-    // values must collectively appear (4 documented as pre-existing in the
-    // header, plus the 2 new ones — `personal` and `sub_thread` — added via
-    // backfill UPDATEs).
+    // a plain TEXT column — Drizzle's `enum:[]` is TS-only). Migration 0023
+    // restored the original six; `group` and `run` were added later in schema
+    // only (still text — no CHECK), so they are NOT required in 0023.
     const migrationPath = path.join(
       __dirname,
       "../../migrations/0023_channel_v2_restore.sql"
     );
     const sql = readFileSync(migrationPath, "utf-8");
+    const originalSix = [
+      "personal",
+      "thread",
+      "sub_thread",
+      "feed",
+      "external",
+      "agent_collab",
+    ] as const;
 
-    for (const value of SPEC_CHANNEL_TYPES) {
+    for (const value of originalSix) {
       expect(
         sql.includes(value),
-        `Migration 0023 must reference canonical channelType "${value}" ` +
+        `Migration 0023 must reference original channelType "${value}" ` +
           `(header doc or backfill UPDATE). Drift detected.`
       ).toBe(true);
     }

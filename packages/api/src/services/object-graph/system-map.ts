@@ -53,12 +53,84 @@ export interface SystemMapOverview {
   };
 }
 
+/** A concrete entity node for the bounded force-graph view. */
+export interface SystemMapEntityGraphNode extends SystemMapEntity {
+  title: string | null;
+  preview: string | null;
+  workspaceId: string | null;
+  /** Live role slugs already filtered through the caller's facet lens. */
+  facetSlugs: string[];
+}
+
+/** A raw, visible relation row between two returned force-graph nodes. */
+export interface SystemMapEntityGraphSemanticEdge {
+  edgeClass: "semantic";
+  sourceEntityId: string;
+  targetEntityId: string;
+  type: string;
+}
+
+/** A raw indexed entity_id-property link between two returned nodes. */
+export interface SystemMapEntityGraphStructuralEdge {
+  edgeClass: "structural";
+  sourceEntityId: string;
+  targetEntityId: string;
+  propertySlug: string;
+}
+
+export type SystemMapEntityGraphEdge =
+  SystemMapEntityGraphSemanticEdge | SystemMapEntityGraphStructuralEdge;
+
+export interface SystemMapEntityGraph {
+  nodes: SystemMapEntityGraphNode[];
+  /** Individual edges, never kind-level aggregates. */
+  edges: SystemMapEntityGraphEdge[];
+  /** Exact number of entities matching the scoped filter, before the cap. */
+  total: number;
+  totals: {
+    returnedEntities: number;
+    /** Exact edge totals for the returned node set, before each edge cap. */
+    semanticRelations: number;
+    structuralLinks: number;
+    edges: number;
+    returnedSemanticRelations: number;
+    returnedStructuralLinks: number;
+    returnedEdges: number;
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
+  /** False whenever node paging, edge caps, or a nonzero offset omits graph data. */
+  complete: boolean;
+  truncationReason: "node_limit" | "edge_limit" | "offset" | null;
+}
+
 export interface BuildSystemMapOverviewInput {
   entities: SystemMapEntity[];
   /** Must have been loaded through the same visibility lens as entities. */
   facetSlugsByEntity: ReadonlyMap<string, readonly string[]>;
   semanticRelations: SystemMapSemanticRelation[];
   structuralLinks: SystemMapStructuralLink[];
+}
+
+export interface BuildSystemMapEntityGraphInput {
+  entities: Array<
+    SystemMapEntity & {
+      title: string | null;
+      preview: string | null;
+      workspaceId: string | null;
+    }
+  >;
+  facetSlugsByEntity: ReadonlyMap<string, readonly string[]>;
+  semanticRelations: SystemMapSemanticRelation[];
+  structuralLinks: SystemMapStructuralLink[];
+  total: number;
+  limit: number;
+  offset: number;
+  semanticRelationsTotal: number;
+  structuralLinksTotal: number;
 }
 
 interface MutableBundle extends SystemMapRelationBundle {}
@@ -174,5 +246,92 @@ export function buildSystemMapOverview(
       ).length,
       relationBundles: relationBundles.length,
     },
+  };
+}
+
+/**
+ * Fold one bounded, already-visible System Map node page into the force-graph
+ * contract. As with the overview, only edges with both returned endpoints are
+ * emitted: an edge never discloses a node outside the caller's page/lens.
+ */
+export function buildSystemMapEntityGraph(
+  input: BuildSystemMapEntityGraphInput
+): SystemMapEntityGraph {
+  const nodeIds = new Set(input.entities.map((entity) => entity.id));
+  const nodes = input.entities.map((entity) => ({
+    ...entity,
+    facetSlugs: [...new Set(input.facetSlugsByEntity.get(entity.id) ?? [])],
+  }));
+  const semanticEdges: SystemMapEntityGraphSemanticEdge[] = [];
+  const structuralEdges: SystemMapEntityGraphStructuralEdge[] = [];
+
+  for (const relation of input.semanticRelations) {
+    if (
+      relation.sourceEntityId === null ||
+      relation.targetEntityId === null ||
+      !nodeIds.has(relation.sourceEntityId) ||
+      !nodeIds.has(relation.targetEntityId)
+    ) {
+      continue;
+    }
+    semanticEdges.push({
+      edgeClass: "semantic",
+      sourceEntityId: relation.sourceEntityId,
+      targetEntityId: relation.targetEntityId,
+      type: relation.type,
+    });
+  }
+
+  for (const link of input.structuralLinks) {
+    if (
+      link.targetEntityId === null ||
+      !nodeIds.has(link.sourceEntityId) ||
+      !nodeIds.has(link.targetEntityId)
+    ) {
+      continue;
+    }
+    structuralEdges.push({
+      edgeClass: "structural",
+      sourceEntityId: link.sourceEntityId,
+      targetEntityId: link.targetEntityId,
+      propertySlug: link.propertySlug,
+    });
+  }
+
+  const edges: SystemMapEntityGraphEdge[] = [
+    ...semanticEdges,
+    ...structuralEdges,
+  ];
+  const hasMore = input.offset + nodes.length < input.total;
+  const returnedEdges = edges.length;
+  const totalEdges = input.semanticRelationsTotal + input.structuralLinksTotal;
+  const truncationReason = hasMore
+    ? "node_limit"
+    : input.offset > 0
+      ? "offset"
+      : returnedEdges < totalEdges
+        ? "edge_limit"
+        : null;
+
+  return {
+    nodes,
+    edges,
+    total: input.total,
+    totals: {
+      returnedEntities: nodes.length,
+      semanticRelations: input.semanticRelationsTotal,
+      structuralLinks: input.structuralLinksTotal,
+      edges: totalEdges,
+      returnedSemanticRelations: semanticEdges.length,
+      returnedStructuralLinks: structuralEdges.length,
+      returnedEdges,
+    },
+    pagination: {
+      limit: input.limit,
+      offset: input.offset,
+      hasMore,
+    },
+    complete: truncationReason === null,
+    truncationReason,
   };
 }

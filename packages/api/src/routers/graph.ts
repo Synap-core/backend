@@ -22,11 +22,16 @@ import {
   isNotNull,
   desc,
   drizzleSql,
+  exists,
+  facetRoleExists,
+  facetVisibilityConditions,
+  not,
   profileSlugScopeConditionFromRows,
   loadFacetSlugsBatch,
 } from "@synap/database";
 import {
   entities,
+  entityFacets,
   entityPropertyIndex,
   propertyDefs,
   relations,
@@ -43,7 +48,11 @@ import {
   type GraphEnvelope,
 } from "../services/object-graph/graph-service.js";
 import {
+  buildSystemMapEntityGraph,
   buildSystemMapOverview,
+  type SystemMapEntityGraph,
+  type SystemMapSemanticRelation,
+  type SystemMapStructuralLink,
   type SystemMapOverview,
 } from "../services/object-graph/system-map.js";
 import { relationsRouter } from "./relations.js";
@@ -125,6 +134,56 @@ function systemMapPropertyDefScope(workspaceLens: string | null | undefined) {
         eq(propertyDefs.workspaceId, workspaceLens)
       )
     : isNull(propertyDefs.workspaceId);
+}
+
+/**
+ * System Map kinds are primary-kind cluster ids emitted by the overview, not
+ * polymorphic profile-slug filters. Roles are deliberately a separate facet
+ * predicate (`systemMapRoleScope`) so a role never masquerades as a kind.
+ */
+function systemMapKindScope(kind: string) {
+  return drizzleSql`${entities.type} = ${kind}`;
+}
+
+/**
+ * Role filtering uses the same facet read door as role annotation. `null` is
+ * intentionally "no visible roles", not "no facet rows at all": an invisible
+ * role is not evidence for filtering an entity out of the caller's map.
+ */
+async function systemMapRoleScope(
+  role: string | null | undefined,
+  facetVisibilityScope: Awaited<ReturnType<typeof resolveFacetVisibilityScope>>
+) {
+  if (role === undefined) return undefined;
+
+  if (role !== null) {
+    const roleProfiles = await assertKnownProfileSlug(db, role);
+    const roleProfileIds = roleProfiles
+      .filter((profile) => profile.profileKind === "role")
+      .map((profile) => profile.id);
+    if (roleProfileIds.length === 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Profile "${role}" is a kind, not an attachable role`,
+      });
+    }
+    return facetRoleExists(db, roleProfileIds, facetVisibilityScope);
+  }
+
+  return not(
+    exists(
+      db
+        .select({ one: drizzleSql`1` })
+        .from(entityFacets)
+        .where(
+          and(
+            eq(entityFacets.entityId, entities.id),
+            isNull(entityFacets.deletedAt),
+            ...facetVisibilityConditions(facetVisibilityScope)
+          )
+        )
+    )
+  );
 }
 
 /**
@@ -250,6 +309,8 @@ export const graphRouter = router({
     .input(
       z.object({
         kind: z.string().min(1),
+        /** undefined = every entity, string = visible role, null = no visible roles. */
+        role: z.string().min(1).nullable().optional(),
         workspaceId: z.string().uuid().nullable().optional(),
         allData: z.boolean().default(false),
         includePodWide: z.boolean().default(false),
@@ -276,9 +337,14 @@ export const graphRouter = router({
           message: "Workspace is not available in this map lens",
         });
       }
+      const roleScope = await systemMapRoleScope(
+        input.role,
+        facetVisibilityScope
+      );
       const where = and(
         isNull(entities.deletedAt),
-        eq(entities.type, input.kind),
+        systemMapKindScope(input.kind),
+        roleScope,
         systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
       );
       const [items, totalRows] = await Promise.all([
@@ -306,6 +372,12 @@ export const graphRouter = router({
         facetVisibilityScope
       );
       const total = totalRows[0]?.count ?? 0;
+      const hasMore = input.offset + items.length < total;
+      const truncationReason = hasMore
+        ? "node_limit"
+        : input.offset > 0
+          ? "offset"
+          : null;
 
       return {
         items: items.map((item) => ({
@@ -316,9 +388,169 @@ export const graphRouter = router({
         pagination: {
           limit: input.limit,
           offset: input.offset,
-          hasMore: input.offset + items.length < total,
+          hasMore,
         },
+        complete: truncationReason === null,
+        truncationReason,
       };
+    }),
+
+  /**
+   * A bounded raw entity graph for force-directed renderers. This is separate
+   * from the aggregate overview: its edges are individual rows/projection
+   * links, and every endpoint is one of the returned, visibility-scoped nodes.
+   */
+  getSystemMapEntityGraph: podProcedure
+    .input(
+      z.object({
+        /** Optional kind narrow; omit for the full visible System Map lens. */
+        kind: z.string().min(1).optional(),
+        /** undefined = every entity, string = visible role, null = no visible roles. */
+        role: z.string().min(1).nullable().optional(),
+        workspaceId: z.string().uuid().nullable().optional(),
+        allData: z.boolean().default(false),
+        includePodWide: z.boolean().default(false),
+        /** Hard cap keeps force-graph payloads bounded even for large pods. */
+        limit: z.number().int().min(1).max(250).default(150),
+        offset: z.number().int().min(0).default(0),
+        /**
+         * Cap applied independently to semantic and structural edge sources so
+         * neither provenance class can starve the other.
+         */
+        edgeLimit: z.number().int().min(1).max(2_000).default(1_000),
+      })
+    )
+    .query(async ({ input, ctx }): Promise<SystemMapEntityGraph> => {
+      const workspaceLens = systemMapWorkspaceLens(
+        input.workspaceId,
+        ctx.workspaceId,
+        input.allData
+      );
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        workspaceLens
+      );
+      if (
+        typeof workspaceLens === "string" &&
+        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace is not available in this map lens",
+        });
+      }
+
+      const roleScope = await systemMapRoleScope(
+        input.role,
+        facetVisibilityScope
+      );
+      const where = and(
+        isNull(entities.deletedAt),
+        input.kind ? systemMapKindScope(input.kind) : undefined,
+        roleScope,
+        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+      );
+      const [entityRows, totalRows] = await Promise.all([
+        db.query.entities.findMany({
+          where,
+          columns: {
+            id: true,
+            type: true,
+            title: true,
+            preview: true,
+            workspaceId: true,
+          },
+          orderBy: [desc(entities.updatedAt)],
+          limit: input.limit,
+          offset: input.offset,
+        }),
+        db
+          .select({ count: drizzleSql<number>`count(*)::int` })
+          .from(entities)
+          .where(where),
+      ]);
+      const entityIds = entityRows.map((entity) => entity.id);
+      const relationAccess = scopedDb(
+        AccessContext.from(ctx).withLens(workspaceLens)
+      );
+      const semanticWhere = and(
+        inArray(relations.sourceEntityId, entityIds),
+        inArray(relations.targetEntityId, entityIds)
+      );
+      const structuralWhere = and(
+        isNotNull(entityPropertyIndex.valueEntityId),
+        inArray(entityPropertyIndex.entityId, entityIds),
+        inArray(entityPropertyIndex.valueEntityId, entityIds),
+        systemMapPropertyDefScope(workspaceLens)
+      );
+      const [
+        facetSlugsByEntity,
+        semanticRelations,
+        structuralLinks,
+        semanticRelationTotalRows,
+        structuralLinkTotalRows,
+      ] = await Promise.all([
+        loadFacetSlugsBatch(db, entityIds, facetVisibilityScope),
+        entityIds.length === 0
+          ? Promise.resolve([] as SystemMapSemanticRelation[])
+          : relationAccess.findMany<typeof relations.$inferSelect>(relations, {
+              where: semanticWhere,
+              columns: {
+                sourceEntityId: true,
+                targetEntityId: true,
+                type: true,
+              },
+              orderBy: [desc(relations.createdAt)],
+              limit: input.edgeLimit,
+            }),
+        entityIds.length === 0
+          ? Promise.resolve([] as SystemMapStructuralLink[])
+          : db
+              .select({
+                sourceEntityId: entityPropertyIndex.entityId,
+                targetEntityId: entityPropertyIndex.valueEntityId,
+                propertySlug: propertyDefs.slug,
+              })
+              .from(entityPropertyIndex)
+              .innerJoin(
+                propertyDefs,
+                eq(entityPropertyIndex.propertyDefId, propertyDefs.id)
+              )
+              .where(structuralWhere)
+              .orderBy(
+                entityPropertyIndex.entityId,
+                entityPropertyIndex.propertyDefId
+              )
+              .limit(input.edgeLimit),
+        entityIds.length === 0
+          ? Promise.resolve([{ count: 0 }])
+          : db
+              .select({ count: drizzleSql<number>`count(*)::int` })
+              .from(relations)
+              .where(and(semanticWhere, relationAccess.predicate(relations))),
+        entityIds.length === 0
+          ? Promise.resolve([{ count: 0 }])
+          : db
+              .select({ count: drizzleSql<number>`count(*)::int` })
+              .from(entityPropertyIndex)
+              .innerJoin(
+                propertyDefs,
+                eq(entityPropertyIndex.propertyDefId, propertyDefs.id)
+              )
+              .where(structuralWhere),
+      ]);
+
+      return buildSystemMapEntityGraph({
+        entities: entityRows,
+        facetSlugsByEntity,
+        semanticRelations,
+        structuralLinks,
+        total: totalRows[0]?.count ?? 0,
+        limit: input.limit,
+        offset: input.offset,
+        semanticRelationsTotal: semanticRelationTotalRows[0]?.count ?? 0,
+        structuralLinksTotal: structuralLinkTotalRows[0]?.count ?? 0,
+      });
     }),
 
   /**

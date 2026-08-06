@@ -55,6 +55,8 @@ import {
   FeedScope,
   ChannelStatus,
   MessageRole,
+  MessageAuthorType,
+  MessageCategory,
   type ChannelContextObjectType,
   ChannelContextRelationshipType,
   proposals,
@@ -373,6 +375,8 @@ const CHANNEL_TYPE_VALUES = [
   ChannelType.FEED,
   ChannelType.EXTERNAL,
   ChannelType.AGENT_COLLAB,
+  ChannelType.GROUP,
+  ChannelType.RUN,
 ] as const;
 
 // ── MCP server list cache ────────────────────────────────────────────────────
@@ -893,6 +897,9 @@ export const channelsRouter = router({
   resolveOrCreateChannel: protectedProcedure
     .input(
       z.object({
+        // resolveOrCreateChannel util still owns personal/thread/sub_thread/feed
+        // (external/agent_collab reject bootstrap). RUN is created via
+        // openProcessChannel / ensureRunChannel; GROUP via createGroupChannel.
         channelType: z.enum([
           ChannelType.PERSONAL,
           ChannelType.THREAD,
@@ -2076,6 +2083,9 @@ export const channelsRouter = router({
         (channel.channelType === ChannelType.PERSONAL && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.THREAD && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef) ||
+        // RUN = live process narration; free-text flips to agent turn when an
+        // agent is assigned (ensureRunChannel sets orchestrator by default).
+        (channel.channelType === ChannelType.RUN && !!effectiveAgentRef) ||
         // GROUP handled by the routing engine (routingDecision) below;
         // keep the old mention-gate here so isAiChannel stays meaningful for
         // the fallthrough path but routing engine overrides for GROUP.
@@ -3502,6 +3512,198 @@ export const channelsRouter = router({
    * conversation for this user and agent is archived first and remains in
    * History; generic PERSONAL resolve-or-create semantics are unchanged.
    */
+  /**
+   * Open (ensure + seed) a RUN channel for live process narration.
+   * Capture follow-up, import, automation UI, etc. call this then open
+   * Companion on the returned channelId. System seed lines do not trigger AI;
+   * the user's next free-text message flips into an agent turn.
+   */
+  openProcessChannel: protectedProcedure
+    .input(
+      z.object({
+        flowType: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(
+            /^[a-z][a-z0-9_-]*$/i,
+            "flowType must be a short slug (e.g. capture, import)"
+          ),
+        flowId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+        title: z.string().max(200).optional(),
+        seedMessages: z
+          .array(
+            z.object({
+              role: z.enum(["user", "system", "assistant"]),
+              content: z.string().min(1).max(8000),
+              metadata: z.record(z.string(), z.unknown()).optional(),
+              idempotencyKey: z.string().max(200).optional(),
+            })
+          )
+          .max(20)
+          .optional(),
+        channelMetadata: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      if (workspaceId) {
+        await assertWorkspaceWrite(db, ctx.userId, {
+          workspaceId,
+        });
+      }
+      const { openProcessChannel } =
+        await import("../services/messaging/open-process-channel.js");
+      const result = await openProcessChannel({
+        userId: ctx.userId,
+        flowType: input.flowType,
+        flowId: input.flowId,
+        workspaceId,
+        title: input.title,
+        seedMessages: input.seedMessages,
+        channelMetadata: input.channelMetadata,
+      });
+      return {
+        channelId: result.channel.id,
+        channel: result.channel,
+        created: result.created,
+        messageIds: result.messageIds,
+      };
+    }),
+
+  /**
+   * Post a single narrative line into an existing RUN (or other) channel.
+   * System role = infrastructure talking; does not trigger an agent turn.
+   * User role + triggerAI = flip into agent dialogue.
+   */
+  narrate: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        content: z.string().min(1).max(8000),
+        role: z.enum(["system", "assistant", "user"]).default("system"),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+        /** Only meaningful for role=user — kick off an agent turn. */
+        triggerAI: z.boolean().optional(),
+        idempotencyKey: z.string().max(200).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Ownership: channel must belong to the caller (run channels are user-owned).
+      const [channel] = await db
+        .select({
+          id: channels.id,
+          userId: channels.userId,
+          channelType: channels.channelType,
+        })
+        .from(channels)
+        .where(eq(channels.id, input.channelId))
+        .limit(1);
+      if (!channel || channel.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+      // Narrate is the process-channel door — don't inject system lines into
+      // personal/group/etc. by accident.
+      if (channel.channelType !== ChannelType.RUN) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "narrate is only valid on run channels",
+        });
+      }
+
+      if (input.role === "user" && input.triggerAI) {
+        const { postChannelMessage } =
+          await import("../services/messaging/post-message.js");
+        return postChannelMessage({
+          channelId: input.channelId,
+          content: input.content,
+          role: "user",
+          triggerAI: true,
+          userId: ctx.userId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      }
+
+      // System / assistant / user-without-AI narrative insert.
+      const { deterministicUuidFromKey } =
+        await import("../utils/write-door-idempotency.js");
+      const msgId = input.idempotencyKey
+        ? deterministicUuidFromKey(
+            `narrate:${input.channelId}:${input.idempotencyKey}`
+          )
+        : randomUUID();
+      const roleEnum =
+        input.role === "user"
+          ? MessageRole.USER
+          : input.role === "system"
+            ? MessageRole.SYSTEM
+            : MessageRole.ASSISTANT;
+      const authorType =
+        input.role === "user"
+          ? MessageAuthorType.HUMAN
+          : input.role === "system"
+            ? MessageAuthorType.BOT
+            : MessageAuthorType.AI_AGENT;
+      const hash = computeMessageHash(msgId, input.content);
+      const inserted = await db
+        .insert(messages)
+        .values({
+          id: msgId,
+          channelId: input.channelId,
+          role: roleEnum,
+          authorType,
+          messageCategory:
+            input.role === "system"
+              ? MessageCategory.SYSTEM_NOTIFICATION
+              : MessageCategory.CHAT,
+          content: input.content,
+          userId: ctx.userId,
+          hash,
+          previousHash: "",
+          metadata: input.metadata ?? null,
+        })
+        .onConflictDoNothing({ target: messages.id })
+        .returning({ id: messages.id });
+
+      if (inserted.length > 0) {
+        emitChatEvent({
+          event: EventNames.CHAT_MESSAGE,
+          data: {
+            threadId: input.channelId,
+            message: {
+              id: msgId,
+              threadId: input.channelId,
+              role: roleEnum,
+              authorType,
+              content: input.content,
+              userId: ctx.userId,
+              timestamp: new Date(),
+              previousHash: "",
+              hash,
+              metadata: input.metadata,
+            },
+            userId: ctx.userId,
+          },
+          userId: ctx.userId,
+          channelId: input.channelId,
+        });
+      }
+
+      return {
+        success: true as const,
+        messageId: msgId,
+        channelId: input.channelId,
+        ackState:
+          inserted.length > 0
+            ? ("applied" as const)
+            : ("duplicate-ignored" as const),
+      };
+    }),
+
   startNewPersonalConversation: protectedProcedure
     .input(z.object({ agentId: z.string().uuid().optional() }))
     .mutation(async ({ input, ctx }) => {

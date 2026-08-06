@@ -433,6 +433,84 @@ export class ChannelRepository {
    * `ensureAutomationRunChannel`): the oldest-wins read keeps it deterministic if
    * a rare first-run race ever inserts two.
    */
+  /** Lookup the active RUN channel for (flowType, flowId), if any. */
+  async findRunChannel(
+    flowType: string,
+    flowId: string
+  ): Promise<Channel | undefined> {
+    const [existing] = await this.db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.contextObjectType, flowType),
+          eq(channels.contextObjectId, flowId),
+          eq(channels.channelType, ChannelType.RUN),
+          eq(channels.status, ChannelStatus.ACTIVE)
+        )
+      )
+      .orderBy(asc(channels.createdAt))
+      .limit(1);
+    return existing;
+  }
+
+  /**
+   * Get or create the RUN channel for a process instance (capture, import, …).
+   * Keyed on contextObjectType=flowType + contextObjectId=flowId.
+   * Requires an active orchestrator agent so free-text can flip to an agent turn.
+   */
+  async ensureRunChannel(
+    flowType: string,
+    flowId: string,
+    ownerId: string,
+    opts?: {
+      workspaceId?: string;
+      title?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<Channel> {
+    const existing = await this.findRunChannel(flowType, flowId);
+    if (existing) return existing;
+
+    const [orchestrator] = await this.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+      .limit(1);
+
+    if (!orchestrator?.id) {
+      throw new Error(
+        "ensureRunChannel: no active orchestrator agent — cannot open a process channel"
+      );
+    }
+
+    try {
+      return await this.create({
+        userId: ownerId,
+        workspaceId: opts?.workspaceId,
+        title: opts?.title ?? `Run · ${flowType}`,
+        channelType: ChannelType.RUN,
+        scope: opts?.workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+        contextObjectType: flowType,
+        contextObjectId: flowId,
+        assignedAgentId: orchestrator.id,
+        metadata: {
+          purpose: "run",
+          flowType,
+          flowId,
+          ...(opts?.metadata ?? {}),
+        },
+      });
+    } catch (err) {
+      // Race: another creator won — re-select the oldest active run channel.
+      if (isUniqueViolation(err)) {
+        const raced = await this.findRunChannel(flowType, flowId);
+        if (raced) return raced;
+      }
+      throw err;
+    }
+  }
+
   async ensureEntityChannel(
     entityId: string,
     ownerId: string,
