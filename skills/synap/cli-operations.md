@@ -40,10 +40,11 @@ synap list entities --profile=task --workspace=<id> --json
 synap get entity <id> --json
 ```
 
-**Capturing a decision (the AI structures — it never `note`s):**
+**Recording a decision as its own graph entity:**
 
 ```bash
-synap capture --type decision --claim "Use Typesense for entity search" --json
+synap create entity --profile=decision --name="Use Typesense for entity search" \
+  --props='{"summary":"Use Typesense for entity search","decisionStatus":"accepted"}' --json
 # Retrieve later with the one read verb: synap ask "Typesense decision"
 ```
 
@@ -52,27 +53,30 @@ synap capture --type decision --claim "Use Typesense for entity search" --json
 **Structured knowledge (durable, typed, searchable — preferred for engineering learnings):**
 
 ```bash
-# Work lane (default): a domain gotcha/lesson/decision → knowledge entity in the ACTIVE workspace
-synap capture --type gotcha --claim "Hono static routes must come before /:id" \
-  --why "First-match routing; dynamic routes eat static ones" \
-  --tags "repo:synap-backend,layer:routing" --json
+# Work lane: one explicit Knowledge form. Keep the Markdown body on the
+# linked document; these properties remain compact/queryable metadata.
+synap create entity --profile=knowledge --name="Hono static route ordering" \
+  --workspace=<id> \
+  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' --json
 
-synap capture --type lesson --claim "code-read ≠ runtime-true for library APIs" \
-  --evidence "tldraw 2.4.6 binding API changed silently from props.start.boundShapeId"
+synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
+  --workspace=<id> \
+  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' --json
 
-# A quick decision-note is a typed knowledge entry (ek_type=decision):
-synap capture --type decision --claim "Use Typesense for entity search" \
-  --why "pgvector deferred to V1; Typesense ships now" --json
+# A Decision is its own lifecycle entity; link it to the supporting Knowledge.
+synap create entity --profile=decision --name="Use Typesense for entity search" \
+  --props='{"summary":"pgvector deferred to V1; Typesense ships now","decisionStatus":"accepted"}' --json
 
-# Global lane: a runbook/best-practice that holds across ALL projects → pod-wide knowledge_keys
-synap capture --global --type reference --claim "Always fix the canonical path, never a workaround" \
+# A Reference is source material, not a Knowledge form. Create/use a source
+# entity or document and link it as evidence; global runbooks remain knowledge_keys.
+synap capture --global "Always fix the canonical path, never a workaround" \
   --key "principle:root-cause" --json
 
 # Retrieve any of it later with the one read verb (it spans every lane):
-synap ask "hono routing gotcha" --json
+synap ask "hono routing caution" --json
 ```
 
-`synap capture --type` writes a typed **`knowledge`** entity in the **active workspace** (the Work lane); `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain — a Builder gotcha ≠ a marketing one (there is no `engineering_knowledge`). Add **`--global`** to write a pod-wide cross-cutting runbook to `knowledge_keys` instead. A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
+`knowledge` has exactly one canonical `knowledgeForm`: `insight` or `caution`. It is workspace-scoped, so the active workspace supplies the domain. The optional `ek_claim` is a short summary; readable long form belongs in the entity's linked Markdown document. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
 **Open (the one display door):**

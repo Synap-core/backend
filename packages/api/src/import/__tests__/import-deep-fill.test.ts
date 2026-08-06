@@ -7,7 +7,7 @@
  *       (`propertyHints` was always undefined — see the capture-router test),
  *   (2) the mapper dropped the model's own `content` field, and
  *   (3) nothing validated the ops, so an entity missing a REQUIRED property
- *       (e.g. `knowledge` needs `ek_type` + `ek_claim`) reached
+ *       (e.g. `knowledge` needs `knowledgeForm`) reached
  *       `EntityRepository.create` at apply and threw, aborting the WHOLE
  *       composite proposal.
  *
@@ -77,6 +77,7 @@ describe("deep import — model-supplied content reaches the op", () => {
     expect(ops[0].properties).toEqual({
       ek_type: "gotcha",
       ek_claim: "feed.post fails open",
+      knowledgeForm: "caution",
     });
     expect(res.stats.documentCount).toBe(1);
   });
@@ -106,7 +107,7 @@ describe("deep import — model-supplied content reaches the op", () => {
 });
 
 describe("deep import — schema preflight", () => {
-  /** Rejects `knowledge` unless it carries ek_type AND ek_claim. */
+  /** Rejects `knowledge` unless it carries the canonical knowledgeForm. */
   const knowledgeValidator = async ({
     profileSlug,
     properties,
@@ -116,8 +117,8 @@ describe("deep import — schema preflight", () => {
   }) => {
     if (profileSlug !== "knowledge") return { valid: true, errors: [] };
     const errors: string[] = [];
-    if (!properties?.ek_type) errors.push("Property 'ek_type' is required");
-    if (!properties?.ek_claim) errors.push("Property 'ek_claim' is required");
+    if (!properties?.knowledgeForm)
+      errors.push("Property 'knowledgeForm' is required");
     return { valid: errors.length === 0, errors };
   };
 
@@ -189,6 +190,10 @@ describe("deep import — schema preflight", () => {
       res.operations as unknown as Array<Record<string, unknown>>
     );
     expect(ops[0].profileSlug).toBe("knowledge");
+    expect(ops[0].properties).toMatchObject({
+      ek_type: "decision",
+      knowledgeForm: "insight",
+    });
     expect(res.stats.degradedToNote).toBe(0);
     expect(res.stats.degradedByProfile).toEqual({});
   });

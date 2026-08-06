@@ -711,29 +711,43 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Focus Areas", inputType: "tags" },
       },
-      // `knowledge` profile properties (ek_*)
+      // `knowledge` profile properties. Knowledge remains a primary kind; its
+      // form is an exactly-one discriminator, not an additive facet role.
+      {
+        slug: "knowledgeForm",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["insight", "caution"] },
+        uiHints: {
+          label: "Knowledge form",
+          inputType: "select",
+          required: true,
+          helpText:
+            "Insight is a reusable conclusion; caution is a failure mode or caveat.",
+        },
+      },
+      // `ek_type` is retained for historic entities and import compatibility.
+      // It is not the canonical classification for new Knowledge records.
       {
         slug: "ek_type",
         valueType: PropertyValueType.STRING,
         constraints: { enum: ["gotcha", "lesson", "decision", "reference"] },
-        uiHints: { label: "Type", inputType: "select", required: true },
+        uiHints: {
+          label: "Legacy classification",
+          inputType: "select",
+          helpText:
+            "Retained for compatibility while historic records are reviewed.",
+        },
       },
       {
         slug: "ek_claim",
         valueType: PropertyValueType.STRING,
-        // 8000 (== the smart-capture SMART_TEXT_MAX ceiling), not 1000: a real
-        // `lesson`/`decision` claim routinely runs past a single line, and a
-        // whole capture already tops out at 8000 chars, so a claim can never
-        // sensibly exceed that. The old 1000 hard-failed durable captures
-        // mid-flight ("String length 1404 > maximum 1000"). ek_why=5000 /
-        // ek_evidence=2000 keep their smaller bounds — the CLAIM is the primary
-        // body and gets the most headroom.
+        // Retained compact summary for legacy captures and Sheet/search use.
+        // Long-form readable knowledge belongs in the linked document instead.
         constraints: { maxLength: 8000 },
         uiHints: {
-          label: "Claim",
+          label: "Summary",
           inputType: "text",
-          required: true,
-          placeholder: "One-line assertion",
+          placeholder: "Optional one-line summary",
         },
       },
       {
@@ -1009,7 +1023,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             "An investigation: sources consulted, findings, confidence, and conclusion. Answers a question; informs a decision.",
         },
       },
-      // Knowledge — validated knowledge: gotchas, lessons, decisions, references.
+      // Knowledge — reusable insights and cautions, connected to decisions and
+      // sources as separate graph entities when those relationships matter.
       {
         slug: "knowledge",
         displayName: "Knowledge",
@@ -1017,7 +1032,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           icon: "brain",
           color: "#6366F1",
           description:
-            "Validated knowledge: gotchas, lessons, decisions, references",
+            "Reusable insights and cautions, with evidence and related graph entities.",
         },
       },
       // Report — a generated, read-only narrative artifact over a lens.
@@ -1102,6 +1117,26 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         if (existing.entityScope !== expectedScope) {
           await profileRepo.update(existing.id, { entityScope: expectedScope });
         }
+        // Repair only the known system-owned Knowledge copy. A custom
+        // description is user configuration, so leave it entirely untouched.
+        if (profile.slug === "knowledge") {
+          const existingHints = (existing.uiHints ?? {}) as Record<
+            string,
+            unknown
+          >;
+          if (
+            existingHints.description ===
+            "Validated knowledge: gotchas, lessons, decisions, references"
+          ) {
+            await profileRepo.update(existing.id, {
+              uiHints: {
+                ...existingHints,
+                description:
+                  "Reusable insights and cautions, with evidence and related graph entities.",
+              },
+            });
+          }
+        }
       } else {
         const created = await profileRepo.create({
           slug: profile.slug,
@@ -1112,6 +1147,65 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         });
         createdProfiles.set(profile.slug, created.id);
         profilesCreated++;
+      }
+    }
+
+    // Reconcile the two system-owned *active* Knowledge fields without ever
+    // rewriting a global definition another profile uses. A custom global slug
+    // collision gets a Knowledge-scoped def instead; the external profile keeps
+    // its own contract untouched. `ek_type` is deliberately excluded: it is
+    // retained raw on historic entities, but no longer linked/editable.
+    const knowledgeProfileId = createdProfiles.get("knowledge");
+    const knowledgeContractDefs = capturePropertyDefs.filter((propDef) =>
+      ["knowledgeForm", "ek_claim"].includes(propDef.slug)
+    );
+    if (!knowledgeProfileId) {
+      throw new Error("System knowledge profile was not created or resolved");
+    }
+    for (const propDef of knowledgeContractDefs) {
+      const resolved = await propertyDefRepo.getBySlug(
+        propDef.slug,
+        knowledgeProfileId,
+        null
+      );
+      if (resolved?.profileId === knowledgeProfileId) {
+        await propertyDefRepo.update(resolved.id, {
+          valueType: propDef.valueType,
+          constraints: propDef.constraints,
+          uiHints: propDef.uiHints,
+        });
+        createdPropertyDefs.set(propDef.slug, resolved.id);
+        continue;
+      }
+
+      const globalDefId = createdPropertyDefs.get(propDef.slug);
+      if (!resolved || !globalDefId) {
+        throw new Error(
+          `System knowledge property '${propDef.slug}' could not be resolved`
+        );
+      }
+      const externalLinks = (
+        await profilePropertyRepo.getByProperty(globalDefId)
+      ).filter((link) => link.profileId !== knowledgeProfileId);
+      if (externalLinks.length > 0) {
+        // A same-slug global field belongs to another profile. Do not hijack
+        // it; shadow it with the correct profile-scoped definition instead.
+        const scoped = await propertyDefRepo.create({
+          ...propDef,
+          profileId: knowledgeProfileId,
+          workspaceId: null,
+        });
+        createdPropertyDefs.set(propDef.slug, scoped.id);
+        propertiesCreated++;
+        // A prior partial rollout may already have linked the global field to
+        // Knowledge. Remove only that link; it remains intact for its owners.
+        await profilePropertyRepo.unlink(knowledgeProfileId, globalDefId);
+      } else {
+        await propertyDefRepo.update(globalDefId, {
+          valueType: propDef.valueType,
+          constraints: propDef.constraints,
+          uiHints: propDef.uiHints,
+        });
       }
     }
 
@@ -1179,6 +1273,13 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         "entity-detail": {
           kind: "cell",
           cellKey: "entity-detail-report",
+          props: {},
+        },
+      },
+      knowledge: {
+        "entity-detail": {
+          kind: "cell",
+          cellKey: "entity-detail-knowledge",
           props: {},
         },
       },
@@ -1530,12 +1631,18 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "tags", required: false, displayOrder: 6 },
         ],
       },
-      // Knowledge — ek_* properties
+      // Knowledge — one required canonical form plus optional compact metadata.
+      // Historic entities receive a form only when their legacy payload is
+      // explicitly normalised at a write/import/capture door; no JSONB backfill.
       {
         profileSlug: "knowledge",
         propertySlugs: [
-          { slug: "ek_type", required: true, displayOrder: 0 },
-          { slug: "ek_claim", required: true, displayOrder: 1 },
+          {
+            slug: "knowledgeForm",
+            required: true,
+            displayOrder: 0,
+          },
+          { slug: "ek_claim", required: false, displayOrder: 1 },
           { slug: "ek_why", required: false, displayOrder: 2 },
           { slug: "ek_evidence", required: false, displayOrder: 3 },
           { slug: "ek_tags", required: false, displayOrder: 4 },
@@ -1580,6 +1687,17 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           linksCreated++;
         }
       }
+    }
+
+    // Legacy ek_type survives in entity JSON for migration/renderer fallback,
+    // but removing the profile link means it is not a second editable
+    // classification. New writes normalise it into the sole knowledgeForm.
+    const legacyKnowledgeTypeId = createdPropertyDefs.get("ek_type");
+    if (legacyKnowledgeTypeId && knowledgeProfileId) {
+      await profilePropertyRepo.unlink(
+        knowledgeProfileId,
+        legacyKnowledgeTypeId
+      );
     }
 
     const totalCreated = profilesCreated + propertiesCreated + linksCreated;

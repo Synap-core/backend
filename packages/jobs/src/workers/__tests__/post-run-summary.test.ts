@@ -254,6 +254,39 @@ function step(overrides: Partial<AutomationStepRun>): AutomationStepRun {
   } as AutomationStepRun;
 }
 
+describe("buildSummaryCardMeta", () => {
+  it("packs structured card fields for Room UI", async () => {
+    const { buildSummaryCardMeta } =
+      await import("../../utils/post-run-summary.js");
+    const meta = buildSummaryCardMeta({
+      automation,
+      run: run({}),
+      steps: [
+        step({
+          status: "completed",
+          nodeId: "fetch",
+          output: { status: "created", entityId: "e1", title: "Acme" },
+        }),
+        step({
+          status: "failed",
+          nodeId: "enrich",
+          errorMessage: "Upstream 500\nstack",
+        }),
+      ],
+      status: "failure",
+    });
+    expect(meta.runSummary).toBe(true);
+    expect(meta.automationId).toBe("auto-1");
+    expect(meta.automationName).toBe("Nightly Sync");
+    expect(meta.status).toBe("failure");
+    expect(meta.failedStepNodeId).toBe("enrich");
+    expect(meta.errorLine).toBe("Upstream 500");
+    expect(meta.steps).toHaveLength(2);
+    expect(meta.createdEntities).toEqual([{ entityId: "e1", title: "Acme" }]);
+    expect(meta.durationMs).toBe(2100);
+  });
+});
+
 describe("renderSummary", () => {
   it("success: automation chip, step count, duration, and created entity chips", () => {
     const content = renderSummary({

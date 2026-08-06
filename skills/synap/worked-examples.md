@@ -65,7 +65,7 @@ a `file`/`document`-kind entity and stuff the Markdown into it.
    { "userId": "{userId}", "workspaceId": "{wsId}",
      "profileSlug": "knowledge",
      "title": "Q3 launch strategic plan",
-     "properties": { "ek_type": "reference" },
+     "properties": { "knowledgeForm": "insight" },
      "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
    }
    ```

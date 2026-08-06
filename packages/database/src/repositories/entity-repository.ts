@@ -29,6 +29,10 @@ import {
   extractIdentitySignals,
   registerIdentitySignals,
 } from "../services/identity-resolution-service.js";
+import {
+  KnowledgeFormConflictError,
+  normalizeKnowledgeProperties,
+} from "../utils/knowledge-contract.js";
 
 /**
  * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
@@ -355,7 +359,7 @@ export class EntityRepository extends BaseRepository<
       // common frontend/API pattern), not inside `properties`. Mirrors the
       // identical merge the non-role path below already does, and does NOT
       // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
-      // false) — a role's OWN required fields (e.g. knowledge's ek_type)
+      // false) — a role's OWN required fields
       // must still fail loud here; only the vestigial-title case is real.
       const roleTitleAlreadyInProps =
         data.properties && "title" in data.properties;
@@ -413,9 +417,22 @@ export class EntityRepository extends BaseRepository<
       // Merge top-level title into properties before validation so profiles that
       // declare a required "title" property_def don't fail when the caller only
       // passes title at the entity level (which is the common frontend pattern).
-      const propsToValidate: Record<string, unknown> = { ...data.properties };
+      let propsToValidate: Record<string, unknown> = { ...data.properties };
       if (data.title !== undefined && !("title" in propsToValidate)) {
         propsToValidate["title"] = data.title;
+      }
+      if (profile.slug === "knowledge") {
+        try {
+          propsToValidate = normalizeKnowledgeProperties(propsToValidate);
+        } catch (error) {
+          if (error instanceof KnowledgeFormConflictError) {
+            throw new PropertyValidationError(
+              [{ field: "knowledgeForm", message: error.message }],
+              profileId
+            );
+          }
+          throw error;
+        }
       }
 
       // Validate through the requesting workspace's lens — overlay props
@@ -480,8 +497,8 @@ export class EntityRepository extends BaseRepository<
       // retry and never heal the missing facet. Facet properties were
       // validated against the ROLE profile in 1a, hence skipValidation
       // (attach's own door validates with enforceRequired:false anyway —
-      // the stricter 1a check is deliberate: legacy capture flows depend on
-      // required-def failures like a missing ek_type surfacing early).
+      // the stricter 1a check is deliberate: required-def failures must surface
+      // before an entity is written).
       const roleProfileId = roleFacetProfile.id;
       // The facet's own completed event must NOT fire from inside this
       // transaction: EventRepository writes on its own connection, separate
@@ -609,7 +626,12 @@ export class EntityRepository extends BaseRepository<
       throw new Error("Entity not found");
     }
 
-    // 2. Validate and merge properties if provided
+    // 2. Validate and merge properties if they change. A deletion is a
+    // property mutation too: validating only an explicit merge lets callers
+    // remove a required/canonical property without ever passing the profile
+    // validator. Moving an entity *to* Knowledge also needs a full pass so
+    // historic `ek_type` data is normalized and the required one-form
+    // contract is enforced.
     // 2b. Resolve new profile if profileSlug is provided
     let newProfileId: string | undefined;
     let newType: string | undefined;
@@ -637,13 +659,30 @@ export class EntityRepository extends BaseRepository<
       }
     }
 
+    const hasPropertyMutation =
+      data.properties !== undefined || (data.deleteProperties?.length ?? 0) > 0;
+    const isMovingToKnowledge = newType === "knowledge";
+    const shouldValidateProperties = hasPropertyMutation || isMovingToKnowledge;
+
     let updatedProperties: Record<string, unknown> = baseProperties;
-    if (data.properties && validationProfileId) {
+    if (shouldValidateProperties && validationProfileId) {
       // Merge with existing properties (after deletions)
-      const mergedProperties = {
+      let mergedProperties = {
         ...baseProperties,
-        ...data.properties,
+        ...(data.properties ?? {}),
       };
+      // Historic Knowledge rows remain updatable through every entity door.
+      // Preserve ek_type, but derive the new required form before validation.
+      if ((newType || existing.type) === "knowledge") {
+        try {
+          mergedProperties = normalizeKnowledgeProperties(mergedProperties);
+        } catch (error) {
+          if (error instanceof KnowledgeFormConflictError) {
+            throw new Error(`Property validation failed: ${error.message}`);
+          }
+          throw error;
+        }
+      }
 
       // Lens resolution: the caller's workspace context (if supplied) takes
       // precedence over the entity's stored workspace. Pod-wide entities
@@ -665,7 +704,7 @@ export class EntityRepository extends BaseRepository<
 
       updatedProperties = validationResult.normalized;
       unmodeled.push(...validationResult.unmodeled);
-    } else if (data.properties) {
+    } else if (hasPropertyMutation) {
       // No profile - just merge properties (after deletions already applied to baseProperties)
       updatedProperties = {
         ...baseProperties,
@@ -694,10 +733,7 @@ export class EntityRepository extends BaseRepository<
 
     // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;
-    if (
-      (data.properties || data.deleteProperties?.length) &&
-      reindexProfileId
-    ) {
+    if (shouldValidateProperties && reindexProfileId) {
       const lensWorkspaceId = data.workspaceId ?? existing.workspaceId ?? null;
       this.propertyIndex
         .reindexEntity(

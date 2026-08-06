@@ -11,6 +11,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { projectKnowledgeProperties } from "@synap/database";
 
 // Canonical wire shape for entities returned by Hub Protocol after passing
 // through `entityToWire(...)`. Routes that return raw DB rows directly should
@@ -326,6 +327,7 @@ export function entityToWire(entity: unknown): WireEntity {
     (typeof row.type === "string" && row.type) ||
     (typeof row.entityType === "string" && row.entityType) ||
     "note";
+  const rawProperties = (row.properties as Record<string, unknown>) ?? {};
   return {
     id: String(row.id),
     profileSlug: slug,
@@ -333,7 +335,13 @@ export function entityToWire(entity: unknown): WireEntity {
     title: (row.title as string | null | undefined) ?? null,
     preview: (row.preview as string | null | undefined) ?? null,
     description: (row.description as string | null | undefined) ?? undefined,
-    properties: (row.properties as Record<string, unknown>) ?? {},
+    // Read-time compatibility projection for Sheets, views, and Hub clients.
+    // It never writes the DB row or removes ek_type; old Knowledge records
+    // simply present the canonical form until their next governed write.
+    properties:
+      slug === "knowledge"
+        ? projectKnowledgeProperties(rawProperties)
+        : rawProperties,
     systemData: (row.systemData as Record<string, unknown>) ?? {},
     userId: String(row.userId ?? row.user_id ?? ""),
     workspaceId:

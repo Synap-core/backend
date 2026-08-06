@@ -302,6 +302,92 @@ function harvestCreatedChips(steps: AutomationStepRun[], max = 5): string[] {
   return chips;
 }
 
+/** One step row for the Room card's progressive disclosure. */
+export interface RunSummaryStepMeta {
+  nodeId: string;
+  status: string;
+  /** Wall-clock ms when both timestamps exist. */
+  durationMs?: number;
+  errorMessage?: string;
+}
+
+/** Structured payload for rich Room/Companion cards (metadata.runSummary). */
+export interface RunSummaryCardMeta {
+  runSummary: true;
+  automationRunId: string;
+  automationId: string;
+  automationName: string;
+  status: SummaryStatus;
+  groupKey: string;
+  stepsCompleted: number;
+  stepsFailed: number;
+  stepCount: number;
+  durationMs?: number;
+  failedStepNodeId?: string;
+  errorLine?: string;
+  steps: RunSummaryStepMeta[];
+  createdEntities: Array<{ entityId: string; title: string }>;
+}
+
+/** Build structured card metadata from a terminal run. Exported for tests. */
+export function buildSummaryCardMeta(input: {
+  automation: Automation;
+  run: AutomationRun;
+  steps: AutomationStepRun[];
+  status: SummaryStatus;
+}): RunSummaryCardMeta {
+  const { automation, run, steps, status } = input;
+  const failedStep = steps.find((s) => s.status === "failed");
+  const rawError = firstErrorLine(failedStep?.errorMessage ?? run.errorMessage);
+  const durationMs =
+    run.completedAt && run.startedAt
+      ? Math.max(0, run.completedAt.getTime() - run.startedAt.getTime())
+      : undefined;
+
+  const stepMetas: RunSummaryStepMeta[] = steps.map((s) => {
+    const dMs =
+      s.completedAt && s.startedAt
+        ? Math.max(0, s.completedAt.getTime() - s.startedAt.getTime())
+        : undefined;
+    const err = firstErrorLine(s.errorMessage);
+    return {
+      nodeId: s.nodeId ?? "step",
+      status: s.status,
+      ...(dMs != null ? { durationMs: dMs } : {}),
+      ...(err ? { errorMessage: safeLabel(err) } : {}),
+    };
+  });
+
+  const createdEntities: Array<{ entityId: string; title: string }> = [];
+  for (const step of steps) {
+    const out = step.output as Record<string, unknown> | null;
+    if (!out || out.status !== "created") continue;
+    if (typeof out.entityId !== "string") continue;
+    createdEntities.push({
+      entityId: out.entityId,
+      title: typeof out.title === "string" ? out.title : "entity",
+    });
+    if (createdEntities.length >= 5) break;
+  }
+
+  return {
+    runSummary: true,
+    automationRunId: run.id,
+    automationId: automation.id,
+    automationName: automation.name ?? "Automation",
+    status,
+    groupKey: `runsummary.${automation.id}.${status}`,
+    stepsCompleted: run.stepsCompleted,
+    stepsFailed: run.stepsFailed,
+    stepCount: steps.length || run.stepsCompleted + run.stepsFailed,
+    ...(durationMs != null ? { durationMs } : {}),
+    ...(failedStep?.nodeId ? { failedStepNodeId: failedStep.nodeId } : {}),
+    ...(rawError ? { errorLine: safeLabel(rawError) } : {}),
+    steps: stepMetas,
+    createdEntities,
+  };
+}
+
 /** Compact, calm markdown for a terminal run. Exported for unit tests. */
 export function renderSummary(input: {
   automation: Automation;
@@ -436,14 +522,14 @@ export async function postRunSummary(
 
     const messageId = randomUUID();
     const messageHash = computeMessageHash(messageId, content);
-    const groupKey = `runsummary.${automation.id}.${status}`;
-    const messageMetadata = {
-      runSummary: true,
-      automationRunId: runId,
-      automationId: automation.id,
+    // Structured card payload for Room/Companion — plain content stays for
+    // back-compat clients and feed search.
+    const messageMetadata = buildSummaryCardMeta({
+      automation,
+      run,
+      steps,
       status,
-      groupKey,
-    };
+    });
 
     // Claim + insert in ONE transaction: a failed message insert must roll the
     // claim back, or the slot is burned forever with no message ever written

@@ -717,40 +717,18 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       note: "RETIRED (Decision 1): user_observation stays a primary KIND. The earlier W4 intent to convert it into an `item` role is withdrawn; kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions (index.ts runs runConversions with dryRun:false), so pods that already booted this convert carry it as a role — they are moved back by w6.revert.user_observation below; retiring this op to a keep only stops FRESH pods converting.",
     },
 
-    // knowledge → item: validated knowledge (gotchas/lessons/decisions/
-    // references). `knowledge` is special: ONE profile whose entities are
-    // discriminated into gotcha/lesson/decision/reference via the ek_type
-    // enum property, not via separate profiles. The engine's convertToFacet
-    // attaches exactly one role per source profile — it has no notion of
-    // "split this source into N target roles by a property value". Two ways
-    // to model that:
-    //   (a) [IMPLEMENTED] convert knowledge → item + ONE `knowledge` facet
-    //       role that carries ek_type as an ordinary facet property. The
-    //       gotcha/lesson/decision/reference discrimination survives as data
-    //       (facet.properties.ek_type), just not as a first-class sub-role.
-    //       Ships now with the existing engine, zero new ops.
-    //   (b) [DEFERRED] a new engine op (e.g. `splitByProperty`) that reads
-    //       ek_type per-entity and attaches one of four distinct facet roles
-    //       (gotcha/lesson/decision/reference) instead of one `knowledge`
-    //       role — sharper modeling (each sub-kind could carry its own
-    //       applicableKinds/propertyMapping) but needs new engine work, so
-    //       it's the refinement path for a later wave, not W4.
-    // ek_type is NOT used as statusFrom — it's a category discriminator, not
-    // a lifecycle status (contrast decisionStatus/questionStatus above).
+    // Knowledge stays a primary kind. It has one knowledgeForm
+    // (insight/caution); historic ek_type values are compatibility data only.
+    // This is deliberately not an additive facet or lifecycle status.
     {
       op: "keep",
       opKey: "w4.convert.knowledge",
       slug: "knowledge",
-      note: "RETIRED (Decision 1): knowledge stays a primary KIND, with ek_type as an ordinary PROPERTY enum (gotcha/lesson/decision/reference) — NOT four sub-roles (facets are an additive set; ek_type is a mutually-exclusive choice an enum enforces for free). The W4 convert into an `item` role is withdrawn; kept as a ledger no-op per append-only opKey discipline. Already-converted pods (boot auto-applies) are moved back by w6.revert.knowledge below.",
+      note: "RETIRED (Decision 1): knowledge stays a primary KIND, with knowledgeForm as an ordinary exactly-one PROPERTY enum (insight/caution) — NOT sub-roles (facets are additive; the discriminator is mutually exclusive). Historic ek_type values remain as compatibility data until reviewed migration. The W4 convert into an `item` role is withdrawn; kept as a ledger no-op per append-only opKey discipline. Already-converted pods (boot auto-applies) are moved back by w6.revert.knowledge below.",
     },
 
-    // Duplicate-row note: the live perso pod has TWO `knowledge` profile
-    // rows — the system one (2172aa81) and a workspace-scoped duplicate
-    // (ff8924b2). convertToFacet iterates EVERY active same-slug row (see
-    // applyConvertToFacet in engine.ts), so w4.convert.knowledge converts
-    // BOTH: each row flips to a role and its entities repoint to the `item`
-    // target resolved for that row's scope. No manual pre-cleanup needed;
-    // the dry-run counts will show both rows' entities.
+    // Historic duplicate profile rows are reconciled separately. This retired
+    // ledger entry must not reintroduce any kind→facet conversion.
 
     // signal_item: audited, NOT converted in W4. It is a child of `bookmark`
     // (parentSlug: bookmark in ensure-system-profiles.ts) with external-feed

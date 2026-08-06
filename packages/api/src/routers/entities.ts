@@ -4547,7 +4547,10 @@ export const entitiesRouter = router({
               properties: entity.properties,
               workspaceId: placedWorkspaceId,
               userId: ctx.userId,
-              skipValidation: true, // seed data — trust the input
+              // Batch provisioning remains permissive for legacy templates,
+              // except Knowledge: its canonical one-form contract must hold
+              // at every entity creation door.
+              skipValidation: entity.profileSlug !== "knowledge",
             },
             ctx.userId
           );

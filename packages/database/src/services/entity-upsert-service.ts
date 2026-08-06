@@ -299,10 +299,11 @@ export class EntityUpsertService {
         properties: input.properties,
         workspaceId: input.workspaceId,
         userId: input.userId,
-        // Preserved verbatim from the previous EntityRepository.create call —
-        // imports carry messy provider values and must not start failing
-        // schema enforcement on this path.
-        skipValidation: true,
+        // Imports stay permissive for their existing kinds, but Knowledge has
+        // one canonical form and must enter through the normalizer/validator.
+        // This keeps malformed or conflicting legacy+canonical values from
+        // becoming durable data through capture's materialized-upsert path.
+        skipValidation: createSlug !== "knowledge",
       },
       {
         db: this.db,

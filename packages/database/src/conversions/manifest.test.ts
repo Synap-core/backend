@@ -164,8 +164,8 @@ describe("CONVERSION_MANIFEST — Wave 4 (knowledge-family)", () => {
 
   it("retires knowledge + user_observation convert ops to keeps (Decision 1 — the whole knowledge-workflow family stays KINDS)", () => {
     // The full knowledge-workflow family are distinct entities related by edges,
-    // not identity hats — so all five stay primary kinds. knowledge keeps ek_type
-    // as a PROPERTY enum (not four sub-roles). These were the last two still
+    // not identity hats — so all five stay primary kinds. knowledge keeps an
+    // exactly-one knowledgeForm PROPERTY enum (not sub-roles). These were the last two still
     // converting onto item; now retired to ledger keeps.
     const retired = [
       "w4.convert.user_observation",

@@ -68,6 +68,7 @@ export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
+export * from "./utils/knowledge-contract.js";
 
 // Server-side vault encryption
 export {

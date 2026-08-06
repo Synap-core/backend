@@ -19,7 +19,13 @@ import type {
   CompositeProposalOperation,
 } from "@synap-core/types/proposals";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
-import { db, resolveIdentity, entities } from "@synap/database";
+import {
+  db,
+  resolveIdentity,
+  entities,
+  KnowledgeFormConflictError,
+  normalizeKnowledgeProperties,
+} from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
 import type { ImportItem } from "./import-items.js";
 import {
@@ -162,7 +168,7 @@ interface DeepStructureOptions {
    * is emitted as a `create_entity` op. Required-property validation otherwise
    * runs for the first time at APPLY (`EntityRepository.create`), where a throw
    * aborts the whole composite proposal — so an extraction that under-fills a
-   * required-property profile (e.g. `knowledge` needs `ek_type` + `ek_claim`)
+   * required-property profile (e.g. `knowledge` needs `knowledgeForm`)
    * turned the entire import into a hard failure at approve time.
    *
    * A failing entity is NOT created under its extracted profile and is NOT
@@ -583,6 +589,22 @@ export async function deepStructureImportItems(
         !longBody && e.description
           ? String(e.description).slice(0, 2000)
           : undefined;
+      // Keep proposal preflight and materialization aligned with capture: old
+      // ek_type inputs gain a canonical form but keep their original value.
+      let normalizedProperties = e.properties ?? {};
+      let knowledgeFormConflict: string | undefined;
+      if (slug === "knowledge") {
+        try {
+          normalizedProperties =
+            normalizeKnowledgeProperties(normalizedProperties);
+        } catch (error) {
+          if (error instanceof KnowledgeFormConflictError) {
+            knowledgeFormConflict = error.message;
+          } else {
+            throw error;
+          }
+        }
+      }
 
       // PREFLIGHT: required-property validation runs for the first time at
       // materialize, where a throw aborts the WHOLE proposal. Check here against
@@ -590,11 +612,19 @@ export async function deepStructureImportItems(
       // extracted profile becomes a `note` (same title + body) rather than a
       // hollow shell or a fabricated claim.
       let effectiveSlug = slug;
-      if (opts.validateEntity && slug !== "note") {
+      if (knowledgeFormConflict) {
+        deps.logger.warn(
+          { profileSlug: slug, title, error: knowledgeFormConflict },
+          "deep import: conflicting Knowledge classifications — emitting as note instead"
+        );
+        effectiveSlug = "note";
+        degradedToNote++;
+        degradedByProfile[slug] = (degradedByProfile[slug] ?? 0) + 1;
+      } else if (opts.validateEntity && slug !== "note") {
         const { valid, errors } = await opts.validateEntity({
           profileSlug: slug,
           title,
-          properties: e.properties ?? {},
+          properties: normalizedProperties,
           ...(longBody ? { content: longBody } : {}),
         });
         if (!valid) {
@@ -618,7 +648,7 @@ export async function deepStructureImportItems(
             // A degraded entity keeps its title + body but NOT the partial
             // properties that failed validation under the original profile —
             // they would land as unmodeled keys on a note.
-            properties: effectiveSlug === slug ? (e.properties ?? {}) : {},
+            properties: effectiveSlug === slug ? normalizedProperties : {},
           },
           itemHome
         );

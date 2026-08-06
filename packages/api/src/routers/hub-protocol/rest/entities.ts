@@ -578,8 +578,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     },
     responses: {
       200: {
-        description: "Entity row",
-        content: { "application/json": { schema: RawEntityRecordSchema } },
+        description: "Canonical entity wire record",
+        content: { "application/json": { schema: WireEntitySchema } },
       },
       403: {
         description: "Forbidden",
@@ -641,7 +641,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           return c.json({ error: "Access denied to entity's workspace" }, 403);
         }
       }
-      return c.json(result, 200);
+      return c.json(entityToWire(result), 200);
     } catch (err) {
       logger.error({ err, entityId }, "entities.get failed");
       return c.json(

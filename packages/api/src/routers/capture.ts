@@ -58,6 +58,9 @@ import {
   resolveProjectPlacement,
   resolveKindWritePin,
   loadFacetSlugsBatch,
+  inferKnowledgeForm,
+  KnowledgeFormConflictError,
+  normalizeKnowledgeProperties,
   type ResolutionRung,
 } from "@synap/database";
 import {
@@ -161,21 +164,20 @@ const FALLBACK_RELATION_TYPE = "relates_to";
 /** Canonical generic kind for unclassified capture material. */
 const DEFAULT_CAPTURE_PROFILE = "item";
 
-// ── ek_type inference (knowledge profile discriminator) ────────────────────
-// The `knowledge` profile requires an ek_type (gotcha|lesson|decision|reference).
-// IS structuring identifies the profile but does not always set ek_type — infer
-// it from the text via a keyword sniff so entity creation succeeds instead of
-// degrading to an item. ONE helper, called by both the single-entity (thought)
-// and multi-entity (structure) paths.
-function inferEkType(
+// ── Knowledge form normalisation ───────────────────────────────────────────
+// Knowledge has one canonical, mutually-exclusive `knowledgeForm`. Historic
+// ek_type values remain intact but are mapped by the shared database utility
+// at every capture door, so old payloads stay valid without pretending that a
+// decision/reference has already been converted into another graph entity.
+export function normalizeCapturedKnowledgeProperties(
+  properties: Record<string, unknown>,
   text: string
-): "gotcha" | "lesson" | "decision" | "reference" | undefined {
-  const haystack = text.toLowerCase();
-  if (haystack.includes("gotcha")) return "gotcha";
-  if (haystack.includes("lesson")) return "lesson";
-  if (haystack.includes("decision")) return "decision";
-  if (haystack.includes("reference")) return "reference";
-  return undefined;
+): Record<string, unknown> {
+  const normalized = normalizeKnowledgeProperties(properties);
+  if (!("knowledgeForm" in normalized)) {
+    normalized.knowledgeForm = inferKnowledgeForm(text);
+  }
+  return normalized;
 }
 
 // ── Dedup candidate scoring (honest title similarity) ───────────────────────
@@ -557,11 +559,11 @@ export const captureRouter = router({
           title = entity.title || title;
           properties = entity.properties ?? {};
 
-          // Knowledge profile requires ek_type — infer from the leading text
-          // when IS omitted it (see inferEkType).
-          if (profileSlug === "knowledge" && !properties.ek_type) {
-            const ek = inferEkType(input.content.slice(0, 200));
-            if (ek) properties.ek_type = ek;
+          if (profileSlug === "knowledge") {
+            properties = normalizeCapturedKnowledgeProperties(
+              properties,
+              input.content.slice(0, 200)
+            );
           }
 
           mode = "ai";
@@ -571,6 +573,12 @@ export const captureRouter = router({
           );
         }
       } catch (err) {
+        // An inconsistent dual classification is a malformed payload, not an
+        // intelligence-service outage. Surface it explicitly; degrading it to
+        // item would hide a schema conflict the caller needs to repair.
+        if (err instanceof KnowledgeFormConflictError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         // Only an upstream auth failure (401/403) means the pod's IS
         // credentials are bad — mark credential_error so the frontend can
         // drive re-provisioning. Every other failure (validation, timeout,
@@ -1280,16 +1288,25 @@ export const captureRouter = router({
         return degradedFallback("is_empty_result");
       }
 
-      // Knowledge profile requires ek_type — infer from each entity's title when
-      // IS omitted it (see inferEkType), so entity creation succeeds instead of
-      // degrading to item.
+      // Normalise every Knowledge proposal before the caller validates or
+      // materialises it. This preserves ek_type for old clients while making
+      // knowledgeForm the one canonical discriminator for new records.
       for (const entity of structureResult.entities) {
-        if (
-          entity.profileSlug === "knowledge" &&
-          !(entity.properties as Record<string, unknown>).ek_type
-        ) {
-          const ek = inferEkType(entity.title || "");
-          if (ek) (entity.properties as Record<string, unknown>).ek_type = ek;
+        if (entity.profileSlug === "knowledge") {
+          try {
+            entity.properties = normalizeCapturedKnowledgeProperties(
+              (entity.properties as Record<string, unknown>) ?? {},
+              entity.title || ""
+            );
+          } catch (error) {
+            if (error instanceof KnowledgeFormConflictError) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: error.message,
+              });
+            }
+            throw error;
+          }
         }
       }
 

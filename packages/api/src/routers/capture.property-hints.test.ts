@@ -32,19 +32,19 @@ describe("buildAvailableProfiles — propertyHints", () => {
         displayName: "Knowledge",
         effectiveProperties: [
           {
-            slug: "ek_type",
+            slug: "knowledgeForm",
             valueType: "string",
             required: true,
-            constraints: { enum: ["gotcha", "lesson", "decision"] },
+            constraints: { enum: ["insight", "caution"] },
           },
-          { slug: "ek_claim", valueType: "string", required: true },
+          { slug: "ek_claim", valueType: "string", required: false },
           { slug: "ek_confidence", valueType: "number", required: false },
         ],
       },
     ]);
 
     expect(hint.propertyHints).toBe(
-      "ek_type:enum(gotcha|lesson|decision)*, ek_claim:string*, ek_confidence:number"
+      "knowledgeForm:enum(insight|caution)*, ek_claim:string, ek_confidence:number"
     );
   });
 
@@ -82,8 +82,8 @@ describe("withEffectiveProperties", () => {
     getEffectiveProperties: async (profileId: string) =>
       profileId === KNOWLEDGE_ID
         ? [
-            { slug: "ek_type", valueType: "string", required: true },
-            { slug: "ek_claim", valueType: "string", required: true },
+            { slug: "knowledgeForm", valueType: "string", required: true },
+            { slug: "ek_claim", valueType: "string", required: false },
           ]
         : [],
   };
@@ -95,7 +95,7 @@ describe("withEffectiveProperties", () => {
       null
     );
     const [hint] = buildAvailableProfiles(enriched);
-    expect(hint.propertyHints).toBe("ek_type:string*, ek_claim:string*");
+    expect(hint.propertyHints).toBe("knowledgeForm:string*, ek_claim:string");
   });
 
   it("degrades to no hints for a profile whose resolution throws — never fails the import", async () => {

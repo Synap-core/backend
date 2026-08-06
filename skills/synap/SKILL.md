@@ -168,15 +168,15 @@ Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it rou
 
 Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchpad** — structuring knowledge into a real lane IS your job. Never write a `note` (that's the human's raw inbox); always `capture` into a lane.
 
-**Known fields → typed create.** If you already know the profileSlug and the values, use `synap create entity` / `synap_create_entity` (or typed `capture --type` for a knowledge entry). Reach for free-text `capture "…"` only for an unstructured blob you haven't parsed — it runs an AI pipeline that can degrade to one flat `note`. 'Always capture into a lane' means _don't leave it unstructured_, not _always use the free-text pipeline_.
+**Known fields → typed create.** If you already know the profileSlug and values, use `synap create entity` / `synap_create_entity`. Reach for free-text `capture "…"` only for an unstructured blob you haven't parsed — it runs an AI pipeline that can degrade to one flat `note`. 'Always capture into a lane' means _don't leave it unstructured_, not _always use the free-text pipeline_.
 
 | If it…                                                                                                                          | Lane                 | Where it goes                                                                            | Governance                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **is about the CURRENT WORK** — domain know-how for the project/task you're on (incl. a domain-specific gotcha/lesson/decision) | **Work** _(default)_ | a `knowledge` entity in the **active workspace** (`synap capture --type …`)              | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing)              |
+| **is about the CURRENT WORK** — a reusable conclusion or caveat in the project/task you're on | **Work** _(default)_ | a `knowledge` entity in the **active workspace** (`synap create entity --profile=knowledge …`) | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing) |
 | **is GLOBAL truth** — a best-practice / runbook / how-to that holds across ALL projects                                         | **Global**           | pod-wide procedural `knowledge_keys` (`synap capture --global --type … [--key ns:slug]`) | reviewed for shared truth                                                                                  |
 | **is about the USER** — how they work/talk/decide, their preferences, their life                                                | **User**             | pod-wide `user_observation` (`synap observe write` / `record_observation` tool)          | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
 
-> **Why this matters:** writing to the wrong lane degrades the graph. A gotcha you learned about the **current project** is **Work** (the active workspace — its domain). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
+> **Why this matters:** writing to the wrong lane degrades the graph. A caution you learned about the **current project** is **Work** (the active workspace — its domain). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
 
 > **Read the write outcome — it guides your next move (it never blocks you).** Every write (`capture`, `observe`, `create entity`, `create relation`, `note`) reports one of two outcomes (and `--json` carries `"outcome"`):
 >
@@ -200,7 +200,7 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 | Profile slug       | Scope     | Who writes     | Purpose                                                                                                                                                                                                                                       |
 | ------------------ | --------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `note`             | pod       | **human only** | The human's raw "dump now, structure later" inbox. **The AI never writes a note** — structuring into a lane is its job; use `capture` instead.                                                                                                |
-| `knowledge`        | workspace | AI             | Validated gotchas/lessons/decisions — the **Work lane** (default `synap capture --type`; ek_type/ek_claim/ek_why). DOMAIN = the workspace (a Builder gotcha ≠ a marketing one). Cross-project runbooks go to `knowledge_keys` via `--global`. |
+| `knowledge`        | workspace | AI             | Reusable **Insights** and **Cautions** — one required `knowledgeForm`; an optional `ek_claim` is only a compact summary and long form belongs in the linked Markdown document. Decisions and sources remain linked first-class entities. DOMAIN = the workspace. Cross-project runbooks go to `knowledge_keys` via `--global`. |
 | `user_observation` | pod       | AI only        | Durable user model — habits, communication style, preferences                                                                                                                                                                                 |
 | `decision`         | pod       | human + AI     | Architectural decisions with rationale                                                                                                                                                                                                        |
 | `research`         | pod       | AI             | Investigation with sources + conclusion                                                                                                                                                                                                       |
@@ -409,10 +409,11 @@ synap list entities --profile=task --workspace=<id> --json
 synap get entity <id> --json
 ```
 
-**Capturing a decision (the AI structures — it never `note`s):**
+**Recording a decision as its own graph entity:**
 
 ```bash
-synap capture --type decision --claim "Use Typesense for entity search" --json
+synap create entity --profile=decision --name="Use Typesense for entity search" \
+  --props='{"summary":"Use Typesense for entity search","decisionStatus":"accepted"}' --json
 # Retrieve later with the one read verb: synap ask "Typesense decision"
 ```
 
@@ -421,27 +422,30 @@ synap capture --type decision --claim "Use Typesense for entity search" --json
 **Structured knowledge (durable, typed, searchable — preferred for engineering learnings):**
 
 ```bash
-# Work lane (default): a domain gotcha/lesson/decision → knowledge entity in the ACTIVE workspace
-synap capture --type gotcha --claim "Hono static routes must come before /:id" \
-  --why "First-match routing; dynamic routes eat static ones" \
-  --tags "repo:synap-backend,layer:routing" --json
+# Work lane: one explicit Knowledge form. Keep the Markdown body on the
+# linked document; these properties remain compact/queryable metadata.
+synap create entity --profile=knowledge --name="Hono static route ordering" \
+  --workspace=<id> \
+  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' --json
 
-synap capture --type lesson --claim "code-read ≠ runtime-true for library APIs" \
-  --evidence "tldraw 2.4.6 binding API changed silently from props.start.boundShapeId"
+synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
+  --workspace=<id> \
+  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' --json
 
-# A quick decision-note is a typed knowledge entry (ek_type=decision):
-synap capture --type decision --claim "Use Typesense for entity search" \
-  --why "pgvector deferred to V1; Typesense ships now" --json
+# A Decision is its own lifecycle entity; link it to the supporting Knowledge.
+synap create entity --profile=decision --name="Use Typesense for entity search" \
+  --props='{"summary":"pgvector deferred to V1; Typesense ships now","decisionStatus":"accepted"}' --json
 
-# Global lane: a runbook/best-practice that holds across ALL projects → pod-wide knowledge_keys
-synap capture --global --type reference --claim "Always fix the canonical path, never a workaround" \
+# A Reference is source material, not a Knowledge form. Create/use a source
+# entity or document and link it as evidence; global runbooks remain knowledge_keys.
+synap capture --global "Always fix the canonical path, never a workaround" \
   --key "principle:root-cause" --json
 
 # Retrieve any of it later with the one read verb (it spans every lane):
-synap ask "hono routing gotcha" --json
+synap ask "hono routing caution" --json
 ```
 
-`synap capture --type` writes a typed **`knowledge`** entity in the **active workspace** (the Work lane); `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain — a Builder gotcha ≠ a marketing one (there is no `engineering_knowledge`). Add **`--global`** to write a pod-wide cross-cutting runbook to `knowledge_keys` instead. A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
+`knowledge` has exactly one canonical `knowledgeForm`: `insight` or `caution`. It is workspace-scoped, so the active workspace supplies the domain. The optional `ek_claim` is a short summary; readable long form belongs in the entity's linked Markdown document. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
 **Open (the one display door):**
@@ -1409,7 +1413,7 @@ a `file`/`document`-kind entity and stuff the Markdown into it.
    { "userId": "{userId}", "workspaceId": "{wsId}",
      "profileSlug": "knowledge",
      "title": "Q3 launch strategic plan",
-     "properties": { "ek_type": "reference" },
+     "properties": { "knowledgeForm": "insight" },
      "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
    }
    ```

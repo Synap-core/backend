@@ -3,6 +3,8 @@ import {
   getDb,
   ProfileResolutionService,
   PropertyValidationService,
+  KnowledgeFormConflictError,
+  normalizeKnowledgeProperties,
   resolveKindWritePin,
   eq,
   workspaces,
@@ -270,7 +272,17 @@ export function makeEntitySchemaValidator(
     // gated by `validSlugs`; failing open here keeps this gate no stricter than
     // the materializer.
     if (!profile) return { valid: true, errors: [] };
-    const propsToCheck: Record<string, unknown> = { ...(properties ?? {}) };
+    let propsToCheck: Record<string, unknown> = { ...(properties ?? {}) };
+    if (profileSlug === "knowledge") {
+      try {
+        propsToCheck = normalizeKnowledgeProperties(propsToCheck);
+      } catch (error) {
+        if (error instanceof KnowledgeFormConflictError) {
+          return { valid: false, errors: [error.message] };
+        }
+        throw error;
+      }
+    }
     // A body materializes as a linked document / inline `content` property —
     // fold it in exactly as the materializer does so a profile that REQUIRES
     // `content` isn't falsely flagged when prose was supplied.

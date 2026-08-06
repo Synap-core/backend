@@ -137,6 +137,28 @@ function systemMapPropertyDefScope(workspaceLens: string | null | undefined) {
 }
 
 /**
+ * `resolveFacetVisibilityScope` confirms an explicit workspace lens by
+ * returning it as `workspaceId`; `allowedWorkspaceIds` is reserved for
+ * identity-wide (no-lens) reads. Keep this assertion at the System Map door
+ * so an arbitrary input workspace can never select another workspace's rows
+ * or property-definition overlays.
+ */
+function assertSystemMapWorkspaceLensAccess(
+  workspaceLens: string | null | undefined,
+  facetVisibilityScope: Awaited<ReturnType<typeof resolveFacetVisibilityScope>>
+) {
+  if (
+    typeof workspaceLens === "string" &&
+    facetVisibilityScope.workspaceId !== workspaceLens
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Workspace is not available in this map lens",
+    });
+  }
+}
+
+/**
  * System Map kinds are primary-kind cluster ids emitted by the overview, not
  * polymorphic profile-slug filters. Roles are deliberately a separate facet
  * predicate (`systemMapRoleScope`) so a role never masquerades as a kind.
@@ -223,15 +245,7 @@ export const graphRouter = router({
         ctx.userId,
         workspaceLens
       );
-      if (
-        typeof workspaceLens === "string" &&
-        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Workspace is not available in this map lens",
-        });
-      }
+      assertSystemMapWorkspaceLensAccess(workspaceLens, facetVisibilityScope);
       const entityRows = await db.query.entities.findMany({
         where: and(
           isNull(entities.deletedAt),
@@ -328,15 +342,7 @@ export const graphRouter = router({
         ctx.userId,
         workspaceLens
       );
-      if (
-        typeof workspaceLens === "string" &&
-        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Workspace is not available in this map lens",
-        });
-      }
+      assertSystemMapWorkspaceLensAccess(workspaceLens, facetVisibilityScope);
       const roleScope = await systemMapRoleScope(
         input.role,
         facetVisibilityScope
@@ -430,15 +436,7 @@ export const graphRouter = router({
         ctx.userId,
         workspaceLens
       );
-      if (
-        typeof workspaceLens === "string" &&
-        !facetVisibilityScope.allowedWorkspaceIds?.includes(workspaceLens)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Workspace is not available in this map lens",
-        });
-      }
+      assertSystemMapWorkspaceLensAccess(workspaceLens, facetVisibilityScope);
 
       const roleScope = await systemMapRoleScope(
         input.role,

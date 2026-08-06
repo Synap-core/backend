@@ -22980,6 +22980,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					status?: "pending" | "done" | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -23023,6 +23024,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					status?: "pending" | "done" | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 			};
@@ -23054,6 +23056,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		close: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				summary?: string | undefined;
 			};
 			output: {
 				userId: string;
