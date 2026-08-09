@@ -153,7 +153,10 @@ import {
   handleCpProjectSync,
   CP_PROJECT_SYNC_QUEUE,
 } from "./cp-project-sync.js";
-import { registerCpProjectSyncTrigger } from "@synap/database";
+import {
+  ensureSystemProfiles,
+  registerCpProjectSyncTrigger,
+} from "@synap/database";
 import {
   handlePageRankCentrality,
   PAGERANK_CENTRALITY_QUEUE,
@@ -343,6 +346,24 @@ const LONG_WALK_QUEUES = new Map<string, number>([
  */
 export async function registerAllWorkers(): Promise<void> {
   const boss = getBoss();
+
+  // Reconcile system-owned profile contracts on every worker deployment, not
+  // just when a new workspace is created. This lets existing pods receive
+  // schema and renderer upgrades without waiting for unrelated workspace work.
+  // The routine is idempotent and preserves user-owned overrides; workspace
+  // init remains a safe retry when the database is briefly unavailable at boot.
+  try {
+    const profileResult = await ensureSystemProfiles();
+    logger.info(
+      { ...profileResult },
+      "System profiles reconciled at worker boot"
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "System profile reconciliation failed at worker boot; workspace init will retry"
+    );
+  }
 
   // Create all queues first (pg-boss v10 requires this before work/schedule)
   for (const name of ALL_QUEUES) {

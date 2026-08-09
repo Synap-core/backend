@@ -170,13 +170,13 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 **Known fields → typed create.** If you already know the profileSlug and values, use `synap create entity` / `synap_create_entity`. Reach for free-text `capture "…"` only for an unstructured blob you haven't parsed — it runs an AI pipeline that can degrade to one flat `note`. 'Always capture into a lane' means _don't leave it unstructured_, not _always use the free-text pipeline_.
 
-| If it…                                                                                                                          | Lane                 | Where it goes                                                                            | Governance                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **is about the CURRENT WORK** — a reusable conclusion or caveat in the project/task you're on | **Work** _(default)_ | a `knowledge` entity in the **active workspace** (`synap create entity --profile=knowledge …`) | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing) |
-| **is GLOBAL truth** — a best-practice / runbook / how-to that holds across ALL projects                                         | **Global**           | pod-wide procedural `knowledge_keys` (`synap capture --global --type … [--key ns:slug]`) | reviewed for shared truth                                                                                  |
-| **is about the USER** — how they work/talk/decide, their preferences, their life                                                | **User**             | pod-wide `user_observation` (`synap observe write` / `record_observation` tool)          | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
+| If it…                                                                                        | Lane                 | Where it goes                                                                                  | Governance                                                                                                 |
+| --------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **is about the CURRENT WORK** — a reusable conclusion or caveat in the project/task you're on | **Work** _(default)_ | a `knowledge` entity through server-derived Work placement (pin with `--workspace` only when you know the domain) | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing)              |
+| **is GLOBAL truth** — a best-practice / runbook / how-to that holds across ALL projects       | **Global**           | pod-wide procedural `knowledge_keys` (`synap capture --global --type … [--key ns:slug]`)       | reviewed for shared truth                                                                                  |
+| **is about the USER** — how they work/talk/decide, their preferences, their life              | **User**             | pod-wide `user_observation` (`synap observe write` / `record_observation` tool)                | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
 
-> **Why this matters:** writing to the wrong lane degrades the graph. A caution you learned about the **current project** is **Work** (the active workspace — its domain). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
+> **Why this matters:** writing to the wrong lane degrades the graph. A caution you learned about the **current project** is **Work** (let the server route it, or pin the known domain explicitly). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
 
 > **Read the write outcome — it guides your next move (it never blocks you).** Every write (`capture`, `observe`, `create entity`, `create relation`, `note`) reports one of two outcomes (and `--json` carries `"outcome"`):
 >
@@ -197,14 +197,14 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 ### Key profiles for AI use
 
-| Profile slug       | Scope     | Who writes     | Purpose                                                                                                                                                                                                                                       |
-| ------------------ | --------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `note`             | pod       | **human only** | The human's raw "dump now, structure later" inbox. **The AI never writes a note** — structuring into a lane is its job; use `capture` instead.                                                                                                |
+| Profile slug       | Scope     | Who writes     | Purpose                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | --------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `note`             | pod       | **human only** | The human's raw "dump now, structure later" inbox. **The AI never writes a note** — structuring into a lane is its job; use `capture` instead.                                                                                                                                                                                 |
 | `knowledge`        | workspace | AI             | Reusable **Insights** and **Cautions** — one required `knowledgeForm`; an optional `ek_claim` is only a compact summary and long form belongs in the linked Markdown document. Decisions and sources remain linked first-class entities. DOMAIN = the workspace. Cross-project runbooks go to `knowledge_keys` via `--global`. |
-| `user_observation` | pod       | AI only        | Durable user model — habits, communication style, preferences                                                                                                                                                                                 |
-| `decision`         | pod       | human + AI     | Architectural decisions with rationale                                                                                                                                                                                                        |
-| `research`         | pod       | AI             | Investigation with sources + conclusion                                                                                                                                                                                                       |
-| `question`         | pod       | human + AI     | Open inquiry, closed when a decision answers it                                                                                                                                                                                               |
+| `user_observation` | pod       | AI only        | Durable user model — habits, communication style, preferences                                                                                                                                                                                                                                                                  |
+| `decision`         | pod       | human + AI     | Architectural decisions with rationale                                                                                                                                                                                                                                                                                         |
+| `research`         | pod       | AI             | Investigation with sources + conclusion                                                                                                                                                                                                                                                                                        |
+| `question`         | pod       | human + AI     | Open inquiry, closed when a decision answers it                                                                                                                                                                                                                                                                                |
 
 ---
 
@@ -218,7 +218,7 @@ synap use <workspace-name-or-id>                       # focus a workspace (this
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
 synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered
-synap capture --type=lesson --claim="…" --json         # Work lane (default) — domain knowledge → active workspace
+synap create entity --profile=knowledge --name="…" --props='{"knowledgeForm":"insight|caution"}' --content="…" --json
 synap capture --global --type=reference --claim="…" --json  # Global lane — pod-wide cross-cutting runbook (knowledge_keys)
 synap observe write "…" --json                          # User lane — durable user model (inferences proposed)
 ```
@@ -426,11 +426,13 @@ synap create entity --profile=decision --name="Use Typesense for entity search" 
 # linked document; these properties remain compact/queryable metadata.
 synap create entity --profile=knowledge --name="Hono static route ordering" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' --json
+  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' \
+  --content=$'## Why\\n\\nStatic routes must come before `/:id`.' --json
 
 synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' --json
+  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' \
+  --content=$'Validate the installed version before depending on an API.' --json
 
 # A Decision is its own lifecycle entity; link it to the supporting Knowledge.
 synap create entity --profile=decision --name="Use Typesense for entity search" \

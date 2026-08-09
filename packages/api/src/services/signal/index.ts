@@ -56,12 +56,19 @@ import {
   automationRuns,
   automations,
   proposals,
+  links,
+  tools,
+  capabilities,
+  channelEgress,
   MessageAuthorType,
   ProposalStatus,
 } from "@synap/database";
 import type { FlowDefinition } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { getCapabilityMemberParts } from "../links/links-service.js";
+import { buildCapabilityComposition } from "../diagnose/capability-composition.js";
+import type { CapabilityComposition } from "../diagnose/types.js";
 import type { RunStatus } from "../runs/types.js";
 
 // ── Channel-object doors (the Stack + Rerun facets) ───────────────────────────
@@ -99,10 +106,23 @@ export {
  *   unprocessed_unbound — the message landed but NO extraction run consumed it
  *                         AND the channel is not bound to any context entity
  *                         (never wired to a client). THE structural-gap view.
+ *   suppressed          — a run consumed the message but was SKIPPED by design: a
+ *                         flow-level precondition/filter evaluated false at start,
+ *                         so the run finalized (`status = 'skipped'`) before any
+ *                         step executed. A CORRECT no-op ("filtered on purpose"),
+ *                         NOT a failure and NOT `no_insight` (which is a run that
+ *                         ran fully yet produced nothing). This is the honesty gap
+ *                         Zapier calls its #1 confusion: an intentional filter must
+ *                         never read as a broken pipeline.
  *   failed              — the run errored or was cancelled before producing.
  */
 export type SignalFate =
-  "extracted" | "no_insight" | "no_run" | "unprocessed_unbound" | "failed";
+  | "extracted"
+  | "no_insight"
+  | "no_run"
+  | "unprocessed_unbound"
+  | "suppressed"
+  | "failed";
 
 export interface SignalLinks {
   /** The extraction run this message opened (null when unprocessed_unbound). */
@@ -159,8 +179,14 @@ export function classifySignalFate(input: {
   // outcome — the pipeline broke on this message.
   if (input.runStatus === "failed" || input.runStatus === "cancelled")
     return "failed";
+  // A SKIPPED run was gated by a flow-level precondition BEFORE any step ran
+  // (automation_runs.status = 'skipped', Wave 4.V3) — an intentional filter, a
+  // correct no-op. Distinct from `no_insight` (ran fully, found nothing) and from
+  // `failed` (broke). A skipped run produces nothing by construction, so this is
+  // checked before the produced-count branch.
+  if (input.runStatus === "skipped") return "suppressed";
   if (input.producedCount > 0) return "extracted";
-  // completed / skipped / still-running with nothing produced yet.
+  // completed / still-running with nothing produced yet.
   return "no_insight";
 }
 
@@ -171,6 +197,10 @@ const FATE_PROBLEM_RANK: Record<SignalFate, number> = {
   no_run: 2,
   no_insight: 3,
   extracted: 4,
+  // A suppressed unit is a correct no-op — ranked last (least "problem"), below
+  // even `extracted`, so an intentional filter never floats to the top of a
+  // problems-first stream.
+  suppressed: 5,
 };
 
 interface AttributableMessage {
@@ -277,6 +307,12 @@ export interface ListPipelineInput {
    * everything downstream (run attribution, proposal join, fate) is unchanged.
    */
   channelId?: string;
+  /**
+   * Capability lens: scope the stream to the channels this capability PRODUCED
+   * (`resolveCapabilityChannelIds`). Composes with `channelId`. Inbound only —
+   * the outbound side is the sibling `listEgress` door (P3), not a param here.
+   */
+  capabilityId?: string;
 }
 
 export interface SignalPipelinePage {
@@ -497,6 +533,94 @@ async function assembleUnits(
   });
 }
 
+// ── Capability lens: the channels one capability PRODUCED ─────────────────────
+
+/**
+ * Resolve the visible channels a capability is the source of — the scope every
+ * `capabilityId`-filtered signal read narrows to. Derivation is a pure read-join
+ * over edges the pod already writes, NO new produced writes:
+ *
+ *   capability --member_of<-- tool --produced--> channel        (the graph path)
+ *   ∪  channels WHERE externalSource = the tool's provider slug (legacy fallback)
+ *
+ * The member tools' NAMES are provider slugs (`tools.name` == provider slug), so
+ * the fallback catches legacy channels born with a bare `source` slug origin
+ * (pre-0234) that the graph path can't yet reach. Floored by
+ * `channelVisibilityWhere`, so a channel the caller can't see never enters the
+ * scope. Returns `[]` when the capability produces nothing (→ empty lens).
+ */
+export async function resolveCapabilityChannelIds(
+  userId: string,
+  capabilityId: string
+): Promise<string[]> {
+  // The capability container's runnable member parts (tool|skill|command).
+  // REUSE HAZARD: this member read and the `tools` select below are deliberately
+  // NOT workspace/user-floored — the access boundary is the TERMINAL channel
+  // query at the end of this function, which carries `channelVisibilityWhere`.
+  // Resolving a part/tool id the caller can't "see" leaks nothing on its own; a
+  // channel only enters the scope if it survives that floor. Do NOT lift these
+  // two reads out of this floored context (e.g. to return tool metadata to a
+  // caller) without adding a floor of their own.
+  const partIds = (await getCapabilityMemberParts([capabilityId])).map(
+    (p) => p.id
+  );
+  if (partIds.length === 0) return [];
+
+  // Member tools' names == provider slugs (the legacy-channel fallback key).
+  const toolRows = await db
+    .select({ id: tools.id, name: tools.name })
+    .from(tools)
+    .where(inArray(tools.id, partIds));
+  const providerSlugs = [
+    ...new Set(toolRows.map((t) => t.name).filter((n): n is string => !!n)),
+  ];
+
+  // Channels the parts PRODUCED: part --produced--> channel (post-0234 or
+  // born-with-a-tool origin).
+  const producedRows = await db
+    .select({ channelId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "produced"),
+        eq(links.toType, "channel"),
+        inArray(links.fromId, partIds)
+      )
+    );
+  const producedChannelIds = producedRows.map((r) => r.channelId);
+
+  if (producedChannelIds.length === 0 && providerSlugs.length === 0) return [];
+
+  // Floor to visible channels, unioning the produced-edge channels with legacy
+  // slug-origin channels of the same provider(s).
+  //
+  // HONESTY: the produced-edge half is capability-PRECISE (that specific tool
+  // made the channel), but the `externalSource` slug half is provider-BROAD, not
+  // capability-precise — a bare-slug channel (pre-0234, or an ambiguous origin
+  // that couldn't be re-stamped) surfaces under EVERY capability whose member
+  // tools include one with that provider slug. This over-includes on purpose so
+  // legacy channels aren't invisible to the lens; migration 0234 shrinks the
+  // fuzzy half over time as each source-slug origin is re-stamped to its
+  // specific tool and moves into the precise produced-edge half.
+  const channelRows = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(
+      and(
+        channelVisibilityWhere(userId),
+        or(
+          producedChannelIds.length
+            ? inArray(channels.id, producedChannelIds)
+            : undefined,
+          providerSlugs.length
+            ? inArray(channels.externalSource, providerSlugs)
+            : undefined
+        )
+      )
+    );
+  return [...new Set(channelRows.map((r) => r.id))];
+}
+
 /**
  * The unified signal stream: recent inbound external messages joined to their
  * extraction outcome. Newest-first (or problems-first within the page).
@@ -506,6 +630,17 @@ export async function listPipeline(
 ): Promise<SignalPipelinePage> {
   const { userId } = input;
   const limit = Math.min(input.limit ?? DEFAULT_PAGE, MAX_PAGE);
+
+  // Capability lens: resolve the capability's visible channels up front. An
+  // empty set (capability produces nothing) short-circuits to an empty page.
+  let capChannelIds: string[] | null = null;
+  if (input.capabilityId) {
+    capChannelIds = await resolveCapabilityChannelIds(
+      userId,
+      input.capabilityId
+    );
+    if (capChannelIds.length === 0) return { units: [], nextCursor: null };
+  }
 
   // 1. Page of inbound external messages, floored by channelVisibilityWhere
   //    (the canonical channel read predicate) — a message is visible iff its
@@ -530,6 +665,8 @@ export async function listPipeline(
         // Drill-down: scope to one channel (the channel-detail view). The floor
         // below still applies, so an unseeable channelId returns nothing.
         input.channelId ? eq(messages.channelId, input.channelId) : undefined,
+        // Capability lens: restrict to the capability's produced channels.
+        capChannelIds ? inArray(messages.channelId, capChannelIds) : undefined,
         // Composite keyset on (timestamp, id): strictly-earlier timestamps, plus
         // the equal-timestamp rows whose id sorts before the cursor's — so a page
         // boundary that lands mid-way through a block of equal-timestamp rows
@@ -607,6 +744,13 @@ export interface SignalChannelRollup {
 export interface ListChannelsInput {
   userId: string;
   order?: SignalChannelOrder;
+  /**
+   * Capability lens: restrict the rollup to the channels this capability
+   * PRODUCED (`resolveCapabilityChannelIds`). Same shapes as the unfiltered
+   * rollup, just narrowed. Inbound only — the outbound rollup is the sibling
+   * `listEgress` door (P3).
+   */
+  capabilityId?: string;
 }
 
 export interface ListChannelsResult {
@@ -642,6 +786,18 @@ export async function listChannels(
 ): Promise<ListChannelsResult> {
   const { userId } = input;
 
+  // Capability lens: resolve the capability's visible channels; an empty set
+  // short-circuits to an empty rollup.
+  let capChannelIds: string[] | null = null;
+  if (input.capabilityId) {
+    capChannelIds = await resolveCapabilityChannelIds(
+      userId,
+      input.capabilityId
+    );
+    if (capChannelIds.length === 0)
+      return { channels: [], scanned: 0, truncated: false };
+  }
+
   // Same floored message read as listPipeline — a bounded recent prefix, no
   // cursor. `channelVisibilityWhere` is the ONLY channel/message floor, so an
   // unseeable channel never enters the rollup.
@@ -662,7 +818,9 @@ export async function listChannels(
         eq(messages.authorType, MessageAuthorType.EXTERNAL),
         isNull(messages.deletedAt),
         eq(messages.ephemeral, false),
-        channelVisibilityWhere(userId)
+        channelVisibilityWhere(userId),
+        // Capability lens: restrict to the capability's produced channels.
+        capChannelIds ? inArray(messages.channelId, capChannelIds) : undefined
       )
     )
     .orderBy(desc(messages.timestamp), desc(messages.id))
@@ -695,6 +853,7 @@ export async function listChannels(
           no_insight: 0,
           no_run: 0,
           unprocessed_unbound: 0,
+          suppressed: 0,
           failed: 0,
         },
         lastActivityAt: u.ts,
@@ -1018,9 +1177,48 @@ export interface SignalSummary {
   noRun: number;
 }
 
-export async function getSignalSummary(userId: string): Promise<SignalSummary> {
+export async function getSignalSummary(
+  userId: string,
+  capabilityId?: string
+): Promise<SignalSummary> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const externalRun = drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE 'external_message.received%'`;
+
+  // Capability lens: resolve the capability's visible channels once, then scope
+  // every tile to them. An empty set (capability produces nothing) is an all-zero
+  // summary. When `capabilityId` is omitted, every scope fragment is `undefined`
+  // and each COUNT is byte-for-byte the pod-wide query it was before.
+  const capChannelIds = capabilityId
+    ? await resolveCapabilityChannelIds(userId, capabilityId)
+    : null;
+  if (capChannelIds && capChannelIds.length === 0) {
+    return {
+      messages24h: 0,
+      extracted: 0,
+      processed: 0,
+      needsYou: 0,
+      unboundChannels: 0,
+      noRun: 0,
+    };
+  }
+  // Message/channel-keyed scopes.
+  const msgScope = capChannelIds
+    ? inArray(messages.channelId, capChannelIds)
+    : undefined;
+  const chanScope = capChannelIds
+    ? inArray(channels.id, capChannelIds)
+    : undefined;
+  // Run-keyed scope: the run's triggering channel (its `data.channelId`) is one
+  // of the capability's channels. An OR of scalar `=` params (never a Postgres
+  // array literal — same driver gotcha the run fetch documents).
+  const runScope = capChannelIds
+    ? or(
+        ...capChannelIds.map(
+          (id) =>
+            drizzleSql`${automationRuns.triggerPayload}->'data'->>'channelId' = ${id}`
+        )
+      )
+    : undefined;
 
   const [
     messages24hRow,
@@ -1041,7 +1239,8 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
           isNull(messages.deletedAt),
           eq(messages.ephemeral, false),
           gte(messages.timestamp, since),
-          channelVisibilityWhere(userId)
+          channelVisibilityWhere(userId),
+          msgScope
         )
       ),
     // 2. External-message runs (window) that produced ≥1 proposal.
@@ -1053,6 +1252,7 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
           userVisibleWhere(automationRuns.workspaceId, userId),
           externalRun,
           gte(automationRuns.startedAt, since),
+          runScope,
           exists(
             db
               .select({ one: drizzleSql`1` })
@@ -1074,10 +1274,12 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
         and(
           userVisibleWhere(automationRuns.workspaceId, userId),
           externalRun,
-          gte(automationRuns.startedAt, since)
+          gte(automationRuns.startedAt, since),
+          runScope
         )
       ),
-    // 4. Proposals awaiting the caller's decision (pod-wide).
+    // 4. Proposals awaiting the caller's decision (pod-wide, or scoped to the
+    //    capability's channels via the run that produced each proposal).
     db
       .select({ value: count() })
       .from(proposals)
@@ -1087,7 +1289,21 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
           inArray(proposals.status, [
             ProposalStatus.PENDING,
             ProposalStatus.APPROVAL_FAILED,
-          ])
+          ]),
+          capChannelIds
+            ? exists(
+                db
+                  .select({ one: drizzleSql`1` })
+                  .from(automationRuns)
+                  .where(
+                    and(
+                      eq(automationRuns.id, proposals.correlationId),
+                      userVisibleWhere(automationRuns.workspaceId, userId),
+                      runScope
+                    )
+                  )
+              )
+            : undefined
         )
       ),
     // 5. Channels with recent external signal that are NOT bound to a context
@@ -1100,6 +1316,7 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
           isNotNull(channels.externalSource),
           isNull(channels.contextObjectId),
           channelVisibilityWhere(userId),
+          chanScope,
           exists(
             db
               .select({ one: drizzleSql`1` })
@@ -1129,6 +1346,7 @@ export async function getSignalSummary(userId: string): Promise<SignalSummary> {
           gte(messages.timestamp, since),
           isNotNull(channels.contextObjectId),
           channelVisibilityWhere(userId),
+          msgScope,
           not(
             exists(
               db
@@ -1415,4 +1633,946 @@ export async function getQualityByVersion(
   });
 
   return { automations: result, scanned, truncated };
+}
+
+// ── Door 6: outbound egress rollup (the OUTBOUND half of the capability lens) ──
+//
+// The inbound reading (`listChannels`) groups `messages WHERE authorType =
+// EXTERNAL` — what LANDED. Its mirror, the outbound reading, groups the SAME
+// `messages` ledger the other way: `authorType IN (human, ai_agent)` on the same
+// visible external channels — what the pod SENT toward the platform (an owner
+// send mirrored by `sendExternalMessage`, or an approved agent reply). Zero new
+// schema, the SAME `channelVisibilityWhere` floor, and — the reuse that makes it
+// a true lens — the SAME `resolveCapabilityChannelIds` capability derivation P2
+// uses, so a channel attributes to its capability identically in both directions.
+//
+// Two ledgers answer two different questions here (documented asymmetry, not a
+// bug): `sentCount`/`lastSentAt` come from the `messages` ledger — universal
+// across providers, a recent windowed census like `listChannels`; `failedCount`
+// comes from the `channel_egress` outbox — the ONE ledger that records outbound-
+// DELIVERY failure, but only for providers that route through the outbox (the
+// bridge/Discord path). A provider that delivers inline (messaging via
+// Unipile/Stalwart) writes no outbox row, so its `failedCount` is a genuine 0,
+// never a hidden failure.
+
+/**
+ * Author types that count as OUTBOUND toward the external platform — a human send
+ * or an (approved) agent reply. Excludes `external` (that IS the inbound signal)
+ * and `bot` (internal system notices, not sent to the party).
+ */
+const OUTBOUND_AUTHOR_TYPES = [
+  MessageAuthorType.HUMAN,
+  MessageAuthorType.AI_AGENT,
+] as const;
+
+export type SignalEgressOrder = "problems" | "recent";
+
+export interface SignalEgressChannelRollup {
+  channelId: string;
+  name: string | null;
+  provider: string | null;
+  /**
+   * Outbound messages authored toward the platform (human + agent) within the
+   * scan prefix — the symmetric mirror of the inbound `messageCount`.
+   */
+  sentCount: number;
+  /**
+   * Terminal-failed message sends (`kind = 'post_message'`, `status = 'failed'`)
+   * in the `channel_egress` outbox for this channel's external target — the
+   * failure counterpart of `sentCount`. 0 for providers that deliver inline
+   * (which write no outbox row) — a genuine 0, not a hidden failure.
+   */
+  failedCount: number;
+  /**
+   * Most recent outbound message on the channel within the scan prefix; null when
+   * the channel surfaces ONLY via a failed-egress row (every send failed, so no
+   * message row was written).
+   */
+  lastSentAt: Date | null;
+}
+
+export interface ListEgressInput {
+  userId: string;
+  order?: SignalEgressOrder;
+  /**
+   * Capability lens: restrict the rollup to the channels this capability PRODUCED
+   * (`resolveCapabilityChannelIds` — the SAME derivation the inbound doors use).
+   * Omit for a pod-wide outbound rollup over the recent scan prefix.
+   */
+  capabilityId?: string;
+}
+
+export interface ListEgressResult {
+  channels: SignalEgressChannelRollup[];
+  /** Outbound messages actually scanned to build the rollup. */
+  scanned: number;
+  /**
+   * True when the scan hit `CHANNEL_SCAN_CAP` — the per-channel `sentCount`/
+   * `lastSentAt` cover only the most recent `scanned` outbound messages, so the
+   * caller must disclose "showing recent N" (same honesty contract as
+   * `listChannels`). `failedCount` is a full count of the outbox failure backlog,
+   * not windowed.
+   */
+  truncated: boolean;
+}
+
+interface OutboundScanRow {
+  channelId: string;
+  ts: Date;
+}
+interface EgressChannelMeta {
+  name: string | null;
+  provider: string | null;
+}
+
+/**
+ * Group outbound messages by channel into a sent-count + last-sent rollup, fold
+ * in each channel's failed-egress count (which may introduce a channel that has
+ * NO outbound message — every send failed), and order it. Pure + DB-free so the
+ * grouping/ordering is unit-testable without a database.
+ *
+ * `problems` (default) floats channels with failed egress first, then the highest
+ * failure count, then most recently active; `recent` orders purely by last send.
+ */
+export function aggregateEgressRollups(args: {
+  outbound: OutboundScanRow[];
+  meta: Map<string, EgressChannelMeta>;
+  failedByChannel: Map<string, number>;
+  order: SignalEgressOrder;
+}): SignalEgressChannelRollup[] {
+  const { outbound, meta, failedByChannel, order } = args;
+  const byChannel = new Map<string, SignalEgressChannelRollup>();
+
+  const ensure = (channelId: string): SignalEgressChannelRollup => {
+    let roll = byChannel.get(channelId);
+    if (!roll) {
+      const m = meta.get(channelId);
+      roll = {
+        channelId,
+        name: m?.name ?? null,
+        provider: m?.provider ?? null,
+        sentCount: 0,
+        failedCount: 0,
+        lastSentAt: null,
+      };
+      byChannel.set(channelId, roll);
+    }
+    return roll;
+  };
+
+  for (const m of outbound) {
+    const roll = ensure(m.channelId);
+    roll.sentCount += 1;
+    if (!roll.lastSentAt || m.ts.getTime() > roll.lastSentAt.getTime())
+      roll.lastSentAt = m.ts;
+  }
+  for (const [channelId, failedCount] of failedByChannel) {
+    if (failedCount > 0) ensure(channelId).failedCount = failedCount;
+  }
+
+  const rollups = [...byChannel.values()];
+  const lastTs = (r: SignalEgressChannelRollup) =>
+    r.lastSentAt ? r.lastSentAt.getTime() : -Infinity;
+  if (order === "recent") {
+    rollups.sort((a, b) => lastTs(b) - lastTs(a));
+  } else {
+    // problems (default): failing channels first, then the highest failure count,
+    // then the most recently active.
+    rollups.sort((a, b) => {
+      const ap = a.failedCount > 0 ? 0 : 1;
+      const bp = b.failedCount > 0 ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (a.failedCount !== b.failedCount) return b.failedCount - a.failedCount;
+      return lastTs(b) - lastTs(a);
+    });
+  }
+  return rollups;
+}
+
+/**
+ * Per-channel OUTBOUND rollup — what a capability (or the pod) SENT toward its
+ * external channels. See the section header for the two-ledger contract. Floored
+ * by `channelVisibilityWhere` on every terminal read; capability-scoped by the
+ * SAME `resolveCapabilityChannelIds` the inbound doors use.
+ */
+export async function listEgress(
+  input: ListEgressInput
+): Promise<ListEgressResult> {
+  const { userId } = input;
+
+  // Capability lens: resolve the capability's visible channels; an empty set
+  // short-circuits to an empty rollup (capability sends nothing).
+  let capChannelIds: string[] | null = null;
+  if (input.capabilityId) {
+    capChannelIds = await resolveCapabilityChannelIds(
+      userId,
+      input.capabilityId
+    );
+    if (capChannelIds.length === 0)
+      return { channels: [], scanned: 0, truncated: false };
+  }
+
+  // 1. Outbound message scan — the symmetric mirror of the inbound EXTERNAL read:
+  //    human + agent messages on visible EXTERNAL channels, newest-first, capped
+  //    to the same CHANNEL_SCAN_CAP recent prefix `listChannels` uses.
+  const scanRows: OutboundScanRow[] = await db
+    .select({ channelId: messages.channelId, ts: messages.timestamp })
+    .from(messages)
+    .innerJoin(channels, eq(channels.id, messages.channelId))
+    .where(
+      and(
+        inArray(messages.authorType, [...OUTBOUND_AUTHOR_TYPES]),
+        isNull(messages.deletedAt),
+        eq(messages.ephemeral, false),
+        // Only channels bound to an external system are "outbound-to-platform".
+        isNotNull(channels.externalSource),
+        channelVisibilityWhere(userId),
+        capChannelIds ? inArray(messages.channelId, capChannelIds) : undefined
+      )
+    )
+    .orderBy(desc(messages.timestamp), desc(messages.id))
+    .limit(CHANNEL_SCAN_CAP);
+
+  const scanned = scanRows.length;
+  const truncated = scanned === CHANNEL_SCAN_CAP;
+
+  // 2. The channel set whose metadata + egress failures we resolve: the
+  //    capability's channels (when scoped, so a channel whose every send FAILED
+  //    still surfaces) ∪ the channels seen in the scan. Unscoped, the scan
+  //    channels alone bound it — no unbounded channel census.
+  const scanChannelIds = [...new Set(scanRows.map((r) => r.channelId))];
+  const candidateIds = capChannelIds
+    ? [...new Set([...capChannelIds, ...scanChannelIds])]
+    : scanChannelIds;
+
+  if (candidateIds.length === 0) return { channels: [], scanned, truncated };
+
+  // 3. Channel metadata (name, provider, external identity), floored AGAIN — this
+  //    is the terminal read yielding the external target the egress join uses.
+  const metaRows = await db
+    .select({
+      id: channels.id,
+      name: channels.title,
+      provider: channels.externalSource,
+      externalId: channels.externalId,
+      externalChannelId: channels.externalChannelId,
+    })
+    .from(channels)
+    .where(
+      and(inArray(channels.id, candidateIds), channelVisibilityWhere(userId))
+    );
+
+  const meta = new Map<string, EgressChannelMeta>();
+  // Egress target `${provider}::${externalId}` → channelId. The mirror enqueues
+  // with `externalId ?? externalChannelId` (see mirror-to-external.ts), so match
+  // the same fallback here.
+  const targetToChannel = new Map<string, string>();
+  const egressTargets: { source: string; externalId: string }[] = [];
+  for (const c of metaRows) {
+    meta.set(c.id, { name: c.name ?? null, provider: c.provider ?? null });
+    const target = c.externalId ?? c.externalChannelId ?? null;
+    if (c.provider && target) {
+      targetToChannel.set(`${c.provider}::${target}`, c.id);
+      egressTargets.push({ source: c.provider, externalId: target });
+    }
+  }
+
+  // 4. Terminal-failed outbox rows per external target. An OR of scalar composite
+  //    `=` predicates — NEVER a Postgres array literal (the documented driver
+  //    gotcha the run fetch calls out). Grouped by target, mapped back to channel.
+  //    Scoped to `kind = 'post_message'` so `failedCount` is the failure
+  //    counterpart of `sentCount` (a failed MESSAGE send) — not a failed
+  //    rename/pin/scheduled-event, which the outbox also carries. Only
+  //    `status = 'failed'` counts: a `pending` row is in-flight, not a failure (a
+  //    correct no-op must not read as a failure).
+  const failedByChannel = new Map<string, number>();
+  if (egressTargets.length > 0) {
+    const failedRows = await db
+      .select({
+        source: channelEgress.externalSource,
+        externalId: channelEgress.externalId,
+        value: count(),
+      })
+      .from(channelEgress)
+      .where(
+        and(
+          eq(channelEgress.status, "failed"),
+          eq(channelEgress.kind, "post_message"),
+          or(
+            ...egressTargets.map((t) =>
+              and(
+                eq(channelEgress.externalSource, t.source),
+                eq(channelEgress.externalId, t.externalId)
+              )
+            )
+          )
+        )
+      )
+      .groupBy(channelEgress.externalSource, channelEgress.externalId);
+    for (const r of failedRows) {
+      const channelId = targetToChannel.get(`${r.source}::${r.externalId}`);
+      if (channelId)
+        failedByChannel.set(
+          channelId,
+          (failedByChannel.get(channelId) ?? 0) + r.value
+        );
+    }
+  }
+
+  const channelsOut = aggregateEgressRollups({
+    outbound: scanRows,
+    meta,
+    failedByChannel,
+    order: input.order ?? "problems",
+  });
+
+  return { channels: channelsOut, scanned, truncated };
+}
+
+// ── Door 7: producer mode + per-mode health (the callable-vs-standing axis) ────
+//
+// An external-data capability runs in one of two MODES with DIFFERENT health
+// semantics:
+//
+//   standing — an always-on listener/webhook/bridge (Discord gateway, Proton
+//              bridge). Health = LIVENESS by last-seen age, NOT insight volume.
+//              A standing source with no recent data may be DEAD or merely QUIET;
+//              those are indistinguishable from the pod's ledgers alone, so the
+//              absence of recent data is reported as `idle` (a caution, "quiet or
+//              down"), NEVER as `failed`. Only a run/egress that actually broke
+//              (`fate.failed` / failed egress) is a failure.
+//   callable — an invocable verb (a poll/action run on demand). Health =
+//              SUCCESS-RATE over recent runs. A suppressed (correct no-op) unit is
+//              excluded from the denominator so an intentional filter never drags
+//              the rate down.
+//
+// The mode marker is resolved from the stored capability definition
+// (`capabilities.metadata.mode`, the SAME marker P6's transport planner shares),
+// falling back to a derived signal (a member tool whose `config.transport` marks
+// an always-on bridge ⇒ standing), and finally an HONEST `unknown` — never a
+// guessed default. Both readings reuse `listChannels({ capabilityId })` (which
+// carries the SAME `channelVisibilityWhere` + `resolveCapabilityChannelIds`
+// floors), so the health is a synthesis over already-floored data — no new SQL
+// floor, no frozen shape (`SignalSummary` / `SignalChannelRollup` /
+// `SignalEgressChannelRollup`) touched.
+
+export type CapabilityProducerMode = "standing" | "callable" | "unknown";
+export type CapabilityModeSource = "declared" | "derived_transport" | "unknown";
+
+/**
+ * How recently a standing source must have produced inbound signal to read
+ * `live`. Beyond this, it reads `idle` — quiet OR down, indistinguishable from
+ * the ledgers alone (a true bridge health-ping does not yet exist in the pod
+ * schema — see the door's report). 24h aligns with the summary window.
+ */
+const STANDING_FRESHNESS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve a capability's producer mode. `capabilities.metadata.mode` (declared)
+ * wins; else a member tool with `config.transport = 'bridge'` derives `standing`;
+ * else an honest `unknown`. Floored by `userVisibleWhere` — an unseeable
+ * capability yields `unknown` (and its channels are empty under the channel
+ * floor anyway).
+ */
+export async function resolveCapabilityMode(
+  userId: string,
+  capabilityId: string
+): Promise<{ mode: CapabilityProducerMode; source: CapabilityModeSource }> {
+  const [capRow] = await db
+    .select({ metadata: capabilities.metadata })
+    .from(capabilities)
+    .where(
+      and(
+        eq(capabilities.id, capabilityId),
+        userVisibleWhere(capabilities.workspaceId, userId)
+      )
+    )
+    .limit(1);
+  if (!capRow) return { mode: "unknown", source: "unknown" };
+
+  const declared = (capRow.metadata as Record<string, unknown> | null)?.mode;
+  if (declared === "standing" || declared === "callable")
+    return { mode: declared, source: "declared" };
+
+  // Derive: an always-on bridge member tool ⇒ standing. `config.transport` is the
+  // one concrete transport marker the catalog carries today (proton /
+  // telegram-bridge tools). NOT workspace-floored on its own — a tool id the
+  // caller can't act on leaks nothing here (only a mode label), and the capability
+  // row above was already visibility-floored.
+  const partIds = (await getCapabilityMemberParts([capabilityId])).map(
+    (p) => p.id
+  );
+  if (partIds.length > 0) {
+    const toolRows = await db
+      .select({ config: tools.config })
+      .from(tools)
+      .where(inArray(tools.id, partIds));
+    const hasBridge = toolRows.some(
+      (t) =>
+        ((t.config ?? {}) as Record<string, unknown>).transport === "bridge"
+    );
+    if (hasBridge) return { mode: "standing", source: "derived_transport" };
+  }
+
+  // No signal — honest unknown, never a guessed green.
+  return { mode: "unknown", source: "unknown" };
+}
+
+export interface CapabilityStandingHealth {
+  /** Most recent inbound message across the capability's channels; null = none seen. */
+  lastSeenAt: Date | null;
+  /** Age of `lastSeenAt` in ms; null when nothing has been seen. */
+  lastSeenAgeMs: number | null;
+  /**
+   * `live`   — inbound within the freshness window (proves the source is alive).
+   * `idle`   — no inbound within the window: QUIET or DOWN, indistinguishable
+   *            from the ledgers alone. Explicitly NOT `failed`.
+   * `unknown`— no inbound message has ever been recorded for this capability.
+   */
+  liveness: "live" | "idle" | "unknown";
+  /** The freshness window (ms) beyond which a standing source reads `idle`. */
+  freshnessWindowMs: number;
+  /** Channels carrying ≥1 `failed` unit — real breakage, distinct from mere quiet. */
+  failedChannels: number;
+}
+
+export interface CapabilityCallableHealth {
+  /** Inbound units classified over the capability's channels (recent prefix). */
+  messageCount: number;
+  extracted: number;
+  failed: number;
+  /** Correct no-ops (intentional filters) — excluded from the success denominator. */
+  suppressed: number;
+  /**
+   * `extracted / (messageCount − suppressed) * 100`, rounded; 0 when the
+   * denominator is 0. Suppressed units leave the denominator so an intentional
+   * filter never depresses the success rate.
+   */
+  successRatePct: number;
+}
+
+export interface CapabilityHealthResult {
+  capabilityId: string;
+  mode: CapabilityProducerMode;
+  modeSource: CapabilityModeSource;
+  /** Present when `mode === 'standing'`. */
+  standing: CapabilityStandingHealth | null;
+  /** Present when `mode === 'callable'`. */
+  callable: CapabilityCallableHealth | null;
+  /**
+   * Fate mix across the capability's channels (includes `suppressed`) — surfaced
+   * for BOTH modes so a suppressed unit is always visible as a correct no-op, not
+   * folded into a failure. Sums to `messageCount`.
+   */
+  fate: Record<SignalFate, number>;
+  messageCount: number;
+  channelCount: number;
+  /**
+   * True when the underlying channel scan hit `CHANNEL_SCAN_CAP` — the counts are
+   * a recent-prefix census, not a whole-history total (same honesty contract as
+   * `listChannels`); the caller must disclose it.
+   */
+  truncated: boolean;
+}
+
+/**
+ * Pure synthesis of per-mode health from a capability's channel rollups — the
+ * DB-free core of `getCapabilityHealth`, so the liveness threshold, the
+ * suppressed-excluded success rate, and the fate summation are unit-testable
+ * without a database. `now` is injected for deterministic liveness tests.
+ */
+export function synthesizeCapabilityHealth(args: {
+  capabilityId: string;
+  mode: CapabilityProducerMode;
+  modeSource: CapabilityModeSource;
+  rollups: SignalChannelRollup[];
+  truncated: boolean;
+  now?: number;
+}): CapabilityHealthResult {
+  const { capabilityId, mode, modeSource, rollups, truncated } = args;
+  const now = args.now ?? Date.now();
+
+  // Sum the fate mix + volume across the capability's channels.
+  const fate: Record<SignalFate, number> = {
+    extracted: 0,
+    no_insight: 0,
+    no_run: 0,
+    unprocessed_unbound: 0,
+    suppressed: 0,
+    failed: 0,
+  };
+  let messageCount = 0;
+  let failedChannels = 0;
+  let lastSeenAt: Date | null = null;
+  for (const r of rollups) {
+    messageCount += r.messageCount;
+    for (const k of Object.keys(fate) as SignalFate[]) fate[k] += r.fate[k];
+    if (r.fate.failed > 0) failedChannels += 1;
+    if (!lastSeenAt || r.lastActivityAt.getTime() > lastSeenAt.getTime())
+      lastSeenAt = r.lastActivityAt;
+  }
+
+  const standing: CapabilityStandingHealth | null =
+    mode === "standing"
+      ? {
+          lastSeenAt,
+          lastSeenAgeMs: lastSeenAt ? now - lastSeenAt.getTime() : null,
+          liveness: !lastSeenAt
+            ? "unknown"
+            : now - lastSeenAt.getTime() <= STANDING_FRESHNESS_WINDOW_MS
+              ? "live"
+              : "idle",
+          freshnessWindowMs: STANDING_FRESHNESS_WINDOW_MS,
+          failedChannels,
+        }
+      : null;
+
+  const callable: CapabilityCallableHealth | null =
+    mode === "callable"
+      ? {
+          messageCount,
+          extracted: fate.extracted,
+          failed: fate.failed,
+          suppressed: fate.suppressed,
+          // Suppressed units leave the denominator (intentional no-ops don't count
+          // against success). 0 when nothing actionable ran.
+          successRatePct:
+            messageCount - fate.suppressed <= 0
+              ? 0
+              : Math.round(
+                  (fate.extracted / (messageCount - fate.suppressed)) * 100
+                ),
+        }
+      : null;
+
+  return {
+    capabilityId,
+    mode,
+    modeSource,
+    standing,
+    callable,
+    fate,
+    messageCount,
+    channelCount: rollups.length,
+    truncated,
+  };
+}
+
+/**
+ * Producer mode + per-mode health for one capability. Synthesizes over
+ * `listChannels({ capabilityId })` (already floored + capability-scoped): last-
+ * seen liveness for standing, run success-rate for callable, and the full fate
+ * mix (with `suppressed`) for both. Never fabricates a mode — an undeclared,
+ * non-bridge capability reads `unknown` with empty per-mode health.
+ */
+export async function getCapabilityHealth(
+  userId: string,
+  capabilityId: string
+): Promise<CapabilityHealthResult> {
+  // Visibility gate — symmetric with `getCapabilityIssues`. A capability the
+  // caller can't see yields an empty `unknown` health, never health synthesized
+  // over channels it happens to see pod-wide. `resolveCapabilityMode` already
+  // floors the mode read, so this is defense-in-depth + it skips the channel
+  // rollup work for an unseeable capability.
+  const [capRow] = await db
+    .select({ id: capabilities.id })
+    .from(capabilities)
+    .where(
+      and(
+        eq(capabilities.id, capabilityId),
+        userVisibleWhere(capabilities.workspaceId, userId)
+      )
+    )
+    .limit(1);
+  if (!capRow)
+    return synthesizeCapabilityHealth({
+      capabilityId,
+      mode: "unknown",
+      modeSource: "unknown",
+      rollups: [],
+      truncated: false,
+    });
+
+  const [{ mode, source }, channelsResult] = await Promise.all([
+    resolveCapabilityMode(userId, capabilityId),
+    listChannels({ userId, capabilityId, order: "recent" }),
+  ]);
+  return synthesizeCapabilityHealth({
+    capabilityId,
+    mode,
+    modeSource: source,
+    rollups: channelsResult.channels,
+    truncated: channelsResult.truncated,
+  });
+}
+
+// ── Door 8: intended-vs-actual DRIFT, surfaced as Issues ──────────────────────
+//
+// A capability DECLARES an intended behavior; the lens OBSERVES the actual. The
+// GAP is DRIFT — promoted here from a log line to an actionable ISSUE (a
+// severity + a human sentence + a suggested Fix + a targetRef). This door owns
+// NO new store and NO new signal: it COMPOSES the drift the P1–P7 lens already
+// derives into ONE ranked list. The composition is pure + testable; the async
+// door just gathers the already-floored inputs and hands them over.
+//
+// The two drift families it consolidates:
+//   · STRUCTURAL — the composition's `gaps[]` (a declared-but-unwired member, a
+//     dangling member link, an archived flow). These are ALREADY human-phrased,
+//     so Issues consolidates them verbatim, adding only severity + a targetRef +
+//     a Fix. It does NOT re-derive them (the task's "don't duplicate gaps[]").
+//   · EXTERNAL-DATA RUNTIME — from the P2–P7 signals: a produced channel whose
+//     extraction FAILED (real breakage), a produced channel receiving signal but
+//     NOT bound (an activation gap), an outbound target with failed deliveries, a
+//     declared standing source that is silent or idle, and an undeclared mode on
+//     an OBSERVED capability (config hygiene).
+//
+// Severity is NOT boolean (Fivetran's error-vs-warning): `error` = data is
+// failing/lost, `warning` = degraded/attention, `info` = advisory hygiene.
+//
+// HONESTY (the no-fabrication guard). An Issue must be TRUE and ACTIONABLE:
+//   · an `unknown`-mode capability with NO observed signal is UNOBSERVED, not
+//     broken — it yields ZERO issues (mode_undeclared fires only when data has
+//     actually moved);
+//   · a `suppressed` unit is a CORRECT no-op (an intentional filter) and never
+//     becomes an Issue — the runtime scans key only on `fate.failed`, unbound,
+//     and failed-egress, never on suppressed or on a merely-low success rate
+//     (a low rate from `no_insight` is "ran, found nothing", not a failure);
+//   · a quiet standing source reads `standing_idle`/`silent_producer`, NEVER
+//     `failed` (quiet vs down is indistinguishable from the ledgers alone).
+//
+// NOT built (the FUTURE decision): a "dataflow manifest" — an explicit
+// declared-produces / declared-sends SPEC to diff SHAPE and INTEGRITY drift
+// against (wrong field types, dropped records). It does not exist in the schema
+// today, and inventing a speculative manifest+engine is the trap this door
+// avoids. P5 scopes to the drift DERIVABLE now (structural + behavior/liveness);
+// shape/integrity drift waits on a real manifest.
+
+export type CapabilityIssueSeverity = "error" | "warning" | "info";
+
+export type CapabilityIssueKind =
+  /** A member the capability references no longer resolves to a row (structural). */
+  | "member_missing"
+  /** A member present but not wired into the capability — orphaned verb, archived flow (structural). */
+  | "member_unwired"
+  /** Extraction errored/cancelled on a produced channel (runtime breakage). */
+  | "run_failure"
+  /** A produced channel is receiving inbound signal but is not bound to a record (activation gap). */
+  | "channel_unbound"
+  /** Outbound sends to a channel's external target are failing in the delivery outbox. */
+  | "delivery_failure"
+  /** A declared/derived always-on source has been quiet past the freshness window. */
+  | "standing_idle"
+  /** A standing source has produced NO channels — intended-to-listen, actually-silent. */
+  | "silent_producer"
+  /** The capability moves external data but hasn't declared its producer mode (hygiene). */
+  | "mode_undeclared";
+
+/**
+ * A suggested Fix mapped to an EXISTING action — never a new remedy. The frontend
+ * dispatches the action through the door that already owns it:
+ *   · bind_channel     → the existing channel-bind proposal (BindChannelModal);
+ *   · rerun_channel    → `signal.channelRerun` (governed re-run);
+ *   · open_composition → the capability's composition facet (shows gaps + remedy);
+ *   · open_egress      → the outbound egress rollup (`signal.egress`);
+ *   · declare_mode     → edit `capabilities.metadata.mode`.
+ */
+export type CapabilityIssueFixAction =
+  | { kind: "bind_channel"; channelId: string }
+  | { kind: "rerun_channel"; channelId: string }
+  | { kind: "open_composition" }
+  | { kind: "open_egress" }
+  | { kind: "declare_mode" };
+
+export interface CapabilityIssueFix {
+  label: string;
+  action: CapabilityIssueFixAction;
+}
+
+export interface CapabilityIssue {
+  kind: CapabilityIssueKind;
+  severity: CapabilityIssueSeverity;
+  /** A human sentence — what drifted, in plain language. */
+  title: string;
+  /** One line of supporting context. */
+  detail: string;
+  /** The existing action that resolves it, when one maps cleanly. */
+  fix?: CapabilityIssueFix;
+  /** The object the Issue is about (channel / capability / member), for deep-link. */
+  targetRef?: { kind: string; id: string };
+}
+
+export interface CapabilityIssuesResult {
+  capabilityId: string;
+  /** Ranked worst-first (severity, then a stable kind order, then title). */
+  issues: CapabilityIssue[];
+  /** Per-severity tallies — the facet badge reads `error + warning`. */
+  counts: { error: number; warning: number; info: number };
+  /**
+   * True when the underlying channel scan was truncated — the runtime counts are
+   * a recent-prefix census, not a whole-history total. The caller must disclose it.
+   */
+  truncated: boolean;
+}
+
+/** Severity ordering for the worst-first sort. */
+const ISSUE_SEVERITY_RANK: Record<CapabilityIssueSeverity, number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+};
+
+/** Stable secondary ordering within a severity, so equal-severity Issues don't jitter. */
+const ISSUE_KIND_RANK: Record<CapabilityIssueKind, number> = {
+  member_missing: 0,
+  delivery_failure: 1,
+  run_failure: 2,
+  channel_unbound: 3,
+  member_unwired: 4,
+  standing_idle: 5,
+  silent_producer: 6,
+  mode_undeclared: 7,
+};
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+export interface ComposeCapabilityIssuesInput {
+  capabilityId: string;
+  /** The composition's human-phrased structural gaps — consolidated verbatim. */
+  gaps: string[];
+  /** The composition's members — used to attach a targetRef to a structural Issue. */
+  members: CapabilityComposition["members"];
+  /** Synthesized producer-mode health (mode + standing/callable + fate + counts). */
+  health: CapabilityHealthResult;
+  /** Per-channel INBOUND rollups (bound flag + fate) — activation + failure signals. */
+  channels: SignalChannelRollup[];
+  /** Per-channel OUTBOUND rollups (failedCount) — delivery-drift signal. */
+  egress: SignalEgressChannelRollup[];
+  truncated: boolean;
+}
+
+/**
+ * PURE composition of a capability's drift Issues from the already-derived
+ * signals. DB-free so every Issue kind, the severity ranking, and the
+ * no-fabrication guard are unit-testable without a database.
+ */
+export function composeCapabilityIssues(
+  input: ComposeCapabilityIssuesInput
+): CapabilityIssuesResult {
+  const { capabilityId, gaps, members, health, channels, egress, truncated } =
+    input;
+  const issues: CapabilityIssue[] = [];
+
+  // ── Structural drift: consolidate the composition's human-phrased gaps[]. ──
+  // A gap saying "not found" is a MISSING member (a dangling reference — data is
+  // broken → error); any other gap ("unwired", "archived") is a member present
+  // but not wired in (degraded → warning). The gap string IS the human title.
+  for (const gap of gaps) {
+    const missing = /not found/i.test(gap);
+    const member = members.find((m) => m.name && gap.includes(m.name));
+    issues.push({
+      kind: missing ? "member_missing" : "member_unwired",
+      severity: missing ? "error" : "warning",
+      title: gap,
+      detail: missing
+        ? "A member this capability references no longer resolves to a row."
+        : "A member is present but not wired into the capability (it lacks its own edges).",
+      fix: { label: "Open composition", action: { kind: "open_composition" } },
+      ...(member ? { targetRef: { kind: member.kind, id: member.id } } : {}),
+    });
+  }
+
+  // ── Runtime breakage: extraction FAILED on a produced channel (data lost). ──
+  // Keyed strictly on `fate.failed` — a suppressed (correct no-op) or no_insight
+  // (ran, found nothing) unit never enters here, so an intentional filter or an
+  // empty inbox never fabricates a failure.
+  for (const c of channels) {
+    if (c.fate.failed > 0) {
+      issues.push({
+        kind: "run_failure",
+        severity: "error",
+        title: `Extraction failed on "${c.name ?? c.channelId}" (${plural(
+          c.fate.failed,
+          "message"
+        )})`,
+        detail:
+          "An extraction run errored or was cancelled before producing on this channel.",
+        fix: {
+          label: "Re-run channel",
+          action: { kind: "rerun_channel", channelId: c.channelId },
+        },
+        targetRef: { kind: "channel", id: c.channelId },
+      });
+    }
+  }
+
+  // ── Activation gap: a produced channel receiving signal but NOT bound. ──
+  // Intended (a source is wired to receive) vs actual (nothing routes what lands).
+  for (const c of channels) {
+    if (!c.bound && c.messageCount > 0) {
+      issues.push({
+        kind: "channel_unbound",
+        severity: "warning",
+        title: `"${
+          c.name ?? c.channelId
+        }" is receiving signal but isn't wired to a record`,
+        detail: `${plural(
+          c.messageCount,
+          "inbound message"
+        )} landed on a channel with no context entity — nothing routes them.`,
+        fix: {
+          label: "Bind channel",
+          action: { kind: "bind_channel", channelId: c.channelId },
+        },
+        targetRef: { kind: "channel", id: c.channelId },
+      });
+    }
+  }
+
+  // ── Delivery drift: outbound sends that terminally failed in the outbox. ──
+  for (const c of egress) {
+    if (c.failedCount > 0) {
+      issues.push({
+        kind: "delivery_failure",
+        severity: "error",
+        title: `${plural(
+          c.failedCount,
+          "outbound message"
+        )} failed to deliver on "${c.name ?? c.channelId}"`,
+        detail:
+          "Sends to this channel's external target are failing in the delivery outbox.",
+        fix: { label: "Review deliveries", action: { kind: "open_egress" } },
+        targetRef: { kind: "channel", id: c.channelId },
+      });
+    }
+  }
+
+  // ── Standing-mode liveness drift (a declared/derived always-on source). ──
+  // NEVER `failed`: quiet vs down is indistinguishable from the ledgers alone.
+  if (health.mode === "standing" && health.standing) {
+    if (health.channelCount === 0) {
+      // Intended-to-listen, actually-silent — the flagship external-data drift.
+      // Confidence-weighted: an EXPLICIT declaration + silence warrants attention;
+      // a merely-DERIVED mode + silence is advisory (it may just be new).
+      issues.push({
+        kind: "silent_producer",
+        severity: health.modeSource === "declared" ? "warning" : "info",
+        title: "This listener has produced no channels yet",
+        detail:
+          "The capability is configured as an always-on source, but no inbound data has flowed through it — verify its connection.",
+        targetRef: { kind: "capability", id: capabilityId },
+      });
+    } else if (health.standing.liveness === "idle") {
+      issues.push({
+        kind: "standing_idle",
+        severity: "warning",
+        title: "No inbound signal in the last 24h",
+        detail:
+          "This always-on source has been quiet for over 24h — it may be idle or down (indistinguishable from the pod's ledgers alone).",
+        targetRef: { kind: "capability", id: capabilityId },
+      });
+    }
+  }
+
+  // ── Config hygiene: OBSERVED but undeclared mode. ──
+  // Only when data has ACTUALLY moved (channels produced or messages seen) — an
+  // unobserved unknown-mode capability is not "broken", it's unobserved.
+  if (
+    health.mode === "unknown" &&
+    (health.messageCount > 0 || health.channelCount > 0)
+  ) {
+    issues.push({
+      kind: "mode_undeclared",
+      severity: "info",
+      title: "This capability's producer mode isn't declared",
+      detail:
+        "It is moving external data but hasn't declared whether it's an always-on listener or an on-demand action — declare metadata.mode so its health reads correctly.",
+      fix: { label: "Declare mode", action: { kind: "declare_mode" } },
+      targetRef: { kind: "capability", id: capabilityId },
+    });
+  }
+
+  // Rank worst-first: severity, then the stable kind order, then title.
+  issues.sort((a, b) => {
+    const s = ISSUE_SEVERITY_RANK[a.severity] - ISSUE_SEVERITY_RANK[b.severity];
+    if (s !== 0) return s;
+    const k = ISSUE_KIND_RANK[a.kind] - ISSUE_KIND_RANK[b.kind];
+    if (k !== 0) return k;
+    return a.title.localeCompare(b.title);
+  });
+
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const i of issues) counts[i.severity] += 1;
+
+  return { capabilityId, issues, counts, truncated };
+}
+
+/**
+ * Intended-vs-actual drift for ONE capability, as a ranked Issues list. Gathers
+ * the already-floored drift inputs — the composition's structural gaps, the
+ * producer-mode health, and the inbound/outbound channel rollups — and hands
+ * them to the pure `composeCapabilityIssues`. Visibility-gated: a capability the
+ * caller can't see (or that doesn't exist) resolves to an empty, all-zero result
+ * rather than leaking.
+ */
+export async function getCapabilityIssues(
+  userId: string,
+  capabilityId: string
+): Promise<CapabilityIssuesResult> {
+  const empty: CapabilityIssuesResult = {
+    capabilityId,
+    issues: [],
+    counts: { error: 0, warning: 0, info: 0 },
+    truncated: false,
+  };
+
+  // Visibility gate + load the container row the composition build needs.
+  const [capRow] = await db
+    .select({
+      id: capabilities.id,
+      name: capabilities.name,
+      approved: capabilities.approved,
+      metadata: capabilities.metadata,
+    })
+    .from(capabilities)
+    .where(
+      and(
+        eq(capabilities.id, capabilityId),
+        userVisibleWhere(capabilities.workspaceId, userId)
+      )
+    )
+    .limit(1);
+  if (!capRow) return empty;
+
+  const [composition, modeRes, channelsRes, egressRes] = await Promise.all([
+    buildCapabilityComposition({
+      userId,
+      capability: {
+        id: capRow.id,
+        name: capRow.name,
+        approved: capRow.approved,
+        metadata: capRow.metadata as Record<string, unknown> | null,
+      },
+    }),
+    resolveCapabilityMode(userId, capabilityId),
+    listChannels({ userId, capabilityId, order: "recent" }),
+    listEgress({ userId, capabilityId, order: "problems" }),
+  ]);
+
+  const health = synthesizeCapabilityHealth({
+    capabilityId,
+    mode: modeRes.mode,
+    modeSource: modeRes.source,
+    rollups: channelsRes.channels,
+    truncated: channelsRes.truncated,
+  });
+
+  return composeCapabilityIssues({
+    capabilityId,
+    gaps: composition.gaps,
+    members: composition.members,
+    health,
+    channels: channelsRes.channels,
+    egress: egressRes.channels,
+    truncated: channelsRes.truncated || egressRes.truncated,
+  });
 }

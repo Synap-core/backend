@@ -7018,9 +7018,17 @@ export interface ChannelStackResult {
  *   unprocessed_unbound — the message landed but NO extraction run consumed it
  *                         AND the channel is not bound to any context entity
  *                         (never wired to a client). THE structural-gap view.
+ *   suppressed          — a run consumed the message but was SKIPPED by design: a
+ *                         flow-level precondition/filter evaluated false at start,
+ *                         so the run finalized (`status = 'skipped'`) before any
+ *                         step executed. A CORRECT no-op ("filtered on purpose"),
+ *                         NOT a failure and NOT `no_insight` (which is a run that
+ *                         ran fully yet produced nothing). This is the honesty gap
+ *                         Zapier calls its #1 confusion: an intentional filter must
+ *                         never read as a broken pipeline.
  *   failed              — the run errored or was cancelled before producing.
  */
-export type SignalFate = "extracted" | "no_insight" | "no_run" | "unprocessed_unbound" | "failed";
+export type SignalFate = "extracted" | "no_insight" | "no_run" | "unprocessed_unbound" | "suppressed" | "failed";
 export interface SignalLinks {
 	/** The extraction run this message opened (null when unprocessed_unbound). */
 	runId: string | null;
@@ -7181,6 +7189,173 @@ export interface QualityByVersionResult {
 	/** External-message runs scanned to build the slice. */
 	scanned: number;
 	/** True when the scan hit the cap — an older version may be under-counted. */
+	truncated: boolean;
+}
+export interface SignalEgressChannelRollup {
+	channelId: string;
+	name: string | null;
+	provider: string | null;
+	/**
+	 * Outbound messages authored toward the platform (human + agent) within the
+	 * scan prefix — the symmetric mirror of the inbound `messageCount`.
+	 */
+	sentCount: number;
+	/**
+	 * Terminal-failed message sends (`kind = 'post_message'`, `status = 'failed'`)
+	 * in the `channel_egress` outbox for this channel's external target — the
+	 * failure counterpart of `sentCount`. 0 for providers that deliver inline
+	 * (which write no outbox row) — a genuine 0, not a hidden failure.
+	 */
+	failedCount: number;
+	/**
+	 * Most recent outbound message on the channel within the scan prefix; null when
+	 * the channel surfaces ONLY via a failed-egress row (every send failed, so no
+	 * message row was written).
+	 */
+	lastSentAt: Date | null;
+}
+export interface ListEgressResult {
+	channels: SignalEgressChannelRollup[];
+	/** Outbound messages actually scanned to build the rollup. */
+	scanned: number;
+	/**
+	 * True when the scan hit `CHANNEL_SCAN_CAP` — the per-channel `sentCount`/
+	 * `lastSentAt` cover only the most recent `scanned` outbound messages, so the
+	 * caller must disclose "showing recent N" (same honesty contract as
+	 * `listChannels`). `failedCount` is a full count of the outbox failure backlog,
+	 * not windowed.
+	 */
+	truncated: boolean;
+}
+export type CapabilityProducerMode = "standing" | "callable" | "unknown";
+export type CapabilityModeSource = "declared" | "derived_transport" | "unknown";
+export interface CapabilityStandingHealth {
+	/** Most recent inbound message across the capability's channels; null = none seen. */
+	lastSeenAt: Date | null;
+	/** Age of `lastSeenAt` in ms; null when nothing has been seen. */
+	lastSeenAgeMs: number | null;
+	/**
+	 * `live`   — inbound within the freshness window (proves the source is alive).
+	 * `idle`   — no inbound within the window: QUIET or DOWN, indistinguishable
+	 *            from the ledgers alone. Explicitly NOT `failed`.
+	 * `unknown`— no inbound message has ever been recorded for this capability.
+	 */
+	liveness: "live" | "idle" | "unknown";
+	/** The freshness window (ms) beyond which a standing source reads `idle`. */
+	freshnessWindowMs: number;
+	/** Channels carrying ≥1 `failed` unit — real breakage, distinct from mere quiet. */
+	failedChannels: number;
+}
+export interface CapabilityCallableHealth {
+	/** Inbound units classified over the capability's channels (recent prefix). */
+	messageCount: number;
+	extracted: number;
+	failed: number;
+	/** Correct no-ops (intentional filters) — excluded from the success denominator. */
+	suppressed: number;
+	/**
+	 * `extracted / (messageCount − suppressed) * 100`, rounded; 0 when the
+	 * denominator is 0. Suppressed units leave the denominator so an intentional
+	 * filter never depresses the success rate.
+	 */
+	successRatePct: number;
+}
+export interface CapabilityHealthResult {
+	capabilityId: string;
+	mode: CapabilityProducerMode;
+	modeSource: CapabilityModeSource;
+	/** Present when `mode === 'standing'`. */
+	standing: CapabilityStandingHealth | null;
+	/** Present when `mode === 'callable'`. */
+	callable: CapabilityCallableHealth | null;
+	/**
+	 * Fate mix across the capability's channels (includes `suppressed`) — surfaced
+	 * for BOTH modes so a suppressed unit is always visible as a correct no-op, not
+	 * folded into a failure. Sums to `messageCount`.
+	 */
+	fate: Record<SignalFate, number>;
+	messageCount: number;
+	channelCount: number;
+	/**
+	 * True when the underlying channel scan hit `CHANNEL_SCAN_CAP` — the counts are
+	 * a recent-prefix census, not a whole-history total (same honesty contract as
+	 * `listChannels`); the caller must disclose it.
+	 */
+	truncated: boolean;
+}
+export type CapabilityIssueSeverity = "error" | "warning" | "info";
+export type CapabilityIssueKind = 
+/** A member the capability references no longer resolves to a row (structural). */
+"member_missing"
+/** A member present but not wired into the capability — orphaned verb, archived flow (structural). */
+ | "member_unwired"
+/** Extraction errored/cancelled on a produced channel (runtime breakage). */
+ | "run_failure"
+/** A produced channel is receiving inbound signal but is not bound to a record (activation gap). */
+ | "channel_unbound"
+/** Outbound sends to a channel's external target are failing in the delivery outbox. */
+ | "delivery_failure"
+/** A declared/derived always-on source has been quiet past the freshness window. */
+ | "standing_idle"
+/** A standing source has produced NO channels — intended-to-listen, actually-silent. */
+ | "silent_producer"
+/** The capability moves external data but hasn't declared its producer mode (hygiene). */
+ | "mode_undeclared";
+/**
+ * A suggested Fix mapped to an EXISTING action — never a new remedy. The frontend
+ * dispatches the action through the door that already owns it:
+ *   · bind_channel     → the existing channel-bind proposal (BindChannelModal);
+ *   · rerun_channel    → `signal.channelRerun` (governed re-run);
+ *   · open_composition → the capability's composition facet (shows gaps + remedy);
+ *   · open_egress      → the outbound egress rollup (`signal.egress`);
+ *   · declare_mode     → edit `capabilities.metadata.mode`.
+ */
+export type CapabilityIssueFixAction = {
+	kind: "bind_channel";
+	channelId: string;
+} | {
+	kind: "rerun_channel";
+	channelId: string;
+} | {
+	kind: "open_composition";
+} | {
+	kind: "open_egress";
+} | {
+	kind: "declare_mode";
+};
+export interface CapabilityIssueFix {
+	label: string;
+	action: CapabilityIssueFixAction;
+}
+export interface CapabilityIssue {
+	kind: CapabilityIssueKind;
+	severity: CapabilityIssueSeverity;
+	/** A human sentence — what drifted, in plain language. */
+	title: string;
+	/** One line of supporting context. */
+	detail: string;
+	/** The existing action that resolves it, when one maps cleanly. */
+	fix?: CapabilityIssueFix;
+	/** The object the Issue is about (channel / capability / member), for deep-link. */
+	targetRef?: {
+		kind: string;
+		id: string;
+	};
+}
+export interface CapabilityIssuesResult {
+	capabilityId: string;
+	/** Ranked worst-first (severity, then a stable kind order, then title). */
+	issues: CapabilityIssue[];
+	/** Per-severity tallies — the facet badge reads `error + warning`. */
+	counts: {
+		error: number;
+		warning: number;
+		info: number;
+	};
+	/**
+	 * True when the underlying channel scan was truncated — the runtime counts are
+	 * a recent-prefix census, not a whole-history total. The caller must disclose it.
+	 */
 	truncated: boolean;
 }
 /**
@@ -24647,6 +24822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cursor?: string | undefined;
 				order?: "recent" | "problems" | undefined;
 				channelId?: string | undefined;
+				capabilityId?: string | undefined;
 			};
 			output: SignalPipelinePage;
 			meta: object;
@@ -24654,13 +24830,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		channels: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				order?: "recent" | "problems" | undefined;
+				capabilityId?: string | undefined;
 			};
 			output: ListChannelsResult;
 			meta: object;
 		}>;
+		egress: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				order?: "recent" | "problems" | undefined;
+				capabilityId?: string | undefined;
+			};
+			output: ListEgressResult;
+			meta: object;
+		}>;
 		summary: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				capabilityId?: string | undefined;
+			} | undefined;
 			output: SignalSummary;
+			meta: object;
+		}>;
+		capabilityHealth: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				capabilityId: string;
+			};
+			output: CapabilityHealthResult;
+			meta: object;
+		}>;
+		capabilityIssues: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				capabilityId: string;
+			};
+			output: CapabilityIssuesResult;
 			meta: object;
 		}>;
 		provenance: import("@trpc/server").TRPCQueryProcedure<{

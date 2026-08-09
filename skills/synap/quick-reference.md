@@ -8,7 +8,7 @@ synap use <workspace-name-or-id>                       # focus a workspace (this
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
 synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered
-synap capture --type=lesson --claim="…" --json         # Work lane (default) — domain knowledge → active workspace
+synap create entity --profile=knowledge --name="…" --props='{"knowledgeForm":"insight|caution"}' --content="…" --json
 synap capture --global --type=reference --claim="…" --json  # Global lane — pod-wide cross-cutting runbook (knowledge_keys)
 synap observe write "…" --json                          # User lane — durable user model (inferences proposed)
 ```

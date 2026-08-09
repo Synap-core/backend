@@ -61,6 +61,9 @@ import {
   findExtractionNodeId,
   resolveTuneTarget,
   getQualityByVersion,
+  synthesizeCapabilityHealth,
+  type SignalChannelRollup,
+  type SignalFate,
 } from "./index.js";
 
 /**
@@ -184,6 +187,31 @@ describe("classifySignalFate", () => {
         producedCount: 3,
       })
     ).toBe("failed");
+  });
+
+  it("suppressed — a run was SKIPPED by a flow precondition (correct no-op)", () => {
+    expect(
+      classifySignalFate({
+        hasRun: true,
+        bound: true,
+        runStatus: "skipped",
+        producedCount: 0,
+      })
+    ).toBe("suppressed");
+  });
+
+  it("suppressed wins over extracted even if a skipped run somehow reports produced", () => {
+    // A skipped run finalizes before any step, so producedCount is 0 in practice;
+    // the ordering guarantee (skipped ⇒ suppressed, never extracted) is asserted
+    // regardless so a filtered message can never read as an insight.
+    expect(
+      classifySignalFate({
+        hasRun: true,
+        bound: true,
+        runStatus: "skipped",
+        producedCount: 5,
+      })
+    ).toBe("suppressed");
   });
 });
 
@@ -947,5 +975,202 @@ describe("getQualityByVersion", () => {
     h.queue([]);
     const out = await getQualityByVersion({ userId: "u1" });
     expect(out).toEqual({ automations: [], scanned: 0, truncated: false });
+  });
+});
+
+// ── Pure: producer-mode + per-mode health synthesis ───────────────────────────
+
+describe("synthesizeCapabilityHealth", () => {
+  const NOW = 1_000_000_000_000; // fixed clock for deterministic liveness
+
+  const zeroFate = (): Record<SignalFate, number> => ({
+    extracted: 0,
+    no_insight: 0,
+    no_run: 0,
+    unprocessed_unbound: 0,
+    suppressed: 0,
+    failed: 0,
+  });
+
+  const rollup = (
+    over: Partial<SignalChannelRollup> & { lastActivityAt: Date }
+  ): SignalChannelRollup => ({
+    channelId: "c",
+    name: null,
+    provider: null,
+    bound: true,
+    boundEntityId: null,
+    messageCount: 0,
+    extractionRatePct: 0,
+    fate: zeroFate(),
+    ...over,
+  });
+
+  it("standing + recent inbound ⇒ live (data proves the source alive)", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "standing",
+      modeSource: "declared",
+      rollups: [
+        rollup({
+          messageCount: 3,
+          fate: { ...zeroFate(), extracted: 3 },
+          lastActivityAt: new Date(NOW - 60_000), // 1 min ago
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.mode).toBe("standing");
+    expect(h.standing?.liveness).toBe("live");
+    expect(h.standing?.failedChannels).toBe(0);
+    expect(h.callable).toBeNull();
+  });
+
+  it("standing + stale inbound ⇒ idle (quiet OR down — NEVER failed)", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "standing",
+      modeSource: "derived_transport",
+      rollups: [
+        rollup({
+          messageCount: 1,
+          fate: { ...zeroFate(), extracted: 1 },
+          lastActivityAt: new Date(NOW - 48 * 60 * 60 * 1000), // 48h ago
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.standing?.liveness).toBe("idle");
+    // idle is a caution state, not a failure: no failed unit ⇒ no failedChannels.
+    expect(h.standing?.failedChannels).toBe(0);
+  });
+
+  it("standing + real breakage ⇒ idle-or-live BUT failedChannels counts the break", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "standing",
+      modeSource: "declared",
+      rollups: [
+        rollup({
+          messageCount: 2,
+          fate: { ...zeroFate(), failed: 2 },
+          lastActivityAt: new Date(NOW - 30_000),
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.standing?.liveness).toBe("live");
+    expect(h.standing?.failedChannels).toBe(1);
+    expect(h.fate.failed).toBe(2);
+  });
+
+  it("standing + never seen ⇒ unknown liveness (honest, not green)", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "standing",
+      modeSource: "declared",
+      rollups: [],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.standing?.liveness).toBe("unknown");
+    expect(h.standing?.lastSeenAt).toBeNull();
+    expect(h.standing?.lastSeenAgeMs).toBeNull();
+  });
+
+  it("callable success rate EXCLUDES suppressed no-ops from the denominator", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "callable",
+      modeSource: "declared",
+      rollups: [
+        rollup({
+          messageCount: 10,
+          // 4 extracted, 4 suppressed (intentional filters), 2 no_insight.
+          fate: { ...zeroFate(), extracted: 4, suppressed: 4, no_insight: 2 },
+          lastActivityAt: new Date(NOW - 1000),
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    // Denominator = 10 − 4 suppressed = 6; 4/6 = 67% (not 40% over all 10).
+    expect(h.callable?.successRatePct).toBe(67);
+    expect(h.callable?.suppressed).toBe(4);
+    expect(h.standing).toBeNull();
+  });
+
+  it("callable with only suppressed units ⇒ 0% (empty denominator, no divide-by-zero)", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "callable",
+      modeSource: "declared",
+      rollups: [
+        rollup({
+          messageCount: 3,
+          fate: { ...zeroFate(), suppressed: 3 },
+          lastActivityAt: new Date(NOW - 1000),
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.callable?.successRatePct).toBe(0);
+  });
+
+  it("unknown mode ⇒ both per-mode blocks null, fate still summed", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "unknown",
+      modeSource: "unknown",
+      rollups: [
+        rollup({
+          messageCount: 2,
+          fate: { ...zeroFate(), extracted: 1, suppressed: 1 },
+          lastActivityAt: new Date(NOW - 1000),
+        }),
+      ],
+      truncated: false,
+      now: NOW,
+    });
+    expect(h.standing).toBeNull();
+    expect(h.callable).toBeNull();
+    expect(h.fate.extracted).toBe(1);
+    expect(h.fate.suppressed).toBe(1);
+    expect(h.messageCount).toBe(2);
+  });
+
+  it("fate mix + lastSeen aggregate across multiple channels; truncated passes through", () => {
+    const h = synthesizeCapabilityHealth({
+      capabilityId: "cap",
+      mode: "standing",
+      modeSource: "declared",
+      rollups: [
+        rollup({
+          channelId: "c1",
+          messageCount: 2,
+          fate: { ...zeroFate(), extracted: 2 },
+          lastActivityAt: new Date(NOW - 5 * 60_000),
+        }),
+        rollup({
+          channelId: "c2",
+          messageCount: 1,
+          fate: { ...zeroFate(), failed: 1 },
+          lastActivityAt: new Date(NOW - 60_000), // most recent
+        }),
+      ],
+      truncated: true,
+      now: NOW,
+    });
+    expect(h.messageCount).toBe(3);
+    expect(h.channelCount).toBe(2);
+    expect(h.fate.extracted).toBe(2);
+    expect(h.fate.failed).toBe(1);
+    expect(h.standing?.lastSeenAt).toEqual(new Date(NOW - 60_000));
+    expect(h.standing?.failedChannels).toBe(1);
+    expect(h.truncated).toBe(true);
   });
 });

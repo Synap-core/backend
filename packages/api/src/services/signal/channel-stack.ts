@@ -137,7 +137,8 @@ export async function getChannelStack(input: {
   }
 
   // ── 2. Graph edges touching the channel (ONE query, userVisibleWhere-floored
-  //      inside `getLinksFor`) — origin + capability targets both come from it.
+  //      inside `getLinksFor`) — the origin `produced` edge comes from here; the
+  //      capability is then derived from the producer's `member_of` (below).
   const edges = await getLinksFor(userId, "channel", channelId);
 
   const producedEdge = edges.find(
@@ -169,19 +170,36 @@ export async function getChannelStack(input: {
         }
       : null;
 
-  const capabilityIds = [
-    ...new Set(
-      edges
-        .filter(
-          (e) =>
-            e.linkType === "targets" &&
-            e.fromType === "capability" &&
-            e.toType === "channel" &&
-            e.toId === channelId
-        )
-        .map((e) => e.fromId)
-    ),
-  ].slice(0, CAPABILITY_CAP);
+  // Capabilities the channel belongs to, DERIVED from its origin producer:
+  //   channel <--produced-- tool --member_of--> capability
+  // The `capability --targets--> channel` edge this once read has NO writer
+  // anywhere in the codebase, so it always resolved to nothing. A channel's
+  // capability is its PRODUCER's container: follow the produced edge to the tool
+  // (or skill/command) that made the channel, then that part's `member_of`
+  // capability container. Legacy channels whose origin is still a bare `source`
+  // slug (no installed tool) have no producer node and surface no capability —
+  // exactly right, since none is installed.
+  const producerEndpoint = producedEdge?.fromType ?? null;
+  const producerId = producedEdge?.fromId ?? null;
+  const capabilityIds =
+    producerId &&
+    (producerEndpoint === "tool" ||
+      producerEndpoint === "skill" ||
+      producerEndpoint === "command")
+      ? [
+          ...new Set(
+            (await getLinksFor(userId, producerEndpoint, producerId))
+              .filter(
+                (e) =>
+                  e.linkType === "member_of" &&
+                  e.fromType === producerEndpoint &&
+                  e.fromId === producerId &&
+                  e.toType === "capability"
+              )
+              .map((e) => e.toId)
+          ),
+        ].slice(0, CAPABILITY_CAP)
+      : [];
 
   const capabilityRows =
     capabilityIds.length === 0

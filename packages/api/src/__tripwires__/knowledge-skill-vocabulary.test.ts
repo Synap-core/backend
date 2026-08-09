@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const skillRoot = new URL("../../../../skills/synap/", import.meta.url);
 const sourceFiles = [
   "mental-model.md",
+  "quick-reference.md",
   "cli-operations.md",
   "worked-examples.md",
 ];
@@ -20,6 +21,10 @@ describe("tripwire: Knowledge skill vocabulary", () => {
     );
     expect(body, "source skill must name insight").toContain("insight");
     expect(body, "source skill must name caution").toContain("caution");
+    expect(
+      body,
+      "source skill must teach the canonical Markdown body door"
+    ).toContain("--content");
     for (const name of sourceFiles) {
       const source = readFileSync(new URL(name, skillRoot), "utf8");
       expect(
@@ -34,6 +39,7 @@ describe("tripwire: Knowledge skill vocabulary", () => {
     expect(body).toContain("knowledgeForm");
     expect(body).toContain("insight");
     expect(body).toContain("caution");
+    expect(body).toContain("--content");
     expect(body).toContain(
       "Decisions and sources remain linked first-class entities"
     );

@@ -57,11 +57,13 @@ synap create entity --profile=decision --name="Use Typesense for entity search" 
 # linked document; these properties remain compact/queryable metadata.
 synap create entity --profile=knowledge --name="Hono static route ordering" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' --json
+  --props='{"knowledgeForm":"caution","ek_claim":"Static routes must come before /:id","ek_tags":["repo:synap-backend","layer:routing"]}' \
+  --content=$'## Why\\n\\nStatic routes must come before `/:id`.' --json
 
 synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' --json
+  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' \
+  --content=$'Validate the installed version before depending on an API.' --json
 
 # A Decision is its own lifecycle entity; link it to the supporting Knowledge.
 synap create entity --profile=decision --name="Use Typesense for entity search" \

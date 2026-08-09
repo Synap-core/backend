@@ -39,8 +39,8 @@ describe("tripwire: Knowledge never bypasses its canonical form contract", () =>
     expect(repository).toContain(
       'const isMovingToKnowledge = newType === "knowledge"'
     );
-    expect(repository).toContain(
-      "const shouldValidateProperties =\n      hasPropertyMutation || isMovingToKnowledge"
+    expect(repository).toMatch(
+      /const shouldValidateProperties\s*=\s*hasPropertyMutation\s*\|\|\s*isMovingToKnowledge/
     );
 
     // Capture's identity upsert is another create door. It must not pass

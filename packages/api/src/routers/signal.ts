@@ -20,6 +20,9 @@ import {
   resolveProvenance,
   getSignalSummary,
   listChannels,
+  listEgress,
+  getCapabilityHealth,
+  getCapabilityIssues,
   resolveTuneTarget,
   getQualityByVersion,
   getChannelStack,
@@ -42,6 +45,8 @@ export const signalRouter = router({
         order: z.enum(["recent", "problems"]).optional(),
         /** Drill-down: scope the stream to a single channel (channel-detail view). */
         channelId: z.string().optional(),
+        /** Capability lens: scope the stream to the channels a capability produced. */
+        capabilityId: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -56,6 +61,7 @@ export const signalRouter = router({
         beforeId: beforeId || undefined,
         order: input.order,
         channelId: input.channelId,
+        capabilityId: input.capabilityId,
       });
     }),
 
@@ -68,18 +74,86 @@ export const signalRouter = router({
     .input(
       z.object({
         order: z.enum(["problems", "recent"]).optional(),
+        /** Capability lens: restrict the rollup to a capability's produced channels. */
+        capabilityId: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return listChannels({ userId, order: input.order });
+      return listChannels({
+        userId,
+        order: input.order,
+        capabilityId: input.capabilityId,
+      });
     }),
 
-  /** Pod-wide signal aggregates for the attention band (cheap COUNTs). */
-  summary: protectedProcedure.query(async ({ ctx }) => {
-    const userId = requireUserId(ctx.userId);
-    return getSignalSummary(userId);
-  }),
+  /**
+   * The OUTBOUND half of the capability lens — a per-channel rollup of what the
+   * capability (or the pod) SENT toward its external channels: authored outbound
+   * messages (`sentCount` + `lastSentAt`, from the `messages` ledger) plus
+   * terminal outbox-delivery failures (`failedCount`, from `channel_egress`).
+   * Same floors + capability derivation as `channels`; a distinct return shape
+   * because outbound carries no extraction fate. `problems` (default) floats
+   * failing channels first; `recent` orders by last send.
+   */
+  egress: protectedProcedure
+    .input(
+      z.object({
+        order: z.enum(["problems", "recent"]).optional(),
+        /** Capability lens: restrict the rollup to a capability's produced channels. */
+        capabilityId: z.string().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return listEgress({
+        userId,
+        order: input.order,
+        capabilityId: input.capabilityId,
+      });
+    }),
+
+  /**
+   * Pod-wide signal aggregates for the attention band (cheap COUNTs). With
+   * `capabilityId` set, every tile is scoped to that capability's channels.
+   */
+  summary: protectedProcedure
+    .input(z.object({ capabilityId: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getSignalSummary(userId, input?.capabilityId);
+    }),
+
+  /**
+   * Producer mode (standing vs callable) + per-mode health for ONE capability —
+   * the callable-vs-standing axis of the external-data lens. Standing health is
+   * last-seen liveness (a quiet bridge reads `idle`, never `failed`); callable
+   * health is run success-rate (suppressed no-ops excluded from the denominator).
+   * A distinct door so the frozen `summary` / `channels` / `egress` shapes stay
+   * intact. Floored inside the service.
+   */
+  capabilityHealth: protectedProcedure
+    .input(z.object({ capabilityId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getCapabilityHealth(userId, input.capabilityId);
+    }),
+
+  /**
+   * Intended-vs-actual DRIFT for ONE capability, as a ranked Issues list —
+   * structural gaps (unwired/missing members, consolidated from the composition)
+   * plus external-data runtime drift (failed extraction, unbound produced
+   * channels, failed deliveries, a silent/idle standing source, an undeclared
+   * mode on an observed capability). Severity is NOT boolean (error/warning/info);
+   * each Issue carries a human sentence + a Fix mapped to an EXISTING action.
+   * Derived every read — no new store. Floored inside the service.
+   */
+  capabilityIssues: protectedProcedure
+    .input(z.object({ capabilityId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getCapabilityIssues(userId, input.capabilityId);
+    }),
 
   /** Given a proposal / entity / run id, resolve back to its source message(s). */
   provenance: protectedProcedure

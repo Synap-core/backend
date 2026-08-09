@@ -19,6 +19,7 @@ import {
   channelOriginLinkInputs,
   producerEndpointType,
   producerTypeFromEndpoint,
+  pickProducerToolByScope,
 } from "../channels/channel-origin.js";
 import {
   classifyChannelAutomationBinding,
@@ -384,5 +385,44 @@ describe("pickPrimaryChannelAutomation", () => {
       ])?.id
     ).toBe("w");
     expect(pickPrimaryChannelAutomation([])).toBeNull();
+  });
+});
+
+// ── U6: source→tool producer resolution precedence ────────────────────────────
+
+describe("pickProducerToolByScope", () => {
+  const t = (id: string, workspaceId: string | null) => ({ id, workspaceId });
+
+  it("returns null for no matches (keeps the honest source slug)", () => {
+    expect(pickProducerToolByScope([], "ws-1")).toBeNull();
+  });
+
+  it("returns the sole match regardless of scope", () => {
+    expect(pickProducerToolByScope([t("a", null)], "ws-1")?.id).toBe("a");
+    expect(pickProducerToolByScope([t("a", "ws-1")], null)?.id).toBe("a");
+  });
+
+  it("a workspace-scoped tool OVERRIDES a pod-wide tool of the same name", () => {
+    expect(
+      pickProducerToolByScope([t("pod", null), t("ws", "ws-1")], "ws-1")?.id
+    ).toBe("ws");
+  });
+
+  it("falls back to the sole pod-wide tool when no workspace match", () => {
+    expect(
+      pickProducerToolByScope([t("pod", null), t("other", "ws-2")], "ws-1")?.id
+    ).toBe("pod");
+  });
+
+  it("returns null when still ambiguous after precedence (two pod-wide)", () => {
+    expect(
+      pickProducerToolByScope([t("p1", null), t("p2", null)], "ws-1")
+    ).toBeNull();
+  });
+
+  it("returns null when two tools share the same workspace", () => {
+    expect(
+      pickProducerToolByScope([t("w1", "ws-1"), t("w2", "ws-1")], "ws-1")
+    ).toBeNull();
   });
 });
