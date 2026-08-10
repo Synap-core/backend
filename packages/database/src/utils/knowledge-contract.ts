@@ -134,3 +134,22 @@ export function inferKnowledgeForm(text: string): KnowledgeForm {
   }
   return "insight";
 }
+
+/**
+ * Complete a historic Knowledge write before schema validation.
+ *
+ * Older proposals can predate both `knowledgeForm` and the legacy `ek_type`
+ * discriminator. Keep a recognized legacy value authoritative; otherwise use
+ * the same conservative text inference as capture. This is a write-time
+ * compatibility door, never a migration of an existing entity.
+ */
+export function completeKnowledgeProperties(
+  properties: Record<string, unknown>,
+  text: string
+): Record<string, unknown> {
+  const normalized = normalizeKnowledgeProperties(properties);
+  if (!("knowledgeForm" in normalized)) {
+    normalized.knowledgeForm = inferKnowledgeForm(text);
+  }
+  return normalized;
+}

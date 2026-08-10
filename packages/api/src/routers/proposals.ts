@@ -106,6 +106,7 @@ import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { reconcileApprovedProperties } from "../services/proposals/reconcile-proposal-properties.js";
+import { completeKnowledgeProposalProperties } from "../services/proposals/complete-knowledge-proposal.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
@@ -2000,9 +2001,15 @@ async function applyProposalApproval(args: {
         const { decisions } = decisionSlices[survivingIdx++] ?? {
           decisions: undefined,
         };
-        const props = entityOp.properties;
+        const props = completeKnowledgeProposalProperties({
+          profileSlug: entityOp.profileSlug,
+          properties: entityOp.properties,
+          title: entityOp.title,
+          description: entityOp.description,
+          content: entityOp.content,
+        });
         if (!props || Object.keys(props).length === 0) {
-          rebuilt.push(op);
+          rebuilt.push({ ...entityOp, properties: props });
           continue;
         }
         // Def-creation lens for this op: a per-op workspace pin, else the

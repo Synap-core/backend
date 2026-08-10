@@ -582,6 +582,16 @@ export interface CapabilityDefinition {
    * `updatesAvailable` entry without applying, deferring to a human/UI decision.
    */
   updatePolicy?: "auto" | "notify";
+  /**
+   * Declared container-level config, merged read-modify-write into the
+   * installed capability's `metadata` jsonb (never clobbers other keys) by
+   * both the applier (`createCapabilityFromDefinition`) and the reconcile's
+   * `stampContainerMetadata` — so a template-declared key (e.g. `mode:
+   * "standing"|"callable"`, read by `resolveCapabilityMode`, declared-wins
+   * over any derived signal) reaches an already-installed capability on its
+   * next reconcile, not just a fresh install.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

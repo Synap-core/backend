@@ -108,18 +108,28 @@ export function missingToolMemberships(
   return missing;
 }
 
-/** Read-modify-write merge of a container's `metadata` jsonb (never clobbers). */
+/**
+ * Read-modify-write merge of a container's `metadata` jsonb (never clobbers).
+ * `defMetadata` carries the template's declared container-level config (e.g.
+ * `mode`) — merging it here (not just on a full re-apply) is what lets an
+ * already-installed capability pick up a template's newly-declared `mode` on
+ * the very next reconcile, even when nothing else drifted (a metadata-only
+ * template edit changes `contentHash`, which alone triggers this stamp — see
+ * the "no drift" call site).
+ */
 async function stampContainerMetadata(
   containerId: string,
   currentMetadata: Record<string, unknown>,
   templateKey: string,
-  contentHash: string | undefined
+  contentHash: string | undefined,
+  defMetadata?: Record<string, unknown>
 ): Promise<void> {
   await db
     .update(capabilities)
     .set({
       metadata: {
         ...currentMetadata,
+        ...(defMetadata ?? {}),
         templateKey,
         ...(contentHash ? { contentHash } : {}),
       },
@@ -341,7 +351,8 @@ export async function reconcileCapabilitiesToTemplates(
             container.id,
             metadata,
             templateKey,
-            cachedDef.contentHash
+            cachedDef.contentHash,
+            cachedDef.metadata
           );
         }
         report.skipped.push({
@@ -413,7 +424,8 @@ export async function reconcileCapabilitiesToTemplates(
         container.id,
         metadata,
         templateKey,
-        cachedDef.contentHash
+        cachedDef.contentHash,
+        cachedDef.metadata
       );
       report.applied.push({
         containerId: container.id,

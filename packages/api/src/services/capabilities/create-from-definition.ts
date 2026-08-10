@@ -1026,6 +1026,9 @@ export async function createCapabilityFromDefinition(
     // in-repo definition). Read-modify-write: preserves any other metadata keys,
     // never clobbers. Re-applying (reused container) refreshes both fields, so a
     // legacy container converges to having provenance on its next apply.
+    // `def.metadata` (declared container-level config, e.g. `mode`) is spread
+    // BEFORE templateKey/contentHash so those two stay authoritative even if a
+    // template mistakenly declares them under `metadata`.
     const [containerRow] = await db
       .select({ metadata: capabilitiesTable.metadata })
       .from(capabilitiesTable)
@@ -1040,6 +1043,7 @@ export async function createCapabilityFromDefinition(
       .set({
         metadata: {
           ...existingMetadata,
+          ...(def.metadata ?? {}),
           templateKey: def.key,
           ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
         },

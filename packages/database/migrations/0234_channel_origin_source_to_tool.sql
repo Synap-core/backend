@@ -39,8 +39,11 @@ FROM (
   SELECT
     src.id AS link_id,
     -- Precedence pick: workspace-scoped rows sort before pod-wide, so [1] is the
-    -- workspace tool when one exists, else the pod-wide tool.
-    (ARRAY_AGG(t."id"   ORDER BY (t."workspace_id" IS NOT NULL) DESC))[1] AS tool_id,
+    -- workspace tool when one exists, else the pod-wide tool. `t.id` is uuid but
+    -- `links.from_id` is TEXT (polymorphic producer id), so cast to text here —
+    -- otherwise SET from_id = tool_id and the collision guard (x.from_id =
+    -- tool_id) are a text = uuid mismatch (PG 42883).
+    (ARRAY_AGG(t."id"::text ORDER BY (t."workspace_id" IS NOT NULL) DESC))[1] AS tool_id,
     (ARRAY_AGG(t."name" ORDER BY (t."workspace_id" IS NOT NULL) DESC))[1] AS tool_name,
     COUNT(*) FILTER (WHERE t."workspace_id" IS NOT DISTINCT FROM src."workspace_id") AS ws_matches,
     COUNT(*) FILTER (WHERE t."workspace_id" IS NULL) AS pod_matches

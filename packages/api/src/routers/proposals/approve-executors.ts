@@ -60,6 +60,7 @@ import { storage } from "@synap/storage";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
 import { reconcileApprovedProperties } from "../../services/proposals/reconcile-proposal-properties.js";
+import { completeKnowledgeProposalProperties } from "../../services/proposals/complete-knowledge-proposal.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
@@ -748,6 +749,13 @@ export function registerApproveExecutors(): void {
         userId,
         decisions: input.propertyDecisions,
       });
+      const properties = completeKnowledgeProposalProperties({
+        profileSlug: reconciledProfile?.slug ?? profileSlug,
+        properties: reconciledCreate.properties,
+        title: innerData.title,
+        description: innerData.description,
+        content: innerData.content,
+      });
 
       // `proposedEntityId` is the id minted at PROPOSE time. `entities.create`
       // honors it when nothing matches, but its identity-first dedup may return
@@ -762,7 +770,7 @@ export function registerApproveExecutors(): void {
         profileSlug,
         title: (innerData.title as string) || "Untitled",
         description: innerData.description as string | undefined,
-        properties: reconciledCreate.properties,
+        properties,
         content: innerData.content as string | undefined,
         // `entities.create` persists `documentId` into the proposal data
         // (entities.ts) but this replay historically dropped it — so an approved

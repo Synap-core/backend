@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  completeKnowledgeProperties,
   KnowledgeFormConflictError,
   inferKnowledgeForm,
   normalizeKnowledgeProperties,
@@ -60,5 +61,14 @@ describe("Knowledge contract", () => {
     expect(
       inferKnowledgeForm("A useful conclusion from the investigation")
     ).toBe("insight");
+  });
+
+  it("completes historic unclassified writes without overriding legacy data", () => {
+    expect(
+      completeKnowledgeProperties({}, "Avoid this known failure mode")
+    ).toEqual({ knowledgeForm: "caution" });
+    expect(
+      completeKnowledgeProperties({ ek_type: "lesson" }, "Avoid this")
+    ).toEqual({ ek_type: "lesson", knowledgeForm: "insight" });
   });
 });
