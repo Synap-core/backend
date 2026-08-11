@@ -206,6 +206,86 @@ describe("buildCapabilityComposition", () => {
   });
 });
 
+describe("buildCapabilityComposition — isBridge + mode classification", () => {
+  it("a capability whose tool member PRODUCED a channel ⇒ isBridge:true, mode:standing (derived_produced)", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    // Callable-looking tool kind (`'api'`) — the produced edge alone must still
+    // flip isBridge/mode, independent of the tool's own kind.
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Discord Bot", config: {}, kind: "api" },
+    ]);
+    // No skill members ⇒ the wired-skills query never runs, so this `links`
+    // fixture feeds ONLY the produced-channel-count query.
+    rowsByTable.set(links, [{ channelId: "ch1" }]);
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Discord",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.isBridge).toBe(true);
+    expect(result.mode).toBe("standing");
+    expect(result.modeSource).toBe("derived_produced");
+  });
+
+  it("a verb-only api-tool capability with no connection ⇒ isBridge:false, mode:unknown", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "fal.ai", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(links, []); // no produced edges
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "fal.ai",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.isBridge).toBe(false);
+    expect(result.mode).toBe("unknown");
+    expect(result.modeSource).toBe("unknown");
+  });
+
+  it("a connected-provider tool member ⇒ isBridge:true even with mode:unknown (no liveness signal)", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Google Workspace", config: {}, kind: "provider" },
+    ]);
+    rowsByTable.set(links, []); // no produced channels
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Google Workspace",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    // isBridge (product classification) is true — a connected provider IS a
+    // real external connection — but mode (health semantics) stays unknown,
+    // since there's no declared/transport/produced liveness signal.
+    expect(result.isBridge).toBe(true);
+    expect(result.mode).toBe("unknown");
+  });
+});
+
 describe("listCapabilityCompositions — the whole-pod map door", () => {
   it("returns one CapabilityComposition per visible container, keyed by container id", async () => {
     // Two containers; each has a single tool member with no runs.

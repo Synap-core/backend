@@ -35,6 +35,7 @@ import {
 import { getLinksFor } from "../links/links-service.js";
 import { listRuns } from "../runs/index.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { deriveCapabilityMode } from "../signal/capability-mode.js";
 import { createLogger } from "@synap-core/core";
 import {
   DEFAULT_STUCK_THRESHOLD_HOURS,
@@ -89,7 +90,13 @@ export async function buildCapabilityComposition(
   }
 
   // Resolve names (+ the per-kind wiring signal) in one batched read per kind.
-  const toolNames = await loadNames(tools, idsByKind.tool);
+  // Tool rows also carry `config` + `kind` — reused below for
+  // `deriveCapabilityMode` (bridge-transport detection) and `isBridge`
+  // (connected-provider detection) instead of a second round-trip.
+  const toolRows = await loadToolRows(idsByKind.tool);
+  const toolNames = new Map(
+    [...toolRows.entries()].map(([id, row]) => [id, row.name])
+  );
   const skillRows = await loadSkillRows(idsByKind.skill);
   const playbookRows = await loadStatusRows(playbooks, idsByKind.playbook);
   const automationRows = await loadStatusRows(
@@ -175,6 +182,45 @@ export async function buildCapabilityComposition(
         }
       : null;
 
+  // ── Produced channels: does this capability's `tool --produced--> channel`
+  // edge exist? Queried directly here (not via `resolveCapabilityChannelIds`
+  // in `signal/index.ts`) to avoid re-introducing the exact mutual import the
+  // capability-mode.ts split-out already documents — `signal/index.ts` imports
+  // `buildCapabilityComposition` from this file, so this file importing back
+  // from `signal/index.ts` would be circular. All member ids (not just tools)
+  // are checked — mirrors `resolveCapabilityChannelIds`'s own part scope
+  // (tool/skill/command), which allows a non-tool member to carry the edge. ──
+  const allMemberIds = [
+    ...idsByKind.tool,
+    ...idsByKind.skill,
+    ...idsByKind.playbook,
+    ...idsByKind.automation,
+  ];
+  const producedChannelCount = await countProducedChannels(allMemberIds);
+
+  // ── Mode: standing vs callable vs unknown — reuses the already-loaded
+  // metadata + tool configs + produced-channel count above, no extra DB
+  // round-trip beyond the one above. ──────────────────────────────────────
+  const { mode, source: modeSource } = deriveCapabilityMode({
+    metadata: cap.metadata,
+    memberToolConfigs: [...toolRows.values()].map((t) => t.config),
+    producedChannelCount,
+  });
+
+  // ── isBridge: product classification for the Bridges LIST — "does this
+  // capability maintain a real connection to an external system?" DISTINCT
+  // from `mode` (health semantics): a connected provider with zero produced
+  // channels (e.g. Google Workspace) is `isBridge:true` but may still read
+  // `mode:'unknown'` (no liveness signal) — that split is intentional, see
+  // the doc on `CapabilityComposition.isBridge`. ANY of: declared standing,
+  // a `transport:'bridge'` member tool, a produced channel, or a member tool
+  // that is a connected provider (`kind==='provider'`, e.g. a Nango OAuth
+  // account) — never a merely-callable `'api'`/`'builtin'`/`'mcp'`/`'script'`
+  // tool (fal.ai/Exa/Apify are `'api'`, invocable, not bridges).
+  const isBridge =
+    mode === "standing" || // declared, derived_transport, or derived_produced
+    [...toolRows.values()].some((t) => t.kind === "provider");
+
   return {
     id: cap.id,
     name: cap.name,
@@ -183,6 +229,9 @@ export async function buildCapabilityComposition(
     members,
     health,
     gaps,
+    mode,
+    modeSource,
+    isBridge,
   };
 }
 
@@ -251,19 +300,52 @@ export async function listCapabilityCompositions(args: {
   return built.filter((c): c is CapabilityComposition => c !== null);
 }
 
-/** id → name, batched. */
-async function loadNames(
-  table: typeof tools | typeof skills,
+/** id → { name, config, kind }, batched — tool member rows (name + transport
+ *  config + `ToolKind`, e.g. `'provider'` for a connected Nango OAuth account
+ *  vs `'api'` for a merely-callable API-key tool like fal.ai/Exa/Apify). */
+async function loadToolRows(
   ids: string[]
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+): Promise<Map<string, { name: string; config: unknown; kind: string }>> {
+  const out = new Map<
+    string,
+    { name: string; config: unknown; kind: string }
+  >();
   if (ids.length === 0) return out;
   const rows = await db
-    .select({ id: table.id, name: table.name })
-    .from(table)
-    .where(inArray(table.id, ids));
-  for (const r of rows) out.set(r.id, r.name);
+    .select({
+      id: tools.id,
+      name: tools.name,
+      config: tools.config,
+      kind: tools.kind,
+    })
+    .from(tools)
+    .where(inArray(tools.id, ids));
+  for (const r of rows)
+    out.set(r.id, { name: r.name, config: r.config, kind: r.kind });
   return out;
+}
+
+/**
+ * How many channels this capability's members PRODUCED — a direct
+ * `member --produced--> channel` edge count, no visibility floor (feeds a
+ * boolean/count classification signal only, not a channel listing). Queried
+ * locally instead of via `resolveCapabilityChannelIds` (`signal/index.ts`) to
+ * avoid the exact circular import `capability-mode.ts`'s split-out already
+ * documents — see the call site.
+ */
+async function countProducedChannels(memberIds: string[]): Promise<number> {
+  if (memberIds.length === 0) return 0;
+  const rows = await db
+    .select({ channelId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "produced"),
+        eq(links.toType, "channel"),
+        inArray(links.fromId, memberIds)
+      )
+    );
+  return rows.length;
 }
 
 /** id → { name, kind }, batched — skills carry the declarative/code/instruction axis. */

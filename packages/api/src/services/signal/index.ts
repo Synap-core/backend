@@ -70,6 +70,11 @@ import { getCapabilityMemberParts } from "../links/links-service.js";
 import { buildCapabilityComposition } from "../diagnose/capability-composition.js";
 import type { CapabilityComposition } from "../diagnose/types.js";
 import type { RunStatus } from "../runs/types.js";
+import { deriveCapabilityMode } from "./capability-mode.js";
+import type {
+  CapabilityProducerMode,
+  CapabilityModeSource,
+} from "./capability-mode.js";
 
 // ── Channel-object doors (the Stack + Rerun facets) ───────────────────────────
 export {
@@ -1956,8 +1961,16 @@ export async function listEgress(
 // floor, no frozen shape (`SignalSummary` / `SignalChannelRollup` /
 // `SignalEgressChannelRollup`) touched.
 
-export type CapabilityProducerMode = "standing" | "callable" | "unknown";
-export type CapabilityModeSource = "declared" | "derived_transport" | "unknown";
+// Mode types + the pure decision live in `./capability-mode.js` (no DB access,
+// no other service dependency) — `capability-composition.ts` depends on the
+// decision without pulling in the rest of this service, which would otherwise
+// cycle back through `buildCapabilityComposition`. Re-exported here so this
+// module's own callers are unaffected.
+export type {
+  CapabilityProducerMode,
+  CapabilityModeSource,
+} from "./capability-mode.js";
+export { deriveCapabilityMode } from "./capability-mode.js";
 
 /**
  * How recently a standing source must have produced inbound signal to read
@@ -1968,11 +1981,10 @@ export type CapabilityModeSource = "declared" | "derived_transport" | "unknown";
 const STANDING_FRESHNESS_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Resolve a capability's producer mode. `capabilities.metadata.mode` (declared)
- * wins; else a member tool with `config.transport = 'bridge'` derives `standing`;
- * else an honest `unknown`. Floored by `userVisibleWhere` — an unseeable
- * capability yields `unknown` (and its channels are empty under the channel
- * floor anyway).
+ * Resolve a capability's producer mode. Floored by `userVisibleWhere` — an
+ * unseeable capability yields `unknown` (and its channels are empty under the
+ * channel floor anyway). Fetches its inputs then delegates the decision to
+ * `deriveCapabilityMode` — the one place the mode logic lives.
  */
 export async function resolveCapabilityMode(
   userId: string,
@@ -1990,32 +2002,33 @@ export async function resolveCapabilityMode(
     .limit(1);
   if (!capRow) return { mode: "unknown", source: "unknown" };
 
-  const declared = (capRow.metadata as Record<string, unknown> | null)?.mode;
-  if (declared === "standing" || declared === "callable")
-    return { mode: declared, source: "declared" };
-
-  // Derive: an always-on bridge member tool ⇒ standing. `config.transport` is the
-  // one concrete transport marker the catalog carries today (proton /
-  // telegram-bridge tools). NOT workspace-floored on its own — a tool id the
-  // caller can't act on leaks nothing here (only a mode label), and the capability
-  // row above was already visibility-floored.
+  // NOT workspace-floored on its own — a tool id the caller can't act on
+  // leaks nothing here (only a mode label), and the capability row above was
+  // already visibility-floored.
   const partIds = (await getCapabilityMemberParts([capabilityId])).map(
     (p) => p.id
   );
+  const memberToolConfigs: unknown[] = [];
   if (partIds.length > 0) {
     const toolRows = await db
       .select({ config: tools.config })
       .from(tools)
       .where(inArray(tools.id, partIds));
-    const hasBridge = toolRows.some(
-      (t) =>
-        ((t.config ?? {}) as Record<string, unknown>).transport === "bridge"
-    );
-    if (hasBridge) return { mode: "standing", source: "derived_transport" };
+    memberToolConfigs.push(...toolRows.map((t) => t.config));
   }
 
-  // No signal — honest unknown, never a guessed green.
-  return { mode: "unknown", source: "unknown" };
+  // Channels this capability PRODUCES also derive `standing` (a channel-
+  // producing capability, e.g. a Discord bot, is a bridge even undeclared) —
+  // same derivation the Bridges list uses (`buildCapabilityComposition`).
+  const producedChannelCount = (
+    await resolveCapabilityChannelIds(userId, capabilityId)
+  ).length;
+
+  return deriveCapabilityMode({
+    metadata: capRow.metadata,
+    memberToolConfigs,
+    producedChannelCount,
+  });
 }
 
 export interface CapabilityStandingHealth {

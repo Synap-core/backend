@@ -151,6 +151,25 @@ export interface CapabilityComposition {
     lastRunAt?: string;
   };
   gaps: string[];
+  /**
+   * Producer mode — "standing" (always-on, e.g. a bridge) vs "callable"
+   * (invoked per-run) vs "unknown". Lets a "Bridges" listing filter standing
+   * capabilities without an N+1 (see `deriveCapabilityMode`).
+   */
+  mode: "standing" | "callable" | "unknown";
+  modeSource: "declared" | "derived_transport" | "derived_produced" | "unknown";
+  /**
+   * Product classification — "does this capability maintain a real connection
+   * to an external system?" (drives the Bridges LIST). DISTINCT from `mode`
+   * (standing/callable, drives HEALTH semantics): a connected provider with no
+   * produced channels (e.g. Google Workspace) is `isBridge:true` but may still
+   * read `mode:'unknown'` (no liveness signal yet) — that split is correct, not
+   * a bug. True iff ANY: declared `metadata.mode==='standing'`; a member tool
+   * `config.transport==='bridge'`; the capability PRODUCES ≥1 channel; or a
+   * member tool is a connected provider (`kind==='provider'`, a Nango OAuth
+   * account) — never an invocable `'api'`/`'builtin'`/`'mcp'`/`'script'` tool.
+   */
+  isBridge: boolean;
 }
 
 /** Today's run-feed / per-run behaviour, preserved verbatim (back-compat). */

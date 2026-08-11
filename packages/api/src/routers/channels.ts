@@ -51,6 +51,7 @@ import {
   messages,
   channelContextItems,
   entities as entitiesTable,
+  documents as documentsTable,
   ChannelType,
   FeedScope,
   ChannelStatus,
@@ -4298,12 +4299,22 @@ export const channelsRouter = router({
       }
 
       // Get context items (entities + documents) if requested
-      let contextItems: (typeof channelContextItems.$inferSelect)[] = [];
+      let contextItems: (typeof channelContextItems.$inferSelect & {
+        objectName: string | null;
+      })[] = [];
 
       if (input.includeContext) {
-        contextItems = await db.query.channelContextItems.findMany({
+        const rows = await db.query.channelContextItems.findMany({
           where: eq(channelContextItems.channelId, input.channelId),
         });
+        const names = await resolveContextItemNames(
+          rows,
+          AccessContext.from(ctx)
+        );
+        contextItems = rows.map((row) => ({
+          ...row,
+          objectName: names.get(row.objectId) ?? null,
+        }));
       }
 
       // Get branch tree if requested
@@ -4755,9 +4766,17 @@ export const channelsRouter = router({
         );
       }
 
-      const items = await db.query.channelContextItems.findMany({
+      const rows = await db.query.channelContextItems.findMany({
         where: and(...conditions),
       });
+      const names = await resolveContextItemNames(
+        rows,
+        AccessContext.from(ctx)
+      );
+      const items = rows.map((row) => ({
+        ...row,
+        objectName: names.get(row.objectId) ?? null,
+      }));
 
       // For backward compat: split into entities and documents
       const entities = items.filter((i) => i.objectType === "entity");
@@ -5930,4 +5949,69 @@ function buildBranchTree(
     .filter((n): n is BranchTreeNode => n !== null);
 
   return { channel: root, children };
+}
+
+/**
+ * Batch-resolve `objectId -> name` for channel context items, grouped by
+ * objectType. `channel_context_items` is polymorphic with no FK (see the
+ * schema comment), so resolution is app-layer: one query per object type
+ * over the id set, never a SQL join. Types without a known name source
+ * (view/proposal/inbox_item) resolve to `null` — left honestly unresolved
+ * rather than guessed at.
+ *
+ * Floored by the caller's `AccessContext` via `scopedDb` (the `entities` /
+ * `documents` VisibilityRule — the same floor `entities.get` / `documents`
+ * reads use) — the upstream channel-authz check above is NOT relied on as
+ * the floor for referenced objects, since a context item can point at an
+ * object outside the channel's own workspace. An id the caller can't see
+ * simply never appears in the resolved rows, so it resolves to `null`
+ * (honest — not the title) exactly like the other unresolved kinds.
+ */
+async function resolveContextItemNames(
+  items: (typeof channelContextItems.$inferSelect)[],
+  access: AccessContext
+): Promise<Map<string, string | null>> {
+  const names = new Map<string, string | null>();
+
+  const entityIds = [
+    ...new Set(
+      items.filter((i) => i.objectType === "entity").map((i) => i.objectId)
+    ),
+  ];
+  const documentIds = [
+    ...new Set(
+      items.filter((i) => i.objectType === "document").map((i) => i.objectId)
+    ),
+  ];
+
+  if (entityIds.length) {
+    const rows = await scopedDb(access).findMany<{
+      id: string;
+      title: string | null;
+    }>(entitiesTable, {
+      where: inArray(entitiesTable.id, entityIds),
+      columns: { id: true, title: true },
+    });
+    for (const row of rows) names.set(row.id, row.title ?? null);
+  }
+
+  if (documentIds.length) {
+    const rows = await scopedDb(access).findMany<{
+      id: string;
+      title: string | null;
+    }>(documentsTable, {
+      where: inArray(documentsTable.id, documentIds),
+      columns: { id: true, title: true },
+    });
+    for (const row of rows) names.set(row.id, row.title ?? null);
+  }
+
+  // view / proposal / inbox_item: no name source wired up yet — honestly null.
+  // An out-of-visibility entity/document id also lands here (no row matched
+  // above), so it resolves to null rather than leaking its title.
+  for (const item of items) {
+    if (!names.has(item.objectId)) names.set(item.objectId, null);
+  }
+
+  return names;
 }
