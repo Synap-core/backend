@@ -23,7 +23,13 @@ export interface AgentMetadata {
   isPersonalAgent?: boolean;
   parentAgentId?: string;
   writesRequireProposal?: boolean;
-  /** Per-agent auto-approve list — overrides the workspace default when set. */
+  /**
+   * @deprecated RETIRED as a write target (Governance Convergence, contract
+   * phase). NO write surface persists this anymore — the per-agent auto-approve
+   * boundary lives in `governance_rules` (resolver rung 2.8). Kept optional
+   * ONLY so `backfillGovernanceRules` can project pre-migration legacy JSONB
+   * into rows at boot. Never read it to make a decision; never write it.
+   */
   autoApproveFor?: string[];
   activePersonality?: string;
   /**

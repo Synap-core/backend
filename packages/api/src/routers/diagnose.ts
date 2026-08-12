@@ -15,7 +15,10 @@
  */
 
 import { z } from "zod";
-import { eventRepository } from "@synap/database";
+import {
+  eventRepository,
+  UNGOVERNED_INSTRUMENTATION_EPOCH,
+} from "@synap/database";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { diagnoseGlobal } from "../services/diagnose/index.js";
@@ -115,7 +118,11 @@ export const diagnoseRouter = router({
         agentUserId: input?.agentUserId,
         limit: input?.limit ?? 50,
       });
-      return rows.map((e) => ({
+      // The read is floored at the instrumentation epoch (see the constant's
+      // docblock) — the caller gets that boundary so the UI can state its scope
+      // instead of implying it covers all history.
+      const since = UNGOVERNED_INSTRUMENTATION_EPOCH.toISOString();
+      const writes = rows.map((e) => ({
         id: e.id,
         agentUserId: e.agentUserId ?? null,
         agentType: e.agentType ?? null,
@@ -127,5 +134,6 @@ export const diagnoseRouter = router({
             ? e.timestamp.toISOString()
             : String(e.timestamp),
       }));
+      return { writes, since };
     }),
 });

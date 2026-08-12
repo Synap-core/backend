@@ -13,13 +13,44 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-const { mockGetLinksFor, mockListRuns } = vi.hoisted(() => ({
-  mockGetLinksFor: vi.fn(),
-  mockListRuns: vi.fn(),
-}));
+const { mockGetLinksFor, mockListRuns, mockGetCapabilityMemberParts } =
+  vi.hoisted(() => ({
+    mockGetLinksFor: vi.fn(),
+    mockListRuns: vi.fn(),
+    // Derives from whatever `mockGetLinksFor` is configured to return for
+    // this test — mirrors the real `getCapabilityMemberParts`'s
+    // tool|skill|command member-part scope (distinct from the builder's own
+    // tool/skill/playbook/automation `idsByKind`) without every test having
+    // to register a second, separately-shaped fixture.
+    mockGetCapabilityMemberParts: vi.fn(async (capabilityIds: string[]) => {
+      const capId = capabilityIds[0];
+      const rows = await mockGetLinksFor("unused", "capability", capId);
+      return (rows ?? [])
+        .filter(
+          (l: {
+            linkType: string;
+            toType: string;
+            toId: string;
+            fromType: string;
+          }) =>
+            l.linkType === "member_of" &&
+            l.toType === "capability" &&
+            l.toId === capId &&
+            (l.fromType === "tool" ||
+              l.fromType === "skill" ||
+              l.fromType === "command")
+        )
+        .map((l: { fromType: string; fromId: string; toId: string }) => ({
+          kind: l.fromType,
+          id: l.fromId,
+          capabilityId: l.toId,
+        }));
+    }),
+  }));
 
 vi.mock("../links/links-service.js", () => ({
   getLinksFor: mockGetLinksFor,
+  getCapabilityMemberParts: mockGetCapabilityMemberParts,
 }));
 vi.mock("../runs/index.js", () => ({
   listRuns: mockListRuns,
@@ -72,6 +103,7 @@ import {
   playbooks,
   automations,
   links,
+  channels,
 } from "@synap/database";
 
 const CAP_ID = "cap-1";
@@ -235,6 +267,38 @@ describe("buildCapabilityComposition — isBridge + mode classification", () => 
     expect(result.modeSource).toBe("derived_produced");
   });
 
+  it("a capability with 0 produced edges but ≥1 externalSource-slug channel ⇒ isBridge:true, mode:standing (derived_produced) — the Discord-legacy case", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    // Member tool's name IS the provider slug (`tools.name` == provider slug),
+    // the fallback-match key `resolveCapabilityChannelIds` also relies on.
+    rowsByTable.set(tools, [
+      { id: "t1", name: "discord", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(links, []); // NO produced edges — the legacy-slug gap
+    // 9 legacy channels born with a bare `source: "discord"` origin, pre-0234,
+    // never re-stamped with a `produced` edge.
+    rowsByTable.set(
+      channels,
+      Array.from({ length: 9 }, (_, i) => ({ id: `ch${i}` }))
+    );
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Discord Channel Ingest",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.isBridge).toBe(true);
+    expect(result.mode).toBe("standing");
+    expect(result.modeSource).toBe("derived_produced");
+  });
+
   it("a verb-only api-tool capability with no connection ⇒ isBridge:false, mode:unknown", async () => {
     mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
     rowsByTable.clear();
@@ -257,6 +321,33 @@ describe("buildCapabilityComposition — isBridge + mode classification", () => 
     expect(result.isBridge).toBe(false);
     expect(result.mode).toBe("unknown");
     expect(result.modeSource).toBe("unknown");
+  });
+
+  it("a command-borne produced edge ⇒ isBridge:true (part-scope parity with resolveCapabilityChannelIds's tool|skill|command)", async () => {
+    // A `command` member, NOT a `tool` — the builder's own `idsByKind` never
+    // tracks `command` (MEMBER_KINDS = tool/skill/playbook/automation), so
+    // this only counts if `countBridgeChannels` resolves its produced-edge
+    // scope via `getCapabilityMemberParts` (tool|skill|command) rather than
+    // the builder's own `idsByKind`.
+    mockGetLinksFor.mockResolvedValue([memberLink("command", "cmd1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, []); // no tool members at all
+    rowsByTable.set(links, [{ channelId: "ch1" }]); // cmd1 --produced--> ch1
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Command-borne bridge",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.isBridge).toBe(true);
+    expect(result.mode).toBe("standing");
+    expect(result.modeSource).toBe("derived_produced");
   });
 
   it("a connected-provider tool member ⇒ isBridge:true even with mode:unknown (no liveness signal)", async () => {
@@ -283,6 +374,98 @@ describe("buildCapabilityComposition — isBridge + mode classification", () => 
     // since there's no declared/transport/produced liveness signal.
     expect(result.isBridge).toBe(true);
     expect(result.mode).toBe("unknown");
+  });
+});
+
+describe("buildCapabilityComposition — description + extractionPolicy", () => {
+  it("passes description through verbatim and returns null when absent", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Linear", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(links, []);
+    mockListRuns.mockResolvedValue([]);
+
+    const withDescription = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "CRM",
+        description: "Runs the CRM pipeline.",
+        approved: true,
+        metadata: null,
+      },
+    });
+    expect(withDescription.description).toBe("Runs the CRM pipeline.");
+
+    const withoutDescription = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: { id: CAP_ID, name: "CRM", approved: true, metadata: null },
+    });
+    expect(withoutDescription.description).toBeNull();
+  });
+
+  it("normalizes present discord extraction-policy keys off tool metadata", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      {
+        id: "t1",
+        name: "discord",
+        config: {},
+        kind: "external",
+        metadata: {
+          discord: {
+            reactCapture: true,
+            captureFlows: [{ channelId: "c1" }, { channelId: "c2" }],
+            captureChannel: "chan-123",
+            eventSync: { enabled: true },
+          },
+        },
+      },
+    ]);
+    rowsByTable.set(links, []);
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Discord Bot",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.extractionPolicy).toEqual({
+      reactCapture: true,
+      captureFlows: 2,
+      captureChannel: "chan-123",
+      eventSync: true,
+    });
+  });
+
+  it("returns null when no member tool metadata carries recognized keys", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Linear", config: {}, kind: "api", metadata: null },
+    ]);
+    rowsByTable.set(links, []);
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Linear",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.extractionPolicy).toBeNull();
   });
 });
 

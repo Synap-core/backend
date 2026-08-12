@@ -69,6 +69,9 @@ export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/knowledge-contract.js";
+// Message shape matcher (shared door) + the config-settings/guideline store.
+export * from "./utils/message-shape.js";
+export * from "./utils/config-settings.js";
 
 // Server-side vault encryption
 export {
@@ -155,6 +158,7 @@ export {
 export {
   ensureSystemProfiles,
   ensureDevplaneProfiles,
+  ensureTeamMemberRoleProfile,
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 

@@ -128,6 +128,42 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "message.interpret",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Interpret a message's content into a GOVERNED proposal: runs the AI extraction engine (the same client.structure the capture path uses) over `content` and files ONE pending import.graph proposal via the shared capture proposal door — so an automation/playbook node can turn an inbound message into a review-inbox suggestion. `guidelines` is natural-language extraction bias (injected as the structure `instructions`). `workspaceId` scopes the proposal; `channelId`/`entityId` are accepted context. Read-only w.r.t. graph data (files a human-governed review item, never a direct write): auto-runs inside an automation. Returns { status, proposalId?, reviewUrl?, entityCount, relationCount } — or { status:'no_proposal', reason } when nothing durable was extracted.",
+      parameters: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: {
+            type: "string",
+            description: "The message text to interpret.",
+          },
+          channelId: {
+            type: "string",
+            description:
+              "Optional originating channel id (context/provenance).",
+          },
+          entityId: {
+            type: "string",
+            description: "Optional subject entity id (context/anchoring).",
+          },
+          workspaceId: {
+            type: "string",
+            description:
+              "Optional workspace lens to scope the emitted proposal to (defaults to the acting run's lens, else pod-wide).",
+          },
+          guidelines: {
+            type: "string",
+            description:
+              "Optional natural-language extraction bias, injected as the structure pass's instructions.",
+          },
+        },
+      },
+    },
+    {
       name: "output.generate",
       kind: "builtin",
       scope: "pod",

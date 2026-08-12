@@ -221,6 +221,21 @@ describe("matchesEventPattern", () => {
       )
     ).toBe(false);
   });
+
+  it("mirrors the matcher's message.received synthetic alias (both physical events)", () => {
+    for (const evt of [
+      "external_message.received.completed",
+      "channel_message.created.completed",
+    ]) {
+      expect(matchesEventPattern(evt, "message.received")).toBe(true);
+      expect(matchesEventPattern(evt, "message.*")).toBe(true);
+      expect(matchesEventPattern(evt, "message.received.*")).toBe(true);
+    }
+    // The alias covers ONLY the physical message events, nothing else.
+    expect(
+      matchesEventPattern("entity.create.completed", "message.received")
+    ).toBe(false);
+  });
 });
 
 describe("classifyChannelAutomationBinding", () => {
@@ -240,6 +255,29 @@ describe("classifyChannelAutomationBinding", () => {
         CHANNEL
       )
     ).toBe("workspace");
+  });
+
+  it("counts a message.received-alias automation for the channel (mirror lockstep)", () => {
+    // No narrowing → workspace binding, reported for the channel.
+    expect(
+      classifyChannelAutomationBinding(
+        { eventPattern: "message.received" },
+        CHANNEL
+      )
+    ).toBe("workspace");
+    // channelId binding composes with the alias.
+    expect(
+      classifyChannelAutomationBinding(
+        { eventPattern: "message.received", channelId: "chan-1" },
+        CHANNEL
+      )
+    ).toBe("channel");
+    expect(
+      classifyChannelAutomationBinding(
+        { eventPattern: "message.received", channelId: "chan-OTHER" },
+        CHANNEL
+      )
+    ).toBeNull();
   });
 
   it("channel-bound when triggerConfig.channelId matches, excluded when it does not", () => {

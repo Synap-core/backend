@@ -114,6 +114,17 @@ export interface UserStreamOptions {
 // EVENT REPOSITORY
 // ============================================================================
 
+/**
+ * When `events.proposal_id` began recording (migration 0231). Rows older than
+ * this carry NULL because the COLUMN did not exist, not because the write was
+ * ungoverned — so the "ungoverned AI write" read floors here and states that
+ * scope rather than indicting unmeasured history. Move this ONLY if the column
+ * is ever re-instrumented; never widen it to claim coverage we do not have.
+ */
+export const UNGOVERNED_INSTRUMENTATION_EPOCH = new Date(
+  "2026-08-05T00:00:00.000Z"
+);
+
 export class EventRepository {
   private eventHooks: EventHook[] = [];
 
@@ -771,9 +782,21 @@ export class EventRepository {
       // "Ungoverned AI write": an agent write that EXECUTED (`.completed`) with
       // no proposal behind it. `.requested` intent events are excluded — they
       // fire before the governance gate and never carry a proposal_id, so they
-      // would otherwise be constant false positives. No param binding needed.
+      // would otherwise be constant false positives.
+      //
+      // EPOCH FLOOR (dogfood finding 2026-08-11): every row written BEFORE
+      // migration 0231 has `proposal_id IS NULL` because the column did not yet
+      // exist — not because the write was ungoverned. Without this floor the
+      // lane reports every historical agent write as "ran without any rule"
+      // (on the first real pod: 17 such rows, all pre-migration, vs 0 genuine
+      // ones after). An instrument cannot testify about the time before it
+      // existed, so we scope the claim to the instrumented window instead of
+      // fabricating a verdict about unmeasured history.
       query +=
-        " AND is_agent = true AND proposal_id IS NULL AND type LIKE '%.completed'";
+        " AND is_agent = true AND proposal_id IS NULL AND type LIKE '%.completed'" +
+        ` AND timestamp >= $${paramIndex}`;
+      params.push(UNGOVERNED_INSTRUMENTATION_EPOCH.toISOString());
+      paramIndex++;
     }
 
     if (filters.fromDate) {

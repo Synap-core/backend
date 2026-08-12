@@ -356,7 +356,7 @@ export function matchesActionPattern(
 ): boolean {
   return patterns.some((pattern) =>
     pattern.endsWith(".*")
-      ? eventKey.startsWith(pattern.slice(0, -2))
+      ? eventKey.startsWith(pattern.slice(0, -1))
       : eventKey === pattern
   );
 }
@@ -373,7 +373,7 @@ export function findMatchingPattern(
 ): string | undefined {
   return patterns.find((pattern) =>
     pattern.endsWith(".*")
-      ? eventKey.startsWith(pattern.slice(0, -2))
+      ? eventKey.startsWith(pattern.slice(0, -1))
       : eventKey === pattern
   );
 }

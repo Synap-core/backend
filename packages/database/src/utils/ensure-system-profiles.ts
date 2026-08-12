@@ -2544,3 +2544,71 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
     };
   }
 }
+
+/**
+ * Ensure the `team-member` ROLE profile exists (profileKind='role',
+ * applicableKinds=['person']).
+ *
+ * The team roster → person bridge (`ensureTeamPersonForMember`,
+ * `team-person-bridge.ts`) always tries to attach this facet when a human
+ * joins a workspace, but every kind/role profile in this pod is otherwise
+ * either seeded above (kinds, pod-wide) or created ad hoc by a user/AI via
+ * the governed `profiles.create` door (roles like `client`/`partner`/
+ * `investor` — there is no code-level seed for those). `team-member` is
+ * different: it is load-bearing substrate the bridge depends on existing on
+ * EVERY pod, not a workspace's own CRM vocabulary, so — unlike the other
+ * roles — it gets a system seed here, mirroring `ensureSystemProfiles()`'s
+ * idempotent existence-guarded pattern (profileRepo.getBySlug then create).
+ *
+ * SYSTEM scope (not per-workspace) so `ProfileRepository.getBySlugForWorkspace`
+ * resolves it for every workspace without a per-workspace row. `entityScope`
+ * resolves to `'workspace'` automatically for `profileKind: 'role'`
+ * (`resolveEntityScope` — role profiles cannot be pod-wide).
+ *
+ * Idempotent: safe to call on every boot.
+ */
+export async function ensureTeamMemberRoleProfile(): Promise<EnsureSystemProfilesResult> {
+  const db = await getDb();
+  const profileRepo = new ProfileRepository(db);
+
+  let profilesCreated = 0;
+
+  try {
+    const existing = await profileRepo.getBySlug("team-member");
+    if (!existing) {
+      await profileRepo.create({
+        slug: "team-member",
+        displayName: "Team Member",
+        profileKind: "role",
+        applicableKinds: ["person"],
+        scope: ProfileScope.SYSTEM,
+        uiHints: {
+          icon: "users",
+          color: "#22C55E",
+          description: "Human member of a workspace's team.",
+        },
+      });
+      profilesCreated = 1;
+    }
+
+    return {
+      status: profilesCreated > 0 ? "created" : "exists",
+      message:
+        profilesCreated > 0
+          ? "Created team-member role profile"
+          : "team-member role profile already exists",
+      profilesCreated,
+      propertiesCreated: 0,
+      linksCreated: 0,
+    };
+  } catch (error: any) {
+    return {
+      status: "error",
+      message: "Failed to ensure team-member role profile",
+      profilesCreated,
+      propertiesCreated: 0,
+      linksCreated: 0,
+      error: error.message,
+    };
+  }
+}

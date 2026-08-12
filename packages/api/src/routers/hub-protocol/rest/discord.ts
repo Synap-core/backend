@@ -64,6 +64,7 @@ import {
 
 import { resolveIntelligenceServiceByAgentId } from "../../../utils/intelligence-routing.js";
 import { resolveExistingExternalUser } from "../../../services/external-user-mapping.js";
+import { loadTeamRosterForCapture } from "../../../services/team-roster-context.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { runMailFeed } from "../../../services/mail-feed/run-mail-feed.js";
@@ -695,9 +696,35 @@ export function registerDiscordRoutes(app: HubHono): void {
         ? AbortSignal.any([turnDeadline.signal, requestSignal])
         : turnDeadline.signal;
 
+      // Team roster — prepend an "OUR TEAM" instruction so the orchestrator
+      // reuses known teammates instead of proposing them as new client/contact
+      // entities (the bug: the Discord bridge had no roster awareness, unlike
+      // capture/orient/discover). Rides `query` — the text the IS actually
+      // reads as instructions — not `turnContext`, which the IS is told to
+      // treat as untrusted reference data and never follow. Gated on the turn
+      // being workspace-resolvable: a pod-wide (null workspaceId) turn has no
+      // single roster to inject. Best-effort: never fails the turn.
+      let query = body.text;
+      if (workspaceId) {
+        try {
+          const roster = await loadTeamRosterForCapture(db, {
+            workspaceId,
+            userId: actingUserId,
+          });
+          if (roster.instructionBlock) {
+            query = `${roster.instructionBlock}\n\n${body.text}`;
+          }
+        } catch (err) {
+          logger.debug(
+            { err, workspaceId, discordChannelId: body.discordChannelId },
+            "Discord agent turn: team roster load failed (turn proceeds without it)"
+          );
+        }
+      }
+
       try {
         const stream = resolvedService.client.sendMessageStream({
-          query: body.text,
+          query,
           threadId: channelId,
           // Run the turn AS the linked caller (or the operator when unlinked).
           // The IS delegates this via the is_internal keystone, so the agent's

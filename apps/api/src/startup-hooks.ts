@@ -15,6 +15,7 @@ import {
   and,
   inArray,
   ensureSystemProfiles,
+  ensureTeamMemberRoleProfile,
   users,
   workspaces,
   workspaceMembers,
@@ -36,6 +37,7 @@ import {
   seedWidgetDefinitions,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
+import { backfillAllWorkspacesTeamPersonBridge } from "./startup/backfill-team-person-bridge.js";
 import { backfillFederationOidcCredentials } from "./routers/federation.js";
 
 const logger = createLogger({ module: "startup-hooks" });
@@ -587,6 +589,20 @@ export async function runStartupHooks(): Promise<void> {
     );
   }
 
+  // Seed the `team-member` ROLE profile — load-bearing substrate for the team
+  // roster → person bridge (`ensureTeamPersonForMember`), which otherwise
+  // silently no-ops when the profile is absent. Idempotent; must run before
+  // the team-person-bridge backfill pass below.
+  try {
+    const result = await ensureTeamMemberRoleProfile();
+    logger.info({ ...result }, "team-member role profile seeded on startup");
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed team-member role profile on startup (non-fatal)"
+    );
+  }
+
   // Seed the widget_definitions table from the @synap/capabilities manifest —
   // the SSOT for bento widget kinds the UI reads via trpc.widgetDefinitions.list.
   // Idempotent upsert; was previously carried by the deleted plugins/init.ts.
@@ -627,6 +643,19 @@ export async function runStartupHooks(): Promise<void> {
   // Pod-admin invariant — non-fatal, surfaces a loud warning if broken so
   // operators see exactly which recovery command to run.
   await verifyPodAdminInvariant();
+
+  // Retrofit person entities + team-member facets for every EXISTING workspace
+  // member (the team-person bridge only ran going-forward on membership
+  // mutations until now). Idempotent; must run after ensureTeamMemberRoleProfile
+  // above and after workspaces/owners exist (local-mode workspace included).
+  try {
+    await backfillAllWorkspacesTeamPersonBridge();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to backfill team-person bridge on startup (non-fatal)"
+    );
+  }
 
   // Seed the synap-core built-in capability (Tier-0 verbs). Idempotent +
   // non-fatal; runs after the pod-owner invariant so an owner exists to attribute

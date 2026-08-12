@@ -1363,6 +1363,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "idempotency_key",
     addedBy: "0219_capability_run_receipts.sql",
   },
+  // Config Settings (0235) — the general per-granularity config store (guidelines
+  // now, bridge specificities later). New table; checking one column confirms the
+  // migration ran (the guideline resolver silently returns nothing if absent).
+  {
+    table: "config_settings",
+    column: "scope_kind",
+    addedBy: "0235_config_settings.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

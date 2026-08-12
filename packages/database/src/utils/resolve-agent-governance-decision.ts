@@ -443,10 +443,12 @@ export interface SyncAutoApproveRulesInput {
  * legitimately clears the mirrored rules (revoke-only, no insert), matching
  * "workspace clears its autoApproveFor override."
  *
- * The JSONB column itself is NOT written here — callers keep writing it
- * exactly as before (back-compat / CP / UI display); this only keeps the
- * `governance_rules` mirror in sync so the ONE store the engine reads from
- * never drifts from what the operator just set.
+ * This mirrors a caller-supplied `autoApproveFor` list INTO `governance_rules`
+ * (diff-only vs the code floor; REPLACE over the rows this surface owns, scoped
+ * to `source_proposal_id IS NULL`). It does NOT write the JSONB column: after
+ * the Phase B / W1 retirement, callers NO LONGER persist the `autoApproveFor`
+ * sub-key at all — `governance_rules` is the ONE store the engine reads from,
+ * and this keeps it in sync with what the operator just set.
  */
 export async function syncAutoApproveRules(
   input: SyncAutoApproveRulesInput

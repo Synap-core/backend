@@ -2425,13 +2425,11 @@ export function composeCapabilityIssues(
       issues.push({
         kind: "channel_unbound",
         severity: "warning",
-        title: `"${
-          c.name ?? c.channelId
-        }" is receiving signal but isn't wired to a record`,
+        title: `"${c.name ?? c.channelId}" isn't linked to a record yet`,
         detail: `${plural(
           c.messageCount,
-          "inbound message"
-        )} landed on a channel with no context entity — nothing routes them.`,
+          "message"
+        )} arrived here, but this channel isn't linked to a person, company, or client — so nothing turns them into structured data. Bind it to a record to start extracting.`,
         fix: {
           label: "Bind channel",
           action: { kind: "bind_channel", channelId: c.channelId },

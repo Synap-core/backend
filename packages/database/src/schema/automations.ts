@@ -39,6 +39,28 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * For event triggers, all domain-specific filter fields are declared here so
  * TypeScript sees them without `& Record<string, unknown>` casts.
  */
+/**
+ * MessageShapePredicate
+ *
+ * A SAFE, bounded predicate over a normalized message (the matcher's
+ * `MessageEnvelope`). Used by `message.received`-alias (and physical
+ * message-event) automations to narrow WHICH messages fire beyond a channel
+ * binding — provider-agnostic, because it reads the envelope, not a raw payload.
+ *
+ *   contains         — envelope.content includes `value` (case-insensitive)
+ *   regex            — `value` (a RegExp source) tests against envelope.content;
+ *                      bounded + try/caught so a bad pattern can never hang the
+ *                      worker (see the matcher's guard)
+ *   has_attachment   — envelope.attachments is non-empty (no `value`)
+ *   has_url          — envelope.content contains an http(s) URL (no `value`)
+ *   from_participant — envelope.participant equals `value` (case-insensitive)
+ */
+export interface MessageShapePredicate {
+  op: "contains" | "regex" | "has_attachment" | "has_url" | "from_participant";
+  /** Required for contains / regex / from_participant; ignored otherwise. */
+  value?: string;
+}
+
 export interface AutomationTriggerConfig {
   // ── event trigger ──────────────────────────────────────────────────────
   /** Event pattern to match. Supports trailing wildcard: "entities.*", "capture.complete.completed" */
@@ -59,6 +81,17 @@ export interface AutomationTriggerConfig {
   channelId?: string;
   /** Filter by message author role ("user" | "assistant" | "any") */
   messageRole?: "user" | "assistant" | "any";
+
+  // ── message shape predicate (eventPattern "message.received" alias + the two
+  //    physical message events) ─────────────────────────────────────────────
+  /**
+   * Content/attachment/participant predicate evaluated against the normalized
+   * MessageEnvelope the matcher derives from EITHER `external_message.received`
+   * OR `channel_message.created`. Composes WITH `channelId` (both must match).
+   * Additive: absent = no shape narrowing, so existing message automations are
+   * unchanged. See `MessageShapePredicate`.
+   */
+  shape?: MessageShapePredicate;
 
   // ── connector_sync domain filters ─────────────────────────────────────
   /** Only match events from this connector provider (e.g. "google-calendar", "github") */

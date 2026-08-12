@@ -40,8 +40,25 @@ export const CHANNEL_EVENT_TYPES = [
 ] as const;
 
 /**
- * Verbatim mirror of the matcher's `matchPattern`: exact match, or a trailing
- * `*` that swallows the rest.
+ * The synthetic `message.received` aliases (mirror of the matcher's
+ * `matchesMessageAlias`): an automation with one of these patterns fires for
+ * BOTH physical message events, so the channel-Stack surface must count it for a
+ * channel too. Keep in lockstep with @synap/jobs `automation-trigger-matcher.ts`.
+ */
+function matchesMessageAlias(eventType: string, pattern: string): boolean {
+  if (
+    pattern !== "message.received" &&
+    pattern !== "message.received.*" &&
+    pattern !== "message.*"
+  ) {
+    return false;
+  }
+  return (CHANNEL_EVENT_TYPES as readonly string[]).includes(eventType);
+}
+
+/**
+ * Verbatim mirror of the matcher's `matchPattern`: exact match, the synthetic
+ * `message.received` alias, or a trailing `*` that swallows the rest.
  */
 export function matchesEventPattern(
   eventType: string,
@@ -49,6 +66,7 @@ export function matchesEventPattern(
 ): boolean {
   if (!pattern) return false;
   if (pattern === eventType) return true;
+  if (matchesMessageAlias(eventType, pattern)) return true;
   const patternParts = pattern.split(".");
   const eventParts = eventType.split(".");
   for (let i = 0; i < patternParts.length; i++) {

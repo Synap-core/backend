@@ -29,6 +29,11 @@ import {
   addToast,
 } from "@heroui/react";
 import { ChevronDown, Repeat } from "lucide-react";
+import {
+  deriveGovernanceGrantOptions,
+  resolveCapabilityTarget,
+  type GovernanceGrantOption,
+} from "@synap-core/types";
 import { trpc } from "../../../lib/trpc";
 
 type CreateRuleInput = Parameters<
@@ -36,9 +41,9 @@ type CreateRuleInput = Parameters<
 >[0];
 
 interface Granularity {
-  key: string;
+  key: GovernanceGrantOption["id"];
   label: string;
-  build: (p: ProposalForRule) => CreateRuleInput;
+  input: CreateRuleInput;
 }
 
 /** The subset of the proposal's own rendered fields this menu reads. */
@@ -58,110 +63,58 @@ function stringField(data: unknown, key: string): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
 }
 
+/** Operator-facing label copy for each granularity — the option DERIVATION is
+ * shared (`deriveGovernanceGrantOptions(..., "operator-any")`); only the
+ * wording is pod-admin's own (`GovernanceMenu` words the same ids for the
+ * end-user surface). The "action" label reads the raw `targetType`/`proposalType`
+ * (space-separated) rather than the `<type>.<action>` event key. */
+const GRANT_LABELS: Record<
+  GovernanceGrantOption["id"],
+  (p: ProposalForRule, value?: string) => string
+> = {
+  capability: (_p, value) => `Always approve "${value}"`,
+  action: (p) => `All "${p.targetType} ${p.proposalType}" actions`,
+  profile: (_p, value) => `Everything of type "${value}"`,
+  agent: () => "This same action from this agent",
+  global: () => "Everything, always",
+};
+
 /** Derive the applicable granularities from data already on the page — a
  * granularity is offered only when the proposal actually carries the field
- * it needs (e.g. no `agentUserId` → no "this agent" option). */
-function deriveGranularities(p: ProposalForRule): Granularity[] {
-  const scope = p.workspaceId
-    ? ({ scopeKind: "workspace", workspaceId: p.workspaceId } as const)
-    : ({ scopeKind: "pod" } as const);
-  const eventKey =
+ * it needs (e.g. no `agentUserId` → no "this agent" option). The which-and-what
+ * decision (and the exact `governanceRules.create` payloads) is the shared pure
+ * `deriveGovernanceGrantOptions` in `@synap-core/types` — the SAME function
+ * synap-app's `GovernanceMenu` calls, here with the operator (`"operator-any"`)
+ * mode; this file only maps pod-admin's raw proposal-row fields into the shared
+ * context and supplies operator label copy. */
+function deriveGrantOptions(p: ProposalForRule): Granularity[] {
+  const actionKey =
     p.targetType && p.proposalType
       ? `${p.targetType}.${p.proposalType}`
       : undefined;
-  const options: Granularity[] = [];
-
-  // "This capability" — a `capability.run` proposal stores `data.verbId`
-  // (e.g. "unipile_list_accounts"), not `data.capabilityId`; the gate
-  // (`gateCapabilityExecution`) matches a capability rule on that verb name.
-  // Prefer verbId, fall back to skillId, then the older `capabilityId` shape
-  // (some gate paths still store that) so the rule we create is byte-identical
-  // to what the gate resolves. (Phase 2 / Option B wired the gate to consult
-  // these; a verdict:"auto" rule authorizes the run — never a secret, never
-  // past the approval floor.)
-  const verbId =
-    stringField(p.request?.data, "verbId") ??
-    stringField(p.request?.data, "skillId") ??
-    stringField(p.request?.data, "capabilityId");
-  if (verbId) {
-    options.push({
-      key: "capability",
-      label: `Always approve "${verbId}"`,
-      build: () => ({
-        principalKind: "any",
-        ...scope,
-        targetKind: "capability",
-        targetPattern: verbId,
-        verdict: "auto",
-        sourceProposalId: p.id,
-      }),
-    });
-  }
-
-  if (eventKey) {
-    options.push({
-      key: "action",
-      label: `All "${p.targetType} ${p.proposalType}" actions`,
-      build: () => ({
-        principalKind: "any",
-        ...scope,
-        targetKind: "action",
-        targetPattern: eventKey,
-        verdict: "auto",
-        sourceProposalId: p.id,
-      }),
-    });
-  }
-
+  // profileSlug has no shared resolver — keep pod-admin's own `profileSlug ?? type`
+  // resolution so the derived rule stays identical to the prior inline logic.
   const profileSlug =
     stringField(p.request?.data, "profileSlug") ??
     stringField(p.request?.data, "type");
-  if (profileSlug) {
-    options.push({
-      key: "profile",
-      label: `Everything of type "${profileSlug}"`,
-      build: () => ({
-        principalKind: "any",
-        ...scope,
-        targetKind: "profile",
-        targetPattern: "*",
-        targetProfile: profileSlug,
-        verdict: "auto",
-        sourceProposalId: p.id,
-      }),
-    });
-  }
 
-  if (p.agentUserId && eventKey) {
-    options.push({
-      key: "agent",
-      label: "This same action from this agent",
-      build: () => ({
-        principalKind: "agent",
-        agentUserId: p.agentUserId!,
-        ...scope,
-        targetKind: "action",
-        targetPattern: eventKey,
-        verdict: "auto",
-        sourceProposalId: p.id,
-      }),
-    });
-  }
+  const options = deriveGovernanceGrantOptions(
+    {
+      proposalId: p.id,
+      workspaceId: p.workspaceId,
+      agentUserId: p.agentUserId,
+      capabilityTarget: resolveCapabilityTarget(p.request?.data),
+      actionKey,
+      profileSlug,
+    },
+    "operator-any"
+  );
 
-  options.push({
-    key: "global",
-    label: "Everything, always",
-    build: () => ({
-      principalKind: "any",
-      scopeKind: "pod",
-      targetKind: "action",
-      targetPattern: "*",
-      verdict: "auto",
-      sourceProposalId: p.id,
-    }),
-  });
-
-  return options;
+  return options.map((o) => ({
+    key: o.id,
+    label: GRANT_LABELS[o.id](p, o.value),
+    input: o.rule as CreateRuleInput,
+  }));
 }
 
 export function AlwaysApproveMenu({
@@ -177,14 +130,14 @@ export function AlwaysApproveMenu({
   const approve = trpc.proposals.approve.useMutation();
   const createRule = trpc.governanceRules.create.useMutation();
 
-  const granularities = deriveGranularities(proposal);
+  const granularities = deriveGrantOptions(proposal);
 
   async function approveAndAlways(g: Granularity) {
     setRunning(true);
     try {
       await approve.mutateAsync({ proposalId: proposal.id });
       try {
-        await createRule.mutateAsync(g.build(proposal));
+        await createRule.mutateAsync(g.input);
         addToast({
           title: "Approved",
           description: `Rule created — "${g.label}" will auto-approve from now on. Revocable in Governance rules.`,

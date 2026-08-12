@@ -892,6 +892,12 @@ export interface WorkspaceSettings {
      *   "entity.read"    — agents can read entities without proposal
      *   "search.*"       — all search operations bypass proposal
      *   "entity.create"  — agents can create entities without proposal (high trust)
+     *
+     * @deprecated RETIRED as a write target (Governance Convergence, contract
+     * phase). NO write surface persists this anymore — the workspace grant lives
+     * in `governance_rules` (resolver rung 2.8). Kept optional ONLY so
+     * `backfillGovernanceRules` can project pre-migration legacy JSONB into rows
+     * at boot. Never read it to make a decision; never write it.
      */
     autoApproveFor?: string[];
     /** @deprecated Use autoApproveFor instead. Kept for migration reference only. */

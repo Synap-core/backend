@@ -120,7 +120,13 @@ export interface AgentMetadata {
 	isPersonalAgent?: boolean;
 	parentAgentId?: string;
 	writesRequireProposal?: boolean;
-	/** Per-agent auto-approve list — overrides the workspace default when set. */
+	/**
+	 * @deprecated RETIRED as a write target (Governance Convergence, contract
+	 * phase). NO write surface persists this anymore — the per-agent auto-approve
+	 * boundary lives in `governance_rules` (resolver rung 2.8). Kept optional
+	 * ONLY so `backfillGovernanceRules` can project pre-migration legacy JSONB
+	 * into rows at boot. Never read it to make a decision; never write it.
+	 */
 	autoApproveFor?: string[];
 	activePersonality?: string;
 	/**
@@ -1002,6 +1008,12 @@ export interface WorkspaceSettings {
 		 *   "entity.read"    — agents can read entities without proposal
 		 *   "search.*"       — all search operations bypass proposal
 		 *   "entity.create"  — agents can create entities without proposal (high trust)
+		 *
+		 * @deprecated RETIRED as a write target (Governance Convergence, contract
+		 * phase). NO write surface persists this anymore — the workspace grant lives
+		 * in `governance_rules` (resolver rung 2.8). Kept optional ONLY so
+		 * `backfillGovernanceRules` can project pre-migration legacy JSONB into rows
+		 * at boot. Never read it to make a decision; never write it.
 		 */
 		autoApproveFor?: string[];
 		/** @deprecated Use autoApproveFor instead. Kept for migration reference only. */
@@ -1254,6 +1266,27 @@ export type SkillScope = "pod" | "user" | "workspace";
  * For event triggers, all domain-specific filter fields are declared here so
  * TypeScript sees them without `& Record<string, unknown>` casts.
  */
+/**
+ * MessageShapePredicate
+ *
+ * A SAFE, bounded predicate over a normalized message (the matcher's
+ * `MessageEnvelope`). Used by `message.received`-alias (and physical
+ * message-event) automations to narrow WHICH messages fire beyond a channel
+ * binding — provider-agnostic, because it reads the envelope, not a raw payload.
+ *
+ *   contains         — envelope.content includes `value` (case-insensitive)
+ *   regex            — `value` (a RegExp source) tests against envelope.content;
+ *                      bounded + try/caught so a bad pattern can never hang the
+ *                      worker (see the matcher's guard)
+ *   has_attachment   — envelope.attachments is non-empty (no `value`)
+ *   has_url          — envelope.content contains an http(s) URL (no `value`)
+ *   from_participant — envelope.participant equals `value` (case-insensitive)
+ */
+export interface MessageShapePredicate {
+	op: "contains" | "regex" | "has_attachment" | "has_url" | "from_participant";
+	/** Required for contains / regex / from_participant; ignored otherwise. */
+	value?: string;
+}
 export interface AutomationTriggerConfig {
 	/** Event pattern to match. Supports trailing wildcard: "entities.*", "capture.complete.completed" */
 	eventPattern?: string;
@@ -1267,6 +1300,14 @@ export interface AutomationTriggerConfig {
 	channelId?: string;
 	/** Filter by message author role ("user" | "assistant" | "any") */
 	messageRole?: "user" | "assistant" | "any";
+	/**
+	 * Content/attachment/participant predicate evaluated against the normalized
+	 * MessageEnvelope the matcher derives from EITHER `external_message.received`
+	 * OR `channel_message.created`. Composes WITH `channelId` (both must match).
+	 * Additive: absent = no shape narrowing, so existing message automations are
+	 * unchanged. See `MessageShapePredicate`.
+	 */
+	shape?: MessageShapePredicate;
 	/** Only match events from this connector provider (e.g. "google-calendar", "github") */
 	provider?: string;
 	/** Filter by sync outcome ("success" | "error" | "any") */
@@ -5950,6 +5991,9 @@ export interface AgentScorecard {
 export interface CapabilityComposition {
 	id: string;
 	name: string;
+	/** The container's own `capabilities.description` column, verbatim.
+	 *  `null` when absent — never fabricated. */
+	description: string | null;
 	approved: boolean;
 	provenance: {
 		templateKey?: string;
@@ -5968,6 +6012,40 @@ export interface CapabilityComposition {
 		lastRunAt?: string;
 	};
 	gaps: string[];
+	/**
+	 * Producer mode — "standing" (always-on, e.g. a bridge) vs "callable"
+	 * (invoked per-run) vs "unknown". Lets a "Bridges" listing filter standing
+	 * capabilities without an N+1 (see `deriveCapabilityMode`).
+	 */
+	mode: "standing" | "callable" | "unknown";
+	modeSource: "declared" | "derived_transport" | "derived_produced" | "unknown";
+	/**
+	 * Product classification — "does this capability maintain a real connection
+	 * to an external system?" (drives the Bridges LIST). DISTINCT from `mode`
+	 * (standing/callable, drives HEALTH semantics): a connected provider with no
+	 * produced channels (e.g. Google Workspace) is `isBridge:true` but may still
+	 * read `mode:'unknown'` (no liveness signal yet) — that split is correct, not
+	 * a bug. True iff ANY: declared `metadata.mode==='standing'`; a member tool
+	 * `config.transport==='bridge'`; the capability PRODUCES ≥1 channel; or a
+	 * member tool is a connected provider (`kind==='provider'`, a Nango OAuth
+	 * account) — never an invocable `'api'`/`'builtin'`/`'mcp'`/`'script'` tool.
+	 */
+	isBridge: boolean;
+	/**
+	 * Best-effort, NORMALIZED read of a member tool's provider-specific
+	 * extraction config (currently only the Discord bot template populates
+	 * this — `tools.metadata.discord.*`; see `normalizeExtractionPolicy` in
+	 * capability-composition.ts). Provider config shapes vary, so only keys
+	 * that are present and the right type are included; `null` when NONE of
+	 * the recognized keys are present anywhere across the member tools — the
+	 * rail then renders nothing rather than an empty shell. Never fabricated.
+	 */
+	extractionPolicy: {
+		reactCapture?: boolean;
+		captureFlows?: number;
+		eventSync?: boolean;
+		captureChannel?: string | null;
+	} | null;
 }
 /**
  * Capability-connection service — the SINGLE source of truth for CRUD over a
@@ -6955,6 +7033,21 @@ export interface AgentProfile {
 	}>;
 }
 /**
+ * CAPABILITY MODE — the callable-vs-standing axis, pure decision only.
+ *
+ * Split out of `signal/index.ts` so `diagnose/capability-composition.ts` can
+ * depend on the mode decision without importing the rest of the signal
+ * service (which itself depends on `capability-composition.ts` for
+ * `buildCapabilityComposition`) — that mutual import was a circular import.
+ * This module has no DB access and no other service dependency; `signal/index.ts`
+ * re-exports it so its own callers are unaffected.
+ *
+ * See `signal/index.ts` Door 7 for the full mode semantics (standing vs
+ * callable, health-by-liveness vs health-by-success-rate).
+ */
+export type CapabilityProducerMode = "standing" | "callable" | "unknown";
+export type CapabilityModeSource = "declared" | "derived_transport" | "derived_produced" | "unknown";
+/**
  * Channel deep link — the NATIVE url that opens this conversation in the app it
  * came from (Discord, Telegram, …).
  *
@@ -7227,8 +7320,6 @@ export interface ListEgressResult {
 	 */
 	truncated: boolean;
 }
-export type CapabilityProducerMode = "standing" | "callable" | "unknown";
-export type CapabilityModeSource = "declared" | "derived_transport" | "unknown";
 export interface CapabilityStandingHealth {
 	/** Most recent inbound message across the capability's channels; null = none seen. */
 	lastSeenAt: Date | null;
@@ -9381,7 +9472,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -9749,7 +9840,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalId: string | null;
 					mergedAt: Date | null;
 				};
-				contextItems: {
+				contextItems: ({
 					userId: string;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
@@ -9761,7 +9852,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
-				}[] | undefined;
+				} & {
+					objectName: string | null;
+				})[] | undefined;
 				branchTree: any;
 			};
 			meta: object;
@@ -9935,6 +10028,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				items: {
+					objectName: string | null;
 					userId: string;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
@@ -9948,6 +10042,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					conflictStatus: "pending" | "none" | "resolved";
 				}[];
 				entities: {
+					objectName: string | null;
 					userId: string;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
@@ -9961,6 +10056,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					conflictStatus: "pending" | "none" | "resolved";
 				}[];
 				documents: {
+					objectName: string | null;
 					userId: string;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
@@ -10116,7 +10212,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -10217,7 +10313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -10328,7 +10424,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -24795,14 +24891,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 			} | undefined;
 			output: {
-				id: string;
-				agentUserId: string | null;
-				agentType: string | null;
-				subjectType: string;
-				subjectId: string;
-				action: string;
-				at: string;
-			}[];
+				writes: {
+					id: string;
+					agentUserId: string | null;
+					agentType: string | null;
+					subjectType: string;
+					subjectId: string;
+					action: string;
+					at: string;
+				}[];
+				since: string;
+			};
 			meta: object;
 		}>;
 	}>>;

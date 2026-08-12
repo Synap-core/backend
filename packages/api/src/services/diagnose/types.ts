@@ -136,6 +136,9 @@ export interface ObjectReport {
 export interface CapabilityComposition {
   id: string;
   name: string;
+  /** The container's own `capabilities.description` column, verbatim.
+   *  `null` when absent — never fabricated. */
+  description: string | null;
   approved: boolean;
   provenance: { templateKey?: string; contentHash?: string } | null;
   members: Array<{
@@ -170,6 +173,21 @@ export interface CapabilityComposition {
    * account) — never an invocable `'api'`/`'builtin'`/`'mcp'`/`'script'` tool.
    */
   isBridge: boolean;
+  /**
+   * Best-effort, NORMALIZED read of a member tool's provider-specific
+   * extraction config (currently only the Discord bot template populates
+   * this — `tools.metadata.discord.*`; see `normalizeExtractionPolicy` in
+   * capability-composition.ts). Provider config shapes vary, so only keys
+   * that are present and the right type are included; `null` when NONE of
+   * the recognized keys are present anywhere across the member tools — the
+   * rail then renders nothing rather than an empty shell. Never fabricated.
+   */
+  extractionPolicy: {
+    reactCapture?: boolean;
+    captureFlows?: number;
+    eventSync?: boolean;
+    captureChannel?: string | null;
+  } | null;
 }
 
 /** Today's run-feed / per-run behaviour, preserved verbatim (back-compat). */

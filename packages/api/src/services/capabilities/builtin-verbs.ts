@@ -56,6 +56,7 @@ import type { Context } from "../../context.js";
 // touch the pilot verbs.
 import type { ScopedDb } from "../../access/scoped-db.js";
 import type { ContextObjectType } from "../../utils/resolve-or-create-channel.js";
+import type { CaptureStructureLike } from "../capture-agent/capture-structure-to-graph.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
@@ -66,6 +67,7 @@ import {
 import { triageEmails } from "../mail-feed/triage.js";
 import { generateViaIS } from "../mail-feed/generate.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
+import { assertPodAdmin } from "../../trpc.js";
 // catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
 // via capability-registry.ts's scoreTextMatch dependency) and marketplace-
 // install.ts pulls in the full router graph (create-from-definition.ts imports
@@ -390,6 +392,282 @@ const aiGenerateHandler: BuiltinVerbHandler = async (params) => {
     json: input.json,
     maxTokens: input.maxTokens,
   });
+};
+
+/**
+ * message.interpret — the proactive keystone (agnostic message → governed proposals).
+ *
+ * Runs the EXISTING extraction engine (`client.structure` — the SAME Hub-client
+ * call the capture path uses, reached via `resolveIntelligenceService`) on a
+ * message's `content`, then files ONE governed `import.graph` proposal through the
+ * SAME door capture uses (`submitCaptureGraph` → `insertPendingProposal`). Nothing
+ * here reimplements extraction or a second proposal door. An automation/playbook
+ * `capability` node with `verbId:'message.interpret'` dispatches this through the
+ * canonical capability router (`dispatchViaCapabilityRouter`), so an inbound
+ * message can be interpreted into a review-inbox proposal with no new step type
+ * and no second dispatch path.
+ *
+ * GUIDELINES → INSTRUCTIONS: the optional `guidelines` string is natural-language
+ * prompt-shaping, injected as the structure pass's `instructions` (the same field
+ * interactive capture threads its intake bias through). It biases extraction; it
+ * is NOT a routing or permission control.
+ *
+ * DEFAULT POSTURE = PROPOSE: no `agentUserId` is threaded into `submitCaptureGraph`,
+ * so the graph is ALWAYS filed as a PENDING proposal (never agent-mode
+ * auto-applied) — the honest default for a proactive suggestion, and what keeps
+ * this verb READ-ONLY w.r.t. graph data (it files a human-governed review item,
+ * never a direct write). It is therefore in READ_ONLY_BUILTIN_VERBS so the outer
+ * capability gate AUTO-RUNS it inside an automation (a propose verdict would stall
+ * the flow), exactly like `governance.recommend_tighten` — governance lives on the
+ * proposal it emits, not on running the interpretation.
+ *
+ * AGNOSTIC: operates on `content` + optional channel/entity/workspace context,
+ * never on a provider. `workspaceId` scopes the proposal lens. `channelId` /
+ * `entityId` are accepted as the stable context contract for the follow-up wave
+ * (provenance / anchoring) and are not yet consumed by the write.
+ */
+const messageInterpretParams = z.object({
+  // Capped to match the inbound-message event's own bound (see
+  // inbound-recorder.ts's `content: args.text.slice(0, 4000)`): that `data`
+  // blob is what typically feeds this verb, and an uncapped `content` here
+  // would let a pathological payload ride unbounded into the IS structure
+  // call and the eventual proposal record.
+  content: z.string().min(1).max(4000),
+  channelId: z.string().optional(),
+  entityId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  guidelines: z.string().optional(),
+});
+
+const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = messageInterpretParams.parse(params);
+  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+
+  // Routing self-improvement memory — the SAME hint the capture path threads
+  // into structure(). Best-effort: a memory hiccup degrades to "no memory",
+  // never fails the interpret.
+  const { fetchRoutingMemory } = await import("../routing-memory.js");
+  let routingMemory: Awaited<ReturnType<typeof fetchRoutingMemory>> | undefined;
+  try {
+    routingMemory = await fetchRoutingMemory(ctx.userId);
+  } catch {
+    routingMemory = undefined;
+  }
+
+  // Extraction quality hints — the SAME hints the interactive capture path
+  // (routers/capture.ts's `structure` procedure) threads into structure():
+  // accessible profiles (with property schemas), candidate workspaces, and
+  // existing-entity names for dedup. `availableProfiles` reuses capture.ts's
+  // OWN exported builders (`buildAvailableProfiles` + `withEffectiveProperties`)
+  // rather than re-deriving the profile/property queries. The workspace list
+  // and existing-entity search have no shared helper to import — they live
+  // inline in that procedure — so they're re-derived here, minimally (no
+  // roster/anchor/degraded-fallback machinery this verb doesn't need). Each
+  // hint is independently best-effort: a lookup failure degrades to "no hint",
+  // never fails the interpret (mirrors routingMemory above).
+  let availableProfiles:
+    | ReturnType<
+        (typeof import("../../routers/capture.js"))["buildAvailableProfiles"]
+      >
+    | undefined;
+  try {
+    const { ProfileResolutionService } = await import("@synap/database");
+    const { buildAvailableProfiles, withEffectiveProperties } =
+      await import("../../routers/capture.js");
+    const profileService = new ProfileResolutionService(db);
+    const accessibleProfiles = await profileService.getAccessibleProfiles(
+      ctx.userId,
+      workspaceId ?? ""
+    );
+    availableProfiles = buildAvailableProfiles(
+      await withEffectiveProperties(
+        profileService,
+        accessibleProfiles as unknown as Parameters<
+          typeof withEffectiveProperties
+        >[1],
+        workspaceId
+      )
+    );
+  } catch {
+    availableProfiles = undefined;
+  }
+
+  let availableWorkspaces:
+    Array<{ id: string; name: string; description?: string }> | undefined;
+  try {
+    const { workspaces, workspaceMembers } = await import("@synap/database");
+    const { isDomainHomeWorkspace } =
+      await import("../../lib/routing-candidates.js");
+    const rows = await db
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        description: workspaces.description,
+        workspaceType: workspaces.workspaceType,
+        systemSlug: workspaces.systemSlug,
+        settings: workspaces.settings,
+      })
+      .from(workspaces)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, workspaces.id)
+      )
+      .where(
+        and(
+          eq(workspaceMembers.userId, ctx.userId),
+          drizzleSql`${workspaces.archivedAt} IS NULL`
+        )
+      )
+      .orderBy(desc(workspaces.updatedAt))
+      .limit(30);
+    availableWorkspaces = rows
+      .filter((w) => isDomainHomeWorkspace(w))
+      .map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description ?? undefined,
+      }));
+  } catch {
+    availableWorkspaces = undefined;
+  }
+
+  let existingEntityNames: string[] | undefined;
+  try {
+    const { searchService } = await import("@synap/search");
+    const existing = await searchService.searchCollection(
+      "entities",
+      input.content.slice(0, 200),
+      { userId: ctx.userId, workspaceId: workspaceId ?? undefined, limit: 30 }
+    );
+    existingEntityNames = Array.from(
+      new Set(
+        existing.results
+          .map((r) => r.document?.title as string | undefined)
+          .filter((t): t is string => Boolean(t && t.trim()))
+      )
+    );
+  } catch {
+    existingEntityNames = undefined;
+  }
+
+  // Scoped GUIDELINES (Wave 3a) — natural-language intent attached at any
+  // granularity (default | channelType | bridge | channel | shape) via the
+  // `config_settings` store, resolved for THIS message's context and injected as
+  // the structure pass's `instructions` (the SAME hook explicit `guidelines`
+  // uses). Ordered most-general → most-specific so a specific guideline
+  // reinforces/overrides a general one; the caller's explicit `guidelines` is
+  // appended LAST so it wins. Best-effort: a resolver hiccup degrades to "no
+  // scoped guidelines" (explicit-only), never fails the interpret — and with no
+  // stored guidelines this is a byte-identical no-op vs Wave 1 (explicit only).
+  let mergedInstructions: string | undefined =
+    input.guidelines?.trim() || undefined;
+  try {
+    const { resolveGuidelines } = await import("@synap/database");
+    const resolved = await resolveGuidelines({
+      db,
+      userId: ctx.userId,
+      // The capability this interpret runs through (skills row id), when known —
+      // lets a capability-scoped guideline match. channelType/bridgeId are not
+      // available on the interpret verb today, so those scopes simply won't match
+      // (honest: never fabricated).
+      capabilityId: ctx.verbId ?? undefined,
+      channelId: input.channelId ?? undefined,
+      workspaceId: workspaceId ?? undefined,
+      envelope: {
+        content: input.content,
+        channelId: input.channelId ?? undefined,
+        entityId: input.entityId ?? undefined,
+        attachments: [],
+      },
+    });
+    const parts = [
+      ...resolved.map((g) => g.text),
+      ...(input.guidelines?.trim() ? [input.guidelines.trim()] : []),
+    ];
+    mergedInstructions = parts.length > 0 ? parts.join("\n\n") : undefined;
+  } catch {
+    mergedInstructions = input.guidelines?.trim() || undefined;
+  }
+
+  // Extraction — the SAME client.structure the capture path calls, reached the
+  // SAME way (resolveIntelligenceService). The merged guidelines ride through as
+  // the structure pass's `instructions` (natural-language extraction bias).
+  const { resolveIntelligenceService } =
+    await import("../../utils/intelligence-routing.js");
+  const { client } = await resolveIntelligenceService({
+    userId: ctx.userId,
+    workspaceId: workspaceId ?? undefined,
+    capability: "default",
+  });
+  const structured = await client.structure({
+    text: input.content,
+    ...(mergedInstructions ? { instructions: mergedInstructions } : {}),
+    hints: {
+      routingMemory,
+      availableProfiles,
+      availableWorkspaces,
+      existingEntityNames,
+    },
+  });
+
+  // Map the tempId-keyed plan → ref-keyed graph via the SHARED confirm-mode
+  // bridge (tempId→ref, contextTempId→contextRef, dangling relations dropped).
+  // `client.structure` returns `entities`; the bridge reads `proposals` — the
+  // only shape difference, adapted here (cast mirrors capture.ts's own
+  // `result as CaptureStructureLike`).
+  const { shouldPersistCapturePlan, captureStructureToGraph } =
+    await import("../capture-agent/capture-structure-to-graph.js");
+  const plan: CaptureStructureLike = structured
+    ? {
+        proposals: structured.entities as Array<Record<string, unknown>>,
+        relations: structured.relations as Array<Record<string, unknown>>,
+        followUp: structured.followUp,
+        degraded: structured.degraded,
+      }
+    : { degraded: true };
+
+  // Honest no-op: the IS was unreachable/degraded, asked a clarifying question,
+  // or found nothing durable — there is no graph to propose. Report it plainly
+  // rather than filing an empty proposal.
+  if (!shouldPersistCapturePlan(plan)) {
+    return {
+      status: "no_proposal",
+      reason: !structured
+        ? "structuring-unavailable"
+        : structured.degraded
+          ? "degraded"
+          : structured.followUp != null
+            ? "needs-clarification"
+            : "nothing-durable",
+      entityCount: 0,
+    };
+  }
+
+  const { entities: graphEntities, relations } = captureStructureToGraph(plan);
+
+  // File ONE governed proposal through the SAME door capture uses. No
+  // `agentUserId` → the graph is ALWAYS filed PENDING (default propose); the
+  // human approves it from the review inbox, which materializes the entities.
+  const { submitCaptureGraph } =
+    await import("../capture-agent/submit-capture-graph.js");
+  const result = await submitCaptureGraph({
+    userId: ctx.userId,
+    workspaceId,
+    entities: graphEntities,
+    relations,
+    source: "agent",
+    summary: `Interpreted message — ${graphEntities.length} ${
+      graphEntities.length === 1 ? "entity" : "entities"
+    }`,
+  });
+
+  return {
+    status: result.applied ? "applied" : "proposed",
+    ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+    ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
+    entityCount: result.entityCount,
+    relationCount: result.relationCount,
+  };
 };
 
 // ── Read/resolve half (W6) ────────────────────────────────────────────────────
@@ -2228,10 +2506,20 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
  */
 const governanceRecommendTightenParams = z.object({});
 
-const governanceRecommendTightenHandler: BuiltinVerbHandler = async () => {
-  // Pod-wide by design: scans every agent-user's recent proposals. `ctx` is
-  // intentionally unused — the recommender resolves each agent's owner itself
-  // (createdBy on the filed proposals), like the widen scanner.
+const governanceRecommendTightenHandler: BuiltinVerbHandler = async (
+  _params,
+  ctx
+) => {
+  // POD-ADMIN GATE. The widen mirror is a pg-boss CRON job — unreachable by a
+  // user, so it needed no caller authorization. This one is an INVOKABLE verb,
+  // and it scans every agent-user pod-wide and files proposals attributed to
+  // OTHER users (`createdBy: agent.createdByUserId`) whose approval inserts
+  // `governance_rules`. Read-only w.r.t. graph data ≠ unauthorized: without this
+  // gate any workspace member (or any agent that can `run_capability`) could
+  // file governance proposals in other people's names and fan notifications out
+  // to every pod admin. Mirroring the scanner's SHAPE must not mean inheriting
+  // the absence of a gate it never needed.
+  await assertPodAdmin(ctx.userId);
   return recommendTightenForAllAgents();
 };
 
@@ -2248,6 +2536,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "output.generate": outputGenerateHandler,
   "ai.triage": aiTriageHandler,
   "ai.generate": aiGenerateHandler,
+  // Proactive keystone — interpret a message's content into a governed proposal.
+  "message.interpret": messageInterpretHandler,
   // W6 — read/resolve half.
   "entity.query": entityQueryHandler,
   "channel.resolve": channelResolveHandler,
@@ -2307,6 +2597,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "output.generate": outputGenerateParams,
   "ai.triage": aiTriageParams,
   "ai.generate": aiGenerateParams,
+  "message.interpret": messageInterpretParams,
   "entity.query": entityQueryParams,
   "channel.resolve": channelResolveParams,
   "channel.ensure": channelEnsureParams,
@@ -2351,6 +2642,13 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // the flow, since a capability node refuses on a propose verdict). Scope is N/A:
   // it reads no DB rows, so there is no access-layer floor to enforce.
   "ai.generate",
+  // message.interpret — files a human-governed PENDING proposal (never a direct
+  // graph write: no agentUserId is threaded, so submitCaptureGraph always
+  // proposes). Same "produces review items, not a data write → auto-run"
+  // rationale as governance.recommend_tighten; the outer gate must auto-run it so
+  // an automation node interpreting an inbound message isn't stalled by a propose
+  // verdict. Governance lives on the proposal it emits, not on running interpret.
+  "message.interpret",
   // document.read — pure access-layer read (see handler doc above).
   "document.read",
   // entity_facet.list — floor-scoped facet read (see handler doc above).

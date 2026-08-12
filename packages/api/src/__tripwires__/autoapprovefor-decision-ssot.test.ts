@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
-import { join, relative } from "path";
+import { join, relative, dirname, resolve } from "path";
+import { fileURLToPath } from "url";
 
 /**
  * TRIPWIRE — `governance_rules` is the ONE decision store for auto-approve /
@@ -29,10 +30,11 @@ import { join, relative } from "path";
  * `*` is stripped before scanning, so this only reacts to actual code:
  * property reads, type declarations, string literals, and object keys.
  *
- * SCOPE: `packages/api/src` and `packages/database/src` only (per the task
- * that shipped this tripwire) — `packages/governance-policy/src` (the
- * `decideAgentPolicy` engine, which takes `autoApproveFor` as a plain
- * function parameter, never reads the JSONB itself) is out of scope.
+ * SCOPE: `packages/api/src`, `packages/database/src`, and `packages/jobs/src`
+ * (the automation governance door) — see SCAN_ROOTS below.
+ * `packages/governance-policy/src` (the `decideAgentPolicy` engine, which takes
+ * `autoApproveFor` as a plain function parameter, never reads the JSONB itself)
+ * is out of scope.
  */
 
 // Repo-root-relative path → one-line reason this file's `autoApproveFor`
@@ -64,18 +66,26 @@ const ALLOWLIST: Record<string, string> = {
   "packages/api/src/utils/permission-check.ts":
     "getEffectiveGovernance() is read-only introspection, not the decision path",
 
-  // Write surfaces: these validate/set a CALLER-SUPPLIED autoApproveFor list
-  // (an explicit governance-widening action, itself proposal-gated) and
-  // mirror it into governance_rules — they do not read it back to decide
-  // whether some OTHER action auto-approves.
+  // Write surfaces (allowlisted, read-side SSOT only): these validate a
+  // CALLER-SUPPLIED autoApproveFor list (an explicit governance-widening action,
+  // itself proposal-gated) and MIRROR it into governance_rules. CONTRACT PHASE:
+  // they no longer PERSIST the JSONB sub-key — they only mirror to rules. NOTE:
+  // this scan does not guard the write side; it merely allowlists these files so
+  // their legitimate list-handling isn't flagged as a decision read. A re-added
+  // JSONB *persist* here would NOT be caught — only a JSONB decision *read*
+  // (reading it back to decide whether some OTHER action auto-approves) is.
   "packages/api/src/routers/workspaces.ts":
-    "workspaces.update write path — validates + mirrors an admin-supplied autoApproveFor into governance_rules",
+    "workspaces.update write path — validates + mirrors an admin-supplied autoApproveFor into governance_rules; strips the JSONB sub-key before persisting",
   "packages/api/src/routers/hub-protocol/rest/agent-users.ts":
-    "agent create/update write path — validates + mirrors a caller-supplied autoApproveFor into governance_rules",
+    "agent update write path — validates + mirrors a caller-supplied autoApproveFor into governance_rules; no longer persists the JSONB sub-key",
   "packages/api/src/routers/hub-protocol/rest/workspaces.ts":
-    "provision-agent write path (seeds a new agent-owned workspace's autoApproveFor) + OpenAPI doc-string prose",
+    "provision-agent write path — mirrors the agent-workspace preset into governance_rules (no longer seeds the JSONB sub-key) + OpenAPI doc-string prose",
   "packages/api/src/services/capture-agent/ensure-capture-agent.ts":
-    "capture-agent seed/backfill door — projects its own declarative CAPTURE_AGENT_DEF into agent_metadata + governance_rules",
+    "capture-agent seed door — projects its declarative CAPTURE_AGENT_DEF into governance_rules (no longer into agent_metadata JSONB)",
+
+  // Read-only display surfaces (introspection), not a decision read.
+  "packages/api/src/routers/governance-rules.ts":
+    "platformDefaults query — exposes the DEFAULT_AUTO_APPROVE floor under an `autoApproveFor` display key; read-only editor introspection, not a decision read",
 
   // Pure documentation string (OpenAPI `description`), not a property read.
   "packages/api/src/routers/hub-protocol/rest/channels.ts":
@@ -110,12 +120,23 @@ function tsFilesUnderSrc(root: string, acc: string[] = []): string[] {
   return acc;
 }
 
-// cwd is packages/api when run via `pnpm --filter @synap/api exec vitest`;
-// the backend repo root is two levels up.
-const REPO_ROOT = join(process.cwd(), "..", "..");
+// Anchor on THIS test file, not process.cwd() — vitest may run from the repo
+// root or from packages/api, and a cwd-relative root silently scans nothing
+// (→ 0 hits → false failures). src/__tripwires__ → up 4 = the backend repo root.
+const REPO_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  ".."
+);
 const SCAN_ROOTS = [
   join(REPO_ROOT, "packages", "api", "src"),
   join(REPO_ROOT, "packages", "database", "src"),
+  // The automation governance door (`automation-governance.ts`) lives here and
+  // decides auto-approve vs propose via `resolveAgentGovernanceDecision` — scan
+  // it too so a re-introduced direct JSONB decision read there is caught.
+  join(REPO_ROOT, "packages", "jobs", "src"),
 ];
 
 function liveOffenders(): { file: string; reason: string | undefined }[] {

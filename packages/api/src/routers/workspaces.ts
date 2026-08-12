@@ -49,7 +49,6 @@ import {
   ONBOARDING_SCAFFOLD_SYSTEM_DATA,
   projectWorkspaceSettings,
 } from "@synap/database";
-import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type {
   WorkspaceSettings,
@@ -771,11 +770,27 @@ export const workspacesRouter = router({
       const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
+      // CONTRACT PHASE (Governance Convergence): never persist the
+      // `settings.aiGovernance.autoApproveFor` JSONB sub-key. Strip it from what
+      // we store while preserving every OTHER aiGovernance dial (governanceMode,
+      // proposalApprovalPolicy, navigationPermissions, …) and every other
+      // setting. The auto-approve grant lives ONLY in `governance_rules`, which
+      // is written through its own doors (the Governance › Rules editor /
+      // `governanceRules.create`, agent provisioning, the agent-users PATCH) —
+      // NEVER through this workspace-settings path.
+      let settingsToPersist = input.settings;
+      const aiGovIn = input.settings?.aiGovernance;
+      if (settingsToPersist && aiGovIn && typeof aiGovIn === "object") {
+        const aiGov = { ...(aiGovIn as Record<string, unknown>) };
+        delete aiGov.autoApproveFor;
+        settingsToPersist = { ...settingsToPersist, aiGovernance: aiGov };
+      }
+
       await workspaceRepo.update(
         input.id,
         {
           name: input.name || undefined,
-          settings: input.settings || undefined,
+          settings: settingsToPersist || undefined,
         },
         ctx.userId
       );
@@ -785,23 +800,15 @@ export const workspacesRouter = router({
         ProfileResolutionService.invalidateAiPostureCache();
       }
 
-      // ONE-STORE (Phase B write surface): mirror an explicit autoApproveFor
-      // list into governance_rules — the resolver's read side (rung 2.8) is
-      // now the enforcement path (see resolve-agent-governance-decision.ts).
-      // The JSONB column itself is unchanged above (back-compat / CP / UI
-      // display); this keeps the rules mirror from drifting from what the
-      // operator just set. REPLACE semantics: an empty array legitimately
-      // clears the mirrored rules.
-      if (Array.isArray(autoApproveFor)) {
-        await syncAutoApproveRules({
-          db,
-          principalKind: "any",
-          scopeKind: "workspace",
-          workspaceId: input.id,
-          actions: autoApproveFor as string[],
-          createdBy: ctx.userId,
-        });
-      }
+      // NOTE: there is deliberately NO `syncAutoApproveRules` mirror here. Post
+      // W1.1 the JSONB `autoApproveFor` is display-only and is stripped above,
+      // and no legitimate caller sends an auto-approve grant through
+      // `workspaces.update` settings — the workspace rules are owned by the
+      // Governance › Rules editor (`governanceRules.create`) and agent
+      // provisioning. A REPLACE-semantics mirror here re-asserted whatever the
+      // UI round-tripped from the frozen JSONB, silently clobbering rules
+      // edited since via the rules door. `autoApproveFor` in the incoming
+      // settings is validated (rung 0 above) then ignored.
 
       // 3. Audit log
       auditLog({

@@ -76,7 +76,12 @@ async function mirrorConnectionAuthOutcome(
   try {
     if (outcome === "ok") {
       // Reset ONLY when there is something to clear — a no-op UPDATE on every
-      // successful call would be needless write load.
+      // successful call would be needless write load. "Something to clear" is a
+      // non-zero counter OR a `needs_reauth` state: the latter can be set with
+      // authFailCount=0 by a source OTHER than this reactive path (e.g. a Nango
+      // refresh-failure webhook / a reconcile that reads Nango's own error state),
+      // so guarding on the counter alone would strand it — a successful call must
+      // clear needs_reauth no matter who set it.
       await db
         .update(secrets)
         .set({
@@ -93,7 +98,10 @@ async function mirrorConnectionAuthOutcome(
             eq(secrets.accountHint, connectionId),
             isNotNull(secrets.capabilityId),
             isNull(secrets.deletedAt),
-            gt(secrets.authFailCount, 0)
+            or(
+              gt(secrets.authFailCount, 0),
+              eq(secrets.connectionState, "needs_reauth")
+            )
           )
         );
       return;

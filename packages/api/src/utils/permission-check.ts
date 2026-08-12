@@ -241,16 +241,17 @@ type EntityPreviousData = {
  * enforced set is ADDITIVE: DEFAULT_AUTO_APPROVE (rung 8 code floor) ∪ the
  * workspace-authored `verdict:"auto"` action rules (pod ∪ this workspace,
  * `principal_kind = "any"`), minus any action a `verdict:"propose"` action rule
- * pins back to review. The raw JSONB is preserved (unchanged, still written by
- * every write path) and surfaced under `effective.settingsAutoApproveFor` for
- * back-compat, but is no longer the DISPLAYED effective set. No write path is
- * touched here — this is a read only.
+ * pins back to review. CONTRACT PHASE (Governance Convergence): the raw JSONB
+ * sub-key is RETIRED as a write target and no longer read here —
+ * `effective.settingsAutoApproveFor` is kept in the response shape for
+ * back-compat but is now always null. No write path is touched here — this is a
+ * read only.
  */
 export async function getEffectiveGovernance(workspaceId: string): Promise<{
   workspaceId: string;
   effective: {
     autoApproveFor: readonly string[];
-    /** The raw `settings.aiGovernance.autoApproveFor` JSONB (back-compat), or null. */
+    /** RETIRED back-compat field — always null (the JSONB sub-key is no longer read or written). */
     settingsAutoApproveFor: readonly string[] | null;
     /** Actions a `verdict:"propose"` rule pins back to review (rules-derived). */
     alwaysProposeFor: readonly string[];
@@ -279,7 +280,6 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
     .limit(1);
 
   const settings = ws?.settings as WorkspaceSettings | undefined;
-  const override = settings?.aiGovernance?.autoApproveFor;
   const governanceMode =
     getWorkspaceGovernanceMode(settings) === "agent-owned"
       ? "agent-owned"
@@ -335,7 +335,13 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
     workspaceId,
     effective: {
       autoApproveFor: effectiveAutoApproveFor,
-      settingsAutoApproveFor: override ?? null,
+      // CONTRACT PHASE (Governance Convergence): the raw
+      // `settings.aiGovernance.autoApproveFor` JSONB sub-key is RETIRED as a
+      // write target and no longer read here — the meaningful, enforced set is
+      // `effective.autoApproveFor` above (rules-derived). This back-compat field
+      // is kept in the response SHAPE but always null (its only consumer,
+      // WorkspaceIntelligenceTabs, is migrated to the rules door).
+      settingsAutoApproveFor: null,
       alwaysProposeFor: Array.from(proposeRulePatterns),
       rulesDerived: true,
       governanceMode,
@@ -1335,7 +1341,17 @@ async function notifyProposalCreated(
           `${input.proposalType} ${input.targetType}`,
         agentUserId: input.agentUserId ?? undefined,
       });
-    })().catch(() => {});
+    })().catch((err) => {
+      // Non-critical to the WRITE, but never silent: this is the ONLY attention
+      // path for a pod-wide governance proposal (the workspace branch can't fire
+      // — there is no workspace). If `resolvePodAdminUserIds` throws, the owner
+      // is never told a widen/tighten decision is waiting; swallowing that leaves
+      // zero evidence anywhere that it happened.
+      logger.warn(
+        { err, proposalId: proposal.id },
+        "Pod-wide proposal notification fan-out failed (non-fatal)"
+      );
+    });
   }
 }
 

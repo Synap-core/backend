@@ -15,6 +15,7 @@ import {
   notificationPreferences,
   eq,
   and,
+  or,
   desc,
   count,
   inArray,
@@ -122,7 +123,16 @@ export const notifCenterRouter = router({
       .from(notifications)
       .where(
         and(
-          eq(notifications.workspaceId, ctx.workspaceId),
+          // POD-WIDE notifications carry `workspace_id IS NULL`, and SQL `=`
+          // NEVER matches NULL — so an `eq(workspaceId, ctx.workspaceId)` filter
+          // silently excluded every one of them and the bell never badged for
+          // pod-wide governance attention (the one path that has no workspace to
+          // belong to). They are not workspace-scoped, so they count in EVERY
+          // lens; the user floor below is what actually protects them.
+          or(
+            eq(notifications.workspaceId, ctx.workspaceId),
+            isNull(notifications.workspaceId)
+          ),
           eq(notifications.userId, ctx.userId),
           eq(notifications.status, NotificationStatus.UNREAD)
         )

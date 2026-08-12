@@ -3,6 +3,7 @@ import {
   decideAgentPolicy,
   requiredPermissionFor,
   isAutoApproved,
+  matchesActionPattern,
   findMatchingPattern,
   isPureReadAction,
   agentHasCapability,
@@ -1013,5 +1014,97 @@ describe("constants are intact", () => {
   // propose at runtime today" — they do not.
   it("channel.create is out of the policy lists (enforcement wiring is a tracked follow-up)", () => {
     expect(isAutoApproved("channel.create", DEFAULT_AUTO_APPROVE)).toBe(false);
+  });
+});
+
+// ── Glob dot-boundary fix — equivalence proof + corrected behavior ──────────────
+// matchesActionPattern / findMatchingPattern matched a `x.*` glob via
+// `eventKey.startsWith(pattern.slice(0, -2))`. slice(0,-2) strips BOTH "." and "*",
+// leaving a DOT-LESS prefix — so `search.*` would wrongly cover a hypothetical
+// `searchable.foo`. The fix uses slice(0,-1) (keeps the dot). This proves the fix
+// changes NOTHING for any CURRENT key, and corrects the hypothetical over-match.
+describe("glob dot-boundary fix — equivalence over the real corpus", () => {
+  // The OLD (buggy) dot-less matcher, kept verbatim as the equivalence reference.
+  const oldMatch = (eventKey: string, patterns: readonly string[]): boolean =>
+    patterns.some((p) =>
+      p.endsWith(".*") ? eventKey.startsWith(p.slice(0, -2)) : eventKey === p
+    );
+
+  const FLOOR_GLOBS = DEFAULT_AUTO_APPROVE.filter((p) => p.endsWith(".*"));
+
+  it("the floor's only globs are search.* and context.* (fails if a new glob is added)", () => {
+    expect([...FLOOR_GLOBS].sort()).toEqual(["context.*", "search.*"]);
+  });
+
+  it("fixed matcher === old matcher for every CURRENT key (zero behavior change)", () => {
+    // Real corpus: every floor/admin/destructive member + a broad subject×verb grid.
+    // REAL current subjects only — no `searchable`/`contextual` decoys: those don't
+    // exist today, so they are not "current keys". The fix intentionally changes
+    // THEM (asserted in the corrected-behavior test below), which is why they must
+    // NOT be in this zero-change equivalence corpus.
+    const subjects = [
+      "entity",
+      "document",
+      "relation",
+      "search",
+      "context",
+      "memory",
+      "channel",
+      "profile",
+      "property_def",
+      "automation",
+      "playbook",
+      "tool",
+      "link",
+      "skill",
+      "facet",
+      "capability",
+      "terminal",
+      "filesystem",
+      "view",
+      "bento",
+      "focus_session",
+    ];
+    const verbs = [
+      "create",
+      "read",
+      "update",
+      "delete",
+      "recall",
+      "semantic",
+      "get",
+      "window",
+      "attach",
+      "foo",
+    ];
+    const corpus = new Set<string>([
+      ...DEFAULT_AUTO_APPROVE,
+      ...ADMIN_ACTIONS,
+      ...DESTRUCTIVE_ACTIONS,
+      ...subjects.flatMap((s) => verbs.map((v) => `${s}.${v}`)),
+    ]);
+    for (const key of corpus) {
+      expect(
+        matchesActionPattern(key, FLOOR_GLOBS),
+        `matchesActionPattern diverged from old for "${key}"`
+      ).toBe(oldMatch(key, FLOOR_GLOBS));
+    }
+  });
+
+  it("corrects the silent over-match (the whole point of the fix)", () => {
+    // Fixed: dot boundary respected.
+    expect(matchesActionPattern("searchable.foo", ["search.*"])).toBe(false);
+    expect(matchesActionPattern("searching_history.read", ["search.*"])).toBe(
+      false
+    );
+    expect(matchesActionPattern("contextual.tag", ["context.*"])).toBe(false);
+    // Unchanged: real members of the glob still match.
+    expect(matchesActionPattern("search.semantic", ["search.*"])).toBe(true);
+    expect(matchesActionPattern("context.window", ["context.*"])).toBe(true);
+    // findMatchingPattern parity.
+    expect(findMatchingPattern("searchable.foo", ["search.*"])).toBeUndefined();
+    expect(findMatchingPattern("search.semantic", ["search.*"])).toBe(
+      "search.*"
+    );
   });
 });

@@ -90,16 +90,17 @@ async function findCaptureAgent(
   return row ?? null;
 }
 
-/** True when the stored metadata already matches CAPTURE_AGENT_DEF (no heal needed). */
+/**
+ * True when the stored metadata already matches CAPTURE_AGENT_DEF (no heal
+ * needed). CONTRACT PHASE (Governance Convergence): `autoApproveFor` is no
+ * longer stored in `agent_metadata` — the auto-approve boundary lives in
+ * `governance_rules` (seeded by `syncCaptureAgentGovernanceRules`). Convergence
+ * is therefore judged on the remaining stored dial only; comparing an
+ * always-absent JSONB `autoApproveFor` would (falsely) report perpetual drift.
+ */
 function metadataInSync(meta: AgentMetadata | null): boolean {
   if (!meta) return false;
-  if (meta.writesRequireProposal !== CAPTURE_AGENT_DEF.writesRequireProposal) {
-    return false;
-  }
-  const current = [...(meta.autoApproveFor ?? [])].sort();
-  const desired = [...CAPTURE_AGENT_DEF.autoApproveFor].sort();
-  if (current.length !== desired.length) return false;
-  return current.every((v, i) => v === desired[i]);
+  return meta.writesRequireProposal === CAPTURE_AGENT_DEF.writesRequireProposal;
 }
 
 const GOVERNANCE_RULES_CREATED_BY = "system:ensure-capture-agent";
@@ -203,8 +204,11 @@ export async function ensureCaptureAgent(): Promise<void> {
         createdByUserId: ownerUserId,
         isPersonalAgent: false,
         writesRequireProposal: CAPTURE_AGENT_DEF.writesRequireProposal,
-        autoApproveFor: [...CAPTURE_AGENT_DEF.autoApproveFor],
       };
+      // CONTRACT PHASE: never persist `autoApproveFor` into agent_metadata —
+      // strip any stale sub-key carried over from the spread above. The verbs
+      // are seeded into governance_rules by syncCaptureAgentGovernanceRules().
+      delete (healed as { autoApproveFor?: string[] }).autoApproveFor;
 
       await db
         .update(users)
@@ -227,13 +231,14 @@ export async function ensureCaptureAgent(): Promise<void> {
     const shortId = agentId.slice(0, 8);
     const email = `agent-${CAPTURE_AGENT_DEF.agentType}-${shortId}@synap.agent`;
 
+    // CONTRACT PHASE: `autoApproveFor` is NOT stored in agent_metadata — the
+    // capture verbs are seeded into governance_rules (syncCaptureAgentGovernanceRules).
     const agentMetadata: AgentMetadata = {
       agentType: CAPTURE_AGENT_DEF.agentType,
       description: CAPTURE_AGENT_DEF.description,
       createdByUserId: ownerUserId,
       isPersonalAgent: false,
       writesRequireProposal: CAPTURE_AGENT_DEF.writesRequireProposal,
-      autoApproveFor: [...CAPTURE_AGENT_DEF.autoApproveFor],
     };
 
     await db.insert(users).values({

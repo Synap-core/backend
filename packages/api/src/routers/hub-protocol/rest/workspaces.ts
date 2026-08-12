@@ -21,6 +21,7 @@ import {
   WorkspaceRepository,
   type AgentMetadata,
 } from "@synap/database";
+import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
   templateHealthFor,
@@ -769,8 +770,34 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         createdBy: "provisioning",
       });
 
+      // The wide preset an agent-owned workspace grants its agent. CONTRACT
+      // PHASE (Governance Convergence): this is mirrored into `governance_rules`
+      // (below) — NOT stored in the retired `settings.aiGovernance.autoApproveFor`
+      // JSONB sub-key. Floor-covered verbs (search.*, entity.create, …) are
+      // dropped by `syncAutoApproveRules`; only genuine widenings become rows.
+      const agentWorkspaceAutoApprove = [
+        "search.*",
+        "memory.recall",
+        "entity.read",
+        "entity.create",
+        "entity.update",
+        "relation.create",
+        "relation.update",
+        "document.create",
+        "document.read",
+        "view.create",
+        "profile.create",
+        "profile.update",
+        "property_def.create",
+        "property_def.update",
+        "bento.arrange",
+        "context.*",
+        "channel.create",
+        "terminal.read_logs",
+      ];
+
       // Always apply settings (upsert): workspace may have been created before
-      // autoApproveFor was introduced, so re-provisioning must fix existing workspaces.
+      // this preset existed, so re-provisioning must fix existing workspaces.
       await db
         .update(workspaces)
         .set({
@@ -779,31 +806,21 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             workspaceType: "agent",
             linkedAgentId: agentUserId,
             governanceMode: "standard",
-            aiGovernance: {
-              autoApproveFor: [
-                "search.*",
-                "memory.recall",
-                "entity.read",
-                "entity.create",
-                "entity.update",
-                "relation.create",
-                "relation.update",
-                "document.create",
-                "document.read",
-                "view.create",
-                "profile.create",
-                "profile.update",
-                "property_def.create",
-                "property_def.update",
-                "bento.arrange",
-                "context.*",
-                "channel.create",
-                "terminal.read_logs",
-              ],
-            },
           } as never,
         })
         .where(eq(workspaces.id, result.workspaceId));
+
+      // Mirror the preset into governance_rules (principal "any", this
+      // workspace) — the enforcement path the resolver reads at rung 2.8.
+      // REPLACE semantics: idempotent on re-provision.
+      await syncAutoApproveRules({
+        db,
+        principalKind: "any",
+        scopeKind: "workspace",
+        workspaceId: result.workspaceId,
+        actions: agentWorkspaceAutoApprove,
+        createdBy: callerId,
+      });
 
       // Add calling user as admin so they see the agent's work (idempotent)
       if (callerId !== agentUserId) {

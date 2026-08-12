@@ -5,10 +5,11 @@
  * Where the widen scanner PROPOSES opening an agent's auto-approve lane once it
  * has earned trust, this recommender PROPOSES pinning a specific agent
  * write-motif back to REVIEW when the humans keep saying no. It scans recent
- * REJECTED proposals per agent, clusters them by shape (the SAME structural
- * fingerprint the inbox groups on — `collapseProposalsToClusters`), and for any
- * shape the humans REJECT consistently (a conservative floor: ≥ MIN_CLUSTER_SIZE
- * rejects AND ≥ MIN_REJECT_RATE of that shape's attempts rejected) files ONE
+ * REJECTED proposals per agent, groups them by ACTION MOTIF
+ * (`${targetType}.${proposalType}` — the same key it files against, and the same
+ * vocabulary the widen scanner's `computeDominantMotif` emits), and for any motif
+ * the humans REJECT consistently (a conservative floor: ≥ MIN_CLUSTER_SIZE
+ * rejects AND ≥ MIN_REJECT_RATE of that motif's attempts rejected) files ONE
  * pending `governance.tighten_lane` proposal. Approving it inserts a
  * `governance_rules` row with `verdict:'propose'` — see the approve-branch in
  * `packages/api/src/routers/proposals.ts`.
@@ -19,11 +20,15 @@
  * mutation, so it auto-runs inside a cron automation (marked read-only in
  * `builtin-verbs.ts`, same rationale as `connector.health_check`).
  *
+ * NOT the structural fingerprint: `collapseProposalsToClusters` keys on a
+ * per-OBJECT signature (`id:<targetId>` for every non-create class), which is
+ * correct for DUPLICATE detection but wrong here — see the axis-mismatch note at
+ * the qualification site below.
+ *
  * REUSE, not reinvention:
- *   - `collapseProposalsToClusters` + `computeProposalFingerprint` (fingerprint.ts)
- *     — the canonical shape-cluster primitive. (The widen scanner MIRRORS this
- *     algorithm as `computeFingerprint` only because `@synap/jobs` cannot import
- *     `@synap/api`; this recommender lives IN api, so it uses the canonical fn.)
+ *   - the motif vocabulary `${targetType}.${proposalType}` — identical to the
+ *     widen scanner's `computeDominantMotif`, so both lanes speak one language
+ *     and `hasCoveringProposeRule` can glob-match it.
  *   - the widen scanner's DB-tier STRUCTURE — agent enumeration, the resilient
  *     per-agent loop, the pending/covering-rule dedupe — mirrored here for
  *     tighten (per (agent, motif), not per agent, since one agent can have
@@ -56,11 +61,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
-import {
-  collapseProposalsToClusters,
-  computeProposalFingerprint,
-  type ClusterInputRow,
-} from "./fingerprint.js";
+const SAMPLE_CAP = 20;
 
 const logger = createLogger({ module: "governance-recommend-tighten" });
 
@@ -107,15 +108,17 @@ interface AgentRow {
   createdByUserId: string | null;
 }
 
+/**
+ * Exactly the columns the motif qualification reads. The fingerprint-era scan
+ * also pulled `targetId`, `data` (JSONB), `createdAt` and `workspaceId` to build
+ * a per-object signature; grouping by motif needs none of them, and selecting
+ * `data` meant dragging 500 JSONB payloads per agent per run for nothing.
+ */
 interface ScanRow {
+  id: string;
   proposalType: string;
   targetType: string;
-  targetId: string;
-  data: unknown;
   status: string;
-  createdAt: Date;
-  workspaceId: string | null;
-  id: string;
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
@@ -132,11 +135,7 @@ async function loadAgentProposals(agentId: string): Promise<ScanRow[]> {
       id: proposals.id,
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
-      targetId: proposals.targetId,
-      data: proposals.data,
       status: proposals.status,
-      createdAt: proposals.createdAt,
-      workspaceId: proposals.workspaceId,
     })
     .from(proposals)
     .where(eq(proposals.agentUserId, agentId))
@@ -216,43 +215,74 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
   const rows = await loadAgentProposals(agent.id);
   if (rows.length === 0) return [];
 
-  // Totals per shape (ALL statuses) — the denominator of the reject rate. Uses
-  // the SAME canonical fingerprint `collapseProposalsToClusters` groups on, so
-  // the cluster's fingerprint keys straight into this map.
-  const totalByFingerprint = new Map<string, number>();
+  // QUALIFY ON THE MOTIF — the SAME axis this recommender ACTS on.
+  //
+  // Dogfood finding (2026-08-11): qualifying on the canonical FINGERPRINT was an
+  // axis mismatch that made this recommender unfireable in practice. The
+  // fingerprint embeds a per-object signature — `id:<targetId>` for every
+  // non-create class (delete / update / merge / attach) — so N rejections of the
+  // same ACTION against N different objects produce N clusters of size 1 and
+  // never reach MIN_CLUSTER_SIZE. On a real pod, 11 rejected `entity.delete`
+  // proposals scored 11 clusters of 1 (fires: never) instead of one motif at 11
+  // (fires: correctly). The fingerprint is the right key for DUPLICATE detection
+  // ("the same thing proposed twice"); the motif is the right key for tighten
+  // ("this action shape keeps getting refused"). Since the filed proposal always
+  // targets `${targetType}.${proposalType}`, qualifying on anything narrower
+  // measured a different population than it acted on.
+  const motifOf = (r: { targetType: string; proposalType: string }) =>
+    `${r.targetType}.${r.proposalType}`;
+
+  // Denominator: attempts per motif that a HUMAN ACTUALLY DECIDED.
+  //
+  // Only decided outcomes belong in a rate whose meaning is "how reliably do the
+  // humans reject this". PENDING / EXPIRED / APPROVAL_FAILED / WITHDRAWN are not
+  // verdicts — counting them dilutes the numerator against rows nobody judged.
+  // Worst case they invert the loop this recommender exists to close: an agent
+  // with 9 rejected + 2 still-pending `entity.delete` scores 9/11 = 0.82 < 0.9
+  // and stays silent, so a chatty agent that keeps a steady backlog of the same
+  // shape pending PERMANENTLY SUPPRESSES its own tighten recommendation.
+  const DECIDED: ReadonlySet<string> = new Set<string>([
+    ProposalStatus.APPROVED,
+    ProposalStatus.AUTO_APPROVED,
+    ProposalStatus.REJECTED,
+  ]);
+  const decidedByMotif = new Map<string, number>();
   for (const r of rows) {
-    const fp = computeProposalFingerprint(r);
-    totalByFingerprint.set(fp, (totalByFingerprint.get(fp) ?? 0) + 1);
+    if (!DECIDED.has(r.status)) continue;
+    const m = motifOf(r);
+    decidedByMotif.set(m, (decidedByMotif.get(m) ?? 0) + 1);
   }
 
-  // Cluster the REJECTED rows by shape (count + sampleProposalIds per cluster).
-  const rejectedRows: ClusterInputRow[] = rows
-    .filter((r) => r.status === ProposalStatus.REJECTED)
-    .map((r) => ({
-      id: r.id,
-      proposalType: r.proposalType,
-      targetType: r.targetType,
-      targetId: r.targetId,
-      data: r.data,
-      createdAt: r.createdAt,
-      workspaceId: r.workspaceId,
-    }));
-  if (rejectedRows.length === 0) return [];
+  // Numerator: rejected attempts per motif (+ evidence sample ids).
+  const rejectedByMotif = new Map<
+    string,
+    { count: number; sampleProposalIds: string[] }
+  >();
+  for (const r of rows) {
+    if (r.status !== ProposalStatus.REJECTED) continue;
+    const m = motifOf(r);
+    const acc = rejectedByMotif.get(m) ?? { count: 0, sampleProposalIds: [] };
+    acc.count += 1;
+    if (acc.sampleProposalIds.length < SAMPLE_CAP)
+      acc.sampleProposalIds.push(r.id);
+    rejectedByMotif.set(m, acc);
+  }
+  if (rejectedByMotif.size === 0) return [];
 
-  const clusters = collapseProposalsToClusters(rejectedRows);
   const filed: string[] = [];
 
-  for (const cluster of clusters) {
-    if (cluster.count < MIN_CLUSTER_SIZE) continue;
-    const totalForShape =
-      totalByFingerprint.get(cluster.fingerprint) ?? cluster.count;
-    const rejectRate = Number((cluster.count / totalForShape).toFixed(4));
-    if (rejectRate < MIN_REJECT_RATE) continue;
+  // Most-rejected motifs first — worst offenders lead. NOTE: there is no per-run
+  // cap; every qualifying motif is filed (the ≥5-count + ≥0.9-rate floors and the
+  // per-(agent,motif) dedupe are what bound the volume).
+  const motifs = Array.from(rejectedByMotif.entries()).sort(
+    (a, b) => b[1].count - a[1].count
+  );
 
-    // Motif action pattern — the SAME `${targetType}.${proposalType}` shape the
-    // widen scanner's computeDominantMotif emits, so the two lanes speak one
-    // vocabulary and hasCoveringProposeRule can glob-match it.
-    const targetPattern = `${cluster.targetType}.${cluster.proposalType}`;
+  for (const [targetPattern, rejected] of motifs) {
+    if (rejected.count < MIN_CLUSTER_SIZE) continue;
+    const totalForShape = decidedByMotif.get(targetPattern) ?? rejected.count;
+    const rejectRate = Number((rejected.count / totalForShape).toFixed(4));
+    if (rejectRate < MIN_REJECT_RATE) continue;
 
     if (await hasPendingTightenProposal(agent.id, targetPattern)) continue;
     if (await hasCoveringProposeRule(agent.id, targetPattern)) continue;
@@ -264,10 +294,10 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
       scopeKind: "pod",
       verdict: "propose",
       evidence: {
-        clusterSize: cluster.count,
+        clusterSize: rejected.count,
         rejectRate,
         totalForShape,
-        sampleProposalIds: cluster.sampleProposalIds,
+        sampleProposalIds: rejected.sampleProposalIds,
       },
     };
 
@@ -304,7 +334,7 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
         agentId: agent.id,
         motif: targetPattern,
         rejectRate,
-        clusterSize: cluster.count,
+        clusterSize: rejected.count,
       },
       "recommend-tighten: filed tighten_lane proposal"
     );

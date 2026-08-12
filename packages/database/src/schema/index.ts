@@ -224,3 +224,8 @@ export type { ProvenanceKind } from "./provenance.js";
 // (Governance Convergence Plan, Phase A). Storage only here; resolver + engine
 // rung 2.8 wiring land in a separate wave.
 export * from "./governance-rules.js";
+
+// Config Settings (0235) — a general, layered per-granularity config store that
+// MIRRORS governance_rules. Used first for GUIDELINES (natural-language intent
+// injected into message.interpret via resolveGuidelines).
+export * from "./config-settings.js";

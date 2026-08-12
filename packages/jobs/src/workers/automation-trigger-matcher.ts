@@ -28,6 +28,10 @@ import {
   workspaces,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
+import { matchMessageShape, type MessageEnvelope } from "@synap/database";
+// Re-export to preserve this module's public surface (tests + downstream imports)
+// after MessageEnvelope + matchMessageShape moved to `@synap/database`.
+export type { MessageEnvelope };
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import { deriveEventSubjectEntityId } from "../utils/run-subject.js";
@@ -128,15 +132,54 @@ interface TriggerMatchPayload {
 }
 
 /**
+ * The two PHYSICAL message events the `message.received` synthetic alias covers.
+ *   `external_message.received.completed` — inbound-recorder's emitSideEffects.
+ *   `channel_message.created.completed`   — an in-pod channel message.
+ * `channel-automation-binding.ts` (@synap/api) keeps a HAND-MIRRORED copy of
+ * this list (`CHANNEL_EVENT_TYPES`) so the Signal channel-Stack surface counts
+ * the same automations — keep the two in lockstep.
+ */
+export const MESSAGE_ALIAS_EVENT_TYPES = [
+  "external_message.received.completed",
+  "channel_message.created.completed",
+] as const;
+
+/**
+ * The synthetic aliases an automation can use to fire for BOTH physical message
+ * events without binding to one transport. `message.received` is the documented
+ * form; `message.*` / `message.received.*` are accepted for grammar symmetry
+ * with the trailing-wildcard patterns elsewhere. This is a MATCH-ALIAS only —
+ * the physical events still exist and `external_message.*` / `channel_message.*`
+ * automations are untouched.
+ */
+function matchesMessageAlias(eventType: string, pattern: string): boolean {
+  if (
+    pattern !== "message.received" &&
+    pattern !== "message.received.*" &&
+    pattern !== "message.*"
+  ) {
+    return false;
+  }
+  return (MESSAGE_ALIAS_EVENT_TYPES as readonly string[]).includes(eventType);
+}
+
+/**
  * Match an event pattern against a trigger pattern.
  * Supports exact match and trailing wildcard:
  *   "entities.create.completed" matches "entities.create.completed"
  *   "entities.create.*" matches "entities.create.completed"
  *   "entities.*" matches "entities.create.completed"
+ * Plus the synthetic `message.received` alias (see `matchesMessageAlias`), which
+ * fires for BOTH physical message events — additive, physical patterns unchanged.
  */
 function matchPattern(eventType: string, pattern?: string): boolean {
   if (!pattern) return false;
   if (pattern === eventType) return true;
+
+  // Synthetic message alias — an ADDITIVE opt-in, checked before the literal
+  // dotted-wildcard walk (which could never match "message.*" against
+  // "external_message..." anyway, so there is no collision).
+  if (matchesMessageAlias(eventType, pattern)) return true;
 
   const patternParts = pattern.split(".");
   const eventParts = eventType.split(".");
@@ -179,6 +222,63 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 }
 
 /**
+ * Normalized, provider-agnostic view of a message event, derived ONCE at match
+ * time from EITHER `external_message.received.completed` OR
+ * `channel_message.created.completed`. Shape predicates and downstream
+ * `{{trigger.message.*}}` context both read this ONE shape, so a
+ * `message.received` automation never has to know which transport fired it.
+ *
+ * Fields are honest to the source payload: `channel_message.created` carries
+ * only `{ channelId, messageRole }` today, so its envelope has no content /
+ * participant / attachments — a shape predicate over those simply won't match a
+ * channel_message (never fabricated).
+ */
+/** Whether an event type is one of the physical message events. */
+function isMessageEvent(eventType: string): boolean {
+  return (
+    eventType.startsWith("external_message.") ||
+    eventType.startsWith("channel_message.")
+  );
+}
+
+/**
+ * Map EITHER physical message payload into ONE `MessageEnvelope`. Returns
+ * undefined for a non-message event. Reads only fields the emitter actually
+ * puts on the event `data` (inbound-recorder's emitSideEffects for external;
+ * channels.ts for channel_message) — anything absent stays undefined.
+ */
+function deriveMessageEnvelope(
+  eventType: string,
+  data: Record<string, unknown> | undefined
+): MessageEnvelope | undefined {
+  if (!isMessageEvent(eventType)) return undefined;
+  const d = data ?? {};
+
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v : undefined;
+
+  const rawAttachments = Array.isArray(d.attachments) ? d.attachments : [];
+  const attachments = rawAttachments
+    .filter(
+      (a): a is Record<string, unknown> => a != null && typeof a === "object"
+    )
+    .map((a) => ({ type: str(a.type), url: str(a.url) }));
+
+  return {
+    channelId: str(d.channelId),
+    // Not on today's payloads, but read defensively so a richer emitter (or a
+    // bridge-stamped event) is honored without another matcher change.
+    channelType: str(d.channelType),
+    bridgeId: str(d.bridgeId),
+    provider: str(d.provider),
+    participant: str(d.participantName) ?? str(d.participant),
+    content: str(d.content),
+    attachments,
+    entityId: str(d.entityId),
+  };
+}
+
+/**
  * Check trigger-type-specific filter fields stored directly on triggerConfig.
  *
  * The frontend TriggerSettings stores per-trigger filters as top-level fields on
@@ -190,8 +290,18 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 function matchTriggerSpecificFilters(
   eventType: string,
   eventData: Record<string, unknown> | undefined,
-  config: AutomationTriggerConfig
+  config: AutomationTriggerConfig,
+  envelope?: MessageEnvelope
 ): boolean {
+  // ── message shape predicate (composes WITH channelId below) ─────────────
+  // Applies to BOTH physical message events (so it also covers a
+  // `message.received`-alias automation, which fires for either). A non-message
+  // event never carries a shape today; gating on `isMessageEvent` keeps this
+  // strictly additive. `channelId` binding + `shape` are ANDed — both must pass.
+  if (config.shape && isMessageEvent(eventType)) {
+    if (!matchMessageShape(config.shape, envelope)) return false;
+  }
+
   // ── channel_message trigger ─────────────────────────────────────────────
   if (eventType.startsWith("channel_message.")) {
     // Filter by specific channel
@@ -680,6 +790,11 @@ export async function handleAutomationTriggerMatch(job: {
     data,
   });
 
+  // Normalized message view, derived ONCE from either physical message payload.
+  // Read by shape predicates AND exposed to the fired automation as
+  // `{{trigger.message.*}}`. `undefined` for a non-message event.
+  const messageEnvelope = deriveMessageEnvelope(eventType, data);
+
   const boss = getBoss();
 
   const rootRunId =
@@ -827,7 +942,8 @@ export async function handleAutomationTriggerMatch(job: {
     if (!matchFilters(data, config.filters)) continue;
 
     // ── Trigger-type-specific filter match ─────────────────────────────
-    if (!matchTriggerSpecificFilters(eventType, data, config)) continue;
+    if (!matchTriggerSpecificFilters(eventType, data, config, messageEnvelope))
+      continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(
@@ -844,6 +960,10 @@ export async function handleAutomationTriggerMatch(job: {
         data: data ?? {},
         userId,
         timestamp: new Date().toISOString(),
+        // Provider-agnostic normalized message for `{{trigger.message.*}}`.
+        // Only present for a message event; additive alongside `data`, which
+        // stays byte-identical so existing `{{trigger.data.*}}` mappings work.
+        ...(messageEnvelope ? { message: messageEnvelope } : {}),
       },
       subjectEntityId
     );

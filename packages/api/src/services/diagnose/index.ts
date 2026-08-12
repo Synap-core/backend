@@ -339,6 +339,7 @@ async function diagnoseObject(
           capability: {
             id: row.id,
             name: row.name,
+            description: row.description,
             approved: row.approved,
             metadata: row.metadata as Record<string, unknown> | null,
           },

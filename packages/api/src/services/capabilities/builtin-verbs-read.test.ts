@@ -130,6 +130,15 @@ describe("W6 read/resolve verbs — registry", () => {
       "entity.query",
       "entity_facet.list",
       "feed.read",
+      // governance.recommend_tighten mutates NO graph data — it only FILES
+      // pending proposals (review items) via the `insertPendingProposal` one
+      // door, so it auto-runs in its daily cron automation exactly like
+      // connector.health_check; a propose verdict on the verb itself would
+      // stall the flow it lives in. Read-only here means "no graph mutation,
+      // safe to auto-run" — it is NOT an authorization claim: the handler
+      // gates on `assertPodAdmin(ctx.userId)` because it scans every agent
+      // pod-wide and files proposals attributed to other users.
+      "governance.recommend_tighten",
       "graph.relations",
       "market.search",
     ]);

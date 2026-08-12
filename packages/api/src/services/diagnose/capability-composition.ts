@@ -31,8 +31,12 @@ import {
   playbooks,
   automations,
   links,
+  channels,
 } from "@synap/database";
-import { getLinksFor } from "../links/links-service.js";
+import {
+  getLinksFor,
+  getCapabilityMemberParts,
+} from "../links/links-service.js";
 import { listRuns } from "../runs/index.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { deriveCapabilityMode } from "../signal/capability-mode.js";
@@ -59,6 +63,7 @@ export interface CapabilityCompositionInput {
     id: string;
     name: string;
     approved: boolean;
+    description?: string | null;
     metadata: Record<string, unknown> | null;
   };
 }
@@ -182,21 +187,27 @@ export async function buildCapabilityComposition(
         }
       : null;
 
-  // ── Produced channels: does this capability's `tool --produced--> channel`
-  // edge exist? Queried directly here (not via `resolveCapabilityChannelIds`
-  // in `signal/index.ts`) to avoid re-introducing the exact mutual import the
-  // capability-mode.ts split-out already documents — `signal/index.ts` imports
-  // `buildCapabilityComposition` from this file, so this file importing back
-  // from `signal/index.ts` would be circular. All member ids (not just tools)
-  // are checked — mirrors `resolveCapabilityChannelIds`'s own part scope
-  // (tool/skill/command), which allows a non-tool member to carry the edge. ──
-  const allMemberIds = [
-    ...idsByKind.tool,
-    ...idsByKind.skill,
-    ...idsByKind.playbook,
-    ...idsByKind.automation,
-  ];
-  const producedChannelCount = await countProducedChannels(allMemberIds);
+  // ── Bridge channels: how many channels this capability materialized —
+  // MIRRORS `resolveCapabilityChannelIds`'s union (`signal/index.ts`) so a
+  // legacy slug-matched bridge (channels born pre-0234, before the `produced`
+  // edge existed) counts the same UNFLOORED scope that resolver counts before
+  // its visibility floor. Queried directly here (not via
+  // `resolveCapabilityChannelIds` itself) to avoid re-introducing the exact
+  // mutual import the capability-mode.ts split-out already documents —
+  // `signal/index.ts` imports `buildCapabilityComposition` from this file, so
+  // this file importing back from `signal/index.ts` would be circular. The
+  // produced-edge half reuses `getCapabilityMemberParts` — the SAME
+  // tool/skill/command part-scope `resolveCapabilityChannelIds` resolves via —
+  // NOT this builder's own `idsByKind` (which spans tool/skill/playbook/
+  // automation, a different set built for the members/gaps section above). ──
+  const capabilityParts = await getCapabilityMemberParts([cap.id]);
+  const memberToolNames = [...toolRows.values()]
+    .map((t) => t.name)
+    .filter((n): n is string => !!n);
+  const producedChannelCount = await countBridgeChannels(
+    capabilityParts.map((p) => p.id),
+    memberToolNames
+  );
 
   // ── Mode: standing vs callable vs unknown — reuses the already-loaded
   // metadata + tool configs + produced-channel count above, no extra DB
@@ -221,9 +232,14 @@ export async function buildCapabilityComposition(
     mode === "standing" || // declared, derived_transport, or derived_produced
     [...toolRows.values()].some((t) => t.kind === "provider");
 
+  const extractionPolicy = normalizeExtractionPolicy(
+    [...toolRows.values()].map((t) => t.metadata)
+  );
+
   return {
     id: cap.id,
     name: cap.name,
+    description: cap.description ?? null,
     approved: cap.approved,
     provenance,
     members,
@@ -232,6 +248,7 @@ export async function buildCapabilityComposition(
     mode,
     modeSource,
     isBridge,
+    extractionPolicy,
   };
 }
 
@@ -258,6 +275,7 @@ export async function listCapabilityCompositions(args: {
     .select({
       id: capabilities.id,
       name: capabilities.name,
+      description: capabilities.description,
       approved: capabilities.approved,
       metadata: capabilities.metadata,
     })
@@ -284,6 +302,7 @@ export async function listCapabilityCompositions(args: {
           capability: {
             id: row.id,
             name: row.name,
+            description: row.description,
             approved: row.approved,
             metadata: row.metadata as Record<string, unknown> | null,
           },
@@ -300,15 +319,22 @@ export async function listCapabilityCompositions(args: {
   return built.filter((c): c is CapabilityComposition => c !== null);
 }
 
-/** id → { name, config, kind }, batched — tool member rows (name + transport
- *  config + `ToolKind`, e.g. `'provider'` for a connected Nango OAuth account
- *  vs `'api'` for a merely-callable API-key tool like fal.ai/Exa/Apify). */
+/** id → { name, config, kind, metadata }, batched — tool member rows (name +
+ *  transport config + `ToolKind`, e.g. `'provider'` for a connected Nango
+ *  OAuth account vs `'api'` for a merely-callable API-key tool like
+ *  fal.ai/Exa/Apify + provider-specific `metadata` — e.g. the Discord bot's
+ *  extraction settings live at `metadata.discord.*`, NOT `config`). */
 async function loadToolRows(
   ids: string[]
-): Promise<Map<string, { name: string; config: unknown; kind: string }>> {
+): Promise<
+  Map<
+    string,
+    { name: string; config: unknown; kind: string; metadata: unknown }
+  >
+> {
   const out = new Map<
     string,
-    { name: string; config: unknown; kind: string }
+    { name: string; config: unknown; kind: string; metadata: unknown }
   >();
   if (ids.length === 0) return out;
   const rows = await db
@@ -317,35 +343,131 @@ async function loadToolRows(
       name: tools.name,
       config: tools.config,
       kind: tools.kind,
+      metadata: tools.metadata,
     })
     .from(tools)
     .where(inArray(tools.id, ids));
   for (const r of rows)
-    out.set(r.id, { name: r.name, config: r.config, kind: r.kind });
+    out.set(r.id, {
+      name: r.name,
+      config: r.config,
+      kind: r.kind,
+      metadata: r.metadata,
+    });
   return out;
 }
 
 /**
- * How many channels this capability's members PRODUCED — a direct
- * `member --produced--> channel` edge count, no visibility floor (feeds a
- * boolean/count classification signal only, not a channel listing). Queried
- * locally instead of via `resolveCapabilityChannelIds` (`signal/index.ts`) to
- * avoid the exact circular import `capability-mode.ts`'s split-out already
- * documents — see the call site.
+ * Best-effort, normalized read of member tools' provider-specific extraction
+ * config. Today only the Discord bot template populates this, nested at
+ * `tools.metadata.discord.*` (confirmed against the actual reader sites —
+ * `event-sync`/`mail-feed` services — NOT `tools.config`, which carries an
+ * unrelated transport marker for other providers). Read defensively: config
+ * shapes vary across providers, so only keys that are PRESENT and the right
+ * type are included. Scans every member tool and merges the first hit per
+ * key (today there is at most one Discord-shaped tool per capability, so
+ * this never actually needs to arbitrate a conflict). Returns `null` when
+ * NONE of the recognized keys are present anywhere — never a fabricated
+ * default.
  */
-async function countProducedChannels(memberIds: string[]): Promise<number> {
-  if (memberIds.length === 0) return 0;
-  const rows = await db
-    .select({ channelId: links.toId })
-    .from(links)
-    .where(
-      and(
-        eq(links.linkType, "produced"),
-        eq(links.toType, "channel"),
-        inArray(links.fromId, memberIds)
-      )
-    );
-  return rows.length;
+function normalizeExtractionPolicy(
+  toolMetadatas: unknown[]
+): CapabilityComposition["extractionPolicy"] {
+  const out: NonNullable<CapabilityComposition["extractionPolicy"]> = {};
+
+  for (const meta of toolMetadatas) {
+    const discord = (meta as Record<string, unknown> | null | undefined)
+      ?.discord as Record<string, unknown> | undefined;
+    if (!discord || typeof discord !== "object") continue;
+
+    if (
+      out.reactCapture === undefined &&
+      typeof discord.reactCapture === "boolean"
+    ) {
+      out.reactCapture = discord.reactCapture;
+    }
+    if (out.captureFlows === undefined && Array.isArray(discord.captureFlows)) {
+      out.captureFlows = discord.captureFlows.length;
+    }
+    if (
+      out.eventSync === undefined &&
+      discord.eventSync &&
+      typeof discord.eventSync === "object" &&
+      typeof (discord.eventSync as Record<string, unknown>).enabled ===
+        "boolean"
+    ) {
+      out.eventSync = (discord.eventSync as Record<string, unknown>)
+        .enabled as boolean;
+    }
+    if (
+      out.captureChannel === undefined &&
+      typeof discord.captureChannel === "string" &&
+      discord.captureChannel.length > 0
+    ) {
+      out.captureChannel = discord.captureChannel;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * How many DISTINCT channels this capability materialized — the SAME union
+ * `resolveCapabilityChannelIds` (`signal/index.ts`) resolves, minus its
+ * visibility floor:
+ *
+ *   member --produced--> channel                              (precise half)
+ *   ∪  channels WHERE externalSource IN (member tools' provider slugs)  (legacy half)
+ *
+ * `memberIds` here is the capability's `tool|skill|command` part scope
+ * (`getCapabilityMemberParts` — the exact set `resolveCapabilityChannelIds`
+ * resolves its parts over), not this file's own `idsByKind` (which spans a
+ * different kind set for the members/gaps section). `tools.name` == provider
+ * slug (same convention `resolveCapabilityChannelIds` relies on), so the
+ * fallback catches legacy channels born with a bare `source` slug origin
+ * (pre-0234) that never got a `produced` edge — the exact gap that made a
+ * real bridge (e.g. a Discord ingest with 9 slug-matched channels but 0
+ * produced edges) read as `isBridge:false`.
+ *
+ * UNFLOORED on purpose: this count feeds `isBridge` / `mode` classification
+ * only (a boolean/count signal), never a channel listing — the visible "N
+ * channels" the Bridges card shows to a user comes from the FLOORED
+ * `signal.capabilityHealth` door (`getCapabilityHealth` → `listChannels` →
+ * `resolveCapabilityChannelIds` with `channelVisibilityWhere` applied), a
+ * different, smaller number by design. Queried locally instead of via
+ * `resolveCapabilityChannelIds` itself to avoid the exact circular import
+ * `capability-mode.ts`'s split-out already documents — see the call site.
+ */
+async function countBridgeChannels(
+  memberIds: string[],
+  memberToolNames: string[]
+): Promise<number> {
+  if (memberIds.length === 0 && memberToolNames.length === 0) return 0;
+
+  const producedRows = memberIds.length
+    ? await db
+        .select({ channelId: links.toId })
+        .from(links)
+        .where(
+          and(
+            eq(links.linkType, "produced"),
+            eq(links.toType, "channel"),
+            inArray(links.fromId, memberIds)
+          )
+        )
+    : [];
+  const producedChannelIds = producedRows.map((r) => r.channelId);
+
+  const slugChannelIds = memberToolNames.length
+    ? (
+        await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(inArray(channels.externalSource, memberToolNames))
+      ).map((r) => r.id)
+    : [];
+
+  return new Set([...producedChannelIds, ...slugChannelIds]).size;
 }
 
 /** id → { name, kind }, batched — skills carry the declarative/code/instruction axis. */

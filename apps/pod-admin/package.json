@@ -14,6 +14,7 @@
     "@heroui/theme": "^2.4.0",
     "@synap-core/api-types": "workspace:*",
     "@synap-core/external-connect-client": "workspace:*",
+    "@synap-core/types": "workspace:*",
     "@synap/governance-policy": "workspace:*",
     "@tanstack/react-query": "^5.62.13",
     "@trpc/client": "^11.0.0",

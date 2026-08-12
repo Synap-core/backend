@@ -7,7 +7,12 @@
 
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  workspaceProcedure,
+  assertPodAdmin,
+} from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -2360,6 +2365,24 @@ async function applyProposalApproval(args: {
     return { success: true };
   }
 
+  // POD-ADMIN FLOOR for every `governance.*` meta-proposal.
+  //
+  // Approving one of these INSERTS A `governance_rules` ROW — the same privileged
+  // write that `governanceRules.create` gates behind `assertPodAdmin` for
+  // `scopeKind:'pod'`. But governance meta-proposals are ALWAYS pod-wide
+  // (`workspaceId: null`), and both review-authority helpers short-circuit
+  // `if (!proposal.workspaceId) => allowed` — so without this floor the SAME row
+  // is pod-admin-only through one door and open to every authenticated pod user
+  // through the other. A workspace editor could approve a pending
+  // `governance.widen_lane` and widen an agent they don't own, pod-wide.
+  //
+  // Gated HERE, at the privileged operation, rather than in the route helpers:
+  // one chokepoint that every caller (approve, batchApprove, and any future
+  // door) must pass, and it covers governance types added later by prefix.
+  if (proposal.proposalType.startsWith("governance.")) {
+    await assertPodAdmin(userId);
+  }
+
   // B4: governance.widen_lane — Phase D trusted-lane widen. Keyed off
   // proposalType (not payload shape) so it stays inline rather than in the
   // registry (execution-registry.ts is out of scope for this change). The
@@ -4683,6 +4706,14 @@ export const proposalsRouter = router({
           .set({
             status: ProposalStatus.REJECTED,
             rejectionReason: input.reason,
+            // Structured cause (0232) — MUST mirror the single `reject` door.
+            // This input already accepted `reasonCode` and already emitted it on
+            // the flywheel event, but never wrote the COLUMN: a reviewer who
+            // rejects 12 proposals in one batch produced correct telemetry and 12
+            // NULL `reason_code` rows, so every reader of the durable column (the
+            // scorecard histogram, any reason-keyed tightening) silently
+            // under-counted — invisibly, because the event path looked right.
+            reasonCode: input.reasonCode ?? null,
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),

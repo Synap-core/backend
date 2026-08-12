@@ -260,32 +260,46 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       string,
       unknown
     > | null;
+
+    // CONTRACT PHASE (Governance Convergence): `autoApproveFor` is now OPTIONAL.
+    // When present it is validated + mirrored into `governance_rules` (REPLACE
+    // semantics); when absent the PATCH updates only `writesRequireProposal` and
+    // leaves the mirrored rules untouched. It is NO LONGER persisted into the
+    // `agent_metadata` JSONB — `governance_rules` is the one decision store.
+    const hasAutoApproveFor = body?.autoApproveFor !== undefined;
     if (
-      !body?.autoApproveFor ||
-      !Array.isArray(body.autoApproveFor) ||
-      !body.autoApproveFor.every((entry) => typeof entry === "string")
+      hasAutoApproveFor &&
+      (!Array.isArray(body!.autoApproveFor) ||
+        !(body!.autoApproveFor as unknown[]).every(
+          (entry) => typeof entry === "string"
+        ))
     ) {
-      return c.json({ error: "autoApproveFor (string[]) is required" }, 400);
+      return c.json(
+        { error: "autoApproveFor must be a string[] when provided" },
+        400
+      );
     }
 
     // Reject entries that could silently auto-approve a destructive action
     // (delete/archive/purge) — the DESTRUCTIVE_ACTIONS hard floor in
     // decideAgentPolicy() catches this at read time too, but rejecting here
-    // keeps the persisted setting itself honest and gives the caller a clear
+    // keeps the mirrored rules themselves honest and gives the caller a clear
     // error instead of a silently-neutered grant.
-    const unsafe = findUnsafeAutoApproveEntries(
-      body.autoApproveFor as string[]
-    );
-    if (unsafe.length > 0) {
-      return c.json(
-        {
-          error:
-            "autoApproveFor entries may not auto-approve destructive actions " +
-            "(delete/archive/purge). Rejected entries: " +
-            unsafe.join(", "),
-        },
-        400
+    if (hasAutoApproveFor) {
+      const unsafe = findUnsafeAutoApproveEntries(
+        body!.autoApproveFor as string[]
       );
+      if (unsafe.length > 0) {
+        return c.json(
+          {
+            error:
+              "autoApproveFor entries may not auto-approve destructive actions " +
+              "(delete/archive/purge). Rejected entries: " +
+              unsafe.join(", "),
+          },
+          400
+        );
+      }
     }
 
     try {
@@ -321,41 +335,49 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         string,
         unknown
       >;
-      const merged = {
-        ...existingMeta,
-        autoApproveFor: body.autoApproveFor,
-        writesRequireProposal: body.writesRequireProposal ?? false,
-        // Remove null/undefined keys so JSONB stays clean
-        ...(body.writesRequireProposal === undefined
-          ? {}
-          : { writesRequireProposal: body.writesRequireProposal }),
-      };
+      // CONTRACT PHASE: do NOT persist `autoApproveFor` into `agent_metadata`.
+      // Actively strip any stale sub-key while preserving every OTHER field
+      // (capabilities, agentType, focusWorkspaceId, …). `writesRequireProposal`
+      // is still a stored dial. The auto-approve boundary lives ONLY in
+      // `governance_rules` (mirrored below).
+      const persistedMeta: Record<string, unknown> = { ...existingMeta };
+      delete persistedMeta.autoApproveFor;
+      const writesRequireProposal = body?.writesRequireProposal ?? false;
+      persistedMeta.writesRequireProposal = writesRequireProposal;
 
       await db
         .update(users)
-        .set({ agentMetadata: merged as never })
+        .set({ agentMetadata: persistedMeta as never })
         .where(eq(users.id, agentUserId));
 
-      // ONE-STORE (Phase B write surface): mirror this agent's autoApproveFor
-      // list into governance_rules (agent-scoped, pod-wide) — the resolver's
-      // read side (rung 2.8) is now the enforcement path. The agent_metadata
-      // JSONB above is unchanged (back-compat / CP / UI display); this keeps
-      // the rules mirror from drifting from what was just set. REPLACE
-      // semantics: an empty array clears the mirrored rules.
-      await syncAutoApproveRules({
-        db,
-        principalKind: "agent",
-        agentUserId,
-        scopeKind: "pod",
-        actions: merged.autoApproveFor as string[],
-        createdBy: callerId ?? agentUserId,
-      });
+      // ONE-STORE (Phase B write surface, contract phase): mirror this agent's
+      // caller-supplied autoApproveFor list into governance_rules (agent-scoped,
+      // pod-wide) — the resolver's read side (rung 2.8) is the enforcement path.
+      // REPLACE semantics: an empty array clears the mirrored rules. Only runs
+      // when the caller actually sent a list; a `writesRequireProposal`-only
+      // PATCH leaves the mirrored rules untouched.
+      if (hasAutoApproveFor) {
+        await syncAutoApproveRules({
+          db,
+          principalKind: "agent",
+          agentUserId,
+          scopeKind: "pod",
+          actions: body!.autoApproveFor as string[],
+          createdBy: callerId ?? agentUserId,
+        });
+      }
 
+      // Only echo `autoApproveFor` when the caller actually supplied it — a
+      // `writesRequireProposal`-only PATCH leaves the mirrored governance_rules
+      // untouched, so returning `[]` here would misrepresent the grant list as
+      // cleared. Omit the field instead of fabricating an empty list.
       return c.json({
         ok: true,
         agentUserId,
-        autoApproveFor: merged.autoApproveFor,
-        writesRequireProposal: merged.writesRequireProposal,
+        ...(hasAutoApproveFor
+          ? { autoApproveFor: body!.autoApproveFor as string[] }
+          : {}),
+        writesRequireProposal,
       });
     } catch (err) {
       logger.error(

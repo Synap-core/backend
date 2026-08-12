@@ -241,7 +241,7 @@ export const NotificationService = {
         },
       }).catch(() => {}); // non-blocking, non-fatal
 
-      // Emit real-time event to all workspace members
+      // Emit real-time event to the RECIPIENT's user room
       const payload: NotificationPayload = {
         id: row.id,
         type: input.type,
@@ -261,13 +261,18 @@ export const NotificationService = {
       // Fire-and-forget — never blocks the caller
       // Skip real-time emission during quiet hours (notification is still persisted above)
       // Skip real-time emission if routing rule is "os" only (no in-app)
-      const shouldEmitSocket =
-        !suppressRealtime && categoryRule !== "os" && !!input.workspaceId;
+      const shouldEmitSocket = !suppressRealtime && categoryRule !== "os";
       if (shouldEmitSocket) {
+        // Deliver to the RECIPIENT's user room — never the workspace room. The
+        // bridge emits once per room key present, so passing `workspaceId` would
+        // fan a private notification to every workspace member (disclosure), and
+        // gating the emit on `!!input.workspaceId` dropped pod-wide
+        // (null-workspace) notifications from realtime entirely — the W0 hole
+        // that left pod-wide governance proposals silent in the bell.
         emitChatEvent({
           event: SERVER_CONVERSATION_EVENTS.NOTIFICATION_NEW,
           data: { notification: payload, userId: input.userId },
-          workspaceId: input.workspaceId!,
+          userId: input.userId,
         });
       }
 
