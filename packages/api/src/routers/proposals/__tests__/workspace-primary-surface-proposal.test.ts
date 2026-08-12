@@ -6,8 +6,11 @@ const workspaces = readFileSync(
   fileURLToPath(new URL("../../workspaces.ts", import.meta.url)),
   "utf8"
 );
+// Wave 1 router-decomposition moved workspace/* executors into their own
+// domain module; workspace/create and workspace/update are still adjacent
+// there (in that order).
 const executors = readFileSync(
-  fileURLToPath(new URL("../approve-executors.ts", import.meta.url)),
+  fileURLToPath(new URL("../executors/workspace.ts", import.meta.url)),
   "utf8"
 );
 

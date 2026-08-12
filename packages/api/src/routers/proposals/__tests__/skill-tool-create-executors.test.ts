@@ -35,6 +35,7 @@ import {
   type ProposalExecutor,
   type ProposalExecutorResult,
 } from "../execution-registry.js";
+import { readExecutorsSource } from "./read-executors-source.js";
 
 // vitest cwd is the api package root.
 const API_SRC = join(process.cwd(), "src");
@@ -42,7 +43,7 @@ function readSrc(relFromApiSrc: string): string {
   return readFileSync(join(API_SRC, relFromApiSrc), "utf8");
 }
 
-const EXECUTORS = readSrc("routers/proposals/approve-executors.ts");
+const EXECUTORS = readExecutorsSource(API_SRC);
 
 /**
  * Slice one executor body out of the registration file. Throws (rather than

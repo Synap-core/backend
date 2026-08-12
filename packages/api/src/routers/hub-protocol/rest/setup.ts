@@ -50,7 +50,7 @@ import {
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { API_KEY_SCOPES, isValidScope } from "@synap/database/schema";
 
-import { kratosAdmin } from "@synap/auth";
+import { kratosAdmin, safeTokenEqual } from "@synap/auth";
 import type { Context } from "hono";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
 
@@ -1462,10 +1462,9 @@ export function registerSetupRoutes(app: HubHono): void {
         );
       }
       try {
-        const decoded = jwt.verify(magicToken, provisioningToken) as Record<
-          string,
-          unknown
-        >;
+        const decoded = jwt.verify(magicToken, provisioningToken, {
+          algorithms: ["HS256"],
+        }) as Record<string, unknown>;
         if (decoded.purpose === "first_admin_setup") {
           authenticated = true;
         }
@@ -1477,7 +1476,11 @@ export function registerSetupRoutes(app: HubHono): void {
       const token = authHeader.startsWith("Bearer ")
         ? authHeader.slice(7).trim()
         : null;
-      if (token && provisioningToken && token === provisioningToken) {
+      if (
+        token &&
+        provisioningToken &&
+        safeTokenEqual(token, provisioningToken)
+      ) {
         authenticated = true;
       }
     }

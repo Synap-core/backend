@@ -562,16 +562,48 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
   let mergedInstructions: string | undefined =
     input.guidelines?.trim() || undefined;
   try {
+    // channelType/bridgeId — derived from the channel's origin so the `bridge`
+    // and `channelType` guideline scopes actually match at runtime (they are
+    // stored granularities, previously never supplied here). Reuses
+    // `getChannelOrigin` (the cheap channel-facts + `produced`-edge read
+    // `getChannelStack` is built on, WITHOUT its automation-scan/capability
+    // lookup — this runs on every interpret call, so the heavier assembly
+    // would be pure overhead). Best-effort: a lookup failure just omits the
+    // scope, never fails the interpret (mirrors routingMemory above).
+    let channelType: string | undefined;
+    let bridgeId: string | undefined;
+    if (input.channelId) {
+      try {
+        const { getChannelOrigin } = await import("../signal/channel-stack.js");
+        const originResult = await getChannelOrigin(
+          ctx.userId,
+          input.channelId
+        );
+        channelType = originResult.externalSource ?? undefined;
+        // `bridge` scope's scopeRef is a toolId (config-settings.ts: "bridge —
+        // a specific bridge/transport; scopeRef = toolId/bridgeId") — only a
+        // "tool" producer qualifies; a bare `source` slug or non-tool producer
+        // has no bridge to scope to.
+        bridgeId =
+          originResult.origin?.producerType === "tool"
+            ? (originResult.origin.producerId ?? undefined)
+            : undefined;
+      } catch {
+        channelType = undefined;
+        bridgeId = undefined;
+      }
+    }
+
     const { resolveGuidelines } = await import("@synap/database");
     const resolved = await resolveGuidelines({
       db,
       userId: ctx.userId,
       // The capability this interpret runs through (skills row id), when known —
-      // lets a capability-scoped guideline match. channelType/bridgeId are not
-      // available on the interpret verb today, so those scopes simply won't match
-      // (honest: never fabricated).
+      // lets a capability-scoped guideline match.
       capabilityId: ctx.verbId ?? undefined,
       channelId: input.channelId ?? undefined,
+      channelType,
+      bridgeId,
       workspaceId: workspaceId ?? undefined,
       envelope: {
         content: input.content,

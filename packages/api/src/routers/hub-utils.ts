@@ -26,7 +26,7 @@ const HUB_JWT_SECRET =
         .createHmac("sha256", process.env.JWT_SECRET)
         .update("hub-jwt-secret")
         .digest("hex")
-    : "change-me-in-production");
+    : crypto.randomBytes(32).toString("hex"));
 
 if (
   process.env.NODE_ENV === "production" &&

@@ -587,10 +587,22 @@ async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
   createdBy: string,
-  stableId?: string
+  stableId?: string,
+  /**
+   * P2-3 (draft-state remedy): true for every agent-originated create — the
+   * auto-approved direct path (`automation.create` ∈ DEFAULT_AUTO_APPROVE)
+   * AND the proposal-approved materialize path. `automation.create` stays
+   * auto-approved (no proposal friction for the proactive-bridge roadmap),
+   * but a planted WHEN-trigger from a prompt-injected agent must not be able
+   * to FIRE unreviewed — so an agent-authored automation always lands
+   * `draft` regardless of the `status` it requested. A human's OWN direct
+   * create (no agentUserId) is never forced — it keeps its requested status.
+   */
+  forceDraft = false
 ): Promise<string | null> {
+  const status = forceDraft ? "draft" : input.status;
   let nextRunAt: Date | null = null;
-  if (input.status === "active" && input.triggerType === "cron") {
+  if (status === "active" && input.triggerType === "cron") {
     const expression = input.triggerConfig.expression as string | undefined;
     if (expression) nextRunAt = computeNextCronRunAt(expression, new Date());
   }
@@ -615,7 +627,7 @@ async function insertAutomationAfterGovernance(
         triggerType: input.triggerType,
         triggerConfig: input.triggerConfig,
         flowDefinition: input.flowDefinition as unknown as FlowDefinition,
-        status: input.status,
+        status,
         ...(nextRunAt ? { nextRunAt } : {}),
         state: input.state ?? {},
         metadata: {
@@ -668,11 +680,14 @@ export async function materializeApprovedAutomation(input: {
     input.definition,
     input.agentUserId
   );
+  // forceDraft: true — this materializer is EXCLUSIVELY the agent-authored
+  // proposal-approval path (see P2-3 note on insertAutomationAfterGovernance).
   return insertAutomationAfterGovernance(
     input.database,
     input.definition,
     input.agentUserId,
-    input.stableId
+    input.stableId,
+    true
   );
 }
 
@@ -1152,16 +1167,27 @@ export const automationsRouter = router({
         }
       }
 
+      // P2-3 (draft-state remedy): reaching here with `agentUserId` set means
+      // `automation.create` auto-approved (the proposal branch above already
+      // returned) — an agent-authored automation must never fall straight
+      // through to a firing state, so force draft regardless of the
+      // requested `status`. The operator's own direct create (no
+      // agentUserId) keeps its requested status untouched.
+      const forceDraft = Boolean(input.agentUserId);
       const automationId = await insertAutomationAfterGovernance(
         database,
         input,
-        createdBy
+        createdBy,
+        undefined,
+        forceDraft
       );
 
       return {
         status: "created" as const,
         id: automationId,
-        message: `Automation "${input.name}" created as ${input.status}`,
+        message: `Automation "${input.name}" created as ${
+          forceDraft ? "draft" : input.status
+        }`,
         proposalId: null as string | null,
       };
     }),

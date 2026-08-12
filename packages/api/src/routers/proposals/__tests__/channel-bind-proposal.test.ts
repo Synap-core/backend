@@ -27,6 +27,7 @@ import {
   decideAgentPolicy,
 } from "@synap/governance-policy";
 import { computeProposalDedupHash } from "@synap/database";
+import { readExecutorsSource } from "./read-executors-source.js";
 
 // vitest cwd is the api package root (mirrors workspace-create-executor.test.ts).
 const API_SRC = join(process.cwd(), "src");
@@ -135,7 +136,7 @@ describe("(a) channel.bind is never auto-approved", () => {
 // (b) approval binds context_object_id + branch_purpose via the ONE door.
 // ───────────────────────────────────────────────────────────────────────────
 describe("(b) channel/bind executor delegates to the governed one door", () => {
-  const src = readSrc("routers/proposals/approve-executors.ts");
+  const src = readExecutorsSource(API_SRC);
   const block = src.slice(
     src.indexOf('key: "channel/bind"'),
     src.indexOf('key: "entity/create"')
@@ -191,7 +192,7 @@ describe("(c) client-comms immutability is preserved through the bind path", () 
   });
 
   it("the executor does NOT swallow the immutability error (it propagates → APPROVAL_FAILED)", () => {
-    const src = readSrc("routers/proposals/approve-executors.ts");
+    const src = readExecutorsSource(API_SRC);
     const block = src.slice(
       src.indexOf('key: "channel/bind"'),
       src.indexOf('key: "entity/create"')

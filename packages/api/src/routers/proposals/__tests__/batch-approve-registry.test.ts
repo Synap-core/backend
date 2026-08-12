@@ -45,6 +45,7 @@ import {
   type ProposalExecutorArgs,
   type ProposalExecutorResult,
 } from "../execution-registry.js";
+import { readExecutorsSource } from "./read-executors-source.js";
 
 // vitest cwd is the api package root (mirrors execute-executors.test.ts).
 const API_SRC = join(process.cwd(), "src");
@@ -56,7 +57,7 @@ function readRepo(relFromApiRoot: string): string {
 }
 
 const ROUTER = readSrc("routers/proposals.ts");
-const EXECUTORS = readSrc("routers/proposals/approve-executors.ts");
+const EXECUTORS = readExecutorsSource(API_SRC);
 
 /** `batchApprove`'s body (up to the next procedure). */
 const BATCH_APPROVE_BLOCK = (() => {

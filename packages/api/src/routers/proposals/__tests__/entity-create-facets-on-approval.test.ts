@@ -24,6 +24,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { readExecutorsSource } from "./read-executors-source.js";
 
 const API_SRC = join(process.cwd(), "src");
 
@@ -53,7 +54,7 @@ describe("entities.create — requested facets survive onto the create proposal"
 });
 
 describe("entity/create approve executor — replays the proposal's requested facets", () => {
-  const src = readSrc("routers/proposals/approve-executors.ts");
+  const src = readExecutorsSource(API_SRC);
 
   it('registers key "entity/create"', () => {
     expect(src).toMatch(/key:\s*["']entity\/create["']/);

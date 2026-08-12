@@ -449,7 +449,38 @@ async function computeCanReviewApproval(args: {
   userId: string;
 }): Promise<{ allowed: boolean; reason: ReviewAuthorityReason }> {
   const { proposal, userId } = args;
-  if (!proposal.workspaceId) return { allowed: true, reason: "pod-wide" };
+  if (!proposal.workspaceId) {
+    // Pod-wide proposals have no workspace membership ladder to fall back on,
+    // so "any pod member" used to be treated as authorized — a stranger could
+    // rubber-stamp another user's pod-wide proposal. Narrow this to the
+    // proposal's own owner (creator, or the human who owns the acting agent)
+    // OR a pod-admin — the SAME two authorities `revise`'s pod-wide downgrade
+    // path already trusts (see `isPodAdmin` above). Solo-capture UX (approving
+    // your own pod-wide proposals) is preserved.
+    const proposalData = proposal.data as Record<string, unknown> | null;
+    let isOwner = proposalData?.sourceId === userId;
+    let isAgentOwner = false;
+
+    if (!isOwner && proposal.agentUserId) {
+      const [agent] = await db
+        .select({ createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(eq(users.id, proposal.agentUserId))
+        .limit(1);
+      isOwner = agent?.createdByUserId === userId;
+      isAgentOwner = isOwner;
+    }
+
+    if (isOwner) {
+      return { allowed: true, reason: isAgentOwner ? "agent-owner" : "owner" };
+    }
+
+    if (await isPodAdmin(userId)) {
+      return { allowed: true, reason: "admin" };
+    }
+
+    return { allowed: false, reason: "not-authorized" };
+  }
 
   const [ws] = await db
     .select({ settings: workspaces.settings })

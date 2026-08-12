@@ -21,7 +21,9 @@ function readSrc(relFromApiSrc: string): string {
 }
 
 describe("workspace/create approve executor registration", () => {
-  const src = readSrc("routers/proposals/approve-executors.ts");
+  // Wave 1 router-decomposition moved workspace/* executors into their own
+  // domain module; both keys checked here are still adjacent there.
+  const src = readSrc("routers/proposals/executors/workspace.ts");
 
   it("registers key workspace/create", () => {
     expect(src).toMatch(/key:\s*["']workspace\/create["']/);

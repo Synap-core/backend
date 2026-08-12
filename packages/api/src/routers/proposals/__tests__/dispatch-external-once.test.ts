@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
-import { dispatchExternalOnce } from "../approve-executors.js";
+import { dispatchExternalOnce } from "../executors/shared.js";
 
 /**
  * Unit coverage for the at-most-once HYBRID dispatch decision table
@@ -19,7 +19,9 @@ function makeExecutor(claimWon: boolean) {
           const isRelease = vals.externalDispatchedAt === null;
           if (isRelease) calls.releases++;
           else calls.claims++;
-          const whereResult = Promise.resolve(undefined) as Promise<undefined> & {
+          const whereResult = Promise.resolve(
+            undefined
+          ) as Promise<undefined> & {
             returning: () => Promise<Array<{ id: string }>>;
           };
           whereResult.returning = () =>
@@ -29,7 +31,10 @@ function makeExecutor(claimWon: boolean) {
       };
     },
   };
-  return { executor: executor as unknown as Parameters<typeof dispatchExternalOnce>[2], calls };
+  return {
+    executor: executor as unknown as Parameters<typeof dispatchExternalOnce>[2],
+    calls,
+  };
 }
 
 describe("dispatchExternalOnce — at-most-once hybrid failure policy", () => {
@@ -46,7 +51,9 @@ describe("dispatchExternalOnce — at-most-once hybrid failure policy", () => {
   it("claim WON + delivered:true → resolves, send ran once, no release (caller marks APPROVED)", async () => {
     const { executor, calls } = makeExecutor(true);
     const send = vi.fn().mockResolvedValue({ delivered: true });
-    await expect(dispatchExternalOnce("p1", send, executor)).resolves.toBeUndefined();
+    await expect(
+      dispatchExternalOnce("p1", send, executor)
+    ).resolves.toBeUndefined();
     expect(send).toHaveBeenCalledTimes(1);
     expect(calls.claims).toBe(1);
     expect(calls.releases).toBe(0);

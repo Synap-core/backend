@@ -109,6 +109,85 @@ export function summarizeAutomationTrigger(
   return triggerType ?? null;
 }
 
+/** The channel facts + origin — the cheap half of {@link getChannelStack}. */
+export interface ChannelOriginResult {
+  channelId: string;
+  workspaceId: string | null;
+  externalSource: string | null;
+  origin: ChannelStackOrigin | null;
+}
+
+/**
+ * Channel facts + origin only — steps 1-2 of {@link getChannelStack}, without
+ * the automation scan (up to `AUTOMATION_SCAN_CAP` rows) or the capability
+ * lookup. For a hot per-message read (e.g. `message.interpret`'s guideline
+ * scope derivation) that extra work is pure overhead; this is the cheapest
+ * correct source for "who produced this channel" + "what provider is it on".
+ */
+export async function getChannelOrigin(
+  userId: string,
+  channelId: string
+): Promise<ChannelOriginResult> {
+  // ── 1. Channel facts, floored by the canonical channel predicate ───────────
+  const [channel] = await db
+    .select({
+      id: channels.id,
+      workspaceId: channels.workspaceId,
+      externalSource: channels.externalSource,
+      metadata: channels.metadata,
+    })
+    .from(channels)
+    .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
+    .limit(1);
+
+  if (!channel) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Channel not found or access denied",
+    });
+  }
+
+  // ── 2. Graph edges touching the channel (ONE query, userVisibleWhere-floored
+  //      inside `getLinksFor`) — the origin `produced` edge comes from here.
+  const edges = await getLinksFor(userId, "channel", channelId);
+
+  const producedEdge = edges.find(
+    (e) =>
+      e.linkType === "produced" &&
+      e.toType === "channel" &&
+      e.toId === channelId
+  );
+  const originLabel = readOriginLabel(channel.metadata);
+  const edgeMeta = (producedEdge?.metadata ?? {}) as Record<string, unknown>;
+  const producerType = producedEdge
+    ? // The declared kind is cached on the edge (a `skill` endpoint carries the
+      // "capability" kind); fall back to deriving it from the endpoint type.
+      ((typeof edgeMeta.producerKind === "string"
+        ? producerTypeFromEndpoint(edgeMeta.producerKind)
+        : null) ?? producerTypeFromEndpoint(producedEdge.fromType))
+    : null;
+
+  const origin: ChannelStackOrigin | null =
+    producedEdge || originLabel
+      ? {
+          producerType,
+          producerId: producedEdge?.fromId ?? null,
+          producerName:
+            typeof edgeMeta.producerName === "string"
+              ? edgeMeta.producerName
+              : null,
+          label: originLabel,
+        }
+      : null;
+
+  return {
+    channelId: channel.id,
+    workspaceId: channel.workspaceId,
+    externalSource: channel.externalSource,
+    origin,
+  };
+}
+
 export async function getChannelStack(input: {
   userId: string;
   channelId: string;

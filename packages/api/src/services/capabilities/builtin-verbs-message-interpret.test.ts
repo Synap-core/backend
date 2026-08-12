@@ -17,6 +17,20 @@ const h = vi.hoisted(() => ({
   // pre-existing assertions (explicit `guidelines` → `instructions`) are unchanged.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resolveGuidelines: vi.fn(async (_arg: any) => [] as Array<{ text: string }>),
+  // Default: no producer edge → channelType/bridgeId both omitted (honest,
+  // never fabricated), matching a channel with no derivable origin.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getChannelOrigin: vi.fn(async (..._args: any[]) => ({
+    channelId: "chan-1",
+    workspaceId: null as string | null,
+    externalSource: null as string | null,
+    origin: null as {
+      producerType: string;
+      producerId: string | null;
+      producerName: string | null;
+      label: string | null;
+    } | null,
+  })),
 }));
 
 vi.mock("../../utils/intelligence-routing.js", () => ({
@@ -70,6 +84,9 @@ vi.mock("./place-artboard-deck.js", async (importOriginal) => {
 });
 vi.mock("../mail-feed/triage.js", () => ({ triageEmails: vi.fn() }));
 vi.mock("../mail-feed/generate.js", () => ({ generateViaIS: vi.fn() }));
+vi.mock("../signal/channel-stack.js", () => ({
+  getChannelOrigin: h.getChannelOrigin,
+}));
 
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 
@@ -200,6 +217,90 @@ describe("message.interpret — handler", () => {
         "This channel: use Proton not Google Drive\n\n" +
         "explicit override wins"
     );
+  });
+
+  it("derives channelType + bridgeId from the channel's origin and passes them to resolveGuidelines", async () => {
+    h.getChannelOrigin.mockResolvedValueOnce({
+      channelId: "chan-1",
+      workspaceId: "ws-1",
+      externalSource: "discord",
+      origin: {
+        producerType: "tool",
+        producerId: "tool-42",
+        producerName: null,
+        label: null,
+      },
+    });
+    h.structure.mockResolvedValueOnce({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "some message", channelId: "chan-1", workspaceId: "ws-1" },
+      { userId: "u1", workspaceId: "ws-1", verbId: "verb-xyz" }
+    );
+
+    expect(h.getChannelOrigin).toHaveBeenCalledWith("u1", "chan-1");
+    const resolveArg = h.resolveGuidelines.mock.calls[0][0] as unknown as {
+      channelType?: string;
+      bridgeId?: string;
+    };
+    expect(resolveArg.channelType).toBe("discord");
+    expect(resolveArg.bridgeId).toBe("tool-42");
+  });
+
+  it("omits bridgeId when the producer isn't a tool (honest — never fabricated)", async () => {
+    h.getChannelOrigin.mockResolvedValueOnce({
+      channelId: "chan-1",
+      workspaceId: "ws-1",
+      externalSource: "discord",
+      origin: {
+        producerType: "source",
+        producerId: "discord-bridge-slug",
+        producerName: null,
+        label: null,
+      },
+    });
+    h.structure.mockResolvedValueOnce({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "some message", channelId: "chan-1", workspaceId: "ws-1" },
+      { userId: "u1", workspaceId: "ws-1" }
+    );
+
+    const resolveArg = h.resolveGuidelines.mock.calls[0][0] as unknown as {
+      channelType?: string;
+      bridgeId?: string;
+    };
+    expect(resolveArg.channelType).toBe("discord");
+    expect(resolveArg.bridgeId).toBeUndefined();
+  });
+
+  it("omits channelType/bridgeId when there is no channelId (no lookup attempted)", async () => {
+    h.structure.mockResolvedValueOnce({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "some message" },
+      { userId: "u1", workspaceId: "ws-1" }
+    );
+
+    expect(h.getChannelOrigin).not.toHaveBeenCalled();
+    const resolveArg = h.resolveGuidelines.mock.calls[0][0] as unknown as {
+      channelType?: string;
+      bridgeId?: string;
+    };
+    expect(resolveArg.channelType).toBeUndefined();
+    expect(resolveArg.bridgeId).toBeUndefined();
   });
 
   it("injects scoped guidelines even when no explicit `guidelines` is given", async () => {

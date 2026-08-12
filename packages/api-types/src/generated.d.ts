@@ -3840,6 +3840,14 @@ export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
 /** Lifecycle of a run. */
 export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed";
 /**
+ * The `value` payload of a GUIDELINE row (key = 'guideline'). `posture` is
+ * stored intent only — NOT yet an executor (see file header).
+ */
+export interface GuidelineValue {
+	text: string;
+	posture?: "auto" | "propose";
+}
+/**
  * EventRecord - Database representation of an event
  *
  * This is the format returned from the database.
@@ -17076,7 +17084,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setIntelligenceService: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				serviceId: string | null;
-				capability?: "chat" | "default" | "analysis" | undefined;
+				capability?: "default" | "chat" | "analysis" | undefined;
 			};
 			output: {
 				success: boolean;
@@ -19622,6 +19630,92 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetProfile: string | null;
 					verdict: "auto" | "propose";
 				};
+			};
+			meta: object;
+		}>;
+	}>>;
+	guidelines: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+			};
+			output: {
+				guidelines: {
+					workspaceId: string | null;
+					source: string;
+					id: string;
+					shape: MessageShapePredicate | null;
+					key: string;
+					createdAt: Date;
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					createdBy: string;
+					revokedAt: Date | null;
+					capabilityId: string | null;
+					value: Record<string, unknown> | GuidelineValue;
+					scopeRef: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				text: string;
+				scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+				posture?: "auto" | "propose" | undefined;
+				scopeRef?: string | undefined;
+				shape?: {
+					op: "contains" | "regex" | "has_attachment" | "has_url" | "from_participant";
+					value?: string | undefined;
+				} | undefined;
+				capabilityId?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				guideline: {
+					workspaceId: string | null;
+					source: string;
+					id: string;
+					shape: MessageShapePredicate | null;
+					key: string;
+					createdAt: Date;
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					createdBy: string;
+					revokedAt: Date | null;
+					capabilityId: string | null;
+					value: Record<string, unknown> | GuidelineValue;
+					scopeRef: string | null;
+				};
+			};
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				guideline: {
+					workspaceId: string | null;
+					source: string;
+					id: string;
+					shape: MessageShapePredicate | null;
+					key: string;
+					createdAt: Date;
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					createdBy: string;
+					revokedAt: Date | null;
+					capabilityId: string | null;
+					value: Record<string, unknown> | GuidelineValue;
+					scopeRef: string | null;
+				} | undefined;
 			};
 			meta: object;
 		}>;

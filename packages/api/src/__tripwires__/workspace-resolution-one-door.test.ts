@@ -66,10 +66,12 @@ describe("tripwire: workspace placement has one door", () => {
     expect(materializer).toContain("resolveMaterializedEntityWorkspaceId");
     // Interactive entity/create approve must share the same I3 read-back (not
     // re-derive via getEntityScope alone / ambient proposal.workspaceId).
-    const approve = read("api/src/routers/proposals/approve-executors.ts");
+    // Wave 1 router-decomposition moved this executor into its own domain
+    // module (proposals/executors/entity.ts) — read the new location.
+    const approve = read("api/src/routers/proposals/executors/entity.ts");
     const entityCreateBlock = approve.slice(
       approve.indexOf('key: "entity/create"'),
-      approve.indexOf('key: "property_def/create"')
+      approve.indexOf('key: "entity/renderer.set"')
     );
     expect(entityCreateBlock).toContain("resolveMaterializedEntityWorkspaceId");
     expect(entityCreateBlock).toContain("targetWorkspaceId");

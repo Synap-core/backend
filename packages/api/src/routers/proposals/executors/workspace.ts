@@ -1,0 +1,732 @@
+import { TRPCError } from "@trpc/server";
+import { db, proposals, eq } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
+import { auditLog } from "../../../utils/audit-log.js";
+import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
+import { registerProposalExecutor } from "../execution-registry.js";
+import { reportApproved } from "./shared.js";
+
+const logger = createLogger({ module: "proposal-approve-executors-workspace" });
+
+/** Register the workspace/* approve executors. */
+export function registerWorkspaceExecutors(): void {
+  // ── workspace / create ─────────────────────────────────────────────────────
+  // A gated createWorkspace (packages.apply / MCP synap_create_workspace /
+  // agent-authored freehand invent) lands here on approval. Without this
+  // executor the `*/*` catch-all flips APPROVED but never materializes the
+  // workspace — the definition was discarded at the gate (name-only) and
+  // approve had no door to call. Materializes via the SAME
+  // `materializeWorkspaceCore` the Hub packages.apply path uses on grant —
+  // re-run as the APPROVER (userId) so audit/membership attribute to the
+  // reviewer. The full PackageApply / WorkspaceDefinitionInput lives on
+  // `proposal.data.data.definition` (RequestShaped nested bag).
+  //
+  // DATA-SHAPE NOTE: the propose gates (hub-protocol/rest/packages.ts +
+  // mcp/adapter.ts synap_create_workspace) store the full definition +
+  // workspaceName/templateId/packageSlug/workspaceType/proposalId/createdBy
+  // so re-approve can reconstruct the create exactly. `proposalId` prefers
+  // the gate's stable key (package slug / caller idempotency key) and falls
+  // back to the proposal row id so re-approve is always stable.
+  registerProposalExecutor({
+    key: "workspace/create",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const inner = ((proposal.data as Record<string, unknown>)?.data ??
+        proposal.data ??
+        {}) as Record<string, unknown>;
+      const name =
+        (inner.name as string | undefined) ??
+        (inner.workspaceName as string | undefined);
+      if (!name || typeof name !== "string" || name.trim() === "") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace proposal is missing name",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch; skip if
+      // already materialized (idempotent create would still re-hit deps/reconcile).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const {
+        materializeWorkspaceCore,
+        ComposeBaseUnavailableError,
+        DependencyResolutionError,
+        ComposeBaseNotFoundError,
+        ComposeOverlayError,
+      } =
+        await import("../../../services/workspace-materialization-service.js");
+
+      let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
+      try {
+        core = await materializeWorkspaceCore({
+          definition: (inner.definition ??
+            {}) as import("@synap/database").WorkspaceDefinitionInput,
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          proposalId:
+            (inner.proposalId as string | undefined) ?? input.proposalId,
+          workspaceName: (inner.workspaceName as string | undefined) ?? name,
+          templateId: inner.templateId as string | undefined,
+          packageSlug: inner.packageSlug as string | undefined,
+          workspaceType: inner.workspaceType as
+            "personal" | "agent" | "project" | "operational" | undefined,
+          createdBy:
+            (inner.createdBy as
+              "user" | "provisioning" | "plugin" | undefined) ?? "provisioning",
+        });
+      } catch (e) {
+        if (
+          e instanceof DependencyResolutionError ||
+          e instanceof ComposeBaseUnavailableError ||
+          e instanceof ComposeOverlayError
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (e as Error).message,
+          });
+        }
+        if (e instanceof ComposeBaseNotFoundError) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: (e as Error).message,
+          });
+        }
+        throw e;
+      }
+
+      // deferCreate is never set here — core is "created" | "composed" (both
+      // carry workspaceId). Narrow so the "resolved"-only union arm is excluded.
+      if (core.status === "resolved") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Workspace materialize returned resolved-without-create (unexpected on approve path)",
+        });
+      }
+      const workspaceId = core.workspaceId;
+
+      // Stamp the produced workspaceId onto the proposal row so clients/revert
+      // can recover it (ProposalMaterializedRecord has no workspaceIds field —
+      // store as a sibling lifecycle key next to materialized).
+      void payload;
+      const updatedData = {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: workspaceId,
+        materializeStatus: core.status,
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: updatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // packages.apply: after workspace materialize, run the SAME post-workspace
+      // layers as the grant path (enroll agent + caps/autos/playbooks/loops).
+      // Without this, every agent package install silently dropped Phase 2.
+      const source = inner.source as string | undefined;
+      const definition = (inner.definition ?? {}) as Record<string, unknown>;
+      const needsPost =
+        source === "packages.apply" ||
+        Boolean(
+          definition.capabilities ||
+          definition.automations ||
+          definition.playbooks ||
+          definition.loops ||
+          definition.projectId
+        );
+      if (needsPost) {
+        try {
+          const { applyPackagePostWorkspace } =
+            await import("../../../services/package-apply-post-workspace.js");
+          await applyPackagePostWorkspace({
+            workspaceId,
+            body: definition as Parameters<
+              typeof applyPackagePostWorkspace
+            >[0]["body"],
+            userId,
+            // Approver is authority for creates; still enroll the proposing
+            // agent so follow-on agent writes don't collapse to join proposals.
+            agentUserId: proposal.agentUserId ?? undefined,
+            scopes: [],
+          });
+        } catch (e) {
+          // Workspace already exists — surface post-layer failure rather than
+          // leaving APPROVED with a silent partial package. Scrub the raw cause
+          // (it can carry DB/connector internals) to the operator log; the client
+          // gets a fixed message, not the interpolated exception text (E1).
+          logger.warn(
+            { proposalId: input.proposalId, err: (e as Error).message },
+            "workspace create: package layers failed post-workspace"
+          );
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Workspace created, but applying its package layers failed.",
+          });
+        }
+      }
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: workspaceId };
+    },
+  });
+
+  // ── workspace / join ───────────────────────────────────────────────────────
+  registerProposalExecutor({
+    key: "workspace/join",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const joinData = (proposal.data ?? {}) as Record<string, unknown>;
+      const validatedEvent = await auditLog({
+        subjectType: "workspace",
+        action: "join",
+        phase: "validated",
+        throwOnError: true,
+        subjectId: proposal.targetId,
+        userId,
+        workspaceId: proposal.workspaceId ?? undefined,
+        correlationId:
+          typeof joinData.correlationId === "string"
+            ? joinData.correlationId
+            : undefined,
+        data: {
+          role: typeof joinData.role === "string" ? joinData.role : "editor",
+          agentUserId: proposal.agentUserId ?? joinData.agentUserId,
+          workspaceId: proposal.workspaceId,
+          approvedBy: userId,
+          approvedAt: new Date().toISOString(),
+          approvalComment: input.comment,
+          sourceProposalId: input.proposalId,
+        },
+        source: "api",
+      });
+
+      const joinUpdatedData = {
+        ...joinData,
+        ...(validatedEvent ? { validatedEventId: validatedEvent.id } : {}),
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: joinUpdatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── workspace / declare_source ───────────────────────────────────────────────
+  // (Enterprise-OS Wave 0, now GOVERNED) A gated `synap_declare_workspace_source`
+  // / Hub `PATCH /workspaces/:id/source-edges` (agent-authored, or a member whose
+  // role lacks `write`) lands here on approval. Rewiring pod-wide cross-workspace
+  // read routing must go through review, not apply immediately — so this executor
+  // is what makes approval actually merge the edge. Materializes via the SAME
+  // `mergeWorkspaceSourceEdges` apply fn the direct/auto-approve path uses — re-run
+  // as the APPROVER (userId) so the settings merge + `feeds`-link materialization
+  // attribute to the reviewer. Without this executor the `*/*` catch-all would flip
+  // the proposal APPROVED (emit `.validated`) but NEVER merge the edge — the
+  // cross-workspace reads would silently never redirect.
+  //
+  // DATA-SHAPE NOTE: the propose gate stores exactly `{ sourceRoles,
+  // defaultSources }` in the proposal `data.data` — the full input
+  // `mergeWorkspaceSourceEdges` needs. The target workspace is `proposal.workspaceId`
+  // (the consumer workspace the edge is declared ON), the SAME workspace the gate
+  // RBAC-checked (mirrors project/create using proposal.workspaceId).
+  registerProposalExecutor({
+    key: "workspace/declare_source",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace source-edge proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, so skip if
+      // this proposal was already materialized (a re-approve would re-merge —
+      // harmless (mergeSettings is idempotent) but the guard mirrors the siblings).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { WorkspaceSourceEdgeInputSchema, mergeWorkspaceSourceEdges } =
+        await import("../../../services/workspace-edge-service.js");
+      const parsed = WorkspaceSourceEdgeInputSchema.safeParse({
+        sourceRoles: innerData.sourceRoles,
+        defaultSources: innerData.defaultSources,
+      });
+      if (
+        !parsed.success ||
+        (!parsed.data.sourceRoles && !parsed.data.defaultSources)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace source-edge proposal is missing sourceRoles/defaultSources",
+        });
+      }
+
+      // Apply as the APPROVER — the same door the granted/direct path calls.
+      await mergeWorkspaceSourceEdges(workspaceId, parsed.data, userId);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── workspace / configure_public_projection ─────────────────────────────────
+  // A gated Hub `PATCH /workspaces/:id/public-projection` (agent-authored, or a
+  // member whose role lacks `write`) lands here on approval. Opting a workspace
+  // into an UNAUTHENTICATED public projection must go through review, not apply
+  // immediately — so this executor is what makes approval actually write the
+  // config. Materializes via the SAME `setWorkspacePublicProjection` apply fn the
+  // direct/auto-approve path uses — re-run as the APPROVER (userId) so the
+  // settings merge attributes to the reviewer. Without this executor the `*/*`
+  // catch-all would flip the proposal APPROVED (emit `.validated`) but NEVER
+  // write the config — the public surface would silently never open.
+  //
+  // DATA-SHAPE NOTE: the propose gate stores exactly `{ enabled, roles, fields }`
+  // in the proposal `data.data` — the full input `setWorkspacePublicProjection`
+  // needs. The target workspace is `proposal.workspaceId` (the SAME workspace the
+  // gate RBAC-checked, mirrors workspace/declare_source).
+  registerProposalExecutor({
+    key: "workspace/configure_public_projection",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace public-projection proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, so skip if
+      // this proposal was already materialized (a re-approve would re-write —
+      // harmless (mergeSettings is idempotent) but the guard mirrors the siblings).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { PublicProjectionInputSchema, setWorkspacePublicProjection } =
+        await import("../../../services/workspace-projection-service.js");
+      const parsed = PublicProjectionInputSchema.safeParse({
+        enabled: innerData.enabled,
+        roles: innerData.roles,
+        fields: innerData.fields,
+      });
+      if (!parsed.success) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace public-projection proposal is missing a valid { enabled, roles, fields } config",
+        });
+      }
+
+      // Apply as the APPROVER — the same door the granted/direct path calls.
+      await setWorkspacePublicProjection(workspaceId, parsed.data, userId);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── workspace / update ───────────────────────────────────────────────────────
+  // Hub `POST /packages/apply` with `targetWorkspaceId` set (install-onto-
+  // existing) proposes via `subjectType:"workspace", action:"update"` when the
+  // caller can't auto-approve (workspace.update ∈ ADMIN_ACTIONS). Without this
+  // executor the generic `*/*` catch-all only flipped the row APPROVED — the
+  // additive reconcile never ran. Re-runs the SAME `materializeWorkspaceCore`
+  // (targetWorkspaceId forces the `composeOntoBaseWorkspace` branch) the grant
+  // path drives, from the FULL package body the route already stores as
+  // `data.definition` (packages.ts:246-276), then the SAME phase-2
+  // `applyPackagePostWorkspace` layers — stamping the APPROVER as the acting
+  // userId (mirrors workspace/create's approve-as-authority above).
+  registerProposalExecutor({
+    key: "workspace/update",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const inner = ((proposal.data as Record<string, unknown>)?.data ??
+        proposal.data ??
+        {}) as Record<string, unknown>;
+      const targetWorkspaceId =
+        (inner.targetWorkspaceId as string | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+      if (!targetWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace update proposal is missing targetWorkspaceId",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      if (inner.operation === "set_primary_surface") {
+        const parsedSurface = workspaceRuntimePrimarySurfaceSchema
+          .nullable()
+          .safeParse(inner.primarySurface);
+        if (!parsedSurface.success) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Workspace start proposal has an invalid primary surface",
+          });
+        }
+
+        const { getDb, eventRepository, WorkspaceRepository } =
+          await import("@synap/database");
+        const dbConn = await getDb();
+        const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
+        await workspaceRepo.setPrimarySurface(
+          targetWorkspaceId,
+          parsedSurface.data,
+          userId
+        );
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: targetWorkspaceId };
+      }
+
+      const {
+        materializeWorkspaceCore,
+        ComposeBaseUnavailableError,
+        DependencyResolutionError,
+        ComposeBaseNotFoundError,
+        ComposeOverlayError,
+      } =
+        await import("../../../services/workspace-materialization-service.js");
+
+      const definition = (inner.definition ?? {}) as Record<string, unknown>;
+
+      let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
+      try {
+        core = await materializeWorkspaceCore({
+          definition:
+            definition as unknown as import("@synap/database").WorkspaceDefinitionInput,
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          selfSlug: inner.packageSlug as string | undefined,
+          targetWorkspaceId,
+          proposalId:
+            (inner.proposalId as string | undefined) ?? input.proposalId,
+          workspaceName: inner.workspaceName as string | undefined,
+          templateId: inner.templateId as string | undefined,
+          packageSlug: inner.packageSlug as string | undefined,
+          packageVersion: inner.packageVersion as string | undefined,
+          workspaceType: inner.workspaceType as
+            "personal" | "agent" | "project" | "operational" | undefined,
+        });
+      } catch (e) {
+        if (
+          e instanceof DependencyResolutionError ||
+          e instanceof ComposeBaseUnavailableError ||
+          e instanceof ComposeOverlayError
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (e as Error).message,
+          });
+        }
+        if (e instanceof ComposeBaseNotFoundError) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: (e as Error).message,
+          });
+        }
+        throw e;
+      }
+
+      // targetWorkspaceId always forces the "composed" branch inside
+      // materializeWorkspaceCore (never "created"/"resolved") — narrow so the
+      // rest of this executor can read workspaceId unconditionally.
+      if (core.status !== "composed") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Workspace update materialize returned unexpected status "${core.status}" for a targeted install`,
+        });
+      }
+      const workspaceId = core.workspaceId;
+
+      const updatedData = {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: workspaceId,
+        materializeStatus: core.status,
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: updatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Phase 2: same post-workspace layers the grant path always runs after a
+      // "composed" outcome (packages.ts has no `unchanged` discriminator on
+      // that branch — it always re-seeds, see packages.ts:450).
+      try {
+        const { applyPackagePostWorkspace } =
+          await import("../../../services/package-apply-post-workspace.js");
+        await applyPackagePostWorkspace({
+          workspaceId,
+          body: definition as Parameters<
+            typeof applyPackagePostWorkspace
+          >[0]["body"],
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          scopes: [],
+        });
+      } catch (e) {
+        // Scrub the raw cause to the operator log; the client gets a fixed
+        // message, not interpolated exception text (E1).
+        logger.warn(
+          { proposalId: input.proposalId, err: (e as Error).message },
+          "workspace update: package layers failed post-workspace"
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Workspace updated, but applying its package layers failed.",
+        });
+      }
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: workspaceId };
+    },
+  });
+
+  // ── workspace / adopt ────────────────────────────────────────────────────────
+  // Hub `POST /pod/adopt` (`hub-protocol/rest/pod-adopt.ts`) proposes via
+  // `subjectType:"workspace", action:"adopt"` for agent callers under the same
+  // ADMIN_ACTIONS floor. Re-runs the SAME stamp-then-reconcile sequence the
+  // grant path performs inline: `WorkspaceRepository.mergeSettings` (lifts
+  // packageSlug/proposalId onto the workspace settings) then
+  // `reconcileWorkspaceFromDefinition({ mergeCapabilities: true })` — never
+  // destructive, never a second workspace. The template is re-resolved FRESH at
+  // approval time via `resolveWorkspaceTemplate` (mirrors the grant path, which
+  // also resolves at call time rather than trusting a stale snapshot) — only
+  // `templateSlug` needs to survive from propose to approve.
+  registerProposalExecutor({
+    key: "workspace/adopt",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const inner = ((proposal.data as Record<string, unknown>)?.data ??
+        proposal.data ??
+        {}) as Record<string, unknown>;
+      const templateSlug = inner.templateSlug as string | undefined;
+      const workspaceId =
+        (inner.workspaceId as string | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+      if (!templateSlug || !workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace adopt proposal is missing templateSlug or workspaceId",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { resolveWorkspaceTemplate } =
+        await import("../../../services/capabilities/resolve-workspace-template.js");
+      const resolved = await resolveWorkspaceTemplate(templateSlug);
+      if (!resolved) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Unknown template: ${templateSlug}`,
+        });
+      }
+
+      const {
+        getDb,
+        eventRepository,
+        WorkspaceRepository,
+        reconcileWorkspaceFromDefinition,
+      } = await import("@synap/database");
+
+      const settingsPatch: Partial<
+        import("@synap/database").WorkspaceSettings
+      > = {
+        packageSlug: templateSlug,
+        proposalId: templateSlug,
+        ...(resolved.version ? { packageVersion: resolved.version } : {}),
+      };
+      const dbConn = await getDb();
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
+      // Approver is the authority — same as workspace/create above.
+      await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
+
+      const report = await reconcileWorkspaceFromDefinition({
+        workspaceId,
+        userId,
+        definition: resolved.workspaceDefinition as unknown as Parameters<
+          typeof reconcileWorkspaceFromDefinition
+        >[0]["definition"],
+        mergeCapabilities: true,
+      });
+
+      const updatedData = {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: workspaceId,
+        reconcile: {
+          profilesAdded: report.profiles.added.length,
+          propertiesAdded: report.properties.added.length,
+          viewsAdded: report.views.added.length,
+          entityLinksAdded: report.entityLinks.added.length,
+        },
+      };
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: updatedData,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: workspaceId };
+    },
+  });
+}

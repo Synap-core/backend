@@ -130,7 +130,11 @@ const UN_UNIFIED_ALLOWLIST = new Set<string>([
   "tools.ts", // TODO
   "sharing.ts", // TODO
   "proposals.ts", // TODO
-  "proposals/approve-executors.ts", // TODO
+  // Wave 1 router-decomposition split approve-executors.ts by domain; only
+  // project/archive's raw completed-audit + emitSideEffects pair still lands
+  // here post-split (entity.ts's merge emits have no adjacent completed-audit
+  // string, so they don't trip this guard).
+  "proposals/executors/project.ts", // TODO
 ]);
 
 function tsFiles(dir: string, acc: string[] = []): string[] {

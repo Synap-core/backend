@@ -37,6 +37,7 @@ import {
   proposalExecRegistry,
   type ProposalExecutorResult,
 } from "../execution-registry.js";
+import { readExecutorsSource } from "./read-executors-source.js";
 
 // vitest cwd is the api package root (mirrors workspace-create-executor.test.ts).
 const API_SRC = join(process.cwd(), "src");
@@ -47,7 +48,7 @@ function readRepo(relFromApiRoot: string): string {
   return readFileSync(join(process.cwd(), relFromApiRoot), "utf8");
 }
 
-const EXECUTORS = readSrc("routers/proposals/approve-executors.ts");
+const EXECUTORS = readExecutorsSource(API_SRC);
 
 /** The `automation/execute` executor body (up to the next registration). */
 const AUTOMATION_EXEC_BLOCK = (() => {
