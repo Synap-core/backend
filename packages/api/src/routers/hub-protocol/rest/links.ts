@@ -48,6 +48,7 @@ const LINK_ENDPOINT_TYPES = [
   "project",
   "secret",
   "capability",
+  "agent",
   "workspace",
 ] as const;
 

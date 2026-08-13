@@ -73,6 +73,26 @@ export const CONNECTOR_SUBJECT_TYPES = [
 
 export type ConnectorSubjectType = (typeof CONNECTOR_SUBJECT_TYPES)[number];
 
+/**
+ * The synthetic message-alias patterns. `message.received` is the documented
+ * cross-transport proactive-from-messages trigger — it fires for BOTH physical
+ * message events (`external_message.*` and `channel_message.*`) without binding
+ * to one transport. `message.*` also validates as a plain full wildcard, but is
+ * listed here so the whole alias set is a SINGLE source of truth.
+ *
+ * The action segment `received` is a domain verb outside the CRUD vocab, so
+ * `validateEventPattern` must accept this set explicitly (below) — otherwise the
+ * authoring door rejects the very pattern the runtime matcher is built to match.
+ * The runtime matcher (`matchesMessageAlias` in @synap/jobs) matches this EXACT
+ * set; it consumes this constant (re-exported through @synap/database) rather
+ * than re-listing it, so validator and matcher can never drift.
+ */
+export const MESSAGE_ALIAS_PATTERNS = [
+  "message.received",
+  "message.received.*",
+  "message.*",
+] as const;
+
 // ============================================================================
 // EVENT ACTIONS
 // ============================================================================
@@ -155,9 +175,7 @@ export function subjectTrigger(subject: SubjectType): { event: string } {
  * All three levels are supported by the trigger matcher's matchPattern().
  */
 export type EventPattern =
-  | EventName
-  | `${SubjectType}.${EventAction}.*`
-  | `${SubjectType}.*`;
+  EventName | `${SubjectType}.${EventAction}.*` | `${SubjectType}.*`;
 
 /**
  * Validate that a string is a valid event pattern at runtime.
@@ -179,6 +197,16 @@ export function validateEventPattern(raw: string): EventPattern {
   }
 
   const [subject, action, phase] = parts;
+
+  // Synthetic message alias (`message.received` / `message.received.*` /
+  // `message.*`): a documented cross-transport trigger whose action segment is
+  // the domain verb "received", outside the CRUD vocab. `subject === "message"`
+  // is otherwise a real CRUD subject, so this must be accepted BEFORE the strict
+  // action check below rejects "received". The runtime matcher matches this exact
+  // set (matchesMessageAlias) — both sides consume MESSAGE_ALIAS_PATTERNS.
+  if ((MESSAGE_ALIAS_PATTERNS as readonly string[]).includes(raw)) {
+    return raw as EventPattern;
+  }
 
   // Connector / system event families bypass the strict CRUD action/phase vocab
   // (their actions are domain verbs like "received"). The structural length

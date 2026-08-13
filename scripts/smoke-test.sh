@@ -117,7 +117,11 @@ if [ -z "$HUB_API_KEY" ]; then
   printf "${SKIP}  POST /api/hub/entities (no HUB_API_KEY set)\n"
 else
   TITLE="__smoke_test__-$(date +%s)"
-  BODY="{\"profileSlug\":\"note\",\"title\":\"${TITLE}\",\"workspaceId\":\"__SMOKE__\"}"
+  # workspaceId is omitted so the server derives pod-wide placement — this makes
+  # the smoke test pod-agnostic (a hardcoded/bogus workspaceId like "__SMOKE__"
+  # is rejected: the entities door returns 500 on an unknown workspace, so the
+  # old body could never pass against a real pod).
+  BODY="{\"profileSlug\":\"note\",\"title\":\"${TITLE}\"}"
 
   # Capture body and status in a single request to avoid double-posting
   RESPONSE=$(http_body "${BASE_URL}/api/hub/entities" \

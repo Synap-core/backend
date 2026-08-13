@@ -65,6 +65,8 @@ export * from "./vault/index.js";
 // Unified event naming system (SubjectType, EventAction, EventPhase, EventName)
 export {
   SUBJECT_TYPES,
+  CONNECTOR_SUBJECT_TYPES,
+  MESSAGE_ALIAS_PATTERNS,
   EVENT_ACTIONS,
   EVENT_PHASES,
   buildEventName,

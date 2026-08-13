@@ -67,6 +67,15 @@ const FROZEN: Record<string, number> = {
   "packages/jobs/src/workers/steps/query.ts": 1,
   "packages/jobs/src/workers/crm-daily-digest.ts": 1,
   "packages/jobs/src/workers/proactive-intelligence.ts": 1,
+  // pod-hygiene-near-dup.ts scans SCAN_KINDS = ["person", "company"] — both
+  // pure PRIMARY kinds with no role wearers, the sanctioned literal-kind case
+  // (same shape as event-sync's `event` dedup above).
+  "packages/jobs/src/workers/pod-hygiene-near-dup.ts": 1,
+  // team-roster-context.ts filters eq(entities.type, "person") — 'person' is a
+  // primary kind, not a role slug; the tripwire's pattern-match alone can't
+  // tell a sanctioned literal-kind read from row-blind role-slug debt, so this
+  // is a false positive, not code to fix.
+  "packages/api/src/services/team-roster-context.ts": 1,
 };
 
 function tsFilesUnderSrc(pkgRoot: string, acc: string[]): void {

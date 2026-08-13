@@ -42,6 +42,12 @@
  * - route_to_channel           → routers/channels.ts (context-scoped routing).
  * - teammate:answering         → routers/channels.ts (AI "is answering" presence).
  * - proposal:reviewed          → routers/proposals.ts (approve/reject/reopen).
+ * - ai:proposal                → routers/channels/send-message.ts,
+ *                                utils/chat-turn-sse.ts,
+ *                                routers/hub-protocol/documents.ts via
+ *                                `EventNames.AI_PROPOSAL` (mirrored here as a
+ *                                literal for the same reason chat:stream is —
+ *                                see the drift guard at the bottom of this file).
  * - notification:new           → notifications/NotificationService.ts (bell feed).
  * - presence:init/update,
  *   user:joined/left           → @synap/realtime (server.ts, collaboration-manager.ts).
@@ -72,6 +78,8 @@ export const SERVER_CONVERSATION_EVENTS = {
   TEAMMATE_ANSWERING: "teammate:answering",
   /** A proposal was approved, rejected, or reopened. */
   PROPOSAL_REVIEWED: "proposal:reviewed",
+  /** A governed AI mutation was proposed instead of auto-applied. */
+  AI_PROPOSAL: "ai:proposal",
   /** Generic bell notification (filter on data.notification.sourceType). */
   NOTIFICATION_NEW: "notification:new",
   /** Initial "who's online" snapshot on connect (@synap/realtime). */
@@ -98,5 +106,8 @@ const _chatStreamInSync: typeof EventNames.CHAT_STREAM =
   SERVER_CONVERSATION_EVENTS.CHAT_STREAM;
 const _chatMessageInSync: typeof EventNames.CHAT_MESSAGE =
   SERVER_CONVERSATION_EVENTS.CHAT_MESSAGE;
+const _aiProposalInSync: typeof EventNames.AI_PROPOSAL =
+  SERVER_CONVERSATION_EVENTS.AI_PROPOSAL;
 void _chatStreamInSync;
 void _chatMessageInSync;
+void _aiProposalInSync;

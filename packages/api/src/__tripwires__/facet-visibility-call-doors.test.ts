@@ -65,13 +65,13 @@ describe("facet visibility call doors", () => {
   it("validates role context entities through the same user visibility floor", () => {
     // Wave 3 router-decomposition (2026-08-12) moved attachFacet (the code
     // this test reads) from entities.ts into entities/facets.ts — a path
-    // re-key, not a behavior change. NOTE: this assertion pre-dates the move
-    // and was already failing (`entityVisibleWhere` vs the actual
-    // `entityWriteVisibleWhere`) — read-path fixed, not the assertion.
+    // re-key, not a behavior change. A facet-attach is a WRITE, so the write
+    // floor (`entityWriteVisibleWhere`, which is ⊇ the read floor — stricter)
+    // is the correct predicate here.
     const entitiesRouter = read("packages/api/src/routers/entities/facets.ts");
 
     expect(entitiesRouter).toContain(
-      "eq(entities.id, input.contextEntityId),\n            isNull(entities.deletedAt),\n            entityVisibleWhere(ctx.userId)"
+      "eq(entities.id, input.contextEntityId),\n            isNull(entities.deletedAt),\n            entityWriteVisibleWhere(ctx.userId)"
     );
     expect(entitiesRouter).toContain(
       "message: `Context entity not found: ${input.contextEntityId}`"

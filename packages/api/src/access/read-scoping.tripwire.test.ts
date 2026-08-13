@@ -107,6 +107,11 @@ const SCOPING_HELPERS = [
   //     visibility SQL, the floor skills.list/get already apply.
   "graphEntityFloor",
   "visibleSkillsWhere",
+  //   systemMapEntityScope (graph.ts) → module-top wrapper around
+  //     accessScopeWhere, paired with assertSystemMapWorkspaceLensAccess's
+  //     FORBIDDEN throw — the floor getSystemMapKindDrilldown (and the other
+  //     system-map procedures) already apply.
+  "systemMapEntityScope",
   // The proposal-visibility SSOT (utils/proposal-visibility.ts): loads the
   // proposal by id then throws unless the caller is an editor+ member (workspace
   // proposal) or the proposer (pod-wide). The floor proposals.get/source now
@@ -465,6 +470,12 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     // use the unified seam; searchEvents always floors by userId and the
     // workspaceId is membership-checked. Justified single door named listAll.
     "subscriptions.ts::listAll",
+    // governance-rules `listAll` is the DELIBERATE "across every workspace the
+    // caller can see" door (pod ∪ all visible workspaces) — a different shape
+    // than `.list`'s single-workspace lens, not a re-expansion of it. Properly
+    // floored by `userVisibleWhere(governanceRules.workspaceId, ctx.userId)`,
+    // same predicate `.list` uses. Justified single door named listAll.
+    "governance-rules.ts::listAll",
   ]);
 
   it("no NEW listAll procedure (the two-door split may only collapse, never re-expand)", () => {

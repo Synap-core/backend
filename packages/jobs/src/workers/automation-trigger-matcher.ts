@@ -29,6 +29,7 @@ import {
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
+import { MESSAGE_ALIAS_PATTERNS } from "@synap-core/types";
 // Re-export to preserve this module's public surface (tests + downstream imports)
 // after MessageEnvelope + matchMessageShape moved to `@synap/database`.
 export type { MessageEnvelope };
@@ -153,11 +154,7 @@ export const MESSAGE_ALIAS_EVENT_TYPES = [
  * automations are untouched.
  */
 function matchesMessageAlias(eventType: string, pattern: string): boolean {
-  if (
-    pattern !== "message.received" &&
-    pattern !== "message.received.*" &&
-    pattern !== "message.*"
-  ) {
+  if (!(MESSAGE_ALIAS_PATTERNS as readonly string[]).includes(pattern)) {
     return false;
   }
   return (MESSAGE_ALIAS_EVENT_TYPES as readonly string[]).includes(eventType);

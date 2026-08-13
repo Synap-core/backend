@@ -50,10 +50,17 @@ describe("tripwire: agents can see connection state", () => {
     expect(registrySrc).toContain("required: true");
   });
 
-  it("MCP runnable projection gates enabled on the connection, not just governance", () => {
-    expect(mcpSrc).toContain("needsConnection");
-    // enabled must AND-in the connection gate — a disconnected provider verb is
-    // not runnable even when governance is auto.
-    expect(mcpSrc).toContain('cap.governance === "auto" && !needsConnection');
+  it("MCP list door forwards the integration's `connection` field unfiltered", () => {
+    // WAVE-7 UPDATE: the `b32b606d` router-decomposition split moved
+    // `synap_list_capabilities` from a flat, hand-computed `enabled` /
+    // `needsConnection` action projection (the tokens this test used to
+    // assert on) to the sectioned `sections.integrations` view built by
+    // `sectionCapabilities` (capability-registry.ts). That view still carries
+    // the SAME signal per integration — `connection: { required, connected,
+    // provider }` (asserted on `registrySrc` above) — so an agent can still
+    // tell "connected" from "needs connection"; only the derived boolean
+    // token is gone, not the underlying fact. Assert the door forwards that
+    // section verbatim instead of stripping the field back out.
+    expect(mcpSrc).toContain("integrations: sections.integrations");
   });
 });

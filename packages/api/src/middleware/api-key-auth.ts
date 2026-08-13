@@ -150,11 +150,27 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
     "API key validated successfully"
   );
 
+  // Agent-key identity remap — mirrors the Hub REST auth middleware
+  // (hub-protocol-rest.ts) and the MCP HTTP handler (http-handler.ts) EXACTLY:
+  // when the key carries a `linkedUserId` (= the human the agent acts for), the
+  // effective identity is the HUMAN (who OWNS the entities) while the agent (the
+  // raw key owner) is tracked as `agentUserId` so WRITES still route through the
+  // governance membrane (checkPermissionOrPropose → propose, never auto-apply as
+  // the operator). Without this remap the tRPC hub-protocol door left
+  // `ctx.userId` = the agent principal, so `assertMayActAs(ctx, input.userId)`
+  // 403'd every CLI/BYOA call (the human id it sends never equalled the agent id)
+  // and reads/attribution scoped to the wrong identity. For NON-agent keys
+  // (`linkedUserId` null → user PATs) `userId` stays `keyRecord.userId` and
+  // `agentUserId` stays undefined — byte-identical to the prior behavior.
+  const effectiveUserId = keyRecord.linkedUserId ?? keyRecord.userId;
+  const agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined;
+
   // Add authentication context
   return next({
     ctx: {
       ...ctx,
-      userId: keyRecord.userId,
+      userId: effectiveUserId,
+      agentUserId,
       scopes: keyRecord.scope,
       apiKeyId: keyRecord.id,
       apiKeyName: keyRecord.keyName,

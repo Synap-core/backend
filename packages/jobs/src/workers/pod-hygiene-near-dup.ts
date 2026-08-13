@@ -73,7 +73,8 @@ export const POD_HYGIENE_NEAR_DUP_QUEUE = "pod-hygiene.near-dup-scan";
 export const POD_HYGIENE_NEAR_DUP_CRON = "15 3 * * *";
 
 /** Prefer people/orgs first — residual kinds can expand later. */
-const SCAN_KINDS = ["person", "company", "contact"] as const;
+// 'contact' is a role (facet), not a kind — person entities + contact facet are already deduped in the 'person' bucket; a facet is not a dedup axis.
+const SCAN_KINDS = ["person", "company"] as const;
 
 /** Cap entities loaded per kind per user to bound O(n²) pair work. */
 const MAX_ENTITIES_PER_KIND = 500;

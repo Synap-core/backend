@@ -335,6 +335,21 @@ export async function resolveActingContext(
     // workspace. NO first-workspace fallback, NO 400.
     return { ok: true, userId, workspaceId: null, role: "owner" };
   }
+  // Shape-check BEFORE the DB call: `workspaceId` is bare request input here
+  // (route wire schemas commonly validate it as `z.string()`, not
+  // `.uuid()`), and `getWorkspaceMembership` binds it straight into a
+  // Postgres `uuid` column comparison. An unshaped value (e.g. "__SMOKE__")
+  // makes Postgres throw `invalid input syntax for type uuid`, which is a
+  // CLIENT error but escapes as a bare 500 to every one of the ~40 REST
+  // routes that call this shared resolver. Root-caused here (was previously
+  // patched per-route in entities.ts) so every caller gets the fix for free.
+  if (!isUuid(workspaceId)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `workspaceId is not a valid id: ${workspaceId}`,
+    };
+  }
   const membership = await getWorkspaceMembership(db, workspaceId, userId);
   if (!membership) {
     return { ok: false, status: 403, error: "Access denied to workspace" };

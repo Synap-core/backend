@@ -36,6 +36,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 vi.mock("../../../services/capabilities/execute-capability.js", () => ({
   runResolvedSkill: mockRunResolvedSkill,
+  // Also imported by executors/capability.ts, executors/messaging.ts, and
+  // executors/provider.ts (all loaded transitively via
+  // registerApproveExecutors()). Stub as "target resolves" (null = no
+  // failure) so the pre-existing skill/command flow under test is unaffected.
+  assertApprovalTargetResolves: vi.fn(async () => null),
 }));
 
 import { proposalExecRegistry } from "../execution-registry.js";

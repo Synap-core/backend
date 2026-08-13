@@ -18,6 +18,7 @@ import {
   confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   resolveActorId,
@@ -241,7 +242,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       logger.error({ err }, "automations.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -279,7 +280,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       logger.error({ err }, "automations.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -474,7 +475,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       logger.error({ err }, "automations.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -527,7 +528,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       logger.error({ err }, "automations.activate failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -580,7 +581,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       logger.error({ err }, "automations.pause failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
