@@ -39,6 +39,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   confineWorkspaceOrForbidden,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   type HubHono,
@@ -428,11 +429,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       return c.json({ id, approved }, 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      if (msg.toLowerCase().includes("not found")) {
-        return c.json({ error: msg }, 404);
-      }
       logger.error({ err, id }, "skills approve failed");
-      return c.json({ error: msg }, 500);
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 
@@ -658,11 +656,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      if (msg.toLowerCase().includes("not found")) {
-        return c.json({ error: msg }, 404);
-      }
       logger.error({ err, id }, "skills delete failed");
-      return c.json({ error: msg }, 500);
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 }

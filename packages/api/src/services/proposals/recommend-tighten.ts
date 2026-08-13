@@ -56,11 +56,14 @@ import {
   proposals,
   users,
   governanceRules,
+  proposalClusterMutes,
   insertPendingProposal,
   ProposalStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
+import { computeProposalFingerprint } from "./fingerprint.js";
+import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
 const SAMPLE_CAP = 20;
 
 const logger = createLogger({ module: "governance-recommend-tighten" });
@@ -109,16 +112,23 @@ interface AgentRow {
 }
 
 /**
- * Exactly the columns the motif qualification reads. The fingerprint-era scan
- * also pulled `targetId`, `data` (JSONB), `createdAt` and `workspaceId` to build
- * a per-object signature; grouping by motif needs none of them, and selecting
- * `data` meant dragging 500 JSONB payloads per agent per run for nothing.
+ * The columns motif qualification + MUTE EXCLUSION read.
+ *
+ * Grouping is by motif, so `createdAt` / `workspaceId` stay dropped. But
+ * `targetId` and `data` are back: `computeProposalFingerprint` needs exactly
+ * those two (plus proposalType/targetType) to reproduce the per-object
+ * fingerprint the "Mark expected" mute is keyed on. Without them this scan
+ * cannot tell a muted rejection from a live one.
  */
 interface ScanRow {
   id: string;
   proposalType: string;
   targetType: string;
   status: string;
+  /** Fingerprint input — the mute key's per-object signature. */
+  targetId: string;
+  /** Fingerprint input — the create-class signature reads the proposed name. */
+  data: unknown;
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
@@ -136,6 +146,8 @@ async function loadAgentProposals(agentId: string): Promise<ScanRow[]> {
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
       status: proposals.status,
+      targetId: proposals.targetId,
+      data: proposals.data,
     })
     .from(proposals)
     .where(eq(proposals.agentUserId, agentId))
@@ -208,8 +220,27 @@ async function hasCoveringProposeRule(
   );
 }
 
+/**
+ * Every ACTIVE "Mark expected" mute (`proposal_cluster_mutes`, migration 0233),
+ * as a fingerprint set. Pod-scoped and agent-independent, so it is loaded ONCE
+ * per scan and handed to every agent pass — never re-queried per agent or per
+ * motif (the per-(agent,motif) `hasPendingTightenProposal` /
+ * `hasCoveringProposeRule` N+1 already flagged in review is not to be joined by
+ * a third).
+ */
+async function loadActiveMutedFingerprints(): Promise<ReadonlySet<string>> {
+  const rows = await db
+    .select({ fingerprint: proposalClusterMutes.fingerprint })
+    .from(proposalClusterMutes)
+    .where(isNull(proposalClusterMutes.revokedAt));
+  return new Set(rows.map((r) => r.fingerprint));
+}
+
 /** Scan ONE agent; file a tighten proposal per consistently-rejected shape. */
-async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
+async function recommendTightenForAgent(
+  agent: AgentRow,
+  mutedFingerprints: ReadonlySet<string>
+): Promise<string[]> {
   if (!agent.createdByUserId) return [];
 
   const rows = await loadAgentProposals(agent.id);
@@ -232,6 +263,37 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
   const motifOf = (r: { targetType: string; proposalType: string }) =>
     `${r.targetType}.${r.proposalType}`;
 
+  // MUTE AWARENESS — the two axes must not contradict each other.
+  //
+  // "Mark expected" (`proposal_cluster_mutes`, 0233) keys on the structural
+  // FINGERPRINT; this recommender qualifies on the MOTIF, which is strictly
+  // coarser (many fingerprints roll up into one motif). Without this filter a
+  // human who marks a rejection cluster expected keeps feeding exactly those
+  // rejections into a proposal to pin the WHOLE motif to review — the recommender
+  // escalates what the human just declared benign, and re-files it after every
+  // reject. A muted rejection is a human verdict of "this is fine", so it is not
+  // evidence of anything here.
+  //
+  // REMOVED FROM BOTH NUMERATOR AND DENOMINATOR — deliberately. Dropping muted
+  // rows from the numerator only would leave them sitting in the denominator
+  // behaving like approvals: N muted rejections would drag the rate below the
+  // 0.9 floor and SUPPRESS tighten for the remaining, genuinely-contested
+  // rejections of the same motif. That is the same dilution bug already fixed
+  // for PENDING rows just below. Excluding them from both keeps the rate's
+  // meaning honest: "of the decided attempts still treated as signal, how
+  // reliably do the humans reject this shape". A motif whose rejections are
+  // ENTIRELY muted simply disappears from the scan, which is the correct outcome.
+  const isMuted = (r: ScanRow) =>
+    mutedFingerprints.size > 0 &&
+    mutedFingerprints.has(
+      computeProposalFingerprint({
+        proposalType: r.proposalType,
+        targetType: r.targetType,
+        targetId: r.targetId,
+        data: r.data,
+      })
+    );
+
   // Denominator: attempts per motif that a HUMAN ACTUALLY DECIDED.
   //
   // Only decided outcomes belong in a rate whose meaning is "how reliably do the
@@ -249,6 +311,7 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
   const decidedByMotif = new Map<string, number>();
   for (const r of rows) {
     if (!DECIDED.has(r.status)) continue;
+    if (isMuted(r)) continue;
     const m = motifOf(r);
     decidedByMotif.set(m, (decidedByMotif.get(m) ?? 0) + 1);
   }
@@ -260,6 +323,7 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
   >();
   for (const r of rows) {
     if (r.status !== ProposalStatus.REJECTED) continue;
+    if (isMuted(r)) continue;
     const m = motifOf(r);
     const acc = rejectedByMotif.get(m) ?? { count: 0, sampleProposalIds: [] };
     acc.count += 1;
@@ -301,7 +365,7 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
       },
     };
 
-    const { proposal } = await insertPendingProposal({
+    const { proposal, deduped } = await insertPendingProposal({
       workspaceId: null,
       targetType: "governance",
       targetId: agent.id,
@@ -310,6 +374,28 @@ async function recommendTightenForAgent(agent: AgentRow): Promise<string[]> {
       createdBy: agent.createdByUserId,
       proposedByUserId: null,
     });
+
+    // TELL A HUMAN. `insertPendingProposal` is the durable one-door but it fires
+    // NO notification — the pod-wide fan-out lives in `notifyProposalCreated`
+    // (permission-check), which this path never reaches. Without this call every
+    // tighten proposal was INVISIBLE: the recommender asked a human to decide
+    // something and never told them, so the calibration loop's last link was
+    // open. Pod-wide (`workspaceId: null`) → owner + admins, via the SAME
+    // extracted helper permission-check now uses. Non-fatal + self-logging: the
+    // proposal is already committed, and the helper never throws.
+    // A dedup hit returns a PRE-EXISTING pending row that already notified when
+    // it was first filed — same guard `createPendingProposal` applies.
+    if (!deduped) {
+      void notifyPodWideProposal({
+        proposalId: proposal.id,
+        proposalType: "governance.tighten_lane",
+        description: `Pin ${targetPattern} to review (rejected ${rejected.count}× — ${Math.round(rejectRate * 100)}%)`,
+        // The SUBJECT agent, for bell grouping — mirrors the workspace path's
+        // `agentUserId` grouping key. `proposals.agentUserId` is null here (this
+        // recommender authors the row), so it comes from the payload.
+        agentUserId: agent.id,
+      });
+    }
 
     void emitSideEffects({
       subjectType: "proposal",
@@ -354,12 +440,14 @@ export async function recommendTightenForAllAgents(): Promise<{
 }> {
   logger.info("recommend-tighten: starting scan");
   const agents = await listAgentUsers();
+  // ONCE per scan: the mute set is pod-scoped and agent-independent.
+  const mutedFingerprints = await loadActiveMutedFingerprints();
   const proposalIds: string[] = [];
   let failed = 0;
 
   for (const agent of agents) {
     try {
-      const filed = await recommendTightenForAgent(agent);
+      const filed = await recommendTightenForAgent(agent, mutedFingerprints);
       proposalIds.push(...filed);
     } catch (err) {
       failed += 1;
@@ -371,7 +459,12 @@ export async function recommendTightenForAllAgents(): Promise<{
   }
 
   logger.info(
-    { agents: agents.length, failed, proposalsFiled: proposalIds.length },
+    {
+      agents: agents.length,
+      failed,
+      mutedFingerprints: mutedFingerprints.size,
+      proposalsFiled: proposalIds.length,
+    },
     "recommend-tighten: scan complete"
   );
   return { proposalsFiled: proposalIds.length, proposalIds };

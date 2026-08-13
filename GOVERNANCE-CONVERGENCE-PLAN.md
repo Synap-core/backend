@@ -4,9 +4,23 @@
 **Research:** two read-only deep-dives, every claim `file:line`-verified against `synap-backend/` HEAD
 (`gov-attribution`, `gov-rules-lane-cap`). Nothing below is built yet.
 
+**Update 2026-08-13:** a real convergence round shipped against this plan — see
+**§6 "SHIPPED 2026-08 (this convergence round)"** at the bottom for what's actually landed
+(uncommitted; needs redeploy). It **supersedes D1 / Phase 0's per-transport hard-reject** with a
+correct identity signal (`users.userType==='agent'`, not `linkedUserId`/`keyType`), and adds two new
+rungs to `decideAgentPolicy` — **2.55 provenance** and **2.56 ceilings** (first slice) — that follow
+the same rung-2.8 pattern this doc already established (I/O caller resolves a pre-computed
+tighten-only verdict, the pure engine consumes it, floors stay supreme). Read §6 before treating
+anything below as the current state of the system.
+
 ### Ratified decisions (founder, 2026-07-27)
 
 - **D1 = Hard-reject.** A `linkedUserId==null` key writing over `/mcp` → loud 403 ("not an agent key — run `synap init`"). Human PATs on Hub REST stay anonymous.
+  **⚠️ SUPERSEDED 2026-08-13 — see §6.** The per-transport reject used `linkedUserId==null` as the
+  "is this an agent" signal; the correct signal is the key principal's `users.userType==='agent'`.
+  Gating on `linkedUserId` alone would hard-reject legitimate **pod-wide agents** (no `linkedUserId`
+  by design), which this round explicitly set out to support as governed machine principals. Fixed at
+  identity resolution, not at the `/mcp` transport boundary — see §6 item #1.
 - **D2 = Keep `DEFAULT_AUTO_APPROVE` as code floor.** Consulted when no rule matches; not seeded into the table.
 - **D3 = Wire automation profile-granularity NOW.** Thread `subjectProfileSlug` through the automation door (`automation-governance.ts:154`) this wave — full parity with the chat door.
 - **D4 = Full 0→D in scope.** Attribution → store → collapse → retire → trusted lane + per-agent cap. Build in sequenced, committed, gate-green waves (files overlap across phases — NOT parallel).
@@ -65,6 +79,12 @@ concurrent decision paths.
 ## 2. The plan, phased (each phase ships green + committed)
 
 ### Phase 0 — Attribution (PREREQUISITE; everything keys on `proposals.agentUserId`)
+
+**⚠️ SUPERSEDED 2026-08-13 — see §6 item #1 for what actually shipped.** The per-transport
+hard-reject below was never built as written; instead the round fixed the underlying identity
+signal (`resolveKeyIdentity`, one door across all 3 transports) so `shouldRejectUnattributedWrite`
+now keys on `isAgent` (from `users.userType`) OR `linkedUserId`, not `linkedUserId` alone — which
+correctly admits pod-wide agents instead of hard-rejecting them.
 
 The bug is a **misuse at the boundary**: a bare user PAT handed to an AI as `SYNAP_HUB_API_KEY`. The
 minting surfaces are fine — `/setup/agent` (#7), mcp-redeem claude-web (#8), pod-OAuth (#9),
@@ -174,6 +194,10 @@ scorecard-weighted ceiling (e.g. base 10, ×3 if approveRate≥0.95 & total≥10
 - **D1 — Attribution enforcement severity.** Hard-reject bare `linkedUserId==null` keys on `/mcp` writes
   (loud, self-service `synap init`) vs. soft-treat-as-agentic-and-warn. _Recommend hard-reject_ — the
   silent bypass is the worst failure mode; a loud one-time break is the correct direction.
+  **⚠️ SUPERSEDED 2026-08-13 — see §6.** Decided differently in practice: reject stays, but re-keyed to
+  the correct identity signal (`isAgent` from `users.userType`, OR `linkedUserId`) instead of
+  `linkedUserId==null` alone, so pod-wide agents are admitted rather than rejected. Bare human
+  `user_pat`/`hub_inbound` keys are still rejected; service keys are still allowed.
 - **D2 — `DEFAULT_AUTO_APPROVE` home.** Keep as a code floor consulted when no rule matches vs. seed as
   pod-scope `any` rules. _Recommend keep-as-code_ — it's the safe default, not a user setting; avoids
   seeding churn.
@@ -210,3 +234,100 @@ packages/api/src/routers/proposals.ts:1606                       (widen_lane exe
 packages/jobs/src/... (NEW pg-boss trusted-lane scanner) + automation-governance.ts:154 (profileSlug plumbing, if D3=now)
 Write surfaces: workspaces.ts:660, hub-protocol/rest/agent-users.ts:201, ensure-capture-agent.ts, browser AiGovernanceSection.tsx
 ```
+
+---
+
+## 6. SHIPPED 2026-08 (this convergence round) — verified, uncommitted
+
+Everything below was built and gate-verified in this round. It is **uncommitted** and **not deployed**
+— all runtime claims are NEEDS-DOGFOOD until redeploy. Where it revises a decision or phase above, that
+section is annotated `SUPERSEDED` in place; nothing below duplicates deleted content, it records what
+actually landed.
+
+### #1 — Identity: `resolveKeyIdentity`, one door (supersedes D1 / Phase 0)
+
+The real "is this an agent" signal is **`users.userType === 'agent'`** of the key's principal
+(`keyRecord.userId`) — not `linkedUserId` (which encodes _delegation to a human_, not agent-ness) and
+not `keyType` (defaults to `hub_inbound`, unreliable as a signal). Shipped:
+
+- ONE `resolveKeyIdentity` — `packages/api/src/access/key-identity.ts` — adopted by all three
+  transports that previously each computed this independently: `api-key-auth`, `hub-protocol-rest`,
+  `mcp/http-handler`.
+- `agentUserId = isAgent ? keyRecord.userId : undefined` (was: `linkedUserId`-gated).
+- `effectiveUserId = linkedUserId ?? userId` — an own-principal data floor for pod-wide agents (no
+  `linkedUserId` to fall back to), so a pod-wide agent's reads/writes scope to _itself_, never
+  silently to an owner it isn't delegated from (no owner-impersonation).
+- `shouldRejectUnattributedWrite` re-keyed to `(!isAgent && !linkedUserId && bare user_pat/hub_inbound)`
+  — now **admits** real agents including pod-wide ones, still **rejects** bare human PATs speaking
+  MCP, still **allows** service keys. This is the corrected, shipped form of D1/Phase 0's reject.
+- Pod-wide agents are treated as governed machine principals (the GCP-service-account /
+  GitHub-App-installation model) — never hard-refused outright; they still go through the full
+  governance ladder like any other agent.
+- New minting path: `podWide: true` opt-in on `provisionSurfaceAgentKey` / `POST /setup/agent`.
+  **Default stays fail-closed** (`NO_LINKED_HUMAN`) — pod-wide is opt-in, not the new default.
+- Regression coverage: `identity-one-door.test.ts` (new tripwire — one door, not three divergent
+  computations).
+- **Behavior-preserving** for every existing key: an already-attributed agent key resolves the same
+  `isAgent`/`agentUserId`/`effectiveUserId` triple it did before.
+
+**Deferred:** user-facing CLI/UI for minting or managing pod-wide agent keys is unbuilt — the door
+exists server-side only.
+
+### #2 — Kind/facet write-guard: closed the `skipValidation` bypass
+
+The identity-shape guard against writing a role-profile as its own kind already lived in
+`EntityRepository.create`. This round closed a bypass: `skipValidation: true` was skipping the
+identity-shape adapter along with property validation. Now `skipValidation` skips **only** property
+validation — the kind/facet adapter always runs. Additionally, `sync-materializer` now derives
+`entities.type` from the authoritative `profileId` rather than trusting a separately-supplied type.
+
+### #3 — Ceilings: rung 2.56, first slice (new axis, not in the original plan)
+
+New `governance_ceilings` store (migration `0236`) plus a **per-agent daily executed-write ceiling**
+(lazy count via `idx_events_ungoverned_agent`) feeding a new **tighten-only** rung **2.56** in
+`decideAgentPolicy`. Resolves inside the existing shared `resolveAgentGovernanceDecision` call site —
+so the automation door, which was previously uncapped on this axis, is now capped through the same
+one door as chat.
+
+**Deferred (explicitly out of scope this round):** rate-limiting axis, tool-level ceilings, hard
+economic/cost budgets, and a scorecard-weighted-ceiling recommender (§2 Phase D's per-agent cap idea
+is related but distinct — still open).
+
+### #4 — Provenance: rung 2.55, dormant until wired (new axis, not in the original plan)
+
+New **tighten-only** rung **2.55 `UNTRUSTED_ORIGIN`** in `decideAgentPolicy`. `resolveOriginTrust`
+classifies the acting channel's origin (EXTERNAL / bridge / source-produced → untrusted → forces
+propose). This activates the previously-dormant `config_settings.posture` knob referenced elsewhere in
+the governance surface.
+
+**DORMANT until a caller threads `channelId` into the gate** — the rung and classifier are built and
+tested, but no live call site passes `channelId` yet, so this rung never fires in production today.
+Wiring that is explicit follow-up work, not part of this round.
+
+### #5 — Error-mapping: 19 hub-REST catch sites → `httpStatusForTrpcError`
+
+19 hub-REST catch sites converted from ad-hoc status codes to the shared `httpStatusForTrpcError`
+mapper, with a regression tripwire and 2 explicitly-excluded traps. Improves error-code fidelity for
+Hub Protocol callers (including the identity/governance error paths above). **~235 remaining call
+sites repo-wide are an explicitly deferred tail**, not part of this round's scope.
+
+### Architecture invariant this round reinforces
+
+**#3 and #4 both follow the rung-2.8 pattern this doc already established for `governance_rules`**:
+the I/O caller (`resolveAgentGovernanceDecision`) resolves a pre-computed, tighten-only verdict from
+a store or classifier; the pure `decideAgentPolicy` engine only ever _consumes_ an already-decided
+value — it never reaches into the DB itself. Floors (2 ADMIN, 2.1 forcePropose, 2.5 DESTRUCTIVE, 2.6
+by-kind) stay supreme; every new rung is placed below them and is additive/tighten-only, never
+loosening. **#1 (`resolveKeyIdentity`) is the identity-layer analogue of the same discipline** — one
+door computes the signal, every transport consumes it, no transport re-derives its own notion of
+"is this an agent."
+
+### Verification status
+
+- **VERIFIED (gate-proven, this session):** migration 0236 SQL, `identity-one-door.test.ts`, ceiling
+  and provenance rung unit coverage, hub-REST error-mapping tripwire — all green at time of writing.
+- **NEEDS-DOGFOOD (runtime, requires redeploy):** all behavior above — identity resolution across
+  live traffic, ceiling enforcement against real daily volumes, provenance classification once wired.
+- **CI-gated, not yet run in this environment:** migration 0236 replay + `schema:check`.
+- **Unbuilt:** pod-wide-agent CLI/UI surface; ceilings' rate/tool/economic axes; error-mapping tail
+  (~235 sites); #4's `channelId` caller wiring.

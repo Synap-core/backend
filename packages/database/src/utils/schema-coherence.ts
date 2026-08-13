@@ -1371,6 +1371,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "scope_kind",
     addedBy: "0235_config_settings.sql",
   },
+  // Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
+  // to governance_rules' verdicts). First axis: daily_write_count. New table;
+  // checking one column confirms the migration ran (the ceiling resolver falls
+  // back to the code default silently if the table is absent).
+  {
+    table: "governance_ceilings",
+    column: "limit_value",
+    addedBy: "0236_governance_ceilings.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

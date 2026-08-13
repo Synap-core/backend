@@ -32,6 +32,7 @@ import { Hono } from "hono";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
+import { resolveKeyIdentity } from "../../access/key-identity.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer } from "./index.js";
@@ -189,10 +190,19 @@ export function shouldRejectUnattributedWrite(
   parsedBody: unknown,
   toolDefs: ReadonlyArray<Pick<Tool, "name" | "annotations">>,
   keyType: string | null | undefined,
-  linkedUserId: string | null | undefined
+  linkedUserId: string | null | undefined,
+  isAgent?: boolean
 ): boolean {
+  // The is-agent signal ADMITS a real agent principal — including a pod-wide
+  // agent (userType='agent', no linked human — wave #1b), which is a bare
+  // hub_inbound key today and would otherwise be wrongly rejected here. It is
+  // ANDed onto the existing bare-key predicate rather than replacing it, so the
+  // gate still admits owner-attributed non-agent keys (e.g. service creds) and
+  // still rejects a bare human PAT/hub_inbound misused as an agent write.
   const isBareKey =
-    !linkedUserId && (keyType === "user_pat" || keyType === "hub_inbound");
+    !isAgent &&
+    !linkedUserId &&
+    (keyType === "user_pat" || keyType === "hub_inbound");
   if (!isBareKey) return false;
 
   const method = (parsedBody as { method?: string } | null)?.method;
@@ -435,13 +445,26 @@ mcpHttpApp.post("/", async (c) => {
     );
   }
 
+  // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
+  // (access/key-identity.ts), mirroring the Hub REST auth middleware. The DATA
+  // FLOOR (`effectiveUserId`) is the operator when the key carries a linkedUserId
+  // (so the agent reads the user's second brain), while the agent itself is
+  // tracked as `agentUserId` — derived from the principal's `userType === 'agent'`
+  // — so WRITES still route through the governance membrane (propose, never
+  // auto-apply as the operator). Resolved BEFORE the reject gate so the gate can
+  // ADMIT an agent principal (the `isAgent` bit) instead of keying off the
+  // delegation fact.
+  const { effectiveUserId, agentUserId, isAgent } =
+    await resolveKeyIdentity(keyRecord);
+
   // ── 2b. Attribution hard-reject (Phase 0, GOVERNANCE-CONVERGENCE-PLAN.md) ──
   if (
     shouldRejectUnattributedWrite(
       parsedBody,
       await tools.list(),
       keyRecord.keyType,
-      keyRecord.linkedUserId
+      keyRecord.linkedUserId,
+      isAgent
     )
   ) {
     const requestId = (parsedBody as { id?: unknown } | null)?.id ?? null;
@@ -468,13 +491,6 @@ mcpHttpApp.post("/", async (c) => {
   // re-reads. (Stateless mode rebuilds the server per request, hence the gate.)
   const isInitialize =
     (parsedBody as { method?: string } | null)?.method === "initialize";
-  // Agent-key identity remap (mirrors the Hub REST auth middleware): when the
-  // key has a linkedUserId (= the human the agent acts on behalf of), the DATA
-  // FLOOR is the operator (so the agent reads the user's second brain), while the
-  // agent itself is tracked as `agentUserId` so WRITES still route through the
-  // governance membrane (propose, never auto-apply as the operator).
-  const effectiveUserId = keyRecord.linkedUserId ?? keyRecord.userId;
-  const agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined;
   const grounding = isInitialize
     ? await buildGrounding(effectiveUserId)
     : undefined;

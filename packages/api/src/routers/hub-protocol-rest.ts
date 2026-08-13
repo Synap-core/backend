@@ -17,6 +17,7 @@ import { createLogger } from "@synap-core/core";
 
 import { db, users, eq } from "@synap/database";
 import { apiKeyService } from "../services/api-keys.js";
+import { resolveKeyIdentity } from "../access/key-identity.js";
 import {
   isSubTokenFeatureEnabled,
   resolveExternalUserMapping,
@@ -396,17 +397,22 @@ app.use("/*", async (c, next) => {
     // bound `service` key to its workspace. Inert for every other key type.
     c.set("keyType", keyRecord.keyType);
     c.set("keyWorkspaceId", keyRecord.workspaceId ?? null);
-    // Agent key identity remap: when a key has linkedUserId (= the human who
-    // created the agent), remap the effective userId to the human so entity
-    // ownership is attributed correctly. The agent (key owner) is tracked as
-    // agentUserId for proposal attribution across all Hub Protocol write handlers.
-    // NOTE: resolvedUserId was initialized from keyRecord.userId (the agent),
-    // so the condition `keyRecord.userId !== resolvedUserId` is always false —
-    // we unconditionally remap here instead.
+    // Agent key identity remap — via the ONE door `resolveKeyIdentity`
+    // (access/key-identity.ts). When a key has a linkedUserId (= the human who
+    // created the agent), the human owns the entities (effectiveUserId), while the
+    // acting agent principal is tracked as agentUserId for proposal attribution
+    // across all Hub Protocol write handlers. agentUserId is derived from the
+    // principal's `userType === 'agent'` (the ONE is-agent signal), NOT from "has
+    // a linked human". The userId override stays GUARDED by linkedUserId so it
+    // never clobbers the X-External-User-Id sub-token remap above; the is_internal
+    // X-Delegated-Operator-Id remap below layers on top of this base.
+    const keyIdentity = await resolveKeyIdentity(keyRecord);
     if (keyRecord.linkedUserId) {
       c.set("linkedUserId", keyRecord.linkedUserId);
-      c.set("userId", keyRecord.linkedUserId); // human owns the entities
-      c.set("agentUserId", keyRecord.userId); // agent performed the action
+      c.set("userId", keyIdentity.effectiveUserId); // human owns the entities
+    }
+    if (keyIdentity.agentUserId) {
+      c.set("agentUserId", keyIdentity.agentUserId); // agent performed the action
     }
 
     // ── Trusted-IS operator-floor read delegation ───────────────────────────

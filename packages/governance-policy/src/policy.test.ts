@@ -894,6 +894,329 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
   });
 });
 
+describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tighten-only)", () => {
+  it("downgrades a DEFAULT_AUTO_APPROVE write to propose (entity.create)", () => {
+    // entity.create is on DEFAULT_AUTO_APPROVE and would auto-execute (rung 8);
+    // an untrusted origin tightens it to a reviewable proposal.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  it("beats ownership (rung 3): an owned-workspace write proposes when untrusted", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      isAgentOwnedWorkspace: true,
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  it("beats an explicit autoApproveFor (rung 4): untrusted proposes even with a broad glob", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      autoApproveFor: ["*", "entity.*"],
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  it("beats a governance rule (rung 2.8): untrusted proposes even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "document",
+      action: "update",
+      governanceRuleVerdict: "auto",
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  it("beats an EXPLICIT user_observation auto-execute (rung 2.6): untrusted proposes", () => {
+    // An untrusted origin cannot be trusted to declare an observation
+    // "explicit/validated" — rung 2.55 sits above the by-kind execute.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: true,
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  it("beats an auto capability run (rung 2.7): untrusted proposes", () => {
+    const v = decideAgentPolicy({
+      subjectType: "capability",
+      action: "run",
+      capabilityGovernance: "auto",
+      capabilityExecMode: "auto",
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+
+  // ── Floors remain supreme over an untrusted origin (rung 2.55 sits below them).
+  it("ADMIN floor still wins over untrusted origin (ADMIN reason, not UNTRUSTED)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "workspace",
+      action: "update", // ADMIN_ACTIONS
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+  });
+
+  it("forcePropose floor still wins over untrusted origin (SCOPE_IDENTITY reason)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      forcePropose: true,
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("DESTRUCTIVE floor still wins over untrusted origin (DESTRUCTIVE reason)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      originTrust: "untrusted",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
+  });
+
+  it("CBAC deny still wins over untrusted origin (deny-precedence preserved)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      agentCapabilities: ["entity.read"], // lacks entity.update
+      originTrust: "untrusted",
+    });
+    expect(v.verdict).toBe("deny");
+  });
+
+  it("NEVER denies on its own: an untrusted would-be-auto write becomes propose, not deny", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      originTrust: "untrusted",
+    });
+    expect(v.verdict).toBe("propose");
+  });
+
+  it("a TRUSTED origin is unchanged (entity.create still executes)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      originTrust: "trusted",
+    });
+    expect(v).toEqual({ verdict: "execute" });
+  });
+
+  it("originTrust:undefined leaves the verdict byte-identical to the baseline", () => {
+    for (const action of ["create", "delete"] as const) {
+      expect(decideAgentPolicy({ subjectType: "entity", action })).toEqual(
+        decideAgentPolicy({
+          subjectType: "entity",
+          action,
+          originTrust: undefined,
+        })
+      );
+    }
+  });
+
+  it("is tighten-only: never turns a baseline propose/deny into execute", () => {
+    // A baseline default-propose (document.update, rung 9) stays propose under
+    // both trust states — the signal never widens.
+    const untrusted = decideAgentPolicy({
+      subjectType: "document",
+      action: "update",
+      originTrust: "untrusted",
+    });
+    const trusted = decideAgentPolicy({
+      subjectType: "document",
+      action: "update",
+      originTrust: "trusted",
+    });
+    expect(untrusted.verdict).toBe("propose");
+    expect(trusted.verdict).toBe("propose");
+  });
+});
+
+describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", () => {
+  it("at-limit: ceilingVerdict 'propose' downgrades a DEFAULT_AUTO_APPROVE write to propose", () => {
+    // entity.create would auto-execute (rung 8); an over-limit ceiling tightens
+    // it to a reviewable proposal.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+    });
+  });
+
+  it("under-limit: ceilingVerdict undefined leaves the verdict byte-identical to baseline", () => {
+    for (const action of ["create", "delete"] as const) {
+      expect(decideAgentPolicy({ subjectType: "entity", action })).toEqual(
+        decideAgentPolicy({
+          subjectType: "entity",
+          action,
+          ceilingVerdict: undefined,
+        })
+      );
+    }
+  });
+
+  it("beats ownership (rung 3): an owned-workspace write proposes when over ceiling", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      isAgentOwnedWorkspace: true,
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+    });
+  });
+
+  it("beats an explicit autoApproveFor (rung 4) and a governance rule (rung 2.8)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        autoApproveFor: ["*", "entity.*"],
+        ceilingVerdict: "propose",
+      })
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+    });
+    expect(
+      decideAgentPolicy({
+        subjectType: "document",
+        action: "update",
+        governanceRuleVerdict: "auto",
+        ceilingVerdict: "propose",
+      })
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+    });
+  });
+
+  // ── Floors remain supreme over an over-ceiling agent (rung 2.56 sits below them).
+  it("ADMIN floor still wins over the ceiling (ADMIN reason, not CEILING)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "workspace",
+      action: "update", // ADMIN_ACTIONS
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+  });
+
+  it("forcePropose floor still wins over the ceiling (SCOPE_IDENTITY reason)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      forcePropose: true,
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("DESTRUCTIVE floor still wins over the ceiling (DESTRUCTIVE reason)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
+  });
+
+  it("CBAC deny still wins over the ceiling (deny-precedence preserved)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      agentCapabilities: ["entity.read"], // lacks entity.update
+      ceilingVerdict: "propose",
+    });
+    expect(v.verdict).toBe("deny");
+  });
+
+  it("NEVER denies on its own: an over-ceiling would-be-auto write becomes propose", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      ceilingVerdict: "propose",
+    });
+    expect(v.verdict).toBe("propose");
+  });
+
+  it("is tighten-only: never turns a baseline propose into execute", () => {
+    // A baseline default-propose (document.update, rung 9) stays propose; the
+    // ceiling signal only ever tightens, never widens.
+    const v = decideAgentPolicy({
+      subjectType: "document",
+      action: "update",
+      ceilingVerdict: "propose",
+    });
+    expect(v.verdict).toBe("propose");
+  });
+
+  it("does NOT disturb rung 2.55: an untrusted origin still reports its own reason", () => {
+    // When both an untrusted origin AND the ceiling are present, 2.55 (placed
+    // just above 2.56) returns first — proving 2.56 did not clobber #4's rung.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      originTrust: "untrusted",
+      ceilingVerdict: "propose",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+    });
+  });
+});
+
 describe("findUnsafeAutoApproveEntries", () => {
   it("flags exact destructive verbs and subject.verb forms", () => {
     expect(findUnsafeAutoApproveEntries(["delete"])).toEqual(["delete"]);

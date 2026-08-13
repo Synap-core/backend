@@ -314,21 +314,13 @@ export class EntityRepository extends BaseRepository<
     // the attach door instead.
     let roleFacetProfile: typeof profile | null = null;
     let roleFacetProperties: Record<string, unknown> = {};
-    if (profile.profileKind === "role" && data.skipValidation) {
-      // skipValidation (trusted seeds/imports) intentionally bypasses the
-      // adapter — but that means a seed/template referencing a role slug
-      // directly reintroduces the exact drift this feature exists to close,
-      // silently. No shipped automation/template does this today (checked),
-      // but there's no structural guard against a future one doing so — log
-      // loud so it's visible in practice instead of a quiet ontology drift.
-      console.warn(
-        `EntityRepository.create: skipValidation created an entity directly ` +
-          `on role profile '${profile.slug}' (profileId=${profile.id}) — this ` +
-          `bypasses the role→kind+facet adapter and violates one-entity-one-kind. ` +
-          `The caller should target the role's applicable kind and attach '${profile.slug}' as a facet instead.`
-      );
-    }
-    if (profile.profileKind === "role" && !data.skipValidation) {
+    if (profile.profileKind === "role") {
+      // The role→kind+facet adapter runs UNCONDITIONALLY, even when
+      // skipValidation:true (trusted seeds/imports) — skipValidation may
+      // still skip PROPERTY schema enforcement below, but it must never skip
+      // this identity-shape adapter, or a seed/template referencing a role
+      // slug directly reintroduces the exact one-entity-one-kind drift this
+      // feature exists to close (previously only `console.warn`'d).
       const applicable = profile.applicableKinds ?? [];
       if (applicable.length !== 1) {
         throw new EntityCreateRejectedError(
@@ -351,47 +343,55 @@ export class EntityRepository extends BaseRepository<
             `not an active kind profile on this pod`
         );
       }
-      // Validate the role's properties against the ROLE profile up front, so
-      // a bad payload fails BEFORE the kind entity is inserted (no orphan).
-      // Merge data.title in first — a converted role can carry a vestigial
-      // required `title` def left over from when it was a kind (e.g.
-      // `contact`), and the caller supplies title at the top level (the
-      // common frontend/API pattern), not inside `properties`. Mirrors the
-      // identical merge the non-role path below already does, and does NOT
-      // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
-      // false) — a role's OWN required fields
-      // must still fail loud here; only the vestigial-title case is real.
-      const roleTitleAlreadyInProps =
-        data.properties && "title" in data.properties;
-      const propsToValidateForRole: Record<string, unknown> = {
-        ...data.properties,
-      };
-      if (data.title !== undefined && !roleTitleAlreadyInProps) {
-        propsToValidateForRole["title"] = data.title;
+      if (data.skipValidation) {
+        // Trusted seed data (template provisioning) — store facet properties
+        // as-is without schema enforcement, mirroring the non-role
+        // skipValidation behavior below.
+        roleFacetProperties = { ...data.properties };
+      } else {
+        // Validate the role's properties against the ROLE profile up front, so
+        // a bad payload fails BEFORE the kind entity is inserted (no orphan).
+        // Merge data.title in first — a converted role can carry a vestigial
+        // required `title` def left over from when it was a kind (e.g.
+        // `contact`), and the caller supplies title at the top level (the
+        // common frontend/API pattern), not inside `properties`. Mirrors the
+        // identical merge the non-role path below already does, and does NOT
+        // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
+        // false) — a role's OWN required fields
+        // must still fail loud here; only the vestigial-title case is real.
+        const roleTitleAlreadyInProps =
+          data.properties && "title" in data.properties;
+        const propsToValidateForRole: Record<string, unknown> = {
+          ...data.properties,
+        };
+        if (data.title !== undefined && !roleTitleAlreadyInProps) {
+          propsToValidateForRole["title"] = data.title;
+        }
+        const facetValidation =
+          await this.propertyValidation.validateProperties(
+            propsToValidateForRole,
+            profile.id,
+            data.workspaceId ?? null
+          );
+        if (!facetValidation.valid) {
+          throw new PropertyValidationError(
+            facetValidation.errors.map((err, idx) => ({
+              field: `property_${idx}`,
+              message: err,
+            })),
+            profile.id
+          );
+        }
+        unmodeled.push(...facetValidation.unmodeled);
+        roleFacetProperties = { ...facetValidation.normalized };
+        if (!roleTitleAlreadyInProps) {
+          // title was merged in ONLY to satisfy a vestigial required def — it
+          // belongs on the kind entity (see comment below), not duplicated
+          // onto the facet's own properties.
+          delete roleFacetProperties["title"];
+        }
       }
-      const facetValidation = await this.propertyValidation.validateProperties(
-        propsToValidateForRole,
-        profile.id,
-        data.workspaceId ?? null
-      );
-      if (!facetValidation.valid) {
-        throw new PropertyValidationError(
-          facetValidation.errors.map((err, idx) => ({
-            field: `property_${idx}`,
-            message: err,
-          })),
-          profile.id
-        );
-      }
-      unmodeled.push(...facetValidation.unmodeled);
       roleFacetProfile = profile;
-      roleFacetProperties = { ...facetValidation.normalized };
-      if (!roleTitleAlreadyInProps) {
-        // title was merged in ONLY to satisfy a vestigial required def — it
-        // belongs on the kind entity (see comment below), not duplicated
-        // onto the facet's own properties.
-        delete roleFacetProperties["title"];
-      }
       profile = target;
       // The role's data lives on the facet; the kind entity carries only the
       // identity columns (title/preview/document).

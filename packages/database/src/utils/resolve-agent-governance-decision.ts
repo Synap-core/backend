@@ -1,15 +1,23 @@
-import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, isNull, or, sql } from "drizzle-orm";
 import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { governanceRules } from "../schema/governance-rules.js";
+import { governanceCeilings } from "../schema/governance-ceilings.js";
+import { events } from "../schema/events.js";
+import { channels, ChannelType } from "../schema/channels.js";
 import {
   decideAgentPolicy,
   getWorkspaceGovernanceMode,
   matchesActionPattern,
+  DEFAULT_DAILY_WRITE_CEILING,
   PROPOSE_REASON,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
+import {
+  resolveGuidelines,
+  resolveMostSpecificPosture,
+} from "./config-settings.js";
 
 /**
  * Shared agent-governance orchestration — the SINGLE SOURCE OF TRUTH for the
@@ -67,6 +75,19 @@ export interface ResolveAgentGovernanceInput {
   subjectUoValidated?: boolean | null;
   /** Force a proposal even on an otherwise auto-approved write (chat door). Automation omits. */
   forcePropose?: boolean;
+  /**
+   * The acting channel id, when the write is evaluated in a channel context
+   * (chat door — an inbound-message agent turn). Threaded to rung 2.55's
+   * origin-trust resolver (`resolveOriginTrust`). Absent → no channel context →
+   * rung 2.55 no-ops. Automation writes are never channel writes → omitted.
+   */
+  channelId?: string | null;
+  /**
+   * The HUMAN owner behind the write (`opts.userId` at the chat door) — used
+   * ONLY for the config_settings pod-wide owner floor in the origin-trust
+   * posture override. Absent → workspace-scoped postures only.
+   */
+  userId?: string | null;
   /**
    * `autoApproveFor` precedence — the ONE decideAgentPolicy input that differs
    * between the doors, preserved EXACTLY:
@@ -530,6 +551,220 @@ export async function syncAutoApproveRules(
   });
 }
 
+export interface ResolveOriginTrustInput {
+  /** Injected Drizzle handle. */
+  db: DbHandle;
+  /**
+   * The acting channel to classify. Absent/null (the common case — a pod or
+   * workspace write with no acting channel) → returns `undefined`, so rung 2.55
+   * no-ops (tighten-only: `undefined` never downgrades anything).
+   */
+  channelId?: string | null;
+  /**
+   * The HUMAN owner behind the write — used ONLY for the config_settings
+   * pod-wide owner floor in the posture override (a pod-wide guideline applies
+   * only to its owner). Absent → only workspace-scoped postures are consulted;
+   * the base channel classification is unaffected.
+   */
+  userId?: string | null;
+  workspaceId?: string | null;
+  /** The capability being run, when this is a capability-run resolution. */
+  capabilityId?: string | null;
+}
+
+/**
+ * Resolve the #4 instruction-provenance ORIGIN TRUST of the acting channel —
+ * rung 2.55's I/O half. The pure engine (`decideAgentPolicy`) stays I/O-free and
+ * just consumes the `"trusted" | "untrusted" | undefined` this returns. Follows
+ * the rung-2.8 shape EXACTLY: the I/O caller resolves a signal, the pure engine
+ * consumes it.
+ *
+ * CLASSIFICATION (server-side ONLY — never the request body, like `IssuerTrust`):
+ *   1. ONE indexed channel read (by PK id): a channel that is EXTERNAL
+ *      (`ChannelType.EXTERNAL`) OR carries an `externalSource` (a bridge /
+ *      `source`-produced channel — Discord / Unipile / mail feeds) is
+ *      UNTRUSTED by default; every other owner-side channel (PERSONAL / THREAD
+ *      / AGENT_COLLAB with no external source) is TRUSTED (owner-authored).
+ *   2. OVERRIDABLE via the `config_settings` POSTURE ladder (this is what
+ *      ACTIVATES the dormant `GuidelineValue.posture`): the most-specific
+ *      applicable guideline posture wins — `posture:"auto"` RESTORES trust for a
+ *      specific trusted bridge/channel (owner-approved), `posture:"propose"`
+ *      tightens an otherwise-trusted channel to review.
+ *
+ * LAYERING: this reads the channel ROW directly (schema lives here in
+ * @synap/database) rather than `getChannelOrigin` (which lives in @synap/api —
+ * importing it would be an illegal upward dependency). The channel's
+ * `channelType` / `externalSource` columns already carry the EXTERNAL /
+ * source-produced signal the `produced` origin edge encodes, so one indexed
+ * read is the honest, sufficient database-layer equivalent.
+ *
+ * Returns `undefined` when there is no channel context or the channel can't be
+ * read — rung 2.55 then no-ops (tighten-only default is "don't downgrade").
+ */
+export async function resolveOriginTrust(
+  input: ResolveOriginTrustInput
+): Promise<"trusted" | "untrusted" | undefined> {
+  const { db, channelId, userId, workspaceId, capabilityId } = input;
+  if (!channelId) return undefined;
+
+  const [channel] = await db
+    .select({
+      channelType: channels.channelType,
+      externalSource: channels.externalSource,
+      workspaceId: channels.workspaceId,
+    })
+    .from(channels)
+    .where(eq(channels.id, channelId))
+    .limit(1);
+  if (!channel) return undefined;
+
+  const externalOrigin =
+    channel.channelType === ChannelType.EXTERNAL ||
+    channel.externalSource != null;
+
+  // Posture override (owner-authored, activates GuidelineValue.posture). Only
+  // the `posture` field is consulted here — the guideline TEXT is for
+  // `message.interpret`, not governance. The pod-wide owner floor needs the
+  // human userId; without it, only workspace-scoped postures can match.
+  if (userId) {
+    const guidelines = await resolveGuidelines({
+      db,
+      userId,
+      channelId,
+      channelType: channel.channelType,
+      workspaceId: workspaceId ?? channel.workspaceId ?? null,
+      capabilityId: capabilityId ?? null,
+    });
+    const posture = resolveMostSpecificPosture(guidelines);
+    if (posture === "auto") return "trusted"; // operator restored auto
+    if (posture === "propose") return "untrusted"; // operator tightened
+  }
+
+  return externalOrigin ? "untrusted" : "trusted";
+}
+
+// ---------------------------------------------------------------------------
+// Rung 2.56 — daily write ceiling (governance_ceilings axis daily_write_count)
+// ---------------------------------------------------------------------------
+
+/** Start of the current UTC day (00:00:00.000Z). */
+function startOfUtcDay(now: Date = new Date()): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+export interface ResolveDailyWriteCeilingInput {
+  /** Injected Drizzle handle. */
+  db: DbHandle;
+  agentUserId: string;
+  workspaceId?: string | null;
+}
+
+/**
+ * Resolve the effective per-UTC-day auto-execute write limit for this agent —
+ * rung 2.56's LIMIT half. Reads `governance_ceilings` (axis `daily_write_count`)
+ * for the acting (agent, scope) tuple and returns the most-specific ACTIVE row's
+ * `limit_value`, ranked EXACTLY like `resolveGovernanceRule`: principal
+ * (agent=2, any=0) + scope (workspace=2, pod=0), ties broken by newest
+ * `created_at`. Returns `DEFAULT_DAILY_WRITE_CEILING` (@synap/governance-policy —
+ * the ONE source of the fallback) when no row matches.
+ *
+ * Mirrors `findRedeemableGrant`'s active predicate: `revoked_at IS NULL AND
+ * (expires_at IS NULL OR expires_at > now())`.
+ */
+export async function resolveDailyWriteCeiling(
+  input: ResolveDailyWriteCeilingInput
+): Promise<number> {
+  const { db, agentUserId, workspaceId } = input;
+
+  const candidates = (await db
+    .select({
+      principalKind: governanceCeilings.principalKind,
+      scopeKind: governanceCeilings.scopeKind,
+      limitValue: governanceCeilings.limitValue,
+      createdAt: governanceCeilings.createdAt,
+    })
+    .from(governanceCeilings)
+    .where(
+      and(
+        eq(governanceCeilings.axis, "daily_write_count"),
+        isNull(governanceCeilings.revokedAt),
+        or(
+          isNull(governanceCeilings.expiresAt),
+          gt(governanceCeilings.expiresAt, new Date())
+        ),
+        or(
+          eq(governanceCeilings.principalKind, "any"),
+          and(
+            eq(governanceCeilings.principalKind, "agent"),
+            eq(governanceCeilings.agentUserId, agentUserId)
+          )
+        ),
+        or(
+          eq(governanceCeilings.scopeKind, "pod"),
+          workspaceId
+            ? and(
+                eq(governanceCeilings.scopeKind, "workspace"),
+                eq(governanceCeilings.workspaceId, workspaceId)
+              )
+            : sql`false`
+        )
+      )
+    )) as Array<{
+    principalKind: "agent" | "any";
+    scopeKind: "workspace" | "pod";
+    limitValue: number;
+    createdAt: Date;
+  }>;
+
+  let best: { score: number; createdAt: Date; limitValue: number } | undefined;
+  for (const row of candidates) {
+    const score =
+      (row.principalKind === "agent" ? 2 : 0) +
+      (row.scopeKind === "workspace" ? 2 : 0);
+    if (
+      !best ||
+      score > best.score ||
+      (score === best.score && row.createdAt > best.createdAt)
+    ) {
+      best = { score, createdAt: row.createdAt, limitValue: row.limitValue };
+    }
+  }
+
+  return best ? best.limitValue : DEFAULT_DAILY_WRITE_CEILING;
+}
+
+/**
+ * Count the acting agent's auto-executed writes so far in the current UTC day —
+ * rung 2.56's COUNT half. Uses the partial index `idx_events_ungoverned_agent`
+ * (`(agent_user_id, timestamp) WHERE is_agent = true AND proposal_id IS NULL`):
+ * the WHERE clause matches that index's predicate exactly so PG can serve the
+ * count from it.
+ *
+ * SEMANTICS (first slice): this counts an agent's writes on the events spine
+ * that have NOT been stamped with a `proposal_id` — i.e. the auto-executed /
+ * ungoverned-lane population the ceiling is meant to backpressure. Pod-wide per
+ * agent (NOT workspace-filtered): the ceiling is a per-agent daily budget.
+ */
+async function countAgentWritesTodayUtc(
+  db: DbHandle,
+  agentUserId: string
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(events)
+    .where(
+      and(
+        eq(events.agentUserId, agentUserId),
+        eq(events.isAgent, true),
+        isNull(events.proposalId),
+        gte(events.timestamp, startOfUtcDay())
+      )
+    );
+  return row?.n ?? 0;
+}
+
 export async function resolveAgentGovernanceDecision(
   input: ResolveAgentGovernanceInput
 ): Promise<AgentGovernanceResolution> {
@@ -592,6 +827,16 @@ export async function resolveAgentGovernanceDecision(
     includeAgentPrincipal: input.preferAgentMetadataAutoApproveFor,
   });
 
+  // (c.6) Rung 2.55's I/O half — resolve the acting channel's ORIGIN TRUST
+  // (#4 instruction-provenance). Pure query; the engine consumes the resolved
+  // "trusted" | "untrusted" | undefined. No channelId → no channel read → no-op.
+  const originTrust = await resolveOriginTrust({
+    db,
+    channelId: input.channelId,
+    userId: input.userId,
+    workspaceId,
+  });
+
   // (d) Agent governance policy — SINGLE SOURCE OF TRUTH in
   // @synap/governance-policy. Absent optional inputs (the automation door omits
   // channel/profile/uo/forcePropose) read as `undefined`, identical to not
@@ -605,7 +850,7 @@ export async function resolveAgentGovernanceDecision(
   // resolves the SAME verdict rung 4 used to for that exact write — the
   // engine's rung 4 (still present, untouched) simply never fires because its
   // input is now always `undefined`, deferring to rung 8's default whitelist.
-  const decision = decideAgentPolicy({
+  const basePolicyInput = {
     subjectType,
     action,
     agentCapabilities: agentMetadata?.capabilities,
@@ -617,7 +862,33 @@ export async function resolveAgentGovernanceDecision(
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
     governanceRuleVerdict: ruleMatch?.verdict,
-  });
+    originTrust,
+  };
+
+  let decision = decideAgentPolicy(basePolicyInput);
+
+  // (d.5) Rung 2.56's I/O half — daily write ceiling. LAZY BY DESIGN: we only
+  // count the agent's writes (and resolve the limit) when the base verdict would
+  // otherwise be `execute` — no count query at all for a write that is already
+  // proposing/denying (the common tightened case), and the count is the one
+  // signal that must be fresh the instant a would-be-auto write is decided.
+  // Over the limit → inject `ceilingVerdict: "propose"` and re-run the pure
+  // engine, which tightens execute→propose at rung 2.56. Re-running keeps the
+  // rung the single decision site (no verdict is synthesised here).
+  if (decision.verdict === "execute") {
+    const limit = await resolveDailyWriteCeiling({
+      db,
+      agentUserId,
+      workspaceId,
+    });
+    const writesToday = await countAgentWritesTodayUtc(db, agentUserId);
+    if (writesToday >= limit) {
+      decision = decideAgentPolicy({
+        ...basePolicyInput,
+        ceilingVerdict: "propose",
+      });
+    }
+  }
 
   // (e) Verdict → plain resolution. All side effects stay with the caller.
   if (decision.verdict === "deny") {

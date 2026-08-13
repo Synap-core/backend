@@ -306,12 +306,44 @@ export async function materializeEvent(
 // Per-subject materializers (unchanged logic from Phase 2)
 // ============================================================================
 
+/**
+ * Resolve the entity's `type` for materialization.
+ *
+ * `data.type` is replayed verbatim from a remote event and is not
+ * authoritative — a corrupt/stale remote `type` (e.g. a role slug where a
+ * kind slug belongs) must not be trusted. When `data.profileId` is present,
+ * resolve `type` from `profiles.slug` (the authoritative FK) so the row
+ * self-heals on replay. Only fall back to `data.type` when there is no
+ * profileId to resolve against.
+ */
+async function resolveMaterializedEntityType(
+  data: Record<string, unknown>
+): Promise<string> {
+  const profileId = data.profileId as string | undefined;
+  if (profileId) {
+    try {
+      const profile = await db.query.profiles.findFirst({
+        where: eq(profiles.id, profileId),
+        columns: { slug: true },
+      });
+      if (profile?.slug) return profile.slug;
+    } catch (err) {
+      logger.warn(
+        { profileId, err },
+        "Failed to resolve profile slug for sync entity type; falling back to event type"
+      );
+    }
+  }
+  return (data.type as string) ?? "note";
+}
+
 async function materializeEntity(
   action: string,
   subjectId: string,
   data: Record<string, unknown>
 ): Promise<boolean> {
   if (action === "create" || action === "update") {
+    const resolvedType = await resolveMaterializedEntityType(data);
     await db
       .insert(entities)
       .values({
@@ -319,7 +351,7 @@ async function materializeEntity(
         userId: (data.userId as string) ?? "sync",
         workspaceId: data.workspaceId as string | undefined,
         profileId: data.profileId as string | undefined,
-        type: (data.type as string) ?? "note",
+        type: resolvedType,
         title: data.title as string | undefined,
         preview: data.preview as string | undefined,
         documentId: data.documentId as string | undefined,
@@ -333,7 +365,7 @@ async function materializeEntity(
           title: data.title as string | undefined,
           preview: data.preview as string | undefined,
           profileId: data.profileId as string | undefined,
-          type: (data.type as string) ?? "note",
+          type: resolvedType,
           properties: data.properties ?? {},
           systemData: data.systemData ?? {},
           version: (data.version as number) ?? 1,

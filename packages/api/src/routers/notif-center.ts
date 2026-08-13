@@ -170,7 +170,16 @@ export const notifCenterRouter = router({
       .set({ status: NotificationStatus.READ, readAt: new Date() })
       .where(
         and(
-          eq(notifications.workspaceId, ctx.workspaceId),
+          // Same NULL-scope bug as `unreadCount`: pod-wide notifications carry
+          // `workspace_id IS NULL` and SQL `=` NEVER matches NULL, so "mark all
+          // read" left every pod-wide governance item unread forever — the badge
+          // counts them (post-fix) but this door could never clear them. They
+          // belong to no workspace, so they are in scope from EVERY lens; the
+          // userId floor below is what actually protects the row.
+          or(
+            eq(notifications.workspaceId, ctx.workspaceId),
+            isNull(notifications.workspaceId)
+          ),
           eq(notifications.userId, ctx.userId),
           eq(notifications.status, NotificationStatus.UNREAD)
         )
@@ -191,7 +200,15 @@ export const notifCenterRouter = router({
           and(
             eq(notifications.id, input.notificationId),
             eq(notifications.userId, ctx.userId),
-            eq(notifications.workspaceId, ctx.workspaceId)
+            // Same NULL-scope bug as `unreadCount`. Here it made dismiss a LYING
+            // MUTATION: a pod-wide row (`workspace_id IS NULL`) matched 0 rows,
+            // the door still returned `{success:true}`, and the item reappeared
+            // on the next poll. Pod-wide items are dismissable from every lens;
+            // the id + userId floor above is the real protection.
+            or(
+              eq(notifications.workspaceId, ctx.workspaceId),
+              isNull(notifications.workspaceId)
+            )
           )
         );
       return { success: true };
@@ -206,7 +223,14 @@ export const notifCenterRouter = router({
       .set({ status: NotificationStatus.DISMISSED })
       .where(
         and(
-          eq(notifications.workspaceId, ctx.workspaceId),
+          // Same NULL-scope bug as `unreadCount` / `dismiss`: "clear bell" left
+          // every pod-wide (`workspace_id IS NULL`) item behind while claiming
+          // success. Pod-wide items belong to no workspace, so they clear from
+          // any lens; the userId floor below is what protects them.
+          or(
+            eq(notifications.workspaceId, ctx.workspaceId),
+            isNull(notifications.workspaceId)
+          ),
           eq(notifications.userId, ctx.userId),
           eq(notifications.status, NotificationStatus.UNREAD)
         )

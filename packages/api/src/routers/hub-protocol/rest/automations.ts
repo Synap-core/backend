@@ -331,11 +331,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "automations.get failed");
-      const status =
-        err instanceof Error && err.message.includes("not found") ? 404 : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        status
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -401,11 +399,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "automations.trigger failed");
-      const status =
-        err instanceof Error && err.message.includes("not found") ? 404 : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        status
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -38,7 +38,10 @@
  */
 
 import { getDb, eq, findCapabilityGrant } from "@synap/database";
-import { resolveGovernanceRule } from "@synap/database/agent-governance";
+import {
+  resolveGovernanceRule,
+  resolveOriginTrust,
+} from "@synap/database/agent-governance";
 import { tools, skills } from "@synap/database/schema";
 import { decideAgentPolicy } from "@synap/governance-policy";
 
@@ -108,6 +111,16 @@ export interface GateCapabilityExecutionInput {
   workspaceId?: string | null;
   sessionId?: string | null;
   playbookId?: string | null;
+  /**
+   * The acting channel id, when this run happens in a channel context. Threaded
+   * to the #4 instruction-provenance origin-trust resolver (`resolveOriginTrust`):
+   * an untrusted-origin channel (EXTERNAL / bridge / `source`) force-proposes the
+   * run — it can never auto-run via grant exec-mode, an "auto" capability, OR a
+   * governance rule (tighten-only, owner-approved). Set it server-side from the
+   * routing/turn seam, never from request-body fields; absent → no channel
+   * context → the origin-trust signal no-ops.
+   */
+  channelId?: string | null;
   /** Free-text issuer label (channel / hub door) for audit; not yet consumed. */
   issuer?: string | null;
   /**
@@ -293,6 +306,23 @@ export async function gateCapabilityExecution(
     return { decision: "run" };
   }
 
+  // ── 1.5 ORIGIN TRUST (#4 instruction-provenance) — resolve ONCE for this
+  //       agent run. An untrusted-origin channel (EXTERNAL / bridge / `source`)
+  //       force-proposes the run: it can NEVER auto-run via grant exec-mode, an
+  //       "auto" capability, or a governance rule. Owner/read-only runs already
+  //       returned above and are unaffected. Only agent runs are classified;
+  //       absent channelId → no channel read → undefined (no downgrade).
+  const originTrust = input.agentUserId
+    ? await resolveOriginTrust({
+        db: await getDb(),
+        channelId: input.channelId,
+        userId: input.actorUserId,
+        workspaceId: input.workspaceId ?? null,
+        capabilityId: input.capabilityId,
+      })
+    : undefined;
+  const originUntrusted = originTrust === "untrusted";
+
   // ── 2. GRANT EXISTENCE + exec-mode (the model's namesake) ───────────────────
   // For an agent run that is NOT an owner run, an ACTIVE capability grant must
   // authorize this redeemer. NO grant → propose (a human reviews; an ungranted
@@ -317,7 +347,12 @@ export async function gateCapabilityExecution(
       // before proposing (Option B, D1: a rule can authorize a run with NO
       // grant at all). No matching "auto" rule → route to a reviewable
       // proposal (a human can approve the run); do NOT hard-deny.
-      if (await capabilityRuleAuthorizesRun(input, verbName)) {
+      // #4: an untrusted origin can NEVER be widened to run by a rule (rung
+      // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
+      if (
+        !originUntrusted &&
+        (await capabilityRuleAuthorizesRun(input, verbName))
+      ) {
         return { decision: "run" };
       }
       return buildProposeDecision(input);
@@ -350,6 +385,9 @@ export async function gateCapabilityExecution(
     capabilityGovernance,
     capabilityExecMode: policyExecMode,
     channelCapabilities: input.channelCapabilities ?? undefined,
+    // #4: an untrusted origin downgrades a would-be-auto run to propose at rung
+    // 2.55 (above the capability rung 2.7) inside the pure engine.
+    originTrust,
   });
 
   if (verdict.verdict === "execute") {
@@ -359,8 +397,12 @@ export async function gateCapabilityExecution(
     return { decision: "deny", reason: verdict.reason };
   }
   // propose — consult a stored capability rule (Option B) before falling
-  // through to a reviewable `capability/run` proposal.
-  if (await capabilityRuleAuthorizesRun(input, verbName)) {
+  // through to a reviewable `capability/run` proposal. #4: an untrusted origin
+  // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
+  if (
+    !originUntrusted &&
+    (await capabilityRuleAuthorizesRun(input, verbName))
+  ) {
     return { decision: "run" };
   }
   return buildProposeDecision(input);

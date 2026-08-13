@@ -572,6 +572,12 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.instanceId === "string" && body.instanceId.trim()
         ? body.instanceId.trim()
         : undefined;
+    // OPT-IN — mint a POD-WIDE agent key (key.linkedUserId = null), governed as
+    // its OWN agent-user principal (#1a) rather than acting for a human. Default
+    // false: absent/false keeps the fail-closed linked-human resolution below. A
+    // creator (createdByUserId) is still resolved and required; only the key's
+    // linked human is deliberately dropped.
+    const podWide: boolean = body.podWide === true;
     // Surface installs can request a pending-approval flow: key is created inactive
     // until the human owner approves it at the review URL.
     const requireApproval: boolean =
@@ -611,7 +617,15 @@ export function registerSetupRoutes(app: HubHono): void {
       //   warn-and-continue to oldest-human — that mis-attributes agents).
       // Agent user singleton is (createdByUserId × agentType), not pod-wide type.
       let resolvedLinkedUserId: string | undefined = linkedUserId;
-      if (authMethod === "api_key_surface") {
+      if (podWide) {
+        // Pod-wide agent: the KEY carries NO linked human (governed as its own
+        // agent-user principal, #1a). We still need a human CREATOR to attribute
+        // the agent-user row + own the (creator × agentType) singleton — resolved
+        // below as ownerUserId (pod owner / oldest human) and passed as
+        // createdByUserId. Skip the linked-human fail-closed guards; provision-
+        // SurfaceAgentKey({ podWide: true }) forces linkedUserId null at the mint.
+        resolvedLinkedUserId = undefined;
+      } else if (authMethod === "api_key_surface") {
         resolvedLinkedUserId = surfaceAgentLinkedUserId;
       } else if (resolvedLinkedUserId === undefined) {
         const humans = await db.query.users.findMany({
@@ -762,6 +776,9 @@ export function registerSetupRoutes(app: HubHono): void {
         agentType,
         createdByUserId: agentCreatorId,
         linkedUserId: resolvedLinkedUserId ?? agentCreatorId,
+        // OPT-IN pod-wide: forces the minted key's linkedUserId to null (governed
+        // as the agent-user's own principal). Ignored when false.
+        podWide,
         instanceId,
         agentLabel,
         // Only the surface-key path provisions a genuine local CLI adjunct

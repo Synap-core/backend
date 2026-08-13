@@ -15,6 +15,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActorId,
   resolveActingContext,
@@ -254,11 +255,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, documentId }, "rawDocument failed");
-      const isNotFound =
-        err instanceof Error && err.message.includes("NOT_FOUND");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        isNotFound ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -356,11 +355,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err, documentId }, "updateDocument failed");
-      const isNotFound =
-        err instanceof Error && err.message.includes("NOT_FOUND");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        isNotFound ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -7,6 +7,7 @@
 import { t } from "../init-trpc.js";
 import { TRPCError } from "@trpc/server";
 import { apiKeyService } from "../services/api-keys.js";
+import { resolveKeyIdentity } from "../access/key-identity.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "api-key-middleware" });
@@ -150,20 +151,19 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
     "API key validated successfully"
   );
 
-  // Agent-key identity remap — mirrors the Hub REST auth middleware
-  // (hub-protocol-rest.ts) and the MCP HTTP handler (http-handler.ts) EXACTLY:
-  // when the key carries a `linkedUserId` (= the human the agent acts for), the
-  // effective identity is the HUMAN (who OWNS the entities) while the agent (the
-  // raw key owner) is tracked as `agentUserId` so WRITES still route through the
-  // governance membrane (checkPermissionOrPropose → propose, never auto-apply as
-  // the operator). Without this remap the tRPC hub-protocol door left
-  // `ctx.userId` = the agent principal, so `assertMayActAs(ctx, input.userId)`
-  // 403'd every CLI/BYOA call (the human id it sends never equalled the agent id)
-  // and reads/attribution scoped to the wrong identity. For NON-agent keys
-  // (`linkedUserId` null → user PATs) `userId` stays `keyRecord.userId` and
+  // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
+  // (access/key-identity.ts), mirroring the Hub REST auth middleware
+  // (hub-protocol-rest.ts) and the MCP HTTP handler (http-handler.ts) EXACTLY.
+  // `effectiveUserId` is the HUMAN (who OWNS the entities) when the key carries a
+  // `linkedUserId`; the acting AGENT (the key principal) is tracked as
+  // `agentUserId` — derived from the principal's `userType === 'agent'`, NOT from
+  // "has a linked human" — so WRITES still route through the governance membrane
+  // (checkPermissionOrPropose → propose, never auto-apply as the operator).
+  // Without this remap the tRPC hub-protocol door left `ctx.userId` = the agent
+  // principal, so `assertMayActAs(ctx, input.userId)` 403'd every CLI/BYOA call.
+  // For NON-agent keys (human PATs) `userId` stays `keyRecord.userId` and
   // `agentUserId` stays undefined — byte-identical to the prior behavior.
-  const effectiveUserId = keyRecord.linkedUserId ?? keyRecord.userId;
-  const agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined;
+  const { effectiveUserId, agentUserId } = await resolveKeyIdentity(keyRecord);
 
   // Add authentication context
   return next({

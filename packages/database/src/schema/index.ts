@@ -225,6 +225,10 @@ export type { ProvenanceKind } from "./provenance.js";
 // rung 2.8 wiring land in a separate wave.
 export * from "./governance-rules.js";
 
+// Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
+// to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.
+export * from "./governance-ceilings.js";
+
 // Config Settings (0235) — a general, layered per-granularity config store that
 // MIRRORS governance_rules. Used first for GUIDELINES (natural-language intent
 // injected into message.interpret via resolveGuidelines).

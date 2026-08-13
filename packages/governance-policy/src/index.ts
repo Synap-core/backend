@@ -28,6 +28,19 @@
  *                                     governance). EXCEPTION: caller opts in
  *                                     via `allowDestructiveAutoApprove` (the
  *                                     future "Crazy" mode) — see below.
+ *   2.55 UNTRUSTED ORIGIN         → propose (tighten-only): a write whose acting
+ *                                    channel origin is not owner-trusted
+ *                                    (EXTERNAL / bridge / `source`-produced) is
+ *                                    downgraded execute→propose. Sits BELOW the
+ *                                    three floors (2/2.1/2.5) and ABOVE every
+ *                                    auto path (2.6/2.7/2.8/3/4/8). Never denies.
+ *   2.56 DAILY WRITE CEILING      → propose (tighten-only): the acting agent has
+ *                                    reached its resolved per-UTC-day
+ *                                    auto-execute write limit (governance_ceilings
+ *                                    axis daily_write_count), so a would-be-auto
+ *                                    write is downgraded execute→propose. Same
+ *                                    placement class as 2.55 — below the floors,
+ *                                    above every auto path. Never denies.
  *   2.6 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
  *                                    (governs by the observation's nature, NOT
  *                                     the routing workspace — see below)
@@ -139,6 +152,25 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
   "purge",
   "merge",
 ];
+
+/**
+ * The ONE SOURCE of the default daily auto-execute write ceiling (rung 2.56 —
+ * governance_ceilings axis `daily_write_count`). Consulted by the resolver
+ * (`resolveDailyWriteCeiling` in @synap/database) when NO `governance_ceilings`
+ * row matches the acting (agent, scope) tuple — the same "absence → code floor"
+ * shape `DEFAULT_AUTO_APPROVE` (rung 8) uses. A stored ceiling row always sets
+ * its own `limit_value`; this is only the fallback. The DB column deliberately
+ * carries NO default so this constant stays the single source (see the 0236
+ * migration + governance-ceilings.ts header).
+ *
+ * NOTE — distinct from the pod-hygiene near-dup scanner's
+ * `MAX_PROPOSALS_PER_USER_PER_DAY` (packages/jobs): that caps how many MERGE
+ * PROPOSALS one HUMAN user's nightly scan may FILE; this caps how many WRITES one
+ * AGENT may AUTO-EXECUTE. Different population (proposals filed vs writes
+ * executed), principal (user vs agent), and axis — NOT the same concept, so they
+ * are deliberately NOT consolidated.
+ */
+export const DEFAULT_DAILY_WRITE_CEILING = 500;
 
 /**
  * The ONE canonical reader of `workspaces.settings.governanceMode`. Both
@@ -582,6 +614,36 @@ export interface AgentPolicyInput {
    * widen or keep-reviewable, never close a door a floor already opened.
    */
   governanceRuleVerdict?: "auto" | "propose";
+  /**
+   * Server-resolved TRUST of the acting channel's ORIGIN — the #4
+   * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
+   * EXTERNAL / bridge / `source`-produced channel (a message authored outside
+   * the pod owner's direct control); `"trusted"` for a PERSONAL/THREAD
+   * owner-authored channel, or when an operator's `config_settings` posture
+   * explicitly restores auto for a specific bridge/channel. Resolved by the
+   * I/O half (`resolveOriginTrust` in @synap/database — this engine stays pure)
+   * from the acting channelId, NEVER from the request body (like `IssuerTrust`).
+   * Absent/undefined (the common case — no channel context) → rung 2.55 no-ops,
+   * falling through byte-identical to every rung below. TIGHTEN-ONLY: it can
+   * only ever downgrade a would-be-auto write to `propose`, never widen, never
+   * deny — so it cannot weaken a floor (all three floors return above it) and
+   * cannot open a door a floor already closed.
+   */
+  originTrust?: "trusted" | "untrusted";
+  /**
+   * The resolved DAILY-WRITE-CEILING verdict for the acting agent — rung 2.56
+   * (governance_ceilings axis `daily_write_count`). `"propose"` when the agent
+   * has already reached its resolved per-UTC-day auto-execute write limit; the
+   * next would-be-auto write is then downgraded to a reviewable proposal.
+   * Resolved LAZILY by the I/O half (`resolveAgentGovernanceDecision` in
+   * @synap/database — this engine stays pure): it counts the agent's writes for
+   * the day ONLY when the base verdict would otherwise be `execute`, so absent/
+   * undefined (the common case) → rung 2.56 no-ops, falling through
+   * byte-identical to every rung below. TIGHTEN-ONLY, exactly like `originTrust`:
+   * the ONLY value the engine ever receives is `"propose"` — it can never widen,
+   * never deny, and (sitting below all three floors) can never weaken a floor.
+   */
+  ceilingVerdict?: "propose";
 }
 
 /**
@@ -611,6 +673,10 @@ export const PROPOSE_REASON = {
   DESTRUCTIVE_HARD_FLOOR:
     "Destructive action (delete/archive/purge/merge) always requires human approval.",
   GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
+  UNTRUSTED_ORIGIN:
+    "This write originates from an untrusted channel (external / bridge) and requires human approval before it is applied.",
+  DAILY_WRITE_CEILING:
+    "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -674,6 +740,49 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
     };
+  }
+
+  // 2.55 UNTRUSTED ORIGIN → propose (TIGHTEN-ONLY; #4 instruction-provenance).
+  // When the acting channel's origin is not owner-trusted — an EXTERNAL /
+  // bridge / `source`-produced channel, i.e. a message authored by a third
+  // party outside the pod owner's direct control — a write that WOULD otherwise
+  // auto-execute is downgraded to a reviewable proposal. Untrusted-origin
+  // content must be REVIEWED before it mutates the pod, never silently applied.
+  //
+  // PLACEMENT (proof it never weakens a floor and only downgrades auto→propose):
+  //   • BELOW the three floors — 2 ADMIN, 2.1 forcePropose, 2.5 DESTRUCTIVE —
+  //     which have already returned above, so this rung can NEVER open a door a
+  //     floor closed (a floor's proposal/deny stands).
+  //   • ABOVE every auto path below — 2.6 by-kind (its EXPLICIT-observation
+  //     execute), 2.7 per-capability governance, 2.8 governance_rules, 3
+  //     ownership, 4 explicit autoApproveFor, 8 DEFAULT_AUTO_APPROVE — so an
+  //     untrusted origin's would-be-auto write resolves to `propose` HERE before
+  //     any of those can execute it (an untrusted origin therefore beats even a
+  //     stored `verdict:"auto"` rule or an "auto" capability grant).
+  // It NEVER denies (untrusted ≠ blocked — the write is reviewed, no data loss)
+  // and NEVER executes. `originTrust` is resolved server-side from the acting
+  // channel (never the request body); absent/undefined → this rung no-ops.
+  if (input.originTrust === "untrusted") {
+    return { verdict: "propose", reason: PROPOSE_REASON.UNTRUSTED_ORIGIN };
+  }
+
+  // 2.56 DAILY WRITE CEILING → propose (TIGHTEN-ONLY; governance_ceilings axis
+  // daily_write_count). When the acting agent has already reached its resolved
+  // per-UTC-day auto-execute write limit, the next would-be-auto write is
+  // downgraded to a reviewable proposal — daily backpressure against a runaway
+  // agent (a stuck loop, a fan-out cron) silently auto-writing all day.
+  //
+  // PLACEMENT (same class as 2.55 — proof it never weakens a floor):
+  //   • BELOW the three floors (2 ADMIN, 2.1 forcePropose, 2.5 DESTRUCTIVE),
+  //     which have already returned above → can NEVER open a door a floor closed.
+  //   • ABOVE every auto path (2.6/2.7/2.8/3/4/8) → a would-be-auto write
+  //     resolves to `propose` HERE before any of them can execute it.
+  // NEVER denies (over-ceiling ≠ blocked — the write is reviewed, no data loss)
+  // and NEVER executes. `ceilingVerdict` is resolved LAZILY server-side — only
+  // counted when the base verdict would be `execute` (so the field is `"propose"`
+  // ONLY in the over-limit case); absent/undefined → this rung no-ops.
+  if (input.ceilingVerdict === "propose") {
+    return { verdict: "propose", reason: PROPOSE_REASON.DAILY_WRITE_CEILING };
   }
 
   // 2.6 GOVERNANCE BY KIND — user_observation.

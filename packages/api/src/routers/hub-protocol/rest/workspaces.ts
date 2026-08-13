@@ -48,6 +48,7 @@ import {
   getCaller,
   getUserAccessibleWorkspaceIds,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   verifyWorkspaceReadAccess,
   type HubHono,
@@ -356,7 +357,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         description: "User context",
         schema: zOpenapi.record(zOpenapi.string(), zOpenapi.unknown()),
       },
+      400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -1930,7 +1933,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       logger.error({ err, userId }, "getUserContext failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

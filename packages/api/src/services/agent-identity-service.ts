@@ -461,6 +461,24 @@ export interface ProvisionSurfaceAgentKeyOpts {
   /** Key display name (default: `${agentLabel} Hub Key`). */
   keyName?: string;
   /**
+   * OPT-IN — mint a POD-WIDE agent key (`linkedUserId: null`) bound to the
+   * agent-user principal itself, rather than to a human it acts for.
+   *
+   * DEFAULT (omitted/false): fail-closed. `linkedUserId` defaults to the creator
+   * and a null-linked hub_inbound key is NEVER minted (silent governance bypass).
+   * An accidental null still errors `NO_LINKED_HUMAN`.
+   *
+   * When `true`: the key is DELIBERATELY minted with `linkedUserId: null`. The
+   * `resolveKeyIdentity` resolver (#1a) then derives `agentUserId` from the key
+   * owner's `userType==='agent'`, so the write is still GOVERNED — as the agent's
+   * OWN principal (`effectiveUserId = linkedUserId ?? userId` = the agent-user),
+   * NOT by impersonating the human creator. Org/workspace access is granted via
+   * the `workspace.join` proposal flow, not a linked human. `createdByUserId` is
+   * still REQUIRED (the agent-user needs a creator for the (creator × agentType)
+   * singleton + attribution) — only the KEY's linked human is dropped.
+   */
+  podWide?: boolean;
+  /**
    * Idempotency: when true, if a live (non-revoked) hub_inbound key already exists
    * for this agent-user (scoped to instanceId when set), skip revoke+mint and
    * return `{ alreadyValid: true }`.
@@ -532,17 +550,31 @@ export async function provisionSurfaceAgentKey(
   }
   const creatorId = createdByUserId.trim();
 
-  // Fail closed: hub_inbound agent keys MUST carry a linked human. Default to
-  // the creator when linked is omitted; never mint with linkedUserId null
-  // (silent governance bypass — agent writes as the operator with no proposal).
-  const resolvedLinkedUserId =
-    (linkedUserId && linkedUserId.trim()) || creatorId;
-  if (!resolvedLinkedUserId) {
-    const err = new Error(
-      "provisionSurfaceAgentKey: linkedUserId is required (agent keys must act for a human)"
-    );
-    (err as Error & { code?: string }).code = "NO_LINKED_HUMAN";
-    throw err;
+  // Resolve the human the KEY acts for.
+  //
+  //  • DEFAULT (podWide !== true) — fail closed: hub_inbound agent keys MUST
+  //    carry a linked human. Default to the creator when linked is omitted;
+  //    never mint with linkedUserId null (silent governance bypass — agent
+  //    writes as the operator with no proposal). An accidental null still errors
+  //    NO_LINKED_HUMAN (defense-in-depth; unreachable while a creator is present,
+  //    which is enforced above).
+  //  • OPT-IN (podWide === true) — DELIBERATELY mint with linkedUserId = null.
+  //    The key is governed as its OWN agent-user principal (#1a resolveKeyIdentity
+  //    derives agentUserId from userType==='agent'), NOT by impersonating the
+  //    creator. This is the ONLY path that opens the null-linked door, so an
+  //    accidental omission still fails closed.
+  let resolvedLinkedUserId: string | null;
+  if (opts.podWide === true) {
+    resolvedLinkedUserId = null;
+  } else {
+    resolvedLinkedUserId = (linkedUserId && linkedUserId.trim()) || creatorId;
+    if (!resolvedLinkedUserId) {
+      const err = new Error(
+        "provisionSurfaceAgentKey: linkedUserId is required (agent keys must act for a human)"
+      );
+      (err as Error & { code?: string }).code = "NO_LINKED_HUMAN";
+      throw err;
+    }
   }
 
   // ── 1. Find or create the agent user (singleton per creator × agentType) ─

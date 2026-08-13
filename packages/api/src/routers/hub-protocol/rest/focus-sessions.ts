@@ -37,6 +37,7 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   type HubHono,
@@ -229,6 +230,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -468,11 +470,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(result.session);
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
-      const code =
-        (err as Record<string, unknown>).code === "FORBIDDEN" ? 403 : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        code as 403 | 500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -4267,3 +4267,47 @@ CREATE INDEX IF NOT EXISTS "config_settings_key_scope_idx"
 CREATE INDEX IF NOT EXISTS "config_settings_capability_idx"
   ON "config_settings" ("capability_id")
   WHERE "revoked_at" IS NULL;
+
+-- governance_ceilings — the store for NUMERIC governance limits (0236), sibling
+-- to governance_rules (verdicts). First axis: `daily_write_count` — a per-agent
+-- (or pod-wide) cap on auto-executed writes/UTC-day; over it, would-be-auto
+-- writes downgrade to a proposal (rung 2.56, tighten-only). Scoping MIRRORS
+-- governance_rules (same principal/scope enums). No SQL default on limit_value:
+-- the fallback default lives ONLY in the TS constant DEFAULT_DAILY_WRITE_CEILING
+-- (@synap/governance-policy), consulted when no row matches.
+DO $$ BEGIN
+  CREATE TYPE governance_ceiling_axis AS ENUM ('daily_write_count');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+CREATE TABLE IF NOT EXISTS "governance_ceilings" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "axis"                governance_ceiling_axis NOT NULL,
+  "principal_kind"      governance_principal NOT NULL,
+  "agent_user_id"       text,
+  "scope_kind"          governance_scope NOT NULL,
+  "workspace_id"        uuid,
+  "limit_value"         integer NOT NULL,
+  "source_proposal_id"  uuid,
+  "created_by"          text NOT NULL,
+  "created_at"          timestamptz NOT NULL DEFAULT now(),
+  "revoked_at"          timestamptz,
+  "expires_at"          timestamptz
+);
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "axis" governance_ceiling_axis;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "principal_kind" governance_principal;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "scope_kind" governance_scope;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "limit_value" integer;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "source_proposal_id" uuid;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
+CREATE INDEX IF NOT EXISTS "governance_ceilings_axis_scope_principal_idx"
+  ON "governance_ceilings" ("axis", "scope_kind", "workspace_id", "principal_kind", "agent_user_id")
+  WHERE "revoked_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "governance_ceilings_agent_active_idx"
+  ON "governance_ceilings" ("agent_user_id")
+  WHERE "revoked_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "governance_ceilings_source_proposal_idx"
+  ON "governance_ceilings" ("source_proposal_id");

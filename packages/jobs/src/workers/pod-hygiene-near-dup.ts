@@ -79,7 +79,19 @@ const SCAN_KINDS = ["person", "company"] as const;
 /** Cap entities loaded per kind per user to bound O(n²) pair work. */
 const MAX_ENTITIES_PER_KIND = 500;
 
-/** Global per-user daily proposal budget (UTC day). */
+/**
+ * Global per-user daily proposal budget (UTC day).
+ *
+ * DELIBERATELY NOT consolidated with `DEFAULT_DAILY_WRITE_CEILING`
+ * (@synap/governance-policy, rung 2.56 governance_ceilings): despite both being
+ * "10-ish per-UTC-day" caps, they are DIFFERENT concepts —
+ *   • THIS caps how many MERGE PROPOSALS this scanner FILES for one HUMAN user
+ *     per night (bounds inbox spam from the near-dup cron).
+ *   • The ceiling caps how many WRITES one AGENT may AUTO-EXECUTE per day
+ *     (governance backpressure, resolved in the shared agent-governance ladder).
+ * Different population (proposals filed vs writes executed), principal (user vs
+ * agent), and axis. Merging them would couple two unrelated policies.
+ */
 const MAX_PROPOSALS_PER_USER_PER_DAY = 10;
 
 /**

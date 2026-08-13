@@ -166,6 +166,29 @@ export async function resolveGuidelines(
   return matched.map(({ createdAt: _createdAt, ...g }) => g);
 }
 
+/**
+ * The most-specific `posture` set by any applicable guideline, or `undefined`.
+ *
+ * ACTIVATES the (until-now dormant) `GuidelineValue.posture` field for the
+ * origin-trust gate (governance rung 2.55). `resolveGuidelines` already returns
+ * rows ordered general → specific, so the LAST row that carries a `posture` is
+ * the most specific and wins — an operator setting `posture:"auto"` on a
+ * specific trusted bridge/channel thereby RESTORES auto for it (overriding the
+ * default untrusted classification of an external origin), while
+ * `posture:"propose"` tightens an otherwise-trusted channel back to review.
+ *
+ * Pure — reads only the already-resolved guideline list; no I/O.
+ */
+export function resolveMostSpecificPosture(
+  guidelines: ResolvedGuideline[]
+): "auto" | "propose" | undefined {
+  for (let i = guidelines.length - 1; i >= 0; i--) {
+    const posture = guidelines[i]!.posture;
+    if (posture) return posture;
+  }
+  return undefined;
+}
+
 /** Does a row's scope match the message context? */
 function scopeMatches(
   scopeKind: ConfigScopeKind,

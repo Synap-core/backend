@@ -51,7 +51,7 @@ import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
-import { resolvePodAdminUserIds } from "../services/capabilities/pod-owner.js";
+import { notifyPodWideProposal } from "../notifications/notify-pod-wide-proposal.js";
 import {
   AccessContext,
   makeRequestProvenance,
@@ -493,6 +493,17 @@ export interface PermissionCheckOpts {
    */
   channelCapabilities?: ChannelCapabilityGrant | null;
   /**
+   * The acting channel id, when the write is evaluated in a channel context (an
+   * agent turn responding to an inbound message). Threaded to the agent
+   * governance ladder's rung 2.55 (#4 instruction-provenance origin trust):
+   * `resolveOriginTrust` classifies the channel server-side (EXTERNAL / bridge /
+   * `source` → untrusted → force-propose). Set it from the routing/turn seam
+   * that already knows the channel (the same seam that resolves
+   * `channelCapabilities`), NEVER from request-body fields. Absent → no channel
+   * context → rung 2.55 no-ops (legacy / non-channel write paths unchanged).
+   */
+  channelId?: string | null;
+  /**
    * Authenticated issuer + its server-resolved trust. When `trusted: false`,
    * the action is routed to a proposal after RBAC. Absent → legacy behavior.
    * Set this from the auth boundary, never from request-body fields.
@@ -907,6 +918,11 @@ export async function checkPermissionOrPropose(
         subjectProfileSlug,
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
+        // #4 instruction-provenance (rung 2.55): the acting channel + the human
+        // owner let the ladder classify origin trust server-side and force-propose
+        // a would-be-auto write from an untrusted (external / bridge) channel.
+        channelId: opts.channelId,
+        userId,
         preferAgentMetadataAutoApproveFor: true,
       });
 
@@ -1325,32 +1341,18 @@ async function notifyProposalCreated(
     }).catch(() => {});
   } else {
     // Pod-wide proposal (workspaceId === null): no workspace membership to
-    // notify, so route the "needs you" attention to the pod owner + pod admins
-    // (pod-wide governance is an owner/admin concern — NOT every user). Same
-    // "proposal.created"/governance shape as the workspace path above. Fire-and-
-    // forget: notification failure is non-critical, exactly like the branch above.
-    void (async () => {
-      const recipients = await resolvePodAdminUserIds();
-      if (recipients.length === 0) return;
-      await NotificationService.fromPodWideProposal({
-        proposalId: proposal.id,
-        recipientUserIds: recipients,
-        proposalType: `${input.targetType}.${input.proposalType}`,
-        description:
-          input.notificationDescription ??
-          `${input.proposalType} ${input.targetType}`,
-        agentUserId: input.agentUserId ?? undefined,
-      });
-    })().catch((err) => {
-      // Non-critical to the WRITE, but never silent: this is the ONLY attention
-      // path for a pod-wide governance proposal (the workspace branch can't fire
-      // — there is no workspace). If `resolvePodAdminUserIds` throws, the owner
-      // is never told a widen/tighten decision is waiting; swallowing that leaves
-      // zero evidence anywhere that it happened.
-      logger.warn(
-        { err, proposalId: proposal.id },
-        "Pod-wide proposal notification fan-out failed (non-fatal)"
-      );
+    // notify, so route the "needs you" attention to the pod owner + pod admins.
+    // The fan-out itself now lives in ONE place (`notifyPodWideProposal`) shared
+    // with the tighten recommender, which files pod-wide proposals through
+    // `insertPendingProposal` and so never reaches this function. Fire-and-
+    // forget: the helper never throws and logs its own failures non-fatally.
+    void notifyPodWideProposal({
+      proposalId: proposal.id,
+      proposalType: `${input.targetType}.${input.proposalType}`,
+      description:
+        input.notificationDescription ??
+        `${input.proposalType} ${input.targetType}`,
+      agentUserId: input.agentUserId ?? undefined,
     });
   }
 }
