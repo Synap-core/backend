@@ -19,7 +19,6 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { TRPCError } from "@trpc/server";
 import {
   db,
   channels,
@@ -56,6 +55,7 @@ import {
   getCaller,
   getUserAccessibleWorkspaceIds,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   resolveActorId,
@@ -178,8 +178,16 @@ export function registerThreadsRoutes(app: HubHono): void {
         description: "Context envelope",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: {
+        description: "Thread not found",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -202,7 +210,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "getThreadContext failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -343,15 +351,9 @@ export function registerThreadsRoutes(app: HubHono): void {
       return c.json(result as Record<string, unknown>, 200);
     } catch (err) {
       logger.error({ err, threadId }, "linkEntity failed");
-      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          404
-        );
-      }
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -427,15 +429,9 @@ export function registerThreadsRoutes(app: HubHono): void {
       return c.json(result as Record<string, unknown>, 200);
     } catch (err) {
       logger.error({ err, threadId }, "linkDocument failed");
-      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          404
-        );
-      }
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

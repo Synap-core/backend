@@ -2176,6 +2176,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
   // Duck-typed on `.code` rather than `instanceof TRPCError`: the bundled
   // build carries its own TRPCError class identity, so instanceof fails
   // across the boundary (verified live — 9fb3e7d4 shipped and still 500'd).
+  // Same technique as the shared `httpStatusForTrpcError` (./_shared.ts) —
+  // kept as its own function rather than delegating to it because this one
+  // carries facet/entity-specific extras (409 dedup, duck-typed @synap/database
+  // domain-error NAMES) interleaved into the SAME per-depth cursor check;
+  // splitting it into "shared base codes, then extras" would re-order which
+  // check wins at a given cursor depth. If you need this exact extended
+  // mapping elsewhere, import THIS function — don't write a third copy.
   const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 409 | 500 => {
     // Walk the cause chain: createCaller wraps a thrown domain error in
     // TRPCError{code:'INTERNAL_SERVER_ERROR', cause: <domain error>}, so the

@@ -4813,19 +4813,6 @@ export interface PersonalConversationHistoryItem {
 	lastActivity: Date;
 	messageCount: number;
 }
-export interface SearchResult {
-	id: string;
-	collection: string;
-	document: any;
-	highlights?: any;
-	textMatch: number;
-}
-export interface SearchResponse {
-	results: SearchResult[];
-	found: number;
-	searchTimeMs: number;
-	facetCounts?: Record<string, Record<string, number>>;
-}
 /**
  * Node shape for the workspace branch tree response.
  * Defined at module scope so tsc can include it in declaration output.
@@ -4842,6 +4829,19 @@ export type BranchTreeNode = {
 	channel: Channel;
 	children: BranchTreeNode[];
 };
+export interface SearchResult {
+	id: string;
+	collection: string;
+	document: any;
+	highlights?: any;
+	textMatch: number;
+}
+export interface SearchResponse {
+	results: SearchResult[];
+	found: number;
+	searchTimeMs: number;
+	facetCounts?: Record<string, Record<string, number>>;
+}
 /** One distinct origin behind a cluster's proposals. */
 export interface ProposalClusterSource {
 	agentLabel?: string;
@@ -16477,7 +16477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "calendar" | "table" | "whiteboard" | "list" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | "all" | undefined;
+				type?: "calendar" | "table" | "whiteboard" | "list" | "graph" | "all" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -20590,7 +20590,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		analyze: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "bookmark" | "obsidian" | "markdown" | "csv";
 				items: {
 					path: string;
 					content: string;
@@ -20624,7 +20624,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "bookmark" | "obsidian" | "markdown" | "csv";
 				workspaceId?: string | undefined;
 				operations?: Record<string, unknown>[] | undefined;
 				idempotencyKey?: string | undefined;
@@ -20643,7 +20643,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		analyzeLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "bookmark" | "obsidian" | "markdown" | "csv";
 				items: {
 					path: string;
 					content: string;
@@ -20696,7 +20696,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		enqueueLargeImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "bookmark" | "obsidian" | "markdown" | "csv";
 				items: {
 					path: string;
 					content: string;
@@ -20719,7 +20719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "bookmark" | "obsidian" | "markdown" | "csv";
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
 				proposalId?: string | undefined;

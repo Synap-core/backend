@@ -57,6 +57,11 @@ function readRepo(relFromApiRoot: string): string {
 }
 
 const ROUTER = readSrc("routers/proposals.ts");
+// Wave 5 router-decomposition (2026-08-12) moved `applyProposalApproval` (and
+// the `dispatchProposalApproval` tail it drives) out of proposals.ts into
+// proposals/apply-approval.ts — a path re-key, not a behavior change. Read
+// both so the structural assertions below still see the same source.
+const APPLY_APPROVAL = readSrc("routers/proposals/apply-approval.ts");
 const EXECUTORS = readExecutorsSource(API_SRC);
 
 /** `batchApprove`'s body (up to the next procedure). */
@@ -263,9 +268,11 @@ describe("(b) approve and batchApprove share one implementation", () => {
   });
 
   it("applyProposalApproval's tail IS the registry dispatch", () => {
-    const start = ROUTER.indexOf("async function applyProposalApproval(");
-    const end = ROUTER.indexOf("export const proposalsRouter", start);
-    const fn = ROUTER.slice(start, end);
+    const start = APPLY_APPROVAL.indexOf(
+      "export async function applyProposalApproval("
+    );
+    expect(start).toBeGreaterThan(-1);
+    const fn = APPLY_APPROVAL.slice(start);
     expect(fn).toContain("return await dispatchProposalApproval(");
     expect(fn).toContain("ProposalStatus.APPROVAL_FAILED");
   });
@@ -281,7 +288,8 @@ describe("(b) approve and batchApprove share one implementation", () => {
 
   it("the registry is resolved from exactly one place in the router", () => {
     expect(ROUTER).not.toContain("proposalExecRegistry.resolve(");
-    expect(ROUTER.match(/dispatchProposalApproval\(/g)?.length).toBe(1);
+    expect(APPLY_APPROVAL).not.toContain("proposalExecRegistry.resolve(");
+    expect(APPLY_APPROVAL.match(/dispatchProposalApproval\(/g)?.length).toBe(1);
   });
 });
 

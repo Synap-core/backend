@@ -15,8 +15,10 @@ const registrySrc = readFileSync(
   new URL("../services/capabilities/capability-registry.ts", import.meta.url),
   "utf-8"
 );
+// Router-decomposition Wave 7 moved `synap_list_capabilities` out of
+// `adapter.ts`'s switch into its own domain file.
 const mcpSrc = readFileSync(
-  new URL("../routers/mcp/adapter.ts", import.meta.url),
+  new URL("../routers/mcp/handlers/capability.ts", import.meta.url),
   "utf-8"
 );
 

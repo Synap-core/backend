@@ -147,7 +147,7 @@ for (const [name, build, table] of [
  */
 describe("runs_query includeSteps — step-runs are reachable ONLY via an authorized parent", () => {
   const SRC = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "../automation-executor.ts"),
+    join(dirname(fileURLToPath(import.meta.url)), "../steps/ledger-query.ts"),
     "utf-8"
   );
   // The `executeRunsQueryStep` body: from its signature to the next top-level

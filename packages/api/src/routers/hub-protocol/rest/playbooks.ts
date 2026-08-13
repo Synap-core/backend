@@ -7,9 +7,13 @@
  * callers get `status: 'proposed'`, operators get the executed result.
  */
 
-import { TRPCError } from "@trpc/server";
-
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerPlaybooksRoutes(app: HubHono): void {
   /**
@@ -52,35 +56,25 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         goalTemplate: body.goalTemplate as string | undefined,
         params: body.params as Record<string, unknown>[] | undefined,
         inputStrategy: body.inputStrategy as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         channelSpec: body.channelSpec as Record<string, unknown> | undefined,
         expectedOutputs: body.expectedOutputs as
-          | Record<string, unknown>[]
-          | undefined,
+          Record<string, unknown>[] | undefined,
         stages: body.stages as Record<string, unknown>[] | undefined,
         subjectProfile: body.subjectProfile as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         schedule: body.schedule as string | number | boolean | null | undefined,
         executor: body.executor as
-          | "is-agent"
-          | "external-agent"
-          | "hybrid"
-          | undefined,
+          "is-agent" | "external-agent" | "hybrid" | undefined,
         status: body.status as
-          | "draft"
-          | "active"
-          | "paused"
-          | "archived"
-          | undefined,
+          "draft" | "active" | "paused" | "archived" | undefined,
       });
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "playbooks.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -123,7 +117,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       logger.error({ err }, "playbooks.promote failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });

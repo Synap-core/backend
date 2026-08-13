@@ -33,7 +33,7 @@ function readSrc(relFromApiSrc: string): string {
 }
 
 describe("entities.create — requested facets survive onto the create proposal", () => {
-  const src = readSrc("routers/entities.ts");
+  const src = readSrc("routers/entities/create.ts");
 
   it("gate data carries input.facets (not dropped before propose)", () => {
     const permBlockStart = src.indexOf("checkPermissionOrPropose({");

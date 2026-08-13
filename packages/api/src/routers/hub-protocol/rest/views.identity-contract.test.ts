@@ -20,6 +20,13 @@ vi.mock("./_shared.js", () => ({
     actorId: userId,
   })),
   resolveActingContext: vi.fn(),
+  // No service-key confinement in play here — pass the requested workspace
+  // through unchanged, mirroring getConfinedWorkspace's legacy-passthrough
+  // contract for a non-service key.
+  confineWorkspaceOrForbidden: vi.fn((_c: unknown, requested: unknown) => ({
+    ok: true,
+    workspaceId: requested,
+  })),
 }));
 
 import { registerViewsRoutes } from "./views.js";

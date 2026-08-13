@@ -1149,7 +1149,12 @@ export function registerDiscordRoutes(app: HubHono): void {
       );
     }
     try {
-      const result = await runEventSync();
+      // Scope to the caller's workspace: the bridge writes its config on the
+      // row for ITS workspace, so an unscoped lookup could run (and report on)
+      // a different workspace's row — the "shows on, runs as disabled" bug.
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const result = await runEventSync(acting.workspaceId);
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err }, "POST /discord/event-sync/run failed");

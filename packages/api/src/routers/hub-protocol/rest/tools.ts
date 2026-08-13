@@ -28,15 +28,13 @@
 
 import { z } from "@hono/zod-openapi";
 
-import { TRPCError } from "@trpc/server";
-
 import { toolsRouter } from "../../tools.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   hasScope,
   logger,
   resolveActingContext,
@@ -409,14 +407,9 @@ export function registerToolsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp the requested
     // workspace at the point of read, before it flows to resolveActingContext,
     // the caller ctx, OR the re-supplied `tools.create` input (input wins).
-    let workspaceId: string | null | undefined;
-    try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId);
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceId = confined.workspaceId;
 
     try {
       // Trusted acting identity + workspace (closes the cross-tenant IDOR).

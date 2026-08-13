@@ -36,7 +36,12 @@ const PACKAGES = join(REPO_ROOT, "packages");
 // the canonical implementation, not a violation).
 const FROZEN: Record<string, number> = {
   "packages/api/src/routers/devplane.ts": 2,
-  "packages/api/src/routers/entities.ts": 3,
+  // Wave 3 router-decomposition (2026-08-12) split entities.ts by domain — a
+  // path re-key, not a debt change. `list`'s facet-vs-kind branching kept its
+  // 1 occurrence in entities/read.ts; adminList's search filter +adminBatch-
+  // Delete's id-list filter kept their 2 in entities/admin.ts.
+  "packages/api/src/routers/entities/read.ts": 1,
+  "packages/api/src/routers/entities/admin.ts": 2,
   // file-upload.ts previously filtered GET /:entityId/url on eq(entities.type,
   // "file"); it now resolves bytes via entities.documentId instead, so the
   // pattern is gone (0 occurrences) — entry removed.
@@ -52,7 +57,14 @@ const FROZEN: Record<string, number> = {
   "packages/database/src/repositories/entity-repository.ts": 1,
   "packages/database/src/services/facet-resolution-service.ts": 1, // the DOOR
   "packages/database/src/utils/materialize-entity.ts": 1,
-  "packages/jobs/src/workers/automation-executor.ts": 2,
+  // automation-executor.ts was split by step-family (router-decomposition Wave
+  // 2, 2026-08-12) — a path re-key, not a debt change. The `entity_create`
+  // dedup-lookup call (`eq(entities.type, profileSlug)`) plus a JSDoc comment
+  // in `entity_update` that names the same pattern as prose landed in
+  // steps/output.ts (2); the `query` node's profileSlug filter landed in
+  // steps/query.ts (1).
+  "packages/jobs/src/workers/steps/output.ts": 2,
+  "packages/jobs/src/workers/steps/query.ts": 1,
   "packages/jobs/src/workers/crm-daily-digest.ts": 1,
   "packages/jobs/src/workers/proactive-intelligence.ts": 1,
 };

@@ -112,18 +112,27 @@ describe("guard: recordDomainMutation fires BOTH pipes (real code path)", () => 
  * remove it from this list once the file routes its completed mutations through
  * the door. Do NOT add a new file here to silence the guard: use the door.
  *
- * NOTE entities.ts stays here for its FACET trio (attach/update/detach via
- * emitFacetSideEffects) + document re-index emits — its plain entity
+ * NOTE entities/facets.ts stays here for its FACET trio (attach/update/detach
+ * via emitFacetSideEffects) + document re-index emits — its plain entity
  * create/update/delete ARE migrated. relations.ts and roles.ts are absent
  * because they are fully unified (relations' remaining `.completed` sites —
  * grant-anchor, projectMember — are audit-only, not a hand-wired pair).
+ *
+ * Wave 3 router-decomposition (2026-08-12) split entities.ts by domain — the
+ * facet trio (the only entities.ts code that tripped this guard) now lives in
+ * entities/facets.ts; the barrel + the other entities/*.ts modules route
+ * their completions through recordDomainMutation and don't hand-wire the pair.
  */
 const UN_UNIFIED_ALLOWLIST = new Set<string>([
-  "entities.ts", // TODO: facet trio (entity_facet attach/update/detach)
+  "entities/facets.ts", // TODO: facet trio (entity_facet attach/update/detach)
   "documents.ts", // TODO
   "views.ts", // TODO
   "projects.ts", // TODO
   "workspaces.ts", // TODO
+  // Wave 6 router-decomposition split workspaces.ts by domain; only the
+  // definition-engine cluster (createFromDefinition/applyDefinition) still
+  // hand-wires the raw completed-audit + emitSideEffects pair post-split.
+  "workspaces/definition-engine.ts", // TODO
   "api-keys.ts", // TODO
   "templates.ts", // TODO
   "skills.ts", // TODO

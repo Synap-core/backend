@@ -2,7 +2,6 @@
  * Hub Protocol REST — proposals
  */
 
-import { TRPCError } from "@trpc/server";
 import { z } from "@hono/zod-openapi";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -21,8 +20,10 @@ import {
 } from "./_codecs/proposal.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  errCode,
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   isUuid,
   logger,
   rejectAgentReviewer,
@@ -331,17 +332,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err, proposalId }, "getProposal failed");
-      const code =
-        err instanceof TRPCError && err.code === "NOT_FOUND"
-          ? 404
-          : err instanceof TRPCError && err.code === "FORBIDDEN"
-            ? 403
-            : err instanceof TRPCError && err.code === "BAD_REQUEST"
-              ? 400
-              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        code
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -377,17 +370,13 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err, proposalId }, "updateProposal failed");
+      // The shared revise core throws CONFLICT for a no-longer-pending proposal
+      // (concurrent approve/reject) — surface it as 409, not a blanket 500, so
+      // the caller can tell a race from a server fault. Duck-typed (not
+      // `instanceof TRPCError` — see httpStatusForTrpcError doc comment: that
+      // check is dead in the bundled build).
       const code =
-        err instanceof TRPCError && err.code === "NOT_FOUND"
-          ? 404
-          : err instanceof TRPCError && err.code === "BAD_REQUEST"
-            ? 400
-            : // The shared revise core throws CONFLICT for a no-longer-pending
-              // proposal (concurrent approve/reject) — surface it as 409, not a
-              // blanket 500, so the caller can tell a race from a server fault.
-              err instanceof TRPCError && err.code === "CONFLICT"
-              ? 409
-              : 500;
+        errCode(err) === "CONFLICT" ? 409 : httpStatusForTrpcError(err);
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code
@@ -436,15 +425,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err, proposalId }, "revertProposal failed");
       const code =
-        err instanceof TRPCError && err.code === "NOT_FOUND"
-          ? 404
-          : err instanceof TRPCError && err.code === "BAD_REQUEST"
-            ? 400
-            : err instanceof TRPCError && err.code === "FORBIDDEN"
-              ? 403
-              : err instanceof TRPCError && err.code === "NOT_IMPLEMENTED"
-                ? 501
-                : 500;
+        errCode(err) === "NOT_IMPLEMENTED" ? 501 : httpStatusForTrpcError(err);
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code
@@ -490,17 +471,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json({ success: true, proposalId: resolvedId, proposal }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "approveProposal failed");
-      const code =
-        err instanceof TRPCError && err.code === "NOT_FOUND"
-          ? 404
-          : err instanceof TRPCError && err.code === "FORBIDDEN"
-            ? 403
-            : err instanceof TRPCError && err.code === "BAD_REQUEST"
-              ? 400
-              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        code
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -556,17 +529,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json({ success: true, proposalId: resolvedId }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "rejectProposal failed");
-      const code =
-        err instanceof TRPCError && err.code === "NOT_FOUND"
-          ? 404
-          : err instanceof TRPCError && err.code === "FORBIDDEN"
-            ? 403
-            : err instanceof TRPCError && err.code === "BAD_REQUEST"
-              ? 400
-              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        code
+        httpStatusForTrpcError(err)
       );
     }
   });

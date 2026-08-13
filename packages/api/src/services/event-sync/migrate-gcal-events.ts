@@ -48,6 +48,8 @@ import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { makeExternalLinkIdempotency } from "../../utils/entity-link-idempotency.js";
 import { mapGcalToGraph, type GCalItem } from "./map-gcal-to-graph.js";
+import { resolveTool } from "../tools/resolve-tool.js";
+import { isDiscordEventSyncEnabled } from "./discord-metadata.js";
 
 const logger = createLogger({ module: "migrate-gcal-events" });
 
@@ -76,10 +78,13 @@ export interface MigrateGcalEventsResult {
 }
 
 export async function migrateGcalEvents(): Promise<MigrateGcalEventsResult> {
-  const discordTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "discord"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // Resolve via the ONE door (resolveTool) — this is a one-time ops script
+  // with no caller workspace, so an unscoped findFirst-by-name would pick an
+  // arbitrary row on a pod with more than one discord tool. This reads
+  // `discord.eventSync.synced`, so it uses the SAME eventSync predicate
+  // runEventSync does (see resolve-tool.ts doc comment on why the predicate
+  // is caller-supplied, not hard-coded).
+  const discordTool = await resolveTool("discord", isDiscordEventSyncEnabled);
   if (!discordTool) return { skipped: true, reason: "no_discord_tool" };
 
   const metadata = (discordTool.metadata ?? {}) as DiscordToolMetadata;

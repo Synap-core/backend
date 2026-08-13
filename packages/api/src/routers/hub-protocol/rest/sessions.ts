@@ -2,7 +2,6 @@
  * Hub Protocol REST — sessions + compacted states (session-scoped memory)
  */
 
-import { TRPCError } from "@trpc/server";
 import { z } from "@hono/zod-openapi";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -18,7 +17,13 @@ import {
   WireCompactedStateSchema,
   WireSessionSchema,
 } from "./_codecs/session.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -283,7 +288,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err, sessionId }, "sessions.get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -337,7 +342,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err, sessionId }, "sessions.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -366,7 +371,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err, sessionId }, "sessions.close failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -447,7 +452,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err, stateId }, "compactedStates.get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
+        httpStatusForTrpcError(err)
       );
     }
   });

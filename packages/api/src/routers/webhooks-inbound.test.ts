@@ -88,7 +88,9 @@ vi.mock("@synap/database", () => ({
       webhookSubscriptions: {
         findFirst: () => Promise.resolve(subscriptionRow),
       },
-      tools: { findFirst: () => Promise.resolve(toolRow) },
+      // Handlers now resolve via resolveToolByWebhookToken (findMany + token
+      // match), not a raw findFirst-by-name — see resolve-tool-by-webhook-token.ts.
+      tools: { findMany: () => Promise.resolve(toolRow ? [toolRow] : []) },
       entities: { findMany: () => Promise.resolve([]) },
       messagingAccounts: { findFirst: () => Promise.resolve(null) },
       workspaces: { findFirst: () => Promise.resolve(null) },

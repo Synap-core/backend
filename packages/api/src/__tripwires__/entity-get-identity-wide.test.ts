@@ -16,10 +16,15 @@ const facetVisibility = fs.readFileSync(
 describe("entities.get identity-wide contract", () => {
   it("does not derive its profile or role envelope from ambient lens state", () => {
     const getStart = entitiesRouter.indexOf("get: podProcedure");
-    const updateStart = entitiesRouter.indexOf(
-      "\n  update: podProcedure",
-      getStart
-    );
+    // Wave 3 router-decomposition (2026-08-12): `get` is now the LAST
+    // procedure declared inline in the entities.ts barrel (every other
+    // procedure moved into co-located entities/*.ts modules and is merely
+    // referenced here as `foo: fooProcs.foo`), so its body runs to the
+    // router-object's own closing `});` rather than to a sibling `update:`
+    // declaration. Boundary marker updated for the new file layout only —
+    // the assertions below (what `get`'s source must/must not contain) are
+    // unchanged.
+    const updateStart = entitiesRouter.indexOf("\n});", getStart);
     const getSource = entitiesRouter.slice(getStart, updateStart);
 
     expect(getStart).toBeGreaterThan(-1);

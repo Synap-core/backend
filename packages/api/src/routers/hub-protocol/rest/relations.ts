@@ -13,6 +13,7 @@ import {
   WireRelationSchema,
 } from "./_codecs/relation.js";
 import {
+  confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
   logger,
@@ -21,8 +22,6 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
-import { TRPCError } from "@trpc/server";
 
 export function registerRelationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -156,14 +155,9 @@ export function registerRelationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp the requested
     // workspace before it reaches resolveActingContext and the re-supplied
     // createRelation input (`relations.create` prefers input.workspaceId).
-    let requestedWorkspaceId: string | null | undefined;
-    try {
-      requestedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const requestedWorkspaceId = confined.workspaceId;
     // Bind the acting identity + workspace to the authenticated principal, and
     // membership-check the workspace for the resolved user (closes the IDOR).
     const acting = await resolveActingContext(c, {
@@ -234,14 +228,9 @@ export function registerRelationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp the requested
     // workspace at the point of read. A bound service key that omits it is
     // positive-pinned to its workspace (no pod-wide delete); a mismatch 403s.
-    let requestedWorkspaceId: string | null | undefined;
-    try {
-      requestedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const requestedWorkspaceId = confined.workspaceId;
 
     // Bind the acting identity to the authenticated principal (closes the IDOR).
     // When workspaceId is given, membership-check it; when omitted the relation

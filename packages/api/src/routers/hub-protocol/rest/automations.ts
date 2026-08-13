@@ -15,6 +15,7 @@ import {
 } from "./_codecs/automation.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
   logger,
@@ -23,8 +24,6 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
-import { TRPCError } from "@trpc/server";
 
 export function registerAutomationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /automations* routes ────────────────────────────
@@ -181,17 +180,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // createAutomation input (input wins).
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        (body.workspaceId as string | null | undefined) ?? null
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      (body.workspaceId as string | null | undefined) ?? null
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
     if (!body.name) {
       return c.json({ error: "name is required" }, 400);
     }
@@ -359,17 +353,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // triggerAutomation input.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        (body.workspaceId as string | null | undefined) ?? null
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      (body.workspaceId as string | null | undefined) ?? null
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-
@@ -436,17 +425,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // updateAutomation input.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        body.workspaceId as string | undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      body.workspaceId as string | undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-
@@ -509,17 +493,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // activateAutomation input.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        body.workspaceId as string | undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      body.workspaceId as string | undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-
@@ -567,17 +546,12 @@ export function registerAutomationsRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // pauseAutomation input.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        body.workspaceId as string | undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      body.workspaceId as string | undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-

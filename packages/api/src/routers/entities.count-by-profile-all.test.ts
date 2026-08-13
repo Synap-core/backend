@@ -116,7 +116,13 @@ describe("entities.countByProfileAll — shape", () => {
   it("both altitudes delegate to the SAME counting implementation", () => {
     // The badge must not be able to tell two stories. A future edit that
     // re-forks the facet merge into one of the two doors trips this.
-    const src = readFileSync(new URL("./entities.ts", import.meta.url), "utf8");
+    // Wave 3 router-decomposition (2026-08-12) moved countByProfile /
+    // countByProfileAll / groupByFacetStatus out of entities.ts into
+    // entities/read.ts — a path re-key, not a behavior change.
+    const src = readFileSync(
+      new URL("./entities/read.ts", import.meta.url),
+      "utf8"
+    );
     const delegations = src.match(/await countEntitiesByProfile\(/g) ?? [];
     expect(delegations.length).toBe(2);
     // ...and neither door hand-rolls its own grouped count.

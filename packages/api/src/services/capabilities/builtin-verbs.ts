@@ -35,7 +35,6 @@ import {
   messages,
   documents,
   capabilities,
-  tools,
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
@@ -66,6 +65,7 @@ import {
 } from "./place-artboard-deck.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { generateViaIS } from "../mail-feed/generate.js";
+import { resolveTool } from "../tools/resolve-tool.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
 import { assertPodAdmin } from "../../trpc.js";
 // catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
@@ -2087,11 +2087,17 @@ const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
   }
 
   // 2. Unhealthy → nudge via the shared helper. The watermark + notice channel
-  //    live on the pod's discord tool (same row run-mail-feed uses).
-  const discordTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "discord"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  //    live on the pod's discord tool — the SAME singleton row run-mail-feed
+  //    uses, deliberately UNSCOPED: this is a pod-wide ops-alert channel, not
+  //    a per-workspace feature (a connector break in any workspace should
+  //    reach the one Discord ops channel, not go silent because THAT
+  //    workspace happens not to own the discord tool row). An earlier version
+  //    of this call scoped to `ctx.workspaceId`, which silently stopped
+  //    nudging for any workspace without its own discord row — a regression,
+  //    reverted here. No sub-feature flag applies to this call site (unlike
+  //    event-sync/mail-feed), so the tie-break predicate always defers to the
+  //    resolver's deterministic oldest-row fallback.
+  const discordTool = await resolveTool("discord", () => false);
   if (!discordTool) {
     // No watermark holder → can't dedup; report unhealthy without nudging.
     return { unhealthy: true, nudged: false, error: capErr };

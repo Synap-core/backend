@@ -39,6 +39,8 @@ import {
 } from "@synap/database";
 import { recordChannelOrigin } from "../channels/channel-origin.js";
 import { createLogger } from "@synap-core/core";
+import { resolveTool } from "../tools/resolve-tool.js";
+import { isDiscordEventSyncEnabled } from "./discord-metadata.js";
 
 const logger = createLogger({ module: "event-sync" });
 
@@ -252,17 +254,17 @@ async function fetchEntityEvents(
 
 // ── Main ────────────────────────────────────────────────────────────────────────
 
-export async function runEventSync(): Promise<RunEventSyncResult> {
-  // Resolve the pod's Discord tool + its event-sync config.
-  const discordTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "discord"),
-    columns: {
-      id: true,
-      createdBy: true,
-      workspaceId: true,
-      metadata: true,
-    },
-  });
+export async function runEventSync(
+  callerWorkspaceId?: string | null
+): Promise<RunEventSyncResult> {
+  // Resolve the pod's Discord tool + its event-sync config. Scoped to the
+  // caller's workspace when known — an unscoped findFirst read a DIFFERENT
+  // workspace's row than the bridge writes, so "on" ran as "disabled".
+  const discordTool = await resolveTool(
+    "discord",
+    isDiscordEventSyncEnabled,
+    callerWorkspaceId
+  );
 
   if (!discordTool) {
     return { skipped: true, reason: "no_discord_tool" };

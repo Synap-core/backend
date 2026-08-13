@@ -95,12 +95,15 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
     // pattern; it is their explicit choice, not seeder flood):
     //   - routers/governance-rules.ts   → the `create` "always approve for X"
     //     door (createdBy = ctx.userId, a real user).
-    //   - routers/proposals.ts          → the `governance.widen_lane` approve-
-    //     executor (createdBy = approver, sourceProposalId = the proposal).
+    //   - routers/proposals/apply-approval.ts → the `governance.widen_lane` /
+    //     `governance.tighten_lane` approve-executor (createdBy = approver,
+    //     sourceProposalId = the proposal). Wave 5 router-decomposition
+    //     (2026-08-12) moved this out of routers/proposals.ts — a path
+    //     re-key, not a behavior change.
     const ALLOWLIST = new Set(
       [
         "packages/api/src/routers/governance-rules.ts",
-        "packages/api/src/routers/proposals.ts",
+        "packages/api/src/routers/proposals/apply-approval.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

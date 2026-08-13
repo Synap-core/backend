@@ -14,6 +14,7 @@ import {
   WireViewSchema,
 } from "./_codecs/view.js";
 import {
+  confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
   logger,
@@ -21,8 +22,6 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
-import { TRPCError } from "@trpc/server";
 
 export function registerViewsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /views* routes ──────────────────────────────────
@@ -162,17 +161,12 @@ export function registerViewsRoutes(app: HubHono): void {
     };
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext (and thus the re-supplied createView input).
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        typeof body.workspaceId === "string" ? body.workspaceId : undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      typeof body.workspaceId === "string" ? body.workspaceId : undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
     try {
       const acting = await resolveActingContext(c, {
         userId: body.userId,
@@ -234,17 +228,12 @@ export function registerViewsRoutes(app: HubHono): void {
     };
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext (and thus the re-supplied updateView input).
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        typeof body.workspaceId === "string" ? body.workspaceId : undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      typeof body.workspaceId === "string" ? body.workspaceId : undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
     try {
       const acting = await resolveActingContext(c, {
         userId: body.userId,
@@ -302,17 +291,12 @@ export function registerViewsRoutes(app: HubHono): void {
 
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext (and thus the re-supplied arrangeBento input).
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        typeof body?.workspaceId === "string" ? body.workspaceId : undefined
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      typeof body?.workspaceId === "string" ? body.workspaceId : undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
     try {
       const acting = await resolveActingContext(c, {
         userId: body?.userId,

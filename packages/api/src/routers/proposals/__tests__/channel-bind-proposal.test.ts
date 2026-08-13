@@ -181,7 +181,7 @@ describe("(b) channel/bind executor delegates to the governed one door", () => {
 // ───────────────────────────────────────────────────────────────────────────
 describe("(c) client-comms immutability is preserved through the bind path", () => {
   it("updateChannel routes branchPurpose through the setChannelBranchPurpose one door", () => {
-    const src = readSrc("routers/channels.ts");
+    const src = readSrc("routers/channels/crud.ts");
     const start = src.indexOf("updateChannel: protectedProcedure");
     expect(start).toBeGreaterThan(-1);
     const proc = src.slice(start, start + 4200);

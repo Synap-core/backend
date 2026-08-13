@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+// Wave 3 router-decomposition (2026-08-12) moved `batchCreate` out of
+// entities.ts into entities/create.ts — a path re-key, not a behavior change.
 const entitiesRouterPath = fileURLToPath(
-  new URL("../routers/entities.ts", import.meta.url)
+  new URL("../routers/entities/create.ts", import.meta.url)
 );
 const entityRepositoryPath = fileURLToPath(
   new URL(

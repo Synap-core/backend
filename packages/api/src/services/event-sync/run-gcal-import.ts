@@ -32,7 +32,6 @@
 
 import {
   db,
-  tools,
   entities,
   eq,
   and,
@@ -57,6 +56,8 @@ import {
   startBucketWindow,
   type GCalItem,
 } from "./map-gcal-to-graph.js";
+import { resolveTool } from "../tools/resolve-tool.js";
+import { isDiscordEventSyncEnabled } from "./discord-metadata.js";
 
 const logger = createLogger({ module: "gcal-import" });
 
@@ -136,10 +137,10 @@ async function patchEventTimes(
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export async function runGcalImport(): Promise<RunGcalImportResult> {
-  const discordTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "discord"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // No caller-scoped invocation exists today (unlike runEventSync, this has
+  // zero callers passing a workspace) — unscoped, same tie-break predicate
+  // as runEventSync so the two agree on the row if/when this IS wired in.
+  const discordTool = await resolveTool("discord", isDiscordEventSyncEnabled);
   if (!discordTool) return { skipped: true, reason: "no_discord_tool" };
 
   const metadata = (discordTool.metadata ?? {}) as DiscordToolMetadata;

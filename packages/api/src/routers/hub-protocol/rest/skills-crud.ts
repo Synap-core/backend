@@ -29,17 +29,15 @@
 import { z } from "@hono/zod-openapi";
 import { db, eq, skills } from "@synap/database";
 
-import { TRPCError } from "@trpc/server";
-
 import { skillsRouter } from "../../skills.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   hasScope,
   logger,
   resolveActingContext,
@@ -268,14 +266,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     // Service-key workspace confinement (Item 3): pin/clamp the requested
     // workspace at the point of read, before it flows to resolveActingContext,
     // the caller ctx, OR the re-supplied `skills.create` input (input wins).
-    let workspaceId: string | null | undefined;
-    try {
-      workspaceId = getConfinedWorkspace(c, body.workspaceId);
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceId = confined.workspaceId;
 
     try {
       const acting = await resolveActingContext(c, {
@@ -361,16 +354,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId");
     const kind = c.req.query("kind") as "instruction" | "code" | undefined;
     const scope = c.req.query("scope") as
-      | "pod"
-      | "user"
-      | "workspace"
-      | undefined;
+      "pod" | "user" | "workspace" | undefined;
     const status = c.req.query("status") as
-      | "active"
-      | "inactive"
-      | "error"
-      | "all"
-      | undefined;
+      "active" | "inactive" | "error" | "all" | undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.min(parseInt(limitRaw, 10) || 50, 100) : 50;
 

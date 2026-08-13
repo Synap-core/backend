@@ -66,11 +66,13 @@ describe("packages.apply gate data shape (Phase 0 contract)", () => {
 });
 
 describe("MCP synap_create_workspace is governed", () => {
-  const src = readSrc("routers/mcp/adapter.ts");
+  // Router-decomposition Wave 7 moved `synap_create_workspace` out of
+  // `adapter.ts`'s switch into its own domain file.
+  const src = readSrc("routers/mcp/handlers/workspace.ts");
 
   it("routes through checkPermissionOrPropose before materialize", () => {
-    const start = src.indexOf('case "synap_create_workspace"');
-    const end = src.indexOf('case "synap_declare_workspace_source"');
+    const start = src.indexOf("synap_create_workspace: async");
+    const end = src.indexOf("synap_declare_workspace_source: async");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const block = src.slice(start, end);

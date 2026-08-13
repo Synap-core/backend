@@ -2,9 +2,7 @@
  * Hub Protocol REST — notifications (IS → backend notification persistence)
  */
 
-import { TRPCError } from "@trpc/server";
 import { NotificationService } from "../../../notifications/NotificationService.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -13,6 +11,7 @@ import {
 } from "./_codecs/notification.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   hasScope,
   logger,
   resolveActingContext,
@@ -76,14 +75,9 @@ export function registerNotificationsRoutes(app: HubHono): void {
 
     // Item 3 Part 3: confine a bound service key to its workspace BEFORE it
     // reaches resolveActingContext or the write.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-

@@ -78,7 +78,10 @@ describe("tripwire: workspace placement has one door", () => {
   });
 
   it("(c) entities.create + capture.execute route through the resolver door", () => {
-    expect(read("api/src/routers/entities.ts")).toContain(
+    // Wave 3 router-decomposition (2026-08-12) moved `create` out of
+    // entities.ts into entities/create.ts — a path re-key, not a behavior
+    // change.
+    expect(read("api/src/routers/entities/create.ts")).toContain(
       "resolveWorkspacePlacement"
     );
     expect(read("api/src/routers/capture.ts")).toContain(

@@ -18,7 +18,7 @@ import { z } from "@hono/zod-openapi";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import { errCode, hasScope, logger, type HubHono } from "./_shared.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { subscriptionsRouter } from "../../subscriptions.js";
 import { webhooksRouter } from "../../webhooks.js";
@@ -160,11 +160,8 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
-      if (err && typeof err === "object" && "code" in err) {
-        const code = (err as { code?: string }).code;
-        if (code === "NOT_FOUND") {
-          return c.json({ error: "Event not found" }, 404);
-        }
+      if (errCode(err) === "NOT_FOUND") {
+        return c.json({ error: "Event not found" }, 404);
       }
       logger.error({ err, userId, eventId }, "subscriptions fanout failed");
       return c.json(
@@ -195,11 +192,8 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       });
       return c.json(result);
     } catch (err) {
-      if (err && typeof err === "object" && "code" in err) {
-        const code = (err as { code?: string }).code;
-        if (code === "NOT_FOUND") {
-          return c.json({ error: "Webhook subscription not found" }, 404);
-        }
+      if (errCode(err) === "NOT_FOUND") {
+        return c.json({ error: "Webhook subscription not found" }, 404);
       }
       logger.error({ err, userId, id }, "webhook deliveries failed");
       return c.json(

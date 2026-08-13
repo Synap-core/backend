@@ -17,10 +17,10 @@
  * recordInboundMessage) is api-side; jobs invokes it in-process (IoC slot).
  */
 
-import { db, tools, eq } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { runFirefliesIngest } from "./run-fireflies-ingest.js";
+import { resolveTool } from "../tools/resolve-tool.js";
 
 const logger = createLogger({ module: "fireflies-backfill" });
 
@@ -47,11 +47,16 @@ export interface RunFirefliesBackfillResult {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+function isFirefliesBackfillEnabled(metadata: unknown): boolean {
+  const fireflies = (metadata as FirefliesToolMetadata | null)?.fireflies;
+  return fireflies?.backfill?.enabled === true;
+}
+
 export async function runFirefliesBackfill(): Promise<RunFirefliesBackfillResult> {
-  const ffTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "fireflies"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // Resolve via the ONE door (resolveTool) — a cron tick with no caller
+  // workspace, so an unscoped findFirst-by-name would pick an arbitrary row
+  // on a pod with more than one fireflies tool.
+  const ffTool = await resolveTool("fireflies", isFirefliesBackfillEnabled);
   if (!ffTool) return { skipped: true, reason: "no_fireflies_tool" };
 
   const metadata = (ffTool.metadata ?? {}) as FirefliesToolMetadata;

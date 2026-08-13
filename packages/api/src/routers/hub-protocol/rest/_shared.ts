@@ -27,6 +27,7 @@ import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
+import { getConfinedWorkspace } from "../confine-workspace.js";
 
 /**
  * Module-scoped pino logger.
@@ -339,6 +340,126 @@ export async function resolveActingContext(
     return { ok: false, status: 403, error: "Access denied to workspace" };
   }
   return { ok: true, userId, workspaceId, role: membership.role };
+}
+
+/**
+ * Map a caught tRPC-door error to the real HTTP status it represents, instead
+ * of a blanket 500.
+ *
+ * DO NOT "clean this up" to `err instanceof TRPCError` — that check LOOKS more
+ * correct and IS PROVEN DEAD in the deployed bundle. Commit `9fb3e7d4` shipped
+ * exactly that check for the facet REST routes; commit `2a163c7e`, same day,
+ * reverted it to duck-typing after live dogfood proof the route still
+ * returned 500 — the tsup bundle carries its own `@trpc/server` copy, so the
+ * `TRPCError` class thrown at runtime and the one imported for the
+ * `instanceof` check are different class identities. This is exactly the kind
+ * of gap that survives every gate we have: unit tests run UNBUNDLED (single
+ * module graph, `instanceof` passes there), production runs BUNDLED
+ * (`instanceof` silently fails there) — tsc cannot see the difference and
+ * vitest cannot see the difference, only a live dogfood or a source-grep
+ * tripwire can. That gap is how a whole class of "looks fixed in the diff,
+ * passes every test" bugs hid for 8+ days (the `getThreadContext`
+ * NOT_FOUND→500 incident this helper fixes, plus 13 other call sites across
+ * proposals/playbooks/sessions/threads that had the same `instanceof` check
+ * and were therefore ALSO silently still 500ing despite reading as handled).
+ *
+ * UNAUTHORIZED intentionally maps to 403, not the more "correct" 401 — this
+ * merges with FORBIDDEN to match the one call site (`entities.ts`
+ * `facetErrorStatus`) that is PROVEN correct live. Introducing a new 401
+ * split here would be an unreviewed client-visible behavior change (401 can
+ * trigger client re-auth/token-refresh paths 403 does not) riding on what is
+ * supposed to be a pure bug fix — exactly the kind of surprise this incident
+ * is about. If 401 is wanted, it is a separate, deliberate change.
+ *
+ * Walks the `.cause` chain (depth-limited) because `createCaller` wraps a
+ * thrown domain error as `TRPCError{code:'INTERNAL_SERVER_ERROR', cause:
+ * <domain error>}` — the meaningful `.code` can sit one or two levels down
+ * (mirrors the entities.ts `facetErrorStatus` this helper generalizes).
+ */
+export function httpStatusForTrpcError(err: unknown): 400 | 403 | 404 | 500 {
+  let cursor: unknown = err;
+  for (
+    let depth = 0;
+    cursor && typeof cursor === "object" && depth < 4;
+    depth++
+  ) {
+    const code = (cursor as { code?: unknown }).code;
+    if (code === "BAD_REQUEST") return 400;
+    if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
+    if (code === "NOT_FOUND") return 404;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return 500;
+}
+
+/**
+ * Duck-typed `.code` read off a caught error — for call sites that need to
+ * branch on a tRPC error code the base `httpStatusForTrpcError` mapping
+ * doesn't cover (e.g. CONFLICT→409, NOT_IMPLEMENTED→501). Never use
+ * `err instanceof TRPCError` for this — see `httpStatusForTrpcError`'s doc
+ * comment for why that check is dead in the bundled build.
+ *
+ * Walks the `.cause` chain (same depth-4 walk as `httpStatusForTrpcError`),
+ * skipping past `INTERNAL_SERVER_ERROR` — that is specifically the sentinel
+ * `trpc.ts`'s `errorCatchingMiddleware` uses when it wraps a non-passthrough
+ * error as `{code:'INTERNAL_SERVER_ERROR', cause: <original>}` (see
+ * `trpc.ts`'s `errorCatchingMiddleware`). A shallow, top-level-only read is
+ * correct ONLY when the caller is certain nothing between the throw site and
+ * here can wrap it — most call sites here go through `createCaller`, which
+ * CAN wrap, so this always walks. Costs nothing when there's no wrapping
+ * (returns at depth 0 same as before).
+ */
+export function errCode(err: unknown): string | undefined {
+  let cursor: unknown = err;
+  for (
+    let depth = 0;
+    cursor && typeof cursor === "object" && depth < 4;
+    depth++
+  ) {
+    const code = (cursor as { code?: unknown }).code;
+    if (typeof code === "string" && code !== "INTERNAL_SERVER_ERROR") {
+      return code;
+    }
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
+ * `getConfinedWorkspace` + its FORBIDDEN catch, collapsed into one call —
+ * the single home for the duck-typing rule. Eight REST route files used to
+ * hand-roll the identical try/catch around `getConfinedWorkspace` (grew from
+ * 2 lines to 5 when the `instanceof TRPCError` → `errCode` fix landed across
+ * all eight copies at once — net +48 lines of identical body on a change
+ * whose theme was removing duplication). One call site now:
+ *
+ *   const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+ *   if (!confined.ok) return c.json({ error: confined.error }, 403);
+ *   const clampedWorkspaceId = confined.workspaceId;
+ *
+ * Re-throws any non-FORBIDDEN error from `getConfinedWorkspace` unchanged
+ * (it is documented as pure and FORBIDDEN-only today, but this must not
+ * silently swallow a future error class it starts throwing).
+ */
+export function confineWorkspaceOrForbidden<
+  E extends { Variables: { keyType?: string; keyWorkspaceId?: string | null } },
+>(
+  c: Context<E>,
+  requested: string | null | undefined
+):
+  | { ok: true; workspaceId: string | null | undefined }
+  | { ok: false; error: string } {
+  try {
+    return { ok: true, workspaceId: getConfinedWorkspace(c, requested) };
+  } catch (err) {
+    if (errCode(err) === "FORBIDDEN") {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Forbidden",
+      };
+    }
+    throw err;
+  }
 }
 
 /**

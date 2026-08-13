@@ -2,11 +2,9 @@
  * Hub Protocol REST — proactive (IS → user's proactive feed channel)
  */
 
-import { TRPCError } from "@trpc/server";
 import { db, messages, eq, and, gte } from "@synap/database";
 
 import { routeSignal } from "../../../utils/delivery-router.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 import type { ProactiveMessageType } from "../../../services/DeliveryService.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -16,6 +14,7 @@ import {
 } from "./_codecs/proactive.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   hasScope,
   logger,
   resolveActingContext,
@@ -94,15 +93,9 @@ export function registerProactiveRoutes(app: HubHono): void {
     // string (guarded above); the clamp returns the bound ws or the value
     // (never null/undefined for a non-null input), so the `?? body.workspaceId`
     // fallback only preserves the `string` type.
-    let clampedWorkspaceId: string;
-    try {
-      clampedWorkspaceId =
-        getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId: string = confined.workspaceId ?? body.workspaceId;
 
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-

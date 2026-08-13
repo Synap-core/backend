@@ -28,6 +28,7 @@ import {
   mapBookingToGraph,
   type CalBookingPayload,
 } from "./map-booking-to-graph.js";
+import { resolveTool } from "../tools/resolve-tool.js";
 
 const logger = createLogger({ module: "cal-backfill" });
 
@@ -47,11 +48,16 @@ export interface RunCalBackfillResult {
   alreadySeen?: number;
 }
 
+function isCalcomBackfillEnabled(metadata: unknown): boolean {
+  const calcom = (metadata as CalcomToolMetadata | null)?.calcom;
+  return calcom?.backfill?.enabled === true;
+}
+
 export async function runCalBackfill(): Promise<RunCalBackfillResult> {
-  const calTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "cal_com"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // Resolve via the ONE door (resolveTool) — a cron tick with no caller
+  // workspace, so an unscoped findFirst-by-name would pick an arbitrary row
+  // on a pod with more than one cal_com tool.
+  const calTool = await resolveTool("cal_com", isCalcomBackfillEnabled);
   if (!calTool) return { skipped: true, reason: "no_cal_tool" };
 
   const metadata = (calTool.metadata ?? {}) as CalcomToolMetadata;

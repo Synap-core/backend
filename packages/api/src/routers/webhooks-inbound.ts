@@ -7,7 +7,6 @@ import {
   and,
   drizzleSql,
   workspaces,
-  tools,
   entities,
   messagingAccounts,
   webhookSubscriptions,
@@ -31,10 +30,27 @@ import {
   type CalBookingPayload,
 } from "../services/calcom/map-booking-to-graph.js";
 import { mapMailgunInboundToMessage } from "../services/mailgun/map-inbound-to-message.js";
+import { resolveToolByWebhookToken } from "../services/webhooks/resolve-tool-by-webhook-token.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
 export const webhooksInboundRouter = new Hono();
+
+/**
+ * Constant-time path-token compare — same idiom as this file's HMAC checks
+ * (`timingSafeEqual` + explicit length pre-check, since `timingSafeEqual`
+ * throws on unequal-length buffers). `resolveToolByWebhookToken` already
+ * matched the row on this same comparison, so this check is a defense-in-
+ * depth redundancy today (never actually false when `calTool`/`ffTool`/
+ * `mgTool` is non-null) — but it must use the same constant-time discipline
+ * as everything else on this path; a lingering `!==` here is exactly the
+ * inconsistency that makes the next person conclude `===` is fine.
+ */
+function tokensMatch(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+}
 
 // Generic inbound webhook — external backend → Synap
 // Static route must appear before /:id dynamic routes (Hono ordering rule)
@@ -188,21 +204,21 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
   const token = c.req.param("token");
   const rawBody = await c.req.text();
 
-  // Resolve the cal_com tool + its webhook config; `:token` must match (else 404).
-  const calTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "cal_com"),
-    columns: {
-      id: true,
-      createdBy: true,
-      workspaceId: true,
-      metadata: true,
-    },
-  });
+  // Resolve the cal_com tool ROW WHOSE TOKEN MATCHES — a pod can have more than
+  // one cal_com tool (one per workspace); an unscoped findFirst-by-name would
+  // pick an arbitrary row and 404 a legitimate webhook whenever it wasn't the
+  // one whose secret matched (see resolveToolByWebhookToken doc comment).
+  const calTool = await resolveToolByWebhookToken("cal_com", "calcom", token);
   const metadata = (calTool?.metadata ?? {}) as {
     calcom?: { webhook?: CalcomWebhookConfig };
   };
   const cfg = metadata.calcom?.webhook;
-  if (!calTool || !cfg?.token || !cfg.secretVaultRef || cfg.token !== token) {
+  if (
+    !calTool ||
+    !cfg?.token ||
+    !cfg.secretVaultRef ||
+    !tokensMatch(cfg.token, token)
+  ) {
     return c.json({ error: "Not found" }, 404);
   }
 
@@ -355,16 +371,19 @@ webhooksInboundRouter.post("/fireflies/:token", async (c) => {
     return c.json({ error: "Payload too large" }, 413);
   }
 
-  // Resolve the fireflies tool + its webhook config; `:token` must match (else 404).
-  const ffTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "fireflies"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // Resolve the fireflies tool ROW WHOSE TOKEN MATCHES — see resolveToolByWebhookToken
+  // doc comment (unscoped findFirst-by-name 404s a legitimate webhook when the
+  // pod has more than one fireflies tool and the wrong row is picked).
+  const ffTool = await resolveToolByWebhookToken(
+    "fireflies",
+    "fireflies",
+    token
+  );
   const metadata = (ffTool?.metadata ?? {}) as {
     fireflies?: { webhook?: FirefliesWebhookConfig };
   };
   const cfg = metadata.fireflies?.webhook;
-  if (!ffTool || !cfg?.token || cfg.token !== token) {
+  if (!ffTool || !cfg?.token || !tokensMatch(cfg.token, token)) {
     return c.json({ error: "Not found" }, 404);
   }
 
@@ -494,16 +513,20 @@ webhooksInboundRouter.post("/mailgun/:token", async (c) => {
     return c.json({ error: "Payload too large" }, 413);
   }
 
-  // Resolve the mailgun tool + its webhook config; `:token` must match (else 404).
-  const mgTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "mailgun"),
-    columns: { id: true, createdBy: true, workspaceId: true, metadata: true },
-  });
+  // Resolve the mailgun tool ROW WHOSE TOKEN MATCHES — see resolveToolByWebhookToken
+  // doc comment (unscoped findFirst-by-name 404s a legitimate webhook when the
+  // pod has more than one mailgun tool and the wrong row is picked).
+  const mgTool = await resolveToolByWebhookToken("mailgun", "mailgun", token);
   const metadata = (mgTool?.metadata ?? {}) as {
     mailgun?: { webhook?: MailgunWebhookConfig };
   };
   const cfg = metadata.mailgun?.webhook;
-  if (!mgTool || !cfg?.token || !cfg.secretVaultRef || cfg.token !== token) {
+  if (
+    !mgTool ||
+    !cfg?.token ||
+    !cfg.secretVaultRef ||
+    !tokensMatch(cfg.token, token)
+  ) {
     return c.json({ error: "Not found" }, 404);
   }
 

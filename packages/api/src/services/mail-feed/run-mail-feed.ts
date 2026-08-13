@@ -39,6 +39,8 @@ import {
 } from "../connection-health/notify-connector-unhealthy.js";
 import { triageEmails } from "./triage.js";
 import type { EmailHit, TriagedEmail } from "./triage.js";
+import { resolveTool } from "../tools/resolve-tool.js";
+import { isDiscordMailFeedEnabled } from "../event-sync/discord-metadata.js";
 
 const logger = createLogger({ module: "mail-feed" });
 
@@ -187,16 +189,16 @@ async function updateWatermark(
 // ── Main ────────────────────────────────────────────────────────────────────────
 
 export async function runMailFeed(): Promise<RunMailFeedResult> {
-  // Resolve the pod's Discord tool + its mail-feed config.
-  const discordTool = await db.query.tools.findFirst({
-    where: eq(tools.name, "discord"),
-    columns: {
-      id: true,
-      createdBy: true,
-      workspaceId: true,
-      metadata: true,
-    },
-  });
+  // Resolve the pod's Discord tool + its mail-feed config via the ONE door
+  // (resolveTool) — this is a cron tick with no caller workspace, so an
+  // unscoped findFirst-by-name would pick an arbitrary row on a pod with more
+  // than one discord tool. Uses the MAIL-FEED predicate specifically — an
+  // earlier version of this call reused the event-sync door's hard-coded
+  // `eventSync.enabled` tie-break, which on a two-workspace pod could resolve
+  // to a row with mailFeed OFF while the operator's actual mail-feed row sat
+  // unpicked — the exact bug this whole resolver exists to fix, reproduced
+  // inside the fix (see resolve-tool.ts doc comment).
+  const discordTool = await resolveTool("discord", isDiscordMailFeedEnabled);
 
   if (!discordTool) {
     return { skipped: true, reason: "no_discord_tool" };

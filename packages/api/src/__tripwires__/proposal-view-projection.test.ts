@@ -28,8 +28,10 @@ const restSrc = readFileSync(
   new URL("../routers/hub-protocol/rest/proposals.ts", import.meta.url),
   "utf-8"
 );
+// Router-decomposition Wave 7 moved `synap_list_proposals` (the caller of
+// `toProposalBasic`) out of `adapter.ts`'s switch into its own domain file.
 const mcpSrc = readFileSync(
-  new URL("../routers/mcp/adapter.ts", import.meta.url),
+  new URL("../routers/mcp/handlers/read.ts", import.meta.url),
   "utf-8"
 );
 

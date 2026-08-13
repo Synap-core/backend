@@ -11,10 +11,9 @@ import {
   UpsertWidgetDefRequestSchema,
   WireWidgetDefSchema,
 } from "./_codecs/widget.js";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 
-import { TRPCError } from "@trpc/server";
 import {
+  confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
   logger,
@@ -102,17 +101,12 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
     // the value BEFORE it flows to resolveActingContext, the caller ctx, and the
     // input (mismatching body → 403). The input is re-supplied via the `...body`
     // spread below, so the clamped value must OVERRIDE `body.workspaceId` there.
-    let clampedWorkspaceId: string | null | undefined;
-    try {
-      clampedWorkspaceId = getConfinedWorkspace(
-        c,
-        (body.workspaceId as string | null | undefined) ?? null
-      );
-    } catch (err) {
-      if (err instanceof TRPCError && err.code === "FORBIDDEN")
-        return c.json({ error: err.message }, 403);
-      throw err;
-    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      (body.workspaceId as string | null | undefined) ?? null
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId;
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-
     // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.

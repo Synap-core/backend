@@ -63,7 +63,12 @@ describe("facet visibility call doors", () => {
   });
 
   it("validates role context entities through the same user visibility floor", () => {
-    const entitiesRouter = read("packages/api/src/routers/entities.ts");
+    // Wave 3 router-decomposition (2026-08-12) moved attachFacet (the code
+    // this test reads) from entities.ts into entities/facets.ts — a path
+    // re-key, not a behavior change. NOTE: this assertion pre-dates the move
+    // and was already failing (`entityVisibleWhere` vs the actual
+    // `entityWriteVisibleWhere`) — read-path fixed, not the assertion.
+    const entitiesRouter = read("packages/api/src/routers/entities/facets.ts");
 
     expect(entitiesRouter).toContain(
       "eq(entities.id, input.contextEntityId),\n            isNull(entities.deletedAt),\n            entityVisibleWhere(ctx.userId)"
@@ -79,10 +84,16 @@ describe("facet visibility call doors", () => {
   // either proposals.ts call site regresses to the 3-arg form, a pod-member
   // reviewing someone else's pod-shared facet update silently loses the
   // before-state (under-render, not a leak — but still the bug this guards).
-  it("threads viewerIsPodMember into both proposals.ts isFacetVisibleForLens call sites", () => {
-    const proposalsRouter = read("packages/api/src/routers/proposals.ts");
+  //
+  // Wave 5 router-decomposition (2026-08-12) moved `enrichProposalsForDisplay`
+  // (the only caller of `isFacetVisibleForLens`) from routers/proposals.ts
+  // into routers/proposals/display.ts — a path re-key, not a behavior change.
+  it("threads viewerIsPodMember into both proposals display isFacetVisibleForLens call sites", () => {
+    const proposalsDisplay = read(
+      "packages/api/src/routers/proposals/display.ts"
+    );
     const callSites = [
-      ...proposalsRouter.matchAll(/isFacetVisibleForLens\(([\s\S]*?)\)/g),
+      ...proposalsDisplay.matchAll(/isFacetVisibleForLens\(([\s\S]*?)\)/g),
     ];
 
     expect(callSites.length).toBeGreaterThanOrEqual(2);

@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   exec: vi.fn(),
   notify: vi.fn(),
-  findFirst: vi.fn(),
+  findMany: vi.fn(),
 }));
 
 // Lazy-imported by the handler (path is relative to builtin-verbs.ts, which
@@ -28,7 +28,11 @@ vi.mock(
 );
 
 // Keep sibling module-load deps happy (mirrors builtin-verbs-generate.test.ts),
-// plus a db.query.tools.findFirst for the watermark-tool lookup.
+// plus a db.query.tools.findMany for resolveTool's watermark-tool lookup (the
+// handler routes through the ONE door, not a raw findFirst-by-name — see
+// ../tools/resolve-tool.ts). Deliberately UNSCOPED (no workspaceId passed) —
+// this is a pod-wide ops-alert channel, not a per-workspace feature; see the
+// "pod-wide" test below.
 vi.mock("@synap/database", () => {
   const mk = (name: string) =>
     new Proxy(
@@ -36,7 +40,7 @@ vi.mock("@synap/database", () => {
       { get: (t, p) => (p in t ? (t as never)[p] : `${name}.${String(p)}`) }
     );
   return {
-    db: { query: { tools: { findFirst: h.findFirst } } },
+    db: { query: { tools: { findMany: h.findMany } } },
     eq: (col: unknown, val: unknown) => ({ op: "eq", col, val }),
     and: (...xs: unknown[]) => ({ op: "and", xs }),
     or: (...xs: unknown[]) => ({ op: "or", xs }),
@@ -57,6 +61,15 @@ vi.mock("@synap/database", () => {
     insertChannelMessage: vi.fn(),
   };
 });
+// resolveTool imports `tools` from @synap/database/schema (not the re-export
+// above) and `asc`/`eq` straight from drizzle-orm.
+vi.mock("@synap/database/schema", () => ({
+  tools: { name: "name", createdAt: "created_at" },
+}));
+vi.mock("drizzle-orm", () => ({
+  eq: (a: unknown, b: unknown) => ({ a, b }),
+  asc: (a: unknown) => ({ asc: a }),
+}));
 vi.mock("./place-artboard-deck.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./place-artboard-deck.js")>();
@@ -110,7 +123,7 @@ describe("connector.health_check — handler", () => {
         error: "invalid_grant: refresh the access token",
       },
     });
-    h.findFirst.mockResolvedValueOnce(DISCORD_TOOL);
+    h.findMany.mockResolvedValueOnce([DISCORD_TOOL]);
     h.notify.mockResolvedValueOnce(true);
 
     const out = await run();
@@ -142,7 +155,7 @@ describe("connector.health_check — handler", () => {
     const out = await run();
 
     expect(h.notify).not.toHaveBeenCalled();
-    expect(h.findFirst).not.toHaveBeenCalled();
+    expect(h.findMany).not.toHaveBeenCalled();
     expect(out).toEqual({ unhealthy: false, nudged: false });
   });
 
@@ -163,7 +176,7 @@ describe("connector.health_check — handler", () => {
       kind: "run",
       result: { success: false, error: "invalid_grant" },
     });
-    h.findFirst.mockResolvedValueOnce(undefined);
+    h.findMany.mockResolvedValueOnce([]);
 
     const out = await run();
 
@@ -171,6 +184,36 @@ describe("connector.health_check — handler", () => {
     expect(out).toEqual({
       unhealthy: true,
       nudged: false,
+      error: "invalid_grant",
+    });
+  });
+
+  it("nudges via the pod's discord tool even when the CALLER's workspace does not own it — pod-wide ops alert, not per-workspace", async () => {
+    // Regression lock: an earlier version of this call scoped the lookup to
+    // `ctx.workspaceId`, which would have silently stopped nudging here (a
+    // DIFFERENT workspace, "ws-other", owns the only discord row). The
+    // watermark + notice channel are a pod-wide singleton — the same row
+    // run-mail-feed.ts uses — so any workspace's connector failure must
+    // still reach it.
+    h.exec.mockResolvedValueOnce({
+      kind: "run",
+      result: { success: false, error: "invalid_grant" },
+    });
+    const otherWorkspaceDiscordTool = {
+      ...DISCORD_TOOL,
+      workspaceId: "ws-other",
+    };
+    h.findMany.mockResolvedValueOnce([otherWorkspaceDiscordTool]);
+    h.notify.mockResolvedValueOnce(true);
+
+    // ctx.workspaceId ("ws-1") does NOT match the discord row's workspace
+    // ("ws-other") — must still nudge.
+    const out = await run();
+
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(out).toEqual({
+      unhealthy: true,
+      nudged: true,
       error: "invalid_grant",
     });
   });
