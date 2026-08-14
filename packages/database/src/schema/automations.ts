@@ -846,13 +846,23 @@ export const automationRuns = pgTable(
 
     // 'skipped' (Wave 4.V3) — a run whose flow-level precondition evaluated false
     // at start: finalized before any step executes, distinct from a genuine
-    // 'completed'. The DB column is unconstrained `text` (no CHECK; see
-    // 0000_baseline_schema.sql), so this is a TS-only enum widening — exactly as
-    // automation_step_runs.status added 'skipped' with no migration. Nothing to
-    // migrate at the DB level, and schema-coherence validates column existence,
-    // not enum membership.
+    // 'completed'. 'blocked_by_policy' — a run whose effect a GOVERNANCE verdict
+    // refused (an agent-produced trigger fired a human-owned automation and the
+    // producer ladder / a policy floor blocked the THEN-action): a calm governance
+    // OUTCOME, not a transport error, so it reads distinct from 'failed'. The DB
+    // column is unconstrained `text` (no CHECK; see 0000_baseline_schema.sql), so
+    // both are TS-only enum widenings — exactly as automation_step_runs.status
+    // added 'skipped' with no migration. Nothing to migrate at the DB level, and
+    // schema-coherence validates column existence, not enum membership.
     status: text("status", {
-      enum: ["running", "completed", "failed", "cancelled", "skipped"],
+      enum: [
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "skipped",
+        "blocked_by_policy",
+      ],
     })
       .notNull()
       .default("running"),
@@ -933,8 +943,19 @@ export const automationStepRuns = pgTable(
 
     commandId: uuid("command_id"), // FK to intelligence_commands (null for non-command steps)
 
+    // 'blocked_by_policy' — this step's effect was refused by a governance verdict
+    // (confused-deputy guard / agent-ladder deny) rather than breaking: a calm
+    // governance outcome, distinct from 'failed'. TS-only widening on this
+    // unconstrained `text` column, mirroring how 'skipped' was added (no migration).
     status: text("status", {
-      enum: ["pending", "running", "completed", "failed", "skipped"],
+      enum: [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "skipped",
+        "blocked_by_policy",
+      ],
     })
       .notNull()
       .default("pending"),

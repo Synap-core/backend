@@ -20,6 +20,10 @@ import {
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes, getBoss, getEventCatalog } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
+import {
+  OBSERVATION_NAMESPACES,
+  RESERVED_PHASES,
+} from "./hub-protocol/observations.js";
 import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
 import { createSynapEvent } from "@synap-core/core";
@@ -1541,7 +1545,16 @@ export const systemRouter = router({
     }),
 
   listEventCatalog: protectedProcedure.query(() => {
-    return getEventCatalog();
+    // The operational events (entities, proposals, relations, connectors, …)
+    // PLUS the observation allowlist. The observation namespaces + reserved
+    // phases are re-used from the key-auth observations door so the
+    // security-boundary allowlist stays CODE-owned; we never expose the
+    // key-auth `observationsRouter.namespaces` door to the Kratos frontend.
+    return {
+      events: getEventCatalog(),
+      observationNamespaces: [...OBSERVATION_NAMESPACES],
+      reservedPhases: [...RESERVED_PHASES],
+    };
   }),
 
   /**

@@ -510,16 +510,25 @@ async function applyPackagePostWorkspaceInner(
             flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
             status: a.status,
             // Merge author metadata (e.g. `metadata.kind`) with the system
-            // `templateKey` stamp — templateKey last so system provenance is
-            // never clobbered by an authored key of the same name.
-            metadata:
-              a.metadata || a.key
+            // `templateKey` stamp. The system provenance wins LAST and
+            // unconditionally: the row's existing templateKey (or the incoming
+            // `a.key`) always overrides any author-supplied `metadata.templateKey`.
+            metadata: (() => {
+              const systemTemplateKey =
+                (
+                  existing.metadata as
+                    { templateKey?: string } | null | undefined
+                )?.templateKey ?? a.key;
+              return a.metadata || systemTemplateKey
                 ? {
                     ...(existing.metadata ?? {}),
                     ...a.metadata,
-                    ...(a.key ? { templateKey: a.key } : {}),
+                    ...(systemTemplateKey
+                      ? { templateKey: systemTemplateKey }
+                      : {}),
                   }
-                : undefined,
+                : undefined;
+            })(),
           } as never);
           autos.push({ name: a.name, status: "updated", id: existing.id });
           continue;

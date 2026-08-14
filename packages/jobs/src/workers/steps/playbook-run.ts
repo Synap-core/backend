@@ -4,7 +4,10 @@
  */
 import { db, eq, entities } from "@synap/database";
 import { getPlaybookRunner } from "../capability-dispatch.js";
-import { guardProducerEffect } from "../../utils/automation-governance.js";
+import {
+  guardProducerEffect,
+  PolicyBlockedError,
+} from "../../utils/automation-governance.js";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
@@ -61,7 +64,8 @@ export async function executePlaybookRun(
     action: "run",
   });
   if ("block" in guard) {
-    throw new Error(
+    throw new PolicyBlockedError(
+      guard.kind,
       guard.kind === "deny"
         ? `playbook_run denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
         : `playbook_run cannot auto-execute: an agent produced this trigger, so a human-owned automation may not launch it ungoverned (confused-deputy guard).`

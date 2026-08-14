@@ -9,7 +9,10 @@ import {
   resolveInputMapping,
 } from "../template-resolve.js";
 import { dispatchViaCapabilityRouter } from "../capability-dispatch.js";
-import { guardProducerEffect } from "../../utils/automation-governance.js";
+import {
+  guardProducerEffect,
+  PolicyBlockedError,
+} from "../../utils/automation-governance.js";
 import {
   resolveVaultReferences,
   isVaultReference,
@@ -49,7 +52,8 @@ export async function executeCommandStep(
     action: "execute",
   });
   if ("block" in guard) {
-    throw new Error(
+    throw new PolicyBlockedError(
+      guard.kind,
       guard.kind === "deny"
         ? `command denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
         : `command cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
@@ -148,7 +152,8 @@ export async function executeSkillNode(
     action: "execute",
   });
   if ("block" in skillGuard) {
-    throw new Error(
+    throw new PolicyBlockedError(
+      skillGuard.kind,
       skillGuard.kind === "deny"
         ? `Skill ${skillId} denied by producer-agent governance (confused-deputy guard): ${skillGuard.reason ?? "capability denied"}`
         : `Skill ${skillId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
@@ -263,7 +268,8 @@ export async function executeCapabilityNode(
     action: verbDot > 0 ? verbId.slice(verbDot + 1) : "execute",
   });
   if ("block" in capGuard) {
-    throw new Error(
+    throw new PolicyBlockedError(
+      capGuard.kind,
       capGuard.kind === "deny"
         ? `Capability ${verbId} denied by producer-agent governance (confused-deputy guard): ${capGuard.reason ?? "capability denied"}`
         : `Capability ${verbId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`

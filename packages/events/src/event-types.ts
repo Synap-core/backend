@@ -43,6 +43,13 @@ export type SystemEventType =
  */
 export interface EventDefinition {
   type: string; // the dot-separated event type used in automation triggers
+  /**
+   * Alias of `type`, injected by getEventCatalog(). The trigger pickers key off
+   * `value` (not `type`) — serving both keeps ONE consistent field across the
+   * frontend consumers. Kept optional so the const literals below still satisfy
+   * this interface without repeating the string.
+   */
+  value?: string;
   label: string; // human-readable name for pickers
   domain: string; // grouping in the UI picker
   description: string; // one-line description for picker tooltips
@@ -296,7 +303,11 @@ export function getEventType<K extends keyof typeof OperationalEventTypes>(
  * Helper to get all picker-visible entries for frontend.
  */
 export function getEventCatalog(): EventDefinition[] {
-  return Object.values(OperationalEventTypes) as EventDefinition[];
+  // Inject `value` as an alias of `type` — the picker consumers read `value`.
+  return Object.values(OperationalEventTypes).map((e) => ({
+    ...e,
+    value: e.type,
+  })) as EventDefinition[];
 }
 
 // ============================================================================

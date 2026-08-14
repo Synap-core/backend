@@ -185,7 +185,12 @@ function sessionStatus(s: string): RunStatus {
 // EMPTY array means the ledger can never produce that status (skip the query).
 
 type AutomationRunStatus =
-  "running" | "completed" | "failed" | "cancelled" | "skipped";
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "skipped"
+  | "blocked_by_policy";
 type PlaybookRunStatusValue = "running" | "completed" | "failed" | "proposed";
 type FocusSessionStatus =
   | "active"
@@ -204,6 +209,7 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
     case "failed":
     case "cancelled":
     case "skipped":
+    case "blocked_by_policy":
       return [status];
     case "proposed":
       return []; // automation_runs has no "proposed"
@@ -219,7 +225,8 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
       return [status];
     case "cancelled":
     case "skipped":
-      return []; // playbook_runs has no "cancelled"/"skipped"
+    case "blocked_by_policy":
+      return []; // playbook_runs has no "cancelled"/"skipped"/"blocked_by_policy"
   }
 }
 
@@ -238,7 +245,8 @@ function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
       return ["cancelled", "stale"];
     case "proposed":
     case "skipped":
-      return []; // focus_sessions is never "proposed"/"skipped"
+    case "blocked_by_policy":
+      return []; // focus_sessions is never "proposed"/"skipped"/"blocked_by_policy"
   }
 }
 
@@ -274,7 +282,8 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
       return [ChatTurnStatus.CANCELLED];
     case "proposed":
     case "skipped":
-      return []; // chat_turns has neither
+    case "blocked_by_policy":
+      return []; // chat_turns has none of these
   }
 }
 
@@ -1162,7 +1171,10 @@ async function groupAutomationRuns(
       flowName: automations.name,
       runCount: drizzleSql<number>`count(*)::int`,
       completedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'completed'))::int`,
-      failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'failed'))::int`,
+      // A policy-block still needs a human's eye, so it counts toward the
+      // needs-attention 'failed' rollup alongside genuine failures (the run-detail
+      // surface renders the two with distinct calm/red tones).
+      failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       latestStartedAt: drizzleSql<Date>`max(${automationRuns.startedAt})`,
       latestRunId: drizzleSql<string>`(array_agg(${automationRuns.id} order by ${automationRuns.startedAt} desc, ${automationRuns.id} asc))[1]`,

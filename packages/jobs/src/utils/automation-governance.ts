@@ -58,6 +58,40 @@ import { requiredPermissionFor } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "automation-governance" });
 
+/**
+ * A governance verdict that REFUSED an effect — an agent-produced trigger fired a
+ * human-owned automation and the producer ladder (or a policy floor) denied or
+ * would-only-propose the THEN-action, OR an entity/session write was itself denied
+ * by the agent ladder. This is a GOVERNANCE OUTCOME ("policy said no"), NOT a
+ * transport/infra error ("this broke"). The executor branches on it to finalize
+ * the step/run as `blocked_by_policy` (calm ochre) instead of `failed` (red), and
+ * the retry floor treats it as non-retryable (a policy verdict is deterministic —
+ * a retry burns attempts for the identical refusal).
+ *
+ * MESSAGE PRESERVATION: the throw sites pass their EXISTING message strings through
+ * `super(message)` unchanged, so the security suite's `.rejects.toThrow(/…/)`
+ * assertions on `/confused-deputy guard/` and `/denied by producer-agent
+ * governance/` still match. `kind` distinguishes a hard `deny` (a floor refused)
+ * from a `review` (forcePropose turned an otherwise-auto effect into a proposal an
+ * automation has no interactive surface to satisfy) — carried for callers that
+ * want the nuance; the single `blocked_by_policy` status intentionally does not
+ * split on it (the errorMessage already carries the human reason).
+ */
+export class PolicyBlockedError extends Error {
+  constructor(
+    public readonly kind: "deny" | "review",
+    message: string
+  ) {
+    super(message);
+    this.name = "PolicyBlockedError";
+  }
+}
+
+/** Narrow an unknown caught value to a governance policy-block. */
+export function isPolicyBlocked(e: unknown): e is PolicyBlockedError {
+  return e instanceof PolicyBlockedError;
+}
+
 // Governance POLICY (the constants + the agent precedence ladder + PROPOSAL_TTL_DAYS)
 // now lives in @synap/governance-policy — the SINGLE SOURCE OF TRUTH shared with
 // checkPermissionOrPropose(). The forked mirror that used to live here is gone;

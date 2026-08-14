@@ -132,7 +132,7 @@ export const OBSERVATION_NAMESPACES = [
  * executes; the others are meaningless coming from a client and are refused
  * for the same reason.
  */
-const RESERVED_PHASES = [".validated", ".completed", ".failed"] as const;
+export const RESERVED_PHASES = [".validated", ".completed", ".failed"] as const;
 
 /**
  * Strict shape: lowercase dot-separated segments, nothing else.

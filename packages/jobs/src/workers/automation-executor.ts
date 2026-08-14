@@ -115,7 +115,9 @@ import {
   executeGuardStep,
   executeComputeStep,
   executeSelectStep,
+  isWorkflowGuardBlocked,
 } from "./steps/control-flow.js";
+import { isPolicyBlocked } from "../utils/automation-governance.js";
 import { executeMessagesQueryStep } from "./steps/messages-query.js";
 import {
   executeRunsQueryStep,
@@ -544,6 +546,13 @@ async function executeAutomationFlow(params: {
     );
     let stepsCompleted = 0;
     let stepsFailed = 0;
+    // Of the `stepsFailed`, how many were a GOVERNANCE policy-block (a
+    // PolicyBlockedError from the confused-deputy guard / an agent-ladder deny, or
+    // the older WorkflowGuardBlockedError precondition halt) rather than a
+    // transport/infra failure. Drives the terminal run status: a run whose ONLY
+    // failures were policy-blocks finalizes as `blocked_by_policy` (calm ochre),
+    // while any real error present keeps it `failed` (red).
+    let stepsBlockedByPolicy = 0;
 
     /**
      * Persist WHICH PATH this run took (D3d) — the one write of the branch
@@ -1704,15 +1713,25 @@ async function executeAutomationFlow(params: {
         const errorMessage =
           lastError instanceof Error ? lastError.message : "Unknown error";
 
+        // A governance policy-block (or the older workflow-guard precondition
+        // halt) is a deliberate NON-PROCEED verdict, not a broken step — record it
+        // as `blocked_by_policy` (calm ochre governance outcome) instead of
+        // `failed` (red error). The errorMessage still carries the human reason.
+        const blockedByPolicy =
+          isPolicyBlocked(lastError) || isWorkflowGuardBlocked(lastError);
+        if (blockedByPolicy) stepsBlockedByPolicy++;
+
         logger.error(
-          { err: lastError, nodeId: node.id, runId },
-          "Automation step failed"
+          { err: lastError, nodeId: node.id, runId, blockedByPolicy },
+          blockedByPolicy
+            ? "Automation step blocked by policy"
+            : "Automation step failed"
         );
 
         await db
           .update(automationStepRuns)
           .set({
-            status: "failed",
+            status: blockedByPolicy ? "blocked_by_policy" : "failed",
             errorMessage,
             completedAt: new Date(),
             ...aiUsageColumns(aiUsage),
@@ -1761,7 +1780,15 @@ async function executeAutomationFlow(params: {
     // Update run with final status. Guarded on status='running' so a late
     // writer can never overwrite a verdict the finalizer/reaper already
     // recorded (an unguarded write here was the retry-overwrite hole).
-    const finalStatus = stepsFailed > 0 ? "failed" : "completed";
+    // A run whose ONLY failures were governance policy-blocks reads as the calm
+    // `blocked_by_policy` outcome; any genuine transport/infra error mixed in
+    // keeps it the red `failed` — an actual error still needs the failed lens.
+    const finalStatus =
+      stepsFailed > 0
+        ? stepsBlockedByPolicy === stepsFailed
+          ? "blocked_by_policy"
+          : "failed"
+        : "completed";
     await db
       .update(automationRuns)
       .set({
@@ -1776,9 +1803,10 @@ async function executeAutomationFlow(params: {
       );
 
     // Claims protect a live run from concurrent writers. Once a run has
-    // terminally failed, release only the claims it owns so a new manual run
-    // can retry the same idempotent graph instead of leaving the record stuck.
-    if (finalStatus === "failed") {
+    // terminally failed (or been blocked by policy), release only the claims it
+    // owns so a new manual run can retry the same idempotent graph instead of
+    // leaving the record stuck.
+    if (finalStatus === "failed" || finalStatus === "blocked_by_policy") {
       await db
         .delete(automationClaims)
         .where(eq(automationClaims.ownerRunId, runId));
@@ -1889,10 +1917,14 @@ export async function handleAutomationExecute(job: {
       producerAgentUserId,
     });
   } catch (err) {
+    // A governance policy-block (or workflow-guard precondition halt) that escaped
+    // the per-node catch is still a NON-PROCEED verdict, not a broken run — mark it
+    // `blocked_by_policy` (calm ochre), not `failed` (red).
+    const blockedByPolicy = isPolicyBlocked(err) || isWorkflowGuardBlocked(err);
     await db
       .update(automationRuns)
       .set({
-        status: "failed",
+        status: blockedByPolicy ? "blocked_by_policy" : "failed",
         errorMessage: err instanceof Error ? err.message : String(err),
         completedAt: new Date(),
       })

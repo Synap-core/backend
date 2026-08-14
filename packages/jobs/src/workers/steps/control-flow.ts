@@ -6,10 +6,27 @@ import type { GuardNodeDef } from "@synap/database";
 import { resolveContextPath, resolveBoundValue } from "../template-resolve.js";
 import type { StepContext } from "../automation-executor-types.js";
 
-class WorkflowGuardBlockedError extends Error {
+/**
+ * A `guard` node's declarative precondition evaluated false — the flow author's
+ * own "only proceed if …" gate halted the run. Like `PolicyBlockedError`, this is
+ * a deliberate NON-PROCEED verdict, not a transport/infra failure, so the executor
+ * finalizes it as `blocked_by_policy` (calm ochre) rather than `failed` (red). It
+ * is an OLDER instance of the same "a typed block collapsing into failed" defect;
+ * exported (with an `instanceof` guard) so the executor can catch it at the SAME
+ * per-node catch site the governance blocks land in.
+ */
+export class WorkflowGuardBlockedError extends Error {
   constructor(readonly detail: Record<string, unknown>) {
     super(`WORKFLOW_GUARD_BLOCKED:${JSON.stringify(detail)}`);
+    this.name = "WorkflowGuardBlockedError";
   }
+}
+
+/** Narrow an unknown caught value to a workflow-guard precondition block. */
+export function isWorkflowGuardBlocked(
+  e: unknown
+): e is WorkflowGuardBlockedError {
+  return e instanceof WorkflowGuardBlockedError;
 }
 
 export function executeGuardStep(

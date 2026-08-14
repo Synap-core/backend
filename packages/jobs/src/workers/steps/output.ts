@@ -37,6 +37,7 @@ import {
 import {
   checkAutomationWriteOrPropose,
   guardProducerEffect,
+  PolicyBlockedError,
 } from "../../utils/automation-governance.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
@@ -266,7 +267,10 @@ export async function executeOutputStep(
         producerAgentUserId,
       });
       if ("denied" in gate) {
-        throw new Error(`entity_create denied by governance: ${gate.reason}`);
+        throw new PolicyBlockedError(
+          "deny",
+          `entity_create denied by governance: ${gate.reason}`
+        );
       }
       if ("proposed" in gate) {
         // SAFETY: a proposal was created — do NOT direct-write. The change
@@ -420,7 +424,10 @@ export async function executeOutputStep(
         producerAgentUserId,
       });
       if ("denied" in gate) {
-        throw new Error(`entity_update denied by governance: ${gate.reason}`);
+        throw new PolicyBlockedError(
+          "deny",
+          `entity_update denied by governance: ${gate.reason}`
+        );
       }
       if ("proposed" in gate) {
         // SAFETY: a proposal was created — do NOT direct-write. The change
@@ -473,7 +480,8 @@ export async function executeOutputStep(
         action: "send",
       });
       if ("block" in webhookGuard) {
-        throw new Error(
+        throw new PolicyBlockedError(
+          webhookGuard.kind,
           webhookGuard.kind === "deny"
             ? `webhook denied by producer-agent governance (confused-deputy guard): ${webhookGuard.reason ?? "denied"}`
             : `webhook cannot auto-execute: an agent produced this trigger, so a human-owned automation may not POST to an external URL with the owner's credentials ungoverned (confused-deputy guard).`
@@ -606,7 +614,8 @@ export async function executeOutputStep(
         action: "send",
       });
       if ("block" in channelMsgGuard) {
-        throw new Error(
+        throw new PolicyBlockedError(
+          channelMsgGuard.kind,
           channelMsgGuard.kind === "deny"
             ? `channel_message denied by producer-agent governance (confused-deputy guard): ${channelMsgGuard.reason ?? "denied"}`
             : `channel_message cannot auto-execute: an agent produced this trigger, so a human-owned automation may not post to a channel under the owner's identity ungoverned (confused-deputy guard).`
@@ -869,7 +878,10 @@ export async function executeOutputStep(
         producerAgentUserId,
       });
       if ("denied" in gate) {
-        throw new Error(`session_update denied by governance: ${gate.reason}`);
+        throw new PolicyBlockedError(
+          "deny",
+          `session_update denied by governance: ${gate.reason}`
+        );
       }
       if ("proposed" in gate) {
         // SAFETY: a proposal was created — do NOT direct-write.

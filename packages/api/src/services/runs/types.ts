@@ -52,7 +52,12 @@ export type RunStatus =
   | "cancelled"
   // 'skipped' (Wave 4.V3) — an automation run whose flow precondition gated it
   // out before any step ran. Only automation_runs produces it today.
-  | "skipped";
+  | "skipped"
+  // 'blocked_by_policy' — an automation run whose effect a governance verdict
+  // refused (agent-produced trigger → human-owned automation → producer ladder /
+  // policy floor blocked the THEN-action). A calm governance OUTCOME, not a
+  // transport failure. Only automation_runs produces it today.
+  | "blocked_by_policy";
 
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
@@ -138,7 +143,14 @@ export interface GenericRunActivityItem {
 }
 
 export type AutomationStepStatus =
-  "pending" | "running" | "completed" | "failed" | "skipped";
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  // A step whose effect a governance verdict refused (confused-deputy guard /
+  // agent-ladder deny) — a calm governance outcome, distinct from "failed".
+  | "blocked_by_policy";
 
 /**
  * Stable per-node execution payload exposed to run-detail consumers.

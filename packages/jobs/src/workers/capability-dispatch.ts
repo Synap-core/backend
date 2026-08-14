@@ -7,7 +7,10 @@
  * `steps/output.ts`, `steps/playbook-run.ts`) can share ONE registration.
  */
 
-import { guardProducerEffect } from "../utils/automation-governance.js";
+import {
+  guardProducerEffect,
+  PolicyBlockedError,
+} from "../utils/automation-governance.js";
 
 /**
  * Discriminated result mirror of `@synap/api`'s `ExecuteCapabilityResult`. jobs
@@ -171,7 +174,8 @@ export async function dispatchOutputVerb(
     action: dotIndex > 0 ? verbId.slice(dotIndex + 1) : "execute",
   });
   if ("block" in guard) {
-    throw new Error(
+    throw new PolicyBlockedError(
+      guard.kind,
       guard.kind === "deny"
         ? `${verbId} denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
         : `${verbId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`

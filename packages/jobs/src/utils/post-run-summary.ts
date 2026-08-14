@@ -62,7 +62,7 @@ export type NarrationMode = "always" | "changes" | "failures" | "off";
 export const DEFAULT_NARRATION_MODE: NarrationMode = "always";
 
 /** Terminal class used for copy, groupKey, and noise decisions. */
-type SummaryStatus = "success" | "failure" | "timeout";
+type SummaryStatus = "success" | "failure" | "timeout" | "blocked";
 
 /**
  * The exactly-once claim guard: a summary posts only when this run's slot is
@@ -337,7 +337,9 @@ export function buildSummaryCardMeta(input: {
   status: SummaryStatus;
 }): RunSummaryCardMeta {
   const { automation, run, steps, status } = input;
-  const failedStep = steps.find((s) => s.status === "failed");
+  const failedStep = steps.find(
+    (s) => s.status === "failed" || s.status === "blocked_by_policy"
+  );
   const rawError = firstErrorLine(failedStep?.errorMessage ?? run.errorMessage);
   const durationMs =
     run.completedAt && run.startedAt
@@ -404,6 +406,19 @@ export function renderSummary(input: {
 
   if (status === "timeout") {
     return `⏱️ ${name} timed out — worker died or hung, no steps recorded`;
+  }
+
+  if (status === "blocked") {
+    // Governance refused the effect — a calm outcome, not a broken run. The
+    // errorMessage carries the human reason (which agent, which floor).
+    const blockedStep = steps.find((s) => s.status === "blocked_by_policy");
+    const stepName = blockedStep?.nodeId ? `"${blockedStep.nodeId}"` : "a step";
+    const header = `🛡️ ${name} was blocked by governance at step ${stepName} — needs your review`;
+    const rawError = firstErrorLine(
+      blockedStep?.errorMessage ?? run.errorMessage
+    );
+    const reason = rawError ? safeLabel(rawError) : rawError;
+    return reason ? `${header}\n${reason}` : header;
   }
 
   if (status === "failure") {
@@ -495,7 +510,11 @@ export async function postRunSummary(
         ? "timeout"
         : run.status === "completed"
           ? "success"
-          : "failure";
+          : run.status === "blocked_by_policy"
+            ? "blocked"
+            : "failure";
+    // A policy-block, like a failure/timeout, still needs a human's eye — it posts
+    // under the same `failures`/`changes` noise gates.
     const isFailureClass = status !== "success";
 
     // ── Noise control (3.N2) ──────────────────────────────────────────────

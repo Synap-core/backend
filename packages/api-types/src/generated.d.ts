@@ -4910,6 +4910,13 @@ export type SystemEventType = (typeof SystemEventTypes)[keyof typeof SystemEvent
  */
 export interface EventDefinition {
 	type: string;
+	/**
+	 * Alias of `type`, injected by getEventCatalog(). The trigger pickers key off
+	 * `value` (not `type`) — serving both keeps ONE consistent field across the
+	 * frontend consumers. Kept optional so the const literals below still satisfy
+	 * this interface without repeating the string.
+	 */
+	value?: string;
 	label: string;
 	domain: string;
 	description: string;
@@ -5668,7 +5675,7 @@ export interface WireCreatedVerbResult {
  */
 export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat" | "agent_write";
 /** Normalised lifecycle across all ledgers. */
-export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped";
+export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped" | "blocked_by_policy";
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
 	/** Run id (the ledger row id; the captureId for a capture run). */
@@ -5749,7 +5756,7 @@ export interface GenericRunActivityItem {
 	hint: string | null;
 	detail: Record<string, unknown> | null;
 }
-export type AutomationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export type AutomationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "blocked_by_policy";
 /**
  * Stable per-node execution payload exposed to run-detail consumers.
  *
@@ -11555,7 +11562,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listEventCatalog: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
-			output: EventDefinition[];
+			output: {
+				events: EventDefinition[];
+				observationNamespaces: ("dev" | "ci")[];
+				reservedPhases: (".validated" | ".completed" | ".failed")[];
+			};
 			meta: object;
 		}>;
 		deleteUser: import("@trpc/server").TRPCMutationProcedure<{
@@ -22491,7 +22502,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					subjectEntityId: string | null;
 					triggeredBy: string | null;
 					triggerPayload: Record<string, unknown>;
-					status: "completed" | "running" | "failed" | "cancelled" | "skipped";
+					status: "completed" | "running" | "failed" | "cancelled" | "skipped" | "blocked_by_policy";
 					errorMessage: string | null;
 					stepsCompleted: number;
 					stepsFailed: number;
@@ -22519,7 +22530,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					id: string;
 					errorMessage: string | null;
-					status: "completed" | "running" | "failed" | "cancelled" | "skipped";
+					status: "completed" | "running" | "failed" | "cancelled" | "skipped" | "blocked_by_policy";
 					completedAt: Date | null;
 					startedAt: Date;
 					outputSummary: Record<string, unknown> | null;
@@ -22542,7 +22553,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runId: string;
 					nodeId: string;
 					commandId: string | null;
-					status: "pending" | "completed" | "running" | "failed" | "skipped";
+					status: "pending" | "completed" | "running" | "failed" | "skipped" | "blocked_by_policy";
 					resolvedInputs: Record<string, unknown>;
 					output: Record<string, unknown>;
 					errorMessage: string | null;

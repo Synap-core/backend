@@ -10,6 +10,7 @@ import type {
   RunPathTaken,
 } from "@synap/database";
 import { isRetryableError } from "@synap/intelligence-client";
+import { isPolicyBlocked } from "../utils/automation-governance.js";
 import {
   markDescendantsSkipped,
   computeLoopBodyNodeIds,
@@ -157,6 +158,10 @@ export function decideStepRetry(
   attempt: number,
   maxRetries: number
 ): StepRetryDecision {
+  // A governance policy-block is DETERMINISTIC: the same producer ladder / floor
+  // refuses the same effect every attempt, so retrying only burns the budget for
+  // an identical refusal. Treat it as non-retryable BEFORE the transient check.
+  if (isPolicyBlocked(err)) return { retry: false, reason: "non-retryable" };
   // Terminality is checked FIRST, before attempts: on the LAST attempt the
   // distinction is still worth reporting, and it costs nothing.
   if (!isRetryableError(err)) return { retry: false, reason: "non-retryable" };
