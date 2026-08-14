@@ -162,7 +162,7 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
   // Without this remap the tRPC hub-protocol door left `ctx.userId` = the agent
   // principal, so `assertMayActAs(ctx, input.userId)` 403'd every CLI/BYOA call.
   // For NON-agent keys (human PATs) `userId` stays `keyRecord.userId` and
-  // `agentUserId` stays undefined — byte-identical to the prior behavior.
+  // `agentUserId` stays undefined.
   const { effectiveUserId, agentUserId } = await resolveKeyIdentity(keyRecord);
 
   // Add authentication context

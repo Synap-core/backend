@@ -1558,3 +1558,116 @@ describe("agentDailyProposalCap", () => {
     expect(cap).toBe(10);
   });
 });
+
+/**
+ * #4 instruction-provenance ACTIVATION (this wave): an agent turn's write
+ * carries `sourceMessageId` (the triggering inbound message). The gate now
+ * resolves that message's CHANNEL (`resolveActingChannelId` →
+ * `messages.channelId`) and threads it to the agent-governance ladder's rung
+ * 2.55, so a would-be-auto write from an EXTERNAL channel force-proposes. This
+ * exercises the REAL (unmocked) `resolveAgentGovernanceDecision` /
+ * `resolveOriginTrust` (from `@synap/database/agent-governance`) against the
+ * mocked `db`, so it proves the end-to-end threading, not just the pure engine.
+ *
+ * The db mock dispatches by the SHAPE of each `.select({...})` (mirrors
+ * `setupWeightedAgentBudget`): channel/message lookups return the acting rows;
+ * everything else is empty (no governance rule, default ceiling).
+ */
+describe("checkPermissionOrPropose — #4 origin-trust activation (sourceMessageId → channel)", () => {
+  function setupOriginFlow(channel: {
+    channelType: string;
+    externalSource?: string | null;
+  }) {
+    mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
+      const keys = Object.keys(fields);
+      let rows: unknown[] = [];
+      if (keys.includes("userType")) {
+        rows = [{ userType: "agent", agentMetadata: {} }];
+      } else if (keys.includes("settings")) {
+        rows = [{ settings: {}, workspaceType: "personal" }];
+      } else if (keys.length === 1 && keys[0] === "channelId") {
+        // resolveActingChannelId: sourceMessageId → messages.channelId
+        rows = [{ channelId: "chan-acting" }];
+      } else if (keys.includes("channelType")) {
+        // resolveOriginTrust: channels row (channelType/externalSource/workspaceId)
+        rows = [
+          {
+            channelType: channel.channelType,
+            externalSource: channel.externalSource ?? null,
+            workspaceId: null,
+          },
+        ];
+      } else if (keys.length === 1 && keys[0] === "n") {
+        rows = [{ n: 0 }]; // countAgentWritesTodayUtc — under ceiling
+      } else {
+        rows = []; // governance_rules, ceiling candidates → none
+      }
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(rows),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve(rows).then(res, rej),
+      };
+      return b;
+    });
+  }
+
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("EXTERNAL acting channel force-proposes an otherwise-auto agent write", async () => {
+    setupOriginFlow({ channelType: "external" });
+
+    const result = await checkPermissionOrPropose({
+      userId: "user-abc",
+      agentUserId: "agent-ext-1",
+      workspaceId: "ws-123",
+      subjectType: "entity",
+      action: "create", // in DEFAULT_AUTO_APPROVE → would auto-execute
+      data: { id: "ent-1", title: "From Discord" },
+      // The inbound message that triggered this agent turn — lives in the
+      // external channel, which is what rung 2.55 classifies.
+      sourceMessageId: "msg-ext-1",
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("trusted PERSONAL acting channel leaves the auto write unchanged (granted)", async () => {
+    setupOriginFlow({ channelType: "personal" });
+
+    const result = await checkPermissionOrPropose({
+      userId: "user-abc",
+      agentUserId: "agent-personal-1",
+      workspaceId: "ws-123",
+      subjectType: "entity",
+      action: "create",
+      data: { id: "ent-2", title: "From personal channel" },
+      sourceMessageId: "msg-personal-1",
+    });
+
+    expect("granted" in result && result.granted === true).toBe(true);
+  });
+
+  it("no sourceMessageId → no acting channel → no-op (auto write still granted)", async () => {
+    // No channel lookup should occur; the write auto-approves exactly as before #4.
+    setupOriginFlow({ channelType: "external" }); // channel row present but never read
+
+    const result = await checkPermissionOrPropose({
+      userId: "user-abc",
+      agentUserId: "agent-nochan-1",
+      workspaceId: "ws-123",
+      subjectType: "entity",
+      action: "create",
+      data: { id: "ent-3", title: "No triggering message" },
+      // sourceMessageId intentionally omitted
+    });
+
+    expect("granted" in result && result.granted === true).toBe(true);
+  });
+});

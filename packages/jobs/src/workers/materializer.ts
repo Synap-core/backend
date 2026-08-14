@@ -56,6 +56,7 @@ import {
   workspaceMembers,
   users,
   proposals,
+  ProposalStatus,
   relations,
   projectMembers,
 } from "@synap/database/schema";
@@ -108,13 +109,71 @@ export async function handleMaterialize(
     action,
     subjectId,
     userId,
-    workspaceId,
     correlationId,
     data,
   } = job.data;
 
+  // ── SECURITY GATE ────────────────────────────────────────────────────────
+  // This worker executes privileged writes (entity/profile/view/workspace
+  // membership) and, via the `command` branch, `/bin/sh -c` on the pod host.
+  // Its authority comes ENTIRELY from an approved proposal — the file header
+  // has always claimed that, but nothing enforced it: the job payload was
+  // trusted as-is, so anyone able to append a `*.validated` event could
+  // materialize arbitrary writes with a workspaceId of their choosing.
+  //
+  // The proposal is now the single source of authority. We re-read it here
+  // rather than trusting the payload's copies, because the payload travelled
+  // through an append-only event whose type was never authenticated.
+  const sourceProposalId = data.sourceProposalId;
+  if (typeof sourceProposalId !== "string" || !sourceProposalId) {
+    logger.error(
+      { eventType, subjectType, action, subjectId, correlationId },
+      "REFUSED materialization: no sourceProposalId. A materialize job may " +
+        "only originate from an approved proposal."
+    );
+    return;
+  }
+
+  const proposal = await sharedDb.query.proposals.findFirst({
+    where: eq(proposals.id, sourceProposalId),
+    columns: { id: true, status: true, workspaceId: true },
+  });
+
+  if (!proposal) {
+    logger.error(
+      { sourceProposalId, eventType, subjectId },
+      "REFUSED materialization: sourceProposalId does not resolve to a proposal."
+    );
+    return;
+  }
+
+  // Both APPROVED (human-reviewed) and AUTO_APPROVED (policy-approved) are
+  // legitimate. Anything else — pending, rejected, superseded — is not.
+  if (
+    proposal.status !== ProposalStatus.APPROVED &&
+    proposal.status !== ProposalStatus.AUTO_APPROVED
+  ) {
+    logger.error(
+      { sourceProposalId, status: proposal.status, eventType, subjectId },
+      "REFUSED materialization: proposal is not approved."
+    );
+    return;
+  }
+
+  // Derive the workspace from the PROPOSAL, never from the job payload. This
+  // is the same rule the access layer applies to every other write: gate on
+  // the loaded row's workspaceId, never a request-supplied one.
+  const workspaceId = proposal.workspaceId ?? undefined;
+
   logger.info(
-    { eventType, subjectType, action, subjectId, correlationId },
+    {
+      eventType,
+      subjectType,
+      action,
+      subjectId,
+      correlationId,
+      sourceProposalId,
+    },
     "Materializing proposal-approved event"
   );
 

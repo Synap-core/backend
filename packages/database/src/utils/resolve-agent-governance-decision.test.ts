@@ -3,7 +3,9 @@ import {
   dryRunAgentGovernanceDecision,
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
+  resolveOriginTrust,
 } from "./resolve-agent-governance-decision.js";
+import { ChannelType } from "../schema/channels.js";
 
 /**
  * Minimal fake db: a queue of query RESULTS, consumed in call order.
@@ -487,5 +489,155 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
     });
 
     expect(match).toBeUndefined();
+  });
+});
+
+/**
+ * #4 instruction-provenance — rung 2.55's I/O half (`resolveOriginTrust`).
+ * These prove the CLASSIFICATION half in isolation (the pure engine's
+ * tighten-only mapping is covered in governance-policy/policy.test.ts). No
+ * `userId` is passed, so the config_settings posture ladder is skipped and the
+ * base channel classification is what's asserted (ONE channel read).
+ */
+describe("resolveOriginTrust (#4 origin classification)", () => {
+  /** A channel row as `resolveOriginTrust` selects it. */
+  function channelRow(overrides: {
+    channelType: string;
+    externalSource?: string | null;
+    workspaceId?: string | null;
+  }) {
+    return {
+      channelType: overrides.channelType,
+      externalSource: overrides.externalSource ?? null,
+      workspaceId: overrides.workspaceId ?? null,
+    };
+  }
+
+  it("no channelId → undefined (rung 2.55 no-ops; never reads a channel)", async () => {
+    // Empty queue: if it tried to read a channel this would return [] and still
+    // resolve undefined, but the guard returns BEFORE any query.
+    const db = makeDb([]);
+    const trust = await resolveOriginTrust({ db, channelId: null });
+    expect(trust).toBeUndefined();
+  });
+
+  it("EXTERNAL channel → untrusted", async () => {
+    const db = makeDb([[channelRow({ channelType: ChannelType.EXTERNAL })]]);
+    const trust = await resolveOriginTrust({ db, channelId: "chan-ext" });
+    expect(trust).toBe("untrusted");
+  });
+
+  it("bridge / source-produced channel (externalSource set) → untrusted", async () => {
+    const db = makeDb([
+      [
+        channelRow({
+          channelType: ChannelType.THREAD,
+          externalSource: "discord",
+        }),
+      ],
+    ]);
+    const trust = await resolveOriginTrust({ db, channelId: "chan-bridge" });
+    expect(trust).toBe("untrusted");
+  });
+
+  it("owner-side PERSONAL channel (no external source) → trusted", async () => {
+    const db = makeDb([[channelRow({ channelType: ChannelType.PERSONAL })]]);
+    const trust = await resolveOriginTrust({ db, channelId: "chan-personal" });
+    expect(trust).toBe("trusted");
+  });
+
+  it("channel not found → undefined (tighten-only: a lookup miss never fabricates a tightening)", async () => {
+    const db = makeDb([[]]);
+    const trust = await resolveOriginTrust({ db, channelId: "chan-missing" });
+    expect(trust).toBeUndefined();
+  });
+});
+
+/**
+ * #4 ACTIVATION at the resolver: threading `channelId` into
+ * `resolveAgentGovernanceDecision` now flows through rung 2.55, so a
+ * would-be-auto agent write from an EXTERNAL channel force-proposes, while the
+ * SAME write with no channel (or a trusted channel) is unchanged. Query order:
+ * users → workspaces → governance_rules → (rung 2.55) channels → [ceiling reads
+ * only when the base verdict is execute].
+ */
+describe("resolveAgentGovernanceDecision — #4 origin-trust activation via channelId", () => {
+  it("EXTERNAL acting channel force-proposes an otherwise-auto write (entity.create)", async () => {
+    const db = makeDb([
+      [{ userType: "agent", agentMetadata: {} }],
+      [{ settings: {}, workspaceType: "personal" }],
+      [], // no governance rule
+      [
+        {
+          channelType: ChannelType.EXTERNAL,
+          externalSource: null,
+          workspaceId: null,
+        },
+      ],
+    ]);
+
+    const result = await resolveAgentGovernanceDecision({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create", // in DEFAULT_AUTO_APPROVE → would execute absent origin
+      channelId: "chan-ext",
+      preferAgentMetadataAutoApproveFor: true,
+    });
+
+    expect(result.decision).toBe("propose");
+  });
+
+  it("trusted PERSONAL acting channel leaves the auto write unchanged (execute)", async () => {
+    const db = makeDb([
+      [{ userType: "agent", agentMetadata: {} }],
+      [{ settings: {}, workspaceType: "personal" }],
+      [], // no governance rule
+      [
+        {
+          channelType: ChannelType.PERSONAL,
+          externalSource: null,
+          workspaceId: null,
+        },
+      ],
+      [], // resolveDailyWriteCeiling candidates → default limit
+      [{ n: 0 }], // countAgentWritesTodayUtc → under ceiling
+    ]);
+
+    const result = await resolveAgentGovernanceDecision({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      channelId: "chan-personal",
+      preferAgentMetadataAutoApproveFor: true,
+    });
+
+    expect(result.decision).toBe("execute");
+  });
+
+  it("no acting channel is a no-op (execute — identical to pre-#4 behavior)", async () => {
+    const db = makeDb([
+      [{ userType: "agent", agentMetadata: {} }],
+      [{ settings: {}, workspaceType: "personal" }],
+      [], // no governance rule
+      // NO channel read is issued (channelId omitted → resolveOriginTrust returns
+      // undefined before querying); the next queued rows are the ceiling reads.
+      [], // resolveDailyWriteCeiling candidates
+      [{ n: 0 }], // countAgentWritesTodayUtc
+    ]);
+
+    const result = await resolveAgentGovernanceDecision({
+      db,
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      preferAgentMetadataAutoApproveFor: true,
+    });
+
+    expect(result.decision).toBe("execute");
   });
 });

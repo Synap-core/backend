@@ -6,15 +6,16 @@ import { join } from "path";
  * TRIPWIRE — an agent key must never be minted without a linked human.
  *
  * Sibling of `capability-agent-identity.test.ts`: same threat (agent-identity
- * laundering), different door. The pod derives
+ * laundering), different door. `resolveKeyIdentity` (access/key-identity.ts)
+ * derives
  *
- *     agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined
+ *     effectiveUserId = keyRecord.linkedUserId ?? keyRecord.userId
  *
- * and a DEFINED `agentUserId` is the only thing routing an agent write through
- * `checkPermissionOrPropose()` into a reviewable PROPOSAL. A key minted with
- * `linkedUserId: null` therefore writes DIRECTLY as the operator — permanently,
- * with no error, no proposal and no signal — and nothing repairs it if a human
- * appears later.
+ * — the data floor the key reads/writes as. This branch is NOT `podWide`, so a
+ * key minted here with `linkedUserId: null` falls back to the agent's OWN
+ * userId as `effectiveUserId` instead of a human's: it reads/writes as itself
+ * rather than as a human's second brain, permanently, with no error and no
+ * signal — and nothing repairs it if a human appears later.
  *
  * THE HOLE THIS CLOSES (found 2026-07-24): `POST /api/hub/setup/agent` resolved
  * `linkedUserId` by falling back to the oldest human on the pod, inside an
@@ -40,7 +41,8 @@ describe("tripwire: setup/agent never mints an agent key with no linked human", 
       src,
       "setup/agent must REFUSE to mint when no human exists. Without this, " +
         "resolvedLinkedUserId stays undefined and the key is minted with " +
-        "linkedUserId: null — a permanent, silent governance bypass."
+        "linkedUserId: null — the agent reads/writes as itself instead of a " +
+        "human's second brain, permanently and silently."
     ).toMatch(/NO_HUMAN_OWNER/);
   });
 

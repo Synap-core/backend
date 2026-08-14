@@ -3,8 +3,9 @@
  *
  * - SURFACE_AGENT_TYPES always allowed on api_key_surface.
  * - Non-surface agentType (twin, custom slug, assistant, …) only when the
- *   authenticating key is human-owned (linkedUserId null).
- * - Agent keys (linkedUserId set) cannot mint non-surface types.
+ *   authenticating key is human-owned (key PRINCIPAL is not an agent).
+ * - Agent keys — linked OR pod-wide (no `linkedUserId`) — cannot mint
+ *   non-surface types.
  *
  * Structural source test — no HTTP / DB.
  */
@@ -17,10 +18,15 @@ const SETUP = "src/routers/hub-protocol/rest/setup.ts";
 describe("tripwire: setup/agent surface allowlist + human named-agent create", () => {
   const src = readFileSync(join(process.cwd(), SETUP), "utf8");
 
-  it("tracks whether the surface key is human-owned (linkedUserId null)", () => {
+  it("derives human-owned from the key PRINCIPAL (resolveKeyIdentity), not linkedUserId", () => {
     expect(src).toMatch(/surfaceKeyIsHumanOwned/);
-    expect(src).toMatch(
-      /linkedUserId\s*==\s*null\s*\|\|\s*keyRecord\.linkedUserId\s*===\s*""/
+    expect(src).toMatch(/resolveKeyIdentity\(keyRecord\)/);
+    expect(src).toMatch(/surfaceKeyIsHumanOwned\s*=\s*!identity\.isAgent/);
+    // Must NOT regress to the `linkedUserId==null` conflation — that
+    // misclassifies a pod-wide agent key (isAgent, no linkedUserId) as
+    // human-owned, letting it mint arbitrary named agents.
+    expect(src).not.toMatch(
+      /surfaceKeyIsHumanOwned\s*=\s*\n?\s*keyRecord\.linkedUserId\s*==\s*null/
     );
   });
 

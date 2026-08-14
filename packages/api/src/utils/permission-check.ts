@@ -36,6 +36,7 @@ import {
   workspaces,
   governanceRules,
   channelMembers,
+  messages,
   focusSessions,
   ChannelMemberKind,
   ProposalStatus,
@@ -136,6 +137,51 @@ async function deriveSessionForceProposeGovernance(
       "Failed to derive session force-propose governance — proceeding without it"
     );
     return false;
+  }
+}
+
+/**
+ * Resolve the acting CHANNEL for an agent turn from the triggering message id —
+ * the plumbing that ACTIVATES the #4 instruction-provenance origin-trust signal
+ * (rung 2.55). An agent's writes DURING a turn carry the inbound
+ * `sourceMessageId` that triggered them (the same provenance the proposal row
+ * already links); that message lives in the ACTING channel, so
+ * `messages.channelId` IS the channel `resolveOriginTrust` classifies (EXTERNAL /
+ * bridge / `source` → untrusted → force-propose). Without an acting channel,
+ * rung 2.55 no-ops — which is why #4 shipped dormant: no caller passed a channel.
+ *
+ * SEAM CHOICE: the acting channel is NOT available as a bare local at any gate
+ * call site today (the dedicated per-turn routing seam that would carry it — the
+ * sibling of `resolveChannelCapabilities` — is documented-but-unbuilt). The ONE
+ * channel-derivable signal already threaded to every agent write door is
+ * `ctx.sourceMessageId`, so we resolve the channel from it here, in the ONE gate
+ * every agent write funnels through — activating all agent-turn writes uniformly
+ * rather than threading (and silently missing) N per-door call sites. An explicit
+ * `opts.channelId` still WINS, so the future routing seam can pass it directly.
+ *
+ * SERVER-DERIVED, never request body: `sourceMessageId` is the verified triggering
+ * message (auth boundary), mirroring `resolveChannelCapabilities`' server-side
+ * contract. Best-effort + tighten-only-safe: a null/absent id, a missing row, or a
+ * lookup error all return `null` → rung 2.55 no-ops (a lookup miss must never
+ * fabricate a tightening).
+ */
+async function resolveActingChannelId(
+  sourceMessageId: string | null | undefined
+): Promise<string | null> {
+  if (!sourceMessageId) return null;
+  try {
+    const [row] = await db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, sourceMessageId))
+      .limit(1);
+    return row?.channelId ?? null;
+  } catch (err) {
+    logger.warn(
+      { err, sourceMessageId },
+      "Failed to resolve acting channel from source message — origin-trust rung 2.55 no-ops for this write"
+    );
+    return null;
   }
 }
 
@@ -901,6 +947,16 @@ export async function checkPermissionOrPropose(
           ? dataProperties.uo_validated
           : undefined;
 
+      // #4 instruction-provenance ACTIVATION: resolve the acting channel for
+      // this agent turn. An explicit `opts.channelId` (a future per-turn routing
+      // seam) wins; otherwise derive it from the triggering message
+      // (`sourceMessageId` → `messages.channelId`). Passed to the ladder's rung
+      // 2.55 below, which classifies an EXTERNAL/bridge/`source` channel as
+      // untrusted and force-proposes a would-be-auto write. Tighten-only: a null
+      // acting channel (non-turn / owner write) no-ops.
+      const actingChannelId =
+        opts.channelId ?? (await resolveActingChannelId(sourceMessageId));
+
       // Agent governance ladder — steps (b) confirm-agent, (c) load workspace
       // settings, (d) decideAgentPolicy, (e) verdict — are the SHARED SSOT
       // `resolveAgentGovernanceDecision` (@synap/database), the SAME ladder the
@@ -921,7 +977,7 @@ export async function checkPermissionOrPropose(
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
         // a would-be-auto write from an untrusted (external / bridge) channel.
-        channelId: opts.channelId,
+        channelId: actingChannelId,
         userId,
         preferAgentMetadataAutoApproveFor: true,
       });

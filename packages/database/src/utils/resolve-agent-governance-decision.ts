@@ -315,7 +315,7 @@ export interface GovernanceRuleMatch {
  * + scope (workspace=2, pod=0) + target (exact action=3, profile=2, glob=1,
  * "*"=0) — and returns the top-ranked row's verdict, breaking ties by the
  * newest `created_at`. Returns `undefined` when no rule matches, so the
- * engine's rung 2.8 no-ops (byte-identical fallthrough).
+ * engine's rung 2.8 simply no-ops.
  */
 export async function resolveGovernanceRule(
   input: ResolveGovernanceRuleInput
@@ -573,7 +573,7 @@ export interface ResolveOriginTrustInput {
 }
 
 /**
- * Resolve the #4 instruction-provenance ORIGIN TRUST of the acting channel —
+ * Resolve the instruction-provenance ORIGIN TRUST of the acting channel —
  * rung 2.55's I/O half. The pure engine (`decideAgentPolicy`) stays I/O-free and
  * just consumes the `"trusted" | "untrusted" | undefined` this returns. Follows
  * the rung-2.8 shape EXACTLY: the I/O caller resolves a signal, the pure engine
@@ -827,8 +827,8 @@ export async function resolveAgentGovernanceDecision(
     includeAgentPrincipal: input.preferAgentMetadataAutoApproveFor,
   });
 
-  // (c.6) Rung 2.55's I/O half — resolve the acting channel's ORIGIN TRUST
-  // (#4 instruction-provenance). Pure query; the engine consumes the resolved
+  // (c.6) Rung 2.55's I/O half — resolve the acting channel's instruction-
+  // provenance ORIGIN TRUST. Pure query; the engine consumes the resolved
   // "trusted" | "untrusted" | undefined. No channelId → no channel read → no-op.
   const originTrust = await resolveOriginTrust({
     db,
@@ -839,8 +839,9 @@ export async function resolveAgentGovernanceDecision(
 
   // (d) Agent governance policy — SINGLE SOURCE OF TRUTH in
   // @synap/governance-policy. Absent optional inputs (the automation door omits
-  // channel/profile/uo/forcePropose) read as `undefined`, identical to not
-  // passing them, so each door's verdict is byte-identical to its prior inline call.
+  // channel/profile/uo/forcePropose) read as `undefined`, so every door's
+  // verdict is derived from the same pure engine regardless of which optional
+  // inputs it supplies.
   //
   // ONE-STORE (Phase B): `autoApproveFor` is deliberately NOT sourced from the
   // JSONB anymore — rung 2.8 (`governanceRuleVerdict` above, backed by

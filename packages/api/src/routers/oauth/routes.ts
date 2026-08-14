@@ -346,12 +346,14 @@ oauthApp.post("/token", async (c) => {
     // ── Mint the access token: an `api_keys` row, via the ONE door. ──────────
     //
     // `linkedUserId` is the consenting human and is LOAD-BEARING, not
-    // bookkeeping: `http-handler.ts` derives
-    //   agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined
-    // and a DEFINED agentUserId is the only thing that routes an MCP write
-    // through the governance membrane into a proposal. Drop it and every Claude
-    // write silently auto-applies with the operator's authority — no error, no
-    // signal, governance bypassed.
+    // bookkeeping: `http-handler.ts` resolves identity via `resolveKeyIdentity`
+    // (access/key-identity.ts), which derives `agentUserId` from the key
+    // principal's `users.userType === 'agent'` — this OAuth-minted key's
+    // principal IS an agent (`OAUTH_AGENT_TYPE`), so `agentUserId` is always
+    // set. `linkedUserId` instead feeds `effectiveUserId` (`linkedUserId ??
+    // userId`), the data floor the agent reads/writes as. Drop it here and
+    // every Claude write silently acts as the AGENT's own identity instead of
+    // the consenting human's — no error, no signal.
     const scopes = mapCpScopesToPodScopes(claimed.scopes);
     const provisioned = await provisionSurfaceAgentKey({
       agentType: OAUTH_AGENT_TYPE,

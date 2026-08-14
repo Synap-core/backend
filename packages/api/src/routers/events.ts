@@ -40,6 +40,16 @@ const EventSourceSchema = z.enum([
   "migration",
   "system",
 ]);
+
+/**
+ * Lifecycle phases a CLIENT may never assert about its own event.
+ *
+ * `.validated` is load-bearing for security (it drives materialization — see
+ * the `log` procedure's note); the others are included because a client
+ * declaring an outcome phase for its own request is meaningless in every case,
+ * and leaving them open would invite the same class of confusion.
+ */
+const RESERVED_EVENT_PHASES = [".validated", ".completed", ".failed"] as const;
 const TimeSeriesPeriodSchema = z.enum(["day", "week", "month"]);
 
 type TimeSeriesPeriod = z.infer<typeof TimeSeriesPeriodSchema>;
@@ -94,19 +104,42 @@ function recordProfileSlug(value: unknown): string | undefined {
 
 export const eventsRouter = router({
   /**
-   * Log a new event
+   * Log a new event.
    *
-   * V0.6: Refactored to use direct event publishing
+   * A caller may only ever assert INTENT (`.requested`) or a plain domain fact.
+   * It may NOT assert a lifecycle-completion phase about itself.
    *
-   * This is the ONLY way to modify system state.
-   * The event will be stored immutably and trigger projectors.
+   * SECURITY — why `RESERVED_EVENT_PHASES` exists:
+   * `.validated` is not a log line, it is a COMMAND. The materialization hook
+   * (`setup-event-broadcasting.ts`) matches on that suffix alone and enqueues a
+   * `materialize` job, which the worker executes — including a
+   * `command.execute.validated` branch that runs `/bin/sh -c <data.command>` on
+   * the pod host. Because this procedure accepted a free-form `eventType`, any
+   * authenticated session could reach that branch, grant itself `owner` via
+   * `workspace.join.validated`, or delete through the DESTRUCTIVE floor.
+   * A client asserting a completion phase about its own request is a category
+   * error, so rejecting these costs nothing legitimate: the real emitters are
+   * the proposal approve-executors, which call `auditLog()` server-side and
+   * never route through here.
+   *
+   * This is defence in depth, NOT the primary fix — the worker independently
+   * verifies an approved proposal (see `handleMaterialize`), so any other way
+   * of enqueueing a materialize job is closed too.
    */
   log: protectedProcedure
     .input(
       z.object({
         subjectId: z.string().uuid(),
         subjectType: subjectTypeSchema,
-        eventType: z.string().min(1),
+        eventType: z
+          .string()
+          .min(1)
+          .refine((t) => !RESERVED_EVENT_PHASES.some((p) => t.endsWith(p)), {
+            message:
+              "eventType may not end in a reserved lifecycle phase " +
+              `(${RESERVED_EVENT_PHASES.join(", ")}) — these are emitted ` +
+              "server-side by the approval pipeline, not by clients.",
+          }),
         data: z.record(z.string(), z.unknown()),
         metadata: z.record(z.string(), z.unknown()).optional(),
         version: z.number().int().positive(),

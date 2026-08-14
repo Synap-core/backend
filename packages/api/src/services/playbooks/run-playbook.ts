@@ -26,6 +26,7 @@ import {
   and,
   desc,
   isNull,
+  notInArray,
   channels,
   entities,
   focusSessions,
@@ -196,6 +197,29 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     expectedOutputs: playbook.expectedOutputs,
   };
 }
+
+/**
+ * Idempotency-by-subject reuses an existing (playbook, subject) session instead
+ * of dispatching a fresh run — UNLESS that session is in one of these TERMINAL
+ * states, in which case a new run is allowed again.
+ *
+ * The bug this closes (Stellar runaway): keying reuse on `status === 'active'`
+ * alone re-spawned a fresh session+run on EVERY daily cron once a stuck session
+ * aged out of 'active'. The focus-session reaper flips an idle session
+ * active/paused → 'stale' at 24h (focus-session-reaper.ts), and the playbook-run
+ * reaper later force-fails its orphaned run and flips the session → 'closed'
+ * (playbook-run-reaper.ts). Reusing across EVERY non-terminal state (active,
+ * paused, stale, forming, scheduled) means a stuck/in-flight subject is not
+ * re-dispatched daily; only once the run is terminally failed/closed — session
+ * in ('closed' | 'failed' | 'cancelled') — is a new run allowed, so a subject
+ * always has a legitimate path back to eligibility and is never permanently
+ * locked out. Exported so a test can lock the SHAPE of this decision.
+ */
+export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = [
+  "closed",
+  "failed",
+  "cancelled",
+] as const;
 
 /** Max runs a single `query`/`rotating` fan-out may spawn (safety bound). */
 const MAX_INPUT_FANOUT = 50;
@@ -395,17 +419,26 @@ async function executeSingleRun(
   // The owning principal: agent-user when an AI runs it, else the human.
   const actorId = input.agentUserId ?? input.userId;
 
-  // 0. Idempotency by subject — if an active session for this playbook + subject
-  // already exists, REUSE it rather than starting a duplicate. This makes a
-  // playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
-  // client has a session): start-if-missing, no-op-if-present. Opt-in; manual
-  // runs leave `idempotentBySubject` false so each click starts fresh.
+  // 0. Idempotency by subject — if a NON-TERMINAL session for this playbook +
+  // subject already exists, REUSE it rather than starting a duplicate. This makes
+  // a playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
+  // client has a session): start-if-missing, no-op-if-present. Reuse spans every
+  // non-terminal state (see IDEMPOTENCY_TERMINAL_SESSION_STATUSES) so a stuck
+  // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in;
+  // manual runs leave `idempotentBySubject` false so each click starts fresh.
   if (input.idempotentBySubject && input.subjectId) {
     const existing = await db.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.playbookId, playbook.id),
         eq(focusSessions.subjectEntityId, input.subjectId),
-        eq(focusSessions.status, "active")
+        // Reuse ANY non-terminal session (active/paused/stale/forming/scheduled),
+        // not just 'active': a stuck subject whose session the focus-session
+        // reaper aged active→'stale' must NOT re-spawn a fresh run on the next
+        // daily cron. Once the playbook-run reaper force-fails the run and closes
+        // the session (→ closed|failed|cancelled), a new run is allowed again.
+        notInArray(focusSessions.status, [
+          ...IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+        ])
       ),
       orderBy: [desc(focusSessions.startedAt)],
     });

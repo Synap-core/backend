@@ -30,6 +30,7 @@ import {
   linkEntityToProject,
   stampProvenance,
   extractIdentitySignals,
+  registerIdentitySignals,
   resolveIdentity,
   resolveWorkspacePlacement,
   acceptDeterministicGraphWorkspace,
@@ -172,9 +173,25 @@ export const createProcs = {
          * name). Logged as `identity_resolve_merge` outcome `force_create`.
          */
         forceCreate: z.boolean().optional().default(false),
+        /**
+         * Strong cross-source identity anchor for this subject, as `provider:id`
+         * (e.g. `discord:123…`). Registered as an `external_id` identity signal
+         * on the resolved entity so a later create with the SAME value dedups
+         * onto it — the strong atom the property auto-extractor cannot derive for
+         * an opaque connector id. Also fed into identity resolution below, so a
+         * repeat create with the same anchor auto-resolves (link, don't create).
+         */
+        externalId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Strong `external_id` identity anchor (opaque connector id, `provider:id`).
+      // Not derived from any property, so `extractIdentitySignals` can't produce
+      // it — build it once here and fold it into both the dedup lookup and the
+      // post-create signal registration below (the ONE signal door).
+      const externalIdSignal = input.externalId?.trim()
+        ? [{ type: "external_id", value: input.externalId.trim() }]
+        : [];
       const entityId = input.proposedEntityId ?? randomUUID();
       const correlationId = randomUUID();
       const governanceWorkspaceId =
@@ -357,7 +374,10 @@ export const createProcs = {
       // executor reads `createdEntity.id` for every downstream write. Approving
       // a proposal that merges is reported with `deduplicated: true` so the
       // executor records it as LINKED, not created (see approve-executors.ts).
-      const dedupSignals = extractIdentitySignals(input.properties ?? {});
+      const dedupSignals = [
+        ...extractIdentitySignals(input.properties ?? {}),
+        ...externalIdSignal,
+      ];
       // Resolve when we have strong signals OR a title for the weak same-name
       // gate. Title-only creates used to skip resolve entirely (zero-friction);
       // Phase 1 runs the weak path for every profile so agents stop minting
@@ -414,6 +434,27 @@ export const createProcs = {
           }
           if (identity.match === "strong" && identity.entity && visibleMatch) {
             const matchedId = identity.entity.id;
+            // Register the external_id anchor onto the matched subject so the
+            // NEXT create with this provider id resolves here directly — not only
+            // via whatever signal matched THIS time (e.g. a create that dedups on
+            // email must still stamp the connector's discord id). Idempotent
+            // (onConflictDoNothing); the caller-scoped visibleMatch gate above
+            // ensures we only write onto an entity the caller can see.
+            if (externalIdSignal.length > 0) {
+              try {
+                await registerIdentitySignals(
+                  resolveDb,
+                  matchedId,
+                  externalIdSignal,
+                  input.source ?? "entities.create"
+                );
+              } catch (sigErr) {
+                logger.warn(
+                  { sigErr, entityId: matchedId },
+                  "[entities.create] external_id signal registration failed on dedup match (entity preserved)"
+                );
+              }
+            }
             const enrichCaller = entitiesRouter.createCaller(
               ctx as unknown as Parameters<
                 typeof entitiesRouter.createCaller
@@ -1078,6 +1119,27 @@ export const createProcs = {
           // can branch on the real failure type instead of the wrapped message.
           cause: createErr,
         });
+      }
+
+      // Register the external_id identity anchor on the freshly created row.
+      // Unlike email/phone/url (auto-extracted inside EntityRepository.create),
+      // external_id is not derived from any property, so it must be registered
+      // explicitly — via the SAME signal door — so a repeat create with this
+      // provider id dedups onto this entity. Advisory: never fails the create.
+      if (externalIdSignal.length > 0 && createdEntity?.id) {
+        try {
+          await registerIdentitySignals(
+            database,
+            createdEntity.id,
+            externalIdSignal,
+            input.source ?? "entities.create"
+          );
+        } catch (sigErr) {
+          logger.warn(
+            { sigErr, entityId: createdEntity.id },
+            "[entities.create] external_id signal registration failed (entity created)"
+          );
+        }
       }
 
       // Provenance: when this entity is created inside a focus session, record

@@ -173,7 +173,7 @@ export function rejectAgentReviewer(
   );
 }
 
-const PROPOSAL_UUID_RE =
+const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -187,7 +187,7 @@ const PROPOSAL_UUID_RE =
  * are forwarded, so callers get a 400 that names the bad value.
  */
 export function isUuid(raw: string): boolean {
-  return PROPOSAL_UUID_RE.test(raw);
+  return UUID_RE.test(raw);
 }
 /** A bare hex prefix (git-style short id) — the CLI shows `id.slice(0, 8)`. */
 const PROPOSAL_PREFIX_RE = /^[0-9a-f]{4,35}$/i;
@@ -210,7 +210,7 @@ export async function resolveProposalId(
   userId: string,
   raw: string
 ): Promise<string> {
-  if (PROPOSAL_UUID_RE.test(raw)) return raw;
+  if (UUID_RE.test(raw)) return raw;
   if (!PROPOSAL_PREFIX_RE.test(raw)) {
     throw new TRPCError({
       code: "NOT_FOUND",
@@ -443,10 +443,8 @@ export function errCode(err: unknown): string | undefined {
 /**
  * `getConfinedWorkspace` + its FORBIDDEN catch, collapsed into one call —
  * the single home for the duck-typing rule. Eight REST route files used to
- * hand-roll the identical try/catch around `getConfinedWorkspace` (grew from
- * 2 lines to 5 when the `instanceof TRPCError` → `errCode` fix landed across
- * all eight copies at once — net +48 lines of identical body on a change
- * whose theme was removing duplication). One call site now:
+ * hand-roll the identical try/catch around `getConfinedWorkspace`. One call
+ * site now:
  *
  *   const confined = confineWorkspaceOrForbidden(c, body.workspaceId);
  *   if (!confined.ok) return c.json({ error: confined.error }, 403);

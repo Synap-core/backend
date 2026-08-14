@@ -8271,6 +8271,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					contextEntityId?: string | null | undefined;
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
+				externalId?: string | undefined;
 			};
 			output: {
 				status: string;

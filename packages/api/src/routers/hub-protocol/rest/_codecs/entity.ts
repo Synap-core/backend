@@ -167,6 +167,18 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Bypass the weak same-name create gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does not bypass strong-signal auto-merge (email/phone/url)."
       ),
+    externalId: z
+      .string()
+      .optional()
+      .describe(
+        "Strong cross-source identity anchor for this subject, as `provider:id` " +
+          "(e.g. `discord:123456789012345678`). Registered as an `external_id` " +
+          "identity signal so a later create with the SAME value auto-resolves to " +
+          "the same entity (dedup) instead of minting a duplicate — the strong " +
+          "atom that the weak email/phone/url auto-extraction cannot express for " +
+          "opaque connector ids. Opaque and case-sensitive; the provider prefix " +
+          "namespaces the id."
+      ),
   })
   .openapi("CreateEntityRequest");
 

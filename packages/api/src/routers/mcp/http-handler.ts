@@ -194,8 +194,8 @@ export function shouldRejectUnattributedWrite(
   isAgent?: boolean
 ): boolean {
   // The is-agent signal ADMITS a real agent principal — including a pod-wide
-  // agent (userType='agent', no linked human — wave #1b), which is a bare
-  // hub_inbound key today and would otherwise be wrongly rejected here. It is
+  // agent (userType='agent', no linked human), which is a bare hub_inbound
+  // key today and would otherwise be wrongly rejected here. It is
   // ANDed onto the existing bare-key predicate rather than replacing it, so the
   // gate still admits owner-attributed non-agent keys (e.g. service creds) and
   // still rejects a bare human PAT/hub_inbound misused as an agent write.

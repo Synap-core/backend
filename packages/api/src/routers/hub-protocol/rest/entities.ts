@@ -1068,6 +1068,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // createEntity door, which attaches each after the entity materializes).
         ...(body.facets?.length ? { facets: body.facets } : {}),
         ...(body.forceCreate ? { forceCreate: true } : {}),
+        // Strong `external_id` identity anchor (`provider:id`) — registered as a
+        // signal so a repeat create with the same value dedups. This is the ONLY
+        // door that exposes external_id over Hub REST; the weak email/phone/url
+        // auto-extraction can't express an opaque connector id.
+        ...(body.externalId ? { externalId: body.externalId } : {}),
       });
 
       // ── Impact-aware writes (SHALLOW, exact-name) ─────────────────────────

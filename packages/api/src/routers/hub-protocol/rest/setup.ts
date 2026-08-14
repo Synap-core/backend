@@ -28,6 +28,7 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 
+import { resolveKeyIdentity } from "../../../access/key-identity.js";
 import { apiKeyService } from "../../../services/api-keys.js";
 import { assertPodAdmin } from "../../../trpc.js";
 import {
@@ -503,8 +504,10 @@ export function registerSetupRoutes(app: HubHono): void {
     // Path 4: any hub-protocol.write key can self-provision a surface agent type.
     // Attribute to the HUMAN principal: if this is already an agent key, use
     // linkedUserId (the human it acts for); if human-owned PAT, userId is the human.
-    // Human-owned = linkedUserId null/empty (key acts as its userId human).
-    // Agent key = linkedUserId set (key is agent principal acting for that human).
+    // Human-owned = the key PRINCIPAL is not an agent (`!isAgent`, via the one
+    // identity door `resolveKeyIdentity`) — NOT `linkedUserId == null`. A
+    // pod-wide agent key also has no `linkedUserId`, so that check alone would
+    // misclassify it as human-owned and let it mint arbitrary named agents.
     let surfaceAgentLinkedUserId: string | undefined;
     let surfaceKeyIsHumanOwned = false;
     if (!authenticated) {
@@ -515,8 +518,8 @@ export function registerSetupRoutes(app: HubHono): void {
       ) {
         authenticated = true;
         authMethod = "api_key_surface";
-        surfaceKeyIsHumanOwned =
-          keyRecord.linkedUserId == null || keyRecord.linkedUserId === "";
+        const identity = await resolveKeyIdentity(keyRecord);
+        surfaceKeyIsHumanOwned = !identity.isAgent;
         surfaceAgentLinkedUserId =
           keyRecord.linkedUserId ?? keyRecord.userId ?? undefined;
       }
@@ -573,7 +576,7 @@ export function registerSetupRoutes(app: HubHono): void {
         ? body.instanceId.trim()
         : undefined;
     // OPT-IN — mint a POD-WIDE agent key (key.linkedUserId = null), governed as
-    // its OWN agent-user principal (#1a) rather than acting for a human. Default
+    // its OWN agent-user principal rather than acting for a human. Default
     // false: absent/false keeps the fail-closed linked-human resolution below. A
     // creator (createdByUserId) is still resolved and required; only the key's
     // linked human is deliberately dropped.
@@ -619,7 +622,7 @@ export function registerSetupRoutes(app: HubHono): void {
       let resolvedLinkedUserId: string | undefined = linkedUserId;
       if (podWide) {
         // Pod-wide agent: the KEY carries NO linked human (governed as its own
-        // agent-user principal, #1a). We still need a human CREATOR to attribute
+        // agent-user principal). We still need a human CREATOR to attribute
         // the agent-user row + own the (creator × agentType) singleton — resolved
         // below as ownerUserId (pod owner / oldest human) and passed as
         // createdByUserId. Skip the linked-human fail-closed guards; provision-
@@ -661,14 +664,14 @@ export function registerSetupRoutes(app: HubHono): void {
           resolvedLinkedUserId = humans[0].id;
         } else {
           // ── FAIL CLOSED: no human on this pod yet ──────────────────────────
-          // Previously this branch did not exist: with zero human rows,
-          // resolvedLinkedUserId stayed undefined and the key was minted with
-          // `linkedUserId: null` (below). That is a SILENT GOVERNANCE BYPASS —
-          // the pod derives `agentUserId = linkedUserId ? userId : undefined`
-          // (hub-protocol-rest.ts), and a defined agentUserId is the ONLY thing
-          // routing an agent write through checkPermissionOrPropose() into a
-          // proposal. A null-linked key therefore writes DIRECTLY, forever, with
-          // no error and no signal — and nothing repairs it once a human appears.
+          // With zero human rows, resolvedLinkedUserId stays undefined and the
+          // key would be minted with `linkedUserId: null` (below) WITHOUT the
+          // caller having opted into `podWide`. `resolveKeyIdentity`
+          // (access/key-identity.ts) derives `effectiveUserId` as
+          // `linkedUserId ?? userId` — with no linked human the agent's own
+          // userId becomes the data floor, so it reads/writes as itself rather
+          // than as a human's second brain, with no error and no signal — and
+          // nothing repairs it once a human appears.
           //
           // Reachable via the PROVISIONING_TOKEN door during pod bootstrap,
           // which is exactly the window where no human exists yet.

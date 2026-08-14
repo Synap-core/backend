@@ -3,6 +3,7 @@ import {
   deriveForceProposeWrites,
   buildRunSessionMetadata,
   buildDefinitionSnapshot,
+  IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
   type RunChainContext,
 } from "./run-playbook.js";
 import type { Playbook } from "@synap/database/schema";
@@ -120,5 +121,40 @@ describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
       params: [{ name: "x" }],
       expectedOutputs: [{ label: "out" }],
     });
+  });
+});
+
+describe("IDEMPOTENCY_TERMINAL_SESSION_STATUSES (subject-idempotency reuse gate)", () => {
+  // Every focus_sessions.status enum value (schema/focus-sessions.ts), split into
+  // the states that mean a run is still IN FLIGHT (reuse → no re-dispatch) vs
+  // TERMINALLY done (a fresh run is allowed again). The idempotency-by-subject
+  // check reuses a session iff its status is NOT in the terminal set.
+  const IN_FLIGHT = [
+    "active",
+    "paused",
+    "stale",
+    "forming",
+    "scheduled",
+  ] as const;
+  const TERMINAL = ["closed", "failed", "cancelled"] as const;
+
+  it("treats NO in-flight state as terminal, so a stuck/aged subject is REUSED (Stellar-runaway regression)", () => {
+    // Regression: keying reuse on 'active' alone re-spawned a fresh run daily once
+    // the focus-session reaper aged the session active→'stale'. 'stale' (and
+    // paused/forming/scheduled) must NOT count as terminal — otherwise the next
+    // daily cron re-dispatches a duplicate run for the same subject.
+    for (const status of IN_FLIGHT) {
+      expect(IDEMPOTENCY_TERMINAL_SESSION_STATUSES).not.toContain(status);
+    }
+  });
+
+  it("lists EXACTLY the terminal states, so a properly-closed subject is eligible again (no permanent lockout)", () => {
+    // Once the playbook-run reaper force-fails the run and closes the session
+    // (→ closed|failed|cancelled) — or the run completes (session → closed) — a
+    // NEW run is allowed. If this set ever narrowed, a subject could re-spawn
+    // daily again; if it widened, a subject could be locked out forever.
+    expect([...IDEMPOTENCY_TERMINAL_SESSION_STATUSES].sort()).toEqual(
+      [...TERMINAL].sort()
+    );
   });
 });

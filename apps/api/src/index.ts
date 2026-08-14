@@ -49,6 +49,7 @@ import {
   fetchFederationMetadata,
   normalizeIssuerUrl,
   sanitizeErrorEgress,
+  registerPodWideProposalReactor,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -1852,6 +1853,15 @@ try {
         },
         "API server started"
       );
+
+      // IoC: fill the pod-wide proposal notification seam. `emitSideEffects`
+      // runs its reactors in THIS process, which is also the process that runs
+      // every pg-boss worker — so registering here is what lets a proposal filed
+      // by the @synap/jobs widen-lane scanner reach the pod owner + admins
+      // without jobs importing @synap/api. Registered before the boss branch:
+      // the registry is process-global, and `emitSideEffects` already no-ops
+      // when pg-boss is unavailable (LOCAL_MODE).
+      registerPodWideProposalReactor();
 
       if (config.server.localMode) {
         // Local mode: pg-boss is disabled (untested on PGlite and would

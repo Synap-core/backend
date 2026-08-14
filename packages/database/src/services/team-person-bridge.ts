@@ -8,7 +8,7 @@
  * Best-effort: never throws to membership callers; agents are skipped.
  */
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, isNotNull, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -23,6 +23,7 @@ import { EntityRepository } from "../repositories/entity-repository.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import { ProfileNotFoundError } from "../errors/index.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   resolveIdentity,
   registerIdentitySignals,
@@ -34,10 +35,7 @@ const logger = createLogger({ module: "team-person-bridge" });
 type Db = PostgresJsDatabase<typeof schema>;
 
 export type EnsureTeamPersonAction =
-  | "created"
-  | "linked"
-  | "updated"
-  | "skipped";
+  "created" | "linked" | "updated" | "skipped";
 
 export interface EnsureTeamPersonInput {
   memberUserId: string;
@@ -146,74 +144,148 @@ async function ensureTeamPersonForMemberInner(
     signals.push({ type: "email", value: member.email.trim() });
   }
 
-  const resolution = await resolveIdentity(db, {
-    userId: ownerUserId,
-    kindSlug: "person",
-    name: displayName,
-    signals,
-  });
-
-  let entityId: string;
-  let action: EnsureTeamPersonAction;
-
-  if (resolution.match === "strong" && resolution.entity) {
-    entityId = resolution.entity.id;
-    action = "linked";
-  } else {
-    const silentEventRepo = createSilentEventRepo();
-    const entityRepo = new EntityRepository(db, silentEventRepo);
-    const created = await entityRepo.create(
-      {
-        profileSlug: "person",
-        title: displayName,
-        workspaceId: null,
-        userId: ownerUserId,
-        properties: {
-          ...(member.email?.trim() ? { email: member.email.trim() } : {}),
-          linkedUserId: member.id,
-        },
-        skipValidation: true,
-      },
-      ownerUserId
+  // Serialize concurrent ensures for the SAME member. Two membership events
+  // (invite-accept + backfill, or two rapid invites) could each strong-MISS the
+  // resolve and each create — the live "Samir ×2 / eve-doctor-s ×2" duplicate.
+  // The (type,value) unique index on entity_identity_signals only makes ONE
+  // signal insert win; both ENTITIES were already created. A transaction-scoped
+  // advisory lock keyed on the login external_id makes the 2nd caller block
+  // until the 1st commits, so it then strong-matches the just-registered signal
+  // and links instead of duplicating. (A migration is NOT needed: the unique
+  // constraint already exists; only the check→create window needed closing, and
+  // an FK from the signal to the entity forbids claim-before-insert — hence the
+  // lock rather than a signal-first upsert.) Released on commit/rollback.
+  return await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Db;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`synap:team-person-bridge:${userExternalIdSignal(member.id)}`}))`
     );
-    entityId = created.id;
-    action = "created";
-  }
 
-  await registerIdentitySignals(db, entityId, signals, "team-person-bridge");
+    // Weak same-name fallback scope: the OWNER's visible rows. Persons are
+    // pod-wide (workspace_id NULL) owned by the workspace owner, so the null
+    // branch is gated by owner — a same-name person in ANOTHER owner's graph is
+    // never a weak-link candidate. Built here (not injected from the api caller)
+    // because the scope must key on the RESOLVED ownerUserId that only this
+    // function knows; `userVisibleWhere` lives in @synap/database so no upward
+    // import is required.
+    const weakScope = or(
+      and(isNull(entities.workspaceId), eq(entities.userId, ownerUserId)),
+      and(
+        isNotNull(entities.workspaceId),
+        userVisibleWhere(entities.workspaceId, ownerUserId)
+      )
+    )!;
 
-  // Merge linkedUserId into properties when missing (strong-match path).
-  if (action !== "created") {
-    const existing = await db.query.entities.findFirst({
-      where: eq(entities.id, entityId),
-      columns: { id: true, properties: true },
+    const resolution = await resolveIdentity(tx, {
+      userId: ownerUserId,
+      kindSlug: "person",
+      name: displayName,
+      signals,
+      userScope: weakScope,
     });
-    const props =
-      (existing?.properties as Record<string, unknown> | null | undefined) ??
-      {};
-    if (props.linkedUserId !== member.id) {
-      if (props.linkedUserId == null || props.linkedUserId === "") {
-        await db
-          .update(entities)
-          .set({
-            properties: { ...props, linkedUserId: member.id },
-            updatedAt: new Date(),
-          })
-          .where(eq(entities.id, entityId));
-      }
+
+    let entityId: string;
+    let action: EnsureTeamPersonAction;
+
+    if (resolution.match === "strong" && resolution.entity) {
+      // Strong signal (external_id / email) → same human. Link, never create.
+      entityId = resolution.entity.id;
+      action = "linked";
+    } else if (
+      resolution.match === "weak" &&
+      resolution.entity &&
+      !!member.email?.trim() &&
+      (await weakMatchEmailCorroborates(
+        tx,
+        resolution.entity.id,
+        member.email.trim()
+      ))
+    ) {
+      // Same-name person whose stored email ALSO matches → same human. Link
+      // (attach the facet + register external_id below) rather than mint a
+      // duplicate. Gating on name+email avoids false-linking a same-name
+      // stranger — name alone never links here.
+      entityId = resolution.entity.id;
+      action = "linked";
     } else {
-      // Idempotent re-run on an already-linked person.
-      action = "updated";
+      const silentEventRepo = createSilentEventRepo();
+      const entityRepo = new EntityRepository(tx, silentEventRepo);
+      const created = await entityRepo.create(
+        {
+          profileSlug: "person",
+          title: displayName,
+          workspaceId: null,
+          userId: ownerUserId,
+          properties: {
+            ...(member.email?.trim() ? { email: member.email.trim() } : {}),
+            linkedUserId: member.id,
+          },
+          skipValidation: true,
+        },
+        ownerUserId
+      );
+      entityId = created.id;
+      action = "created";
     }
-  }
 
-  await tryAttachTeamMemberFacet(db, {
-    entityId,
-    workspaceId: input.workspaceId,
-    ownerUserId,
+    await registerIdentitySignals(tx, entityId, signals, "team-person-bridge");
+
+    // Merge linkedUserId into properties when missing (link paths).
+    if (action !== "created") {
+      const existing = await tx.query.entities.findFirst({
+        where: eq(entities.id, entityId),
+        columns: { id: true, properties: true },
+      });
+      const props =
+        (existing?.properties as Record<string, unknown> | null | undefined) ??
+        {};
+      if (props.linkedUserId !== member.id) {
+        if (props.linkedUserId == null || props.linkedUserId === "") {
+          await tx
+            .update(entities)
+            .set({
+              properties: { ...props, linkedUserId: member.id },
+              updatedAt: new Date(),
+            })
+            .where(eq(entities.id, entityId));
+        }
+      } else {
+        // Idempotent re-run on an already-linked person.
+        action = "updated";
+      }
+    }
+
+    await tryAttachTeamMemberFacet(tx, {
+      entityId,
+      workspaceId: input.workspaceId,
+      ownerUserId,
+    });
+
+    return { entityId, action };
   });
+}
 
-  return { entityId, action };
+/**
+ * A weak (same-name) resolve is only trusted to LINK when the candidate's stored
+ * email matches the member's — name alone must never merge two humans. Returns
+ * false when the candidate has no email or a different one (→ create instead).
+ */
+async function weakMatchEmailCorroborates(
+  db: Db,
+  candidateEntityId: string,
+  memberEmail: string
+): Promise<boolean> {
+  const candidate = await db.query.entities.findFirst({
+    where: eq(entities.id, candidateEntityId),
+    columns: { properties: true },
+  });
+  const candEmail = (
+    candidate?.properties as Record<string, unknown> | null | undefined
+  )?.email;
+  return (
+    typeof candEmail === "string" &&
+    candEmail.trim().toLowerCase() === memberEmail.toLowerCase()
+  );
 }
 
 async function tryAttachTeamMemberFacet(

@@ -320,7 +320,7 @@ export class EntityRepository extends BaseRepository<
       // still skip PROPERTY schema enforcement below, but it must never skip
       // this identity-shape adapter, or a seed/template referencing a role
       // slug directly reintroduces the exact one-entity-one-kind drift this
-      // feature exists to close (previously only `console.warn`'d).
+      // feature exists to close.
       const applicable = profile.applicableKinds ?? [];
       if (applicable.length !== 1) {
         throw new EntityCreateRejectedError(
