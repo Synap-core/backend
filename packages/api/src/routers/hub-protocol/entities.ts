@@ -180,6 +180,14 @@ export const entitiesRouter = router({
          * existing id; only set when the subject is genuinely distinct.
          */
         forceCreate: z.boolean().optional(),
+        /**
+         * Strong `external_id` identity anchor (`provider:id`, e.g. `discord:123`).
+         * Must be declared here or Zod's default `.strip()` drops it before the
+         * real `entities.create` sees it — the bug that made connector dedup
+         * silently no-op (email rode `properties`, which IS declared; external_id
+         * had no home in this wrapper). Forwarded to `caller.create` below.
+         */
+        externalId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -246,6 +254,9 @@ export const entitiesRouter = router({
             }
           : {}),
         ...(input.forceCreate ? { forceCreate: true } : {}),
+        // Strong external_id anchor → real entities.create registers it as an
+        // identity signal so a repeat create with the same provider id dedups.
+        ...(input.externalId ? { externalId: input.externalId } : {}),
       });
       // Emit session event so whiteboards in ambient mode can mirror new entities.
       if (result.status === "created" && result.id) {

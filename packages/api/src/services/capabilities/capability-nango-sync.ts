@@ -23,32 +23,15 @@ import {
   eq,
   isNull,
   inArray,
-  like,
   encryptServerSide,
 } from "@synap/database";
-import {
-  links,
-  tools,
-  secrets,
-  entityExternalLinks,
-} from "@synap/database/schema";
+import { secrets, entityExternalLinks } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 import { resolveNangoConnector } from "../../connectors/index.js";
+import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolution.js";
 
 const logger = createLogger({ module: "capability-nango-sync" });
-
-/** `nango://gmail` / a tool config → the Nango providerConfigKey. */
-function providerConfigKeyOf(tool: {
-  credentialRef: string | null;
-  config: unknown;
-}): string | null {
-  const cfg = (tool.config ?? {}) as Record<string, unknown>;
-  if (typeof cfg.providerConfigKey === "string") return cfg.providerConfigKey;
-  if (tool.credentialRef?.startsWith("nango://"))
-    return tool.credentialRef.replace(/^nango:\/\//, "");
-  return null;
-}
 
 /**
  * Mirror the actor's live Nango connections for `capabilityId` into `secrets`
@@ -58,33 +41,12 @@ export async function syncNangoConnectionsToRegistry(
   capabilityId: string,
   actorUserId: string
 ): Promise<void> {
-  // 1. The capability's member tools that use the nango:// scheme.
-  const edges = await db
-    .select({ toolId: links.fromId })
-    .from(links)
-    .where(
-      and(
-        eq(links.toType, "capability"),
-        eq(links.toId, capabilityId),
-        eq(links.linkType, "member_of"),
-        eq(links.fromType, "tool")
-      )
-    );
-  const toolIds = edges.map((e) => e.toolId);
-  if (toolIds.length === 0) return;
-
-  const nangoTools = await db
-    .select({ credentialRef: tools.credentialRef, config: tools.config })
-    .from(tools)
-    .where(
-      and(inArray(tools.id, toolIds), like(tools.credentialRef, "nango://%"))
-    );
-  if (nangoTools.length === 0) return; // pure-vault capability — nothing to sync.
-
-  const providerKeys = Array.from(
-    new Set(nangoTools.map(providerConfigKeyOf).filter((k): k is string => !!k))
-  );
-  if (providerKeys.length === 0) return;
+  // 1. The capability's Nango providers — resolved the SAME way the catalog card
+  //    does (member_of tool links first, template-def fallback). Sharing this with
+  //    the card + list is what stops the reconciler early-returning while the card
+  //    can still see the tool via its template def.
+  const providerKeys = await resolveCapabilityNangoProviderKeys(capabilityId);
+  if (providerKeys.length === 0) return; // pure-vault / no Nango tool — nothing to sync.
 
   const connector = await resolveNangoConnector();
   if (!connector) return; // Nango unconfigured — leave the registry untouched.

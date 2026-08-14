@@ -19,14 +19,21 @@ import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
 
 import { requirePodAdmin, isPodAdmin } from "../../utils/workspace-role.js";
-import { syncNangoConnectionsToRegistry } from "./capability-nango-sync.js";
+import { resolveNangoConnector } from "../../connectors/index.js";
+import {
+  syncNangoConnectionsToRegistry,
+  detachNangoConnectionRegistry,
+} from "./capability-nango-sync.js";
+import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolution.js";
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
 
 /** A connection as surfaced to callers — NEVER carries the secret value. */
 export interface CapabilityConnectionView {
+  /** Real `secrets.id` for a persisted row; synthetic `nango:<connectionId>`
+   *  for a live-Nango connection with no registry row yet. */
   id: string;
-  /** Human label (`secrets.name`). */
+  /** Human label (`secrets.name`, or `<provider> · …<last6>` for a synthetic). */
   label: string;
   contextType: string | null;
   contextId: string | null;
@@ -39,6 +46,24 @@ export interface CapabilityConnectionView {
    * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
    */
   isPodWide: boolean;
+  /**
+   * Nango providerConfigKey (e.g. "google") for a provider connection; null for a
+   * vault key or when Nango could not be resolved. The UI reconnects THIS provider.
+   */
+  provider: string | null;
+  /**
+   * Liveness, from the connection-health mirror (`secrets.connection_state`, the
+   * SAME signal the catalog reads at `capability-catalog.ts:575-593`). A synthetic
+   * live connection has no registry row to carry a reauth mark, so it reads
+   * `connected`.
+   */
+  health: "connected" | "needs_reauth";
+  /**
+   * True when this row is backed by a real `secrets` row; false for a SYNTHETIC
+   * row computed live from Nango (no registry row yet — the reconciler could not
+   * persist it, or Nango reported it after the last reconcile pass).
+   */
+  persisted: boolean;
 }
 
 /**
@@ -55,6 +80,54 @@ function connectionKind(row: {
   return row.providerIntegrationId != null || row.accountHint != null
     ? "nango"
     : "vault";
+}
+
+/**
+ * Liveness from the connection-health mirror (`secrets.connection_state`). This
+ * is the SAME `needs_reauth` signal the catalog reads (`capability-catalog.ts`
+ * loadConnState, :575-593) — kept in lock-step so the list and the card agree on
+ * whether a connection is usable, not merely present.
+ */
+function connectionHealth(
+  connectionState: string | null | undefined
+): "connected" | "needs_reauth" {
+  return connectionState === "needs_reauth" ? "needs_reauth" : "connected";
+}
+
+/** A persisted `secrets` row → its view row (health from its own state). */
+function persistedRowToView(
+  row: typeof secrets.$inferSelect,
+  provider: string | null
+): CapabilityConnectionView {
+  return {
+    id: row.id,
+    label: row.name,
+    contextType: row.contextType ?? null,
+    contextId: row.contextId ?? null,
+    isDefault: row.isDefault,
+    accountHint: row.accountHint ?? null,
+    kind: connectionKind(row),
+    isPodWide: row.isPodWide,
+    provider,
+    health: connectionHealth(row.connectionState),
+    persisted: true,
+  };
+}
+
+/**
+ * Force EXACTLY ONE default across the merged view (display normalization): the
+ * first row already marked default wins — preferring a persisted default since
+ * persisted rows come first — else the first row is defaulted so a picker always
+ * has a target. Registry defaults are per-tier (a per-user AND a pod-wide default
+ * can coexist under `idx_secrets_capability_default`); this collapses that to one
+ * for the UI without touching stored state (setDefault still acts on real rows).
+ */
+function enforceOneDefault(
+  views: CapabilityConnectionView[]
+): CapabilityConnectionView[] {
+  const idx = views.findIndex((v) => v.isDefault);
+  const winner = idx >= 0 ? idx : views.length > 0 ? 0 : -1;
+  return views.map((v, i) => ({ ...v, isDefault: i === winner }));
 }
 
 // ── Ownership gate (mirrors tools.ts bindCredential) ──────────────────────────
@@ -168,16 +241,99 @@ export async function listConnections(
     ? rows
     : rows.filter((r) => r.userId === actorUserId || r.isPodWide);
 
-  return visible.map((r) => ({
-    id: r.id,
-    label: r.name,
-    contextType: r.contextType ?? null,
-    contextId: r.contextId ?? null,
-    isDefault: r.isDefault,
-    accountHint: r.accountHint ?? null,
-    kind: connectionKind(r),
-    isPodWide: r.isPodWide,
-  }));
+  // ── Live-truth overlay ────────────────────────────────────────────────────
+  // The card shows "Connected" off live Nango; the list must match. Resolve this
+  // capability's Nango providers the SAME way the card does, then fetch the
+  // actor's live connections (TYPED — a fault ≠ empty).
+  const providerKeys = await resolveCapabilityNangoProviderKeys(
+    capabilityId
+  ).catch(() => []);
+
+  // `liveOk` distinguishes "Nango answered, this is the truth" from "Nango
+  // faulted" — on a fault we neither synthesize nor blank, we just return the
+  // persisted rows (live-truth must survive an outage). Filter to THIS
+  // capability's providers.
+  let liveOk = false;
+  const liveConnections: Array<{ connectionId: string; provider: string }> = [];
+  if (providerKeys.length > 0) {
+    const connector = await resolveNangoConnector();
+    if (connector) {
+      const res = await connector.listConnectionsResult(actorUserId);
+      if (res.ok) {
+        liveOk = true;
+        const keySet = new Set(providerKeys);
+        for (const c of res.connections) {
+          if (keySet.has(c.provider)) {
+            liveConnections.push({
+              connectionId: c.connectionId,
+              provider: c.provider,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return mergeConnectionViews(visible, {
+    ok: liveOk,
+    connections: liveConnections,
+  });
+}
+
+/**
+ * Merge persisted registry rows with the live Nango connections into ONE view —
+ * the pure core of `listConnections` (exported for test). A live connection with
+ * no persisted pointer becomes a SYNTHETIC row (`persisted:false`); the
+ * persisted↔live join is on accountHint == Nango connectionId, so a mirrored
+ * connection appears exactly ONCE. When Nango faulted (`live.ok === false`) the
+ * persisted rows are returned untouched — never blanked, never synthesized over.
+ */
+export function mergeConnectionViews(
+  persisted: Array<typeof secrets.$inferSelect>,
+  live: {
+    ok: boolean;
+    connections: Array<{ connectionId: string; provider: string }>;
+  }
+): CapabilityConnectionView[] {
+  const hintToProvider = new Map(
+    live.connections.map((c) => [c.connectionId, c.provider] as const)
+  );
+
+  // Persisted rows first — a Nango pointer row's provider comes from the live
+  // join (the row stores only its accountHint/connectionId, not the provider key).
+  const persistedHints = new Set<string>();
+  const views: CapabilityConnectionView[] = persisted.map((r) => {
+    if (r.accountHint) persistedHints.add(r.accountHint);
+    const provider =
+      connectionKind(r) === "nango" && r.accountHint
+        ? (hintToProvider.get(r.accountHint) ?? null)
+        : null;
+    return persistedRowToView(r, provider);
+  });
+
+  // Synthetic rows for live connections with no persisted pointer — ONLY when
+  // Nango actually answered (never invent rows on a fault). A synthetic row has no
+  // registry row to carry a reauth mark, so it reads `connected`.
+  if (live.ok) {
+    for (const c of live.connections) {
+      if (persistedHints.has(c.connectionId)) continue; // deduped on connectionId
+      views.push({
+        id: `nango:${c.connectionId}`,
+        label: `${c.provider} · …${c.connectionId.slice(-6)}`,
+        contextType: null,
+        contextId: null,
+        isDefault: false,
+        accountHint: c.connectionId,
+        kind: "nango",
+        isPodWide: false,
+        provider: c.provider,
+        health: "connected",
+        persisted: false,
+      });
+    }
+  }
+
+  return enforceOneDefault(views);
 }
 
 // ── add ────────────────────────────────────────────────────────────────────────
@@ -324,16 +480,9 @@ export async function addConnection(
     );
   }
 
-  return {
-    id: secret.id,
-    label: secret.name,
-    contextType: secret.contextType ?? null,
-    contextId: secret.contextId ?? null,
-    isDefault: secret.isDefault,
-    accountHint: secret.accountHint ?? null,
-    kind: connectionKind(secret),
-    isPodWide: secret.isPodWide,
-  };
+  // provider is null here — the write door doesn't resolve live Nango; the merged
+  // `listConnections` is the source of provider truth.
+  return persistedRowToView(secret, null);
 }
 
 // ── update ─────────────────────────────────────────────────────────────────────
@@ -436,16 +585,7 @@ export async function updateConnection(
     });
   }
 
-  return {
-    id: row.id,
-    label: row.name,
-    contextType: row.contextType ?? null,
-    contextId: row.contextId ?? null,
-    isDefault: row.isDefault,
-    accountHint: row.accountHint ?? null,
-    kind: connectionKind(row),
-    isPodWide: row.isPodWide,
-  };
+  return persistedRowToView(row, null);
 }
 
 // ── remove ─────────────────────────────────────────────────────────────────────
@@ -525,4 +665,74 @@ export async function removeConnection(input: {
   }
 
   return { ok: true, promotedDefaultId };
+}
+
+// ── disconnect (Nango revoke) ───────────────────────────────────────────────────
+
+/**
+ * POD-WIDE Nango revoke, addressed by the Nango `connectionId` (== `accountHint`)
+ * so it works on a SYNTHETIC row that has no `secrets` id yet. Reuses the SAME
+ * doors the connector disconnect uses — `revokeConnection` (drops the connection
+ * on Nango) + `detachNangoConnectionRegistry` (soft-deletes every pointer row for
+ * that connectionId across ALL capabilities, and marks its sourced entities
+ * disconnected). That cross-capability reach is why the result flags `podWide`
+ * so the UI can warn: revoking here logs the OAuth account out everywhere.
+ *
+ * Ownership: a persisted pointer row is owner/pod-admin gated (pod-wide or
+ * foreign rows require pod-admin — same floor as `loadOwnedConnection`); a
+ * synthetic connection is authorized by proving it is one of the ACTOR's own live
+ * Nango connections (Nango filters by `end_user.id`), so a member can never
+ * revoke another user's connection.
+ */
+export async function disconnectConnection(input: {
+  capabilityId: string;
+  /** The Nango connectionId (== `accountHint`), not a `secrets` id. */
+  connectionId: string;
+  actorUserId: string;
+}): Promise<{ ok: true; podWide: true; provider: string | null }> {
+  const { capabilityId, connectionId, actorUserId } = input;
+
+  const connector = await resolveNangoConnector();
+  if (!connector) {
+    throw new Error("Nango is not configured on this pod.");
+  }
+
+  // One Nango read serves both provider resolution and synthetic-ownership proof.
+  const live = await connector.listConnectionsResult(actorUserId);
+  const liveMatch = live.ok
+    ? live.connections.find((c) => c.connectionId === connectionId)
+    : undefined;
+  const provider = liveMatch?.provider ?? null;
+
+  // Persisted pointer rows for this (capability, connectionId).
+  const persisted = await db
+    .select()
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.capabilityId, capabilityId),
+        eq(secrets.accountHint, connectionId),
+        isNull(secrets.deletedAt)
+      )
+    );
+
+  if (persisted.length > 0) {
+    // Pod-wide or foreign pointer → pod-admin, else the owning actor is enough.
+    if (persisted.some((r) => r.isPodWide || r.userId !== actorUserId)) {
+      await requirePodAdmin(actorUserId);
+    }
+  } else {
+    // Synthetic: authorize by proving live ownership. A Nango fault here can't
+    // prove ownership, so refuse rather than revoke on an unverifiable claim.
+    if (!liveMatch) {
+      throw new Error("Connection not found for this capability.");
+    }
+  }
+
+  // Reuse the connector disconnect doors verbatim (provider on the hot path lets
+  // the revoke skip an extra Nango lookup; it self-resolves without it).
+  await connector.revokeConnection(connectionId, provider ?? undefined);
+  await detachNangoConnectionRegistry(connectionId);
+
+  return { ok: true, podWide: true, provider };
 }

@@ -602,11 +602,34 @@ export function registerCaptureRoutes(app: HubHono): void {
             ? ((result as { targetWorkspaceId?: string }).targetWorkspaceId ??
               null)
             : null;
+        // Retain what the human actually typed/linked on the proposal.
+        //
+        // Structuring is lossy: `captureStructureToGraph` keeps the extracted
+        // entities, not the sentence they came from. Rejected proposals are
+        // never deleted, so carrying rawSource means a rejected capture still
+        // leaves a durable record of the original input — otherwise rejecting
+        // discards the only copy.
+        //
+        // The MCP capture handler already passes rawSource; this path was the
+        // outlier. NOTE it truncates at 8000 (the `text` input's own cap) while
+        // this bound is 100_000 — `submitCaptureGraph` enforces no bound of its
+        // own despite its type doc calling rawSource "bounded", so the cap is
+        // per-call-site. Worth centralising in that one door before a third
+        // call site invents a third number.
+        const structureRawSource =
+          body.text || body.url
+            ? {
+                ...(body.text ? { rawText: body.text.slice(0, 100_000) } : {}),
+                ...(body.url ? { sourceUrl: body.url } : {}),
+              }
+            : undefined;
+
         const graph = await submitCaptureGraph({
           userId,
           workspaceId: targetWorkspaceId,
           entities,
           relations,
+          ...(structureRawSource ? { rawSource: structureRawSource } : {}),
         });
         return c.json({
           proposalId: graph.proposalId,

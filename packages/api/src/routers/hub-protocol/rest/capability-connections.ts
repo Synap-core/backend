@@ -41,6 +41,12 @@ const ConnectionSchema = z.object({
   accountHint: z.string().nullable(),
   kind: z.enum(["nango", "vault"]),
   isPodWide: z.boolean(),
+  // Merged live-truth fields (capability-connections.listConnections): the Nango
+  // provider key, connection health, and whether the row is a real secrets row or
+  // a synthetic live-Nango connection with no registry row yet.
+  provider: z.string().nullable(),
+  health: z.enum(["connected", "needs_reauth"]),
+  persisted: z.boolean(),
 });
 
 const ListConnectionsResponseSchema = z.object({

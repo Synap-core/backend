@@ -89,6 +89,7 @@ import {
   listConnections,
   removeConnection,
   updateConnection,
+  disconnectConnection,
 } from "../services/capabilities/capability-connections.js";
 
 const logger = createLogger({ module: "capabilities" });
@@ -590,6 +591,27 @@ export const capabilitiesRouter = router({
       .mutation(async ({ ctx, input }) => {
         const userId = requireUserId(ctx.userId);
         return removeConnection({ ...input, actorUserId: userId });
+      }),
+
+    /**
+     * POD-WIDE disconnect of a Nango connection, addressed by the Nango
+     * connectionId (== `accountHint`) so it works on a SYNTHETIC (non-persisted)
+     * row from the merged list. Reuses the connector `revokeConnection` +
+     * `detachNangoConnectionRegistry` doors. `connectionId` is NOT a `secrets`
+     * uuid here (a synthetic row has none) — it is the Nango connectionId, so it
+     * is a plain string, not `.uuid()`. The `{ podWide: true }` result tells the
+     * UI to warn that the OAuth account is logged out everywhere.
+     */
+    disconnect: protectedProcedure
+      .input(
+        z.object({
+          capabilityId: z.string().uuid(),
+          connectionId: z.string().min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const userId = requireUserId(ctx.userId);
+        return disconnectConnection({ ...input, actorUserId: userId });
       }),
   }),
 
@@ -1532,7 +1554,7 @@ export const capabilitiesRouter = router({
       //       `{userId}:{podId}:{provider}` (NangoConnector.buildConnectionId)
       //       and a connectable tool's provider is its `nango://<provider>`
       //       credentialRef / `config.providerConfigKey` (the same derivation as
-      //       `providerConfigKeyOf` in capability-nango-sync.ts). Without this,
+      //       `providerConfigKeyOf` in capability-provider-resolution.ts). Without this,
       //       an arbitrary connectionId enumerates a stranger's link count, and
       //       a stale one returns a confident count for a DIFFERENT connection
       //       inside the one dialog whose job is to be trusted before a revoke.

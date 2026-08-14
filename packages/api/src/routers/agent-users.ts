@@ -6,7 +6,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  assertPodAdmin,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray, drizzleSql } from "@synap/database";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -105,7 +110,12 @@ export const agentUsersRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        workspaceId: z.string().uuid(),
+        // Required for a workspace agent; omit for a pod-wide agent (no
+        // membership row — visible in every workspace). Guarded in the handler.
+        workspaceId: z.string().uuid().optional(),
+        // Opt-in: mint a pod-wide agent-user (no workspace membership, governed
+        // as its own principal). Pod-admin only. Mutually exclusive with a twin.
+        podWide: z.boolean().optional(),
         agentType: z.string().min(1).max(50).optional(),
         name: z.string().min(1).max(100),
         role: z.enum(["admin", "editor", "viewer"]).optional(),
@@ -115,13 +125,42 @@ export const agentUsersRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      if (input.template === "twin") {
+      const podWide = input.podWide === true;
+
+      // ── Scope shape guards ────────────────────────────────────────────────
+      if (podWide && input.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "A pod-wide agent has no workspace — omit workspaceId (or omit podWide to create a workspace agent).",
+        });
+      }
+      if (!podWide && !input.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "workspaceId is required unless podWide is set.",
+        });
+      }
+      if (podWide && input.template === "twin") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "A twin is workspace-scoped (it inherits your membership role) and cannot be pod-wide.",
+        });
+      }
+
+      // ── Authorization ─────────────────────────────────────────────────────
+      // Non-pod-wide branches are guaranteed a workspaceId by the guard above.
+      if (podWide) {
+        // Pod-wide agents are visible in every workspace — a pod-level action.
+        await assertPodAdmin(ctx.userId);
+      } else if (input.template === "twin") {
         // Any workspace member can request their own twin.
         // Admins: always allowed. Members: requires allowSelfServiceTwin governance setting.
         const memberPerm = await verifyPermission({
           db,
           userId: ctx.userId,
-          workspace: { id: input.workspaceId },
+          workspace: { id: input.workspaceId! },
           requiredPermission: "read",
         });
         if (!memberPerm.allowed) {
@@ -134,7 +173,7 @@ export const agentUsersRouter = router({
         const adminPerm = await verifyPermission({
           db,
           userId: ctx.userId,
-          workspace: { id: input.workspaceId },
+          workspace: { id: input.workspaceId! },
           requiredPermission: "manage",
         });
 
@@ -142,7 +181,7 @@ export const agentUsersRouter = router({
           const [ws] = await db
             .select({ settings: workspaces.settings })
             .from(workspaces)
-            .where(eq(workspaces.id, input.workspaceId))
+            .where(eq(workspaces.id, input.workspaceId!))
             .limit(1);
           const governance = (ws?.settings as WorkspaceSettings | undefined)
             ?.aiGovernance;
@@ -159,7 +198,7 @@ export const agentUsersRouter = router({
         const perm = await verifyPermission({
           db,
           userId: ctx.userId,
-          workspace: { id: input.workspaceId },
+          workspace: { id: input.workspaceId! },
           requiredPermission: "manage",
         });
         if (!perm.allowed) {
@@ -197,7 +236,7 @@ export const agentUsersRouter = router({
           .where(
             and(
               eq(workspaceMembers.userId, ctx.userId),
-              eq(workspaceMembers.workspaceId, input.workspaceId)
+              eq(workspaceMembers.workspaceId, input.workspaceId!)
             )
           )
           .limit(1);
@@ -239,13 +278,16 @@ export const agentUsersRouter = router({
         locale: "en",
       });
 
-      // Add to workspace with resolved role
-      await db.insert(workspaceMembers).values({
-        workspaceId: input.workspaceId,
-        userId: agentId,
-        role: resolvedRole,
-        invitedBy: ctx.userId,
-      });
+      // Add to workspace with resolved role — pod-wide agents get NO membership
+      // row (that absence is exactly what marks them pod-wide in `list`).
+      if (!podWide) {
+        await db.insert(workspaceMembers).values({
+          workspaceId: input.workspaceId!,
+          userId: agentId,
+          role: resolvedRole,
+          invitedBy: ctx.userId,
+        });
+      }
 
       auditLog({
         subjectType: "agent_user",
@@ -257,7 +299,8 @@ export const agentUsersRouter = router({
         data: {
           agentType: resolvedAgentType,
           name: input.name,
-          role: resolvedRole,
+          // Pod-wide agents have no membership role.
+          role: podWide ? null : resolvedRole,
           template: input.template,
         },
       });
@@ -267,8 +310,10 @@ export const agentUsersRouter = router({
         email,
         name: input.name,
         agentType: resolvedAgentType,
-        role: resolvedRole,
+        // Pod-wide agents have no membership → no workspace role.
+        role: podWide ? null : resolvedRole,
         template: input.template,
+        podWide,
       };
     }),
 

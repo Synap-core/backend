@@ -95,12 +95,19 @@ export function classifyRateLimitPath(path: string): RateLimitClass {
     return "free";
   }
 
-  // import — Hub REST bulk import
+  // import — Hub REST bulk import, and the observations ingest door.
+  //
+  // `observations.append` takes a BATCH per call, so the default `crud` budget
+  // (500 calls / 15 min) multiplies by the batch size into a very large number
+  // of appended rows on an append-only hypertable. It is a bulk-ingest door in
+  // everything but name, so it belongs in the bulk-ingest budget rather than
+  // alongside single-row CRUD.
   if (
     p === "/api/hub/import" ||
     p.startsWith("/api/hub/import/") ||
     p === "/api/hub-protocol/import" ||
-    p.startsWith("/api/hub-protocol/import/")
+    p.startsWith("/api/hub-protocol/import/") ||
+    p.startsWith("/api/hub/trpc/observations")
   ) {
     return "import";
   }

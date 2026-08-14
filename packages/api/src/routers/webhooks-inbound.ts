@@ -277,6 +277,29 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
         entities: graphEntities,
         relations,
         summary: `Cal.com booking — ${payload.title ?? uid}`,
+        // Retain the ORIGINAL webhook body on the proposal.
+        //
+        // Unlike every bridge path (Discord/mail/LinkedIn/Fireflies), a Cal.com
+        // booking has no sensor-landing step — nothing writes a `messages` row
+        // first — so the proposal was the only record that this booking ever
+        // arrived. Rejected proposals are never deleted, so carrying rawSource
+        // here makes the raw body survive a rejection; without it, `markSeen`
+        // below tells Cal.com not to retry and the original payload is gone for
+        // good. `mapBookingToGraph` is lossy by design, so the derived graph is
+        // not a substitute for the body it came from.
+        rawSource: {
+          rawText: rawBody.slice(0, 100_000),
+          mimeType: "application/json",
+          label: `Cal.com ${trigger} — ${payload.title ?? uid}`,
+          // Namespaced by tool: submitCaptureGraph looks idempotency keys up by
+          // (userId, key) and userId here is the SHARED capture-agent, so a bare
+          // `<uid>:<trigger>` would be a pod-GLOBAL key across every cal.com
+          // tool. It also OVERRIDES the content hash, so a re-delivery with an
+          // edited payload returns the prior proposal rather than filing a new
+          // one — acceptable for a booking (uid+trigger identifies the event),
+          // but only once the key cannot collide across tools.
+          idempotencyKey: `calcom:${calTool.id}:${seenKey}`,
+        },
       });
       markSeen = true;
     } else if (trigger === "BOOKING_RESCHEDULED") {

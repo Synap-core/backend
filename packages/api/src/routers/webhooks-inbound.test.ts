@@ -130,8 +130,9 @@ vi.mock("../services/connectors/inbound-recorder.js", () => ({
   recordInboundMessage: (...args: unknown[]) =>
     recordInboundMessageMock(...args),
 }));
+const submitCaptureGraphMock = vi.fn();
 vi.mock("../services/capture-agent/submit-capture-graph.js", () => ({
-  submitCaptureGraph: vi.fn(),
+  submitCaptureGraph: (...args: unknown[]) => submitCaptureGraphMock(...args),
 }));
 vi.mock("../services/capture-agent/ensure-capture-agent.js", () => ({
   getCaptureAgentUserId: () => Promise.resolve(null),
@@ -582,5 +583,89 @@ describe("mailgun inbound webhook", () => {
     const res = await postMailgun(MG_TOKEN, form);
     expect(res.status).toBe(401);
     expect(recordInboundMessageMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── cal.com ────────────────────────────────────────────────────────────────
+// Cal.com is the ONE inbound path with no sensor-landing step: unlike the
+// bridges, nothing writes a `messages` row before interpretation, so the
+// proposal is the only record the booking ever arrived. Because the handler
+// sets `markSeen` (telling Cal.com not to retry) as soon as the proposal is
+// FILED — not approved — the raw body must ride along on the proposal, or
+// rejecting it discards the only copy.
+const CAL_TOKEN = "cal-token-abc";
+const CAL_SIGNING_KEY = "cal-signing-key";
+
+function calSign(secret: string, body: string): string {
+  return createHmac("sha256", secret).update(body).digest("hex");
+}
+
+async function postCalcom(token: string, body: string, sig?: string) {
+  return app.request(`/api/webhooks/calcom/${token}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-cal-signature-256": sig ?? calSign(CAL_SIGNING_KEY, body),
+    },
+    body,
+  });
+}
+
+describe("cal.com inbound webhook", () => {
+  beforeEach(() => {
+    submitCaptureGraphMock.mockClear();
+    submitCaptureGraphMock.mockResolvedValue({ proposalId: "p-1" });
+    vaultSecret = CAL_SIGNING_KEY;
+    toolRow = {
+      id: "tool-cal",
+      createdBy: OWNER_ID,
+      workspaceId: WS_ID,
+      metadata: {
+        calcom: {
+          webhook: {
+            token: CAL_TOKEN,
+            secretVaultRef: "vault://cal-sig",
+            workspaceId: WS_ID,
+            ownerUserId: OWNER_ID,
+            seen: {},
+          },
+        },
+      },
+    };
+  });
+
+  it("retains the ORIGINAL webhook body as rawSource on the proposal", async () => {
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      payload: { uid: "bk-1", title: "Intro call" },
+    });
+
+    const res = await postCalcom(CAL_TOKEN, body);
+
+    expect(res.status).toBe(200);
+    expect(submitCaptureGraphMock).toHaveBeenCalledTimes(1);
+
+    const arg = submitCaptureGraphMock.mock.calls[0]![0] as {
+      rawSource?: { rawText?: string; mimeType?: string };
+    };
+    expect(
+      arg.rawSource,
+      "DATA LOSS: the raw Cal.com body was not retained — rejecting the proposal would discard the only copy"
+    ).toBeDefined();
+    // Byte-identical to what Cal.com sent, not the lossy mapped graph.
+    expect(arg.rawSource!.rawText).toBe(body);
+    expect(arg.rawSource!.mimeType).toBe("application/json");
+  });
+
+  it("rejects a tampered signature and never files a proposal", async () => {
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      payload: { uid: "bk-2" },
+    });
+
+    const res = await postCalcom(CAL_TOKEN, body, calSign("wrong-key", body));
+
+    expect(res.status).toBe(401);
+    expect(submitCaptureGraphMock).not.toHaveBeenCalled();
   });
 });

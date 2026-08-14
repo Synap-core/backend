@@ -6055,26 +6055,12 @@ export interface CapabilityComposition {
 		captureChannel?: string | null;
 	} | null;
 }
-/**
- * Capability-connection service — the SINGLE source of truth for CRUD over a
- * capability's connections (Wave 4).
- *
- * A "connection" is a `secrets` row (the vault IS the connection registry, plan
- * §3.2) that carries `capability_id`. It optionally binds to a context object
- * (`context_type`/`context_id`), is one of possibly-many under a capability with
- * exactly one `is_default`, and — for a Nango 1-of-N account — an `account_hint`.
- * `secrets.name` is the human label.
- *
- * This module NEVER hand-rolls crypto and NEVER returns a decrypted value: it
- * reuses the SAME `encryptServerSide` path the `POST /vault/secrets` route and the
- * capability-template applier (`create-from-definition.ts:createVaultSecret`) use.
- * Every function is OWNER-GATED — mirrors `tools.ts:bindCredential`
- * (`secret.userId === actorUserId`, with a pod-admin fallback).
- */
 /** A connection as surfaced to callers — NEVER carries the secret value. */
 export interface CapabilityConnectionView {
+	/** Real `secrets.id` for a persisted row; synthetic `nango:<connectionId>`
+	 *  for a live-Nango connection with no registry row yet. */
 	id: string;
-	/** Human label (`secrets.name`). */
+	/** Human label (`secrets.name`, or `<provider> · …<last6>` for a synthetic). */
 	label: string;
 	contextType: string | null;
 	contextId: string | null;
@@ -6087,6 +6073,24 @@ export interface CapabilityConnectionView {
 	 * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
 	 */
 	isPodWide: boolean;
+	/**
+	 * Nango providerConfigKey (e.g. "google") for a provider connection; null for a
+	 * vault key or when Nango could not be resolved. The UI reconnects THIS provider.
+	 */
+	provider: string | null;
+	/**
+	 * Liveness, from the connection-health mirror (`secrets.connection_state`, the
+	 * SAME signal the catalog reads at `capability-catalog.ts:575-593`). A synthetic
+	 * live connection has no registry row to carry a reauth mark, so it reads
+	 * `connected`.
+	 */
+	health: "connected" | "needs_reauth";
+	/**
+	 * True when this row is backed by a real `secrets` row; false for a SYNTHETIC
+	 * row computed live from Nango (no registry row yet — the reconciler could not
+	 * persist it, or Nango reported it after the last reconcile pass).
+	 */
+	persisted: boolean;
 }
 /**
  * Capability CATALOG read-model — the pack-grouped, status-computed view that is
@@ -14275,6 +14279,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 			}>;
+			disconnect: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					connectionId: string;
+				};
+				output: {
+					ok: true;
+					podWide: true;
+					provider: string | null;
+				};
+				meta: object;
+			}>;
 		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
@@ -18872,6 +18888,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				profileSlug: string;
 				contentKind?: "entity-detail" | "entity-profile" | "collection" | undefined;
+				workspaceId?: string | null | undefined;
 			};
 			output: {
 				sources: {
@@ -19361,8 +19378,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				workspaceId: string;
 				name: string;
+				workspaceId?: string | undefined;
+				podWide?: boolean | undefined;
 				agentType?: string | undefined;
 				role?: "admin" | "editor" | "viewer" | undefined;
 				description?: string | undefined;
@@ -19374,8 +19392,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				email: string;
 				name: string;
 				agentType: string;
-				role: "admin" | "editor" | "viewer";
+				role: "admin" | "editor" | "viewer" | null;
 				template: "custom" | "assistant" | "twin" | undefined;
+				podWide: boolean;
 			};
 			meta: object;
 		}>;
@@ -19630,6 +19649,120 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetPattern: string;
 					targetProfile: string | null;
 					verdict: "auto" | "propose";
+				};
+			};
+			meta: object;
+		}>;
+	}>>;
+	governanceCeilings: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+			};
+			output: {
+				ceilings: {
+					id: string;
+					axis: "daily_write_count";
+					principalKind: "agent" | "any";
+					agentUserId: string | null;
+					agentLabel: string | null;
+					scopeKind: "workspace" | "pod";
+					workspaceId: string | null;
+					limitValue: number;
+					createdAt: Date;
+					createdBy: string;
+					sourceProposalId: string | null;
+					expiresAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		listAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				ceilings: {
+					id: string;
+					axis: "daily_write_count";
+					principalKind: "agent" | "any";
+					agentUserId: string | null;
+					agentLabel: string | null;
+					scopeKind: "workspace" | "pod";
+					workspaceId: string | null;
+					limitValue: number;
+					createdAt: Date;
+					createdBy: string;
+					sourceProposalId: string | null;
+					expiresAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		usageToday: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentUserId: string;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				count: number;
+				limit: number;
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				principalKind: "agent" | "any";
+				scopeKind: "workspace" | "pod";
+				limitValue: number;
+				agentUserId?: string | undefined;
+				workspaceId?: string | undefined;
+				sourceProposalId?: string | undefined;
+				expiresAt?: unknown;
+			};
+			output: {
+				ceiling: {
+					workspaceId: string | null;
+					agentUserId: string | null;
+					id: string;
+					createdAt: Date;
+					scopeKind: "workspace" | "pod";
+					expiresAt: Date | null;
+					sourceProposalId: string | null;
+					createdBy: string;
+					revokedAt: Date | null;
+					principalKind: "agent" | "any";
+					axis: "daily_write_count";
+					limitValue: number;
+				};
+			};
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ceiling: {
+					workspaceId: string | null;
+					agentUserId: string | null;
+					id: string;
+					createdAt: Date;
+					scopeKind: "workspace" | "pod";
+					expiresAt: Date | null;
+					sourceProposalId: string | null;
+					createdBy: string;
+					revokedAt: Date | null;
+					principalKind: "agent" | "any";
+					axis: "daily_write_count";
+					limitValue: number;
 				};
 			};
 			meta: object;

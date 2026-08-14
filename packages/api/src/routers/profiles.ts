@@ -1191,17 +1191,25 @@ export const profilesRouter = router({
       z.object({
         profileSlug: z.string(),
         contentKind: ProfileContentKindSchema.optional(),
+        // Explicit lens: undefined = use header (unchanged behavior); null =
+        // pod-wide (no workspace overlay); string = that workspace's overlay.
+        workspaceId: z.string().nullable().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
+      // Honor an explicit input lens (strict !== undefined so an explicit null
+      // stays pod-wide and does NOT fall back to the header).
+      const lensWorkspaceId =
+        input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+
       // Accept UUID or human-readable slug — resolve to canonical slug first.
       const resolved = await resolutionService.resolveProfile(
         input.profileSlug,
         ctx.userId,
-        ctx.workspaceId
+        lensWorkspaceId
       );
       const profileSlug = resolved?.slug ?? input.profileSlug;
 
@@ -1224,7 +1232,7 @@ export const profilesRouter = router({
       if (input.contentKind) {
         const target = await resolutionService.getEffectiveRendererWithSource(
           profileSlug,
-          ctx.workspaceId,
+          lensWorkspaceId,
           input.contentKind
         );
         return {
@@ -1237,17 +1245,17 @@ export const profilesRouter = router({
       const [entityDetail, entityProfile, collection] = await Promise.all([
         resolutionService.getEffectiveRendererWithSource(
           profileSlug,
-          ctx.workspaceId,
+          lensWorkspaceId,
           "entity-detail"
         ),
         resolutionService.getEffectiveRendererWithSource(
           profileSlug,
-          ctx.workspaceId,
+          lensWorkspaceId,
           "entity-profile"
         ),
         resolutionService.getEffectiveRendererWithSource(
           profileSlug,
-          ctx.workspaceId,
+          lensWorkspaceId,
           "collection"
         ),
       ]);

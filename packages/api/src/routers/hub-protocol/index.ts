@@ -37,6 +37,7 @@ import { hubCommandsRouter } from "./commands.js";
 import { signalsRouter } from "./signals.js";
 import { hubRelationDefsRouter } from "./relation-defs.js";
 import { hubPlaybooksRouter } from "./playbooks.js";
+import { observationsRouter } from "./observations.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -69,4 +70,7 @@ export const hubProtocolRouter = router({
   signals: signalsRouter,
   relationDefs: hubRelationDefsRouter,
   playbooks: hubPlaybooksRouter,
+  // Key-authenticated door for recording external facts. Namespaced +
+  // phase-restricted so it can never reach the materializer — see the router.
+  observations: observationsRouter,
 });

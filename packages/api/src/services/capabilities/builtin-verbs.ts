@@ -688,6 +688,15 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     entities: graphEntities,
     relations,
     source: "agent",
+    // Provenance back to the message/channel that produced this graph — the
+    // ONLY genuine anchor available here: this verb takes raw `content`, not
+    // a `messages` row id, so `sourceMessageId` is deliberately NOT set (no
+    // message id to attach honestly). `channelId` maps to `proposals.
+    // thread_id` (see the field's doc comment on SubmitCaptureGraphInput);
+    // `rawSource.rawText` retains the original text so a rejected proposal
+    // still carries what produced it.
+    ...(input.channelId ? { channelId: input.channelId } : {}),
+    rawSource: { rawText: input.content },
     summary: `Interpreted message — ${graphEntities.length} ${
       graphEntities.length === 1 ? "entity" : "entities"
     }`,

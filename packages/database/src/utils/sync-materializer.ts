@@ -316,7 +316,10 @@ export async function materializeEvent(
  * self-heals on replay. Only fall back to `data.type` when there is no
  * profileId to resolve against.
  */
-async function resolveMaterializedEntityType(
+// Exported for the kind-invariant test. This is a second entity-writer that
+// bypasses EntityRepository, so its type resolution needs its own guard —
+// see sync-materializer.kind-invariant.test.ts.
+export async function resolveMaterializedEntityType(
   data: Record<string, unknown>
 ): Promise<string> {
   const profileId = data.profileId as string | undefined;
@@ -324,10 +327,68 @@ async function resolveMaterializedEntityType(
     try {
       const profile = await db.query.profiles.findFirst({
         where: eq(profiles.id, profileId),
-        columns: { slug: true },
+        columns: { slug: true, profileKind: true, applicableKinds: true },
       });
+
+      // KIND/FACET INVARIANT — `entities.type` is the entity's KIND, never a
+      // role it plays. A role (client, partner, investor…) is an entity_facets
+      // row on top of a kind, not a type of its own.
+      //
+      // This path is a SECOND entity-writer: unlike `EntityRepository.create`
+      // (which resolves a role to its kind and attaches the role as a facet,
+      // guarded by entity-repository.kind-invariant.test.ts), replication does
+      // a raw upsert. Returning a role slug here would write `type:'client'`
+      // into a peer pod — the exact corruption the canonical door was fixed to
+      // prevent, arriving through the back door and then propagating onward to
+      // every further peer.
+      if (profile?.profileKind === "role") {
+        // REFUSE, rather than repair.
+        //
+        // An earlier version resolved a kind here and let the write proceed.
+        // That was half a fix: `data.profileId` still points at the ROLE, so the
+        // row lands `type:'person'` with an FK to `client` — internally
+        // inconsistent, and any reader that resolves kind from the FK (this
+        // function included, on every replay) sees a role again. Repairing one
+        // half of a contradiction leaves the contradiction.
+        //
+        // A source pod that emits an entity whose profileId is a role is itself
+        // corrupt: a role should have replicated as an `entity_facets` row on
+        // top of a kind, never as the entity's own profile. The correct border
+        // behaviour is to reject the event, not to guess a kind for it.
+        //
+        // Cost is bounded: `materializeEvent` catches per-event and returns
+        // "error", so the rest of the batch still replicates and the raw event
+        // is still stored — the peer is not blocked, just not obeyed.
+        const declared = data.type as string | undefined;
+        const applicable = profile.applicableKinds ?? [];
+
+        logger.error(
+          {
+            profileId,
+            roleSlug: profile.slug,
+            declaredType: declared,
+            applicableKinds: applicable,
+          },
+          "sync: replicated entity references a ROLE profile — refusing. A role must replicate as a facet on a kind, never as the entity's profile."
+        );
+        throw new Error(
+          `sync-materializer: entity references ROLE profile "${profile.slug}" ` +
+            `(declared type: ${declared ?? "none"}). Writing it would leave entities.type ` +
+            `and entities.profileId disagreeing, and would corrupt the peer.`
+        );
+      }
+
       if (profile?.slug) return profile.slug;
     } catch (err) {
+      // A kind/facet violation must NOT be swallowed into the fallback below —
+      // that would write the corrupt row anyway. Only profile-lookup failures
+      // are recoverable here.
+      if (
+        err instanceof Error &&
+        err.message.startsWith("sync-materializer:")
+      ) {
+        throw err;
+      }
       logger.warn(
         { profileId, err },
         "Failed to resolve profile slug for sync entity type; falling back to event type"

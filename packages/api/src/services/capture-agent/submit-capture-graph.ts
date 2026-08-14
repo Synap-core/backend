@@ -147,6 +147,16 @@ export interface SubmitCaptureGraphInput {
     | "n8n"
     | "raycast";
   sourceMessageId?: string;
+  /**
+   * Channel/thread that originated this graph — the SAME field name +
+   * `proposals.thread_id` (FK → `channels.id`) column the REST `POST
+   * /proposals` door already maps `channelId` onto (see
+   * `routers/hub-protocol/rest/proposals.ts`: `threadId: body.channelId`).
+   * Threaded through here so a channel-sourced producer (e.g. `message.
+   * interpret`) that has a channel but no `sourceMessageId` still leaves a
+   * back-reference a UI can deep-link from.
+   */
+  channelId?: string | null;
   sessionId?: string;
   /**
    * Bounded original input retained only in proposal data for review/retry.
@@ -720,6 +730,7 @@ export async function submitCaptureGraph(
             // discriminator lives in `data.source` + the proposalType.
             source: "api",
             summary,
+            ...(input.channelId ? { threadId: input.channelId } : {}),
             ...(input.sessionId ? { sessionId: input.sessionId } : {}),
             ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             data: {
@@ -793,6 +804,7 @@ export async function submitCaptureGraph(
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
       : {}),
+    ...(input.channelId ? { threadId: input.channelId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     // `bindings` rides alongside operations; the approve flow applies them after
