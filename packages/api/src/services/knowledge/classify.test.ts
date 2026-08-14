@@ -39,10 +39,16 @@ describe("classifySubstrates", () => {
     ).toBe("episodic");
   });
 
-  it("a plain entity query stays semantic-only", () => {
+  // Procedural is ALWAYS queried — the cue decides ORDER, not access. Gating
+  // access on a hand-written cue list meant a procedurally-shaped question
+  // asked without one of those exact words never touched `knowledge_keys`:
+  // the runbook was present, ranked well, and simply never searched.
+  it("a plain entity query leads with semantic, and still reaches procedural", () => {
     const r = classifySubstrates("the onboarding revamp project");
-    expect(r.substrates).toEqual(["semantic"]);
-    expect(r.primary).toBe("semantic");
+    expect(r.substrates).toEqual(["semantic", "procedural"]);
+    expect(r.primary, "an uncued query must not be LED by procedural").toBe(
+      "semantic"
+    );
   });
 
   it("procedural wins over episodic on ties", () => {
@@ -66,16 +72,23 @@ describe("classifySubstrates", () => {
       "the Guide Michelin contact", // bare "guide" is no longer a cue
     ];
     for (const q of entityQueries) {
-      it(`"${q}" → semantic-only`, () => {
+      it(`"${q}" → semantic-led, not procedural-led`, () => {
         const r = classifySubstrates(q);
-        expect(r.substrates).toEqual(["semantic"]);
+        // The guard that matters is PRIMARY: an entity name colliding with a
+        // cue word must not make the answer how-to-shaped. Procedural being in
+        // `substrates` is now unconditional and carries no such risk.
         expect(r.primary).toBe("semantic");
+        expect(r.substrates).not.toContain("episodic");
+        expect(r.substrates).not.toContain("structured");
       });
     }
   });
 
-  it("empty / whitespace query is semantic-only", () => {
-    expect(classifySubstrates("").substrates).toEqual(["semantic"]);
+  it("empty / whitespace query is semantic-led", () => {
+    expect(classifySubstrates("").substrates).toEqual([
+      "semantic",
+      "procedural",
+    ]);
     expect(classifySubstrates("   ").primary).toBe("semantic");
   });
 
@@ -137,9 +150,11 @@ describe("classifySubstrates", () => {
       ).toBeUndefined();
     });
 
-    it("an enumerative lead WITHOUT a named profile stays semantic-only", () => {
+    it("an enumerative lead WITHOUT a named profile does NOT fire structured", () => {
       const r = classifySubstrates("list everything interesting");
-      expect(r.substrates).toEqual(["semantic"]);
+      // The guard is about `structured`, which needs a named profile to be
+      // meaningful. Procedural is unconditional and unrelated to it.
+      expect(r.substrates).not.toContain("structured");
       expect(r.primary).toBe("semantic");
     });
 

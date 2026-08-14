@@ -241,6 +241,11 @@ async function executeAutomationFlow(params: {
   payload: Record<string, unknown>;
   automationContext: ExecutionPayload["automationContext"];
   completedNodeIds?: string[];
+  /** CONFUSED-DEPUTY GUARD: the causal-chain producer (see ExecutionPayload).
+   *  Forwarded to `executeOutputStep` → `checkAutomationWriteOrPropose` so an
+   *  agent-produced trigger governs a human-owned automation's THEN-actions.
+   *  Inherited by `sub_automation` children — the chain is unbroken. */
+  producerAgentUserId?: string | null;
 }): Promise<Record<string, unknown>> {
   const {
     runId,
@@ -249,6 +254,7 @@ async function executeAutomationFlow(params: {
     ownerId,
     automationContext,
     completedNodeIds,
+    producerAgentUserId,
   } = params;
   const alreadyCompleted = new Set(completedNodeIds ?? []);
 
@@ -797,7 +803,8 @@ async function executeAutomationFlow(params: {
                 data,
                 context,
                 workspaceId,
-                ownerId
+                ownerId,
+                producerAgentUserId
               );
               break;
             }
@@ -869,6 +876,13 @@ async function executeAutomationFlow(params: {
                   workspaceId,
                   automationContext: runContext,
                   completedNodeIds: completedSoFar,
+                  // CONFUSED-DEPUTY GUARD: carry the causal-chain producer across
+                  // the delay boundary. Omitting it made the resumed invocation
+                  // read `producerAgentUserId` as undefined → the guard saw no
+                  // producer → an agent-produced trigger's post-delay THEN-actions
+                  // auto-executed ungoverned under the human owner. Thread it so a
+                  // `trigger → delay → entity_create` still PROPOSES after resume.
+                  producerAgentUserId,
                 },
                 { startAfter: resumeAt }
               );
@@ -934,7 +948,8 @@ async function executeAutomationFlow(params: {
                 ownerId,
                 actingUserId,
                 { nodeId: node.id, stepRunId: stepRun.id },
-                run?.subjectEntityId
+                run?.subjectEntityId,
+                producerAgentUserId
               );
               break;
             }
@@ -1050,7 +1065,8 @@ async function executeAutomationFlow(params: {
                           childNode.data as CommandNodeDef["data"],
                           context,
                           workspaceId,
-                          ownerId
+                          ownerId,
+                          producerAgentUserId
                         );
                         break;
                       case "output":
@@ -1062,7 +1078,8 @@ async function executeAutomationFlow(params: {
                           ownerId,
                           actingUserId,
                           { nodeId: childNode.id, stepRunId: stepRun.id },
-                          run?.subjectEntityId
+                          run?.subjectEntityId,
+                          producerAgentUserId
                         );
                         break;
                       case "condition": {
@@ -1087,7 +1104,7 @@ async function executeAutomationFlow(params: {
                             inputMapping?: Record<string, string>;
                           },
                           context,
-                          { workspaceId, ownerId }
+                          { workspaceId, ownerId, producerAgentUserId }
                         );
                         break;
                       case "capability":
@@ -1103,7 +1120,7 @@ async function executeAutomationFlow(params: {
                             connectionId?: string;
                           },
                           context,
-                          { workspaceId, ownerId }
+                          { workspaceId, ownerId, producerAgentUserId }
                         );
                         break;
                       case "playbook_run":
@@ -1116,7 +1133,8 @@ async function executeAutomationFlow(params: {
                           context,
                           workspaceId,
                           ownerId,
-                          automationContext
+                          automationContext,
+                          producerAgentUserId
                         );
                         break;
                       case "messages_query":
@@ -1478,7 +1496,7 @@ async function executeAutomationFlow(params: {
                   inputMapping?: Record<string, string>;
                 },
                 context,
-                { workspaceId, ownerId, stepRun }
+                { workspaceId, ownerId, stepRun, producerAgentUserId }
               );
               break;
             }
@@ -1506,7 +1524,7 @@ async function executeAutomationFlow(params: {
                   connectionId?: string;
                 },
                 context,
-                { workspaceId, ownerId, stepRun }
+                { workspaceId, ownerId, stepRun, producerAgentUserId }
               );
               break;
             }
@@ -1592,6 +1610,10 @@ async function executeAutomationFlow(params: {
                   automationRunId: childRunId,
                   automationId: targetId,
                 },
+                // The producer stays in the causal chain across sub_automation
+                // delegation — a chained child's THEN-actions are still governed
+                // against the agent that fired the ROOT trigger.
+                producerAgentUserId,
               });
 
               // Return the child automation's output DIRECTLY (flat) — one rule.
@@ -1620,7 +1642,8 @@ async function executeAutomationFlow(params: {
                 context,
                 workspaceId,
                 ownerId,
-                automationContext
+                automationContext,
+                producerAgentUserId
               );
               break;
             }
@@ -1807,6 +1830,7 @@ export async function handleAutomationExecute(job: {
     workspaceId,
     automationContext,
     completedNodeIds,
+    producerAgentUserId,
   } = job.data;
 
   // Look up the automation owner for vault resolution
@@ -1862,6 +1886,7 @@ export async function handleAutomationExecute(job: {
       payload: (run.triggerPayload as Record<string, unknown>) ?? {},
       automationContext,
       completedNodeIds,
+      producerAgentUserId,
     });
   } catch (err) {
     await db

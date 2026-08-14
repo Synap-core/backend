@@ -435,6 +435,74 @@ export function computeCaptureGraphIdempotencyKey(input: {
   return createHash("sha256").update(payload).digest("hex");
 }
 
+/**
+ * IMPORT-lane adapter over the ONE hashing rule above. The import lane carries
+ * a flat `CompositeProposalOperation[]` where the capture lane carries
+ * `{entities, relations}` — the shapes are a pure re-projection of each other
+ * (a `create_entity` op IS a graph entity; a `create_relation` op IS a relation
+ * triple), so this ADAPTS the input instead of introducing a second content-hash
+ * rule. Two runs that mean the same graph produce the same key in BOTH lanes.
+ *
+ * Deliberately NOT folded in: `sourceId` (a fresh `randomUUID()` at two of the
+ * three import writers — folding it would mint a new key per run and be
+ * non-idempotent by construction) and `source` (the same graph re-imported
+ * through a different adapter is still the same graph — matching capture, which
+ * also ignores its `source`).
+ *
+ * DEGENERATE GUARD: returns `null` when the operations carry no create_entity
+ * op. An empty/relation-only graph would otherwise hash to a CONSTANT that every
+ * unrelated empty import collides on. A `null` key means "not stampable" — the
+ * caller omits `data.idempotencyKey` entirely and files normally, exactly as
+ * today.
+ */
+export function computeImportGraphIdempotencyKey(input: {
+  workspaceId: string | null;
+  projectId?: string | null;
+  operations: ReadonlyArray<CompositeProposalOperation>;
+}): string | null {
+  const entities: Array<{
+    ref?: string;
+    profileSlug: string;
+    title?: string;
+    description?: string;
+    content?: string;
+    properties?: Record<string, unknown>;
+  }> = [];
+  const relations: Array<{
+    sourceRef: string;
+    targetRef: string;
+    type: string;
+  }> = [];
+
+  for (const op of input.operations) {
+    if (op.op === "create_entity") {
+      entities.push({
+        ref: op.ref,
+        profileSlug: op.profileSlug,
+        title: op.title,
+        description: op.description,
+        content: op.content,
+        properties: op.properties,
+      });
+    } else if (op.op === "create_relation") {
+      relations.push({
+        sourceRef: op.sourceRef,
+        targetRef: op.targetRef,
+        type: op.type,
+      });
+    }
+  }
+
+  if (entities.length === 0) return null;
+
+  return computeCaptureGraphIdempotencyKey({
+    workspaceId: input.workspaceId ?? null,
+    projectId: input.projectId ?? null,
+    entities,
+    relations,
+  });
+}
+
 /** Recursively sort object keys so JSON.stringify is order-independent. */
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);

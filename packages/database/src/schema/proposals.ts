@@ -154,6 +154,16 @@ export const proposals = pgTable(
     // extend without a migration. Nullable + additive: it pairs with (never
     // replaces) the free-text `rejectionReason`.
     reasonCode: text("reason_code"),
+    // Structured GOVERNANCE reason (0238) — the PROPOSE_REASON KEY the pure
+    // engine (`decideAgentPolicy`, @synap/governance-policy) stamped when it
+    // routed this write to review (e.g. "UNTRUSTED_ORIGIN", "DAILY_WRITE_CEILING",
+    // "SCOPE_IDENTITY_CHANGE"). Nullable + additive: it is the machine-readable
+    // companion to the free-text `data.reasoning` prose, so the review UI can
+    // branch on WHY a write needs a human (a distinct force-propose treatment)
+    // without string-matching the sentence. DISTINCT from `reasonCode` above,
+    // which carries REJECTION semantics; this carries CREATION-TIME governance
+    // cause. NULL for human-authored proposals and the plain default-propose case.
+    governanceReason: text("governance_reason"),
     comments: jsonb("comments").default("[]"),
     // Revision history (D3b): append-only before/after snapshots of every
     // reviseProposal edit — the "human corrected the AI" quality signal the

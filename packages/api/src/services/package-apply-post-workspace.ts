@@ -245,6 +245,13 @@ export interface PackagePostWorkspaceBody {
       precondition?: string;
     };
     status?: string;
+    /**
+     * Free-form authored automation metadata → `automations.metadata`. Carries
+     * the calibration UI seam marker (`metadata.kind: "calibration-recommender"`)
+     * and any other author-declared tags. Threaded into the created/updated row
+     * below, MERGED with the system-stamped `templateKey` (never clobbering it).
+     */
+    metadata?: Record<string, unknown>;
   }>;
   playbooks?: Array<{
     name: string;
@@ -502,9 +509,17 @@ async function applyPackagePostWorkspaceInner(
             triggerConfig: a.triggerConfig,
             flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
             status: a.status,
-            metadata: a.key
-              ? { ...(existing.metadata ?? {}), templateKey: a.key }
-              : undefined,
+            // Merge author metadata (e.g. `metadata.kind`) with the system
+            // `templateKey` stamp — templateKey last so system provenance is
+            // never clobbered by an authored key of the same name.
+            metadata:
+              a.metadata || a.key
+                ? {
+                    ...(existing.metadata ?? {}),
+                    ...a.metadata,
+                    ...(a.key ? { templateKey: a.key } : {}),
+                  }
+                : undefined,
           } as never);
           autos.push({ name: a.name, status: "updated", id: existing.id });
           continue;
@@ -517,7 +532,12 @@ async function applyPackagePostWorkspaceInner(
           triggerConfig: a.triggerConfig,
           flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
           status: a.status,
-          metadata: a.key ? { templateKey: a.key } : undefined,
+          // Preserve author metadata (e.g. `metadata.kind`) alongside the
+          // system `templateKey` stamp — templateKey last so it wins.
+          metadata:
+            a.metadata || a.key
+              ? { ...a.metadata, ...(a.key ? { templateKey: a.key } : {}) }
+              : undefined,
           agentUserId,
           source: "intelligence",
         } as never);

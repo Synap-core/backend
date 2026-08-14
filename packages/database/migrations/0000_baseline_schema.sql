@@ -1816,6 +1816,8 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "reviewed_at"       timestamp with time zone,
   "external_dispatched_at" timestamp with time zone,
   "rejection_reason"  text,
+  "reason_code"       text,
+  "governance_reason" text,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
@@ -1848,6 +1850,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with ti
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "external_dispatched_at" timestamp with time zone;  -- 0209 (at-most-once external dispatch claim)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;  -- 0238 (structured governance cause at creation; PROPOSE_REASON key, distinct from rejection reason_code)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();

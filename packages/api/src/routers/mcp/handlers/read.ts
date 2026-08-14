@@ -483,7 +483,27 @@ export const readHandlers: McpHandlerMap = {
   },
   synap_get_channel: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
-    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // GET-OR-CREATE, so this declares the WRITE scope despite the name.
+    //
+    // Both modes mint rows: `ensurePersonal` creates the personal channel, and
+    // `by-context` resolve-or-creates one bound to an object.
+    //
+    // This is NOT closing an open hole — it makes an existing one honest. The
+    // inner procedure is already `scopedProcedure(["hub-protocol.write"])`
+    // (hub-protocol/channels.ts), and a read-only key derives only
+    // `hub-protocol.read`, so the create was already rejected one layer down.
+    // Declaring `mcp.read` here just meant the rejection arrived deep, as a
+    // confusing inner 403, instead of at the door with a scope message. It also
+    // contradicted `skills/synap/writes.md`, which documents this operation as
+    // needing write scope.
+    //
+    // Practically non-breaking: a read-only key could never complete this call.
+    //
+    // Kept as ONE tool rather than split into get + create: the create IS the
+    // point (a caller asking for a context channel wants one to exist), and a
+    // near-identical sibling tool is exactly the overlap that degrades tool
+    // selection.
+    requireScope(apiKeyScopes, "mcp.write", toolName);
     const mode = args.mode as string;
     const wsId = args.workspaceId as string;
     if (mode === "personal") {

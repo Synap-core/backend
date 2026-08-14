@@ -7,6 +7,8 @@
  * `steps/output.ts`, `steps/playbook-run.ts`) can share ONE registration.
  */
 
+import { guardProducerEffect } from "../utils/automation-governance.js";
+
 /**
  * Discriminated result mirror of `@synap/api`'s `ExecuteCapabilityResult`. jobs
  * cannot import @synap/api (circular dep), so the shape is re-declared here.
@@ -148,8 +150,33 @@ export async function dispatchOutputVerb(
   verbId: string,
   config: Record<string, unknown>,
   workspaceId: string,
-  actingUserId: string
+  actingUserId: string,
+  // CONFUSED-DEPUTY GUARD: the causal-chain producer. When an AGENT produced the
+  // trigger firing a HUMAN-owned automation, this facet/relation verb would run
+  // under owner-bypass (governed against `actingUserId` = the human) — ungoverned
+  // despite an agent being the real cause. Guard against the producer first and
+  // FAIL CLOSED on a block, matching the `proposed`/`deny` fail-closed below.
+  // Absent → owner-only governance, unchanged.
+  producerAgentUserId?: string | null
 ): Promise<Record<string, unknown>> {
+  // The output verbs are `<subjectType>.<action>` shaped (e.g. `entity_facet.attach`,
+  // `graph.link`) — split on the first dot so the producer ladder sees the honest
+  // subjectType/action (and its deny-floors can key on them).
+  const dotIndex = verbId.indexOf(".");
+  const guard = await guardProducerEffect({
+    producerAgentUserId,
+    principalUserId: actingUserId,
+    workspaceId,
+    subjectType: dotIndex > 0 ? verbId.slice(0, dotIndex) : verbId,
+    action: dotIndex > 0 ? verbId.slice(dotIndex + 1) : "execute",
+  });
+  if ("block" in guard) {
+    throw new Error(
+      guard.kind === "deny"
+        ? `${verbId} denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
+        : `${verbId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
+    );
+  }
   const dispatch = await dispatchViaCapabilityRouter({
     verbId,
     parameters: config,

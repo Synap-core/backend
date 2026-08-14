@@ -153,6 +153,14 @@ const automationTriggerMatchReactor: Reactor = {
       data: payload.data,
       automationContext: payload.automationContext,
       sessionId: payload.sessionId ?? null,
+      // CONFUSED-DEPUTY GUARD: carry the event's ACTOR as the causal-chain
+      // producer. Agent-authored governed writes emit with `userId = agentUserId`
+      // (the Hub write door collapses the two), so this IS the producing agent
+      // for an agent write and the human for a human write. The trigger matcher
+      // threads it to the executor, which governs the fired automation's
+      // THEN-actions against this producer — confirming agent-ness first, so a
+      // human producer is a no-op (owner path unchanged).
+      producerAgentUserId: payload.userId,
     });
   },
 };

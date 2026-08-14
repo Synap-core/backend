@@ -54,7 +54,10 @@ import type {
 } from "@synap/database/schema";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  previewPermissionDecision,
+} from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import {
@@ -1266,7 +1269,7 @@ export const playbooksRouter = router({
   create: workspaceProcedure
     .input(createInputSchema)
     .mutation(async ({ ctx, input }) => {
-      const perm = await checkPermissionOrPropose({
+      const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
@@ -1296,7 +1299,54 @@ export const playbooksRouter = router({
           status: input.status,
           contextSkill: input.contextSkill,
         },
-      });
+      };
+
+      // IDEMPOTENCY ABOVE THE PROPOSE PATH (AI callers only).
+      //
+      // The 23505 recovery below protects only the EXECUTE path — an agent whose
+      // write routes to a PROPOSAL filed a fresh proposal on every retry, forever
+      // (generic `computeProposalDedupHash` can't collapse them: LLM-authored
+      // prose in description/goalTemplate/stages hashes differently each run, so
+      // NAME is the only stable identity).
+      //
+      // ORDER IS LOAD-BEARING: dry-run the governance door FIRST and re-throw a
+      // deny exactly as the real gate would, BEFORE the existence lookup — a
+      // caller who may not write must never learn whether the playbook exists,
+      // nor receive its row. Only a caller that would have been permitted (to
+      // execute OR to propose) reaches the lookup.
+      const isAiCaller =
+        Boolean(input.agentUserId) ||
+        input.source === "ai" ||
+        input.source === "intelligence";
+      if (isAiCaller) {
+        const preview = await previewPermissionDecision(gateOpts);
+        if (preview.decision === "deny") {
+          throw new TRPCError({ code: "FORBIDDEN", message: preview.reason });
+        }
+        const existingByName = await findNonArchivedPlaybookByName(
+          await getDb(),
+          ctx.workspaceId,
+          input.name
+        );
+        if (existingByName) {
+          logger.info(
+            {
+              playbookId: existingByName.id,
+              workspaceId: ctx.workspaceId,
+              name: input.name,
+            },
+            "playbooks.create: name already exists — returning existing playbook without filing a proposal"
+          );
+          return {
+            playbook: existingByName,
+            status: "created" as const,
+            message: "Playbook already exists (idempotent create)",
+            proposalId: null as string | null,
+          };
+        }
+      }
+
+      const perm = await checkPermissionOrPropose(gateOpts);
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

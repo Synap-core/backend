@@ -651,10 +651,18 @@ export interface AgentPolicyInput {
  * caller has no explicit reasoning (caller pattern: `opts.reasoning ?? reason`).
  * `reason` is absent for the plain default-propose case, matching the gates'
  * prior behavior of passing through the caller's reasoning unchanged.
+ *
+ * `reasonCode` is the STRUCTURED companion to `reason`: the `PROPOSE_REASON` KEY
+ * (e.g. `"UNTRUSTED_ORIGIN"`, `"DAILY_WRITE_CEILING"`) the human sentence came
+ * from. Additive/optional — a machine-readable discriminator the review UI can
+ * branch on (e.g. render a distinct "why this needs you" treatment for a
+ * force-propose rung) without string-matching the prose. Absent for the plain
+ * default-propose case, exactly like `reason`. Distinct from the proposal
+ * `reason_code` column, which carries REJECTION semantics.
  */
 export type AgentPolicyVerdict =
   | { verdict: "execute" }
-  | { verdict: "propose"; reason?: string }
+  | { verdict: "propose"; reason?: string; reasonCode?: string }
   | { verdict: "deny"; reason: string };
 
 /** Default reasoning strings (kept identical to the prior inline gate strings). */
@@ -708,7 +716,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
 
   // 2. ADMIN_ACTIONS → always propose (even for owned workspace).
   if (ADMIN_ACTIONS.includes(eventKey)) {
-    return { verdict: "propose", reason: PROPOSE_REASON.ADMIN };
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    };
   }
 
   // 2.1 CALLER-FORCED PROPOSAL — a scope/identity-bearing write.
@@ -719,7 +731,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // (rung 2) so a capability-denied action still denies and admin actions are
   // unaffected, but BEFORE every execute path below.
   if (input.forcePropose === true) {
-    return { verdict: "propose", reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE };
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
+    };
   }
 
   // 2.5 DESTRUCTIVE_ACTIONS hard floor — mirrors ADMIN_ACTIONS: a destructive
@@ -739,6 +755,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     };
   }
 
@@ -763,7 +780,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // and NEVER executes. `originTrust` is resolved server-side from the acting
   // channel (never the request body); absent/undefined → this rung no-ops.
   if (input.originTrust === "untrusted") {
-    return { verdict: "propose", reason: PROPOSE_REASON.UNTRUSTED_ORIGIN };
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
+    };
   }
 
   // 2.56 DAILY WRITE CEILING → propose (TIGHTEN-ONLY; governance_ceilings axis
@@ -782,7 +803,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // counted when the base verdict would be `execute` (so the field is `"propose"`
   // ONLY in the over-limit case); absent/undefined → this rung no-ops.
   if (input.ceilingVerdict === "propose") {
-    return { verdict: "propose", reason: PROPOSE_REASON.DAILY_WRITE_CEILING };
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+      reasonCode: "DAILY_WRITE_CEILING",
+    };
   }
 
   // 2.6 GOVERNANCE BY KIND — user_observation.
@@ -804,6 +829,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       : {
           verdict: "propose",
           reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+          reasonCode: "USER_OBSERVATION_INFERENCE",
         };
   }
 
@@ -828,7 +854,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       return { verdict: "deny", reason: CAPABILITY_BLOCKED_REASON };
     }
     if (mode !== "auto") {
-      return { verdict: "propose", reason: PROPOSE_REASON.CAPABILITY_PROPOSE };
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON.CAPABILITY_PROPOSE,
+        reasonCode: "CAPABILITY_PROPOSE",
+      };
     }
     // mode === "auto": a per-channel grant (rung 7) can only TIGHTEN, never
     // widen. If this run is inside a channel and the channel resolves stricter
@@ -851,7 +881,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     if (channelDecision === "block") {
       return { verdict: "deny", reason: CHANNEL_BLOCK_REASON };
     }
-    return { verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE };
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.CHANNEL_PROPOSE,
+      reasonCode: "CHANNEL_PROPOSE",
+    };
   }
 
   // 2.8 GOVERNANCE_RULES store — additive; fires ONLY when the caller resolved
@@ -868,7 +902,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   if (input.governanceRuleVerdict) {
     return input.governanceRuleVerdict === "auto"
       ? { verdict: "execute" }
-      : { verdict: "propose", reason: PROPOSE_REASON.GOVERNANCE_RULE };
+      : {
+          verdict: "propose",
+          reason: PROPOSE_REASON.GOVERNANCE_RULE,
+          reasonCode: "GOVERNANCE_RULE",
+        };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
@@ -879,6 +917,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       return {
         verdict: "propose",
         reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+        reasonCode: "AGENT_OWNED_DESTRUCTIVE",
       };
     }
     return { verdict: "execute" };
@@ -902,6 +941,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.WRITES_REQUIRE_PROPOSAL,
+      reasonCode: "WRITES_REQUIRE_PROPOSAL",
     };
   }
 
@@ -915,6 +955,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+      reasonCode: "AGENT_OWNED_DESTRUCTIVE",
     };
   }
 
@@ -931,7 +972,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       return { verdict: "deny", reason: CHANNEL_BLOCK_REASON };
     }
     if (decision === "propose") {
-      return { verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE };
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON.CHANNEL_PROPOSE,
+        reasonCode: "CHANNEL_PROPOSE",
+      };
     }
     // decision === "act" → fall through to default autoApproveFor.
   }

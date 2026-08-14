@@ -29,10 +29,7 @@
 import { KIND_CUES } from "../retrieval/understand-query.js";
 
 export type SubstrateKind =
-  | "semantic"
-  | "structured"
-  | "procedural"
-  | "episodic";
+  "semantic" | "structured" | "procedural" | "episodic";
 
 /**
  * Enumerative LEAD phrases — a query is list-shaped when it opens with a
@@ -64,7 +61,9 @@ const ENUMERATIVE_LEAD_RE = /^\s*what(?:'s|s)?\b/;
 /** True when any KIND_CUES single-word cue appears in PLURAL form. */
 function namesPluralKind(tokenSet: Set<string>): boolean {
   return Object.values(KIND_CUES).some((cues) =>
-    cues.some((c) => !c.includes(" ") && !c.endsWith("s") && tokenSet.has(`${c}s`))
+    cues.some(
+      (c) => !c.includes(" ") && !c.endsWith("s") && tokenSet.has(`${c}s`)
+    )
   );
 }
 
@@ -182,9 +181,23 @@ export function classifySubstrates(query: string): SubstrateRoute {
       ? STATUS_CUES.find((_, i) => STATUS_RE[i].test(q))
       : undefined;
 
-  const substrates: SubstrateKind[] = ["semantic"];
+  // PROCEDURAL RUNS UNCONDITIONALLY — the cue only decides ORDER, not access.
+  //
+  // The cue list (`PROCEDURAL_CUES`) is a hand-written set of how-to phrasings.
+  // Gating ACCESS on it meant a semantically-procedural question asked without
+  // one of those exact words never touched `knowledge_keys` at all — the runbook
+  // was there, ranked well, and simply never queried. Dogfooded: searching for
+  // the contents of a captured runbook returned nothing, while the same question
+  // prefixed with "how to" returned it as hit #1.
+  //
+  // Cheap to always run: one FTS query against a GIN index, and `semantic`
+  // already runs unconditionally for the same reason. The cue keeps its real
+  // job below — deciding which substrate LEADS.
+  //
+  // Episodic stays cue-gated: it is user-narrative recall ("what did I…"), and
+  // firing it on every query changes what an untargeted question returns.
+  const substrates: SubstrateKind[] = ["semantic", "procedural"];
   if (structured) substrates.push("structured");
-  if (procedural) substrates.push("procedural");
   if (episodic) substrates.push("episodic");
 
   // A strongly-enumerative/procedural/episodic query is usually NOT best served

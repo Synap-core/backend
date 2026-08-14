@@ -4,6 +4,7 @@
  */
 import { db, eq, entities } from "@synap/database";
 import { getPlaybookRunner } from "../capability-dispatch.js";
+import { guardProducerEffect } from "../../utils/automation-governance.js";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
@@ -44,8 +45,29 @@ export async function executePlaybookRun(
   ownerId: string,
   // F2 safety floor: the chain context of the automation run spawning this
   // playbook's agent — forwarded to the spine, which stamps it onto the session.
-  automationContext?: ExecutionPayload["automationContext"]
+  automationContext?: ExecutionPayload["automationContext"],
+  // CONFUSED-DEPUTY GUARD: the causal-chain producer. A playbook_run launches an
+  // IS agent session AS the owner (`userId: ownerId`); an agent-produced trigger
+  // firing a HUMAN-owned automation would launder that agent kickoff through
+  // owner-bypass. Fail closed when an agent is in the chain and the producer's
+  // ladder would not auto-execute. Absent → owner-only behavior, unchanged.
+  producerAgentUserId?: string | null
 ): Promise<Record<string, unknown>> {
+  const guard = await guardProducerEffect({
+    producerAgentUserId,
+    principalUserId: ownerId,
+    workspaceId,
+    subjectType: "playbook",
+    action: "run",
+  });
+  if ("block" in guard) {
+    throw new Error(
+      guard.kind === "deny"
+        ? `playbook_run denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
+        : `playbook_run cannot auto-execute: an agent produced this trigger, so a human-owned automation may not launch it ungoverned (confused-deputy guard).`
+    );
+  }
+
   const playbookRunner = getPlaybookRunner();
   if (!playbookRunner) {
     throw new Error(

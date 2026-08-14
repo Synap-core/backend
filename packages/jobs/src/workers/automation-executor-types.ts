@@ -30,6 +30,17 @@ export interface ExecutionPayload {
   };
   /** For delay resumption: skip nodes that were already executed */
   completedNodeIds?: string[];
+  /**
+   * CONFUSED-DEPUTY GUARD (the causal-chain producer). The userId of the actor
+   * whose event/observation fired the trigger that created this run — stamped by
+   * the trigger matcher (`automation-trigger-matcher.ts`). The executor forwards
+   * it to `checkAutomationWriteOrPropose` so a THEN-action authored by an agent
+   * in the causal chain is GOVERNED against that agent (proposal, never an
+   * ungoverned effect) even when the automation OWNER is a human. Absent for
+   * manual/cron runs (they enqueue `automation-execute` directly, not via the
+   * matcher) → owner-only governance, exactly as before.
+   */
+  producerAgentUserId?: string | null;
 }
 
 /** Context built up during execution — step outputs available to later steps */

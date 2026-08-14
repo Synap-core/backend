@@ -70,6 +70,34 @@ export const branchesRouter = router({
 
       const workspaceId = parentChannel.workspaceId ?? undefined;
 
+      // PROMPT-SURFACE DISCLOSURE — `agentConfig.instructions` (and .name /
+      // .personality) are appended VERBATIM to the branch agent's system prompt
+      // (intelligence-hub agents/base/agent.ts). This is the only agent-reachable
+      // door that accepts them, and it is proposal-gated — but a human approving
+      // "create branch: research X" must be able to SEE that a prompt fragment
+      // rides along, or the review is not an informed one. `input.reasoning` is
+      // agent-supplied and may replace the default line entirely, so the
+      // disclosure is APPENDED after the fallback — never folded into it, which
+      // an agent could then omit.
+      const PROMPT_BEARING_KEYS = [
+        "instructions",
+        "name",
+        "personality",
+      ] as const;
+      const promptKeys = input.agentConfig
+        ? PROMPT_BEARING_KEYS.filter((k) => {
+            const v = input.agentConfig?.[k];
+            return typeof v === "string" && v.trim() !== "";
+          })
+        : [];
+      const baseReasoning =
+        input.reasoning ??
+        `AI proposes creating branch: ${input.branchPurpose}`;
+      const reasoning =
+        promptKeys.length > 0
+          ? `${baseReasoning}\n\n⚠️ This branch carries agent prompt configuration (${promptKeys.join(", ")}) that will be appended to the branch agent's system prompt. Review the proposal data before approving.`
+          : baseReasoning;
+
       // Governance check — branch creation requires proposal by default
       const perm = await checkPermissionOrPropose({
         userId: agentUserId,
@@ -78,9 +106,7 @@ export const branchesRouter = router({
         subjectType: "channel",
         action: "create_branch",
         source: "intelligence",
-        reasoning:
-          input.reasoning ??
-          `AI proposes creating branch: ${input.branchPurpose}`,
+        reasoning,
         data: {
           parentChannelId: input.parentChannelId,
           branchPurpose: input.branchPurpose,

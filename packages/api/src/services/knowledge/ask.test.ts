@@ -53,17 +53,22 @@ beforeEach(() => {
 });
 
 describe("ask router", () => {
-  it("a plain entity query hits ONLY semantic", async () => {
+  it("a plain entity query hits semantic + procedural, led by semantic", async () => {
     const r = await ask({ ...baseParams, query: "the Acme project" });
     expect(retrieveMock).toHaveBeenCalledTimes(1);
-    expect(searchFullTextMock).not.toHaveBeenCalled();
+    // Procedural now runs on EVERY query — one indexed FTS lookup. Gating it on
+    // a cue phrase meant runbooks were unreachable unless the caller happened to
+    // say "how to". Episodic stays cue-gated: it is narrative recall.
+    expect(searchFullTextMock).toHaveBeenCalledTimes(1);
     expect(searchFactsMock).not.toHaveBeenCalled();
-    expect(r.routedTo).toEqual(["semantic"]);
+    expect(r.routedTo).toEqual(["semantic", "procedural"]);
     expect(r.primary).toBe("semantic");
-    expect(r.answers).toHaveLength(1);
+    expect(r.answers).toHaveLength(2);
+    // Semantic still LEADS — the answer a user reads first is unchanged.
     expect(r.answers[0].substrate).toBe("semantic");
     expect(r.answers[0].items).toEqual(semanticResult.entities);
     expect(r.answers[0].status).toBe("ok");
+    expect(r.answers[1].substrate).toBe("procedural");
     expect(r.degraded).toEqual([]);
   });
 
@@ -88,7 +93,7 @@ describe("ask router", () => {
       query: "what did I note about pricing",
     });
     expect(searchFactsMock).toHaveBeenCalledTimes(1);
-    expect(searchFullTextMock).not.toHaveBeenCalled();
+    // Procedural runs here too now; what matters is that episodic LEADS.
     expect(r.primary).toBe("episodic");
     expect(r.answers[0].substrate).toBe("episodic");
   });

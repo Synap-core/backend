@@ -88,6 +88,7 @@ vi.mock("@synap/database", () => {
     eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
     isNull: vi.fn((a: unknown) => ({ isNull: a })),
+    inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
     users: TABLES.users,
     proposals: TABLES.proposals,
     governanceRules: TABLES.governanceRules,
@@ -133,7 +134,13 @@ function scanRow(
   id: string,
   targetId: string,
   status: string,
-  over: { proposalType?: string; targetType?: string; data?: unknown } = {}
+  over: {
+    proposalType?: string;
+    targetType?: string;
+    data?: unknown;
+    reasonCode?: string | null;
+    rejectionReason?: string | null;
+  } = {}
 ) {
   return {
     id,
@@ -142,6 +149,10 @@ function scanRow(
     status,
     targetId,
     data: over.data ?? {},
+    // Default: NO reason at all — the pre-0232 / bare-reject shape every legacy
+    // test above implicitly exercises. Must bucket as "unknown", never guessed.
+    reasonCode: over.reasonCode ?? null,
+    rejectionReason: over.rejectionReason ?? null,
   };
 }
 
@@ -517,5 +528,330 @@ describe("recommendTightenForAllAgents", () => {
     // 3 total qualifying motifs across both agents: agent-1's entity.delete,
     // agent-2's entity.delete, agent-2's entity.merge.
     expect(result.proposalsFiled).toBe(3);
+  });
+});
+
+// ── reason-awareness + classification ────────────────────────────────────
+//
+// The recommender used to count rejections and never read WHY. These pin the
+// three behaviours that fix: bucketing, the mechanical-vs-judgment split, and
+// the unknown-reason fallback that keeps the old behaviour when there is no
+// signal to reclassify on.
+
+describe("recommendTightenForAllAgents — reason-aware classification", () => {
+  /** Queue exactly the DB responses the JUDGMENT (rule) path consumes. */
+  function queueRulePath(rows: unknown[], agent = agentRow("agent-1")) {
+    queues.users.push([agent]);
+    queues.proposalClusterMutes.push([]);
+    queues.proposals.push(rows); // loadAgentProposals
+    queues.proposals.push([]); // hasPendingFinding
+    queues.governanceRules.push([]); // hasCoveringProposeRule
+  }
+
+  /**
+   * The MECHANICAL (advisory) path consumes one FEWER call: the covering-rule
+   * check is a rule-redundancy check and is skipped. Queueing no governanceRules
+   * response is itself the assertion — a stray call throws.
+   */
+  function queueAdvisoryPath(rows: unknown[], agent = agentRow("agent-1")) {
+    queues.users.push([agent]);
+    queues.proposalClusterMutes.push([]);
+    queues.proposals.push(rows); // loadAgentProposals
+    queues.proposals.push([]); // hasPendingFinding
+  }
+
+  function filedCall() {
+    return mockInsertPendingProposal.mock.calls[0]![0] as {
+      proposalType: string;
+      data: {
+        verdict?: string;
+        advisoryKind?: string;
+        suggestedRemedy?: string;
+        targetPattern: string;
+        evidence: {
+          dominantReason: string;
+          reasonHistogram: Record<string, number>;
+          faultClass: string;
+          clusterSize: number;
+        };
+      };
+    };
+  }
+
+  it("reads reasonCode and reports the dominant reason + histogram in the evidence", async () => {
+    const rows = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        scanRow(`nr-${i}`, `t-${i}`, "rejected", {
+          reasonCode: "not_relevant",
+        })
+      ),
+      scanRow("bd-0", "t-bd", "rejected", { reasonCode: "bad_data" }),
+    ];
+    queueRulePath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    const call = filedCall();
+    expect(call.data.evidence.dominantReason).toBe("not_relevant");
+    expect(call.data.evidence.reasonHistogram).toEqual({
+      not_relevant: 4,
+      bad_data: 1,
+    });
+  });
+
+  it("falls back to free-text rejectionReason for pre-0232 rows, trimmed + lowercased, collapsing onto the matching code's bucket", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`ft-${i}`, `t-${i}`, "rejected", {
+        // No structured code (pre-migration-0232 row) — the free text carries it.
+        rejectionReason: i === 0 ? "  Duplicate  " : "duplicate",
+      })
+    );
+    queueAdvisoryPath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    const call = filedCall();
+    // All 5 collapsed into ONE bucket — the trimmed/lowercased free text is the
+    // same key as the structured code, so legacy rows classify identically.
+    expect(call.data.evidence.reasonHistogram).toEqual({ duplicate: 5 });
+    expect(call.proposalType).toBe("governance.advisory");
+  });
+
+  it("an unknown reasonCode outside the pinned taxonomy is IGNORED in favour of the free text (precedence, not first-non-null)", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`x-${i}`, `t-${i}`, "rejected", {
+        reasonCode: "some_code_we_never_shipped",
+        rejectionReason: "Not relevant",
+      })
+    );
+    queueRulePath(rows);
+
+    await recommendTightenForAllAgents();
+
+    const call = filedCall();
+    expect(call.data.evidence.reasonHistogram).toEqual({ "not relevant": 5 });
+    expect(call.data.evidence.faultClass).toBe("judgment");
+  });
+
+  it.each([["duplicate"], ["wrong_kind_or_facet"], ["wrong_link_type"]])(
+    "MECHANICAL dominant reason (%s) files an ADVISORY, never a rule — no verdict, and the covering-rule check is skipped",
+    async (reasonCode) => {
+      const rows = Array.from({ length: 6 }, (_, i) =>
+        scanRow(`m-${i}`, `t-${i}`, "rejected", { reasonCode })
+      );
+      queueAdvisoryPath(rows);
+
+      const result = await recommendTightenForAllAgents();
+
+      expect(result.proposalsFiled).toBe(1);
+      const call = filedCall();
+      expect(call.proposalType).toBe("governance.advisory");
+      // The whole point: a `propose` rule cannot deduplicate or repair a
+      // malformed write, so the payload must carry NO verdict at all.
+      expect(call.data.verdict).toBeUndefined();
+      expect(call.data.advisoryKind).toBe("mechanical_fault");
+      expect(call.data.suggestedRemedy).toBeTruthy();
+      expect(call.data.evidence.faultClass).toBe("mechanical");
+      expect(call.data.evidence.dominantReason).toBe(reasonCode);
+      // Same evidence as the rule path — only the REMEDY differs.
+      expect(call.data.evidence.clusterSize).toBe(6);
+    }
+  );
+
+  it("the live-pod case: playbook.create rejected as duplicate does NOT file a tighten_lane (pinning it to review fixes nothing — those writes are already pending review)", async () => {
+    const rows = Array.from({ length: 9 }, (_, i) =>
+      scanRow(`pb-${i}`, `pb-t-${i}`, "rejected", {
+        targetType: "playbook",
+        proposalType: "create",
+        reasonCode: "duplicate",
+      })
+    );
+    queueAdvisoryPath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    const call = filedCall();
+    expect(call.data.targetPattern).toBe("playbook.create");
+    expect(call.proposalType).not.toBe("governance.tighten_lane");
+    expect(call.proposalType).toBe("governance.advisory");
+  });
+
+  it.each([
+    ["not_relevant"],
+    ["bad_data"],
+    ["wrong_workspace"],
+    ["wrong_entity"],
+  ])(
+    "JUDGMENT dominant reason (%s) keeps the tighten_lane rule — the write was well-formed but unwanted",
+    async (reasonCode) => {
+      const rows = Array.from({ length: 6 }, (_, i) =>
+        scanRow(`j-${i}`, `t-${i}`, "rejected", { reasonCode })
+      );
+      queueRulePath(rows);
+
+      const result = await recommendTightenForAllAgents();
+
+      expect(result.proposalsFiled).toBe(1);
+      const call = filedCall();
+      expect(call.proposalType).toBe("governance.tighten_lane");
+      expect(call.data.verdict).toBe("propose");
+      expect(call.data.evidence.faultClass).toBe("judgment");
+      expect(call.data.evidence.dominantReason).toBe(reasonCode);
+    }
+  );
+
+  it("UNREASONED rejections bucket as 'unknown' and keep TODAY's behaviour (rule) — never fabricated into a reason", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`u-${i}`, `t-${i}`, "rejected")
+    );
+    queueRulePath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    const call = filedCall();
+    expect(call.proposalType).toBe("governance.tighten_lane");
+    expect(call.data.evidence.dominantReason).toBe("unknown");
+    expect(call.data.evidence.reasonHistogram).toEqual({ unknown: 5 });
+    expect(call.data.evidence.faultClass).toBe("judgment");
+  });
+
+  it("a motif MOSTLY unreasoned keeps the rule even when a mechanical reason is present — one loud 'duplicate' must not reclassify an unreasoned cluster", async () => {
+    const rows = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        scanRow(`u-${i}`, `t-${i}`, "rejected")
+      ),
+      ...Array.from({ length: 2 }, (_, i) =>
+        scanRow(`d-${i}`, `td-${i}`, "rejected", { reasonCode: "duplicate" })
+      ),
+    ];
+    queueRulePath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    const call = filedCall();
+    expect(result.proposalsFiled).toBe(1);
+    expect(call.data.evidence.dominantReason).toBe("unknown");
+    expect(call.proposalType).toBe("governance.tighten_lane");
+  });
+
+  it("a TIE between 'unknown' and a mechanical reason resolves to unknown (rule) — a tie is not evidence to reclassify", async () => {
+    const rows = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        scanRow(`u-${i}`, `t-${i}`, "rejected")
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        scanRow(`d-${i}`, `td-${i}`, "rejected", { reasonCode: "duplicate" })
+      ),
+    ];
+    queueRulePath(rows);
+
+    await recommendTightenForAllAgents();
+
+    const call = filedCall();
+    expect(call.data.evidence.dominantReason).toBe("unknown");
+    expect(call.proposalType).toBe("governance.tighten_lane");
+  });
+
+  it("the reason histogram is built over the SAME filtered population as the count — muted rejections contribute no reasons", async () => {
+    const muted = Array.from({ length: 6 }, (_, i) =>
+      scanRow(`muted-${i}`, `muted-t-${i}`, "rejected", {
+        reasonCode: "duplicate",
+      })
+    );
+    const live = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`live-${i}`, `live-t-${i}`, "rejected", {
+        reasonCode: "not_relevant",
+      })
+    );
+    const mutedFingerprints = muted.map((r) =>
+      computeProposalFingerprint({
+        proposalType: r.proposalType,
+        targetType: r.targetType,
+        targetId: r.targetId,
+        data: r.data,
+      })
+    );
+
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposalClusterMutes.push(
+      mutedFingerprints.map((fingerprint) => ({ fingerprint }))
+    );
+    queues.proposals.push([...muted, ...live]);
+    queues.proposals.push([]); // hasPendingFinding
+    queues.governanceRules.push([]); // hasCoveringProposeRule (judgment path)
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    const call = filedCall();
+    // If the muted `duplicate` rows leaked into the histogram they would be the
+    // plurality (6 > 5) and would flip this motif to an ADVISORY — measuring a
+    // different population than the rate was computed over.
+    expect(call.data.evidence.reasonHistogram).toEqual({ not_relevant: 5 });
+    expect(call.proposalType).toBe("governance.tighten_lane");
+  });
+
+  it("dedupes across BOTH finding types — an open ADVISORY suppresses a tighten_lane for the same (agent, motif)", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`p-${i}`, `t-${i}`, "rejected", { reasonCode: "not_relevant" })
+    );
+
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposalClusterMutes.push([]);
+    queues.proposals.push(rows); // loadAgentProposals
+    // ONE query returns pending findings of BOTH types; this one is an advisory
+    // for the same (agent, motif). No governanceRules entry is queued — reaching
+    // the covering-rule check would throw and fail this test.
+    queues.proposals.push([
+      {
+        data: {
+          agentUserId: "agent-1",
+          targetPattern: "entity.delete",
+          advisoryKind: "mechanical_fault",
+        },
+      },
+    ]);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(0);
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("an advisory is NOT suppressed by a covering propose rule — the rule does not fix the code fault", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`p-${i}`, `t-${i}`, "rejected", { reasonCode: "duplicate" })
+    );
+    // No governanceRules response queued: if the advisory path consulted the
+    // covering-rule check at all, the mock would throw.
+    queueAdvisoryPath(rows);
+
+    const result = await recommendTightenForAllAgents();
+
+    expect(result.proposalsFiled).toBe(1);
+    expect(filedCall().proposalType).toBe("governance.advisory");
+  });
+
+  it("notifies pod-wide for an advisory too — a finding nobody sees is not a finding", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      scanRow(`p-${i}`, `t-${i}`, "rejected", { reasonCode: "duplicate" })
+    );
+    queueAdvisoryPath(rows);
+
+    await recommendTightenForAllAgents();
+
+    expect(mockNotifyPodWideProposal).toHaveBeenCalledTimes(1);
+    const arg = mockNotifyPodWideProposal.mock.calls[0]![0] as {
+      proposalType: string;
+      description: string;
+      agentUserId: string;
+    };
+    expect(arg.proposalType).toBe("governance.advisory");
+    expect(arg.agentUserId).toBe("agent-1");
+    expect(arg.description).toContain("duplicate");
   });
 });

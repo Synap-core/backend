@@ -253,6 +253,23 @@ export type PermissionResult =
   | { denied: true; reason: string };
 
 /**
+ * What `checkPermissionOrPropose` WOULD do, resolved without doing it.
+ * See `previewPermissionDecision`.
+ */
+export type PermissionDecisionPreview =
+  | { decision: "deny"; reason: string }
+  | { decision: "propose" }
+  | { decision: "execute" };
+
+/**
+ * Internal sentinel returned by the shared evaluator when it reaches a
+ * propose-verdict in dry-run mode — i.e. the exact point at which commit mode
+ * would have created a proposal. Never leaves this module.
+ */
+const DRY_RUN_PROPOSE = { __dryRunPropose: true } as const;
+type DryRunPropose = typeof DRY_RUN_PROPOSE;
+
+/**
  * Before-snapshot of an entity captured at proposal-creation time for UPDATE
  * proposals. Persisted on the proposal's stored `data` as `previousData` so the
  * review layer renders a durable before→after diff. Mirrors the `previousData`
@@ -622,6 +639,58 @@ export interface PermissionCheckOpts {
 export async function checkPermissionOrPropose(
   opts: PermissionCheckOpts
 ): Promise<PermissionResult> {
+  const result = await evaluatePermission(opts, false);
+  if ("__dryRunPropose" in result) {
+    // Unreachable: the sentinel is only ever returned in dry-run mode. Treated
+    // as an internal error rather than silently granting.
+    logger.error(
+      { subjectType: opts.subjectType, action: opts.action },
+      "Dry-run sentinel escaped commit-mode permission check"
+    );
+    return { denied: true, reason: "Permission check error" };
+  }
+  return result;
+}
+
+/**
+ * DECISION-ONLY (dry-run) mode on the SAME governance door.
+ *
+ * Resolves the identical verdict through the identical rungs as
+ * `checkPermissionOrPropose` — same `resolveAgentGovernanceDecision` engine,
+ * same RBAC, same floors, same ordering — but performs **no side effects**:
+ *   - no `proposals` row (pending OR auto-approved receipt)
+ *   - no `.requested` event append
+ *   - no notification / broadcast / side-effect emission
+ *   - no `workspace.join` proposal
+ *   - no daily agent-proposal-cap consumption (the cap is not even read)
+ *
+ * Reads (RBAC lookup, profile resolution, governance rules, workspace settings,
+ * session metadata, acting-channel resolution) still run — they are what
+ * produces the verdict.
+ *
+ * WHY: create doors need to know "would this be DENIED?" *before* they do an
+ * existence lookup (so a forbidden caller never learns whether a row exists),
+ * and "would this be PROPOSED?" so an already-existing target can return the
+ * idempotent success instead of filing yet another duplicate proposal. It is a
+ * PREVIEW, never an authorization: the door still calls
+ * `checkPermissionOrPropose` for the write it actually performs.
+ */
+export async function previewPermissionDecision(
+  opts: PermissionCheckOpts
+): Promise<PermissionDecisionPreview> {
+  const result = await evaluatePermission(opts, true);
+  if ("__dryRunPropose" in result) return { decision: "propose" };
+  if ("denied" in result) return { decision: "deny", reason: result.reason };
+  if (result.granted === true) return { decision: "execute" };
+  // Defensive: no propose path reaches createProposal in dry-run mode, so a
+  // granted:false result should be impossible here.
+  return { decision: "propose" };
+}
+
+async function evaluatePermission(
+  opts: PermissionCheckOpts,
+  dryRun: boolean
+): Promise<PermissionResult | DryRunPropose> {
   const {
     userId,
     agentUserId,
@@ -726,6 +795,7 @@ export async function checkPermissionOrPropose(
           result.reason === "User is not a member of this workspace";
         if (isMembershipMiss && agentUserId) {
           const join = await maybeCreateWorkspaceJoinProposal({
+            dryRun,
             agentUserId,
             requesterUserId: userId,
             workspaceId,
@@ -762,6 +832,7 @@ export async function checkPermissionOrPropose(
             .where(eq(users.id, agentUserId))
             .limit(1);
           if (actorRow?.userType === "agent") {
+            if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
               envelope: writeEnvelope,
               workspaceId,
@@ -827,6 +898,7 @@ export async function checkPermissionOrPropose(
           const reviewerExists = reviewerRows.some((r) => r.userId !== userId);
 
           if (reviewerExists) {
+            if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
               envelope: writeEnvelope,
               proposedByUserId: userId,
@@ -861,6 +933,7 @@ export async function checkPermissionOrPropose(
     // directly even when it rides a permitted user's RBAC; it routes to a
     // reviewable proposal. Absent `issuer` preserves legacy behavior.
     if (opts.issuer && opts.issuer.trusted === false) {
+      if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
         envelope: writeEnvelope,
         workspaceId,
@@ -999,6 +1072,7 @@ export async function checkPermissionOrPropose(
         isFocusSessionLifecycleClose(subjectType, action, data);
 
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
+        if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
           envelope: writeEnvelope,
           workspaceId,
@@ -1009,10 +1083,17 @@ export async function checkPermissionOrPropose(
           // for the plain default-propose case, preserving the prior behavior of
           // passing the caller's reasoning through unchanged.
           reasoning: opts.reasoning ?? gov.reason,
+          // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key,
+          // e.g. "UNTRUSTED_ORIGIN") — persisted so the review UI can render a
+          // distinct "why this needs you" treatment for a force-propose rung.
+          governanceReason: gov.reasonCode,
         });
       }
 
       if (gov.decision === "execute" || lifecycleCloseEscape) {
+        // DRY RUN: the verdict is "execute"; skip the AUTO_APPROVED receipt
+        // INSERT (the only side effect on this branch) and report it.
+        if (dryRun) return { granted: true };
         // Auto-approved (or lifecycle close escape). Record the RECEIPT row, then grant.
         //
         // AWAITED, not fire-and-forget: a receipt that races the response is not
@@ -1192,6 +1273,7 @@ export async function checkPermissionOrPropose(
         ) {
           return { granted: true };
         }
+        if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
           envelope: writeEnvelope,
           workspaceId,
@@ -1313,6 +1395,8 @@ export interface CreatePendingProposalInput {
   projectId?: string | null;
   expiresAt?: Date | null;
   notificationDescription?: string;
+  /** Structured governance reason (PROPOSE_REASON key) → `governance_reason`. */
+  governanceReason?: string | null;
 }
 
 /**
@@ -1461,6 +1545,7 @@ async function createPendingProposalRow(
       sessionId: input.sessionId,
       projectId: input.projectId,
       expiresAt: input.expiresAt,
+      governanceReason: input.governanceReason,
     },
     tx
   );
@@ -1597,6 +1682,13 @@ async function createProposal(args: {
   action: string;
   data: Record<string, unknown>;
   reasoning?: string;
+  /**
+   * Structured governance reason — the PROPOSE_REASON KEY the pure engine
+   * stamped (from `gov.reasonCode`). Persisted to `governance_reason` so the
+   * review UI can branch on WHY the write needs a human. Omitted for the
+   * RBAC-role-exceed propose paths (those carry no governance-engine verdict).
+   */
+  governanceReason?: string;
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
@@ -1608,6 +1700,7 @@ async function createProposal(args: {
     action,
     data,
     reasoning,
+    governanceReason,
   } = args;
   // Identity off the boundary-minted AccessContext; provenance off the frozen
   // per-request slice. Same values as the old loose params — now single-sourced.
@@ -1848,6 +1941,7 @@ async function createProposal(args: {
         correlationId: resolvedCorrelationId,
         requestedEventId: reqEventId ?? null,
         notificationDescription: reasoning ?? `${action} ${singularType}`,
+        governanceReason: governanceReason ?? null,
       };
 
       const { proposal: created, deduped } = await createPendingProposalRow(
@@ -1893,6 +1987,14 @@ async function createProposal(args: {
  * workspaceId), its id is returned rather than creating a second one.
  */
 async function maybeCreateWorkspaceJoinProposal(opts: {
+  /**
+   * Decision-only mode: resolve the SAME verdict (is this actor an agent that
+   * would file a join proposal?) and return the dry-run sentinel instead of
+   * creating anything. The agent-user confirmation above the short-circuit is a
+   * READ and still runs, so the non-agent → `null` → hard-deny fallthrough is
+   * preserved verbatim.
+   */
+  dryRun?: boolean;
   agentUserId: string;
   requesterUserId: string;
   workspaceId: string;
@@ -1907,8 +2009,9 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
   requestedAction?: string;
   /** The original data payload (e.g. { goal, templateId } for sessions). */
   requestedData?: Record<string, unknown>;
-}): Promise<PermissionResult | null> {
+}): Promise<PermissionResult | DryRunPropose | null> {
   const {
+    dryRun,
     agentUserId,
     requesterUserId,
     workspaceId,
@@ -1930,6 +2033,10 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     .where(eq(users.id, agentUserId))
     .limit(1);
   if (agentUser?.userType !== "agent") return null;
+
+  // Verdict resolved (agent → join proposal). In dry-run stop here: everything
+  // below either reads to build the card or WRITES the proposal.
+  if (dryRun) return DRY_RUN_PROPOSE;
 
   const role = "editor";
   const [ws] = await db

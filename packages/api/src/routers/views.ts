@@ -57,7 +57,10 @@ import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  previewPermissionDecision,
+} from "../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
@@ -191,6 +194,50 @@ function assertValidRendererRef(config: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Load the existing view a create would DUPLICATE, keyed on the view's app-level
+ * identity: **(workspaceId, lower(name), type)**, unpinned (`project_id IS NULL`).
+ *
+ * WHY THIS KEY — `views` has NO name-uniqueness index (only
+ * `views_scoped_surface_uniq_idx`, which constrains MARKED canonical surfaces on
+ * `(type, workspace_id, project_id)`), and no soft-delete/archive column, so a
+ * duplicate create genuinely materialises a clone. The key mirrors the two
+ * places the codebase already treats a view as identified:
+ *   - `reconcile-workspace-from-definition.ts` matches on (workspaceId, name);
+ *   - the scoped-surface unique index includes `type` and the project scope.
+ * `type` is kept in the key because a "Tasks" kanban and a "Tasks" table are
+ * legitimately different surfaces; `project_id IS NULL` because this door never
+ * accepts a projectId, so a project-pinned surface must never be handed back as
+ * "the existing one". Name match is case-insensitive, oldest-wins — the same
+ * rule `findNonArchivedPlaybookByName` uses.
+ *
+ * FOLLOW-UP (deliberately NOT in this wave): a partial unique index on
+ * (workspace_id, lower(name), type) WHERE project_id IS NULL would make this a
+ * DB-enforced invariant, but existing pods almost certainly already hold
+ * duplicates, so it needs a soft-reconcile migration of its own.
+ */
+async function findViewByIdentity(
+  database: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string,
+  name: string,
+  type: string
+) {
+  const [row] = await database
+    .select()
+    .from(views)
+    .where(
+      and(
+        eq(views.workspaceId, workspaceId),
+        isNull(views.projectId),
+        eq(views.type, type),
+        sql`lower(${views.name}) = lower(${name})`
+      )
+    )
+    .orderBy(asc(views.createdAt), asc(views.id))
+    .limit(1);
+  return row ?? null;
+}
+
 export const viewsRouter = router({
   /**
    * Create a new view (Synchronous: Direct DB insert)
@@ -252,7 +299,7 @@ export const viewsRouter = router({
 
       // If workspace available, check permissions (including AI proposal gate)
       if (effectiveWorkspaceId) {
-        const perm = await checkPermissionOrPropose({
+        const gateOpts = {
           userId: ctx.userId,
           agentUserId: input.agentUserId,
           workspaceId: effectiveWorkspaceId,
@@ -267,7 +314,45 @@ export const viewsRouter = router({
             type: input.type,
             scopeProfileIds: input.scopeProfileIds,
           },
-        });
+        };
+
+        // IDEMPOTENCY ABOVE THE PROPOSE PATH (AI callers only).
+        //
+        // Unlike playbooks/automations there is no unique index here, so an
+        // approved duplicate materialises a real clone view — and on the propose
+        // path an agent re-running the same intent filed a fresh proposal every
+        // time (payload dedup can't collapse them; only the NAME is stable).
+        //
+        // ORDER IS LOAD-BEARING: dry-run the SAME governance door first and
+        // re-throw a deny exactly as the real gate would, BEFORE the existence
+        // lookup — a caller who may not write must never learn whether the view
+        // exists. HUMAN callers are untouched (a person may legitimately want a
+        // second view with the same name), so this only short-circuits AI writes.
+        const isAiCaller =
+          Boolean(input.agentUserId) ||
+          input.source === "ai" ||
+          input.source === "intelligence";
+        if (isAiCaller) {
+          const preview = await previewPermissionDecision(gateOpts);
+          if (preview.decision === "deny") {
+            throw new TRPCError({ code: "FORBIDDEN", message: preview.reason });
+          }
+          const existingView = await findViewByIdentity(
+            await getDb(),
+            effectiveWorkspaceId,
+            input.name,
+            input.type
+          );
+          if (existingView) {
+            return {
+              view: existingView,
+              documentId: existingView.documentId,
+              status: "created",
+            };
+          }
+        }
+
+        const perm = await checkPermissionOrPropose(gateOpts);
 
         if ("denied" in perm && perm.denied) {
           throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

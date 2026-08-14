@@ -34,7 +34,10 @@ import {
   resolveVaultReferences,
   isVaultReference,
 } from "../../utils/vault-resolver.js";
-import { checkAutomationWriteOrPropose } from "../../utils/automation-governance.js";
+import {
+  checkAutomationWriteOrPropose,
+  guardProducerEffect,
+} from "../../utils/automation-governance.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
@@ -44,6 +47,31 @@ import type {
   StepContext,
   ExecutionPayload,
 } from "../automation-executor-types.js";
+
+// CONFUSED-DEPUTY BACKSTOP: output sub-types whose confused-deputy posture has
+// been consciously reviewed — either they consult the producer ladder
+// (entity_create/entity_update/session_update via checkAutomationWriteOrPropose;
+// facet_attach/update/detach + relation_create via dispatchOutputVerb's
+// producerAgentUserId; webhook + channel_message via guardProducerEffect above),
+// or they are pod-internal with no trust boundary an agent producer could exploit
+// (notification = the owner's OWN attention row; set_state = run-local JSONB
+// cursor). Any effect type NOT in this set fails CLOSED when an agent is in the
+// causal chain — so a NEW effect node added later can never silently bypass the
+// guard the way `webhook`/`channel_message` originally did (found post-hoc). To
+// add a new effect type, classify it here (guard it, or justify it as internal).
+const PRODUCER_REVIEWED_OUTPUT_TYPES = new Set<string>([
+  "entity_create",
+  "entity_update",
+  "session_update",
+  "webhook",
+  "channel_message",
+  "notification",
+  "set_state",
+  "facet_attach",
+  "facet_update",
+  "facet_detach",
+  "relation_create",
+]);
 
 export async function executeOutputStep(
   data: {
@@ -64,7 +92,13 @@ export async function executeOutputStep(
   // The run's subject entity, when the run was launched about one — lets the
   // `channel_message` node target `channelType:'subjectEntity'` (this run's
   // subject's channel) without hardcoding a channelId.
-  runSubjectEntityId?: string | null
+  runSubjectEntityId?: string | null,
+  // CONFUSED-DEPUTY GUARD: the causal-chain producer (see ExecutionPayload /
+  // automation-trigger-matcher). When an AGENT is in the chain, the governed
+  // write below is resolved against that agent — so an agent-produced trigger
+  // firing a HUMAN-owned automation PROPOSES the THEN-action instead of
+  // auto-executing it ungoverned. Absent → owner-only governance, unchanged.
+  producerAgentUserId?: string | null
 ): Promise<Record<string, unknown>> {
   // Deep-resolve all template variables in config
   const config = deepResolveTemplates(data.config, context) as Record<
@@ -88,6 +122,21 @@ export async function executeOutputStep(
       : deterministicUuidV5(
           `${kind}:${automationContext.automationRunId}:${idemNodeId}:${context.loop?.index ?? "-"}`
         );
+
+  // Backstop: an agent in the causal chain may only reach effect types whose
+  // confused-deputy posture has been reviewed (see PRODUCER_REVIEWED_OUTPUT_TYPES).
+  // Fires only when a distinct agent producer is present, so human/system/cron
+  // triggers and owner-authored automations are byte-unchanged.
+  if (
+    typeof producerAgentUserId === "string" &&
+    producerAgentUserId.length > 0 &&
+    producerAgentUserId !== ownerId &&
+    !PRODUCER_REVIEWED_OUTPUT_TYPES.has(data.outputType)
+  ) {
+    throw new Error(
+      `output type "${data.outputType}" has no confused-deputy classification and cannot auto-execute with an agent in the trigger chain (fail-closed backstop). Classify it in PRODUCER_REVIEWED_OUTPUT_TYPES.`
+    );
+  }
 
   switch (data.outputType) {
     case "entity_create": {
@@ -214,6 +263,7 @@ export async function executeOutputStep(
         sessionId: automationContext.focusSessionId,
         stepRunId: attribution?.stepRunId,
         nodeId: attribution?.nodeId,
+        producerAgentUserId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_create denied by governance: ${gate.reason}`);
@@ -367,6 +417,7 @@ export async function executeOutputStep(
         sessionId: automationContext.focusSessionId,
         stepRunId: attribution?.stepRunId,
         nodeId: attribution?.nodeId,
+        producerAgentUserId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_update denied by governance: ${gate.reason}`);
@@ -407,6 +458,28 @@ export async function executeOutputStep(
     }
 
     case "webhook": {
+      // CONFUSED-DEPUTY GUARD (M1): a webhook resolves the OWNER's vault secrets
+      // into headers (`resolveVaultReferences(headers, ownerId)` below) and POSTs
+      // agent-influenced data to an external URL. On the observations/governed-event
+      // path a human-owned automation runs its THEN-nodes under owner-bypass, so an
+      // agent-produced trigger could exfiltrate the owner's secret to an
+      // agent-chosen endpoint ungoverned. This is the one effect node that reaches
+      // OUTSIDE the pod, so it fails closed BEFORE any URL/SSRF/vault work.
+      const webhookGuard = await guardProducerEffect({
+        producerAgentUserId,
+        principalUserId: ownerId,
+        workspaceId,
+        subjectType: "webhook",
+        action: "send",
+      });
+      if ("block" in webhookGuard) {
+        throw new Error(
+          webhookGuard.kind === "deny"
+            ? `webhook denied by producer-agent governance (confused-deputy guard): ${webhookGuard.reason ?? "denied"}`
+            : `webhook cannot auto-execute: an agent produced this trigger, so a human-owned automation may not POST to an external URL with the owner's credentials ungoverned (confused-deputy guard).`
+        );
+      }
+
       const url = config.url as string;
       let headers = (config.headers ?? {}) as Record<string, string>;
       const body = config.body ?? config;
@@ -519,6 +592,27 @@ export async function executeOutputStep(
       //                             of the run's subjectEntityId; per-client recap spine)
       //   (d) DEFAULT (none of the above) → the automation's own run/session channel
       //       (ensureAutomationRunChannel) — a targetless channel_message NEVER errors.
+      // CONFUSED-DEPUTY GUARD (S2): posts agent-influenced content into a channel
+      // under the OWNER's identity (and may mirror to an external surface e.g.
+      // Discord). On the observations/governed-event path a human-owned automation
+      // runs THEN-nodes under owner-bypass, so an agent-produced trigger could relay
+      // prompt-injected content into a team/feed channel ungoverned. Fail closed
+      // before resolving the destination or emitting.
+      const channelMsgGuard = await guardProducerEffect({
+        producerAgentUserId,
+        principalUserId: ownerId,
+        workspaceId,
+        subjectType: "channel_message",
+        action: "send",
+      });
+      if ("block" in channelMsgGuard) {
+        throw new Error(
+          channelMsgGuard.kind === "deny"
+            ? `channel_message denied by producer-agent governance (confused-deputy guard): ${channelMsgGuard.reason ?? "denied"}`
+            : `channel_message cannot auto-execute: an agent produced this trigger, so a human-owned automation may not post to a channel under the owner's identity ungoverned (confused-deputy guard).`
+        );
+      }
+
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
       const metadata = (config.metadata ?? {}) as Record<string, unknown>;
@@ -772,6 +866,7 @@ export async function executeOutputStep(
         sessionId: automationContext.focusSessionId,
         stepRunId: attribution?.stepRunId,
         nodeId: attribution?.nodeId,
+        producerAgentUserId,
       });
       if ("denied" in gate) {
         throw new Error(`session_update denied by governance: ${gate.reason}`);
@@ -942,7 +1037,8 @@ export async function executeOutputStep(
         "entity_facet.attach",
         config,
         workspaceId,
-        actingUserId
+        actingUserId,
+        producerAgentUserId
       );
 
     case "facet_update":
@@ -951,7 +1047,8 @@ export async function executeOutputStep(
         "entity_facet.update",
         config,
         workspaceId,
-        actingUserId
+        actingUserId,
+        producerAgentUserId
       );
 
     case "facet_detach":
@@ -960,7 +1057,8 @@ export async function executeOutputStep(
         "entity_facet.detach",
         config,
         workspaceId,
-        actingUserId
+        actingUserId,
+        producerAgentUserId
       );
 
     case "relation_create":
@@ -992,7 +1090,8 @@ export async function executeOutputStep(
         "graph.link",
         config,
         workspaceId,
-        actingUserId
+        actingUserId,
+        producerAgentUserId
       );
 
     default:

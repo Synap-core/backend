@@ -255,7 +255,11 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       action: "update",
       writesRequireProposal: false,
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
   it("2. ADMIN beats an auto-approve override that would allow it", () => {
     const v = decideAgentPolicy({
@@ -288,6 +292,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
   it("3. ADMIN_ACTIONS still propose before isAgentOwnedWorkspace (step 2 wins)", () => {
@@ -297,7 +302,11 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
         action: "update",
         isAgentOwnedWorkspace: true,
       })
-    ).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 
   it("4. explicit autoApproveFor overrides writesRequireProposal", () => {
@@ -321,6 +330,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.WRITES_REQUIRE_PROPOSAL,
+      reasonCode: "WRITES_REQUIRE_PROPOSAL",
     });
     expect(
       decideAgentPolicy({
@@ -341,6 +351,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
   it("6. standard mode + destructive (not whitelisted) → default propose", () => {
@@ -352,6 +363,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 
@@ -377,7 +389,11 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
           canAct: false,
         },
       })
-    ).toEqual({ verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE });
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.CHANNEL_PROPOSE,
+      reasonCode: "CHANNEL_PROPOSE",
+    });
     expect(
       decideAgentPolicy({
         subjectType: "entity",
@@ -419,6 +435,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 });
@@ -435,6 +452,7 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
         expect(v).toEqual({
           verdict: "propose",
           reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+          reasonCode: "DESTRUCTIVE_HARD_FLOOR",
         });
       }
     }
@@ -466,6 +484,7 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
       expect(v).toEqual({
         verdict: "propose",
         reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+        reasonCode: "DESTRUCTIVE_HARD_FLOOR",
       });
     }
     // Not on the default whitelist either.
@@ -495,6 +514,7 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 
@@ -533,7 +553,11 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
       subjectType: "workspace",
       action: "delete",
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 });
 
@@ -549,6 +573,7 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -562,6 +587,7 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -575,6 +601,7 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -616,6 +643,7 @@ describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+      reasonCode: "USER_OBSERVATION_INFERENCE",
     });
   });
 
@@ -628,6 +656,7 @@ describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+      reasonCode: "USER_OBSERVATION_INFERENCE",
     });
   });
 
@@ -672,7 +701,11 @@ describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
       subjectProfileSlug: "user_observation",
       subjectUoValidated: true,
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 });
 
@@ -688,6 +721,7 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
     // Explicitly null fields are also a no-op.
     expect(
@@ -720,6 +754,7 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.CAPABILITY_PROPOSE,
+      reasonCode: "CAPABILITY_PROPOSE",
     });
   });
 
@@ -743,6 +778,7 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.CAPABILITY_PROPOSE,
+      reasonCode: "CAPABILITY_PROPOSE",
     });
   });
 
@@ -758,7 +794,11 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
           canAct: false,
         },
       })
-    ).toEqual({ verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE });
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.CHANNEL_PROPOSE,
+      reasonCode: "CHANNEL_PROPOSE",
+    });
   });
 
   it("auto + channel act → execute (channel also permits acting)", () => {
@@ -805,7 +845,11 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
       action: "update", // workspace.update is an ADMIN_ACTIONS verb
       governanceRuleVerdict: "auto",
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 
   it("a rule can NEVER override a floor: forcePropose still proposes even with governanceRuleVerdict:'auto'", () => {
@@ -818,6 +862,7 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -830,6 +875,7 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 
@@ -844,6 +890,7 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+      reasonCode: "USER_OBSERVATION_INFERENCE",
     });
   });
 
@@ -869,6 +916,7 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.GOVERNANCE_RULE,
+      reasonCode: "GOVERNANCE_RULE",
     });
   });
 
@@ -906,6 +954,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -919,6 +968,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -932,6 +982,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -945,6 +996,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -961,6 +1013,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -975,6 +1028,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 
@@ -985,7 +1039,11 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
       action: "update", // ADMIN_ACTIONS
       originTrust: "untrusted",
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 
   it("forcePropose floor still wins over untrusted origin (SCOPE_IDENTITY reason)", () => {
@@ -998,6 +1056,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -1010,6 +1069,7 @@ describe("decideAgentPolicy — rung 2.55 untrusted origin (#4 provenance, tight
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 
@@ -1083,6 +1143,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+      reasonCode: "DAILY_WRITE_CEILING",
     });
   });
 
@@ -1108,6 +1169,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+      reasonCode: "DAILY_WRITE_CEILING",
     });
   });
 
@@ -1122,6 +1184,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+      reasonCode: "DAILY_WRITE_CEILING",
     });
     expect(
       decideAgentPolicy({
@@ -1133,6 +1196,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     ).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DAILY_WRITE_CEILING,
+      reasonCode: "DAILY_WRITE_CEILING",
     });
   });
 
@@ -1143,7 +1207,11 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
       action: "update", // ADMIN_ACTIONS
       ceilingVerdict: "propose",
     });
-    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
   });
 
   it("forcePropose floor still wins over the ceiling (SCOPE_IDENTITY reason)", () => {
@@ -1156,6 +1224,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+      reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
   });
 
@@ -1168,6 +1237,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+      reasonCode: "DESTRUCTIVE_HARD_FLOOR",
     });
   });
 
@@ -1213,6 +1283,7 @@ describe("decideAgentPolicy — rung 2.56 daily write ceiling (tighten-only)", (
     expect(v).toEqual({
       verdict: "propose",
       reason: PROPOSE_REASON.UNTRUSTED_ORIGIN,
+      reasonCode: "UNTRUSTED_ORIGIN",
     });
   });
 });

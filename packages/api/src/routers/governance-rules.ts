@@ -342,6 +342,7 @@ export const governanceRulesRouter = router({
         profileSlug: z.string().min(1).optional(),
         door: z.enum(["chat", "automation"]).optional(),
         workspaceId: z.string().uuid().optional(),
+        channelId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -361,6 +362,7 @@ export const governanceRulesRouter = router({
         action: input.action,
         profileSlug: input.profileSlug,
         door: input.door ?? "chat",
+        channelId: input.channelId,
       });
 
       // Enrich the rung-2.8 winner into a full chip the editor can open.

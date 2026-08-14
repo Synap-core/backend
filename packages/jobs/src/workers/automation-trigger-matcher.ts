@@ -130,6 +130,21 @@ interface TriggerMatchPayload {
    * playbook-scoped automations fire for entities produced by their session.
    */
   sessionId?: string | null;
+  /**
+   * CONFUSED-DEPUTY GUARD (the causal-chain producer). The userId of the actor
+   * that PRODUCED the triggering event — the agent (or human) whose write/observation
+   * fired this match. Threaded UNCHANGED into every fired automation's
+   * `automation-execute` job so the executor can govern the THEN-actions against
+   * the PRODUCER, not just the automation owner. Without it, an agent-authored
+   * trigger firing a HUMAN-owned automation would auto-execute the THEN-action
+   * ungoverned (the owner resolves `not-agent` → granted) — a human-owned
+   * automation laundering an agent's write into an ungoverned effect. The gate
+   * (`checkAutomationWriteOrPropose`) confirms agent-ness before escalating, so a
+   * plain human producer here is a no-op (it resolves `not-agent` and the owner
+   * path is unchanged). Absent for manual/cron runs (they never pass through the
+   * matcher) → owner-only governance, exactly as today.
+   */
+  producerAgentUserId?: string | null;
 }
 
 /**
@@ -546,8 +561,15 @@ async function deriveSessionChainContext(
 export async function handleAutomationTriggerMatch(job: {
   data: TriggerMatchPayload;
 }): Promise<void> {
-  const { eventType, subjectId, userId, workspaceId, data, automationContext } =
-    job.data;
+  const {
+    eventType,
+    subjectId,
+    userId,
+    workspaceId,
+    data,
+    automationContext,
+    producerAgentUserId,
+  } = job.data;
 
   // ── F2 depth floor across the agent boundary ───────────────────────────
   // An agent's Hub writes carry the focus session (sessionId) but NO
@@ -907,6 +929,10 @@ export async function handleAutomationTriggerMatch(job: {
         rootRunId: rootRunId ?? run.id,
         chainAutomationIds: [...chainIds, automationId],
       },
+      // Carry the causal-chain producer so the executor governs THEN-actions
+      // against the agent that fired this trigger (closing the confused-deputy
+      // hole). `null` for a run with no agent producer (manual/webhook/human).
+      producerAgentUserId: producerAgentUserId ?? null,
     });
 
     // Update automation stats

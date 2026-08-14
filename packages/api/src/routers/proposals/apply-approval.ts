@@ -15,6 +15,7 @@ import {
   eq,
   and,
   ne,
+  isNull,
   channels,
   getWorkspaceMembership,
   storedVersionValues,
@@ -28,6 +29,8 @@ import {
   ChannelFirewallImmutableError,
   ProfileResolutionService,
   governanceRules,
+  governanceCeilings,
+  createGuideline,
   type GovernanceScope,
   type GovernanceTarget,
 } from "@synap/database";
@@ -369,6 +372,80 @@ export interface GovernanceTightenLaneProposalData {
     totalForShape: number;
     sampleProposalIds: string[];
   };
+}
+
+/**
+ * `governance.advisory` proposal payload — the MECHANICAL-fault sibling of
+ * `GovernanceTightenLaneProposalData`. Emitted ONLY by the tighten recommender
+ * (`services/proposals/recommend-tighten.ts`) when a motif's DOMINANT rejection
+ * reason says the agent produced a MALFORMED write (duplicate / wrong
+ * kind-or-facet / wrong link type) rather than an unwanted one.
+ *
+ * Approving it writes NOTHING — it is a pure acknowledgement. A `propose` rule
+ * cannot deduplicate or repair a malformed payload; the remedy lives in code (an
+ * existence check, a tool schema, a description). The proposal exists so a HUMAN
+ * SEES the finding on the same review surface as every other governance item —
+ * an event nobody reads is not a finding.
+ *
+ * Note the DELIBERATE absence of a `verdict` field: a distinct type with no
+ * verdict can never be misread as rule-writing, whereas a `tighten_lane` payload
+ * carrying an `advisory:true` flag would be turned into a `governance_rules` row
+ * by the B4b branch above, which keys on `proposalType` alone.
+ */
+export interface GovernanceAdvisoryProposalData {
+  agentUserId: string;
+  targetKind: GovernanceTarget;
+  targetPattern: string;
+  scopeKind: GovernanceScope;
+  advisoryKind: "mechanical_fault";
+  suggestedRemedy: string;
+  evidence: {
+    clusterSize: number;
+    rejectRate: number;
+    totalForShape: number;
+    sampleProposalIds: string[];
+    dominantReason: string;
+    reasonHistogram: Record<string, number>;
+    faultClass: "mechanical" | "judgment";
+  };
+}
+
+/**
+ * `governance.raise_ceiling` proposal payload — the numeric-limit twin of
+ * `GovernanceTightenLaneProposalData`. Emitted ONLY by the raise-ceiling
+ * recommender (`services/proposals/recommend-raise-ceiling.ts`); approval here is
+ * the ONE door that turns it into a `governance_ceilings` row. Always pod-scoped
+ * (the daily-write ceiling is a per-agent pod-wide budget). Floor-safe: a ceiling
+ * can only downgrade execute→propose at rung 2.56, so raising one can never widen
+ * a delete/admin/scope-change.
+ */
+export interface GovernanceRaiseCeilingProposalData {
+  agentUserId: string;
+  scopeKind: "pod";
+  workspaceId?: string | null;
+  currentLimit: number;
+  proposedLimit: number;
+  evidence: {
+    daysAtCeiling: number;
+    sampleDays: Array<{ day: string; count: number }>;
+  };
+}
+
+/**
+ * `governance.tighten_posture` proposal payload — the channel-scoped twin of
+ * `GovernanceTightenLaneProposalData`. Emitted ONLY by the tighten-posture
+ * recommender (`services/proposals/recommend-tighten-posture.ts`); approval here
+ * is the ONE door that turns it into a `config_settings` guideline
+ * (posture:'propose', scopeKind:'channel'). Posture is channel-scoped +
+ * agent-independent — the one structural divergence from tighten_lane. Floor-safe
+ * by construction: a posture only tightens origin trust at rung 2.55.
+ */
+export interface GovernanceTightenPostureProposalData {
+  channelId: string;
+  workspaceId?: string | null;
+  rejectRate: number;
+  clusterSize: number;
+  sampleProposalIds: string[];
 }
 
 export async function applyProposalApproval(args: {
@@ -1013,6 +1090,200 @@ export async function applyProposalApproval(args: {
       targetProfile: tightenData.targetProfile ?? null,
       verdict: "propose",
       sourceProposalId: proposal.id,
+      createdBy: userId,
+    });
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // B4b': governance.advisory — the NO-OP sibling of B4b. Approving an advisory
+  // ACKNOWLEDGES a finding and writes NOTHING: no governance_rules row, no
+  // ceiling, no config_setting. The finding says "this agent keeps producing a
+  // MALFORMED write" (duplicate / wrong kind-or-facet / wrong link type), and a
+  // `propose` rule is the wrong remedy for that — those writes are already
+  // pending review; the fix is code (existence check / tool schema). Explicit
+  // branch, not a fall-through: without it an advisory would drop into the
+  // execution registry's catch-all and emit a generic `.validated` for a
+  // proposal that has nothing to materialize.
+  if (proposal.proposalType === "governance.advisory") {
+    const advisoryData = payload as GovernanceAdvisoryProposalData | null;
+    if (
+      !advisoryData ||
+      typeof advisoryData !== "object" ||
+      !advisoryData.agentUserId ||
+      !advisoryData.targetPattern
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.advisory proposal data.",
+      });
+    }
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // B4d: governance.raise_ceiling — the numeric-limit twin of B4b. Approving
+  // INSERTS a `governance_ceilings` row (axis daily_write_count) at the proposed
+  // higher limit + source_proposal_id lineage, and SUPERSEDES (soft-revokes) the
+  // agent's prior active pod-scoped ceiling so exactly one is effective. Mirrors
+  // the ceilings router's `.create` insert shape. Floor-safe: a ceiling can only
+  // downgrade execute→propose at rung 2.56 — raising one never widens a floor.
+  if (proposal.proposalType === "governance.raise_ceiling") {
+    const raiseData = payload as GovernanceRaiseCeilingProposalData | null;
+    if (
+      !raiseData ||
+      typeof raiseData !== "object" ||
+      !raiseData.agentUserId ||
+      typeof raiseData.proposedLimit !== "number"
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.raise_ceiling proposal data.",
+      });
+    }
+
+    // Supersede the agent's prior active pod-scoped daily-write ceiling (if any)
+    // so the new one is the single effective row — same soft-revoke the ceilings
+    // router uses, scoped to this agent's pod ceilings.
+    await db
+      .update(governanceCeilings)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(governanceCeilings.axis, "daily_write_count"),
+          eq(governanceCeilings.principalKind, "agent"),
+          eq(governanceCeilings.agentUserId, raiseData.agentUserId),
+          eq(governanceCeilings.scopeKind, "pod"),
+          isNull(governanceCeilings.revokedAt)
+        )
+      );
+
+    await db.insert(governanceCeilings).values({
+      axis: "daily_write_count",
+      principalKind: "agent",
+      agentUserId: raiseData.agentUserId,
+      scopeKind: "pod",
+      workspaceId: null,
+      limitValue: raiseData.proposedLimit,
+      sourceProposalId: proposal.id,
+      createdBy: userId,
+    });
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  }
+
+  // B4c: governance.tighten_posture — the channel-scoped twin of B4b. Approving
+  // creates a `config_settings` guideline (posture:'propose', scopeKind:'channel')
+  // via the ONE guideline door `createGuideline` — the read side is
+  // `resolveMostSpecificPosture` at rung 2.55. SCOPE RULE: when the channel has a
+  // workspaceId, the guideline is WORKSPACE-scoped (a channel property applies to
+  // all members, author-independent); a null-workspace channel guideline stays
+  // pod-wide and relies on the owner-floor (createGuideline stamps createdBy =
+  // this approver, an admin — see the pod-wide floor in config-settings.ts).
+  if (proposal.proposalType === "governance.tighten_posture") {
+    const postureData = payload as GovernanceTightenPostureProposalData | null;
+    if (
+      !postureData ||
+      typeof postureData !== "object" ||
+      !postureData.channelId
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.tighten_posture proposal data.",
+      });
+    }
+
+    await createGuideline({
+      db,
+      text: `Auto-tightened: this channel produced ${postureData.clusterSize} rejected agent writes (${Math.round(
+        postureData.rejectRate * 100
+      )}% reject rate) — new writes here are routed to review.`,
+      posture: "propose",
+      scopeKind: "channel",
+      scopeRef: postureData.channelId,
+      workspaceId: postureData.workspaceId ?? null,
+      source: "system",
       createdBy: userId,
     });
 

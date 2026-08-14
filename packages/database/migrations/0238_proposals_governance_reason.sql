@@ -1,0 +1,21 @@
+-- 0238_proposals_governance_reason.sql
+--
+-- Structured GOVERNANCE reason stamped at PROPOSAL CREATION — the machine-
+-- readable companion to the free-text `data.reasoning` prose. When the pure
+-- governance engine (`decideAgentPolicy`, @synap/governance-policy) routes an
+-- agent write to human review, it now returns a `reasonCode` (the PROPOSE_REASON
+-- KEY, e.g. "UNTRUSTED_ORIGIN", "DAILY_WRITE_CEILING", "SCOPE_IDENTITY_CHANGE").
+-- `checkPermissionOrPropose` persists that key here so the review UI can branch
+-- on WHY a write needs a human (a distinct "why this needs you" treatment for a
+-- force-propose rung) WITHOUT string-matching the reasoning sentence.
+--
+-- DELIBERATELY NOT a DB enum: the vocabulary is an app-level const
+-- (`PROPOSE_REASON` in @synap/governance-policy — the SSOT the engine stamps
+-- from), so the set can extend without a migration.
+--
+-- DISTINCT from `reason_code` (0232), which carries REJECTION semantics: this
+-- carries CREATION-TIME governance cause. Nullable + additive — every existing
+-- proposal, every human-authored proposal, and the plain default-propose case
+-- stay NULL, so this is fully back-compat.
+
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;

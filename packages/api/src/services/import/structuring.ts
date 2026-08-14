@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import {
+  db,
   getDb,
   ProfileResolutionService,
   PropertyValidationService,
@@ -37,6 +38,10 @@ import { resolveIntelligenceService } from "../../utils/intelligence-routing.js"
 import { searchService } from "@synap/search";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import {
+  computeImportGraphIdempotencyKey,
+  findPriorCaptureGraphProposal,
+} from "../../utils/pending-capture-dedup.js";
 import type { OrchestratorContext } from "./types.js";
 
 const logger = createLogger({ module: "import-orchestrator/structuring" });
@@ -169,11 +174,23 @@ export async function stampScopeAwareHomesOnOps(
  *   sourceId   — stable id of this import unit (batchId, else the proposal target)
  *   contentRef — object-storage location of the raw uploaded blob, when one exists
  *   reasoning  — human-readable justification, when a producer has one
+ *   idempotencyKey — content hash of the graph, so a re-analyze of the SAME
+ *                    corpus resolves to the prior proposal instead of filing a
+ *                    duplicate. Derived HERE (not at the call sites) so no
+ *                    import writer can forget it — the exact defect this closes:
+ *                    3 of 4 `import.graph` writers stamped nothing, and
+ *                    `data->>'idempotencyKey' = $key` never matches NULL, so a
+ *                    keyless proposal was invisible to dedup forever.
+ *                    Omitted (not null) when the graph is degenerate — see
+ *                    `computeImportGraphIdempotencyKey`.
  */
 export function buildImportGraphProposalData(input: {
   operations: CompositeProposalOperation[];
   source: string;
   sourceId: string;
+  /** Scope folded into the idempotency key (parity with the capture lane). */
+  workspaceId?: string | null;
+  projectId?: string | null;
   contentRef?: { storageKey: string; mimeType?: string; size?: number };
   reasoning?: string;
   /** Continuous-improvement report (refuse → inspect → re-run → apply). */
@@ -181,16 +198,66 @@ export function buildImportGraphProposalData(input: {
   homes?: unknown;
   corpusMap?: unknown;
 }): Record<string, unknown> {
+  const idempotencyKey = computeImportGraphIdempotencyKey({
+    workspaceId: input.workspaceId ?? null,
+    projectId: input.projectId ?? null,
+    operations: input.operations,
+  });
   return {
     operations: input.operations,
     source: input.source,
     sourceId: input.sourceId,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(input.contentRef ? { contentRef: input.contentRef } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.quality ? { quality: input.quality } : {}),
     ...(input.homes ? { homes: input.homes } : {}),
     ...(input.corpusMap ? { corpusMap: input.corpusMap } : {}),
   };
+}
+
+/**
+ * The dedup LOOKUP for the import lane — the sibling of the stamp above, and the
+ * half without which stamping is inert (the lane never called it: only
+ * `submitCaptureGraph` did). Mirrors `submitCaptureGraph`'s handling exactly:
+ * the caller's OWN prior pending / auto-approved `import.graph` proposal under
+ * the SAME content key is RETURNED instead of filing a second row.
+ *
+ * Best-effort by design: a lookup hiccup must never block a real import, so any
+ * throw falls through to `null` (= file normally), same as the capture lane.
+ * A `null` key (degenerate graph) short-circuits — it must never be turned into
+ * a `data->>'idempotencyKey' IS NULL` scan, which would make every keyless
+ * historical proposal match everything.
+ */
+export async function findPriorImportGraphProposal(
+  input: {
+    userId: string;
+    workspaceId: string | null;
+    projectId?: string | null;
+    operations: CompositeProposalOperation[];
+  },
+  /** Test seam only — production always uses the module-level connection. */
+  database: typeof db = db
+): Promise<{ id: string; status: string } | null> {
+  const idempotencyKey = computeImportGraphIdempotencyKey({
+    workspaceId: input.workspaceId ?? null,
+    projectId: input.projectId ?? null,
+    operations: input.operations,
+  });
+  if (!idempotencyKey) return null;
+  try {
+    const prior = await findPriorCaptureGraphProposal(database, {
+      userId: input.userId,
+      idempotencyKey,
+    });
+    return prior ? { id: prior.id, status: prior.status } : null;
+  } catch (err) {
+    logger.warn(
+      { err, userId: input.userId },
+      "import.graph: prior-proposal idempotency lookup failed (filing fresh)"
+    );
+    return null;
+  }
 }
 
 /**
@@ -451,7 +518,12 @@ export async function proposeImportGraph(
     /** Object-storage location of the raw uploaded blob, if any. */
     contentRef?: { storageKey: string; mimeType?: string; size?: number };
   }
-): Promise<{ proposalId: string | null; itemCount: number }> {
+): Promise<{
+  proposalId: string | null;
+  itemCount: number;
+  /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
+  deduplicated: boolean;
+}> {
   const { workspaceId, userId } = ctx;
   // IS routing + the live-search resolver take an optional workspaceId; a
   // pod-wide import (null) resolves the user-default service and an
@@ -482,7 +554,8 @@ export async function proposeImportGraph(
     }
   }
   if (items.length === 0) items = adaptItems(source, raw);
-  if (items.length === 0) return { proposalId: null, itemCount: 0 };
+  if (items.length === 0)
+    return { proposalId: null, itemCount: 0, deduplicated: false };
 
   // Prose (markdown/obsidian) → DEEP extraction: decompose each note into
   // multiple typed entities + relations, merged + deduplicated across notes.
@@ -568,6 +641,23 @@ export async function proposeImportGraph(
     summary = buildImportSummary(operations, source);
   }
 
+  // IDEMPOTENCY: a re-run over the same corpus resolves to the proposal the
+  // caller ALREADY has instead of filing a clone. `deduplicated` makes that
+  // visible — a returned id must never read as "freshly filed".
+  const prior = await findPriorImportGraphProposal({
+    userId,
+    workspaceId: workspaceId ?? null,
+    projectId: ctx.projectId ?? null,
+    operations,
+  });
+  if (prior) {
+    logger.info(
+      { userId, source, proposalId: prior.id },
+      "import.graph: identical graph already proposed — returning prior"
+    );
+    return { proposalId: prior.id, itemCount, deduplicated: true };
+  }
+
   const targetId = randomUUID();
   const { proposal: created } = await createEventBackedProposal({
     userId,
@@ -585,11 +675,14 @@ export async function proposeImportGraph(
       source,
       sourceId: provenance?.sourceId ?? targetId,
       contentRef: provenance?.contentRef,
+      workspaceId: workspaceId ?? null,
+      projectId: ctx.projectId ?? null,
     }),
   });
 
   return {
     proposalId: (created as { id?: string })?.id ?? null,
     itemCount,
+    deduplicated: false,
   };
 }

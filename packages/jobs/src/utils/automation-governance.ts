@@ -100,6 +100,17 @@ export interface AutomationGovernanceOpts {
    *  onto the proposal so a rejected proposal traces to the exact step. */
   stepRunId?: string;
   nodeId?: string;
+  /**
+   * CONFUSED-DEPUTY GUARD (the keystone). The userId of the actor whose event
+   * PRODUCED the trigger that fired this automation run (threaded from the
+   * trigger matcher via the executor). When this actor is an AGENT, it is in the
+   * causal chain of this write — so even if the automation OWNER is a human (the
+   * `not-agent` path, which today auto-executes under owner RBAC alone), the
+   * THEN-action MUST be governed against the PRODUCER agent: at minimum a
+   * PROPOSAL, never an ungoverned effect. A human/system producer (or absent) is
+   * a no-op — the owner path is byte-identical to before.
+   */
+  producerAgentUserId?: string | null;
 }
 
 /**
@@ -128,6 +139,7 @@ export async function checkAutomationWriteOrPropose(
     sessionId,
     stepRunId,
     nodeId,
+    producerAgentUserId,
   } = opts;
 
   // Map action → required RBAC permission (canonical map in @synap/governance-policy).
@@ -180,6 +192,79 @@ export async function checkAutomationWriteOrPropose(
     // acting directly. This is NOT a relaxation of agent governance: no agent
     // is involved, so there is nothing to attribute to an agent. RBAC above
     // already gated it.
+    //
+    // ── CONFUSED-DEPUTY GUARD ────────────────────────────────────────────────
+    // …UNLESS an AGENT produced the trigger that fired this run. Then the agent
+    // IS in the causal chain, and auto-granting here would let the human-owned
+    // automation launder the agent's write into an UNGOVERNED effect. Re-resolve
+    // the SAME agent ladder against the PRODUCER agent — its own rules/ceilings/
+    // floors apply — with `forcePropose` so, at minimum, the THEN-action becomes
+    // a PROPOSAL (never auto-executes). The proposal is attributed to the
+    // PRODUCER agent (so its scorecard/ceilings account for it and the review
+    // shows the right principal). If the producer does not resolve as an agent
+    // user (a human/system producer), there is no agent in the chain after all
+    // and we fall through to the human-RBAC grant, exactly as before.
+    // PRECISE INVARIANT (the `!== ownerId` gate matters): this branch is only
+    // reached when the OWNER resolved `not-agent` (a human). When the owner is
+    // ITSELF an agent, we never get here — `gov.decision` was `execute`/`propose`/
+    // `deny` above and the OWNER-agent ladder already governed the write; the
+    // producer cross-check is deliberately skipped. So the effect is "governed
+    // against the OWNER when the owner is an agent, else against the PRODUCER."
+    // The `!== ownerId` term additionally no-ops the degenerate case where the
+    // same agent is both owner and producer (the owner ladder already covered it).
+    const producerInChain =
+      typeof producerAgentUserId === "string" &&
+      producerAgentUserId.length > 0 &&
+      producerAgentUserId !== ownerId;
+
+    if (producerInChain) {
+      const producerGov = await resolveAgentGovernanceDecision({
+        db,
+        agentUserId: producerAgentUserId as string,
+        workspaceId,
+        subjectType,
+        action,
+        subjectProfileSlug,
+        // Never auto-execute a write an agent produced into a human-owned
+        // automation — the founder's non-negotiable. forcePropose keeps the
+        // producer's own deny-floors intact (a floor still denies) while making
+        // the otherwise-auto case PROPOSE.
+        forcePropose: true,
+        preferAgentMetadataAutoApproveFor: false,
+      });
+
+      if (producerGov.decision === "deny") {
+        logger.warn(
+          {
+            ownerId,
+            producerAgentUserId,
+            workspaceId,
+            eventKey: `${subjectType}.${action}`,
+          },
+          "Automation write denied by PRODUCER agent governance (confused-deputy guard)"
+        );
+        return { denied: true, reason: producerGov.reason };
+      }
+      if (producerGov.decision === "propose") {
+        return proposeAutomationWrite({
+          agentUserId: producerAgentUserId as string,
+          workspaceId,
+          subjectType,
+          action,
+          data,
+          reasoning: reasoning ?? producerGov.reason,
+          governanceReason: producerGov.reasonCode,
+          automationRunId,
+          correlationId,
+          sessionId,
+          stepRunId,
+          nodeId,
+        });
+      }
+      // `producerGov.decision === "execute"` is impossible under forcePropose;
+      // `"not-agent"` means the producer is not an agent → fall through to grant.
+    }
+
     return { granted: true };
   }
 
@@ -201,6 +286,10 @@ export async function checkAutomationWriteOrPropose(
       // gov.reason carries the per-branch default; undefined for the plain
       // default-propose case, where proposeAutomationWrite supplies its own.
       reasoning: reasoning ?? gov.reason,
+      // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key, e.g.
+      // "DAILY_WRITE_CEILING") — persisted to `governance_reason` so the review
+      // UI can branch on WHY, exactly as the chat door stamps it in permission-check.
+      governanceReason: gov.reasonCode,
       automationRunId,
       correlationId,
       sessionId,
@@ -211,6 +300,119 @@ export async function checkAutomationWriteOrPropose(
 
   // gov.decision === "execute": auto-approved → the caller may write directly.
   return { granted: true };
+}
+
+/**
+ * CONFUSED-DEPUTY GUARD for the NON-ENTITY effect nodes: facet_attach/update/
+ * detach, relation_create, the capability/skill/command/playbook_run steps, AND
+ * the two DIRECT-effect output nodes that reach a trust boundary without a
+ * capability dispatch — `webhook` (external POST with the owner's vault creds) and
+ * `channel_message` (post under the owner's identity, may mirror externally).
+ *
+ * The 3 entity/session write nodes close the confused-deputy leak INSIDE
+ * `checkAutomationWriteOrPropose` (they re-resolve the producer ladder and file a
+ * PROPOSAL). The rest run as the automation's own principal (`ownerId` for
+ * skill/capability/command/playbook/webhook/channel_message, `actingUserId` for
+ * facet/relation) — so on the OBSERVATIONS path (human principal + agent producer)
+ * they would run under OWNER-BYPASS, ungoverned: the exact leak the entity guard
+ * closes, one door over. This helper extends the SAME cross-check to those nodes.
+ * (webhook/channel_message were originally missed because they emit directly
+ * rather than through the capability gate — a fail-closed backstop over an
+ * explicit reviewed-types allowlist now prevents a future node from slipping the
+ * same way; see PRODUCER_REVIEWED_OUTPUT_TYPES in steps/output.ts.)
+ *
+ * It does NOT build a proposal: an entity-shaped `proposals` row (what
+ * `proposeAutomationWrite` writes) cannot be applied by the approve-executors for
+ * a relation / facet / capability, and automations have no interactive review
+ * surface anyway — which is exactly WHY `dispatchViaCapabilityRouter` already
+ * FAILS CLOSED (suppressProposal → `deny`; a `proposed` verdict throws). So this
+ * returns a verdict and the CALLERS fail closed on a block (throw), matching that
+ * established behavior. The result: an agent anywhere in the causal chain ⇒ these
+ * effects are governed (blocked here), never auto-executed under owner-bypass.
+ *
+ * Mirrors `checkAutomationWriteOrPropose`'s guard EXACTLY:
+ *   - fires only when a producer agent is in the chain AND distinct from the
+ *     principal the effect runs as (`producer !== principalUserId`);
+ *   - only when that principal is a HUMAN (`not-agent`) — an agent principal's
+ *     OWN ladder already governs the dispatch (guardrail: agent-owned automations
+ *     are unchanged);
+ *   - `forcePropose` keeps the producer's deny-floors intact (a floor still
+ *     denies) while turning an otherwise-auto effect into a block.
+ *
+ * Absent / human / system producer (or producer === principal) → `{ proceed }`,
+ * byte-identical to before this guard existed.
+ */
+export type ProducerEffectGuardResult =
+  { proceed: true } | { block: true; kind: "deny" | "review"; reason?: string };
+
+export async function guardProducerEffect(opts: {
+  producerAgentUserId?: string | null;
+  /**
+   * The principal the effect would otherwise run / be governed as — `ownerId`
+   * for skill/capability/command/playbook (they dispatch as the owner), or
+   * `actingUserId` for the facet/relation output verbs.
+   */
+  principalUserId: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  subjectProfileSlug?: string | null;
+}): Promise<ProducerEffectGuardResult> {
+  const {
+    producerAgentUserId,
+    principalUserId,
+    workspaceId,
+    subjectType,
+    action,
+    subjectProfileSlug,
+  } = opts;
+
+  const producerInChain =
+    typeof producerAgentUserId === "string" &&
+    producerAgentUserId.length > 0 &&
+    producerAgentUserId !== principalUserId;
+  // Fast path: no distinct producer agent → zero DB work, unchanged behavior.
+  if (!producerInChain) return { proceed: true };
+
+  // Only the HUMAN-principal owner-bypass case leaks. If the principal is itself
+  // an agent, its own ladder already governs the dispatch — mirror the entity
+  // guard, whose cross-check runs only in the `not-agent` branch. (Guardrail: do
+  // not change behavior for agent-owned automations.)
+  const principalGov = await resolveAgentGovernanceDecision({
+    db,
+    agentUserId: principalUserId,
+    workspaceId,
+    subjectType,
+    action,
+    subjectProfileSlug,
+    preferAgentMetadataAutoApproveFor: false,
+  });
+  if (principalGov.decision !== "not-agent") return { proceed: true };
+
+  // Human principal + agent producer in the chain → govern against the PRODUCER
+  // with forcePropose. A floor still denies; everything else becomes a block
+  // (the callers fail closed).
+  const producerGov = await resolveAgentGovernanceDecision({
+    db,
+    agentUserId: producerAgentUserId as string,
+    workspaceId,
+    subjectType,
+    action,
+    subjectProfileSlug,
+    forcePropose: true,
+    preferAgentMetadataAutoApproveFor: false,
+  });
+  if (producerGov.decision === "deny") {
+    return { block: true, kind: "deny", reason: producerGov.reason };
+  }
+  if (producerGov.decision === "propose") {
+    // forcePropose turned an otherwise-auto effect into a proposal — fail closed
+    // as "needs review" (automations have no interactive review surface).
+    return { block: true, kind: "review", reason: producerGov.reason };
+  }
+  // `not-agent` (producer is not an agent) or the `execute` case that
+  // forcePropose makes unreachable → nothing to govern against; proceed.
+  return { proceed: true };
 }
 
 /**
@@ -226,6 +428,9 @@ async function proposeAutomationWrite(opts: {
   action: string;
   data: Record<string, unknown>;
   reasoning?: string;
+  /** Structured governance reason (the PROPOSE_REASON key from gov.reasonCode) —
+   *  persisted to `governance_reason`, mirroring the chat door. */
+  governanceReason?: string;
   automationRunId?: string;
   correlationId?: string;
   /** The focus session this run opened — stamped onto the proposal row so it
@@ -242,6 +447,7 @@ async function proposeAutomationWrite(opts: {
     action,
     data,
     reasoning,
+    governanceReason,
     automationRunId,
     correlationId,
     sessionId,
@@ -307,7 +513,9 @@ async function proposeAutomationWrite(opts: {
       // autonomous: an agent acted on its own (no human in the loop for
       // automation runs). Mirrors deriveAuthorshipMode(undefined, agentUserId).
       authorshipMode: "autonomous",
-      reasoning: reasoning ?? "Automation write requires review",
+      reasoning:
+        reasoning ??
+        "This automation write matched no auto-approve rule, so it was routed here for your review.",
       correlationId: resolvedCorrelationId,
       ...(automationRunId ? { automationRunId } : {}),
     },
@@ -317,6 +525,7 @@ async function proposeAutomationWrite(opts: {
     sessionId: sessionId ?? null,
     stepRunId: stepRunId ?? null,
     nodeId: nodeId ?? null,
+    governanceReason: governanceReason ?? null,
   });
 
   // Supplementary realtime nudge — the Reactions queue itself is DB-driven, so

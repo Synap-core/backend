@@ -343,6 +343,13 @@ describe("observations.append — workspace tagging is clamped, never trusted", 
       new Date(appended[0].timestamp).toISOString(),
       "everything that orders, partitions or expires an event keys on timestamp"
     ).toBe(when);
-    expect(appended[0].metadata.ingestedAt).toBeDefined();
+    // ingestedAt lives in `data`, not `metadata`: EventRepository.append
+    // REPLACES event metadata with {version, requestId}, so a metadata field
+    // would read back null (confirmed against a live pod).
+    expect(appended[0].data.ingestedAt).toBeDefined();
+    expect(
+      appended[0].metadata,
+      "do not write metadata the store discards — it reads back null"
+    ).toBeUndefined();
   });
 });

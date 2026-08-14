@@ -108,7 +108,7 @@ export interface ResolveAgentGovernanceInput {
 export type AgentGovernanceResolution =
   | { decision: "not-agent" }
   | { decision: "deny"; reason: string }
-  | { decision: "propose"; reason?: string }
+  | { decision: "propose"; reason?: string; reasonCode?: string }
   | { decision: "execute"; explicitAutoApproveFor?: readonly string[] };
 
 /** A candidate row's specificity-scoring columns (subset of `governanceRules`). */
@@ -896,7 +896,15 @@ export async function resolveAgentGovernanceDecision(
     return { decision: "deny", reason: decision.reason };
   }
   if (decision.verdict === "propose") {
-    return { decision: "propose", reason: decision.reason };
+    // `reasonCode` is the STRUCTURED companion to `reason` — the PROPOSE_REASON
+    // KEY the pure engine stamped (undefined for the plain default-propose case).
+    // Carried out so the chat door can persist it on the proposal row and the
+    // review UI can branch on it (e.g. force-propose "why this needs you").
+    return {
+      decision: "propose",
+      reason: decision.reason,
+      reasonCode: decision.reasonCode,
+    };
   }
   // `explicitAutoApproveFor` now carries the MATCHED RULE pattern (one-store),
   // not the raw JSONB list — the chat door's audit stamp
@@ -926,6 +934,13 @@ export interface DryRunAgentGovernanceInput {
   action: string;
   profileSlug?: string | null;
   door: GovernanceDoor;
+  /**
+   * The acting channel id, when previewing the verdict for a specific channel
+   * context — threaded to rung 2.55's origin-trust resolver so the witness
+   * reflects that channel's posture (external/bridge → untrusted → propose).
+   * Absent → no channel context → rung 2.55 no-ops (the "any channel" preview).
+   */
+  channelId?: string | null;
 }
 
 /**
@@ -980,6 +995,12 @@ export async function dryRunAgentGovernanceDecision(
     subjectType: input.subjectType,
     action: input.action,
     subjectProfileSlug: input.profileSlug,
+    // Thread the channel + human owner so rung 2.55 (origin-trust posture) and
+    // its config_settings pod-wide owner floor resolve for real in the preview
+    // — the resolver already forwards both to `resolveOriginTrust`; the dry-run
+    // used to drop them, silently omitting channel posture from the witness.
+    channelId: input.channelId,
+    userId: input.userId,
     preferAgentMetadataAutoApproveFor: input.door === "chat",
   });
 
@@ -1068,6 +1089,12 @@ function reasonToRung(reason: string): string {
       return "writes-require-proposal";
     case PROPOSE_REASON.CHANNEL_PROPOSE:
       return "per-channel-capability-gate";
+    case PROPOSE_REASON.UNTRUSTED_ORIGIN:
+      return "untrusted-origin";
+    case PROPOSE_REASON.DAILY_WRITE_CEILING:
+      return "daily-write-ceiling";
+    case PROPOSE_REASON.GOVERNANCE_RULE:
+      return "governance-rule";
     default:
       return "default";
   }

@@ -1003,6 +1003,7 @@ describe("synthesizeCapabilityHealth", () => {
     messageCount: 0,
     extractionRatePct: 0,
     fate: zeroFate(),
+    originTrust: "trusted",
     ...over,
   });
 

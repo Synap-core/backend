@@ -20,10 +20,7 @@ import {
   extractIdentitySignals,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
 } from "@synap/database";
-import {
-  getUserMemberWorkspaceIds,
-  logger,
-} from "../../hub-protocol/rest/_shared.js";
+import { logger } from "../../hub-protocol/rest/_shared.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -429,23 +426,28 @@ const captureHandler: McpToolHandler = async (
   // structuring pipeline. This folds the former synap_write_knowledge tool
   // into capture so there is ONE write door; the lane is the routing signal.
   if (args.global === true) {
-    // knowledge_keys still stamps a workspaceId column for ownership/catalog.
-    // Content is pod-wide runbook text — this is NOT domain entity placement.
-    // Prefer an explicit/advisory lens; else first membership so the upsert
-    // can complete (the only remaining write-path use of membership[0]).
-    if (!captureWsId) {
-      const wsIds = await getUserMemberWorkspaceIds(userId);
-      captureWsId = wsIds[0];
-    }
-    if (!captureWsId) {
-      return ok({
-        error:
-          "No accessible workspace found — global knowledge_keys still need a home workspace row for this user.",
-      });
-    }
+    // POD-WIDE MEANS workspaceId NULL. Do not stamp a workspace here.
+    //
+    // This lane writes `knowledge_keys` — pod-wide runbook text, by definition
+    // not domain placement. It used to fall back to `membership[0]` so the
+    // upsert could complete, which quietly made every MCP-written runbook
+    // workspace-scoped.
+    //
+    // That broke RECALL, because the two halves disagree: the reader
+    // (`services/knowledge/ask.ts`, procedural lane) searches
+    // `workspace_id = (workspaceId ?? userId) OR workspace_id IS NULL`, so a row
+    // stamped with a real workspace matches ONLY if the caller happens to pass
+    // that exact id. The CLI's `--global` writes NULL and is found; MCP's wrote
+    // a workspace and was not. Verified live: a runbook captured through MCP
+    // 404s on the default namespace and returns fine with
+    // `?workspaceId=<the membership[0] workspace>` — and 19 such rows were
+    // sitting unreachable on the dogfood pod.
+    //
+    // NULL is also what makes the lane's own promise true: a cross-cutting
+    // runbook should be readable from every workspace, not one arbitrary one.
     const globalScope: CaptureScope = {
       ...textScope,
-      workspaceId: captureWsId,
+      workspaceId: null,
     };
     const text = args.text as string;
     const key =
@@ -459,12 +461,15 @@ const captureHandler: McpToolHandler = async (
       key,
       value: text,
       status: "active",
-      workspaceId: captureWsId,
+      // NULL = pod-wide. See the note above: a stamped workspace makes the row
+      // unreachable from the default recall lens.
+      workspaceId: null,
       author: userId,
     });
     const globalReceipt: CaptureWriteReceipt = {
       state: "applied",
-      effectiveWorkspaceId: captureWsId,
+      // Honest echo: this row is pod-wide, not placed in a workspace.
+      effectiveWorkspaceId: null,
       ...(captureProjectId ? { projectId: captureProjectId } : {}),
       source: "agent",
     };
@@ -612,8 +617,16 @@ const captureHandler: McpToolHandler = async (
   // execute() returns movedToWorkspace / pendingWorkspaceSwitch when routing
   // engaged — surface them at the top level for the caller.
   const ex = executed as {
+    status?: string;
     movedToWorkspace?: string;
     pendingWorkspaceSwitch?: unknown;
+    proposalId?: string;
+    proposalType?: string;
+    reviewUrl?: string;
+    reviewPath?: string;
+    summary?: string;
+    reasoning?: string;
+    message?: string;
     project?: {
       projectId?: string;
       rung: number | null;
@@ -621,6 +634,43 @@ const captureHandler: McpToolHandler = async (
       reason?: string;
     };
   };
+
+  // GOVERNANCE MAY HAVE ROUTED THIS TO REVIEW — say so.
+  //
+  // `captureCaller.execute()` returns `{status:"proposed", created:[], …}` with
+  // NOTHING written when the workspace policy does not auto-approve
+  // `entity.create` (routers/capture.ts, "Nothing was written"). This handler
+  // used to fall through to a hardcoded `status:"applied"` receipt regardless,
+  // so an agent was told the capture landed while a proposal sat unreviewed —
+  // and because `ok()` only inspects the TOP-LEVEL status, the "proposed"
+  // reinforcement and the review link never surfaced either.
+  //
+  // It stayed invisible because `entity.create` is in DEFAULT_AUTO_APPROVE, so
+  // the branch only fires on a workspace that has deliberately tightened.
+  //
+  // Shape mirrors the entities[] lane above (top-level status + proposal
+  // fields). No `writeReceipt`: that type is `applied | rejected` by
+  // construction, and emitting an "applied" receipt for an unwritten capture is
+  // the false-success bug the receipt exists to prevent.
+  if (ex.status === "proposed") {
+    return ok({
+      status: "proposed",
+      scope: {
+        workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
+        projectId: captureProjectId,
+        sessionId: sessionId ?? null,
+      },
+      ...(ex.proposalId ? { proposalId: ex.proposalId } : {}),
+      ...(ex.proposalType ? { proposalType: ex.proposalType } : {}),
+      ...(ex.reviewUrl ? { reviewUrl: ex.reviewUrl } : {}),
+      ...(ex.reviewPath ? { reviewPath: ex.reviewPath } : {}),
+      ...(ex.summary ? { summary: ex.summary } : {}),
+      ...(ex.reasoning ? { reasoning: ex.reasoning } : {}),
+      ...(ex.message ? { message: ex.message } : {}),
+      structured,
+      executed,
+    });
+  }
   // The scope echo must be what the write ACTUALLY landed in: routing may
   // have moved it (movedToWorkspace), and a project only counts when it was
   // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
@@ -638,8 +688,10 @@ const captureHandler: McpToolHandler = async (
     source: "agent",
   };
   return ok({
-    // First-party capture writes DIRECTLY (auto-approved + revertible), so
-    // the uniform status here is "applied", never "proposed".
+    // Reached only when execute() actually materialized — the `proposed`
+    // branch above returns early. (This comment used to claim capture is
+    // ALWAYS direct and never proposed; that stopped being true when
+    // `execute()` gained its governance gate.)
     status: "applied",
     scope: {
       workspaceId: landedWsId,

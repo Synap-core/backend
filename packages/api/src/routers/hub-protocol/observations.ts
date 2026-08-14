@@ -61,9 +61,11 @@ import { z } from "zod";
 
 import { createSynapEvent } from "@synap-core/core";
 import { getEventRepository } from "@synap/database";
+import { getBoss } from "@synap/events";
 
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
+import { apiKeyService } from "../../services/api-keys.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 import { getUserAccessibleWorkspaceIds } from "./rest/_shared.js";
 
@@ -306,6 +308,17 @@ export const observationsRouter = router({
             data: {
               ...obs.data,
               subjectRef: obs.subjectId,
+              // When we HEARD about it, kept only when the producer told us when
+              // it actually happened (the row `timestamp` is that occurrence
+              // time). This lives in `data`, NOT `metadata`, because
+              // `EventRepository.append` REPLACES the event's metadata with
+              // `{version, requestId}` and silently drops everything else —
+              // verified against a live pod, where a metadata field written here
+              // came back null. `data` is the only caller-controlled payload
+              // that survives.
+              ...(obs.occurredAt
+                ? { ingestedAt: new Date().toISOString() }
+                : {}),
               // Kept for back-compat with readers that COALESCE the two; the
               // indexable column is set on append below.
               ...(workspaceId ? { workspaceId } : {}),
@@ -319,14 +332,10 @@ export const observationsRouter = router({
             // existing `GET /api/hub/events?agentUserId=` reader able to see
             // what an agent recorded.
             ...(agentUserId ? { agentUserId } : {}),
-            metadata: {
-              observation: true,
-              // When we HEARD about it, kept only when it differs from when it
-              // happened. The row's `timestamp` is the occurrence time (below).
-              ...(obs.occurredAt
-                ? { ingestedAt: new Date().toISOString() }
-                : {}),
-            },
+            // NOTE: no `metadata` — see the `ingestedAt` comment above.
+            // `append` discards caller metadata, so writing any here would be a
+            // field that reads back null. The type namespace already identifies
+            // an observation; nothing else needs a marker.
           });
 
           const row = await eventRepo.append({
@@ -343,6 +352,56 @@ export const observationsRouter = router({
             // `data` only forces readers onto an unindexed JSONB fallback.
             workspaceId,
           });
+
+          // ── UNIFIED TRIGGER HOP (additive) ────────────────────────────────
+          // A recorded observation can now fire automations, exactly like a
+          // governed event does via emitSideEffects' automation-trigger-match
+          // reactor. Enqueue the SAME queue in the SAME payload shape — but with
+          // `eventType = obs.type` (raw, e.g. "dev.commit"), which the matcher's
+          // `matchPattern` already handles (dotted + trailing-wildcard:
+          // "dev.commit" / "dev.*"). We deliberately do NOT route through
+          // `emitSideEffects`: it would synthesize `<subjectType>.<action>.
+          // completed` (the wrong eventType) and fire every unrelated reactor
+          // (search-index, webhook-delivery, …) for a row that is not a
+          // first-party domain event. The matcher's exactly-once
+          // (automation_claims), owner-floor, cycle/depth guard and workspace
+          // fan-out all apply unchanged (additive).
+          //
+          // RATE/VOLUME BOUND (Part C): consume a per-(producer, namespace)
+          // token from the shared key rate limiter BEFORE enqueuing. The FACT is
+          // already recorded above; only the trigger side-effect is gated, so a
+          // noisy/malicious key floods neither the trigger queue nor the
+          // proposals it would spawn — while never losing the fact. Bucketed on
+          // the producing PRINCIPAL (agent user id if present, else the human)
+          // × the coarse namespace, so varying the type suffix cannot bypass it.
+          //
+          // Best-effort: a boss / limiter error must never flip a RECORDED fact
+          // to `ok:false`. The row exists; the trigger is a side-effect.
+          try {
+            const dot = obs.type.indexOf(".");
+            const namespace = dot > 0 ? obs.type.slice(0, dot) : obs.type;
+            const triggerProducer = agentUserId ?? userId;
+            const withinTriggerBudget = apiKeyService.checkRateLimit(
+              `obs-trigger:${triggerProducer}:${namespace}`,
+              "observation-trigger"
+            );
+            if (withinTriggerBudget) {
+              await getBoss().send("automation-trigger-match", {
+                eventType: obs.type,
+                subjectId: event.subjectId,
+                userId,
+                workspaceId: workspaceId ?? null,
+                data: event.data,
+                // The producing agent, so a fired automation's THEN-actions are
+                // governed against it (proposal, never an ungoverned effect).
+                // Null for a human producer → owner-only governance, unchanged.
+                producerAgentUserId: agentUserId ?? null,
+              });
+            }
+          } catch {
+            // Trigger enqueue is a best-effort side-effect of a recorded fact.
+          }
+
           results.push({ ok: true, index, id: row.id });
         } catch (err) {
           results.push({

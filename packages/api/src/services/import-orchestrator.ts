@@ -73,6 +73,7 @@ import {
   proposeImportGraph,
   buildImportSummary,
   buildImportGraphProposalData,
+  findPriorImportGraphProposal,
   computeImportHomes,
   majorityWorkspaceFromHomes,
   stampScopeAwareHomesOnOps,
@@ -314,6 +315,12 @@ export class ImportOrchestrator {
       // this stays 0 and `proposalsCreated` reflects what was enqueued for review.
       entitiesCreated: 0,
       proposalsCreated: 0,
+      /**
+       * Files whose graph was IDENTICAL to a proposal the caller already has —
+       * resolved to the prior proposal instead of filing a clone. Counted apart
+       * from `proposalsCreated` so a re-import can't read as fresh work.
+       */
+      proposalsDeduplicated: 0,
       documentsCreated: 0,
       channelsCreated: 0,
       messagesCreated: 0,
@@ -473,7 +480,7 @@ export class ImportOrchestrator {
             // Resolve the workspace's profile hints once (memoized across all
             // file branches) and pass them into the structuring helper.
             const profileHints = await this.resolveProfileHints();
-            const { proposalId } = await proposeImportGraph(
+            const { proposalId, deduplicated } = await proposeImportGraph(
               this.ctx,
               profileHints,
               engineSource,
@@ -483,7 +490,8 @@ export class ImportOrchestrator {
             if (proposalId) {
               // ONE composite graph proposal per file (was N per-row proposals).
               // entitiesCreated stays 0 — nothing materializes until approval.
-              stats.proposalsCreated++;
+              if (deduplicated) stats.proposalsDeduplicated++;
+              else stats.proposalsCreated++;
             } else {
               stats.filesStoredOnly++;
             }
@@ -886,6 +894,18 @@ export class ImportOrchestrator {
     // durable proposal. Dogfood showed every --dry-run left a pending
     // import.graph clone in the inbox (WineSafe × N).
     let proposalId: string | null = null;
+    let deduplicated = false;
+    // IDEMPOTENCY: identical graph already proposed by THIS user → hand back the
+    // existing proposal rather than a clone. `deduplicated: true` keeps that
+    // honest at the caller. previewOnly files nothing, so it needs no lookup.
+    const priorProposal = input.previewOnly
+      ? null
+      : await findPriorImportGraphProposal({
+          userId,
+          workspaceId: workspaceId ?? null,
+          projectId: this.ctx.projectId ?? null,
+          operations: ops,
+        });
     if (input.previewOnly) {
       logger.info(
         {
@@ -899,6 +919,13 @@ export class ImportOrchestrator {
           ...stats,
         },
         "import.analyze previewOnly (no proposal)"
+      );
+    } else if (priorProposal) {
+      proposalId = priorProposal.id;
+      deduplicated = true;
+      logger.info(
+        { userId, workspaceId, source: input.source, mode, proposalId },
+        "import.analyze: identical graph already proposed — returning prior"
       );
     } else {
       const targetId = randomUUID();
@@ -916,6 +943,8 @@ export class ImportOrchestrator {
           operations: ops,
           source: input.source,
           sourceId: targetId,
+          workspaceId: workspaceId ?? null,
+          projectId: this.ctx.projectId ?? null,
           quality,
           homes,
           corpusMap: corpusMapMeta,
@@ -944,6 +973,8 @@ export class ImportOrchestrator {
       source: input.source,
       mode,
       proposalId,
+      /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
+      deduplicated,
       sessionId: sessionId ?? null,
       tablePlan,
       operations: ops,
@@ -1313,6 +1344,16 @@ export class ImportOrchestrator {
     });
 
     let proposalId: string | null = null;
+    let deduplicated = false;
+    // IDEMPOTENCY — same contract as analyze(); see the note there.
+    const priorProposal = input.previewOnly
+      ? null
+      : await findPriorImportGraphProposal({
+          userId,
+          workspaceId: workspaceId ?? null,
+          projectId: this.ctx.projectId ?? null,
+          operations,
+        });
     if (input.previewOnly) {
       logger.info(
         {
@@ -1327,6 +1368,13 @@ export class ImportOrchestrator {
           ...stats,
         },
         "import.analyzeLarge previewOnly (no proposal)"
+      );
+    } else if (priorProposal) {
+      proposalId = priorProposal.id;
+      deduplicated = true;
+      logger.info(
+        { userId, workspaceId, source: input.source, mode: "deep", proposalId },
+        "import.analyzeLarge: identical graph already proposed — returning prior"
       );
     } else {
       const { proposal: created } = await createEventBackedProposal({
@@ -1343,6 +1391,8 @@ export class ImportOrchestrator {
           operations,
           source: input.source,
           sourceId: batchId,
+          workspaceId: workspaceId ?? null,
+          projectId: this.ctx.projectId ?? null,
           quality,
           homes,
           corpusMap: stats.corpusMap,
@@ -1370,6 +1420,8 @@ export class ImportOrchestrator {
       source: input.source,
       mode: "deep" as const,
       proposalId,
+      /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
+      deduplicated,
       sessionId: sessionId ?? null,
       operations,
       summary,

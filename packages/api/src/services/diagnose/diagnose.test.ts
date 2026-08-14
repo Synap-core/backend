@@ -21,6 +21,7 @@ function proposalRow(
     data: { title: "Acme" },
     status: "approved",
     rejectionReason: null,
+    reasonCode: null,
     revisionHistory: null,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     workspaceId: "ws1",
@@ -77,6 +78,49 @@ describe("computeAgentScorecard", () => {
       cap: 10,
       atOrOverCap: false,
     });
+  });
+
+  it("buckets on reasonCode first, falling back to normalized free-text — and collapses a matching free-text into the code bucket", () => {
+    const rows: ScorecardProposalRow[] = [
+      // Structured reject (0232), no free text — must still count.
+      proposalRow({
+        status: "rejected",
+        reasonCode: "duplicate",
+        rejectionReason: null,
+        targetId: "a",
+      }),
+      // Pre-0232 free-text row that happens to spell out a known code —
+      // collapses into the SAME "duplicate" bucket via lowercase compare.
+      proposalRow({
+        status: "rejected",
+        reasonCode: null,
+        rejectionReason: "Duplicate",
+        targetId: "b",
+      }),
+      // Older free-text row with no structured code and no code match —
+      // keeps its own bucket, must not vanish from the histogram.
+      proposalRow({
+        status: "rejected",
+        reasonCode: null,
+        rejectionReason: "  Not enough context  ",
+        targetId: "c",
+      }),
+    ];
+
+    const card = computeAgentScorecard(rows, {
+      agentId: "agent-1",
+      agentName: "Twin",
+      agentType: "meta",
+      todayCount: 0,
+      cap: 10,
+    });
+
+    expect(card.rejectionReasons).toEqual(
+      expect.arrayContaining([
+        { reason: "duplicate", count: 2 },
+        { reason: "not enough context", count: 1 },
+      ])
+    );
   });
 
   it("derives duplicateRate from the shared structural fingerprint", () => {

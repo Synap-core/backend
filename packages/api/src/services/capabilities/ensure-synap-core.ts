@@ -640,6 +640,28 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         properties: {},
       },
     },
+    {
+      name: "governance.recommend_raise_ceiling",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Governance calibration: scan each agent's daily auto-write volume on the events spine and file a pending governance.raise_ceiling proposal for any agent that keeps hitting its per-UTC-day write ceiling. The numeric-limit twin of governance.recommend_tighten — approving a raise proposal inserts a higher governance_ceilings row (and supersedes the prior one). Takes NO params (scans pod-wide agent behaviour). Read-only w.r.t. graph data (files review items only): auto-runs inside the daily calibration cron. Returns { proposalsFiled, proposalIds }.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "governance.recommend_tighten_posture",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Governance calibration: scan recent REJECTED agent proposals GROUPED BY CHANNEL (across all agents) and file a pending governance.tighten_posture proposal for any channel the humans reject consistently (conservative floor). The channel-scoped twin of governance.recommend_tighten — approving a posture proposal creates a config_settings guideline (posture:'propose', scope:'channel') routing that channel's writes to review. Takes NO params (scans pod-wide channel behaviour). Read-only w.r.t. graph data (files review items only): auto-runs inside the daily calibration cron. Returns { proposalsFiled, proposalIds }.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
   ],
 };
 

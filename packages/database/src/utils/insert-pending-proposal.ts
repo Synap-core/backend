@@ -80,6 +80,14 @@ export interface InsertPendingProposalInput {
   /** Optional explicit expiry. Omitted (or NULL) by default — proposals no
    *  longer auto-expire (see the C2 note at the INSERT below). */
   expiresAt?: Date | null;
+  /**
+   * Structured GOVERNANCE reason — the `PROPOSE_REASON` KEY the pure engine
+   * stamped when it routed this write to review (e.g. "UNTRUSTED_ORIGIN").
+   * Persisted to the `governance_reason` column so the review UI can branch on
+   * WHY a write needs a human. Omitted/NULL for human-authored rows and the
+   * plain default-propose case.
+   */
+  governanceReason?: string | null;
 }
 
 export interface InsertPendingProposalResult {
@@ -316,6 +324,9 @@ export async function insertPendingProposal(
         ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.stepRunId ? { stepRunId: input.stepRunId } : {}),
         ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+        ...(input.governanceReason
+          ? { governanceReason: input.governanceReason }
+          : {}),
       })
       .returning();
 

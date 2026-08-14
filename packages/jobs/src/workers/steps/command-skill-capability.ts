@@ -9,6 +9,7 @@ import {
   resolveInputMapping,
 } from "../template-resolve.js";
 import { dispatchViaCapabilityRouter } from "../capability-dispatch.js";
+import { guardProducerEffect } from "../../utils/automation-governance.js";
 import {
   resolveVaultReferences,
   isVaultReference,
@@ -32,8 +33,29 @@ export async function executeCommandStep(
   },
   context: StepContext,
   workspaceId: string,
-  ownerId: string
+  ownerId: string,
+  // CONFUSED-DEPUTY GUARD: the causal-chain producer. A `command` node spawns an
+  // IS agent AS the owner (`userId: ownerId`), so an agent-produced trigger firing
+  // a HUMAN-owned automation would launder an agentic IS task through owner-bypass.
+  // Fail closed when an agent is in the chain and the producer's ladder would not
+  // auto-execute. Absent → owner-only behavior, unchanged.
+  producerAgentUserId?: string | null
 ): Promise<Record<string, unknown>> {
+  const guard = await guardProducerEffect({
+    producerAgentUserId,
+    principalUserId: ownerId,
+    workspaceId,
+    subjectType: "capability",
+    action: "execute",
+  });
+  if ("block" in guard) {
+    throw new Error(
+      guard.kind === "deny"
+        ? `command denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
+        : `command cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
+    );
+  }
+
   let resolvedInputs = resolveInputMapping(data.inputMapping, context);
 
   // Resolve vault references in input values (e.g., API keys)
@@ -111,10 +133,27 @@ export async function executeSkillNode(
     workspaceId: string;
     ownerId: string;
     stepRun?: { id: string };
+    // CONFUSED-DEPUTY GUARD (see executeCommandStep) — the causal-chain producer.
+    producerAgentUserId?: string | null;
   }
 ): Promise<unknown> {
   const skillId = data.skillId;
   if (!skillId) throw new Error("Skill node has no skillId");
+
+  const skillGuard = await guardProducerEffect({
+    producerAgentUserId: opts.producerAgentUserId,
+    principalUserId: opts.ownerId,
+    workspaceId: opts.workspaceId,
+    subjectType: "capability",
+    action: "execute",
+  });
+  if ("block" in skillGuard) {
+    throw new Error(
+      skillGuard.kind === "deny"
+        ? `Skill ${skillId} denied by producer-agent governance (confused-deputy guard): ${skillGuard.reason ?? "capability denied"}`
+        : `Skill ${skillId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
+    );
+  }
 
   const inputMapping = data.inputMapping ?? {};
   // deepResolveTemplates (NOT resolveInputMapping) so an exact `{{step.x}}`
@@ -206,10 +245,30 @@ export async function executeCapabilityNode(
     workspaceId: string;
     ownerId: string;
     stepRun?: { id: string };
+    // CONFUSED-DEPUTY GUARD (see executeCommandStep) — the causal-chain producer.
+    producerAgentUserId?: string | null;
   }
 ): Promise<unknown> {
   const verbId = data.verbId;
   if (!verbId) throw new Error("Capability node has no verbId");
+
+  // The verb is `<subjectType>.<action>` shaped (e.g. `mail.send`) — split so the
+  // producer ladder's deny-floors can key on the honest subjectType/action.
+  const verbDot = verbId.indexOf(".");
+  const capGuard = await guardProducerEffect({
+    producerAgentUserId: opts.producerAgentUserId,
+    principalUserId: opts.ownerId,
+    workspaceId: opts.workspaceId,
+    subjectType: verbDot > 0 ? verbId.slice(0, verbDot) : "capability",
+    action: verbDot > 0 ? verbId.slice(verbDot + 1) : "execute",
+  });
+  if ("block" in capGuard) {
+    throw new Error(
+      capGuard.kind === "deny"
+        ? `Capability ${verbId} denied by producer-agent governance (confused-deputy guard): ${capGuard.reason ?? "capability denied"}`
+        : `Capability ${verbId} cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
+    );
+  }
 
   const capInputMapping = data.inputMapping ?? {};
   // deepResolveTemplates: preserve array/object params from an exact `{{...}}`

@@ -129,6 +129,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "reason_code",
     addedBy: "0232_proposals_reason_code.sql",
   },
+  // proposals — structured GOVERNANCE cause stamped at creation (0238). The
+  // PROPOSE_REASON key the pure engine returned; the review UI branches on it.
+  // App-level enum (@synap/governance-policy), distinct from `reason_code`
+  // (which is rejection cause). If missing, the chat-AI propose insert throws.
+  {
+    table: "proposals",
+    column: "governance_reason",
+    addedBy: "0238_proposals_governance_reason.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.

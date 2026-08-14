@@ -40,6 +40,28 @@
  * a highly-trusted agent can still have ONE shape the humans reliably reject, and
  * tighten targets that shape regardless of the agent's global approve rate.
  *
+ * REASON-AWARE (2026-08-14): counting rejections was never enough — a count says
+ * HOW OFTEN, never WHY. This module now reads the rejection's `reasonCode`
+ * (falling back to free-text `rejectionReason` for pre-0232 rows, via the shared
+ * `proposalReasonBucket`), computes the DOMINANT reason per qualifying motif, and
+ * CLASSIFIES it:
+ *
+ *   - MECHANICAL fault (`duplicate` / `wrong_kind_or_facet` / `wrong_link_type`):
+ *     a `propose` rule is the WRONG remedy. Live-pod dogfood: an agent hit
+ *     duplicateRate 0.82 by re-creating playbooks that already existed. Pinning
+ *     `playbook.create` to review fixes NOTHING — those writes are ALREADY
+ *     pending review; the remedy is a code-level existence check. Patching policy
+ *     for a deterministic bug is a named anti-pattern; corrections belong on the
+ *     cheapest durable surface (tool schema/idempotency → description → error
+ *     strings → few-shot → standing prompt). So we file an ADVISORY, not a rule.
+ *   - JUDGMENT fault (everything else, including `unknown`): the write was
+ *     well-formed but unwanted. That is exactly what a `propose` rule is for —
+ *     unchanged `governance.tighten_lane` behaviour.
+ *
+ * NEVER FABRICATED: a rejection with no reason at all buckets as `unknown`, and a
+ * motif whose dominant bucket is `unknown` keeps TODAY's behaviour (rule). The
+ * classifier only ever moves a motif OFF the rule path on positive evidence.
+ *
  * TODO (v2, deliberately out of scope): the "auto-approved-then-reverted"
  * detector — a shape that auto-approves under a widen rule but whose writes are
  * repeatedly undone/deleted afterwards. That needs a reverted-write signal
@@ -53,6 +75,7 @@ import {
   eq,
   desc,
   isNull,
+  inArray,
   proposals,
   users,
   governanceRules,
@@ -63,8 +86,24 @@ import {
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { computeProposalFingerprint } from "./fingerprint.js";
+import {
+  proposalReasonBucket,
+  classifyRejectionReason,
+  dominantReason,
+  UNKNOWN_REASON,
+  type RejectionFaultClass,
+} from "./reason-bucket.js";
 import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
 const SAMPLE_CAP = 20;
+
+/**
+ * The two proposal types this recommender can file for a (agent, motif). Both
+ * are deduped together: a motif already carrying an OPEN finding of EITHER shape
+ * must not accrue a second one just because its dominant reason drifted across
+ * the mechanical/judgment line between scans.
+ */
+export const TIGHTEN_LANE_TYPE = "governance.tighten_lane";
+export const ADVISORY_TYPE = "governance.advisory";
 
 const logger = createLogger({ module: "governance-recommend-tighten" });
 
@@ -75,6 +114,32 @@ const logger = createLogger({ module: "governance-recommend-tighten" });
  * recommender authors the proposal, the agent does not. `verdict` is always
  * "propose": a tighten proposal only ever pins a motif to review, never widens.
  */
+/**
+ * The evidence both findings carry. Shared so the human sees the SAME numbers
+ * whichever way the classifier routed the motif — the only difference between an
+ * advisory and a rule proposal must be the REMEDY, never the evidence.
+ */
+export interface TightenEvidence {
+  /** Number of REJECTED proposals in the consistently-rejected shape cluster. */
+  clusterSize: number;
+  /** rejected(shape) / total(shape) — how reliably the humans reject it. */
+  rejectRate: number;
+  /** Total proposals of this shape (all statuses) the reject rate is over. */
+  totalForShape: number;
+  /** Up to 20 member (rejected) proposal ids as evidence. */
+  sampleProposalIds: string[];
+  /**
+   * WHY, not just how often. The most common rejection bucket across the
+   * cluster — a taxonomy `reasonCode`, a lowercased legacy free-text reason, or
+   * `"unknown"` when the rejections carried no reason at all.
+   */
+  dominantReason: string;
+  /** Full bucket → count breakdown, so the human can see how lopsided it is. */
+  reasonHistogram: Record<string, number>;
+  /** What the dominant reason says the fault IS — drives which finding is filed. */
+  faultClass: RejectionFaultClass;
+}
+
 export interface GovernanceTightenLaneProposalData {
   agentUserId: string;
   /** Tighten always targets an ACTION motif (`${targetType}.${proposalType}`). */
@@ -82,17 +147,49 @@ export interface GovernanceTightenLaneProposalData {
   targetPattern: string;
   scopeKind: "pod";
   verdict: "propose";
-  evidence: {
-    /** Number of REJECTED proposals in the consistently-rejected shape cluster. */
-    clusterSize: number;
-    /** rejected(shape) / total(shape) — how reliably the humans reject it. */
-    rejectRate: number;
-    /** Total proposals of this shape (all statuses) the reject rate is over. */
-    totalForShape: number;
-    /** Up to 20 member (rejected) proposal ids as evidence. */
-    sampleProposalIds: string[];
-  };
+  evidence: TightenEvidence;
 }
+
+/**
+ * `governance.advisory` payload — the MECHANICAL-fault sibling of
+ * `GovernanceTightenLaneProposalData`.
+ *
+ * Same subject, same evidence, DIFFERENT remedy: this one asks a human to fix
+ * CODE (an existence check, a tool schema, a description), not to tighten a gate.
+ * Approving it writes NOTHING — it is a pure acknowledgement (see the no-op
+ * branch in `routers/proposals/apply-approval.ts`).
+ *
+ * DELIBERATELY has NO `verdict` field. A distinct proposal type with no verdict
+ * cannot be mistaken for a rule-writing payload by any current or future reader;
+ * the alternative (`tighten_lane` + `advisory:true`) would have left a payload
+ * that the EXISTING approve branch — which keys on `proposalType` alone — happily
+ * turns into a `governance_rules` row if any caller misses the flag. Fail-safe
+ * beats flag-safe for anything that can widen or pin governance.
+ */
+export interface GovernanceAdvisoryProposalData {
+  agentUserId: string;
+  targetKind: "action";
+  targetPattern: string;
+  scopeKind: "pod";
+  /** What kind of advisory this is — the only value v1 emits. */
+  advisoryKind: "mechanical_fault";
+  /**
+   * The cheapest durable surface the correction likely belongs on. Guidance for
+   * the human, not machine-enforced.
+   */
+  suggestedRemedy: string;
+  evidence: TightenEvidence;
+}
+
+/** Per-reason hint at where the fix actually belongs. */
+const REMEDY_BY_REASON: Record<string, string> = {
+  duplicate:
+    "Add an existence/idempotency check to the tool before it proposes a create — a review gate cannot deduplicate.",
+  wrong_kind_or_facet:
+    "Resolve identity + read `list_profiles.profileKind` first and attach a facet instead of creating an entity — fix the tool contract, not the gate.",
+  wrong_link_type:
+    "Constrain the relation type to the enumerable valid set in the tool schema — an invalid type should be unrepresentable, not reviewable.",
+};
 
 /** Mirrors SCAN_LIMIT in governance-lane-scanner.ts. */
 const SCAN_LIMIT = 500;
@@ -129,6 +226,10 @@ interface ScanRow {
   targetId: string;
   /** Fingerprint input — the create-class signature reads the proposed name. */
   data: unknown;
+  /** Structured rejection taxonomy (migration 0232). Null on non-rejects. */
+  reasonCode?: string | null;
+  /** Free-text rejection reason — the pre-0232 fallback. */
+  rejectionReason?: string | null;
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
@@ -148,6 +249,9 @@ async function loadAgentProposals(agentId: string): Promise<ScanRow[]> {
       status: proposals.status,
       targetId: proposals.targetId,
       data: proposals.data,
+      // WHY the humans said no — the classifier's whole input.
+      reasonCode: proposals.reasonCode,
+      rejectionReason: proposals.rejectionReason,
     })
     .from(proposals)
     .where(eq(proposals.agentUserId, agentId))
@@ -156,13 +260,18 @@ async function loadAgentProposals(agentId: string): Promise<ScanRow[]> {
 }
 
 /**
- * Any PENDING `governance.tighten_lane` proposal already open for this
- * (agent, motif). Mirror of the scanner's `hasPendingWidenProposal`, but keyed
- * on (agent, targetPattern) — tighten can file several motifs per agent, so the
+ * Any PENDING finding of EITHER shape already open for this (agent, motif).
+ * Mirror of the scanner's `hasPendingWidenProposal`, but keyed on
+ * (agent, targetPattern) — tighten can file several motifs per agent, so the
  * dedupe is per-motif, not per-agent. The subject agent + motif live in `data`
  * (this recommender authors the row; `proposals.agentUserId` is null).
+ *
+ * BOTH types, ONE query: the classifier can route the same motif to a rule this
+ * scan and an advisory the next (a few late-arriving `duplicate` rejections flip
+ * the dominant reason). Deduping per-type would let the same motif accumulate one
+ * of each. One open finding per (agent, motif) is the invariant.
  */
-async function hasPendingTightenProposal(
+async function hasPendingFinding(
   agentId: string,
   targetPattern: string
 ): Promise<boolean> {
@@ -171,7 +280,7 @@ async function hasPendingTightenProposal(
     .from(proposals)
     .where(
       and(
-        eq(proposals.proposalType, "governance.tighten_lane"),
+        inArray(proposals.proposalType, [TIGHTEN_LANE_TYPE, ADVISORY_TYPE]),
         eq(proposals.status, ProposalStatus.PENDING)
       )
     );
@@ -316,19 +425,37 @@ async function recommendTightenForAgent(
     decidedByMotif.set(m, (decidedByMotif.get(m) ?? 0) + 1);
   }
 
-  // Numerator: rejected attempts per motif (+ evidence sample ids).
+  // Numerator: rejected attempts per motif (+ evidence sample ids + WHY).
+  //
+  // The reason histogram is accumulated on the SAME pass over the SAME filtered
+  // rows the count comes from — so the dominant reason always describes exactly
+  // the population the rate was measured over (muted rows excluded from both, no
+  // second scan that could drift). A rejection with no reason at all buckets as
+  // `unknown`; it is never dropped (that would silently make one loud reason
+  // "dominant" over a mostly-unreasoned cluster) and never guessed at.
   const rejectedByMotif = new Map<
     string,
-    { count: number; sampleProposalIds: string[] }
+    {
+      count: number;
+      sampleProposalIds: string[];
+      reasons: Map<string, number>;
+    }
   >();
   for (const r of rows) {
     if (r.status !== ProposalStatus.REJECTED) continue;
     if (isMuted(r)) continue;
     const m = motifOf(r);
-    const acc = rejectedByMotif.get(m) ?? { count: 0, sampleProposalIds: [] };
+    const acc = rejectedByMotif.get(m) ?? {
+      count: 0,
+      sampleProposalIds: [],
+      reasons: new Map<string, number>(),
+    };
     acc.count += 1;
     if (acc.sampleProposalIds.length < SAMPLE_CAP)
       acc.sampleProposalIds.push(r.id);
+    const bucket =
+      proposalReasonBucket(r.reasonCode, r.rejectionReason) ?? UNKNOWN_REASON;
+    acc.reasons.set(bucket, (acc.reasons.get(bucket) ?? 0) + 1);
     rejectedByMotif.set(m, acc);
   }
   if (rejectedByMotif.size === 0) return [];
@@ -348,28 +475,65 @@ async function recommendTightenForAgent(
     const rejectRate = Number((rejected.count / totalForShape).toFixed(4));
     if (rejectRate < MIN_REJECT_RATE) continue;
 
-    if (await hasPendingTightenProposal(agent.id, targetPattern)) continue;
-    if (await hasCoveringProposeRule(agent.id, targetPattern)) continue;
+    if (await hasPendingFinding(agent.id, targetPattern)) continue;
 
-    const data: GovernanceTightenLaneProposalData = {
-      agentUserId: agent.id,
-      targetKind: "action",
-      targetPattern,
-      scopeKind: "pod",
-      verdict: "propose",
-      evidence: {
-        clusterSize: rejected.count,
-        rejectRate,
-        totalForShape,
-        sampleProposalIds: rejected.sampleProposalIds,
-      },
+    // CLASSIFY — the point of the reason-aware wave. The dominant reason decides
+    // WHICH remedy is even coherent, before any redundancy check runs.
+    const reason = dominantReason(rejected.reasons);
+    const faultClass = classifyRejectionReason(reason);
+    const isMechanical = faultClass === "mechanical";
+
+    // The covering-rule check is a RULE-redundancy check: "the pod already pins
+    // this motif to review, so proposing to pin it again is noise". It says
+    // nothing about a mechanical fault — a propose rule does not fix a missing
+    // existence check, so an advisory stays warranted regardless. Skipped (and
+    // the DB call saved) on the advisory path deliberately.
+    if (
+      !isMechanical &&
+      (await hasCoveringProposeRule(agent.id, targetPattern))
+    )
+      continue;
+
+    const evidence: TightenEvidence = {
+      clusterSize: rejected.count,
+      rejectRate,
+      totalForShape,
+      sampleProposalIds: rejected.sampleProposalIds,
+      dominantReason: reason,
+      reasonHistogram: Object.fromEntries(rejected.reasons),
+      faultClass,
     };
+
+    const data:
+      GovernanceTightenLaneProposalData | GovernanceAdvisoryProposalData =
+      isMechanical
+        ? {
+            agentUserId: agent.id,
+            targetKind: "action",
+            targetPattern,
+            scopeKind: "pod",
+            advisoryKind: "mechanical_fault",
+            suggestedRemedy:
+              REMEDY_BY_REASON[reason] ??
+              "Fix the tool contract that produces this shape — a review gate cannot correct a malformed write.",
+            evidence,
+          }
+        : {
+            agentUserId: agent.id,
+            targetKind: "action",
+            targetPattern,
+            scopeKind: "pod",
+            verdict: "propose",
+            evidence,
+          };
+
+    const proposalType = isMechanical ? ADVISORY_TYPE : TIGHTEN_LANE_TYPE;
 
     const { proposal, deduped } = await insertPendingProposal({
       workspaceId: null,
       targetType: "governance",
       targetId: agent.id,
-      proposalType: "governance.tighten_lane",
+      proposalType,
       data: data as unknown as Record<string, unknown>,
       createdBy: agent.createdByUserId,
       proposedByUserId: null,
@@ -388,8 +552,12 @@ async function recommendTightenForAgent(
     if (!deduped) {
       void notifyPodWideProposal({
         proposalId: proposal.id,
-        proposalType: "governance.tighten_lane",
-        description: `Pin ${targetPattern} to review (rejected ${rejected.count}× — ${Math.round(rejectRate * 100)}%)`,
+        proposalType,
+        // VISIBILITY is the whole reason the advisory is a proposal and not an
+        // event: it rides the same pod-wide bell + review inbox the rule does.
+        description: isMechanical
+          ? `${targetPattern} rejected ${rejected.count}× as "${reason}" (${Math.round(rejectRate * 100)}%) — likely a code-level fix, not a stricter gate`
+          : `Pin ${targetPattern} to review (rejected ${rejected.count}× — ${Math.round(rejectRate * 100)}%, mostly "${reason}")`,
         // The SUBJECT agent, for bell grouping — mirrors the workspace path's
         // `agentUserId` grouping key. `proposals.agentUserId` is null here (this
         // recommender authors the row), so it comes from the payload.
@@ -405,7 +573,7 @@ async function recommendTightenForAgent(
       data: {
         proposalStatus: "created",
         targetType: "governance",
-        changeType: "governance.tighten_lane",
+        changeType: proposalType,
       },
     }).catch((err) => {
       logger.warn(
@@ -421,8 +589,13 @@ async function recommendTightenForAgent(
         motif: targetPattern,
         rejectRate,
         clusterSize: rejected.count,
+        dominantReason: reason,
+        faultClass,
+        proposalType,
       },
-      "recommend-tighten: filed tighten_lane proposal"
+      isMechanical
+        ? "recommend-tighten: filed ADVISORY (mechanical fault — rule would be the wrong remedy)"
+        : "recommend-tighten: filed tighten_lane proposal"
     );
   }
 

@@ -55,6 +55,14 @@ const AutomationSchema = z.object({
     })
     .optional(),
   status: z.enum(["draft", "active", "paused"]).default("active"),
+  // Free-form authored automation metadata → `automations.metadata` (e.g.
+  // `metadata.kind: "calibration-recommender"`, the marker the calibration UI
+  // seam keys on instead of name/description matching). A plain z.object STRIPS
+  // undeclared keys, so — like `subjectProfile` / `actionPlacements` above —
+  // this MUST be declared or every Hub-REST install parses `body` (stored as
+  // the proposal `definition`) with the marker already gone. Threaded into the
+  // created row by `applyPackagePostWorkspace` (merged with `templateKey`).
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const PlaybookSchema = z.object({

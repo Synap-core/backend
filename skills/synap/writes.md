@@ -1,10 +1,23 @@
 ## Core writes
 
-**Two write doors, one gradient.** `create_entity` is for exactly ONE
+> **Scope of this page.** It covers writes that produce ENTITY-shaped data.
+> There are ~30 other write tools (sessions, capabilities, automations, cells,
+> playbooks, views, channels…) that this page does not orient across — reach for
+> `synap_list_capabilities` / the escalation ladder for those. If you are about
+> to pick a tool and the choice feels ambiguous, that ambiguity is real: the
+> tools below differ in ATOMICITY and COLLISION policy, not just in shape.
+
+**Two entity-write doors, one gradient.** `create_entity` is for exactly ONE
 fully-structured, typed entity you already have. For anything unstructured,
 several entities, or a graph — or **when in doubt** — use the capture door
 (`synap_capture`, see `capture.md`): precision comes from sending more structure
 in the SAME call, never from picking a different tool or a second commit step.
+
+The difference that is NOT visible in either tool's description: `create_entity`
+writes one entity with per-entity governance and REJECTS a name collision unless
+`forceCreate`; capture-with-`entities[]` files ONE atomic proposal for the whole
+graph and DEDUP-MERGES instead of rejecting. Pick by whether you want a partial
+write to be possible, not by how structured your data feels.
 
 ### Create an entity (one exact typed entity)
 

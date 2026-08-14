@@ -47,6 +47,7 @@ function channel(over: Partial<SignalChannelRollup> = {}): SignalChannelRollup {
     messageCount: 0,
     extractionRatePct: 0,
     fate: fate(),
+    originTrust: "trusted",
     lastActivityAt: new Date("2026-08-08T10:00:00Z"),
     ...over,
   };

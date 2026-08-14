@@ -27,6 +27,7 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
@@ -45,6 +46,7 @@ export interface ScorecardProposalRow {
   data: unknown;
   status: string;
   rejectionReason: string | null;
+  reasonCode: string | null;
   revisionHistory: ProposalRevision[] | null;
   createdAt: Date;
   workspaceId: string | null;
@@ -73,6 +75,11 @@ export function computeAgentScorecard(
   let rejected = 0;
   let revised = 0;
   const reasonHist = new Map<string, number>();
+  // Bucket key precedence lives in ONE place — `proposalReasonBucket`, shared
+  // with the tighten recommender's classifier. This histogram and that
+  // classifier MUST agree on what a rejection means; two copies of the rule
+  // would drift, which is the defect the scattered dedup implementations
+  // already cost us once.
 
   for (const r of rows) {
     switch (r.status) {
@@ -93,8 +100,8 @@ export function computeAgentScorecard(
     if (Array.isArray(r.revisionHistory) && r.revisionHistory.length > 0) {
       revised += 1;
     }
-    const reason = r.rejectionReason?.trim();
-    if (reason) reasonHist.set(reason, (reasonHist.get(reason) ?? 0) + 1);
+    const bucket = proposalReasonBucket(r.reasonCode, r.rejectionReason);
+    if (bucket) reasonHist.set(bucket, (reasonHist.get(bucket) ?? 0) + 1);
   }
 
   // Duplicate rate — reuse the EXACT structural fingerprint the review inbox
@@ -187,6 +194,7 @@ export async function agentScorecard(params: {
       data: proposals.data,
       status: proposals.status,
       rejectionReason: proposals.rejectionReason,
+      reasonCode: proposals.reasonCode,
       revisionHistory: proposals.revisionHistory,
       createdAt: proposals.createdAt,
       workspaceId: proposals.workspaceId,

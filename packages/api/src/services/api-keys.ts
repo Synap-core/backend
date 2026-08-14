@@ -47,6 +47,17 @@ const RATE_LIMITS = {
   generate: { limit: 10, window: 60000 }, // 10/min
   request: { limit: 1200, window: 60000 }, // 1200/min — bulk import friendly
   submit: { limit: 50, window: 60000 }, // 50/min
+  // Observation → automation-trigger FAN-OUT bound. The observations door is the
+  // unauthenticated-webhook class: any hub-protocol.write key can append up to
+  // 200 facts/request at 1200 requests/min, and each recorded fact can now
+  // enqueue an automation-trigger-match job → a proposal. This caps how many
+  // TRIGGER enqueues a single producer can drive per window, BEFORE the
+  // governance decision, so a noisy/malicious key cannot flood the proposal
+  // queue. The FACT is always recorded (the door's promise); only the trigger
+  // side-effect beyond the cap is skipped. Bucketed per (producer, namespace) —
+  // see observations.ts. 120/min ≈ 2 matches/s sustained: ample for real dev
+  // tooling, a hard ceiling for a flood.
+  "observation-trigger": { limit: 120, window: 60000 }, // 120/min per (producer, namespace)
 } as const;
 
 /**
@@ -689,7 +700,7 @@ export class ApiKeyService {
    */
   checkRateLimit(
     keyId: string,
-    action: "generate" | "request" | "submit"
+    action: "generate" | "request" | "submit" | "observation-trigger"
   ): boolean {
     const config = RATE_LIMITS[action];
     const now = Date.now();

@@ -243,7 +243,33 @@ export const channels = pgTable(
       .notNull()
       .default(AiReactionMode.WHEN_CONFIDENT),
 
-    /** User-configurable overrides (personality, modelTier). Never store systemPrompt or toolsConfig here. */
+    /**
+     * User-configurable per-channel agent overlay: `{ name?, personality?,
+     * instructions?, modelTier? }`. Never store toolsConfig here.
+     *
+     * ⚠️ PROMPT SURFACE — this is durable text that the IS concatenates into the
+     * agent SYSTEM PROMPT (`agents/base/agent.ts`, the `agentConfig` overlay in
+     * both the buffered and streaming paths): `name` rewrites the identity line,
+     * `personality` becomes a personality section, and `instructions` is appended
+     * verbatim as "Additional instructions". So an un-governed writer here is a
+     * durable prompt-injection sink, in the same class as a `kind:'instruction'`
+     * skill — which is why that path is proposal-gated.
+     *
+     * The invariant that keeps this safe is the WRITE SURFACE, not the content:
+     *   • `channels.createChannel` / `channels.updateChannel` (tRPC) are the only
+     *     doors that persist this column, and tRPC authenticates by Kratos session
+     *     ONLY (`packages/api/src/context.ts` — there is no API-key branch), so
+     *     they are human-authored writes. The chat UI's personality editor is the
+     *     legitimate producer of `instructions`.
+     *   • The one agent-reachable door, Hub `branches.createBranch`, forwards
+     *     `agentConfig` through `checkPermissionOrPropose` → proposal; the value
+     *     only lands after a human approves (`proposals/executors/channel.ts`).
+     *     `channel.create_branch` is deliberately NOT in `DEFAULT_AUTO_APPROVE`.
+     *
+     * Enforced by `packages/api/src/__tripwires__/channel-agent-config-prompt-surface.test.ts`.
+     * Do not add an agent-reachable (scopedProcedure / Hub REST / MCP) writer of
+     * this column without routing it through the same governance gate.
+     */
     agentConfig: jsonb("agent_config"),
 
     /** MCP servers enabled for this channel. null = inherit no MCPs (opt-in model). */

@@ -17,6 +17,7 @@ const {
   mockDb,
   mockGetDb,
   mockCheckPermission,
+  mockPreviewDecision,
   mockMaterializeCron,
   mockCreateLinks,
   insertReturning,
@@ -53,6 +54,7 @@ const {
     mockMaterializeCron: vi.fn().mockResolvedValue(undefined),
     mockCreateLinks: vi.fn().mockResolvedValue([]),
     mockCheckPermission: vi.fn().mockResolvedValue({ granted: true }),
+    mockPreviewDecision: vi.fn().mockResolvedValue({ decision: "propose" }),
     mockGetDb: vi.fn().mockResolvedValue(mockDb),
   };
 });
@@ -96,6 +98,7 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: mockCheckPermission,
+  previewPermissionDecision: mockPreviewDecision,
 }));
 
 vi.mock("../services/playbooks/cron-automation.js", () => ({
@@ -149,6 +152,99 @@ const createInput = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockCheckPermission.mockResolvedValue({ granted: true });
+  mockPreviewDecision.mockResolvedValue({ decision: "propose" });
+});
+
+/**
+ * IDEMPOTENCY ABOVE THE PROPOSE PATH.
+ *
+ * The 23505 recovery above only ever protected the EXECUTE path — an agent whose
+ * write routed to a PROPOSAL filed a fresh one on every retry. The door now
+ * dry-runs the governance gate first (deny → FORBIDDEN, before any lookup), then
+ * checks name identity, and only then calls the real gate.
+ */
+describe("playbooks.create — agent idempotency before the propose path", () => {
+  const agentInput = {
+    ...createInput,
+    agentUserId: "00000000-0000-4000-8000-0000000000a1",
+    source: "ai" as const,
+  };
+
+  it("a DENIED agent still gets FORBIDDEN — and learns nothing about existence", async () => {
+    mockPreviewDecision.mockResolvedValue({
+      decision: "deny",
+      reason: "Permission denied",
+    });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    await expect(caller.create(agentInput)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Permission denied",
+    });
+
+    // The existence lookup must NOT have run (no leak), and no proposal filed.
+    expect(selectLimit).not.toHaveBeenCalled();
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it("a permitted agent re-creating an existing name gets the row — and files NO proposal", async () => {
+    const winner = {
+      id: WINNER_ID,
+      workspaceId: WORKSPACE,
+      name: createInput.name,
+      status: "active",
+      createdAt: new Date("2026-01-01"),
+    };
+    selectLimit.mockResolvedValueOnce([winner]);
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.create(agentInput);
+
+    expect(result.status).toBe("created");
+    expect(result.playbook?.id).toBe(WINNER_ID);
+    expect(result.message).toMatch(/idempotent/i);
+    expect(result.proposalId).toBeNull();
+    // The whole point: the real (side-effecting) gate is never reached, so no
+    // duplicate proposal row and no duplicate insert.
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockMaterializeCron).not.toHaveBeenCalled();
+  });
+
+  it("a FIRST-TIME agent create still proposes exactly as before", async () => {
+    selectLimit.mockResolvedValueOnce([]);
+    mockCheckPermission.mockResolvedValue({
+      granted: false,
+      proposalId: "prop-1",
+      proposalType: "playbook.create",
+      summary: "Create playbook",
+      reasoning: "needs review",
+      reviewPath: "/open/prop-1",
+      reviewUrl: "https://pod/open/prop-1",
+    });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.create(agentInput);
+
+    expect(mockCheckPermission).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("proposed");
+    expect(result.proposalId).toBe("prop-1");
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it("a HUMAN create never dry-runs — one gate call, unchanged flow", async () => {
+    insertReturning.mockResolvedValueOnce([
+      { id: "pb-new", workspaceId: WORKSPACE, name: createInput.name },
+    ]);
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.create(createInput);
+
+    expect(mockPreviewDecision).not.toHaveBeenCalled();
+    expect(mockCheckPermission).toHaveBeenCalledTimes(1);
+    expect(result.message).toBe("Playbook created");
+  });
 });
 
 describe("playbooks.create — name uniqueness / 23505 recovery", () => {

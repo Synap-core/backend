@@ -60,10 +60,19 @@ import {
   tools,
   capabilities,
   channelEgress,
+  configSettings,
+  ChannelType,
+  GUIDELINE_KEY,
+  resolveMostSpecificPosture,
   MessageAuthorType,
   ProposalStatus,
 } from "@synap/database";
-import type { FlowDefinition } from "@synap/database";
+import type {
+  FlowDefinition,
+  GuidelineValue,
+  ConfigScopeKind,
+  ResolvedGuideline,
+} from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { getCapabilityMemberParts } from "../links/links-service.js";
@@ -716,6 +725,169 @@ export async function listPipeline(
   return { units, nextCursor };
 }
 
+// ── Channel origin-trust (governance rung 2.55 posture, batched) ──────────────
+
+/**
+ * Set-wise mirror of `resolveOriginTrust`
+ * (@synap/database `resolve-agent-governance-decision.ts`) for the channel
+ * rollup — the SAME precedence, computed for a WHOLE channel set in TWO queries
+ * (never a per-row N+1):
+ *
+ *   originTrust = posture === "auto"   → "trusted"    (operator restored auto)
+ *              |  posture === "propose"→ "untrusted"  (operator tightened)
+ *              |  external-origin      → "untrusted"  (external/bridge default)
+ *              |                       → "trusted"     (owner-side origin)
+ *
+ * where `external-origin` = `channelType === EXTERNAL || externalSource != null`
+ * — byte-for-byte the classification `resolveOriginTrust` applies per channel —
+ * and `posture` is the MOST-SPECIFIC applicable guideline posture. Only the
+ * scope kinds `resolveOriginTrust` can activate are consulted (it passes no
+ * `bridgeId` / `envelope`, so `bridge` / `shape` rows never match) and only
+ * capability-null guidelines (it resolves here with no writing capability), so a
+ * channel-scoped `posture:"propose"` marks the channel review-only and a
+ * `posture:"auto"` on an external channel restores its trust — exactly as
+ * governance decides at write time.
+ *
+ * SSOT: the per-write truth lives in `resolveOriginTrust`; this is its read-only
+ * twin. Keep the precedence in sync with that function and with
+ * `resolveGuidelines`' matching (workspace floor + scope match + non-empty-text
+ * drop); `resolveMostSpecificPosture` is reused unchanged.
+ */
+async function resolveChannelOriginTrust(
+  channelIds: string[],
+  userId: string
+): Promise<Map<string, "trusted" | "untrusted">> {
+  const out = new Map<string, "trusted" | "untrusted">();
+  if (channelIds.length === 0) return out;
+
+  // 1. Batched origin read — channelType + externalSource (the EXTERNAL default)
+  //    and workspaceId (the guideline workspace floor), for the whole set.
+  const chanRows = await db
+    .select({
+      id: channels.id,
+      channelType: channels.channelType,
+      externalSource: channels.externalSource,
+      workspaceId: channels.workspaceId,
+    })
+    .from(channels)
+    .where(inArray(channels.id, channelIds));
+
+  const workspaceIds = [
+    ...new Set(
+      chanRows.map((c) => c.workspaceId).filter((w): w is string => !!w)
+    ),
+  ];
+
+  // 2. Batched guideline read — every active, capability-null guideline in the
+  //    caller's lens (pod-wide owner-floored ∪ these channels' workspaces) at the
+  //    three scope kinds `resolveOriginTrust` can match. ONE query for the whole
+  //    set; the per-channel scope match is in-memory below. (capabilityFloor:
+  //    `resolveOriginTrust` passes no capabilityId, so only capability-null rows.)
+  const guidelineRows = (await db
+    .select({
+      scopeKind: configSettings.scopeKind,
+      scopeRef: configSettings.scopeRef,
+      value: configSettings.value,
+      workspaceId: configSettings.workspaceId,
+      createdBy: configSettings.createdBy,
+      createdAt: configSettings.createdAt,
+    })
+    .from(configSettings)
+    .where(
+      and(
+        eq(configSettings.key, GUIDELINE_KEY),
+        isNull(configSettings.revokedAt),
+        isNull(configSettings.capabilityId),
+        inArray(configSettings.scopeKind, [
+          "default",
+          "channelType",
+          "channel",
+        ]),
+        or(
+          and(
+            isNull(configSettings.workspaceId),
+            eq(configSettings.createdBy, userId)
+          ),
+          workspaceIds.length
+            ? inArray(configSettings.workspaceId, workspaceIds)
+            : undefined
+        )
+      )
+    )) as Array<{
+    scopeKind: ConfigScopeKind;
+    scopeRef: string | null;
+    value: GuidelineValue | Record<string, unknown>;
+    workspaceId: string | null;
+    createdBy: string;
+    createdAt: Date;
+  }>;
+
+  // Specificity of the three matchable scope kinds (general → specific) — the
+  // same ranks `config-settings`' SCOPE_SPECIFICITY assigns.
+  const RANK: Record<string, number> = {
+    default: 0,
+    channelType: 1,
+    channel: 3,
+  };
+
+  for (const c of chanRows) {
+    // Guidelines applicable to THIS channel, ordered general → specific — the
+    // same filter `resolveGuidelines` applies: workspace floor, scope match, and
+    // the non-empty-text drop (a guideline with no text contributes nothing,
+    // INCLUDING its posture). `resolveMostSpecificPosture` then picks the winner.
+    const matched: ResolvedGuideline[] = guidelineRows
+      .filter((r) => {
+        const inLens =
+          (r.workspaceId == null && r.createdBy === userId) ||
+          (r.workspaceId != null && r.workspaceId === c.workspaceId);
+        if (!inLens) return false;
+        if (r.scopeKind === "default") return true;
+        if (r.scopeKind === "channelType")
+          return !!c.channelType && r.scopeRef === c.channelType;
+        if (r.scopeKind === "channel") return r.scopeRef === c.id;
+        return false;
+      })
+      .map((r) => {
+        const value = r.value as GuidelineValue;
+        const text = typeof value?.text === "string" ? value.text.trim() : "";
+        return {
+          scopeKind: r.scopeKind,
+          rank: RANK[r.scopeKind] ?? 0,
+          createdAt: r.createdAt,
+          text,
+          posture: value?.posture,
+        };
+      })
+      .filter((m) => m.text.length > 0)
+      .sort(
+        (a, b) =>
+          a.rank - b.rank || a.createdAt.getTime() - b.createdAt.getTime()
+      )
+      .map((m) => ({
+        id: "", // resolveMostSpecificPosture reads only `posture`
+        scopeKind: m.scopeKind,
+        specificity: m.rank,
+        text: m.text,
+        posture: m.posture,
+      }));
+
+    const posture = resolveMostSpecificPosture(matched);
+    const externalOrigin =
+      c.channelType === ChannelType.EXTERNAL || c.externalSource != null;
+    const originTrust: "trusted" | "untrusted" =
+      posture === "auto"
+        ? "trusted"
+        : posture === "propose"
+          ? "untrusted"
+          : externalOrigin
+            ? "untrusted"
+            : "trusted";
+    out.set(c.id, originTrust);
+  }
+
+  return out;
+}
+
 // ── Door: per-channel rollup (channel-first navigation spine) ─────────────────
 
 /**
@@ -742,6 +914,16 @@ export interface SignalChannelRollup {
   extractionRatePct: number;
   /** Per-fate counts over the same units — sums to `messageCount`. */
   fate: Record<SignalFate, number>;
+  /**
+   * Effective governance origin-trust for the channel — the SAME classification
+   * `resolveOriginTrust` (governance rung 2.55) computes per write, resolved
+   * server-side and batched (no per-row query). `untrusted` means a write from
+   * this channel is force-proposed (external/bridge origin default, or an
+   * explicit `posture:"propose"` guideline); `trusted` means it can auto-execute
+   * (owner-side origin, or an explicit `posture:"auto"` that restored it). The
+   * row renders a quiet "review-only" indicator when `untrusted`.
+   */
+  originTrust: "trusted" | "untrusted";
   /** Most recent inbound message on the channel within the scan prefix. */
   lastActivityAt: Date;
 }
@@ -861,6 +1043,9 @@ export async function listChannels(
           suppressed: 0,
           failed: 0,
         },
+        // Filled by the batched origin-trust resolver below; owner-side default
+        // until then so the field is always present.
+        originTrust: "trusted",
         lastActivityAt: u.ts,
       };
       byChannel.set(u.channel.id, roll);
@@ -877,6 +1062,18 @@ export async function listChannels(
       r.messageCount === 0
         ? 0
         : Math.round((r.fate.extracted / r.messageCount) * 100);
+  }
+
+  // Effective governance origin-trust per channel — the SAME classification a
+  // write from the channel hits (`resolveOriginTrust`), resolved in TWO batched
+  // queries for the whole rollup (never per-row). Drives the row's review-only
+  // indicator so external/bridge + force-proposed channels are truthfully marked.
+  const trustByChannel = await resolveChannelOriginTrust(
+    rollups.map((r) => r.channelId),
+    userId
+  );
+  for (const r of rollups) {
+    r.originTrust = trustByChannel.get(r.channelId) ?? r.originTrust;
   }
 
   // A channel needs attention when it is UNBOUND (structural wiring gap) OR has

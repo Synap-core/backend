@@ -67,6 +67,8 @@ import { triageEmails } from "../mail-feed/triage.js";
 import { generateViaIS } from "../mail-feed/generate.js";
 import { resolveTool } from "../tools/resolve-tool.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
+import { recommendRaiseCeilingForAllAgents } from "../proposals/recommend-raise-ceiling.js";
+import { recommendTightenPostureForAllChannels } from "../proposals/recommend-tighten-posture.js";
 import { assertPodAdmin } from "../../trpc.js";
 // catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
 // via capability-registry.ts's scoreTextMatch dependency) and marketplace-
@@ -2571,6 +2573,41 @@ const governanceRecommendTightenHandler: BuiltinVerbHandler = async (
 };
 
 /**
+ * governance.recommend_raise_ceiling — the numeric-limit twin of
+ * governance.recommend_tighten. Scans each agent's daily auto-write volume on the
+ * events spine and files a pending `governance.raise_ceiling` proposal for any
+ * agent that keeps hitting its per-UTC-day ceiling. Same pod-admin gate + no
+ * params + read-only-w.r.t.-graph-data (files review items only) rationale as the
+ * tighten recommender.
+ */
+const governanceRecommendRaiseCeilingParams = z.object({});
+
+const governanceRecommendRaiseCeilingHandler: BuiltinVerbHandler = async (
+  _params,
+  ctx
+) => {
+  await assertPodAdmin(ctx.userId);
+  return recommendRaiseCeilingForAllAgents();
+};
+
+/**
+ * governance.recommend_tighten_posture — the channel-scoped twin of
+ * governance.recommend_tighten. Scans rejected agent proposals GROUPED BY CHANNEL
+ * (across all agents) and files a pending `governance.tighten_posture` proposal
+ * for any channel the humans reject consistently. Same pod-admin gate + no params
+ * + read-only-w.r.t.-graph-data rationale.
+ */
+const governanceRecommendTightenPostureParams = z.object({});
+
+const governanceRecommendTightenPostureHandler: BuiltinVerbHandler = async (
+  _params,
+  ctx
+) => {
+  await assertPodAdmin(ctx.userId);
+  return recommendTightenPostureForAllChannels();
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -2622,6 +2659,13 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Governance TIGHTEN recommender — mirror of the widen scanner. Scans rejected
   // agent proposals and files governance.tighten_lane review items. No params.
   "governance.recommend_tighten": governanceRecommendTightenHandler,
+  // Governance RAISE-CEILING recommender — numeric-limit twin. Files
+  // governance.raise_ceiling review items when an agent keeps hitting its cap.
+  "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingHandler,
+  // Governance TIGHTEN-POSTURE recommender — channel-scoped twin. Files
+  // governance.tighten_posture review items for consistently-rejected channels.
+  "governance.recommend_tighten_posture":
+    governanceRecommendTightenPostureHandler,
 };
 
 /**
@@ -2667,6 +2711,9 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "channel.ingest": channelIngestParams,
   "messaging.send": messagingSendParams,
   "governance.recommend_tighten": governanceRecommendTightenParams,
+  "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingParams,
+  "governance.recommend_tighten_posture":
+    governanceRecommendTightenPostureParams,
 };
 
 /**
@@ -2717,4 +2764,9 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // "produces review items / notices, not a data write → auto-run" rationale as
   // connector.health_check.
   "governance.recommend_tighten",
+  // governance.recommend_raise_ceiling + governance.recommend_tighten_posture —
+  // the two calibration twins. Same "files review items only → auto-run inside
+  // the daily calibration cron" rationale as governance.recommend_tighten.
+  "governance.recommend_raise_ceiling",
+  "governance.recommend_tighten_posture",
 ]);
