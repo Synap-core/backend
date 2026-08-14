@@ -42,6 +42,7 @@ import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { governanceRulesRouter } from "./routers/governance-rules.js";
+import { governanceCeilingsRouter } from "./routers/governance-ceilings.js";
 import { guidelinesRouter } from "./routers/guidelines.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
@@ -137,6 +138,7 @@ export const coreRouter = router({
   profileRelations: profileRelationsRouter,
   agentUsers: agentUsersRouter,
   governanceRules: governanceRulesRouter,
+  governanceCeilings: governanceCeilingsRouter,
   guidelines: guidelinesRouter,
   mcpServers: mcpServersRouter,
   agentConfigs: agentConfigsRouter,

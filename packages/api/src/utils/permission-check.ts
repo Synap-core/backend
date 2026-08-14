@@ -165,7 +165,7 @@ async function deriveSessionForceProposeGovernance(
  * lookup error all return `null` → rung 2.55 no-ops (a lookup miss must never
  * fabricate a tightening).
  */
-async function resolveActingChannelId(
+export async function resolveActingChannelId(
   sourceMessageId: string | null | undefined
 ): Promise<string | null> {
   if (!sourceMessageId) return null;

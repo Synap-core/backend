@@ -1148,6 +1148,14 @@ export interface ExecuteCapabilityInput {
     connectionId?: string;
     contextObjectId?: string;
   };
+  /**
+   * #4 instruction-provenance: the triggering inbound message id of the agent
+   * turn. The backend resolves it to the acting channel (`messages.channelId`)
+   * so a capability run triggered from an untrusted-origin channel (external /
+   * bridge) force-proposes instead of auto-running (rung 2.55). Tighten-only:
+   * omit for a non-turn / owner run and origin-trust simply no-ops.
+   */
+  sourceMessageId?: string;
 }
 
 export type ExecuteCapabilityResult =

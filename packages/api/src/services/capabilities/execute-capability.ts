@@ -57,7 +57,10 @@ import type {
   ConnectionSelector,
   FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
-import { createPendingProposal } from "../../utils/permission-check.js";
+import {
+  createPendingProposal,
+  resolveActingChannelId,
+} from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
@@ -147,6 +150,21 @@ export async function executeCapability(input: {
    * the params) when a byte-identical run within ~10 minutes is a real second intent.
    */
   idempotencyKey?: string;
+  /**
+   * #4 instruction-provenance (rung 2.55) — the acting channel of THIS agent
+   * turn, so an agent capability run triggered from an untrusted-origin channel
+   * (EXTERNAL / bridge / `source`) force-proposes instead of auto-running. An
+   * explicit `channelId` wins; otherwise it is derived from `sourceMessageId`
+   * (the triggering inbound message → `messages.channelId`), mirroring the chat
+   * door's `resolveActingChannelId`. Tighten-only + server-classified: absent /
+   * a trusted (owner) channel never downgrades anything, so this activates the
+   * dormant capability-path origin-trust signal without ever weakening a floor.
+   * Only agent runs are classified (owner/operator runs owner-bypass upstream).
+   */
+  channelId?: string | null;
+  /** Triggering inbound message id — resolved to the acting `channelId` when one
+   * is not passed explicitly (see `channelId`). */
+  sourceMessageId?: string | null;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -201,6 +219,16 @@ export async function executeCapability(input: {
   const readOnly =
     skillRow.kind === "builtin" && READ_ONLY_BUILTIN_VERBS.has(skillRow.name);
 
+  // #4 instruction-provenance ACTIVATION (rung 2.55): resolve the acting channel
+  // for this turn. An explicit `channelId` wins; otherwise derive it from the
+  // triggering message (`sourceMessageId` → `messages.channelId`) via the ONE
+  // canonical resolver the chat door uses — so the two doors can never drift.
+  // Tighten-only + best-effort: a null acting channel (non-turn / owner run)
+  // no-ops rung 2.55. The gate only classifies agent runs (owner runs owner-bypass
+  // before reaching origin trust), so this is inert for operator runs.
+  const actingChannelId =
+    input.channelId ?? (await resolveActingChannelId(input.sourceMessageId));
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -208,6 +236,7 @@ export async function executeCapability(input: {
     actorUserId: userId,
     agentUserId: input.agentUserId ?? null,
     workspaceId,
+    channelId: actingChannelId,
     issuer: "hub.capabilities-execute",
     readOnly,
   });

@@ -747,7 +747,7 @@ export async function resolveDailyWriteCeiling(
  * ungoverned-lane population the ceiling is meant to backpressure. Pod-wide per
  * agent (NOT workspace-filtered): the ceiling is a per-agent daily budget.
  */
-async function countAgentWritesTodayUtc(
+export async function countAgentWritesTodayUtc(
   db: DbHandle,
   agentUserId: string
 ): Promise<number> {

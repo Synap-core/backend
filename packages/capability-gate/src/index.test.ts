@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
+const resolveOriginTrustMock = vi.fn();
 
 vi.mock("@synap/database", () => ({
   getDb: async () => ({}),
@@ -25,6 +26,11 @@ vi.mock("@synap/database", () => ({
 vi.mock("@synap/database/agent-governance", () => ({
   resolveGovernanceRule: (...args: unknown[]) =>
     resolveGovernanceRuleMock(...args),
+  // #4 instruction-provenance (rung 2.55): the gate resolves the acting
+  // channel's origin trust for every agent run. Default: `undefined` (no channel
+  // context → tighten-only no-op), so the pre-existing rule/grant cases are
+  // unaffected; the origin-trust cases below override it to "untrusted".
+  resolveOriginTrust: (...args: unknown[]) => resolveOriginTrustMock(...args),
 }));
 
 vi.mock("@synap/database/schema", () => ({
@@ -47,6 +53,9 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   beforeEach(() => {
     findCapabilityGrantMock.mockReset();
     resolveGovernanceRuleMock.mockReset();
+    // Default: no channel context → origin-trust no-ops (the common case).
+    resolveOriginTrustMock.mockReset();
+    resolveOriginTrustMock.mockResolvedValue(undefined);
   });
 
   it("approved + NO grant + auto rule → run (rule authorizes with no grant at all)", async () => {
@@ -188,5 +197,71 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
     const decision = await gateCapabilityExecution(BASE_INPUT);
 
     expect(decision.decision).toBe("propose");
+  });
+});
+
+/**
+ * #4 instruction-provenance (rung 2.55) on the CAPABILITY-RUN path. The pure
+ * engine's rung 2.55 (untrusted origin > every rung below) is proven in
+ * governance-policy/policy.test.ts; these tripwires prove the GATE threads the
+ * resolved origin trust so an untrusted-origin channel can never be laundered
+ * into an auto-run by an "auto" governance rule OR an "auto" grant exec-mode —
+ * the two widening shortcuts a capability run has. `channelId` is passed so the
+ * gate calls `resolveOriginTrust`, which the mock forces to "untrusted".
+ */
+describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
+  beforeEach(() => {
+    findCapabilityGrantMock.mockReset();
+    resolveGovernanceRuleMock.mockReset();
+    resolveOriginTrustMock.mockReset();
+  });
+
+  const UNTRUSTED_INPUT = { ...BASE_INPUT, channelId: "chan-external-1" };
+
+  it("untrusted origin + NO grant + auto rule → propose (rule can't widen an untrusted origin)", async () => {
+    resolveOriginTrustMock.mockResolvedValue("untrusted");
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
+    });
+
+    const decision = await gateCapabilityExecution(UNTRUSTED_INPUT);
+
+    expect(decision.decision).toBe("propose");
+    // The rule shortcut is skipped entirely for an untrusted origin (rung 2.55
+    // sits above the capability rule rung 2.8) — it is never even consulted.
+    expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
+  });
+
+  it("untrusted origin + auto-mode grant → propose (grant exec-mode can't auto-run an untrusted origin)", async () => {
+    resolveOriginTrustMock.mockResolvedValue("untrusted");
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+
+    const decision = await gateCapabilityExecution(UNTRUSTED_INPUT);
+
+    expect(decision.decision).toBe("propose");
+  });
+
+  it("TRUSTED origin + auto-mode grant → run (a trusted channel never tightens)", async () => {
+    resolveOriginTrustMock.mockResolvedValue("trusted");
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+
+    const decision = await gateCapabilityExecution(UNTRUSTED_INPUT);
+
+    expect(decision).toEqual({ decision: "run" });
+  });
+
+  it("untrusted origin still cannot cross the approval DENY floor (floor > rung 2.55)", async () => {
+    resolveOriginTrustMock.mockResolvedValue("untrusted");
+
+    const decision = await gateCapabilityExecution({
+      ...UNTRUSTED_INPUT,
+      tool: { id: "tool-123", approved: false, createdBy: "owner-1" },
+    });
+
+    // approved===false denies BEFORE origin trust is even resolved.
+    expect(decision.decision).toBe("deny");
+    expect(resolveOriginTrustMock).not.toHaveBeenCalled();
   });
 });

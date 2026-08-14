@@ -58,6 +58,13 @@ const ExecuteCapabilityRequestSchema = z
         contextObjectId: z.string().optional(),
       })
       .optional(),
+    /** #4 instruction-provenance: the triggering inbound message id of THIS agent
+     * turn. Resolved server-side to the acting channel (`messages.channelId`) so a
+     * capability run triggered from an untrusted-origin channel (external / bridge)
+     * force-proposes instead of auto-running (rung 2.55). Tighten-only: absent → no
+     * origin-trust classification (the dormant default). Mirrors every other Hub
+     * REST write door, which accepts `sourceMessageId` in the body. */
+    sourceMessageId: z.string().optional(),
   })
   .refine((b) => !!b.verbId || !!b.skillId, {
     message: "Either verbId or skillId is required",
@@ -135,8 +142,14 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       );
     }
 
-    const { verbId, skillId, parameters, workspaceId, connectionSelector } =
-      body;
+    const {
+      verbId,
+      skillId,
+      parameters,
+      workspaceId,
+      connectionSelector,
+      sourceMessageId,
+    } = body;
 
     const acting = await resolveActingContext(c, { workspaceId });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -155,6 +168,9 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // ungoverned operator run. A genuine operator (Kratos cookie) has none.
         agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
         connectionSelector,
+        // #4 provenance: the triggering message id → resolved to the acting
+        // channel inside executeCapability so an untrusted-origin run proposes.
+        sourceMessageId: sourceMessageId ?? null,
       });
 
       switch (outcome.kind) {
