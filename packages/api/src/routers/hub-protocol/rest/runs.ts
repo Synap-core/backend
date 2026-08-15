@@ -47,6 +47,8 @@ const RunStatusSchema = z.enum([
   "failed",
   "proposed",
   "cancelled",
+  "skipped",
+  "blocked_by_policy",
 ]);
 
 // ── Wire schemas ─────────────────────────────────────────────────────────────

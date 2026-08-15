@@ -10,6 +10,8 @@ import {
   decideStepRetry,
   assessNodeRetrySafety,
 } from "../automation-executor.js";
+import { PolicyBlockedError } from "../../utils/automation-governance.js";
+import { WorkflowGuardBlockedError } from "../steps/control-flow.js";
 
 /**
  * Per-step RETRY POLICY — the pairing that makes `errorHandling.maxRetries`
@@ -421,5 +423,30 @@ describe("assessNodeRetrySafety — the executor's retry floor", () => {
     );
     // The clamp must be LOUD — a silent downgrade is unreviewable.
     expect(src).toContain("is NOT retry-safe — flooring to 0");
+  });
+});
+
+/**
+ * Governance/guard blocks are DETERMINISTIC verdicts, not transient failures:
+ * the same producer ladder / floor / guard precondition refuses the same effect
+ * on every attempt, so retrying only burns the budget for an identical refusal.
+ * Both block classes must short-circuit to non-retryable BEFORE the transient
+ * check — this pins the asymmetry that regressed once (PolicyBlockedError was
+ * floored but its sibling WorkflowGuardBlockedError was not).
+ */
+describe("decideStepRetry — governance/guard blocks never retry", () => {
+  it("PolicyBlockedError → non-retryable on the first attempt", () => {
+    expect(
+      decideStepRetry(new PolicyBlockedError("deny", "blocked"), 0, 3)
+    ).toEqual({
+      retry: false,
+      reason: "non-retryable",
+    });
+  });
+
+  it("WorkflowGuardBlockedError → non-retryable (same deterministic class)", () => {
+    expect(
+      decideStepRetry(new WorkflowGuardBlockedError({ node: "guard-1" }), 0, 3)
+    ).toEqual({ retry: false, reason: "non-retryable" });
   });
 });
