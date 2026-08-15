@@ -32,7 +32,15 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, isNotNull, desc, ProposalStatus } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  isNotNull,
+  desc,
+  ProposalStatus,
+  authoredCreatedBy,
+} from "@synap/database";
 import {
   governanceRules,
   workspaceMembers,
@@ -501,7 +509,13 @@ export const governanceRulesRouter = router({
             input.targetKind === "profile" ? input.targetProfile : null,
           verdict: input.verdict,
           sourceProposalId: input.sourceProposalId ?? null,
-          createdBy: ctx.userId,
+          // PROVENANCE (display only, never an enforcement input): this is the
+          // ONLY door where a HUMAN authors a rule directly, so it is the only
+          // one allowed to stamp the `user:` namespace. The settings mirror
+          // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>` — the
+          // two used to be indistinguishable bare user ids, which made a
+          // machine-minted grant read as "I authored this deliberately".
+          createdBy: authoredCreatedBy(ctx.userId),
           expiresAt: input.expiresAt ?? null,
         })
         .returning();

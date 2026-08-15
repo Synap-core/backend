@@ -21,6 +21,7 @@
 import {
   notifyConnectorUnhealthy,
   resolveNoticeChannelId,
+  hasDiscordFeedbackChannel,
 } from "./notify-connector-unhealthy.js";
 import { resolveTool } from "../tools/resolve-tool.js";
 import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
@@ -65,12 +66,10 @@ export async function notifyIntelligenceServiceUnhealthy(
     // The Discord half is OPTIONAL and config-gated: it only posts when the
     // operator has set `discord.feedbackChannel` on a `discord` tool row.
     // Without it the in-app notification still fires.
-    const discordTool = await resolveTool("discord", (metadata) =>
-      Boolean(
-        (metadata as { discord?: { feedbackChannel?: unknown } } | null)
-          ?.discord?.feedbackChannel
-      )
-    );
+    // Prefer a row that actually HAS a notice channel over creation order —
+    // via the shared predicate, so this and the connector-health nudge can
+    // never drift apart (this call site used to inline its own copy).
+    const discordTool = await resolveTool("discord", hasDiscordFeedbackChannel);
     const noticeChannelId = resolveNoticeChannelId(
       (discordTool?.metadata ?? null) as Record<string, unknown> | null,
       undefined

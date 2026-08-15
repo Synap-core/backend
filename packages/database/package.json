@@ -20,6 +20,11 @@
       "types": "./dist/utils/resolve-agent-governance-decision.d.ts",
       "import": "./dist/utils/resolve-agent-governance-decision.js",
       "default": "./dist/utils/resolve-agent-governance-decision.js"
+    },
+    "./governance-rule-provenance": {
+      "types": "./dist/utils/governance-rule-provenance.d.ts",
+      "import": "./dist/utils/governance-rule-provenance.js",
+      "default": "./dist/utils/governance-rule-provenance.js"
     }
   },
   "files": [

@@ -376,7 +376,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -98,6 +98,32 @@ export function resolveNoticeChannelId(
 }
 
 /**
+ * The `isEnabled` predicate for `resolveTool("discord", …)` calls whose only
+ * question is "which row knows WHERE system notices go?".
+ *
+ * This pod has TWO `discord` tool rows and `discord.feedbackChannel` is set on
+ * only one of them. Passing `() => false` (or any unrelated sub-feature flag)
+ * makes `resolveTool` fall through to its oldest-by-`createdAt` tie-break — so
+ * whether the alarm reaches Discord depends on which row happened to be created
+ * first, not on which row is configured. Set the channel on the newer row
+ * instead and the nudge goes silent, with no error, because the in-app
+ * notification still fires and covers for it.
+ *
+ * Same rule as the event-sync / mail-feed predicates: the predicate must match
+ * the question being asked. The question here is about `feedbackChannel`, so
+ * that is what it tests. Every notice-channel caller passes THIS one — do not
+ * re-inline the check at a call site.
+ */
+export function hasDiscordFeedbackChannel(metadata: unknown): boolean {
+  return Boolean(
+    resolveNoticeChannelId(
+      (metadata ?? null) as Record<string, unknown> | null,
+      undefined
+    )
+  );
+}
+
+/**
  * WHERE the 6h dedup watermark lives. It was always a `tools` row, because
  * every caller was a connector. An intelligence-service outage has no tool row
  * — its own `intelligence_services` row is the natural home — so the watermark
@@ -207,6 +233,17 @@ export async function notifyConnectorUnhealthy(
     } catch (err) {
       logger.warn({ err }, "connection-health: Discord nudge failed");
     }
+  } else {
+    // Posting nowhere is a real outcome, not a no-op: the in-app notification
+    // still fires, so an unconfigured (or wrongly-resolved) notice channel
+    // otherwise looks EXACTLY like a delivered alert. Say it out loud.
+    logger.warn(
+      {
+        connector: opts.connectorKey,
+        workspaceId: opts.workspaceId,
+      },
+      "connection-health: no Discord notice channel resolved — alert is in-app ONLY (set discord.feedbackChannel on the discord tool row)"
+    );
   }
 
   // 3. Advance the watermark (nested jsonb_set ensures the parent object exists;
@@ -243,7 +280,12 @@ export async function notifyConnectorUnhealthy(
   );
 
   logger.info(
-    { connector: opts.connectorKey },
+    {
+      connector: opts.connectorKey,
+      // Which HALF of the fan-out actually ran — "in-app" alone is the silent
+      // case operators need to be able to see in the log.
+      channels: opts.discordTeamChannelId ? "in-app+discord" : "in-app",
+    },
     "connection-health: reconnect nudge emitted"
   );
   return true;

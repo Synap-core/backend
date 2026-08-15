@@ -689,10 +689,21 @@ export async function runStartupHooks(): Promise<void> {
   // resolve-agent-governance-decision.ts) sees an equivalent rule for every
   // pre-existing override. Non-fatal: logged and skipped on failure, same as
   // every other startup seeder here.
+  //
+  // TRUE ONE-SHOT: this runs at most ONCE per pod. Past the first successful run
+  // it short-circuits on a persisted converged marker and returns
+  // `{ skipped: true }` WITHOUT re-reading the legacy JSONB — because diffing
+  // that stale JSONB against the LIVE DEFAULT_AUTO_APPROVE floor made every
+  // floor TIGHTENING self-undoing at the next boot (see the TRUE ONE-SHOT note
+  // in backfill-governance-rules.ts).
   try {
     const { backfillGovernanceRules } = await import("@synap/database");
     const result = await backfillGovernanceRules(db);
-    if (
+    if (result.skipped) {
+      logger.debug(
+        "governance_rules backfill already converged — legacy autoApproveFor JSONB not re-read"
+      );
+    } else if (
       result.workspaceRulesInserted > 0 ||
       result.agentRulesInserted > 0 ||
       result.floorCoveredRevoked > 0

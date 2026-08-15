@@ -2077,6 +2077,7 @@ const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
     isConnectionAuthError,
     capErrorMessage,
     resolveNoticeChannelId,
+    hasDiscordFeedbackChannel,
   } = await import("../connection-health/notify-connector-unhealthy.js");
 
   // 1. Probe. A dead connection surfaces as an error envelope inside a
@@ -2106,9 +2107,13 @@ const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
   //    of this call scoped to `ctx.workspaceId`, which silently stopped
   //    nudging for any workspace without its own discord row — a regression,
   //    reverted here. No sub-feature flag applies to this call site (unlike
-  //    event-sync/mail-feed), so the tie-break predicate always defers to the
-  //    resolver's deterministic oldest-row fallback.
-  const discordTool = await resolveTool("discord", () => false);
+  //    event-sync/mail-feed) — but "no sub-feature flag" is NOT "no question":
+  //    what this call needs from the row is the notice channel, so it asks for
+  //    a row that HAS one. `() => false` made the choice pure creation order,
+  //    which meant configuring `discord.feedbackChannel` on the newer of this
+  //    pod's two discord rows would have silenced the nudge with no error.
+  //    Oldest-row remains the fallback when NO row is configured.
+  const discordTool = await resolveTool("discord", hasDiscordFeedbackChannel);
   if (!discordTool) {
     // No watermark holder → can't dedup; report unhealthy without nudging.
     return { unhealthy: true, nudged: false, error: capErr };

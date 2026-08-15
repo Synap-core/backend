@@ -12,12 +12,7 @@
 
 /** The category of a single fan-out reaction. */
 export type ReactionKind =
-  | "automation"
-  | "ai_feed"
-  | "ai_react"
-  | "notify"
-  | "webhook"
-  | "message_out";
+  "automation" | "ai_feed" | "ai_react" | "notify" | "webhook" | "message_out";
 
 /** Lens used to filter reactions by direction (internal vs external). */
 export type ReactionLens = "all" | "internal" | "external";
@@ -57,6 +52,14 @@ export interface ReactionEvent {
   subject: string;
   subjectId?: string;
   subjectType?: string;
+  /**
+   * The resolved real display name of the subject object (e.g. "Helix Robotics",
+   * "Person", "Weekly digest"), looked up server-side from the owning table.
+   * Set ONLY when resolution succeeded — absent when the id matched no visible
+   * row, so the client can render a named chip vs. the opaque `subject` fallback
+   * WITHOUT string-sniffing.
+   */
+  subjectName?: string;
   /** "Hestia" | "Maya Chen" | "cron:0 7 * * *" | "feed:rss" */
   actor: string;
   actorAI: boolean;

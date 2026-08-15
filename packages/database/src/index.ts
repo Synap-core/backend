@@ -68,6 +68,7 @@ export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
+export * from "./utils/governance-rule-provenance.js";
 export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
 export * from "./utils/message-shape.js";

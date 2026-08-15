@@ -281,7 +281,13 @@ app.use("*", async (c, next) => {
     );
     c.header(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token"
+      // Every header `createContext()` READS must be listed here. A header the
+      // context reads but CORS omits is a landmine: the first cross-origin
+      // client that attaches it fails preflight, and preflight failure takes
+      // down the ENTIRE tRPC surface for that origin — not just the one feature.
+      // `X-Project-Id` was read at context.ts:91 while absent here; `X-Session-Id`
+      // joined it when the tRPC door started resolving focus sessions.
+      "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Project-Id, X-Session-Id, X-Session-Token"
     );
     c.header(
       "Access-Control-Expose-Headers",
@@ -682,6 +688,7 @@ app.get("/open/:type/:id", (c) => {
     "view",
     "document",
     "cell",
+    "session",
     "project",
     "workspace",
   ]);

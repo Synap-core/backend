@@ -44,6 +44,7 @@ import {
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
   type ProfileCatalogEntry,
   toProfileCatalogEntry,
@@ -920,7 +921,26 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               answer: z.string().nullable(),
               sources: z.array(SourceSchema),
               routedTo: z.array(z.string()),
+              // SAME shape `POST /knowledge/search` already publishes (see
+              // `retrievalResponseSchema`) — one representation, not two.
+              // `ask()` computes it either way; this door used to discard it,
+              // so a client could not tell keyword-only fallback (embedding
+              // provider down ⇒ measurably thinner recall) from a healthy
+              // empty result. Both rendered as "nothing found".
+              degraded: z.array(z.string()),
               error: z.string().optional(),
+              // WHY synthesis did not run, classified by the ONE failure door
+              // (`utils/ai-failure.ts`) — the same `describeAiFailure` shape
+              // `mcp/handlers/read.ts` uses. Present only alongside `error`, so
+              // a client can say "out of credit, retrying won't help" instead
+              // of inventing a temporary outage.
+              failure: z
+                .object({
+                  code: z.string(),
+                  message: z.string(),
+                  retryable: z.boolean(),
+                })
+                .optional(),
             }),
           },
         },
@@ -1004,12 +1024,29 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");
       }
+      // Classify the synthesis outage once, through the one failure door.
+      const failure = synthesis.error
+        ? describeAiFailure(synthesis.failureClass ?? "unknown")
+        : null;
       return c.json(
         {
           answer: synthesis.answer,
           sources: synthesis.sources,
           routedTo: synthesis.routedTo,
-          ...(synthesis.error ? { error: synthesis.error } : {}),
+          // Forward the retrieval-health signal `ask()` already computed —
+          // withholding it is what let a keyword-only fallback render as a
+          // clean empty result.
+          degraded: result.degraded,
+          ...(synthesis.error && failure
+            ? {
+                error: synthesis.error,
+                failure: {
+                  code: failure.code,
+                  message: failure.message,
+                  retryable: failure.retryable,
+                },
+              }
+            : {}),
         },
         200
       );

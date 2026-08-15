@@ -25,6 +25,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
@@ -342,7 +343,7 @@ export function registerCommandsRoutes(app: HubHono): void {
       logger.error({ err, id }, "getCommand failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

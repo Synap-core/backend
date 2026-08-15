@@ -36,12 +36,24 @@ import {
   users,
   proposals,
   ProposalStatus,
+  entities,
+  workspaces,
+  profiles,
+  views,
+  projects,
+  skills,
+  ProfileScope,
+  userVisibleWhere,
+  memberWorkspaceIds,
+  ownedWorkspaceIds,
   eq,
   and,
+  or,
   gte,
   lte,
   inArray,
 } from "@synap/database";
+import { entityReadVisibleWhere } from "./entities/helpers.js";
 import type {
   Reaction,
   ReactionEvent,
@@ -253,13 +265,253 @@ async function resolveActorNames(
   return map;
 }
 
+/** Matches a canonical v4-shaped UUID (the id form of every uuid PK column). */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Map key for a resolved subject: `${subjectType}:${subjectId}`. */
+function subjectKey(subjectType: string, subjectId: string): string {
+  return `${subjectType}:${subjectId}`;
+}
+
+/**
+ * Resolve the REAL display name of each event's subject object, mirroring
+ * `resolveActorNames`: group the loaded events by `subjectType`, then run ONE
+ * batched, user-scoped `inArray` query per KNOWN type. Returns a
+ * `Map<"subjectType:subjectId", name>`.
+ *
+ * FAIL-OPEN by construction: an id that matches no visible row is simply absent
+ * from the map, so the caller keeps `deriveSubject`'s opaque fallback — a name
+ * is NEVER fabricated. Every query is user-scoped via the canonical visibility
+ * predicate (entity read-floor / workspace membership / owner columns), never a
+ * request-supplied filter, so no cross-tenant name can leak. Worst case ≤ ~7
+ * batched queries (one per known type present in the ≤500-event window).
+ */
+async function resolveSubjectNames(
+  events: EventRecord[],
+  userId: string
+): Promise<Map<string, string>> {
+  // Bucket subjectIds by the table that owns them. Both "workspace" and the
+  // legacy plural "workspaces" resolve to the workspaces table.
+  const entityIds = new Set<string>();
+  const workspaceIds = new Set<string>();
+  const notificationIds = new Set<string>();
+  const profileIds = new Set<string>();
+  const viewIds = new Set<string>();
+  const projectIds = new Set<string>();
+  const skillIds = new Set<string>();
+
+  for (const e of events) {
+    const id = e.subjectId;
+    if (!id) continue;
+    switch (e.subjectType) {
+      case "entity":
+        entityIds.add(id);
+        break;
+      case "workspace":
+      case "workspaces":
+        workspaceIds.add(id);
+        break;
+      case "notification":
+        notificationIds.add(id);
+        break;
+      case "profile":
+        profileIds.add(id);
+        break;
+      case "view":
+        viewIds.add(id);
+        break;
+      case "project":
+        projectIds.add(id);
+        break;
+      case "skill":
+        skillIds.add(id);
+        break;
+      default:
+        // Unknown / unmapped subjectType → no query, opaque fallback kept.
+        break;
+    }
+  }
+
+  // Only ids that are UUID-shaped may hit a `uuid` PK column — a non-uuid id
+  // (e.g. a subjectId that fell back to a slug) would raise a Postgres cast
+  // error rather than fail open.
+  const uuidsOf = (s: Set<string>): string[] =>
+    Array.from(s).filter((x) => UUID_RE.test(x));
+
+  const entityIdList = uuidsOf(entityIds);
+  const workspaceIdList = uuidsOf(workspaceIds);
+  const notificationIdList = uuidsOf(notificationIds);
+  const viewIdList = uuidsOf(viewIds);
+  const projectIdList = uuidsOf(projectIds);
+  const skillIdList = uuidsOf(skillIds);
+  // Profiles may key by SLUG (text) OR uuid — query both branches.
+  const profileSlugList = Array.from(profileIds);
+  const profileUuidList = uuidsOf(profileIds);
+
+  type NamedRow = { id: string; name: string | null };
+  const empty = Promise.resolve([] as NamedRow[]);
+
+  const [
+    entityRows,
+    workspaceRows,
+    notificationRows,
+    viewRows,
+    projectRows,
+    skillRows,
+    profileRows,
+  ] = await Promise.all([
+    // entity → entities.title, scoped by the entity READ visibility floor.
+    entityIdList.length
+      ? db
+          .select({ id: entities.id, name: entities.title })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.id, entityIdList),
+              entityReadVisibleWhere(userId)
+            )
+          )
+      : empty,
+    // workspace(s) → workspaces.name, scoped to the user's visible workspaces.
+    workspaceIdList.length
+      ? db
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(
+            and(
+              inArray(workspaces.id, workspaceIdList),
+              userVisibleWhere(workspaces.id, userId)
+            )
+          )
+      : empty,
+    // notification → notifications.title, scoped by recipient userId.
+    notificationIdList.length
+      ? db
+          .select({ id: notifications.id, name: notifications.title })
+          .from(notifications)
+          .where(
+            and(
+              inArray(notifications.id, notificationIdList),
+              eq(notifications.userId, userId)
+            )
+          )
+      : empty,
+    // view → views.name, scoped by creator userId.
+    viewIdList.length
+      ? db
+          .select({ id: views.id, name: views.name })
+          .from(views)
+          .where(and(inArray(views.id, viewIdList), eq(views.userId, userId)))
+      : empty,
+    // project → projects.name, scoped by owner userId.
+    projectIdList.length
+      ? db
+          .select({ id: projects.id, name: projects.name })
+          .from(projects)
+          .where(
+            and(
+              inArray(projects.id, projectIdList),
+              eq(projects.userId, userId)
+            )
+          )
+      : empty,
+    // skill → skills.name, scoped by owner userId.
+    skillIdList.length
+      ? db
+          .select({ id: skills.id, name: skills.name })
+          .from(skills)
+          .where(
+            and(inArray(skills.id, skillIdList), eq(skills.userId, userId))
+          )
+      : empty,
+    // profile → profiles.displayName. Match by uuid id OR slug. Scope: SYSTEM /
+    // SHARED vocabulary is pod-wide by design; USER/WORKSPACE profiles floor on
+    // the caller's own userId or their member/owned workspaces so a foreign
+    // private profile name never leaks.
+    profileSlugList.length
+      ? db
+          .select({
+            id: profiles.id,
+            slug: profiles.slug,
+            name: profiles.displayName,
+          })
+          .from(profiles)
+          .where(
+            and(
+              or(
+                ...(profileUuidList.length
+                  ? [inArray(profiles.id, profileUuidList)]
+                  : []),
+                inArray(profiles.slug, profileSlugList)
+              ),
+              or(
+                inArray(profiles.scope, [
+                  ProfileScope.SYSTEM,
+                  ProfileScope.SHARED,
+                ]),
+                eq(profiles.userId, userId),
+                inArray(profiles.workspaceId, memberWorkspaceIds(userId)),
+                inArray(profiles.workspaceId, ownedWorkspaceIds(userId))
+              )
+            )
+          )
+      : Promise.resolve(
+          [] as { id: string; slug: string; name: string | null }[]
+        ),
+  ]);
+
+  const out = new Map<string, string>();
+  const putById = (
+    rows: NamedRow[],
+    subjectTypes: string[],
+    ids: Set<string>
+  ): void => {
+    const byId = new Map<string, string>();
+    for (const r of rows) if (r.name) byId.set(r.id, r.name);
+    if (byId.size === 0) return;
+    for (const id of ids) {
+      const name = byId.get(id);
+      if (!name) continue;
+      for (const t of subjectTypes) out.set(subjectKey(t, id), name);
+    }
+  };
+
+  putById(entityRows, ["entity"], entityIds);
+  putById(workspaceRows, ["workspace", "workspaces"], workspaceIds);
+  putById(notificationRows, ["notification"], notificationIds);
+  putById(viewRows, ["view"], viewIds);
+  putById(projectRows, ["project"], projectIds);
+  putById(skillRows, ["skill"], skillIds);
+
+  // Profiles: resolve each subjectId by uuid id first, then by slug.
+  const profileById = new Map<string, string>();
+  const profileBySlug = new Map<string, string>();
+  for (const r of profileRows) {
+    if (!r.name) continue;
+    profileById.set(r.id, r.name);
+    profileBySlug.set(r.slug, r.name);
+  }
+  for (const id of profileIds) {
+    const name = profileById.get(id) ?? profileBySlug.get(id);
+    if (name) out.set(subjectKey("profile", id), name);
+  }
+
+  return out;
+}
+
 /**
  * Map a single event record into a ReactionEvent shell (no reactions yet).
  */
 function toReactionEventShell(
   event: EventRecord,
-  actorNameById: Map<string, string>
+  actorNameById: Map<string, string>,
+  subjectNameByKey?: Map<string, string>
 ): ReactionEvent {
+  const subjectName =
+    subjectNameByKey && event.subjectType && event.subjectId
+      ? subjectNameByKey.get(subjectKey(event.subjectType, event.subjectId))
+      : undefined;
   return {
     id: event.id,
     type: event.eventType,
@@ -267,6 +519,9 @@ function toReactionEventShell(
     subject: deriveSubject(event),
     subjectId: event.subjectId,
     subjectType: event.subjectType,
+    // Set ONLY when resolved — absent keeps the opaque `subject` fallback so the
+    // client can distinguish "named chip" from "mono-id chip" without sniffing.
+    ...(subjectName ? { subjectName } : {}),
     actor: deriveActor(event, actorNameById),
     actorAI: deriveActorAI(event),
     correlationId: event.correlationId,
@@ -549,7 +804,10 @@ export const subscriptionsRouter = router({
           e.userId,
         ].filter((v): v is string => Boolean(v));
       });
-      const actorNameById = await resolveActorNames(actorIds);
+      const [actorNameById, subjectNameByKey] = await Promise.all([
+        resolveActorNames(actorIds),
+        resolveSubjectNames(filtered, userId),
+      ]);
 
       // Keep the REAL EventRecord paired with each shell so the kind facet can
       // classify off the actual event (source + data), not a synthetic shell.
@@ -557,7 +815,7 @@ export const subscriptionsRouter = router({
       // would make `ai_react` / AI kinds never match.
       const mapped = filtered.map((e) => ({
         event: e,
-        shell: toReactionEventShell(e, actorNameById),
+        shell: toReactionEventShell(e, actorNameById, subjectNameByKey),
         kind: reactionKindForEventType(e.eventType, e),
       }));
 
@@ -718,7 +976,12 @@ export const subscriptionsRouter = router({
           : "",
       ]);
 
-      const shell = toReactionEventShell(source, actorNameById);
+      const subjectNameByKey = await resolveSubjectNames([source], userId);
+      const shell = toReactionEventShell(
+        source,
+        actorNameById,
+        subjectNameByKey
+      );
       const reactions = await buildFanout(source);
       shell.reactions = filterReactionsByLens(
         reactions,

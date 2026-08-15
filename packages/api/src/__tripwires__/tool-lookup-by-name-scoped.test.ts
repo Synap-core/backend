@@ -127,4 +127,28 @@ describe("tripwire: tools-by-name lookups are scoped", () => {
       .filter((rel) => !ALLOWLIST_SUFFIXES.some((s) => rel === s));
     expect(offenders).toEqual([]);
   });
+
+  /**
+   * The second half of the same bug. Reaching the resolver door is not enough
+   * if the caller hands it a predicate that can never be true: `resolveTool(…,
+   * () => false)` short-circuits straight to the oldest-by-`createdAt`
+   * tie-break, so WHICH of this pod's two `discord` rows answers is decided by
+   * creation order, not configuration. The IS-health / connector-health alert
+   * worked only because the configured row happened to be the older one; set
+   * `discord.feedbackChannel` on the newer row and the alarm goes silent with
+   * no error, because the in-app notification still fires.
+   *
+   * If this fails: pass a predicate that tests the thing you are about to READ
+   * off the row (`hasDiscordFeedbackChannel`, `isDiscordMailFeedEnabled`, …).
+   * Oldest-row stays the fallback for when NO row qualifies.
+   */
+  it("no caller passes an always-false predicate to resolveTool", () => {
+    const srcRoot = join(process.cwd(), "src");
+    const ALWAYS_FALSE =
+      /resolveTool\(\s*[^,]+,\s*\(\s*[^)]*\)\s*=>\s*(false|undefined|null|0|""|'')\s*[,)]/;
+    const offenders = tsFiles(srcRoot)
+      .filter((f) => ALWAYS_FALSE.test(stripComments(readFileSync(f, "utf8"))))
+      .map((f) => relative(srcRoot, f));
+    expect(offenders).toEqual([]);
+  });
 });

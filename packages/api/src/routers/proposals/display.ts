@@ -15,9 +15,11 @@ import {
   entities,
   users,
   podMembers,
+  focusSessions,
   EventRepository,
   isFacetVisibleForLens,
 } from "@synap/database";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { entityFacets, profiles } from "@synap/database/schema";
 import type { EventRecord } from "@synap/database";
 import type {
@@ -50,6 +52,13 @@ type DisplayEnrichedProposal = ProposalRow & {
   request: UpdateRequest;
   authorName?: string;
   targetName?: string;
+  /**
+   * The GOAL of the focus session that produced this proposal, when there is one
+   * and the viewer may see it. A resolved display label exactly like
+   * `authorName` — the review spine groups by `sessionId` and had nothing but
+   * the raw uuid to head the group with.
+   */
+  sessionGoal?: string;
   review: ProposalReviewModel;
 };
 
@@ -126,6 +135,12 @@ export async function enrichProposalsForDisplay(
   const correlationIds = uniqueStrings(
     requests.map((request) => request.correlationId)
   ).filter(isLikelyUUID);
+  // Session GOALS for the `sessionId` FK — one batched query for the whole page
+  // (never per row). Most proposals carry no session, so the common case pays
+  // nothing.
+  const sessionIds = uniqueStrings(
+    rows.map((row) => row.sessionId ?? undefined)
+  ).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
   const [
@@ -135,6 +150,7 @@ export async function enrichProposalsForDisplay(
     facetRows,
     roleFacetRows,
     viewerIsPodMember,
+    sessionRows,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -245,12 +261,33 @@ export async function enrichProposalsForDisplay(
           .limit(1)
           .then((rows) => rows.length > 0)
       : Promise.resolve(false),
+    // Session goals, floored by `ownerPrivateVisibleWhere` — focus_sessions is
+    // an ownerPrivate table (a NULL workspace means "personal to the owner"), so
+    // a plain userVisibleWhere would hand another user's private session goal to
+    // every reviewer. A session the viewer may not see simply resolves to no
+    // label, and the spine falls back to the id.
+    sessionIds.length > 0
+      ? db
+          .select({ id: focusSessions.id, goal: focusSessions.goal })
+          .from(focusSessions)
+          .where(
+            and(
+              inArray(focusSessions.id, sessionIds),
+              ownerPrivateVisibleWhere(
+                focusSessions.workspaceId,
+                focusSessions.userId,
+                userId
+              )
+            )
+          )
+      : Promise.resolve([] as Array<{ id: string; goal: string }>),
   ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
+  const sessionGoalById = new Map(sessionRows.map((row) => [row.id, row.goal]));
   // Roles v2: group live role-facets by their entity id (unfiltered — the
   // workspace lens is applied per-proposal below via `rolesForLens`).
   const roleFacetsByEntityId = new Map<
@@ -412,6 +449,9 @@ export async function enrichProposalsForDisplay(
       ...row,
       authorName,
       targetName,
+      ...(row.sessionId && sessionGoalById.has(row.sessionId)
+        ? { sessionGoal: sessionGoalById.get(row.sessionId)! }
+        : {}),
       request: {
         ...request,
         data: enrichedData,

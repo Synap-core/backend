@@ -7,6 +7,16 @@
  *
  * All operations require hub-protocol.write scope.
  * Sessions are internal system data — not directly user-visible.
+ *
+ * SECURITY — every procedure here is floored by the CALLER's channel
+ * visibility. A `sessions` row has no owner and no workspace column; its only
+ * scoping column is `channel_id`, so visibility is derived from the channel via
+ * `sessionVisibilityWhere` / `channelVisibilityWhere` (the one door — see
+ * `utils/session-visibility.ts`). Without that floor, any holder of a
+ * hub-protocol key could read, mutate, or close another user's session by
+ * guessing a UUID. Per the convention in `hub-protocol/context.ts`, an
+ * invisible row returns NOT_FOUND — never a 403 — so the two cases stay
+ * indistinguishable and no existence oracle is created.
  */
 
 import { z } from "zod";
@@ -14,7 +24,25 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc } from "@synap/database";
-import { sessions, SessionStatus } from "@synap/database/schema";
+import { sessions, channels, SessionStatus } from "@synap/database/schema";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { sessionVisibilityWhere } from "../../utils/session-visibility.js";
+
+/**
+ * Floor a channel-scoped procedure: the caller must be able to SEE the channel
+ * before any session under it is read or created. NOT_FOUND on invisible.
+ */
+async function assertChannelVisible(channelId: string, userId: string) {
+  const row = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
+    .limit(1);
+
+  if (!row[0]) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+  }
+}
 
 export const sessionsRouter = router({
   /**
@@ -32,7 +60,9 @@ export const sessionsRouter = router({
         bootstrapStateId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      await assertChannelVisible(input.channelId, ctx.userId!);
+
       // Check for existing active session
       const existing = await db.query.sessions.findFirst({
         where: and(
@@ -65,7 +95,9 @@ export const sessionsRouter = router({
    */
   getActive: scopedProcedure(["hub-protocol.read"])
     .input(z.object({ channelId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await assertChannelVisible(input.channelId, ctx.userId!);
+
       const session = await db.query.sessions.findFirst({
         where: and(
           eq(sessions.channelId, input.channelId),
@@ -82,10 +114,19 @@ export const sessionsRouter = router({
    */
   get: scopedProcedure(["hub-protocol.read"])
     .input(z.object({ sessionId: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const session = await db.query.sessions.findFirst({
-        where: eq(sessions.id, input.sessionId),
-      });
+    .query(async ({ input, ctx }) => {
+      const rows = await db
+        .select()
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.id, input.sessionId),
+            sessionVisibilityWhere(ctx.userId!)
+          )
+        )
+        .limit(1);
+
+      const session = rows[0];
 
       if (!session) {
         throw new TRPCError({
@@ -107,7 +148,9 @@ export const sessionsRouter = router({
         limit: z.number().int().min(1).max(50).default(10),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await assertChannelVisible(input.channelId, ctx.userId!);
+
       const rows = await db.query.sessions.findMany({
         where: eq(sessions.channelId, input.channelId),
         orderBy: [desc(sessions.startedAt)],
@@ -140,7 +183,7 @@ export const sessionsRouter = router({
         lastActivityAt: z.string().datetime().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { sessionId, ...updates } = input;
 
       const updateData: Record<string, any> = {};
@@ -164,7 +207,9 @@ export const sessionsRouter = router({
       const [updated] = await db
         .update(sessions)
         .set(updateData)
-        .where(eq(sessions.id, sessionId))
+        .where(
+          and(eq(sessions.id, sessionId), sessionVisibilityWhere(ctx.userId!))
+        )
         .returning();
 
       if (!updated) {
@@ -188,7 +233,7 @@ export const sessionsRouter = router({
         producedStateId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [updated] = await db
         .update(sessions)
         .set({
@@ -198,7 +243,12 @@ export const sessionsRouter = router({
             ? { producedStateId: input.producedStateId }
             : {}),
         })
-        .where(eq(sessions.id, input.sessionId))
+        .where(
+          and(
+            eq(sessions.id, input.sessionId),
+            sessionVisibilityWhere(ctx.userId!)
+          )
+        )
         .returning();
 
       if (!updated) {

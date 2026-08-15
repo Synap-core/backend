@@ -49,6 +49,7 @@ import {
   uuidPathParam,
   logger,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -444,7 +445,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId, jobId }, "GET /import/corpus-job failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -31,7 +31,13 @@ import {
   GetSkillsQuerySchema,
   WireSkillSchema,
 } from "./_codecs/skill.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+} from "./_shared.js";
 import { insertSkillGoverned } from "../../skills.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 
@@ -320,7 +326,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       logger.error({ err }, "agent-skills/executable get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -490,7 +496,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json(wireSkill(row), 200);
     } catch (err) {
       logger.error({ err }, "get agent skill by slug failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 
@@ -529,7 +535,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json(wireSkill(row), 200);
     } catch (err) {
       logger.error({ err }, "get agent skill by id failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 

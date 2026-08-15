@@ -16,7 +16,10 @@ import {
   desc,
   inArray,
   isNull,
+  isNotNull,
   focusSessions,
+  proposals,
+  users,
   capabilities,
   vaultGrants,
   assertGrantScoped,
@@ -36,6 +39,7 @@ import {
   type ResolvedScope,
 } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { displayNameForUser } from "./proposals/display.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -194,6 +198,12 @@ export const focusSessionsRouter = router({
   /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
+   *
+   * Returns `participants` — the agents that actually WORKED in this session,
+   * DERIVED from the proposals they filed against it. The `agentIds` column is
+   * not that set: nothing anywhere appends to it (it only ever holds what the
+   * creating call passed as an invite list), so a session driven by an agent
+   * nobody named up front reads as empty. The derived set is authoritative.
    */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -212,7 +222,48 @@ export const focusSessionsRouter = router({
         });
       }
 
-      return row;
+      // Same access predicate every other proposal read uses — owning the
+      // session does not by itself entitle you to a proposal filed into a
+      // workspace you have since left.
+      const participantRows = await db
+        .selectDistinct({ agentUserId: proposals.agentUserId })
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.sessionId, row.id),
+            isNotNull(proposals.agentUserId),
+            userVisibleWhere(proposals.workspaceId, requireUserId(ctx.userId))
+          )
+        );
+      const participantIds = participantRows
+        .map((p) => p.agentUserId)
+        .filter((id): id is string => Boolean(id));
+
+      // Resolve to display names in the SAME batch shape `proposals.list` uses
+      // for its agent labels — one `inArray`, one `displayNameForUser`. A bare
+      // uuid is not a name, and a party cluster rendering `4f2a…` would be a
+      // worse answer than the empty list this replaces.
+      const participants: Array<{ id: string; name: string }> = [];
+      if (participantIds.length > 0) {
+        const agentRows = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(inArray(users.id, participantIds));
+        const nameById = new Map(
+          agentRows.map((u) => [u.id, displayNameForUser(u)])
+        );
+        for (const id of participantIds) {
+          participants.push({ id, name: nameById.get(id) ?? id.slice(0, 8) });
+        }
+      }
+
+      return { ...row, participants };
     }),
 
   /**

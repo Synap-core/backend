@@ -20,7 +20,17 @@
  * the enforcement path is `resolveGovernanceRule` (@synap/database), untouched.
  */
 
-import { db, eq, and, or, isNull, gt, inArray } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  isNull,
+  gt,
+  inArray,
+  classifyRuleProvenance,
+  type RuleProvenance,
+} from "@synap/database";
 import { governanceRules, users } from "@synap/database/schema";
 
 /** A raw `governance_rules` row. */
@@ -114,21 +124,23 @@ export async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
 
 /**
  * How a rule came to exist — the whole diagnostic point of surfacing agent
- * overrides. A `source_proposal_id` means a human approved a widening (earned
- * lineage); a `system:*` author means a machine minted it (backfill / migration
- * of legacy JSONB) and NO human ever reviewed it; anything else is a real user
- * id from the Rules editor.
+ * overrides.
+ *
+ * 🔴 THIS USED TO LIE. The old local rule was "a real user id ⇒ `authored`",
+ * i.e. "a human typed this into the Rules editor". But `syncAutoApproveRules` —
+ * the settings MIRROR — stamps a caller-supplied `created_by` that both of its
+ * callers set to the acting human's id, so a machine-minted grant was
+ * indistinguishable from a deliberate one. Verified live: 32 pod-wide
+ * `verdict:'auto'` agent rules covering actions the platform floor deliberately
+ * EXCLUDES, all reporting `provenance: "authored"`.
+ *
+ * The classifier now lives in `@synap/database`
+ * (`utils/governance-rule-provenance.ts`) next to the two writer doors that
+ * stamp it, so reader and writer can never drift, and it fails toward SUSPICION:
+ * an unmarked author is `"unknown"`, never `"authored"`. Re-exported here so
+ * existing importers of this module are unaffected.
  */
-export type RuleProvenance = "earned" | "machine" | "authored";
-
-export function classifyRuleProvenance(rule: {
-  createdBy: string;
-  sourceProposalId: string | null;
-}): RuleProvenance {
-  if (rule.sourceProposalId) return "earned";
-  if (rule.createdBy.startsWith("system:")) return "machine";
-  return "authored";
-}
+export { classifyRuleProvenance, type RuleProvenance };
 
 /**
  * An agent-principal governance rule, shaped for the introspection surface.

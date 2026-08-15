@@ -74,7 +74,7 @@ vi.mock("../middleware/audit-log.js", async () => {
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
 
-import { db } from "@synap/database";
+import { db, classifyRuleProvenance, createdByUserId } from "@synap/database";
 import { governanceRulesRouter } from "./governance-rules.js";
 import type { Context } from "../types/context.js";
 
@@ -114,6 +114,37 @@ describe("governanceRules.create gating", () => {
 
     expect(result.rule).toMatchObject({ id: "rule-1" });
     expect(h.insertedValues).toHaveLength(1);
+  });
+
+  it("stamps PROVENANCE so an editor-authored rule classifies as 'authored' (and the human id survives)", async () => {
+    // This is the ONLY door where a human authors a rule directly, so it is the
+    // only one allowed to stamp `user:`. The settings MIRROR
+    // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>` — before
+    // both markers existed the two were byte-identical bare user ids, and a
+    // machine-minted grant reported "the operator authored this deliberately".
+    //
+    // BITE PROOF: revert the router to `createdBy: ctx.userId` and the inserted
+    // row classifies as "unknown" → both assertions fail. (Driven through the
+    // real router + real classifier — no source-text assertion.)
+    (db.query.workspaces as unknown as { findFirst: unknown }).findFirst =
+      async () => undefined;
+    setMembership(async () => ({ role: "editor" }));
+
+    await caller(OWNER_ID).create({
+      principalKind: "any",
+      scopeKind: "workspace",
+      workspaceId: WORKSPACE_ID,
+      targetKind: "action",
+      targetPattern: "profile.create",
+      verdict: "auto",
+    });
+
+    const row = h.insertedValues[0] as {
+      createdBy: string;
+      sourceProposalId: string | null;
+    };
+    expect(classifyRuleProvenance(row)).toBe("authored");
+    expect(createdByUserId(row.createdBy)).toBe(OWNER_ID);
   });
 
   it("denies a workspace-scope rule from a non-editor", async () => {

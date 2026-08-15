@@ -124,6 +124,20 @@ async function fetchFullPackageDefinition(
       message: `Marketplace source unreachable fetching "${slug}" — retry the install later (nothing was provisioned).`,
     });
   }
+  // A 401/403/404 here is (almost always) a PRIVATE package: this pod fetch is
+  // UNAUTHENTICATED (bare `fetch`), and the CP's `GET /:slug` is optionalAuth —
+  // it serves a private package only to a requester whose identity matches the
+  // author (or a pod-team member). The pod holds no CP user credential, so the
+  // real fix is the pod→CP user-scoped auth identity seam (not yet wired); until
+  // then, name the cause and the workaround rather than a generic 500.
+  // TODO(identity-seam): authenticate this fetch AS the installing user/author
+  // (pod→CP user-scoped auth) so private packages become fetchable server-side.
+  if (res.status === 401 || res.status === 403 || res.status === 404) {
+    throw new TRPCError({
+      code: res.status === 404 ? "NOT_FOUND" : "FORBIDDEN",
+      message: `Cannot install "${slug}": its package definition isn't fetchable by this pod. Private packages require the CP identity seam (not yet wired); re-publish it public (synap market publish <file> --public) or install it from the browser. (nothing was provisioned)`,
+    });
+  }
   if (!res.ok) {
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
@@ -399,6 +413,7 @@ export async function applyMarketInstall(
             edges: Record<string, unknown>[];
           };
           status?: "draft" | "active" | "paused";
+          metadata?: Record<string, unknown>;
         }>;
       };
       const autos = definition.automations ?? [];
@@ -461,7 +476,14 @@ export async function applyMarketInstall(
             packageVersion: entry?.version ?? input.version ?? null,
             installedAt: new Date().toISOString(),
           });
-          const metadata = stampMarketSource(undefined, source);
+          // Merge author metadata (e.g. `metadata.kind: "calibration-recommender"`,
+          // the marker the browser CalibrationRecommenderSeam matches on) UNDER the
+          // system `marketSource` stamp: `stampMarketSource` spreads the base first,
+          // then writes MARKET_SOURCE_KEY last, so the author's keys survive and the
+          // system provenance can never be clobbered. Mirrors the author-metadata
+          // merge in package-apply-post-workspace.ts. The W4a `fields`/baseline above
+          // is unaffected — metadata is not a reconcilable field.
+          const metadata = stampMarketSource(a.metadata, source);
           const r = await caller.create({
             workspaceId: input.workspaceId,
             name: a.name,

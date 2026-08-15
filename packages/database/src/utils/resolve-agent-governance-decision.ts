@@ -14,6 +14,7 @@ import {
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
+import { settingsMirrorCreatedBy } from "./governance-rule-provenance.js";
 import {
   resolveGuidelines,
   resolveMostSpecificPosture,
@@ -447,6 +448,13 @@ export interface SyncAutoApproveRulesInput {
    * every write, so the mirrored rules must too.
    */
   actions: readonly string[];
+  /**
+   * The acting principal — normally the HUMAN whose settings are being
+   * mirrored. It is stored NAMESPACED (`system:settings-mirror:<id>`, applied
+   * inside this function via `settingsMirrorCreatedBy`) so a mirrored row can
+   * never be mistaken for a rule that human authored in the Rules editor. See
+   * `governance-rule-provenance.ts` for why that distinction is load-bearing.
+   */
   createdBy: string;
 }
 
@@ -545,7 +553,10 @@ export async function syncAutoApproveRules(
         targetKind: "action" as const,
         targetPattern,
         verdict: "auto" as const,
-        createdBy,
+        // PROVENANCE (not enforcement): stamp the mirror's own namespace, here
+        // rather than at the call sites, so a future third caller cannot
+        // reintroduce the bare-user-id ambiguity by forgetting to.
+        createdBy: settingsMirrorCreatedBy(createdBy),
       }))
     );
   });

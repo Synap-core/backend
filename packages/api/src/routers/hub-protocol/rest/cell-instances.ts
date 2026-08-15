@@ -36,6 +36,7 @@ import {
   resolveActorId,
   verifyWorkspaceReadAccess,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -160,7 +161,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       logger.error({ err }, "cellInstances.get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

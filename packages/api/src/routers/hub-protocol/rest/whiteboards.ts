@@ -17,6 +17,7 @@ import {
   resolveActorId,
   verifyWorkspaceAccess,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 const BoardPlacementOptionsSchema = z.object({
@@ -320,7 +321,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       logger.error({ err, viewId }, "whiteboard state fetch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

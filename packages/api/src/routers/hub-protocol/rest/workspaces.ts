@@ -815,15 +815,28 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
       // Mirror the preset into governance_rules (principal "any", this
       // workspace) — the enforcement path the resolver reads at rung 2.8.
-      // REPLACE semantics: idempotent on re-provision.
-      await syncAutoApproveRules({
-        db,
-        principalKind: "any",
-        scopeKind: "workspace",
-        workspaceId: result.workspaceId,
-        actions: agentWorkspaceAutoApprove,
-        createdBy: callerId,
-      });
+      //
+      // 🔴 FIRST PROVISION ONLY. This preset is a list stated in CODE, not a
+      // choice the operator made, and `syncAutoApproveRules` diffs it against
+      // the LIVE `DEFAULT_AUTO_APPROVE`: everything the floor covers is dropped,
+      // so the ONLY rows it can ever mint are the actions the floor
+      // deliberately EXCLUDES (profile.create/update, property_def.*,
+      // channel.create…). Re-applying it on every re-provision therefore made
+      // this the same one-way ratchet the boot backfill had — tighten the floor
+      // (or revoke a grant in the Rules editor) and the next re-provision hands
+      // it straight back. Same shape of fix as `backfillGovernanceRules`'
+      // converged-marker one-shot: read the stale code list EXACTLY ONCE, at
+      // creation. An existing workspace keeps whatever its operator has now.
+      if (result.created) {
+        await syncAutoApproveRules({
+          db,
+          principalKind: "any",
+          scopeKind: "workspace",
+          workspaceId: result.workspaceId,
+          actions: agentWorkspaceAutoApprove,
+          createdBy: callerId,
+        });
+      }
 
       // Add calling user as admin so they see the agent's work (idempotent)
       if (callerId !== agentUserId) {

@@ -512,40 +512,46 @@ const captureHandler: McpToolHandler = async (
   // wait for review. The materialized entities come back in the result.
   const captureProposals =
     (structured as { proposals?: unknown[] }).proposals ?? [];
-  // DEGRADED GUARD: when the IS structurer is down, structure() returns a
-  // single raw-note fallback with `degraded: true`. Do NOT silently execute
-  // that note — it looks like a normal capture but is an outage artifact the
-  // user doesn't want. Surface the degradation loudly and create nothing;
-  // the caller tells the user WHY, from the classified reason — never a stock
-  // "temporarily unavailable, try again" that an auth/credit failure makes false.
-  if ((structured as { degraded?: boolean }).degraded === true) {
-    const reason = (structured as { degradedReason?: string }).degradedReason;
-    // `degradedReason` (capture.ts DegradedCaptureReason) is already a
-    // classification — map it onto the shared failure classes rather than
-    // re-deriving one.
-    const failure = describeAiFailure(
-      reason === "is_auth_error"
-        ? "auth"
-        : reason === "is_invalid_response" || reason === "is_empty_result"
-          ? "invalid_response"
-          : "unknown"
-    );
-    return captureRejected({
-      reason: "structuring-unavailable",
-      scope: textScope,
-      message:
-        `⚠️ AI structuring did not run, so nothing was created. ${failure.message} ` +
-        "Tell the user their capture was NOT structured — do not present this as a normal capture or save a raw note" +
-        (failure.retryable
-          ? " — and that trying again shortly may work."
-          : ", and do not tell them to try again."),
-      extra: {
-        degraded: true,
-        ...(reason ? { degradedReason: reason } : {}),
-        executed: false,
-      },
-    });
-  }
+  // DEGRADED MODE: when the IS structurer is down, `structure()` returns the
+  // shared labelled raw-note fallback (`buildDegradedCaptureFallback`,
+  // routers/capture.ts:242, returned at :1144) with `degraded: true`. We
+  // EXECUTE that fallback — the same note the tRPC/UI door already saves and
+  // renders as "Saved as note (couldn't validate as X)". Refusing instead
+  // created NOTHING, which loses the user's text entirely: the outage becomes
+  // data loss. There is no second fallback here — `structured` IS the builder's
+  // output; the normal execute path below writes it.
+  //
+  // BUT an MCP capture is UNATTENDED — no human watches the note appear — so
+  // the label has to reach the AGENT, or a raw note quietly passes for a
+  // structured one. That is what `degradedNotice` is for: it rides on BOTH
+  // terminal returns below, and the wording tells the agent to say it out loud.
+  // The WHY comes from the classified reason, never a stock "try again" that an
+  // auth/credit failure would make false.
+  const degradedCapture =
+    (structured as { degraded?: boolean }).degraded === true;
+  const degradedReason = (structured as { degradedReason?: string })
+    .degradedReason;
+  // `degradedReason` (capture.ts DegradedCaptureReason) is already a
+  // classification — map it onto the shared failure classes rather than
+  // re-deriving one.
+  const degradedFailure = degradedCapture
+    ? describeAiFailure(
+        degradedReason === "is_auth_error"
+          ? "auth"
+          : degradedReason === "is_invalid_response" ||
+              degradedReason === "is_empty_result"
+            ? "invalid_response"
+            : "unknown"
+      )
+    : null;
+  const degradedNotice = degradedFailure
+    ? `⚠️ AI structuring did not run. The text was saved as a RAW NOTE, unstructured and unclassified — ` +
+      `it is NOT a person/task/decision/whatever it describes. ${degradedFailure.message} ` +
+      `Tell the user their capture was saved as a plain note and was NOT structured` +
+      (degradedFailure.retryable
+        ? " — and that re-capturing shortly may structure it properly."
+        : ", and do not tell them to try again.")
+    : null;
   if (captureProposals.length === 0) {
     return captureRejected({
       reason: "no-durable-content",
@@ -682,6 +688,13 @@ const captureHandler: McpToolHandler = async (
       ...(ex.summary ? { summary: ex.summary } : {}),
       ...(ex.reasoning ? { reasoning: ex.reasoning } : {}),
       ...(ex.message ? { message: ex.message } : {}),
+      ...(degradedNotice
+        ? {
+            degraded: true,
+            ...(degradedReason ? { degradedReason } : {}),
+            degradedNotice,
+          }
+        : {}),
       structured,
       executed,
     });
@@ -714,6 +727,15 @@ const captureHandler: McpToolHandler = async (
       sessionId: sessionId ?? null,
     },
     writeReceipt: textReceipt,
+    // The note LANDED, so the receipt is honestly "applied" — but what landed
+    // is a raw note, not the structured thing the caller asked for. Say both.
+    ...(degradedNotice
+      ? {
+          degraded: true,
+          ...(degradedReason ? { degradedReason } : {}),
+          degradedNotice,
+        }
+      : {}),
     structured,
     executed,
     ...(ex.movedToWorkspace ? { movedToWorkspace: ex.movedToWorkspace } : {}),

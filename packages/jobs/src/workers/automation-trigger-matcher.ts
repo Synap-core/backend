@@ -184,7 +184,7 @@ function matchesMessageAlias(eventType: string, pattern: string): boolean {
  * Plus the synthetic `message.received` alias (see `matchesMessageAlias`), which
  * fires for BOTH physical message events — additive, physical patterns unchanged.
  */
-function matchPattern(eventType: string, pattern?: string): boolean {
+export function matchPattern(eventType: string, pattern?: string): boolean {
   if (!pattern) return false;
   if (pattern === eventType) return true;
 

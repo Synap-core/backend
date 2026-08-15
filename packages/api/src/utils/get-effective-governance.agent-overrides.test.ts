@@ -32,6 +32,11 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap/database", async () => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
+  // The REAL provenance classifier — mocking it would make the provenance
+  // assertions below tautological.
+  const provenance = await vi.importActual<
+    typeof import("@synap/database/governance-rule-provenance")
+  >("@synap/database/governance-rule-provenance");
   const makeWhereResult = () => {
     const rows = h.queue.shift() ?? [];
     return {
@@ -40,6 +45,7 @@ vi.mock("@synap/database", async () => {
     };
   };
   return {
+    ...provenance,
     and: drizzle.and,
     or: drizzle.or,
     eq: drizzle.eq,
@@ -216,7 +222,7 @@ describe("getEffectiveGovernance — agentOverrides", () => {
     expect(res.effective.agentOverrides[0]?.ruleId).toBe("rule-agent-auto");
   });
 
-  it("provenance survives to the caller: machine-minted vs earned vs authored", async () => {
+  it("provenance survives to the caller: machine-minted vs earned vs authored vs unknown", async () => {
     // BITE PROOF: drop `createdBy`/`sourceProposalId` from the select or the
     // DTO and every assertion below fails — this is the whole diagnostic value
     // (a backfilled grant NOBODY reviewed vs an approved widening).
@@ -238,6 +244,27 @@ describe("getEffectiveGovernance — agentOverrides", () => {
           agentUserId: AGENT,
           targetPattern: "doc.create",
           verdict: "propose",
+          // The Rules editor's stamp (`authoredCreatedBy(ctx.userId)`).
+          createdBy: "user:user-human-1",
+        }),
+        // The MIRROR's stamp — `syncAutoApproveRules` applied to the SAME human
+        // id. Before the provenance fix this was byte-identical to the row
+        // above and reported "authored".
+        ruleRow({
+          id: "rule-agent-mirrored",
+          principalKind: "agent",
+          agentUserId: AGENT,
+          targetPattern: "profile.update",
+          verdict: "auto",
+          createdBy: "system:settings-mirror:user-human-1",
+        }),
+        // A LEGACY row: bare user id, no marker. Genuinely unknowable.
+        ruleRow({
+          id: "rule-agent-legacy",
+          principalKind: "agent",
+          agentUserId: AGENT,
+          targetPattern: "skill.create",
+          verdict: "auto",
           createdBy: "user-human-1",
         }),
       ],
@@ -261,10 +288,24 @@ describe("getEffectiveGovernance — agentOverrides", () => {
       provenance: "earned",
     });
     expect(byId.get("rule-agent-authored")).toMatchObject({
-      createdBy: "user-human-1",
+      createdBy: "user:user-human-1",
       sourceProposalId: null,
       provenance: "authored",
       verdict: "propose",
+    });
+    // 🔴 THE FALSE-ASSURANCE CASE: a row the MIRROR minted under the human's
+    // id must NOT read as "the human authored this".
+    expect(byId.get("rule-agent-mirrored")).toMatchObject({
+      createdBy: "system:settings-mirror:user-human-1",
+      sourceProposalId: null,
+      provenance: "machine",
+    });
+    expect(byId.get("rule-agent-mirrored")?.provenance).not.toBe("authored");
+    // Fail toward suspicion: an unmarked legacy author is "unknown", not a
+    // manufactured claim of deliberate authorship.
+    expect(byId.get("rule-agent-legacy")).toMatchObject({
+      createdBy: "user-human-1",
+      provenance: "unknown",
     });
   });
 

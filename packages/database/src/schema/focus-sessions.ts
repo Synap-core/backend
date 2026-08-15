@@ -121,7 +121,13 @@ export const focusSessions = pgTable(
      * for stageless playbooks (progress-only) — NEVER becomes NOT NULL.
      */
     currentStage: text("current_stage"),
-    /** Agent IDs invited to this session. */
+    /**
+     * Agent IDs invited to this session — an INVITE LIST, not a participant set.
+     * NOTHING appends to it after create/update: an agent that joins and works
+     * never lands here. The authoritative participant set is DERIVED from the
+     * proposals filed against the session (`trpc.focusSessions.get` →
+     * `participants`). Kept for the create-time invite; do not read it as truth.
+     */
     agentIds: text("agent_ids").array().default([]),
     /** Set when the session transitions to `closed`. */
     closedAt: timestamp("closed_at", { withTimezone: true }),

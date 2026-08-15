@@ -9,6 +9,7 @@ import { createLogger } from "@synap-core/core";
 import { InternalServerError } from "@synap-core/types";
 import type { Context, KratosSession, User } from "./types/context.js";
 import { sessionCache } from "./utils/sessionCache.js";
+import { resolveHubSessionHeader } from "./routers/hub-protocol/_middleware/session.js";
 
 // Re-export types
 export type { Context, KratosSession, User };
@@ -93,6 +94,18 @@ export async function createContext(
 
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {
+      // Focus-session handle. Same header, same verification as the Hub door:
+      // `resolveHubSessionHeader` rejects a non-uuid AND a session that is not
+      // the caller's own, so a forged id can never stamp another user's session
+      // onto this request's proposals. Only reached for an authenticated
+      // request — an unauthenticated one has no principal to verify against.
+      const sessionId = await resolveHubSessionHeader(
+        req.headers.get("X-Session-Id") ??
+          req.headers.get("x-session-id") ??
+          undefined,
+        session.identity.id
+      );
+
       return {
         db,
         authenticated: true,
@@ -106,6 +119,7 @@ export async function createContext(
         req,
         workspaceId, // Add workspace ID to context
         projectId, // Add project lens to context
+        sessionId, // Verified focus-session handle (undefined when absent/invalid)
       };
     }
 

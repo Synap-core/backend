@@ -198,7 +198,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       logger.error({ err, documentId }, "getDocument failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
