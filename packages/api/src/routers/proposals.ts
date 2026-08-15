@@ -48,6 +48,7 @@ import {
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
+import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -654,6 +655,41 @@ export const proposalsRouter = router({
 
       const groups = clusters.slice(0, limit);
       return { groups };
+    }),
+
+  /**
+   * Approval PATTERNS — "which event shape has repeatedly led to a proposal you
+   * approved?". The read behind the Activity plane's patterns band, and the same
+   * evidence a future promoter would cite before proposing a standing
+   * automation.
+   *
+   * SIBLING OF, NOT A VARIANT OF, `groups`. Both aggregate proposals and both
+   * reuse this file's user floor, but they answer different questions on
+   * different keys and must not be merged: `groups` collapses the PENDING queue
+   * by structural FINGERPRINT (object identity — "these are the same row, review
+   * once"), while this keys on the ACTION MOTIF crossed with the triggering
+   * EVENT ("this WHEN keeps leading to this WHAT"). `groups` has no event axis at
+   * all; folding the two would force the fingerprint's object identity into a
+   * question that is explicitly about shapes recurring ACROSS objects.
+   *
+   * Always returns its `funnel` alongside the patterns. An empty `patterns` list
+   * is ambiguous on its own — `decidedTotal` vs `producedByAutomation` is what
+   * tells a reader "nothing repeated often enough" from "almost nothing here was
+   * produced by an automation at all", and today the honest answer is the second.
+   * See the module doc-comment for why each floor is where it is.
+   */
+  approvalPatterns: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Max decided proposals scanned before grouping. */
+          scanLimit: z.number().min(1).max(2000).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return scanApprovalPatterns({ userId, scanLimit: input?.scanLimit });
     }),
 
   /**

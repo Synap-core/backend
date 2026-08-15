@@ -32,18 +32,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import {
-  db,
-  eq,
-  and,
-  or,
-  isNull,
-  isNotNull,
-  gt,
-  desc,
-  inArray,
-  ProposalStatus,
-} from "@synap/database";
+import { db, eq, and, isNotNull, desc, ProposalStatus } from "@synap/database";
 import {
   governanceRules,
   workspaceMembers,
@@ -53,6 +42,11 @@ import {
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
+  activeRulePredicate,
+  podOrWorkspaceScopePredicate,
+  mapRulesWithAgentLabels,
+} from "../utils/governance-rule-reads.js";
+import {
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   ADMIN_ACTIONS,
@@ -60,68 +54,9 @@ import {
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
 
-/** A `governanceRules` row shaped for the wire, with the agent's display label resolved. */
-type GovernanceRuleRow = typeof governanceRules.$inferSelect;
-
-/**
- * Map raw rule rows to the wire DTO used by `list` / `listAll`, resolving each
- * agent-principal rule's display label in ONE batched lookup. Shared so the two
- * listing doors never drift on shape.
- */
-async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
-  const agentIds = Array.from(
-    new Set(
-      rows
-        .filter((r) => r.principalKind === "agent" && r.agentUserId)
-        .map((r) => r.agentUserId as string)
-    )
-  );
-
-  const agentLabels = new Map<string, string>();
-  if (agentIds.length > 0) {
-    const agents = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        agentType: users.agentType,
-      })
-      .from(users)
-      .where(inArray(users.id, agentIds));
-    for (const a of agents) {
-      agentLabels.set(a.id, a.name ?? a.agentType ?? a.id);
-    }
-  }
-
-  return rows.map((r) => ({
-    id: r.id,
-    principalKind: r.principalKind,
-    agentUserId: r.agentUserId,
-    agentLabel: r.agentUserId
-      ? (agentLabels.get(r.agentUserId) ?? r.agentUserId)
-      : null,
-    scopeKind: r.scopeKind,
-    workspaceId: r.workspaceId,
-    targetKind: r.targetKind,
-    targetPattern: r.targetPattern,
-    targetProfile: r.targetProfile,
-    verdict: r.verdict,
-    createdAt: r.createdAt,
-    createdBy: r.createdBy,
-    sourceProposalId: r.sourceProposalId,
-    expiresAt: r.expiresAt,
-  }));
-}
-
-/** Active-rule predicate: not revoked, not expired. Shared by every read door. */
-function activeRulePredicate() {
-  return and(
-    isNull(governanceRules.revokedAt),
-    or(
-      isNull(governanceRules.expiresAt),
-      gt(governanceRules.expiresAt, new Date())
-    )
-  );
-}
+// The active-rule predicate, the pod∪workspace scope lens, and the agent-label
+// resolver live in ONE place (`utils/governance-rule-reads.ts`) so this editor
+// door and `getEffectiveGovernance`'s introspection surface can never drift.
 
 /**
  * READ-visibility gate for a workspace lens on the preview doors: the caller
@@ -286,15 +221,7 @@ export const governanceRulesRouter = router({
     .query(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
 
-      const scopePredicate = workspaceId
-        ? or(
-            eq(governanceRules.scopeKind, "pod"),
-            and(
-              eq(governanceRules.scopeKind, "workspace"),
-              eq(governanceRules.workspaceId, workspaceId)
-            )
-          )
-        : eq(governanceRules.scopeKind, "pod");
+      const scopePredicate = podOrWorkspaceScopePredicate(workspaceId);
 
       const rows = await db.query.governanceRules.findMany({
         where: and(activeRulePredicate(), scopePredicate),

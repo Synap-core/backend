@@ -4869,6 +4869,112 @@ export interface ProposalCluster {
 	workspaceIds: string[];
 }
 /**
+ * Approval patterns — the "notice" rung of record → notice → propose → ratify.
+ *
+ * Answers ONE question over data that already exists: *which event shape has
+ * repeatedly led to a proposal a human approved?* That is the evidence a
+ * promoter would later need to say "make this a standing automation" — but it is
+ * useful long before any promotion threshold is met, because "you approved this
+ * 3 times" is itself worth showing.
+ *
+ * WHY THIS IS A READ AND NOT A TABLE: the whole chain is already joinable —
+ * `proposals.step_run_id → automation_step_runs.run_id → automation_runs`, whose
+ * `trigger_payload` carries the `eventType` that fired the run. Every column is
+ * indexed (`idx_proposals_step_run_id`, `automation_step_runs_run_id_idx`,
+ * `automation_runs_automation_id_idx`). Prior art says "detect on a projection,
+ * never the raw event log" — at this volume the projection IS this query, and
+ * materializing it now would be infrastructure ahead of evidence. Materialize
+ * when the scan hurts, not before.
+ *
+ * ── The three choices that decide whether this measures anything real ────────
+ *
+ * 1. KEYED ON MOTIF, NEVER ON FINGERPRINT. The key is
+ *    `${eventType}` × `${targetType}.${proposalType}` — the SAME motif
+ *    vocabulary `recommend-tighten` and the widen scanner speak, so all three
+ *    lanes glob-match against one language. The structural fingerprint
+ *    (`computeProposalFingerprint`) embeds OBJECT identity (`id:<targetId>` for
+ *    every non-create class), which is right for duplicate detection and fatal
+ *    here: "same shape, different objects" would shatter into clusters of one.
+ *    That mistake already cost this codebase a recommender that fired ZERO times
+ *    — qualify on the key you act on, or you measure a different population than
+ *    you govern.
+ *
+ * 2. A HUMAN VERDICT, NOT A SYSTEM ONE. `auto_approved` is counted but kept in
+ *    its OWN field and never folded into `approvedByHuman`. An auto-approved row
+ *    means governance already decided the shape is fine and no person ever
+ *    looked — treating it as approval would let the system cite its own past
+ *    decisions as evidence for widening further, which is the loop governance
+ *    exists to close. For the same reason the denominator admits only DECIDED
+ *    statuses: counting PENDING would let a chatty agent suppress its own signal
+ *    by flooding the queue.
+ *
+ * 3. FAST APPROVAL IS NOT APPROVAL. A verdict returned inside
+ *    `MIN_DELIBERATION_MS` is a rubber stamp or a bulk action, and is excluded
+ *    from the human count (still reported in the funnel). Bot output waved
+ *    through by implicit trust is exactly how a dependency bot distributed
+ *    malware across ~895 repositories; the analogue here is a pattern promoted
+ *    on evidence nobody actually read.
+ *
+ * ── The funnel is not optional ───────────────────────────────────────────────
+ * `funnel` reports what was examined and where it fell out. A detector whose
+ * normal output is "nothing to report" is INDISTINGUISHABLE from one that is
+ * structurally dead — this codebase has shipped two such detectors, both fired
+ * zero times, and neither was noticed for weeks. Any caller that surfaces
+ * patterns must be able to say WHY there are none.
+ *
+ * Access: floored with `userVisibleWhere` exactly as `proposals.list` and
+ * `proposals.groups` do. This read never widens what a caller can see — it only
+ * groups rows they could already list.
+ */
+/** One (event shape → action shape) pair and how humans have decided on it. */
+export interface ApprovalPattern {
+	/** The WHEN, read from the triggering run's payload (e.g. `dev.commit`). */
+	eventType: string;
+	/** The action motif `${targetType}.${proposalType}` — the shared vocabulary. */
+	motif: string;
+	/** Distinct proposals a HUMAN approved after real deliberation. The signal. */
+	approvedByHuman: number;
+	/** Distinct proposals a human rejected. The counter-evidence. */
+	rejected: number;
+	/** Approved by policy with no human in the loop. Reported, never evidence. */
+	autoApproved: number;
+	/** Human approvals returned faster than MIN_DELIBERATION_MS. Reported only. */
+	rubberStamped: number;
+	/** Distinct ISO weeks the pair was decided in — ≥2 kills burst artefacts. */
+	distinctWeeks: number;
+	/** Distinct targets — ≥2 proves "same shape, different objects". */
+	distinctSubjects: number;
+	firstDecidedAt: Date;
+	lastDecidedAt: Date;
+}
+/**
+ * Where the scanned rows went. Publish this wherever patterns are shown: it is
+ * the only way a reader can tell "nothing qualified" from "I am broken".
+ */
+export interface ApprovalPatternFunnel {
+	/**
+	 * Every decided proposal the caller can see. Counted separately from the
+	 * scan because the scan INNER-joins the automation chain: when this number is
+	 * large and `producedByAutomation` is ~0, the honest reading is "patterns are
+	 * empty because almost nothing here was produced by an automation" — which is
+	 * a different problem from "no pattern repeated often enough", and the two are
+	 * indistinguishable without this number.
+	 */
+	decidedTotal: number;
+	/** …of which were produced by an automation step run (the scanned set). */
+	producedByAutomation: number;
+	/** …of which resolved to a run whose payload names an `eventType`. */
+	withEventType: number;
+	/** …of which were a real human verdict (reviewer set, past the fast floor). */
+	humanDecided: number;
+	/** Distinct (eventType, motif) pairs the survivors formed. */
+	distinctPatterns: number;
+}
+export interface ApprovalPatternScan {
+	patterns: ApprovalPattern[];
+	funnel: ApprovalPatternFunnel;
+}
+/**
  * Shared external-action dispatcher — ONE implementation, two entry doors:
  *   1. Human-direct (immediate REST — operator IS the approval)
  *   2. Agent-approved (proposals.ts approve branch — proposal already past governance)
@@ -10758,6 +10864,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				groups: ProposalCluster[];
 			};
+			meta: object;
+		}>;
+		approvalPatterns: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				scanLimit?: number | undefined;
+			} | undefined;
+			output: ApprovalPatternScan;
 			meta: object;
 		}>;
 		muteRejectionCluster: import("@trpc/server").TRPCMutationProcedure<{

@@ -54,6 +54,10 @@ import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyPodWideProposal } from "../notifications/notify-pod-wide-proposal.js";
 import {
+  listAgentGovernanceOverrides,
+  type AgentGovernanceOverride,
+} from "./governance-rule-reads.js";
+import {
   AccessContext,
   makeRequestProvenance,
   makeWriteEnvelope,
@@ -309,6 +313,17 @@ type EntityPreviousData = {
  * `effective.settingsAutoApproveFor` is kept in the response shape for
  * back-compat but is now always null. No write path is touched here — this is a
  * read only.
+ *
+ * AGENT OVERRIDES (2026-08-15): `autoApproveFor` above is the workspace
+ * BASELINE — `principal_kind = "any"` rules only. A `principal_kind = "agent"`
+ * rule ALSO resolves at rung 2.8 (above rung 8's DEFAULT_AUTO_APPROVE), so an
+ * agent-scoped `verdict:"auto"` grant was ENFORCED while being invisible here —
+ * that is exactly how a real drift (`profile.create` auto-approving for one
+ * agent) went undetectable from inside the product for days. Those rules are now
+ * surfaced as `effective.agentOverrides[]` — a SEPARATE, clearly-labelled field,
+ * deliberately NOT merged into `autoApproveFor` (merging would misreport a
+ * one-agent grant as a workspace-wide one). Same lens (pod ∪ this workspace),
+ * same authz floor, same shared predicate as the Rules editor door.
  */
 export async function getEffectiveGovernance(workspaceId: string): Promise<{
   workspaceId: string;
@@ -320,6 +335,14 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
     alwaysProposeFor: readonly string[];
     /** True when the displayed `autoApproveFor` is now derived from the rules store. */
     rulesDerived: boolean;
+    /**
+     * ACTIVE `principal_kind = "agent"` rules in this lens — per-agent grants
+     * that resolve at rung 2.8 and are therefore ENFORCED but are NOT part of
+     * the workspace baseline above. Never merge these into `autoApproveFor`:
+     * each applies to exactly ONE agent. `provenance` distinguishes an earned
+     * widening (`sourceProposalId` lineage) from a machine-minted backfill.
+     */
+    agentOverrides: readonly AgentGovernanceOverride[];
     governanceMode: "default" | "agent-owned";
     proposalApprovalPolicy: "owner_and_admins" | "any_editor" | "admins_only";
     destructiveAlwaysPropose: boolean;
@@ -356,6 +379,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
   // workspace, active only.
   const ruleRows = await db
     .select({
+      principalKind: governanceRules.principalKind,
       targetPattern: governanceRules.targetPattern,
       verdict: governanceRules.verdict,
     })
@@ -379,11 +403,21 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
       )
     );
 
-  const autoRulePatterns = ruleRows
+  // Defence-in-depth: the SQL above already floors on `principal_kind = "any"`
+  // — this in-memory re-check is a no-op against a correct query, but it means
+  // a future query change can never let an AGENT-scoped rule leak into the
+  // workspace-wide `autoApproveFor` baseline. An agent grant applies to ONE
+  // agent; reporting it as the workspace baseline would be a lie. Agent rules
+  // are surfaced separately as `effective.agentOverrides` below.
+  const anyPrincipalRows = ruleRows.filter((r) => r.principalKind === "any");
+
+  const autoRulePatterns = anyPrincipalRows
     .filter((r) => r.verdict === "auto")
     .map((r) => r.targetPattern);
   const proposeRulePatterns = new Set(
-    ruleRows.filter((r) => r.verdict === "propose").map((r) => r.targetPattern)
+    anyPrincipalRows
+      .filter((r) => r.verdict === "propose")
+      .map((r) => r.targetPattern)
   );
 
   // Additive union (rung 8 default ∪ rung 2.8 auto rules), then subtract any
@@ -392,7 +426,13 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
     new Set<string>([...DEFAULT_AUTO_APPROVE, ...autoRulePatterns])
   ).filter((p) => !proposeRulePatterns.has(p));
 
-  const hasContributingRules = ruleRows.length > 0;
+  // Agent-principal rules — the SEPARATE field. Read through the shared
+  // `governance-rule-reads` module (same active predicate + same pod ∪
+  // workspace lens the Rules editor uses), so this display can never drift
+  // from the store enforcement reads.
+  const agentOverrides = await listAgentGovernanceOverrides(workspaceId);
+
+  const hasContributingRules = anyPrincipalRows.length > 0;
 
   return {
     workspaceId,
@@ -407,6 +447,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
       settingsAutoApproveFor: null,
       alwaysProposeFor: Array.from(proposeRulePatterns),
       rulesDerived: true,
+      agentOverrides,
       governanceMode,
       proposalApprovalPolicy,
       destructiveAlwaysPropose: governanceMode === "agent-owned",

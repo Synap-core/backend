@@ -79,11 +79,30 @@ export interface FederationOidcClient {
   updatedAt: string;
 }
 
+/**
+ * CONVERGED MARKER for the one-shot `backfillGovernanceRules` boot seeder.
+ *
+ * The backfill projects the LEGACY `autoApproveFor` JSONB into `governance_rules`
+ * exactly once per pod. It must never re-read that (frozen, stale) JSONB after
+ * the first successful run — see the "TRUE ONE-SHOT" note in
+ * `utils/backfill-governance-rules.ts` for why re-running against a MOVING
+ * `DEFAULT_AUTO_APPROVE` floor silently undoes any tightening of that floor.
+ *
+ * Lives on the singleton `pod_settings.settings` blob (same no-new-table pattern
+ * as `catalogSyncStamps`) and is written in the SAME transaction as the rows it
+ * marks, so a crashed/partial run leaves no marker and the next boot retries.
+ */
+export interface GovernanceBackfillMarker {
+  /** ISO timestamp of the first successful, COMPLETE backfill run. */
+  convergedAt: string;
+}
+
 export interface PodSettingsBlob {
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;
   federationOidcClient?: FederationOidcClient;
+  governanceRulesBackfill?: GovernanceBackfillMarker;
   [k: string]: unknown;
 }
 
