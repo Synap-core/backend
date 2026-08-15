@@ -13,6 +13,7 @@
 import {
   db,
   tools,
+  intelligenceServices,
   eq,
   drizzleSql,
   ensureExternalChannel,
@@ -96,6 +97,16 @@ export function resolveNoticeChannelId(
   return typeof fb === "string" && fb.trim() ? fb : fallbackChannelId;
 }
 
+/**
+ * WHERE the 6h dedup watermark lives. It was always a `tools` row, because
+ * every caller was a connector. An intelligence-service outage has no tool row
+ * — its own `intelligence_services` row is the natural home — so the watermark
+ * target is now named rather than assumed. Both tables carry a jsonb
+ * `metadata`, and the SAME `connectionHealth.<key>.lastNotifiedMs` shape is
+ * written to either, so there is still ONE dedup rule.
+ */
+export type HealthWatermarkTable = "tools" | "intelligence_services";
+
 interface NotifyConnectorOpts {
   /** Stable key for dedup + the metadata watermark, e.g. "google" | "cal_com". */
   connectorKey: string;
@@ -105,12 +116,31 @@ interface NotifyConnectorOpts {
   reconnectHint: string;
   userId: string;
   workspaceId: string | null;
-  /** Tool row holding the dedup watermark (metadata.connectionHealth.<key>). */
+  /** Row holding the dedup watermark (metadata.connectionHealth.<key>). */
   watermarkToolId: string;
+  /**
+   * Table the watermark row lives in. Defaults to `tools` so every existing
+   * connector caller keeps working unchanged.
+   */
+  watermarkTable?: HealthWatermarkTable;
   watermarkMetadata: Record<string, unknown> | null | undefined;
   /** Optional Discord team channel (external id) to also post the nudge into. */
   discordTeamChannelId?: string;
   errorMessage?: string;
+  /**
+   * Notification type from the registry. Defaults to `connector.auth.expired`
+   * — the only shape this helper could emit before. A caller whose failure is
+   * NOT an expired credential must pass its own type rather than borrow that
+   * one, or the notification asserts a cause nobody verified.
+   */
+  notificationType?: string;
+  /** Extra template variables merged over `{ connectorName }`. */
+  notificationData?: Record<string, unknown>;
+  /**
+   * Body of the Discord notice. Defaults to the reconnect wording. Same rule
+   * as above: say what actually happened, not what usually happens.
+   */
+  noticeMessage?: string;
 }
 
 /**
@@ -128,14 +158,16 @@ export async function notifyConnectorUnhealthy(
   const last = health[opts.connectorKey]?.lastNotifiedMs ?? 0;
   if (Date.now() - last < NUDGE_COOLDOWN_MS) return false;
 
-  // 1. In-app notification — reuse the existing connector.auth.expired template.
+  // 1. In-app notification — `connector.auth.expired` by default, or the
+  //    caller's own registry type when the failure is a different thing.
+  const notificationType = opts.notificationType ?? "connector.auth.expired";
   await NotificationService.create({
-    type: "connector.auth.expired",
+    type: notificationType,
     sourceType: "connector",
     userId: opts.userId,
     workspaceId: opts.workspaceId,
-    groupKey: `${opts.workspaceId ?? "pod"}:connector.auth.expired:${opts.connectorKey}`,
-    data: { connectorName: opts.connectorName },
+    groupKey: `${opts.workspaceId ?? "pod"}:${notificationType}:${opts.connectorKey}`,
+    data: { connectorName: opts.connectorName, ...opts.notificationData },
   }).catch((err) =>
     logger.warn({ err }, "connection-health: in-app notification failed")
   );
@@ -166,7 +198,9 @@ export async function notifyConnectorUnhealthy(
       }
       await insertChannelMessage({
         channelId,
-        content: `⚠️ **${opts.connectorName} connection needs reconnect** — syncing is paused until it's restored.\n${opts.reconnectHint}`,
+        content:
+          opts.noticeMessage ??
+          `⚠️ **${opts.connectorName} connection needs reconnect** — syncing is paused until it's restored.\n${opts.reconnectHint}`,
         userId: opts.userId,
         metadata: { connectionHealth: true, connector: opts.connectorKey },
       });
@@ -177,18 +211,36 @@ export async function notifyConnectorUnhealthy(
 
   // 3. Advance the watermark (nested jsonb_set ensures the parent object exists;
   //    the connector key is a bound array element, never interpolated into SQL).
-  await db
-    .update(tools)
-    .set({
-      metadata: drizzleSql`jsonb_set(
-        jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{connectionHealth}', COALESCE(${tools.metadata}#>'{connectionHealth}', '{}'::jsonb), true),
-        ARRAY['connectionHealth', ${opts.connectorKey}]::text[], jsonb_build_object('lastNotifiedMs', ${Date.now()}::bigint), true)`,
-      updatedAt: new Date(),
-    })
-    .where(eq(tools.id, opts.watermarkToolId))
-    .catch((err) =>
-      logger.warn({ err }, "connection-health: watermark persist failed")
-    );
+  //    Same statement against whichever table holds the row — the two branches
+  //    differ only in which `metadata` column and id they bind.
+  const watermarkAt = Date.now();
+  const watermarkSql = (
+    column: typeof tools.metadata | typeof intelligenceServices.metadata
+  ) =>
+    drizzleSql`jsonb_set(
+        jsonb_set(COALESCE(${column}, '{}'::jsonb), '{connectionHealth}', COALESCE(${column}#>'{connectionHealth}', '{}'::jsonb), true),
+        ARRAY['connectionHealth', ${opts.connectorKey}]::text[], jsonb_build_object('lastNotifiedMs', ${watermarkAt}::bigint), true)`;
+
+  const persistWatermark =
+    (opts.watermarkTable ?? "tools") === "intelligence_services"
+      ? db
+          .update(intelligenceServices)
+          .set({
+            metadata: watermarkSql(intelligenceServices.metadata),
+            updatedAt: new Date(),
+          })
+          .where(eq(intelligenceServices.id, opts.watermarkToolId))
+      : db
+          .update(tools)
+          .set({
+            metadata: watermarkSql(tools.metadata),
+            updatedAt: new Date(),
+          })
+          .where(eq(tools.id, opts.watermarkToolId));
+
+  await persistWatermark.catch((err) =>
+    logger.warn({ err }, "connection-health: watermark persist failed")
+  );
 
   logger.info(
     { connector: opts.connectorKey },

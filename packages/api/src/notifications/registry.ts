@@ -493,6 +493,21 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
   },
   {
+    // An intelligence service reporting degraded/unhealthy. NOT
+    // `connector.auth.expired` — that template asserts an expired credential,
+    // and an IS outage is usually something else entirely. The body carries
+    // the health endpoint's own detail rather than a guessed cause.
+    type: "system.intelligence_degraded",
+    category: "system",
+    label: "AI Service Degraded",
+    icon: "brain-circuit",
+    priority: "high",
+    titleTemplate: "{{connectorName}} is {{healthStatus}}",
+    bodyTemplate: "{{errorMessage}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+  },
+  {
     type: "system.issuer_pending_approval",
     category: "system",
     label: "Issuer Pending Approval",

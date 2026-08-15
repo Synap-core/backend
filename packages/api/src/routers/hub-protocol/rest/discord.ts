@@ -70,6 +70,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import { runMailFeed } from "../../../services/mail-feed/run-mail-feed.js";
 import { runEventSync } from "../../../services/event-sync/run-event-sync.js";
 import { accumulateAgentTurnStream } from "./discord-agent-turn-stream.js";
+import { aiFailureMessage } from "../../../utils/ai-failure.js";
 import {
   hasScope,
   logger,
@@ -87,8 +88,11 @@ const AGENT_TURN_DEADLINE_MS = Number(
   process.env.AGENT_TURN_DEADLINE_MS ?? 110_000
 );
 
-const IS_UNAVAILABLE_REPLY =
-  "The AI service is temporarily unavailable. Please try again in a moment.";
+/**
+ * No hand-written "temporarily unavailable" copy here: the reply the user reads
+ * comes from the ONE door (utils/ai-failure.ts), which classifies on real
+ * evidence and never promises a retry that cannot work.
+ */
 
 const PARTIAL_TIMEOUT_REPLY =
   "The agent timed out before finishing. Partial progress is included when available.";
@@ -775,7 +779,9 @@ export function registerDiscordRoutes(app: HubHono): void {
             },
             "Discord agent turn: IS stream failed with zero progress"
           );
-          reply = IS_UNAVAILABLE_REPLY;
+          reply = aiFailureMessage(streamResult.streamError, {
+            reference: turnRequestId,
+          });
           turnError = streamResult.streamError;
         } else if (timedOut && hasProgress) {
           // Deadline hit after tools/text — return partial so the bridge can
@@ -799,7 +805,8 @@ export function registerDiscordRoutes(app: HubHono): void {
             { channelId, discordChannelId: body.discordChannelId },
             "Discord agent turn: deadline exceeded with zero progress"
           );
-          reply = IS_UNAVAILABLE_REPLY;
+          // Verified cause: OUR deadline fired with nothing collected.
+          reply = aiFailureMessage("timeout", { reference: turnRequestId });
           timedOut = true;
           turnError = "Agent turn deadline exceeded";
         } else if (streamResult.streamError && hasProgress) {
@@ -829,7 +836,7 @@ export function registerDiscordRoutes(app: HubHono): void {
           { err, channelId, discordChannelId: body.discordChannelId },
           "Discord agent turn: IS call failed"
         );
-        reply = IS_UNAVAILABLE_REPLY;
+        reply = aiFailureMessage(err, { reference: turnRequestId });
         turnError = err instanceof Error ? err.message : String(err);
       } finally {
         clearTimeout(deadlineTimer);

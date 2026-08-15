@@ -324,8 +324,10 @@ describe("the MCP-shaped create now reaches the database", () => {
 
 describe("pattern-detector drafts are updatable (BUG 2, gate side)", () => {
   it("accepts an update to a row carrying the worker's metadata", async () => {
-    // The exact metadata automation-pattern-detector.ts now writes: no forged
-    // `createdVia: "ai"`, the honest suggestedByPattern signal instead.
+    // The exact metadata the retired automation-pattern-detector worker wrote:
+    // no forged `createdVia: "ai"`, the honest suggestedByPattern signal
+    // instead. The writer is gone; the rows it already wrote are not, and they
+    // must stay activatable — which is the whole point of this gate.
     h.existing.metadata = {
       suggestedByPattern: true,
       patternConfidence: 0.82,

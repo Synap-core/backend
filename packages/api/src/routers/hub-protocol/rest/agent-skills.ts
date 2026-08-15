@@ -535,6 +535,15 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
 
   /**
    * POST /agent-skills — create a skill
+   *
+   * Persistence goes through the SAME governed door as every other
+   * skill-creation path (`insertSkillGoverned`, shared with `skills.ts` and the
+   * `/agent-skills/import` sibling below). This route used to `db.insert(skills)`
+   * directly behind nothing but the `hub-protocol.write` scope: an agent bearer
+   * could mint pod-wide `instruction` rows — and squat their slugs (see the 409
+   * below) — with no `checkPermissionOrPropose` gate and no agent attribution.
+   * The gate is what makes an agent-initiated create a reviewable proposal
+   * instead of a silent write.
    */
   app.post("/agent-skills", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -547,9 +556,19 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json({ error: parsed.error.message }, 400);
     }
 
-    try {
-      const authUserId = (c.get("userId") as string) ?? "system";
+    // The auth middleware always sets `userId`. The old `?? "system"` fallback
+    // fabricated a principal, which is precisely what makes a governance gate
+    // vacuous — an unattributable write must be refused, not invented.
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) {
+      return c.json({ error: "Unauthenticated" }, 401);
+    }
+    // Set only when the bearer is an agent API key (auth middleware — see
+    // HubVariables.agentUserId): the governance signal that this create is
+    // agent-initiated, not an operator's own action.
+    const agentUserId = c.get("agentUserId") as string | undefined;
 
+    try {
       // Check slug uniqueness
       const [existing] = await db
         .select({ id: skills.id })
@@ -560,23 +579,40 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         return c.json({ error: "Skill with this slug already exists" }, 409);
       }
 
-      const [row] = await db
-        .insert(skills)
-        .values({
-          userId: authUserId,
-          slug: parsed.data.slug,
-          kind: "instruction",
-          name: parsed.data.name,
-          description: parsed.data.description ?? null,
-          topics: parsed.data.topics ?? [],
-          body: parsed.data.body,
-          source: parsed.data.source ?? null,
-          author: parsed.data.author ?? null,
-          tags: parsed.data.tags ?? [],
-        })
-        .returning();
+      const result = await insertSkillGoverned({
+        userId: authUserId,
+        agentUserId,
+        workspaceId: null,
+        // `scope: "pod"` is the column default this door has always written —
+        // stated explicitly here so the governed path is byte-identical to the
+        // direct insert it replaces.
+        scope: "pod",
+        slug: parsed.data.slug,
+        kind: "instruction",
+        name: parsed.data.name,
+        description: parsed.data.description ?? null,
+        topics: parsed.data.topics ?? [],
+        body: parsed.data.body,
+        source: parsed.data.source ?? null,
+        author: parsed.data.author ?? null,
+        tags: parsed.data.tags ?? [],
+        auditSource: "agent_skills_create",
+      });
 
-      return c.json(wireSkill(row), 200);
+      if (result.status === "denied") {
+        return c.json({ error: result.reason }, 403);
+      }
+      if (result.status === "proposed") {
+        // Honest contract: no row exists yet. Never fake a created skill for a
+        // write that is queued for review — same 202 envelope the other Hub
+        // REST doors return (e.g. rest/packages.ts).
+        return c.json(
+          { status: "proposed" as const, proposalId: result.proposalId },
+          202
+        );
+      }
+
+      return c.json(wireSkill(result.skill), 200);
     } catch (err) {
       logger.error({ err }, "create agent skill failed");
       return c.json({ error: "Internal error" }, 500);

@@ -15,6 +15,10 @@ import type { AskAnswer } from "./ask.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
+import {
+  classifyAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
 
 const logger = createLogger({ module: "knowledge-synthesize" });
 
@@ -31,6 +35,13 @@ export interface SynthesisResult {
   routedTo: string[];
   /** Present only on IS unavailability — callers surface sources instead. */
   error?: "synthesis_unavailable";
+  /**
+   * WHY synthesis was unavailable, classified from the real error by the one
+   * failure door (utils/ai-failure.ts). Present only alongside `error`, so a
+   * caller can tell the user "the provider is out of credit, retrying will not
+   * help" instead of inventing a temporary outage.
+   */
+  failureClass?: AiFailureClass;
 }
 
 const MAX_CONTEXT_CHARS = 16_000;
@@ -210,6 +221,7 @@ export async function synthesizeAnswer(
       sources,
       routedTo,
       error: "synthesis_unavailable",
+      failureClass: classifyAiFailure(err),
     };
   }
 }

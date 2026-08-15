@@ -16,6 +16,7 @@ import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
+import { describeAiFailure } from "../../utils/ai-failure.js";
 import {
   resolveAgentHandle,
   extractMentionAgentType,
@@ -1166,7 +1167,13 @@ export const sendMessageProcedure = protectedProcedure
           // transport failure so the established non-streaming fallback can
           // recover; otherwise the loop would persist a blank or partial
           // assistant message as if the response succeeded.
-          throw new Error(chunk.error ?? "Intelligence service stream failed");
+          // Carry the IS's structured failure evidence on the thrown error so
+          // the failure door classifies on `code`/`retryable` rather than on
+          // the prose. `chunk.error` stays the message for logs.
+          throw Object.assign(
+            new Error(chunk.error ?? "Intelligence service stream failed"),
+            chunk.failure ? { failure: chunk.failure } : {}
+          );
         } else if (chunk.type === "complete") {
           if (chunk.data) {
             const data = chunk.data as Partial<HubResponse>;
@@ -1274,11 +1281,21 @@ export const sendMessageProcedure = protectedProcedure
       // message. Never make that second invocation. Cancellation is equally
       // terminal: the abort signal already reached the IS request.
       if (turnCancelled || streamDeadlineExceeded || receivedStreamOutput) {
+        // A cancelled turn is not a failure — the user ended it — so it carries
+        // no failure class. Everything else goes through the one door: the
+        // deadline case has VERIFIED evidence (our own timer fired), the rest
+        // is classified from the stream error itself.
+        const streamFailure = turnCancelled
+          ? null
+          : describeAiFailure(
+              streamDeadlineExceeded ? "timeout" : streamError,
+              {
+                reference: input.clientRequestId,
+              }
+            );
         const error = turnCancelled
           ? "Chat turn cancelled"
-          : streamDeadlineExceeded
-            ? "The AI response timed out. Please try again."
-            : streamErrMsg;
+          : (streamFailure?.message ?? streamErrMsg);
         terminalTurnFailure = {
           status: turnCancelled ? "cancelled" : "failed",
           error,
@@ -1290,6 +1307,15 @@ export const sendMessageProcedure = protectedProcedure
             error,
             fallback: false,
             cancelled: turnCancelled,
+            // ADDITIVE wire contract (`error` unchanged): a stable code + an
+            // evidence-derived retryable, so the browser stops offering a
+            // Retry button for failures no retry can fix.
+            ...(streamFailure
+              ? {
+                  code: streamFailure.code,
+                  retryable: streamFailure.retryable,
+                }
+              : {}),
           },
           workspaceId: workspaceId ?? null,
           userId: userId,
@@ -1331,6 +1357,11 @@ export const sendMessageProcedure = protectedProcedure
                 ? streamError.message
                 : "Streaming failed",
             fallback: true,
+            // `fallback: true` — the non-streaming retry is still in flight, so
+            // this is progress, not a verdict. The code says WHAT failed; the
+            // turn stays retryable because we are literally retrying it.
+            code: describeAiFailure(streamError).code,
+            retryable: true,
           },
           workspaceId: workspaceId ?? null,
           userId: userId,
@@ -1346,23 +1377,29 @@ export const sendMessageProcedure = protectedProcedure
             fallbackError instanceof Error
               ? fallbackError.message
               : String(fallbackError);
-          const isCircuit = errorDetail.includes("circuit open");
-          const isTimeout =
-            errorDetail.includes("abort") || errorDetail.includes("timeout");
+          // ONE door from failure → user-facing words (utils/ai-failure.ts).
+          // It classifies on real evidence (status / provider code / error
+          // text) and never invents a cause or promises a retry that cannot
+          // work — a 402 out-of-credit used to read as "temporarily
+          // unavailable, try again shortly", which could never come true.
+          const failure = describeAiFailure(fallbackError, {
+            reference: input.clientRequestId,
+          });
 
           logger.error(
-            { err: fallbackError, channelId, isCircuit, isTimeout },
+            {
+              err: fallbackError,
+              channelId,
+              failureClass: failure.class,
+              retryable: failure.retryable,
+            },
             "Both streaming and non-streaming IS calls failed"
           );
 
           // The response never began, so this is a terminal turn error rather
           // than an assistant reply. Persisting a synthetic error as an AI
           // message makes transcript identity and retry semantics ambiguous.
-          const isAuthError =
-            errorDetail.includes("401") ||
-            errorDetail.includes("Unauthorized") ||
-            errorDetail.includes("credential");
-          if (isAuthError) {
+          if (failure.class === "auth") {
             // Auto-repair: request fresh credentials from CP in the background.
             // The current request fails gracefully, but the next one should succeed.
             try {
@@ -1376,21 +1413,24 @@ export const sendMessageProcedure = protectedProcedure
 
           terminalTurnFailure = {
             status: "failed",
-            error: isAuthError
-              ? "The AI service credentials are being refreshed. Please try again shortly."
-              : isCircuit
-                ? "The AI service is recovering from a temporary overload. Please try again shortly."
-                : isTimeout
-                  ? "The AI service took too long to respond. Please try again."
-                  : "The AI service is temporarily unavailable. Please try again shortly.",
+            error: failure.message,
           };
 
           emitChatEvent({
             event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
             data: {
               threadId: channelId,
-              error: errorDetail,
+              // `error` is what the browser RENDERS (useChannelStream →
+              // StreamError), so it carries the honest classified sentence;
+              // the raw provider string stays available as `detail` for
+              // diagnostics rather than being shown to the user.
+              error: failure.message,
+              detail: errorDetail,
               fallback: false,
+              // Terminal verdict — the browser must not offer Retry unless the
+              // evidence says a retry can actually succeed.
+              code: failure.code,
+              retryable: failure.retryable,
             },
             workspaceId: workspaceId ?? null,
             userId: userId,

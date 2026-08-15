@@ -1963,8 +1963,8 @@ try {
               await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
               await import("@synap/jobs/utils/proactive-post.js");
-            const { registerFlowValidator } =
-              await import("@synap/jobs/workers/automation-pattern-detector.js");
+            const { registerServiceHealthNotifier } =
+              await import("@synap/jobs/workers/intelligence-health-check.js");
             const api = await import("@synap/api");
             registerCapabilityExecutor((input) => api.executeCapability(input));
             // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
@@ -1998,11 +1998,11 @@ try {
             registerBrokenAutomationRunner(() => api.scanBrokenAutomations());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
-            // The pattern detector writes an LLM's suggested flow straight to
-            // `automations`, so it never meets the create/update door's check.
-            // Same validator, injected across the circular-dep boundary.
-            registerFlowValidator((flow) =>
-              api.flowValidationErrorMessage(flow)
+            // The 2-minute IS health cron used to only log a degraded verdict.
+            // It now nudges the operator through the SAME connector-health door
+            // (in-app + Discord notice, 6h dedup) across the api↔jobs dep.
+            registerServiceHealthNotifier((input) =>
+              api.notifyIntelligenceServiceUnhealthy(input)
             );
             apiLogger.info(
               "Registered capability / mail-feed / event-sync / event-end / session-recap / signal handlers (IoC)"

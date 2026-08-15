@@ -80,11 +80,55 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "context.*",
   "filesystem.read",
   "filesystem.write_workspace",
+  // `view.create` STAYS auto-approved. A view is a saved query + render config
+  // over data that already exists — it mints no new identity, changes nothing
+  // about what the pod IS, and is per-workspace. It is also the highest-volume
+  // agent surface here (one dashboard build = many views), so gating it would
+  // flood review for a purely presentational, reversible act. Contrast the
+  // META-MODEL keys removed just below.
   "view.create",
-  "profile.create",
-  "profile.update",
-  "property_def.create",
-  "property_def.update",
+  // NOTE — the META-MODEL keys `profile.create`, `profile.update`,
+  // `property_def.create` and `property_def.update` were DELIBERATELY REMOVED
+  // (containment-asymmetry pass). Kinds, roles and property defs define what the
+  // pod IS: a profile row is pod-wide (`entityScope` defaults to 'pod', so its
+  // entities surface in EVERY workspace) and a base property def (workspace_id
+  // NULL) extends a shared kind for every workspace at once. Unlike
+  // `automation.create` — which auto-approves BUT lands INERT (automations.ts
+  // forces `status:'draft'` for agent callers, so a human must activate it) —
+  // `profiles` / `property_defs` / `views` have NO inert state to land in
+  // (`profiles.is_active` is the SOFT-DELETE tombstone that
+  // `ProfileRepository.delete()` sets, not a draft flag), so "auto-approve +
+  // contain" is not available without a schema change. That leaves rung 9
+  // (propose) as the correct default for a structural, pod-wide write.
+  //   • Volume is small by construction: `synap_define_kind` is slug-idempotent
+  //     and documented as an L3 escalation ("only after list_profiles shows no
+  //     fit"), and when the KIND proposes its FIELDS are deferred rather than
+  //     filed (mcp/handlers/capability.ts:143 tells the agent to re-call the
+  //     slug-idempotent tool after approval) — so a new kind costs ONE
+  //     proposal, not 1+N. Field batches on an ALREADY-approved kind collapse
+  //     to one click under `proposals.batchApprove`: both approve doors share
+  //     `dispatchProposalApproval` (execution-registry.ts), so every registered
+  //     executor — `property_def/create` included — batch-approves.
+  //   • Package/template apply does NOT go through this gate at all: the
+  //     definition engine (workspaces/definition-engine.ts:2032) and the
+  //     materializer (jobs/materializer.ts:603) call `ProfileRepository.create`
+  //     DIRECTLY, ungoverned. So an install that mints 20 profiles files ZERO
+  //     proposals — the flood path people fear is structurally absent here.
+  //     (That bypass is a SEPARATE pre-existing governance gap, untouched by
+  //     this change.)
+  //   • Executors already exist for every removed create key —
+  //     `profile/create`, `property_def/create` — so approval materializes
+  //     through the same helper as the direct-apply branch.
+  //   • Widening back is USER-EDITABLE without a code change: a
+  //     `governance_rules` row at action granularity (rung 2.8) can say `auto`
+  //     for a trusted agent. That is the project's own answer for case-by-case
+  //     widening — which is why this stays a platform DEFAULT of propose rather
+  //     than a rung-2.1 `forcePropose` floor (a floor no rule could widen).
+  //   • `profile.update` / `property_def.update` were additionally DEAD keys:
+  //     no call site passes those (subjectType, action) pairs to
+  //     `checkPermissionOrPropose` today, so removing them changes no live
+  //     behavior — it removes a latent default-allow that would silently apply
+  //     the moment someone wires those gates.
   "entity.create",
   "entity.update",
   "document.create",

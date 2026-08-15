@@ -21,6 +21,7 @@ import {
   IDENTITY_SIGNAL_PROPERTY_KEYS,
 } from "@synap/database";
 import { logger } from "../../hub-protocol/rest/_shared.js";
+import { describeAiFailure } from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -515,15 +516,29 @@ const captureHandler: McpToolHandler = async (
   // single raw-note fallback with `degraded: true`. Do NOT silently execute
   // that note — it looks like a normal capture but is an outage artifact the
   // user doesn't want. Surface the degradation loudly and create nothing;
-  // the caller tells the user the AI service is temporarily unavailable.
+  // the caller tells the user WHY, from the classified reason — never a stock
+  // "temporarily unavailable, try again" that an auth/credit failure makes false.
   if ((structured as { degraded?: boolean }).degraded === true) {
     const reason = (structured as { degradedReason?: string }).degradedReason;
+    // `degradedReason` (capture.ts DegradedCaptureReason) is already a
+    // classification — map it onto the shared failure classes rather than
+    // re-deriving one.
+    const failure = describeAiFailure(
+      reason === "is_auth_error"
+        ? "auth"
+        : reason === "is_invalid_response" || reason === "is_empty_result"
+          ? "invalid_response"
+          : "unknown"
+    );
     return captureRejected({
       reason: "structuring-unavailable",
       scope: textScope,
       message:
-        "⚠️ AI structuring is temporarily unavailable, so nothing was created. " +
-        "Tell the user their capture was NOT structured (the AI service is degraded) and to try again shortly — do not present this as a normal capture or save a raw note.",
+        `⚠️ AI structuring did not run, so nothing was created. ${failure.message} ` +
+        "Tell the user their capture was NOT structured — do not present this as a normal capture or save a raw note" +
+        (failure.retryable
+          ? " — and that trying again shortly may work."
+          : ", and do not tell them to try again."),
       extra: {
         degraded: true,
         ...(reason ? { degradedReason: reason } : {}),

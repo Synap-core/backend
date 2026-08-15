@@ -60,8 +60,6 @@ Agents can perform these actions directly without a proposal:
 - `document.create`
 - `memory.store` (always auto-approved, never proposed)
 - `view.create`
-- `profile.create`, `profile.update`
-- `property_def.create`, `property_def.update`
 - `channel.create`
 - `bento.arrange`
 - `filesystem.write_workspace` (OpenClaw sandbox only)
@@ -70,8 +68,12 @@ Agents can perform these actions directly without a proposal:
 
 - `entity.delete`, `entity.archive`, `entity.purge`
 - `view.update`, `view.delete`
-- `profile.delete`
-- `property_def.delete`
+- `profile.create`, `profile.update`, `profile.delete` — META-MODEL. A kind/role
+  is pod-wide (`entityScope` defaults to `'pod'`), so it changes what the pod IS
+  in every workspace. Unlike `automation.create` (auto-approved but landing
+  INERT as a draft), profiles have no inert state, so they propose.
+- `property_def.create`, `property_def.update`, `property_def.delete` — a base
+  property def (`workspace_id` NULL) extends a shared kind for every workspace.
 - `workspace.create`, `workspace.update`, `workspace.delete`
 
 ## Destructive action override
@@ -184,7 +186,8 @@ GET /api/hub/workspaces/{workspaceId}/governance
     effective: {
       autoApproveFor: [           // the actual whitelist at this workspace
         "entity.create", "entity.update", "relation.create", "document.create",
-        "view.create", "profile.create", "property_def.create", "memory.*", …
+        "view.create", "memory.*", …   // NOT profile.create / property_def.create —
+        // meta-model writes propose (see "Proposal-gated" above)
       ],
       governanceMode: "default" | "agent-owned",
       proposalApprovalPolicy: "owner_and_admins" | "any_editor" | "admins_only",

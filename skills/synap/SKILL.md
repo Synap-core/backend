@@ -718,7 +718,7 @@ Example response to the user:
 
 > I queued **Delete task "Q2 plan review"** for your review. Destructive actions need your approval. Open it: synap://open/proposal/prp_abc
 
-Auto-approved by default (for agent API keys): `entity.create`, `entity.update`, `document.create`, `relation.create`, `view.create`, `profile.create`, `property_def.create`, `channel.create`, `memory.*`, all reads. Destructive actions (`delete`, `archive`, `purge`) always propose in agent-owned workspaces.
+Auto-approved by default (for agent API keys): `entity.create`, `entity.update`, `document.create`, `relation.create`, `view.create`, `channel.create`, `memory.*`, all reads. META-MODEL writes (`profile.*`, `property_def.*` — new kinds, roles and fields) always propose: they are pod-wide and have no inert state to land in. Destructive actions (`delete`, `archive`, `purge`) always propose in agent-owned workspaces.
 
 For the full whitelist, agent-user semantics, and workspace overrides, read **`governance.md`**.
 

@@ -28,7 +28,7 @@
  *   - Resilient per-user: one failure does not abort the batch
  *
  * Queue: pod-hygiene.near-dup-scan
- * Cron:  daily 15 3 * * * (after automation-pattern-detect at 03:00)
+ * Cron:  daily 15 3 * * *
  *
  * TODO(proactive digest): if any proposals created in a run, optionally post one
  * proactive_post summary ("N merge proposals ready") — skipped for W0 complexity.

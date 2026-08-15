@@ -5,12 +5,20 @@
  * Profiles define entity types; property defs define custom fields.
  *
  * Governance:
- *   - Profile create/update ops are routed through DEFAULT_AUTO_APPROVE
- *     (view.create, profile.create, profile.update, property_def.create, property_def.update
- *     are in the whitelist — schema evolution is non-destructive and reversible),
- *     but every write is still gated through `checkPermissionOrPropose` so a
- *     workspace that opts into stricter review (SAFE mode / a narrowed
- *     `autoApproveFor`) is honored instead of silently bypassed.
+ *   - META-MODEL writes PROPOSE by default. `profile.create`, `profile.update`,
+ *     `property_def.create` and `property_def.update` are DELIBERATELY ABSENT
+ *     from DEFAULT_AUTO_APPROVE (containment-asymmetry pass): a kind/role row is
+ *     pod-wide (`entityScope` defaults to 'pod') and a base property def
+ *     (workspace_id NULL) extends a shared kind for every workspace at once, and
+ *     — unlike `automation.create`, which auto-approves BUT lands INERT as a
+ *     draft — these tables have NO inert state to land in. So an agent caller
+ *     gets `status: 'proposed'`; operators apply directly.
+ *   - `view.create` REMAINS auto-approved (presentational, per-workspace,
+ *     reversible, high volume).
+ *   - Widening is user-editable without a code change: a `governance_rules` row
+ *     at action granularity (rung 2.8) can restore `auto` for a trusted agent.
+ *   - Every write is gated through `checkPermissionOrPropose`, so a workspace
+ *     that opts into stricter review is honored rather than silently bypassed.
  *   - No delete endpoints exposed to agents.
  */
 
@@ -123,7 +131,10 @@ export const hubProfilesRouter = router({
   /**
    * Create a profile (entity type definition)
    * Requires: hub-protocol.write scope
-   * Governance: auto-approved (profile.create in DEFAULT_AUTO_APPROVE)
+   * Governance: PROPOSES for agent callers — `profile.create` is deliberately
+   * NOT in DEFAULT_AUTO_APPROVE (a kind/role is pod-wide structure with no
+   * inert state to land in). The `profile/create` proposal executor
+   * materializes an approved proposal through the same path used here.
    */
   createProfile: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -275,7 +286,8 @@ export const hubProfilesRouter = router({
    * GOVERNANCE (locked): binding an AI-generated cell as a durable renderer is
    * consequential, so this routes through `checkPermissionOrPropose` with the
    * `profile` / `renderer.set` action — which is DELIBERATELY absent from
-   * DEFAULT_AUTO_APPROVE (unlike `profile.update`). Agent callers therefore get
+   * DEFAULT_AUTO_APPROVE, as every `profile` / `property_def` meta-model write
+   * now is (containment-asymmetry pass). Agent callers therefore get
    * `status: 'proposed'` (awaiting review); operators get `status: 'applied'`.
    * The `profile/renderer.set` proposal executor materializes an approved
    * proposal via the SAME `setProfileRenderer` service used here.
@@ -369,11 +381,11 @@ export const hubProfilesRouter = router({
    *
    * GOVERNANCE: routed through `checkPermissionOrPropose` with
    * `subjectType: 'property_def'`, `action: 'create'` — mirrors the
-   * `entity/create` gate exactly. `property_def.create` is in
-   * DEFAULT_AUTO_APPROVE, so a default-governance workspace still gets
-   * instant apply; a workspace that narrows `autoApproveFor` (or runs in SAFE
-   * mode) now correctly gets `status: 'proposed'` instead of an ungoverned
-   * direct write. On approval, the `property_def/create` proposal executor
+   * `entity/create` gate exactly. `property_def.create` is deliberately NOT in
+   * DEFAULT_AUTO_APPROVE (a base property def carries workspace_id NULL and so
+   * extends a shared kind for EVERY workspace at once, with no inert state to
+   * land in), so an agent caller gets `status: 'proposed'`; operators apply
+   * directly. On approval, the `property_def/create` proposal executor
    * materializes via the SAME `createAndLinkPropertyDef` helper used here.
    *
    * Phase 2 layered schemas: pass `overlay: true` with a `workspaceId` to

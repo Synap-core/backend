@@ -93,6 +93,37 @@ export const MESSAGE_ALIAS_PATTERNS = [
   "message.*",
 ] as const;
 
+/**
+ * Registered OBSERVATION namespaces — the raw `<namespace>.<rest>` types the
+ * hub-protocol observations door accepts (`dev.commit`, `ci.workflow_run`, …).
+ *
+ * They live HERE, not in the api package, for the same reason
+ * `MESSAGE_ALIAS_PATTERNS` does: an observation can FIRE an automation (the
+ * unified trigger hop enqueues `automation-trigger-match` with the raw type),
+ * and the runtime matcher's `matchPattern` handles them as plain dotted strings
+ * — so `validateEventPattern` MUST accept them at create-time too. Otherwise the
+ * trigger hop fans out to a receiver set that can never be populated: every
+ * automation able to receive an observation is rejected at the authoring door.
+ *
+ * That is not hypothetical — it is the SECOND time this exact split has bitten
+ * (`message.received` was the first, and its comment above states the same
+ * invariant). One constant, consumed by both the door and the validator, is what
+ * makes drift impossible.
+ *
+ * `packages/api/.../hub-protocol/observations.ts` re-exports this; add a
+ * namespace here and both sides move together. Keep them coarse (one per
+ * producing system), never per-event-type, and disjoint from every first-party /
+ * governance namespace (tripwire: `observations-not-a-governance-input.test.ts`).
+ */
+export const OBSERVATION_NAMESPACES = [
+  /** Local development tooling — commits, gate runs, deploys (`./dev`). */
+  "dev",
+  /** Continuous integration — workflow runs, build results. */
+  "ci",
+] as const;
+
+export type ObservationNamespace = (typeof OBSERVATION_NAMESPACES)[number];
+
 // ============================================================================
 // EVENT ACTIONS
 // ============================================================================
@@ -205,6 +236,15 @@ export function validateEventPattern(raw: string): EventPattern {
   // action check below rejects "received". The runtime matcher matches this exact
   // set (matchesMessageAlias) — both sides consume MESSAGE_ALIAS_PATTERNS.
   if ((MESSAGE_ALIAS_PATTERNS as readonly string[]).includes(raw)) {
+    return raw as EventPattern;
+  }
+
+  // Observation namespaces (`dev.*`, `ci.*`): raw producer-defined types that the
+  // trigger hop enqueues verbatim and the runtime matcher matches as plain dotted
+  // strings. Accepted before the SubjectType check — "dev" is deliberately NOT a
+  // SubjectType (an observation is not a first-party domain event), so without
+  // this the authoring door rejects every automation capable of receiving one.
+  if ((OBSERVATION_NAMESPACES as readonly string[]).includes(subject)) {
     return raw as EventPattern;
   }
 

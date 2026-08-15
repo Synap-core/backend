@@ -292,6 +292,10 @@ export {
   type RunMailFeedResult,
 } from "./services/mail-feed/run-mail-feed.js";
 export {
+  notifyIntelligenceServiceUnhealthy,
+  type NotifyIntelligenceServiceUnhealthyInput,
+} from "./services/connection-health/notify-service-unhealthy.js";
+export {
   runCalBackfill,
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";

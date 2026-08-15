@@ -18,7 +18,11 @@
  *      bare 60_000, with its failure swallowed into a logger.warn that named
  *      neither side nor elapsed) and automation-pattern-detector.ts (30_000, on
  *      a generation-shaped call whose prompt grows with workspace activity).
- *      Both now take a budget. If you add an IS call site, add it here — grep
+ *      Both took a budget; the pattern detector has since been DELETED (it
+ *      guessed via the IS and wrote draft automations with no proposal row).
+ *      Nothing replaces its IS call today, so this list is one site shorter —
+ *      do not go looking for a successor entry.
+ *      If you add an IS call site, add it here — grep
  *      `AbortSignal.timeout` and `setTimeout(.*abort` across jobs + api before
  *      claiming this list is complete.
  *   2. 60s is simply the wrong number for a reasoning model. A reasoning model

@@ -22,6 +22,7 @@
 import {
   db,
   and,
+  or,
   eq,
   isNull,
   desc,
@@ -29,6 +30,7 @@ import {
   drizzleSql,
   automations,
   automationRuns,
+  automationStepRuns,
   playbooks,
   playbookRuns,
   focusSessions,
@@ -384,13 +386,54 @@ async function loadResults(
   return results;
 }
 
-// ── Proposals (attributed via the workflow's sessions) ──────────────────────
+// ── Proposals (attributed via sessions OR the stamped step-run chain) ───────
 
+/**
+ * A proposal belongs to this workflow when EITHER of the two provenance stamps
+ * the runtime already writes points back at it:
+ *
+ *   1. `sessionId` — the human/agent path: a focus session of this workflow.
+ *   2. `stepRunId → automation_step_runs.run_id → automation_runs.automation_id`
+ *      — the automation path (the same chain `proposals.ts` walks to label a
+ *      proposal's producing automation).
+ *
+ * Attributing on (1) alone hid every automation-produced proposal, because an
+ * automation step run has no focus session — the workflow view showed a run that
+ * demonstrably created proposals with an empty proposals list. Both stamps are
+ * columns already on `proposals`, so this stays inside the file's contract: no
+ * new access dimension, no migration. The user floor is unchanged.
+ */
 async function loadProposals(
+  kind: WorkflowKind,
+  id: string,
   sessionIds: string[],
   userId: string
 ): Promise<WorkflowProposal[]> {
-  if (sessionIds.length === 0) return [];
+  // Only automations own a step-run chain; a playbook's proposals reach us
+  // through its sessions. So a playbook with no sessions still short-circuits.
+  const stepRunPath =
+    kind === "automation"
+      ? inArray(
+          proposals.stepRunId,
+          db
+            .select({ id: automationStepRuns.id })
+            .from(automationStepRuns)
+            .innerJoin(
+              automationRuns,
+              eq(automationRuns.id, automationStepRuns.runId)
+            )
+            .where(eq(automationRuns.automationId, id))
+        )
+      : null;
+
+  if (sessionIds.length === 0 && !stepRunPath) return [];
+
+  const attribution = stepRunPath
+    ? sessionIds.length > 0
+      ? or(inArray(proposals.sessionId, sessionIds), stepRunPath)
+      : stepRunPath
+    : inArray(proposals.sessionId, sessionIds);
+
   const rows = await db
     .select({
       id: proposals.id,
@@ -407,12 +450,7 @@ async function loadProposals(
       revisionHistory: proposals.revisionHistory,
     })
     .from(proposals)
-    .where(
-      and(
-        inArray(proposals.sessionId, sessionIds),
-        userVisibleWhere(proposals.workspaceId, userId)
-      )
-    )
+    .where(and(attribution, userVisibleWhere(proposals.workspaceId, userId)))
     .orderBy(desc(proposals.createdAt))
     .limit(PROPOSAL_CAP);
   return rows.map((r) => ({
@@ -453,7 +491,7 @@ export async function getWorkflowPlace(
     loadRuns(kind, id, userId),
     loadChannels(kind, id, userId, sessions),
     loadResults(sessionIds, userId),
-    loadProposals(sessionIds, userId),
+    loadProposals(kind, id, sessionIds, userId),
   ]);
 
   return {

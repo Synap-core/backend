@@ -23118,6 +23118,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		activityStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				today: {
+					sinceIso: string;
+					total: number;
+					fromAgents: number;
+					leftPod: number;
+					needsLook: number;
+				};
+				last7d: {
+					sinceIso: string;
+					total: number;
+					fromAgents: number;
+					leftPod: number;
+					needsLook: number;
+				};
+			};
+			meta: object;
+		}>;
 		eventFanout: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				eventId: string;

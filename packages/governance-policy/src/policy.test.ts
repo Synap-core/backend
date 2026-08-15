@@ -420,6 +420,59 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toBe("execute");
   });
 
+  // ---------------------------------------------------------------------
+  // Containment asymmetry: META-MODEL writes are NOT default-auto-approved.
+  //
+  // `automation.create` may auto-approve because the write lands INERT
+  // (automations.ts forces status:'draft' for agent callers). Profiles and
+  // property defs have NO inert state to land in, and they are POD-WIDE
+  // (entityScope defaults to 'pod'; a base property def carries workspace_id
+  // NULL). With no containment available, they must propose.
+  // ---------------------------------------------------------------------
+  it("meta-model writes are NOT in DEFAULT_AUTO_APPROVE → propose", () => {
+    for (const [subjectType, action] of [
+      ["profile", "create"],
+      ["profile", "update"],
+      ["property_def", "create"],
+      ["property_def", "update"],
+    ] as const) {
+      expect(
+        DEFAULT_AUTO_APPROVE,
+        `${subjectType}.${action} must not be default-auto-approved`
+      ).not.toContain(`${subjectType}.${action}`);
+      expect(
+        decideAgentPolicy({ subjectType, action }).verdict,
+        `${subjectType}.${action} should route to a proposal`
+      ).toBe("propose");
+    }
+  });
+
+  it("the meta-model default is a PLATFORM default, not a floor — a rung-2.8 rule and an explicit autoApproveFor can still widen it", () => {
+    // Rung 2.8 (governance_rules store) — the user-editable widening door.
+    expect(
+      decideAgentPolicy({
+        subjectType: "profile",
+        action: "create",
+        governanceRuleVerdict: "auto",
+      }).verdict
+    ).toBe("execute");
+    // Rung 4 (explicit workspace autoApproveFor override).
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        autoApproveFor: ["property_def.create"],
+      }).verdict
+    ).toBe("execute");
+  });
+
+  it("view.create is DELIBERATELY still auto-approved (presentational, per-workspace, high volume)", () => {
+    expect(DEFAULT_AUTO_APPROVE).toContain("view.create");
+    expect(
+      decideAgentPolicy({ subjectType: "view", action: "create" }).verdict
+    ).toBe("execute");
+  });
+
   it("9. default (not whitelisted, nothing else triggers) → propose with no preset reason", () => {
     // Use a non-destructive, non-whitelisted action so the 2.5 hard floor
     // doesn't shadow the plain default-propose path this test targets.
@@ -1355,7 +1408,9 @@ describe("constants are intact", () => {
       "entity.create",
       "entity.update",
       "view.create",
-      "profile.create",
+      // `profile.create` is DELIBERATELY absent — see the meta-model test in
+      // "decideAgentPolicy" above (a kind/role is pod-wide structure with no
+      // inert state to land in, so it proposes).
       "relation.create",
       "facet.attach",
       "facet.update",

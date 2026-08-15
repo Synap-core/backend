@@ -60,6 +60,7 @@ import { createHash } from "crypto";
 import { z } from "zod";
 
 import { createSynapEvent } from "@synap-core/core";
+import { OBSERVATION_NAMESPACES } from "@synap-core/types";
 import { getEventRepository } from "@synap/database";
 import { getBoss } from "@synap/events";
 
@@ -117,15 +118,20 @@ const UUID_RE =
 /**
  * Registered observation namespaces. A type MUST be `<namespace>.<rest>`.
  *
- * To add a producer: add its namespace here. Keep them coarse (one per
- * producing system), never per-event-type.
+ * DECLARED IN `@synap-core/types` (events/unified.ts), not here, and re-exported
+ * for the callers that already import it from this module. The reason is the
+ * unified trigger hop below: an observation FIRES automations, so the automation
+ * authoring door's `validateEventPattern` must accept `dev.*` / `ci.*` — and
+ * that validator lives in @synap-core/types, which cannot import from this
+ * package. Two copies would drift, and the drift is not theoretical: the door
+ * accepted `dev.commit` while the validator rejected every automation that could
+ * receive it, so the hop fired into a permanently empty receiver set.
+ *
+ * To add a producer: add its namespace to OBSERVATION_NAMESPACES in
+ * @synap-core/types. Keep them coarse (one per producing system), never
+ * per-event-type.
  */
-export const OBSERVATION_NAMESPACES = [
-  /** Local development tooling — commits, gate runs, deploys (`./dev`). */
-  "dev",
-  /** Continuous integration — workflow runs, build results. */
-  "ci",
-] as const;
+export { OBSERVATION_NAMESPACES };
 
 /**
  * A caller may never assert a lifecycle phase. `.validated` is the one that

@@ -25,6 +25,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireUserId } from "../utils/user-scoped.js";
+import { startOfUtcDay } from "../utils/permission-check.js";
 import {
   db,
   eventRepository,
@@ -628,6 +629,55 @@ export const subscriptionsRouter = router({
         .map((m) => m.shell);
 
       return { items: final, lens: input.lens as ReactionLens };
+    }),
+
+  /**
+   * Windowed activity counts for the Activity plane's pulse band.
+   *
+   * The band shows RATES/COMPARISONS with an explicit window — never a bare
+   * all-time cumulative counter. The client only holds the newest ~200 events
+   * (`listAll`), so it cannot compute an honest total; this proc does the count
+   * server-side as a real SQL aggregate over the SAME population `listAll`
+   * renders (see `EventRepository.activityStats`).
+   *
+   * Population + category derivation are matched to the feed 1:1 (pending-
+   * proposal events excluded; fromAgents = deriveActorAI, leftPod = external
+   * reaction kinds, needsLook = failed). "today" = start of UTC day; each window
+   * carries its `sinceIso` so the band can scope-label every number.
+   */
+  activityStats: protectedProcedure
+    .input(
+      z.object({
+        /**
+         * 3-state workspace filter (same convention as `listAll`):
+         *   - string    → only that workspace's events
+         *   - null      → only pod-wide events (no workspaceId)
+         *   - undefined → no filter (whole pod, every workspace the user owns)
+         */
+        workspaceId: z.string().nullish(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const todaySince = startOfUtcDay();
+      const weekSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      const stats = await eventRepository.activityStats({
+        userId,
+        // Preserve the 3-state distinction: pass `null` through (pod-wide only),
+        // a string through (that ws), or omit entirely (no filter).
+        ...(input.workspaceId === undefined
+          ? {}
+          : { workspaceId: input.workspaceId }),
+        todaySince,
+        weekSince,
+      });
+
+      return {
+        today: { ...stats.today, sinceIso: todaySince.toISOString() },
+        last7d: { ...stats.last7d, sinceIso: weekSince.toISOString() },
+      };
     }),
 
   /**

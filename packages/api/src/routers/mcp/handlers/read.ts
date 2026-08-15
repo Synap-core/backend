@@ -10,6 +10,7 @@
 
 import { ask } from "../../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
   toProfileCatalogEntry,
   type ProfileCatalogEntry,
@@ -111,11 +112,19 @@ export const readHandlers: McpHandlerMap = {
     // Surface synthesis outages loudly instead of returning a null answer that
     // looks like "no results". Retrieval/sources still stand.
     if ((synthesis as { error?: string }).error === "synthesis_unavailable") {
+      // The WHY comes from the one failure door, classified from the real
+      // error — never a stock "temporarily unavailable" that could be telling
+      // the agent to retry a failure no retry can fix.
+      const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
       return ok({
         ...synthesis,
         ...pendingBlock,
         message:
-          "⚠️ AI synthesis is temporarily unavailable. The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
+          `⚠️ AI synthesis did not run. ${failure.message} ` +
+          (failure.retryable
+            ? "Retrying may work. "
+            : "Do not retry — say so instead. ") +
+          "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
       });
     }
     return ok({ ...synthesis, ...pendingBlock });

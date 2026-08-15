@@ -945,6 +945,147 @@ export class EventRepository {
   }
 
   /**
+   * Windowed activity counts for the Activity plane's pulse band.
+   *
+   * A REAL SQL aggregate (`count(*) FILTER`) over the SAME events population the
+   * Activity feed (`subscriptions.listAll` → `searchEvents`) renders — NOT a
+   * capped fetch-then-count — so the band's numbers describe the feed the user
+   * actually sees. One indexed pass; the `today` counts are FILTER subsets of
+   * the same scan the `last7d` window bounds.
+   *
+   * POPULATION MATCH (no drift with the feed rows):
+   *  - user-scoped via `user_id` (the events convention — the table has no
+   *    direct workspace FK; workspace context is
+   *    `COALESCE(workspace_id, data->>'workspaceId')`, same 3-state filter as
+   *    `searchEvents`/`listAll`).
+   *  - EXCLUDES pending-proposal events exactly as the feed does: a `.requested`
+   *    event whose linked proposal (joined by `correlation_id`) is still
+   *    `pending`. The feed is FACTS only, so the band must be too.
+   *
+   * CATEGORY DERIVATION mirrors the router's row mappers 1:1 (see
+   * `routers/subscriptions.ts`):
+   *  - `fromAgents` ← `deriveActorAI`: source/data-based AI attribution. It does
+   *    NOT read the `is_agent` telemetry column — the feed's `actorAI` never
+   *    does either, so keying off `is_agent` here would drift the band from the
+   *    rows.
+   *  - `leftPod`    ← `EXTERNAL_REACTION_KINDS` via `reactionKindForEventType`:
+   *    `webhook.*` OR (`message.*` containing "out").
+   *  - `needsLook`  ← `isFailedEvent`: type ending in ".failed".
+   *
+   * Timezone: `todaySince` is the caller's start-of-day boundary (the router
+   * passes `startOfUtcDay()` — UTC, consistent with the rest of the pod's
+   * "today" reads). The exact instants are returned to the caller as `sinceIso`
+   * so the band can scope-label each number honestly.
+   */
+  async activityStats(params: {
+    userId: string;
+    /** 3-state: string = that ws, null = pod-wide only, undefined = no filter. */
+    workspaceId?: string | null;
+    todaySince: Date;
+    weekSince: Date;
+  }): Promise<{
+    today: {
+      total: number;
+      fromAgents: number;
+      leftPod: number;
+      needsLook: number;
+    };
+    last7d: {
+      total: number;
+      fromAgents: number;
+      leftPod: number;
+      needsLook: number;
+    };
+  }> {
+    const p: unknown[] = [params.userId];
+    let paramIndex = 2;
+
+    // 3-state workspace clamp (mirrors searchEvents' COALESCE resolution).
+    let wsClause = "";
+    if (typeof params.workspaceId === "string") {
+      wsClause = ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
+      p.push(params.workspaceId);
+      paramIndex++;
+    } else if (params.workspaceId === null) {
+      wsClause = ` AND COALESCE(workspace_id, data->>'workspaceId') IS NULL`;
+    }
+
+    const weekIdx = paramIndex;
+    p.push(params.weekSince.toISOString());
+    paramIndex++;
+    const todayIdx = paramIndex;
+    p.push(params.todaySince.toISOString());
+    paramIndex++;
+
+    // ── SQL translations of the router's TS category mappers (keep in sync) ──
+    // deriveActorAI: source/data AI attribution. NULLIF('') matches JS truthiness
+    // for the data hints (an empty string is not an AI signal).
+    const AGENT = `(
+      lower(source) IN ('automation','intelligence','ai','agent')
+      OR NULLIF(data->>'agentUserId','') IS NOT NULL
+      OR NULLIF(data->>'agentType','') IS NOT NULL
+      OR lower(data->>'source') IN ('ai','agent','intelligence')
+    )`;
+    // EXTERNAL_REACTION_KINDS via reactionKindForEventType: webhook + message-out.
+    const EXTERNAL = `(
+      type LIKE 'webhook.%'
+      OR (type LIKE 'message.%' AND type LIKE '%out%')
+    )`;
+    // isFailedEvent.
+    const FAILED = `(type LIKE '%.failed')`;
+
+    const today = `timestamp >= $${todayIdx}`;
+    const week = `timestamp >= $${weekIdx}`;
+
+    // Pending-proposal exclusion — the exact complement of the decision queue,
+    // matching the feed's `e.pending` exclusion. A `.requested` event is dropped
+    // only when its correlation still has an open (pending) proposal.
+    const notPending = `NOT (
+      type LIKE '%.requested'
+      AND correlation_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM proposals prop
+        WHERE prop.correlation_id = e.correlation_id
+          AND prop.status = 'pending'
+      )
+    )`;
+
+    const query = `
+      SELECT
+        count(*) FILTER (WHERE ${today})                 AS today_total,
+        count(*) FILTER (WHERE ${today} AND ${AGENT})    AS today_agents,
+        count(*) FILTER (WHERE ${today} AND ${EXTERNAL}) AS today_left,
+        count(*) FILTER (WHERE ${today} AND ${FAILED})   AS today_look,
+        count(*) FILTER (WHERE ${week})                  AS week_total,
+        count(*) FILTER (WHERE ${week} AND ${AGENT})     AS week_agents,
+        count(*) FILTER (WHERE ${week} AND ${EXTERNAL})  AS week_left,
+        count(*) FILTER (WHERE ${week} AND ${FAILED})    AS week_look
+      FROM events e
+      WHERE user_id = $1${wsClause}
+        AND ${week}
+        AND ${notPending}
+    `;
+
+    const result = await this.query(query, p);
+    const r = (result.rows[0] ?? {}) as Record<string, unknown>;
+    const n = (v: unknown): number => parseInt(String(v ?? 0), 10) || 0;
+    return {
+      today: {
+        total: n(r.today_total),
+        fromAgents: n(r.today_agents),
+        leftPod: n(r.today_left),
+        needsLook: n(r.today_look),
+      },
+      last7d: {
+        total: n(r.week_total),
+        fromAgents: n(r.week_agents),
+        leftPod: n(r.week_left),
+        needsLook: n(r.week_look),
+      },
+    };
+  }
+
+  /**
    * Map database row to EventRecord
    */
   private mapRow(row: Record<string, unknown>): EventRecord {

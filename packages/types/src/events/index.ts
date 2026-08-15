@@ -78,12 +78,7 @@ export interface DocumentVersionCreatedEvent {
 
 /** Platforms that OpenClaw bridges into Synap channels. */
 export type OpenClawPlatform =
-  | "telegram"
-  | "whatsapp"
-  | "signal"
-  | "matrix"
-  | "discord"
-  | "voice";
+  "telegram" | "whatsapp" | "signal" | "matrix" | "discord" | "voice";
 
 /** External chat platform message ingested via OpenClaw → routed into a Synap channel. */
 export interface OpenClawMessageReceivedEvent {
@@ -343,6 +338,7 @@ export type EventPayloadFor<E extends EventName> =
 // import it directly from `@synap-core/types/events/unified`.
 export {
   SUBJECT_TYPES,
+  OBSERVATION_NAMESPACES,
   EVENT_ACTIONS,
   EVENT_PHASES,
   buildEventName,

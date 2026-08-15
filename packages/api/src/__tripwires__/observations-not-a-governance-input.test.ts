@@ -43,6 +43,14 @@ const OBSERVATIONS = read(
   join(API_SRC, "routers/hub-protocol/observations.ts")
 );
 
+// OBSERVATION_NAMESPACES is DECLARED in @synap-core/types (events/unified.ts) and
+// only re-exported by the door — the automation authoring door's
+// `validateEventPattern` lives there and must accept the same namespaces, and a
+// second copy in the api package would drift. Property 3a therefore reads the
+// declaration site, not the re-export.
+const TYPES_SRC = join(HERE, "..", "..", "..", "types", "src"); // packages/types/src
+const UNIFIED_EVENTS = read(join(TYPES_SRC, "events/unified.ts"));
+
 describe("§06-Q5: observations are not a governance input", () => {
   // ── Property 1: the ceiling readers still floor on is_agent = true ─────────
   const CEILING_READERS: Array<{ label: string; abs: string }> = [
@@ -132,7 +140,7 @@ describe("§06-Q5: observations are not a governance input", () => {
   // — "no governance reader file SELECTs an OBSERVATION_NAMESPACE" — needs a
   // cross-file scan of every reader and is deferred as over-scope for this gate.
   it("OBSERVATION_NAMESPACES is disjoint from every first-party/governance namespace", () => {
-    const block = OBSERVATIONS.match(
+    const block = UNIFIED_EVENTS.match(
       /OBSERVATION_NAMESPACES\s*=\s*\[([\s\S]*?)\]\s*as const/
     );
     expect(

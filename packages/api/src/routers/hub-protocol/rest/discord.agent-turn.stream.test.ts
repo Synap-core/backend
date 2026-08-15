@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AIStep, HubStreamEvent } from "@synap-core/types";
 import { accumulateAgentTurnStream } from "./discord-agent-turn-stream.js";
+import { aiFailureMessage } from "../../../utils/ai-failure.js";
 
 function step(
   partial: Partial<AIStep> & Pick<AIStep, "id" | "type" | "content">
@@ -215,14 +216,12 @@ function mapToAgentTurnBody(
   error?: string;
 } {
   const hasProgress = Boolean(result.fullContent) || result.aiSteps.length > 0;
-  const IS_UNAVAILABLE =
-    "The AI service is temporarily unavailable. Please try again in a moment.";
   const PARTIAL_MSG =
     "The agent timed out before finishing. Partial progress is included when available.";
 
   if (result.streamError && !hasProgress) {
     return {
-      reply: IS_UNAVAILABLE,
+      reply: aiFailureMessage(result.streamError),
       steps: result.aiSteps,
       error: result.streamError,
     };
@@ -238,7 +237,7 @@ function mapToAgentTurnBody(
   }
   if (result.timedOut && !hasProgress) {
     return {
-      reply: IS_UNAVAILABLE,
+      reply: aiFailureMessage("timeout"),
       steps: result.aiSteps,
       timedOut: true,
       error: "Agent turn deadline exceeded",

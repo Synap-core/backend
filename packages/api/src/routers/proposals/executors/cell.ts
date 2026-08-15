@@ -44,10 +44,29 @@ export function registerCellExecutors(): void {
       await defineCell({
         name,
         rendererSource,
-        workspaceId:
-          (innerData.workspaceId as string | null | undefined) ??
-          proposal.workspaceId ??
-          null,
+        // SCOPE = THE REVIEWED SCOPE, never the payload. This used to read
+        // `innerData.workspaceId ?? proposal.workspaceId ?? null`, so the
+        // caller-supplied gate `data` chose the cell's scope.
+        //
+        // PRECISION on the reachable vector (measured, not assumed — the first
+        // reading of this bug overstated it): `??` falls through on a payload
+        // `null`, so a payload could NOT force POD-GLOBAL. What it COULD do is
+        // REDIRECT: a payload naming workspace B out-votes a proposal reviewed
+        // under workspace A, and a payload workspace NARROWS a pod-wide
+        // proposal into one workspace. Both write the cell at a scope no
+        // reviewer approved, which is the defect regardless of direction.
+        //
+        // The two doors that mint these proposals (MCP `synap_create_cell`,
+        // Hub `POST /cells/define`) always write the SAME value into both
+        // places, so this is a no-op for every legitimate caller today; the
+        // divergence appears the moment the two can differ — e.g. `revise`
+        // re-targets `proposals.workspaceId` (that path re-authorizes the
+        // DESTINATION, and pod-wide requires pod-admin) while leaving the
+        // stored `data.workspaceId` untouched, at which point the stale payload
+        // would win over the scope a reviewer actually approved.
+        // Matches `view/create` (executors/view.ts), which already reads only
+        // `proposal.workspaceId ?? null`.
+        workspaceId: proposal.workspaceId ?? null,
         description:
           (innerData.description as string | null | undefined) ?? null,
         // View-renderer affinity, carried in the gate `data` by the doors that

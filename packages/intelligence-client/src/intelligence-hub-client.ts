@@ -620,7 +620,15 @@ export class IntelligenceHubClient {
         };
       } else if (frame.type === "error") {
         sawTerminalFrame = true;
-        yield { type: "error", error: frame.error };
+        // Forward the IS's structured failure evidence alongside the prose.
+        // Dropping it here was why the pod had to grep error strings.
+        yield {
+          type: "error",
+          error: frame.error,
+          ...(frame.failure
+            ? { failure: frame.failure as HubStreamEvent["failure"] }
+            : {}),
+        };
       } else if (frame.type === "complete") {
         sawTerminalFrame = true;
         yield { type: "complete", data: frame.data };

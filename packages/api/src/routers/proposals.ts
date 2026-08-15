@@ -1215,7 +1215,9 @@ export const proposalsRouter = router({
 
       // Authority — SAME ladder `approve`/`revert` enforce. Without this a
       // rejection was gated only by `requireUserId` (any member could reject
-      // any proposal by id). Pod-wide (no workspace) proposals skip the check.
+      // any proposal by id). Pod-wide (no workspace) proposals are gated TOO,
+      // by approve's own owner / agent-owner / pod-admin predicate — they used
+      // to short-circuit to an unconditional allow.
       if (proposal) {
         await assertCanReviewProposal({
           proposal: {
@@ -1449,7 +1451,9 @@ export const proposalsRouter = router({
       // Authority — SAME ladder `approve`/`revert` enforce. Reopening puts a
       // rejected proposal back into the pending queue, so it must require the
       // same review authority as approving/rejecting it. Pod-wide (no
-      // workspace) proposals skip the check, mirroring approve/revert.
+      // workspace) proposals are gated TOO — reopen is the RESURRECTION
+      // primitive, and it used to be an unconditional allow there, so any
+      // authenticated pod user could resurrect a rejected pod-wide proposal.
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
@@ -2191,13 +2195,27 @@ export const proposalsRouter = router({
           columns: {
             workspaceId: true,
             data: true,
+            // `agentUserId` is a GATE INPUT, not telemetry: an agent-authored
+            // proposal carries `data.sourceId` = the AGENT, so the human who
+            // owns that agent is admitted only via the agent-owner rung, which
+            // resolves `users.createdByUserId` FROM this column. The single
+            // `reject`/`reopen` doors already select it; omitting it here made
+            // batchReject silently strictly-stricter than reject — and once the
+            // pod-wide branch became a real gate (it used to be an
+            // unconditional allow), that gap would 403 an owner batch-rejecting
+            // their OWN agent's pod-wide proposals.
+            agentUserId: true,
             proposalType: true,
             correlationId: true,
           },
         });
         if (!target) continue;
         await assertCanReviewProposal({
-          proposal: { workspaceId: target.workspaceId, data: target.data },
+          proposal: {
+            workspaceId: target.workspaceId,
+            data: target.data,
+            agentUserId: target.agentUserId,
+          },
           userId,
           action: "reject",
         });

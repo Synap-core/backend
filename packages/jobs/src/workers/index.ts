@@ -64,7 +64,6 @@ import {
   handleVaultGrantExpiry,
   VAULT_GRANT_EXPIRY_QUEUE,
 } from "./vault-grant-expiry-worker.js";
-import { handleAutomationPatternDetect } from "./automation-pattern-detector.js";
 import {
   handleNotificationCleanup,
   NOTIFICATION_CLEANUP_QUEUE,
@@ -220,7 +219,6 @@ const ALL_QUEUES = [
   CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
-  "automation-pattern-detect",
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   "feed-scheduler",
@@ -273,6 +271,12 @@ const RETIRED_QUEUES: string[] = [
   // healed the workspaces it was meant to. The boot-sweep stamp-on-reconcile
   // (`reconcile-workspaces-to-templates.ts`) is now the single truthful stamp.
   "package-version-backfill",
+  // Removed 2026-08-15: the nightly LLM pattern detector asked the IS to GUESS
+  // which activity should become an automation, then wrote a draft automation
+  // DIRECTLY — no proposal row, so it bypassed the review inbox entirely. It
+  // produced nothing in two weeks on the live pod. Its replacement mines the
+  // human approval log instead of guessing, and files a normal proposal.
+  "automation-pattern-detect",
 ];
 
 /**
@@ -577,12 +581,6 @@ export async function registerAllWorkers(): Promise<void> {
     handleVaultGrantExpiry()
   );
   logger.info("Registered worker: vault-grant-expiry");
-
-  // Automation pattern detection (cron: daily at 3:00 AM UTC)
-  await boss.work("automation-pattern-detect", async () =>
-    handleAutomationPatternDetect()
-  );
-  logger.info("Registered worker: automation-pattern-detect");
 
   // Notification cleanup (cron: daily at 2:00 AM UTC)
   await boss.work(NOTIFICATION_CLEANUP_QUEUE, async () =>

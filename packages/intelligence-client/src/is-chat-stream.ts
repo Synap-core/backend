@@ -31,6 +31,13 @@ export interface ISChatStreamFrame {
   proposal?: unknown;
   data?: { content?: string; [k: string]: unknown };
   error?: string;
+  /**
+   * Structured failure evidence on an `error` frame (code / retryable /
+   * status / provider ids). Typed as unknown here so this leaf parser stays
+   * dependency-free; the client narrows it to `IsFailureEnvelope` when it
+   * forwards the frame.
+   */
+  failure?: unknown;
 }
 
 /**

@@ -173,6 +173,39 @@ export interface HubStreamEvent {
   proposal?: CreatedProposal;
   data?: unknown;
   error?: string;
+  /** Structured evidence for an `error` frame. See IsFailureEnvelope. */
+  failure?: IsFailureEnvelope;
+}
+
+/**
+ * Structured failure evidence the Intelligence Service attaches to an `error`
+ * frame, so the pod can classify on FACTS instead of grepping prose.
+ *
+ * ⚠️ `message` is RAW PROVIDER TEXT (e.g. literally "Insufficient Balance").
+ * It is diagnostic only — logs and operator-facing detail. Never render it as
+ * the user-facing explanation: an unexplained provider fragment presented as
+ * an explanation is the same defect as an invented cause. Branch on `code` +
+ * `retryable`; the words live in the pod's ai-failure door.
+ */
+export interface IsFailureEnvelope {
+  code?:
+    | "insufficient_credit"
+    | "auth"
+    | "rate_limit"
+    | "quota_exhausted"
+    | "timeout"
+    | "circuit_open"
+    | "provider_error"
+    | "cancelled"
+    | "unknown"
+    | (string & {});
+  /** RAW provider text — diagnostic only, never user copy. */
+  message?: string;
+  retryable?: boolean;
+  status?: number;
+  providerId?: string;
+  providerCode?: string;
+  retryAfterSeconds?: number;
 }
 
 // =============================================================================

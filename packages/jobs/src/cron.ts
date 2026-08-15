@@ -175,13 +175,7 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});
   logger.info("Registered cron: vault-grant-expiry (every hour)");
 
-  // Automation pattern detection (daily at 3:00 AM UTC)
-  await scheduleSafe(boss, "automation-pattern-detect", "0 3 * * *", {});
-  logger.info(
-    "Registered cron: automation-pattern-detect (daily at 3:00 AM UTC)"
-  );
-
-  // Pod hygiene near-dup scan (daily at 3:15 AM UTC — after pattern-detect).
+  // Pod hygiene near-dup scan (daily at 3:15 AM UTC).
   // Files PENDING entity merge proposals only; never auto-merges.
   await scheduleSafe(
     boss,
