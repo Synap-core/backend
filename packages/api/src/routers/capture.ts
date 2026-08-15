@@ -2626,6 +2626,22 @@ export const captureRouter = router({
             userId,
             reviewedBy: userId,
             workspaceId: workspaceId ?? null,
+            // PROVENANCE — the same two stamps the governance gate above already
+            // resolved (:2142 / :2147). They were omitted here, so every TEXT-lane
+            // capture filed a row reading human-authored and session-less, while
+            // the STRUCTURED lane (submit-capture-graph.ts:721) stamped the
+            // session. Two capture lanes, two different provenances for the same
+            // user action — and the receipt the caller sees reported a session the
+            // stored row did not carry.
+            //
+            // This is what re-listing fields by hand costs: the helper accepts
+            // both (event-backed-proposal.ts:17/22) and writes them to columns
+            // behind a truthiness spread, so an omission is indistinguishable
+            // from a deliberate NULL.
+            ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+            ...((input.sessionId ?? ctx.sessionId)
+              ? { sessionId: input.sessionId ?? ctx.sessionId }
+              : {}),
             // The deterministically-resolved project (already LINKED above), or —
             // when none resolved — the AI's advisory suggestion. This is an
             // auto_approved RECORD (createAutoApprovedProposal never stamps

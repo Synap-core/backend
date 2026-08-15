@@ -612,6 +612,13 @@ const captureHandler: McpToolHandler = async (
       >[0]["relations"]) ?? [],
     workspaceRouting: args.workspaceRouting as
       "auto" | "ask" | "locked" | undefined,
+    // The ambient session, forwarded explicitly. `execute` reads `input.sessionId`
+    // (capture.ts:1753) to run the `session --produced--> entity` link pass for
+    // entities that were MERGED into an existing row — the create-side stamp only
+    // fires on freshly created ones. Omitting it here meant an MCP capture that
+    // deduped into an existing entity left no edge back to the session that
+    // produced it, which is exactly the case a session dashboard needs most.
+    ...(sessionId ? { sessionId } : {}),
     aiWorkspaceId: (structured as { targetWorkspaceId?: string | null })
       .targetWorkspaceId,
     aiWorkspaceConfidence: (
