@@ -28,6 +28,7 @@ import {
   type MessageCategory,
   type RoutedSource,
 } from "../schema/index.js";
+import { emitMessageEvent } from "./emit-message-event.js";
 
 export interface PersistAssistantReplyParams {
   /** Preallocated by the durable chat-turn owner when this is an interactive turn. */
@@ -117,6 +118,22 @@ export async function persistAssistantReply(
     .update(channels)
     .set({ updatedAt: new Date() })
     .where(eq(channels.id, params.channelId));
+
+  // Keystone fact write: append `message.sent` to the `events` log for
+  // every agent reply this shared writer produces (interactive send-message,
+  // the a2ai-response-trigger worker, and the Discord bridge). `assistantId`
+  // is always a fresh insert (no conflict/no-op path here), so no landed-row
+  // guard is needed.
+  await emitMessageEvent({
+    type: "message.sent",
+    userId: params.userId,
+    channelId: params.channelId,
+    messageId: assistantId,
+    data: {
+      authorType: MessageAuthorType.AI_AGENT,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    },
+  });
 
   return { assistantId, previousHash, hash };
 }

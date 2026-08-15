@@ -38,6 +38,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_create_document: ["document.create", "create_document"],
   synap_get_document: ["document.read", "get_document"],
   synap_create_view: ["create_view"],
+  synap_list_views: ["list_views", "synap_list_views"],
   synap_create_cell: ["create_cell", "generate_widget"],
   synap_promote_cell_to_renderer: ["synap_promote_cell_to_renderer"],
   synap_promote_session_to_playbook: ["synap_promote_session_to_playbook"],

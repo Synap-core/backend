@@ -24,12 +24,20 @@ vi.mock("../client-pg.js", () => ({
   },
 }));
 
+// Mock the keystone fact-write so these tests assert on the call, not a live
+// eventRepository/DB append.
+const emitMessageEventMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("./emit-message-event.js", () => ({
+  emitMessageEvent: (...args: unknown[]) => emitMessageEventMock(...args),
+}));
+
 const { persistAssistantReply } = await import("./persist-assistant-reply.js");
 const { computeMessageHash } = await import("./message-hash.js");
 
 beforeEach(() => {
   capturedInsert = null;
   updateCalled = false;
+  emitMessageEventMock.mockClear();
 });
 
 describe("persistAssistantReply", () => {
@@ -51,6 +59,17 @@ describe("persistAssistantReply", () => {
     expect(capturedInsert!.hash).toBe(r.hash);
     expect(capturedInsert!.metadata).toEqual({ a: 1 });
     expect(updateCalled).toBe(true); // channels.updatedAt bumped
+    // Keystone fact write: emitted on every reply this writer produces.
+    expect(emitMessageEventMock).toHaveBeenCalledTimes(1);
+    expect(emitMessageEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message.sent",
+        userId: "u",
+        channelId: "ch",
+        messageId: r.assistantId,
+        data: expect.objectContaining({ authorType: "ai_agent" }),
+      })
+    );
   });
 
   it("uses an explicit previousHash override (discord inbound-hash path)", async () => {

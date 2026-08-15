@@ -154,36 +154,79 @@ prompt_yn() {
 print_npm_auth_help() {
   cat <<'EOF' >&2
 
-── npm publish auth (this is your E404 / web-login loop) ────────────────────
-Your npm account has two-factor auth = "auth-and-writes".
-That means a normal login / "Publish" token is NOT enough to put a package:
+── npm publish auth ──────────────────────────────────────────────────────────
+You are already logged in (npm whoami works). Publish still needs a 2FA step
+because your account is two-factor auth = "auth-and-writes".
 
-  1) PUT /@synap-core/api-types  →  401  (token can't write without 2FA)
-  2) npm opens browser web-auth    →  polls /-/v1/done?authId=…
-  3) poll ends in 404              →  "Not Found" (web auth never finished)
+When YOU run interactively, this script uses your existing login and asks for
+the authenticator OTP in the terminal (legacy auth — no browser).
 
-FIX — pick ONE:
+  ./dev ship api-types publish
+  # → "This operation requires a one-time password:"
+  # → type the 6 digits from your authenticator app
 
-  A) Recommended for ./dev ship (no browser):
-     npmjs.com → Access Tokens → Generate New Token → Classic → Automation
-     (Automation tokens bypass 2FA for publish.)
-     Then:
-       npm config set //registry.npmjs.org/:_authToken=npm_YOUR_AUTOMATION_TOKEN
-       ./dev ship api-types publish --yes
+If you still see a browser URL + done?authId 404, npm is stuck on auth-type=web.
+This script forces legacy auth for the publish process only — re-run the same
+command in a real terminal (not piped).
 
-  B) Keep current token + one-shot OTP from your authenticator app:
-       ./dev ship api-types publish --otp=123456 --yes
-     (or:  NPM_OTP=123456 ./dev ship api-types publish --yes)
+Optional shortcuts:
+  ./dev ship api-types publish --otp=123456     # skip the prompt
+  Automation token (CI / no OTP ever):
+    npmjs.com → Access Tokens → Classic → Automation
+    npm config set //registry.npmjs.org/:_authToken=npm_…
 
-  C) Avoid broken web auth:
-       npm config set auth-type legacy
-     then use B with --otp=…
-
-Do NOT rely on "npm login" web flow for publish while auth-type=web — it is
-what produces the done?authId 404 you saw.
-
-Diagnose anytime:  ./dev ship api-types auth
+Diagnose:  ./dev ship api-types auth
 EOF
+}
+
+# Publish using the caller's existing npm login.
+# Interactive TTY: npm prompts for OTP (2FA). Non-TTY: need --otp or Automation token.
+#
+# Why auth-type=legacy for this process only:
+#   Global auth-type=web opens browser + polls /-/v1/done?authId=… → 404 for you.
+#   Legacy uses your //registry.npmjs.org/:_authToken and asks for OTP in the terminal.
+#
+# Why pnpm --filter (not bare npm in the package dir):
+#   api-types depends on workspace:* — pnpm rewrites those to real versions on publish.
+do_npm_publish() {
+  local ver="$1"
+  local who
+  who="$(npm whoami 2>/dev/null || echo '?')"
+
+  if [[ -n "$NPM_OTP" ]]; then
+    info "using your npm login ($who) + OTP from --otp / NPM_OTP"
+  elif [[ -t 0 && -t 1 ]]; then
+    info "using your npm login ($who)"
+    info "when prompted, enter the 6-digit code from your authenticator app"
+  else
+    warn "non-interactive — pass --otp=XXXXXX or use an Automation token"
+  fi
+
+  log "pnpm publish $PKG_NAME@$ver (your session, auth-type=legacy for this process)"
+
+  local -a cmd=(
+    pnpm --filter "$PKG_NAME" publish
+    --access public
+    --no-git-checks
+    --tag "$NPM_TAG"
+  )
+  if [[ -n "$NPM_OTP" ]]; then
+    cmd+=(--otp "$NPM_OTP")
+  fi
+
+  set +e
+  (
+    cd "$BACKEND_ROOT"
+    # Force legacy auth for this child (and prefer global auth-type=legacy).
+    # auth-type=web opens browser + /-/v1/done?authId=… → 404 on this account.
+    export NPM_CONFIG_AUTH_TYPE=legacy
+    export npm_config_auth_type=legacy
+    # If 2FA prompts are still broken, user can pass --otp= from authenticator.
+    "${cmd[@]}"
+  )
+  local rc=$?
+  set -e
+  return $rc
 }
 
 cmd_auth() {
@@ -206,8 +249,9 @@ cmd_auth() {
   if [[ -n "$profile" ]]; then
     tfa="$(printf '%s\n' "$profile" | awk -F': ' '/two-factor auth/ {print $2; exit}')"
     info "2FA mode:  ${tfa:-unknown}"
-    if [[ "$tfa" == *auth-and-writes* || "$tfa" == *auth-and-writes* ]]; then
-      warn "2FA=auth-and-writes → publish needs Automation token OR --otp=XXXXXX"
+    if [[ "$tfa" == *auth-and-writes* ]]; then
+      ok "2FA=auth-and-writes — interactive publish will prompt for OTP in the terminal"
+      info "(script forces auth-type=legacy for publish so the browser web-auth 404 is avoided)"
     fi
   fi
   # package rights
@@ -222,8 +266,10 @@ cmd_auth() {
   fi
   if [[ -n "$NPM_OTP" ]]; then
     ok "OTP provided for this run (--otp / NPM_OTP)"
+  elif [[ -t 0 && -t 1 ]]; then
+    ok "interactive terminal — publish will use your login and prompt for OTP"
   else
-    info "no OTP in env for this run"
+    info "non-interactive — pass --otp= or Automation token"
   fi
   print_npm_auth_help
 }
@@ -250,9 +296,10 @@ menu() {
   7) auth       — diagnose npm login / 2FA / OTP (E404 helper)
   q) quit
 
-  Usual path:     ./dev ship api-types publish --otp=XXXXXX
-  Force new ver:  ./dev ship api-types publish --force-bump --otp=XXXXXX
-  Explicit ver:   ./dev ship api-types publish 1.27.0 --otp=XXXXXX
+  Usual path:     ./dev ship api-types publish
+                  (uses your npm login; prompts for 2FA OTP in the terminal)
+  Force new ver:  ./dev ship api-types publish --force-bump
+  Explicit ver:   ./dev ship api-types publish 1.27.0
   Auth debug:     ./dev ship api-types auth
 
 EOF
@@ -588,45 +635,27 @@ cmd_publish() {
 
   log "Upload $PKG_NAME@$ver → registry.npmjs.org (tag=$NPM_TAG)"
   info "npm currently: ${live:-unknown}"
+  info "session:       $(npm whoami 2>/dev/null || echo 'not logged in')"
 
-  # 2FA preflight — avoid the browser web-auth 404 loop
-  local tfa=""
-  tfa="$(npm profile get 2>/dev/null | awk -F': ' '/two-factor auth/ {print $2; exit}' || true)"
-  if [[ "$tfa" == *auth-and-writes* || "$tfa" == *auth-and-writes* ]]; then
-    if [[ -z "$NPM_OTP" ]]; then
-      warn "npm 2FA is auth-and-writes and no --otp was passed."
-      info "Publish tokens alone return 401 → npm opens broken web-auth → done?authId 404."
-      info "Pass a fresh authenticator code, or use an Automation token (see auth help)."
-      if [[ -t 0 && "$YES" != "1" ]]; then
-        read -r -p "  OTP from authenticator (or empty to abort): " NPM_OTP || true
-      fi
-      if [[ -z "$NPM_OTP" ]]; then
-        print_npm_auth_help
-        die "missing OTP — re-run: ./dev ship api-types publish --otp=XXXXXX --yes"
-      fi
-    else
-      ok "using OTP from --otp / NPM_OTP"
-    fi
+  if ! npm whoami >/dev/null 2>&1; then
+    die "not logged in to npm — run: npm login   then re-run ./dev ship api-types publish"
   fi
 
-  if ! prompt_yn "Publish $PKG_NAME@$ver to npm?" y; then
+  # Interactive: confirm then let npm prompt for 2FA OTP using YOUR login.
+  # Non-interactive without --otp: fail early with auth help.
+  if [[ ! -t 0 || ! -t 1 ]] && [[ -z "$NPM_OTP" ]] && [[ "$YES" != "1" ]]; then
+    print_npm_auth_help
+    die "non-interactive publish needs --otp=XXXXXX or an Automation token + --yes"
+  fi
+
+  if ! prompt_yn "Publish $PKG_NAME@$ver to npm as $(npm whoami)?" y; then
     die "Aborted (version stamps left at $ver — commit or discard as you like)."
   fi
 
-  local pub_args=(--filter "$PKG_NAME" publish --access public --no-git-checks --tag "$NPM_TAG")
-  if [[ -n "$NPM_OTP" ]]; then
-    pub_args+=(--otp "$NPM_OTP")
-  fi
-
-  set +e
-  (cd "$BACKEND_ROOT" && pnpm "${pub_args[@]}")
-  local pub_rc=$?
-  set -e
-
-  if [[ $pub_rc -ne 0 ]]; then
-    warn "pnpm publish failed (exit $pub_rc)"
+  if ! do_npm_publish "$ver"; then
+    warn "npm publish failed"
     print_npm_auth_help
-    die "publish failed — fix auth (Automation token or --otp), then re-run"
+    die "publish failed — if npm asked for a browser login, re-run in a normal terminal and enter the authenticator OTP when prompted"
   fi
 
   log "Post-publish verify"
@@ -693,9 +722,11 @@ case "$MODE" in
 Modes: verify | prepare | bump | build | publish | dry-run | auth
 Flags: --yes --force/--force-bump --otp=XXXXXX --patch --minor --major --full --version X.Y.Z --tag <npm-tag>
 
-Usual:     ./dev ship api-types publish --otp=XXXXXX
+Usual:     ./dev ship api-types publish
+           (your npm login + terminal OTP prompt)
 Auth help: ./dev ship api-types auth
-Force ver: ./dev ship api-types publish --force-bump --otp=XXXXXX
+Optional:  ./dev ship api-types publish --otp=XXXXXX
+Force ver: ./dev ship api-types publish --force-bump
 EOF
     ;;
   *) die "unknown mode '$MODE' (verify|prepare|bump|build|publish|dry-run|auth)" ;;

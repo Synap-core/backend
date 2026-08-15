@@ -4,6 +4,9 @@
  * Host types (`entity`, `view`) are the only ones this surface fetches.
  * Bounce kinds match the Hono `/open/:type/:id` ALLOWED set minus host
  * types: we never render them here, we point at `synap://open/{type}/{id}`.
+ *
+ * HOST_TYPES ∪ BOUNCE_TYPES MUST equal TYPED_OPEN_KINDS in
+ * apps/api/src/open-dispatch.ts (enforced by open-kinds.lock.test.ts).
  */
 
 export const HOST_TYPES = ["entity", "view"] as const;

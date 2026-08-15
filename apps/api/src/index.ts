@@ -69,7 +69,11 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
-import { dispatchOpen, podAdminTarget } from "./open-dispatch.js";
+import {
+  dispatchOpen,
+  podAdminTarget,
+  TYPED_OPEN_KINDS,
+} from "./open-dispatch.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import {
   authMiddleware,
@@ -720,17 +724,7 @@ app.get("/open/:type/:id", (c) => {
   // `project` / `workspace` are lens targets (not rows the app "opens" as a
   // surface) — the browser deep-link handler switches the active lens and lands
   // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
-  const ALLOWED = new Set([
-    "proposal",
-    "entity",
-    "view",
-    "document",
-    "cell",
-    "channel",
-    "session",
-    "project",
-    "workspace",
-  ]);
+  const ALLOWED = new Set(TYPED_OPEN_KINDS);
   const type = c.req.param("type").trim().toLowerCase();
   const id = c.req.param("id");
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be

@@ -35,6 +35,7 @@ import {
   messages,
   MessageRole,
   computeMessageHash,
+  emitMessageEvent,
   and,
   eq,
   isNull,
@@ -184,6 +185,19 @@ export async function postChannelMessage(
     // re-trigger (at-most-once external effect).
     return duplicateReceipt(msgId, channelId);
   }
+
+  // Keystone fact write: append `message.sent` to the `events` log — reached
+  // ONLY when a NEW row landed (the conflict/no-op path returned above). This is
+  // the MCP/programmatic post door (`synap_post_message`), so agent/API posts
+  // become facts too. No entityId lookup here (honest absence over a per-post
+  // query); the channel is the subject.
+  await emitMessageEvent({
+    type: "message.sent",
+    userId,
+    channelId,
+    messageId: msgId,
+    data: { role },
+  });
 
   if (triggerAI) {
     const { emitChatEvent } =

@@ -24,7 +24,15 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { proposeChannelBind } from "../../utils/propose-channel-bind.js";
 import { randomUUID } from "crypto";
-import { db, eq, and, gt, inArray, computeMessageHash } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  gt,
+  inArray,
+  computeMessageHash,
+  emitMessageEvent,
+} from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import {
@@ -408,6 +416,20 @@ export const channelsRouter = router({
         .set({ updatedAt: new Date() })
         .where(eq(channels.id, channel.id));
 
+      // Keystone fact write: an external platform message just landed in this
+      // channel — inbound. Guarded by reaching here only after the insert above.
+      await emitMessageEvent({
+        type: "message.received",
+        userId: channel.userId,
+        channelId: channel.id,
+        messageId,
+        workspaceId: channel.workspaceId,
+        data: {
+          externalSource: input.externalSource,
+          senderName: input.senderName,
+        },
+      });
+
       emitChatEvent({
         event: EventNames.CHAT_MESSAGE,
         data: {
@@ -613,6 +635,18 @@ export const channelsRouter = router({
         .update(channels)
         .set({ updatedAt: new Date() })
         .where(eq(channels.id, input.channelId));
+
+      // Keystone fact write: an external agent (e.g. OpenClaw) just posted
+      // into this A2AI channel — inbound from the pod's perspective. Guarded
+      // by reaching here only after the insert above.
+      await emitMessageEvent({
+        type: "message.received",
+        userId: channel.userId,
+        channelId: input.channelId,
+        messageId,
+        workspaceId: input.workspaceId,
+        data: { agentUserId: input.agentUserId },
+      });
 
       // Emit — triggers Synap IS to respond
       emitChatEvent({
@@ -903,6 +937,19 @@ export const channelsRouter = router({
         .update(channels)
         .set({ updatedAt: new Date() })
         .where(eq(channels.id, input.channelId));
+
+      // Keystone fact write: the pod itself injects this skill-trigger turn
+      // into the channel — outbound (system/agent-authored). Guarded by
+      // reaching here only after the insert above.
+      await emitMessageEvent({
+        type: "message.sent",
+        userId: input.userId,
+        channelId: input.channelId,
+        messageId,
+        workspaceId: input.workspaceId,
+        entityId: input.entityId,
+        data: { type: "skill_trigger", skillId: input.skillId },
+      });
 
       // Emit chat event — causes IS to generate an AI response in this channel
       emitChatEvent({

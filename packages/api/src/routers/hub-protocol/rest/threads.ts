@@ -31,6 +31,7 @@ import {
   desc,
   inArray,
   computeMessageHash,
+  emitMessageEvent,
 } from "@synap/database";
 import { ChannelType, type MessageRole } from "@synap/database/schema";
 
@@ -833,6 +834,23 @@ export function registerThreadsRoutes(app: HubHono): void {
         return inserted;
       });
 
+      // Keystone fact write: one fact per landed row — this door mirrors/
+      // imports a whole conversation, so direction follows each item's own
+      // role (user = the mirrored human/external side = inbound; assistant/
+      // system = the agent/system side = outbound). Reached only after the
+      // transaction above lands the batch. No workspaceId/entityId lookup
+      // here — honest absence over a per-item query (mirrors post-message.ts).
+      for (let i = 0; i < prepared.length; i++) {
+        await emitMessageEvent({
+          type:
+            prepared[i].role === "user" ? "message.received" : "message.sent",
+          userId: prepared[i].userId,
+          channelId: threadId,
+          messageId: prepared[i].id,
+          data: { role: prepared[i].role },
+        });
+      }
+
       // autoRespond: only fire for the LAST user message in the batch to
       // avoid spawning N IS jobs for an N-message replay.
       if (body.autoRespond === true) {
@@ -938,6 +956,19 @@ export function registerThreadsRoutes(app: HubHono): void {
         userId,
         hash,
         ...(body.metadata ? { metadata: body.metadata } : {}),
+      });
+
+      // Keystone fact write: this door mirrors the MCP `synap_post_message`
+      // door — an identified acting identity posted into the channel, so it
+      // is always `message.sent` regardless of the chat-render `role`. No
+      // workspaceId/entityId lookup here — honest absence over a per-post
+      // query (mirrors post-message.ts).
+      await emitMessageEvent({
+        type: "message.sent",
+        userId,
+        channelId: threadId,
+        messageId: msgId,
+        data: { role: body.role },
       });
 
       if (body.autoRespond === true && body.role === "user") {

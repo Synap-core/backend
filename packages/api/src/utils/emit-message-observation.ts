@@ -8,6 +8,14 @@
  * insert, at both write sites (inbound: `inbound-recorder.ts`, outbound:
  * `channels/send-message.ts`).
  *
+ * ── Delegation ──────────────────────────────────────────────────────────────
+ * The implementation now lives in `@synap/database`'s `emitMessageEvent`
+ * (`packages/database/src/utils/emit-message-event.ts`) so shared writers in
+ * that package (`insertChannelMessage`, `persistAssistantReply`) can call it
+ * directly without duplicating the logic. This file keeps the api-side name
+ * (`emitMessageObservation`) and signature stable for its existing callers
+ * (send-message.ts, inbound-recorder.ts) — it is a thin re-export/delegate.
+ *
  * ── Why NOT the hub-protocol/observations.ts door ──────────────────────────
  * That router is the KEY-AUTHENTICATED, EXTERNAL door: its
  * `OBSERVATION_NAMESPACES` allowlist + `RESERVED_PHASES` refuse exist to
@@ -46,41 +54,9 @@
  * sites.
  */
 
-import { createSynapEvent } from "@synap-core/core";
-import { createLogger } from "@synap-core/core";
-import { eventRepository } from "@synap/database";
+import { emitMessageEvent, type EmitMessageEventArgs } from "@synap/database";
 
-const logger = createLogger({ module: "message-observation" });
-
-export interface MessageObservationArgs {
-  /** `message.received` (inbound) or `message.sent` (outbound). */
-  type: "message.received" | "message.sent";
-  userId: string;
-  /** The real channel this message landed on — the primary subject. */
-  channelId: string;
-  /** The just-inserted message row's id. */
-  messageId: string;
-  workspaceId?: string | null;
-  /**
-   * The real entity this channel is bound to (`contextObjectId`), when one
-   * exists. Carried in `data.entityId` — NOT swapped in as `subjectType` —
-   * so every message observation stays queryable by channel while an
-   * entity-scoped reader can still filter on `data->>'entityId'`.
-   */
-  entityId?: string | null;
-  /**
-   * Minimal fact fields ONLY (authorType, externalSource, threadId, …) —
-   * never the message body/content.
-   */
-  data: Record<string, unknown>;
-  /**
-   * When this message actually happened. Pass the message's real `sentAt` on a
-   * historical backfill (channel.ingest) so the fact is stamped with WHEN it
-   * occurred — a log meant to be replayed over history must not stamp every
-   * backfilled row with execution time. Omit for live inbound/outbound (now).
-   */
-  timestamp?: Date;
-}
+export type MessageObservationArgs = EmitMessageEventArgs;
 
 /**
  * Append one `message.received` / `message.sent` fact into the `events` log.
@@ -92,36 +68,5 @@ export interface MessageObservationArgs {
 export async function emitMessageObservation(
   args: MessageObservationArgs
 ): Promise<void> {
-  try {
-    const event = createSynapEvent({
-      type: args.type,
-      userId: args.userId,
-      subjectId: args.channelId,
-      subjectType: "channel",
-      data: {
-        ...args.data,
-        channelId: args.channelId,
-        messageId: args.messageId,
-        ...(args.entityId ? { entityId: args.entityId } : {}),
-      },
-      source: "api",
-      // Ties this fact to everything else tagged by the message it is about
-      // (the message row itself carries no correlationId of its own).
-      correlationId: args.messageId,
-    });
-
-    await eventRepository.append({
-      ...event,
-      workspaceId: args.workspaceId ?? undefined,
-      // Real occurrence time when the caller supplied one (backfill); else the
-      // `createSynapEvent` default (now). `append` inserts `event.timestamp`.
-      timestamp: args.timestamp ?? event.timestamp,
-      // Deliberately NOT set: isAgent, agentUserId, proposalId — see header.
-    });
-  } catch (err) {
-    logger.warn(
-      { err, channelId: args.channelId, type: args.type },
-      "message observation emit failed (non-fatal)"
-    );
-  }
+  await emitMessageEvent(args);
 }

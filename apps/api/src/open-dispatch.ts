@@ -22,6 +22,20 @@ export function isUnfurlBot(userAgent: string | undefined | null): boolean {
   return UNFURL_MARKERS.some((marker) => ua.includes(marker));
 }
 
+// Typed /open/:type/:id allowlist — single source for Hono ALLOWED.
+// pod-admin HOST_TYPES ∪ BOUNCE_TYPES must equal this (open-kinds.lock.test.ts).
+export const TYPED_OPEN_KINDS = [
+  "proposal",
+  "entity",
+  "view",
+  "document",
+  "cell",
+  "channel",
+  "session",
+  "project",
+  "workspace",
+] as const;
+
 export type OpenWebKind = "proposal" | "entity" | "view";
 
 export function podAdminTarget(

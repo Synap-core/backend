@@ -59,6 +59,7 @@ export * from "./utils/stamp-provenance.js";
 export * from "./utils/package-definition.js";
 export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
+export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/insert-pending-proposal.js";
 export * from "./utils/facet-visibility.js";

@@ -905,7 +905,14 @@ export const viewsRouter = router({
    * Get view with content
    */
   get: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        // Default true keeps the existing wire. Compact /open only needs
+        // metadata and must not pull MinIO / document_versions.
+        includeContent: z.boolean().optional().default(true),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.id),
@@ -938,7 +945,7 @@ export const viewsRouter = router({
 
       // Load content: whiteboards from MinIO (canonical), others from document_versions
       let content = {};
-      if (view.documentId) {
+      if (input.includeContent !== false && view.documentId) {
         const doc = await db.query.documents.findFirst({
           where: eq(documents.id, view.documentId),
         });

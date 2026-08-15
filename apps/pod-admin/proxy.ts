@@ -47,6 +47,18 @@ export async function proxy(req: NextRequest) {
   const currentUrl = req.nextUrl.pathname + req.nextUrl.search;
   const path = req.nextUrl.pathname;
 
+  // Collapse /open/proposal/:id → /proposal/:id before auth so login's
+  // return URL is the final review surface (no post-login extra hop).
+  // Id charset matches open-params SAFE_ID_RE. Other /open/* paths unchanged.
+  const openProposalMatch = path.match(
+    /^\/open\/proposal\/([A-Za-z0-9_-]{1,64})$/
+  );
+  if (openProposalMatch) {
+    const target = req.nextUrl.clone();
+    target.pathname = `/proposal/${openProposalMatch[1]}`;
+    return NextResponse.redirect(target, 307);
+  }
+
   // This is a deliberately data-free bootstrap page. A browser can read and
   // scrub its fragment before native sign-in, preserving the requester-held
   // redemption proof across a Kratos redirect. It cannot inspect, redeem, or

@@ -24,6 +24,7 @@ import {
   mirrorMessageToBoundExternal,
   type MirrorChannelRef,
 } from "./mirror-to-external.js";
+import { emitMessageEvent } from "./emit-message-event.js";
 
 export interface InsertChannelMessageParams {
   channelId: string;
@@ -113,6 +114,22 @@ export async function insertChannelMessage(
         authorType,
       })
     : { mirrored: false, reason: "duplicate-insert-skipped" as const };
+
+  // Keystone fact write: append `message.sent` to the `events` log — ONLY
+  // when this call actually landed a NEW row (same guard as the mirror
+  // above; `msg === undefined` is the onConflict no-op, already observed on
+  // the prior delivery). No entityId: this writer doesn't load the channel's
+  // contextObjectType, and adding that lookup here would be a new query for
+  // every producer post — an honest absence beats a per-write lookup.
+  if (msg) {
+    await emitMessageEvent({
+      type: "message.sent",
+      userId,
+      channelId,
+      messageId: msg.id,
+      data: { authorType, role },
+    });
+  }
 
   return {
     messageId: msg?.id,

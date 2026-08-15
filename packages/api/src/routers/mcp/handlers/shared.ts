@@ -114,10 +114,12 @@ export async function createHubProtocolCaller(
 
 /**
  * Extract the primary object id from a tool result, in field-priority order:
- *   proposalId → id → entityId → documentId → viewId → channelId →
- *   sessionId → knowledgeKey.id → nested data.id → wrapped channel.id /
- *   document.id
+ *   proposalId → id → entityId → wrapped view.id → documentId → viewId →
+ *   channelId → sessionId → knowledgeKey.id → nested data.id → wrapped
+ *   channel.id / document.id
  * First string hit wins; returns undefined when none is present.
+ * `view` is unwrapped before `documentId` so views.create { view, documentId }
+ * (canvas) links to the view, not the backing document.
  *
  * `messageId` is intentionally excluded — messages aren't openable, and
  * post_message already resolves via `channelId` (which precedes it here).
@@ -130,7 +132,6 @@ function primaryObjectId(data: unknown): string | undefined {
     "proposalId",
     "id",
     "entityId",
-    "documentId",
     "viewId",
     "channelId",
     "sessionId",
@@ -139,6 +140,17 @@ function primaryObjectId(data: unknown): string | undefined {
     const v = d[key];
     if (typeof v === "string" && v) return v;
   }
+  const createdView = d.view as Record<string, unknown> | undefined;
+  if (
+    createdView &&
+    typeof createdView === "object" &&
+    typeof createdView.id === "string" &&
+    createdView.id
+  ) {
+    return createdView.id;
+  }
+  const documentId = d.documentId;
+  if (typeof documentId === "string" && documentId) return documentId;
   const kk = d.knowledgeKey as Record<string, unknown> | undefined;
   if (kk && typeof kk.id === "string" && kk.id) return kk.id;
   const nested = d.data as Record<string, unknown> | undefined;
@@ -151,8 +163,7 @@ function primaryObjectId(data: unknown): string | undefined {
     return nested.id;
   }
   // Wrapped detail shapes: get_channel → { channel: { id } }, get_document →
-  // { document: { id } }. Both wrappers are openable, so their nested id yields a
-  // valid link. Only these known wrappers — never a generic deep scan.
+  // { document: { id } }. views.create is handled above (before documentId).
   for (const wrapper of ["channel", "document"] as const) {
     const w = d[wrapper] as Record<string, unknown> | undefined;
     if (w && typeof w === "object" && typeof w.id === "string" && w.id) {

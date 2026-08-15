@@ -1856,7 +1856,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call list_views first — don't duplicate. Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose.",
+          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1886,6 +1886,36 @@ export const tools = {
             },
           },
           required: ["name", "type", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_list_views",
+        annotations: {
+          title: "List views",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "List views you own, optionally narrowed by workspaceId, type, or profileId. Call this BEFORE synap_create_view so you do not duplicate an existing board. Owner-only (same floor as hub listViews). Omit filters for the full catalog.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace UUID to narrow to. Omit for every view you own.",
+            },
+            type: {
+              type: "string",
+              description:
+                "Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow).",
+            },
+            profileId: {
+              type: "string",
+              description:
+                "Optional profile UUID to filter views scoped to that entity type.",
+            },
+          },
         },
       },
 

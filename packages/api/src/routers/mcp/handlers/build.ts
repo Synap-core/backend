@@ -278,6 +278,28 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  synap_list_views: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      caller,
+      confinedWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Owner-only floor lives in hub listViews — do not widen it here.
+    // Narrow only on an explicit/confined workspaceId — not advisory focus
+    // (focus is a write default; catalog stays full user floor unless asked).
+    const result = await caller.views.listViews({
+      userId,
+      workspaceId: confinedWorkspaceId ?? null,
+      type: typeof args.type === "string" ? args.type : undefined,
+      profileId:
+        typeof args.profileId === "string" ? args.profileId : undefined,
+    });
+    return ok(result);
+  },
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);

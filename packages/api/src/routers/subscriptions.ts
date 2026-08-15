@@ -86,7 +86,12 @@ const lensSchema = z.enum(["all", "internal", "external"]);
  * Inbound trigger families — these flow INTO the system (a trigger fired).
  * Match on the event-type prefix.
  */
-const INBOUND_TYPE_PREFIXES = ["cron.", "feed.item.", "webhook.received"];
+const INBOUND_TYPE_PREFIXES = [
+  "cron.",
+  "feed.item.",
+  "webhook.received",
+  "message.received",
+];
 
 function isInboundEvent(eventType: string): boolean {
   return INBOUND_TYPE_PREFIXES.some((p) => eventType.startsWith(p));
@@ -732,7 +737,12 @@ function reactionKindForEventType(
     return "notify";
   }
   if (eventType.startsWith("webhook.")) return "webhook";
-  if (eventType.startsWith("message.") && eventType.includes("out")) {
+  // `message.sent` (outbound) is an external reaction. `message.received`
+  // (inbound) is deliberately NOT mapped here — reactions-kit's ReactionKind
+  // union (automation/ai_feed/ai_react/notify/webhook/message_out) has no
+  // inbound-message kind, and it's already surfaced as a source event via
+  // `isInboundEvent`/`INBOUND_TYPE_PREFIXES` above, not as a fan-out reaction.
+  if (eventType === "message.sent") {
     return "message_out";
   }
   // Proactive AI nudge posted to a feed channel (see proactive REST handler).

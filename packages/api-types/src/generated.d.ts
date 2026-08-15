@@ -16781,6 +16781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
+				includeContent?: boolean | undefined;
 			};
 			output: {
 				view: {
