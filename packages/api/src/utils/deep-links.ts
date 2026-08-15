@@ -4,9 +4,9 @@
  * Every create/propose response surfaces a single canonical link of the form
  * `${PUBLIC_URL}/open/<id>` — a BARE object id (no type). The pod's public
  * `GET /open/:id` route (see apps/api/src/index.ts) resolves the id's type
- * server-side and bounces to `synap://open/<type>/<id>`, opening the Electron
- * app. Emitting the bare-id origin (the pod itself, NOT a separate studio app)
- * keeps one link shape and lets the pod own type resolution.
+ * and dispatches: proposals and (for humans) entity/view 302 to pod-admin;
+ * unfurl bots and other kinds bounce to `synap://open/<type>/<id>`.
+ * Emitting the bare-id origin (the pod itself) keeps one link shape.
  *
  * PUBLIC_URL is normalized exactly like capture.ts does it: force https (chat
  * clients such as Discord only linkify https, and `synap://` alone is not

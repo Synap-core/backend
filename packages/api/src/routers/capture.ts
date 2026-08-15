@@ -83,6 +83,7 @@ import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
+import { computeCaptureGraphIdempotencyKey } from "../utils/pending-capture-dedup.js";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
 import {
@@ -2419,16 +2420,64 @@ export const captureRouter = router({
             namespace: `${userId}:${
               input.idempotencyKey && input.idempotencyKey.length > 0
                 ? input.idempotencyKey.slice(0, 200)
-                : `cap:${operations
-                    .map((o) =>
-                      "tempId" in o && typeof o.tempId === "string"
-                        ? o.tempId
-                        : "ref" in o && typeof o.ref === "string"
-                          ? o.ref
-                          : ""
-                    )
-                    .join("|")
-                    .slice(0, 160)}`
+                : // THE canonical content key — `computeCaptureGraphIdempotencyKey`,
+                  // the same rule `submit-capture-graph` already feeds into the
+                  // same `provider:"capture"` index. It folds workspace + project,
+                  // sorts entities by CONTENT and canonicalises property key
+                  // order, so an LLM-assigned positional label (`t1`/`t2`, by
+                  // array index) never reaches the entity component of the hash.
+                  //
+                  // `ref` IS still passed, because the canonical rule needs it for
+                  // the OTHER half: it builds a ref→content-key map and resolves
+                  // each relation endpoint THROUGH it, so a re-emitted graph whose
+                  // entities arrived in a different order (and so carry different
+                  // labels) still hashes to the same relation component. Omitting
+                  // `ref` leaves that map empty, every endpoint falls back to the
+                  // raw label, and multi-entity captures with relations silently
+                  // lose the order-independence this key exists to provide.
+                  //
+                  // The previous fallback joined those very `ref`s (`t1`, `t2`, …),
+                  // so every single-entity capture without a client key produced
+                  // the identical namespace `cap:t1` and the second one "deduped"
+                  // into the first REGARDLESS OF CONTENT. Reproduced live
+                  // 2026-08-15: three unrelated captures, one entity, two payloads
+                  // silently discarded.
+                  //
+                  // DAY BUCKET: the external-link lookup is a bare
+                  // `(provider, externalId)` match with no time predicate, and the
+                  // row is permanent — so without this a recurring capture with a
+                  // stable phrase ("Standup: no blockers") would link day 1's
+                  // entity forever and report success while storing nothing. The
+                  // window idiom this mirrors is `WRITE_IDEMPOTENCY_WINDOW_MS`,
+                  // which exists for exactly this reason. A retry arrives within
+                  // seconds, so a UTC-day grain is ample; the cost is that a retry
+                  // spanning midnight creates a duplicate instead of collapsing —
+                  // strictly the safer direction of the two failures.
+                  `cap:${new Date().toISOString().slice(0, 10)}:${computeCaptureGraphIdempotencyKey(
+                    {
+                      workspaceId: workspaceId ?? null,
+                      projectId: resolvedProjectId ?? null,
+                      entities: input.entities.map((e) => ({
+                        ref: e.tempId,
+                        profileSlug: e.profileSlug,
+                        title: e.title,
+                        description: e.description,
+                        content: e.content,
+                        properties: e.properties,
+                      })),
+                      // This lane names relation endpoints `sourceTempId` /
+                      // `targetTempId` / `relationType`; the canonical key takes
+                      // the `sourceRef` / `targetRef` / `type` vocabulary the
+                      // graph lane uses. Same triple, two spellings — mapped here
+                      // so both lanes hash identically rather than forking the
+                      // rule a second time.
+                      relations: input.relations.map((r) => ({
+                        sourceRef: r.sourceTempId,
+                        targetRef: r.targetTempId,
+                        type: r.relationType,
+                      })),
+                    }
+                  ).slice(0, 40)}`
             }`,
             provider: "capture",
             userId,
@@ -2638,9 +2687,28 @@ export const captureRouter = router({
             // both (event-backed-proposal.ts:17/22) and writes them to columns
             // behind a truthiness spread, so an omission is indistinguishable
             // from a deliberate NULL.
+            // `createdBy` is passed EXPLICITLY and stays the human. The helper
+            // falls back `createdBy ?? agentUserId ?? userId`
+            // (event-backed-proposal.ts:163), so stamping `agentUserId` without
+            // this would silently move authorship to the agent — and every
+            // consumer floors on `createdBy = <human>`: the human's proposal list,
+            // the revert surface, `findPriorCaptureGraphProposal`, the agent
+            // scorecard (which needs createdBy=human AND agentUserId=agent, so it
+            // would match NOTHING), and the daily agent proposal cap, which the
+            // row would escape by accident. Attribution must be ADDITIVE.
+            createdBy: userId,
             ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
-            ...((input.sessionId ?? ctx.sessionId)
-              ? { sessionId: input.sessionId ?? ctx.sessionId }
+            // VERIFIED handle first. `ctx.sessionId` passed the ownership check in
+            // `resolveHubSessionHeader` → `ownsFocusSession`; `input.sessionId` is
+            // a bare `z.string().uuid()` body field that nothing validates. Letting
+            // the body win would let a caller stamp another user's session onto
+            // rows that user's dashboard reads — their derived participant list
+            // would show an agent that never worked there, and their session graph
+            // would grow an edge to a foreign entity. The body value is kept only
+            // as a fallback for callers with no header (its pre-existing use), and
+            // is worth verifying at the top of `execute` in a follow-up.
+            ...((ctx.sessionId ?? input.sessionId)
+              ? { sessionId: ctx.sessionId ?? input.sessionId }
               : {}),
             // The deterministically-resolved project (already LINKED above), or —
             // when none resolved — the AI's advisory suggestion. This is an

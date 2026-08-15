@@ -9,6 +9,7 @@
  */
 
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { createHash } from "crypto";
 import {
   db,
   knowledgeKeysRepository,
@@ -603,6 +604,38 @@ const captureHandler: McpToolHandler = async (
   // resolveCaptureRouting): the adapter just forwards the AI's structure
   // hints + the caller's mode, so MCP routes identically to every other door.
   const executed = await captureCaller.execute({
+    // Idempotency keyed on the RAW TEXT, because this door is the only place
+    // that still holds it. Everything below has already passed through the
+    // structurer, whose output is LLM-generated and therefore not stable across
+    // a re-run: a key derived from the structured proposals would fail to
+    // collapse a genuine retry of the same capture, which is the one property
+    // idempotency exists for. The raw text is the capture's real identity.
+    //
+    // Without this the router falls back to hashing the structured payload
+    // (capture.ts) — a correct last resort for callers with no stable identity,
+    // but strictly weaker than what this caller can supply.
+    //
+    // Known trade-off, accepted: two DELIBERATE captures of byte-identical text
+    // by the same user collapse into one. That is also what the dedup pass would
+    // have proposed, and it is far cheaper than the failure this replaces —
+    // where a retry that re-structured differently created a second entity.
+    // NORMALIZED, not raw: `normalizeCaptureText` only collapses whitespace runs
+    // and trims, so it cannot merge two meaningfully different captures — but it
+    // DOES survive a client that retries with different line wrapping or a
+    // trailing newline, which the raw string would not. Retry-robustness is the
+    // whole point, so the key takes the more stable of the two.
+    // Day-bucketed, for the same reason the router's fallback is: the external
+    // link lookup has no time predicate and the row is permanent, so an unbounded
+    // key would make a recurring capture with a stable phrase ("Standup: no
+    // blockers") link day 1's entity forever while reporting success. A retry
+    // arrives within seconds; a UTC-day grain is ample.
+    idempotencyKey: captureNormalizedText
+      ? `cap-text:${new Date().toISOString().slice(0, 10)}:${createHash(
+          "sha256"
+        )
+          .update(captureNormalizedText)
+          .digest("hex")}`
+      : undefined,
     entities: mergedProposals as Parameters<
       typeof captureCaller.execute
     >[0]["entities"],

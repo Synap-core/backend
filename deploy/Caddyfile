@@ -168,6 +168,17 @@
         reverse_proxy backend:4000
     }
 
+    # Portable object locator — Discord/email click-to-app bounce (and later
+    # signed-in render). Without this, the HTTPS catch-all returns static API
+    # text. The Cloudflare-tunnel :80 block already proxies /open via its
+    # catch-all; keep both ingresses in lock-step.
+    handle /open {
+        reverse_proxy backend:4000
+    }
+    handle /open/* {
+        reverse_proxy backend:4000
+    }
+
     # Pod home (exact / only): lightweight landing.
     @site_root path /
     handle @site_root {

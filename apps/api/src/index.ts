@@ -69,6 +69,7 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
+import { dispatchOpen, podAdminTarget } from "./open-dispatch.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import {
   authMiddleware,
@@ -445,7 +446,7 @@ app.get("/health", (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.25.3",
+    apiTypesVersion: "1.26.1",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -639,20 +640,26 @@ app.get("/admin/connect", (c) => {
 });
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
-// An https URL — clickable anywhere (Discord, email, chat) — that forwards into
-// the Electron app via its registered `synap://` protocol. Discord (and most
-// chat clients) will NOT linkify a raw `synap://` URL, so we serve a tiny https
-// page that immediately redirects to it. The app's deep-link handler
-// (`useDeepLinkHandler.ts`) understands `synap://open/<type>/<id>` for
-// proposal | entity | view | document | cell | channel. No auth here: this only forwards a
-// scheme; the target surface is access-gated inside the app.
+// An https URL — clickable anywhere (Discord, email, chat). Humans hitting
+// proposal | entity | view 302 to pod-admin when it's configured; unfurl bots
+// (and every other type) get a tiny page that redirects to `synap://` so
+// Discord/etc. never scrape entity bodies. Discord will NOT linkify a raw
+// `synap://` URL. The app's deep-link handler (`useDeepLinkHandler.ts`)
+// understands `synap://open/<type>/<id>` for
+// proposal | entity | view | document | cell | channel | session | project |
+// workspace. No auth here: this only forwards a scheme; the target surface is
+// access-gated inside the app. The typed ALLOWED set below MUST stay in
+// lock-step with the bare-id probe (and with kinds the bounce page emits).
 // Renders the tiny https page that immediately redirects to the given
-// `synap://` deep link. `deep` contains only validated/known-safe chars, so it
-// interpolates into href/JS without escaping concerns. If the app isn't
-// installed the redirect is a no-op, so after a short delay we reveal a
-// fallback block (with a manual retry link) rather than stranding the user on
-// "Opening…" forever.
-function renderDeepLinkPage(deep: string): string {
+// `synap://` deep link. `deep` (and optional `browserUrl`) contain only
+// validated/known-safe chars, so they interpolate into href/JS without
+// escaping concerns. If the app isn't installed the redirect is a no-op, so
+// after a short delay we reveal a fallback block (with a manual retry link)
+// rather than stranding the user on "Opening…" forever.
+function renderDeepLinkPage(deep: string, browserUrl?: string): string {
+  const browserLink = browserUrl
+    ? `<p><a href="${browserUrl}">View in browser</a></p>`
+    : "";
   return (
     `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -673,9 +680,40 @@ function renderDeepLinkPage(deep: string): string {
     `<div class="spinner" aria-hidden="true"></div>` +
     `<h1 role="status" aria-live="polite">Opening in Synap…</h1>` +
     `<div id="fallback"><p>Didn't open? Make sure the Synap app is installed.</p>` +
-    `<p><a href="${deep}">Open in Synap</a></p></div>` +
+    `<p><a href="${deep}">Open in Synap</a></p>${browserLink}</div>` +
     `</main></body></html>`
   );
+}
+
+// Proposal 302s to pod-admin first (web is the review surface, bots included).
+// Entity/view also have a web host for humans; unfurl bots still bounce so
+// Discord/etc. never scrape entity bodies. Other types always bounce.
+// Falls through to bounce if pod-admin isn't configured (graceful).
+function applyOpenDispatch(
+  c: HonoContext,
+  type: string | undefined,
+  id: string
+) {
+  const admin = configuredPodAdminBase();
+  const adminBase = admin.ok ? admin.base.toString() : null;
+  const result = dispatchOpen({
+    type,
+    id,
+    userAgent: c.req.header("user-agent"),
+    adminBase,
+  });
+  // Same URL 302s or 200s by User-Agent — never let a CDN cache the bot bounce
+  // for a human (or the reverse).
+  c.header("Vary", "User-Agent");
+  c.header("Cache-Control", "private, no-store");
+  if (result.action === "redirect") {
+    return c.redirect(result.url, 302);
+  }
+  const browserUrl =
+    adminBase && (type === "entity" || type === "view")
+      ? podAdminTarget(type, id, adminBase)
+      : undefined;
+  return c.html(renderDeepLinkPage(result.deep, browserUrl));
 }
 
 app.get("/open/:type/:id", (c) => {
@@ -688,46 +726,45 @@ app.get("/open/:type/:id", (c) => {
     "view",
     "document",
     "cell",
+    "channel",
     "session",
     "project",
     "workspace",
   ]);
-  const type = c.req.param("type");
+  const type = c.req.param("type").trim().toLowerCase();
   const id = c.req.param("id");
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
   // interpolated into href/JS without escaping concerns.
   if (!ALLOWED.has(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     return c.text("Invalid deep link", 400);
   }
-  // Mirror the bare-id `/open/:id` route: a proposal renders on the web
-  // (pod-admin) with "open in app" as a sub-action, not a forced Electron
-  // bounce. No producer builds this typed form for proposals today (the
-  // canonical `deep-links.ts` emits the bare-id shape), but keep the two routes
-  // in lock-step so a future typed link can't fall into the bounce-only trap.
-  if (type === "proposal") {
-    const admin = configuredPodAdminBase();
-    if (admin.ok) {
-      const target = new URL(`/proposal/${id}`, admin.base);
-      return c.redirect(target.toString(), 302);
-    }
-  }
-  return c.html(renderDeepLinkPage(`synap://open/${type}/${id}`));
+  // Keep this typed route in lock-step with bare-id `/open/:id`. No producer
+  // builds this typed form for proposals today (canonical `deep-links.ts`
+  // emits the bare-id shape).
+  return applyOpenDispatch(c, type, id);
 });
 
 // ── Canonical bare-id deep-link bounce (public, no auth) ─────────────────────
 // The one link shape every create/propose response emits: `${PUBLIC_URL}/open/
 // <id>` (see packages/api/src/utils/deep-links.ts). We resolve the id's type
 // here — probing proposal → entity → view → document (same order as
-// hub-protocol/rest/resolve.ts) — then serve the same bounce page to
-// `synap://open/<type>/<id>`. This is a public id→type map ONLY, so it uses a
-// service DB handle (no user API key); the target surface is access-gated inside
-// the app. Unknown ids gracefully bounce to `synap://open/<id>`.
+// hub-protocol/rest/resolve.ts) — then dispatch. This is a public id→type map
+// ONLY, so it uses a service DB handle (no user API key); the target surface is
+// access-gated inside the app. Unknown ids (incl. the `proposals` keyword)
+// gracefully bounce to `synap://open/<id>`.
 app.get("/open/:id", async (c) => {
   const id = c.req.param("id");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     return c.text("Invalid deep link", 400);
   }
-  const { getDb, eq } = await import("@synap/database");
+  // Keywords such as `proposals` are not UUIDs. Bounce without probing —
+  // uuid `eq` would throw and `exists()` would swallow five queries.
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+  ) {
+    return applyOpenDispatch(c, undefined, id);
+  }
+  const { getDb, eq, and, isNull } = await import("@synap/database");
   const { proposals, entities, views, documents, channels } =
     await import("@synap/database/schema");
   const database = await getDb();
@@ -757,7 +794,7 @@ app.get("/open/:id", async (c) => {
       database
         .select({ id: entities.id })
         .from(entities)
-        .where(eq(entities.id, id))
+        .where(and(eq(entities.id, id), isNull(entities.deletedAt)))
         .limit(1)
     )
   ) {
@@ -796,21 +833,7 @@ app.get("/open/:id", async (c) => {
     type = "channel";
   }
 
-  // A PROPOSAL renders on the web (pod-admin) as its MAIN view — accept / reject /
-  // modify live there, with "open in the desktop app" available as a sub-action —
-  // instead of forcing the `synap://` bounce into Electron. Only `proposal` gets
-  // this: the other types have no web renderer yet, so they keep bouncing to the
-  // app. Falls through to the bounce if pod-admin isn't configured (graceful).
-  if (type === "proposal") {
-    const admin = configuredPodAdminBase();
-    if (admin.ok) {
-      const target = new URL(`/proposal/${id}`, admin.base);
-      return c.redirect(target.toString(), 302);
-    }
-  }
-
-  const deep = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
-  return c.html(renderDeepLinkPage(deep));
+  return applyOpenDispatch(c, type, id);
 });
 
 // Ory Kratos routes

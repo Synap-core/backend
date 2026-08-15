@@ -96,9 +96,16 @@ export async function createContext(
     if (session && session.identity) {
       // Focus-session handle. Same header, same verification as the Hub door:
       // `resolveHubSessionHeader` rejects a non-uuid AND a session that is not
-      // the caller's own, so a forged id can never stamp another user's session
-      // onto this request's proposals. Only reached for an authenticated
-      // request — an unauthenticated one has no principal to verify against.
+      // the caller's own. Only reached for an authenticated request — an
+      // unauthenticated one has no principal to verify against.
+      //
+      // SCOPE OF THE GUARANTEE, stated precisely because an earlier version of
+      // this comment overstated it: what is verified is the value ARRIVING BY
+      // HEADER. Several routers also accept a `sessionId` in the request BODY
+      // (`capture.execute` among them), which nothing validates. Those sites must
+      // prefer this ctx value over the body one — `capture.ts` now does. This
+      // header path guarantees `ctx.sessionId` is the caller's own; it cannot
+      // guarantee anything about a session id a router reads from elsewhere.
       const sessionId = await resolveHubSessionHeader(
         req.headers.get("X-Session-Id") ??
           req.headers.get("x-session-id") ??

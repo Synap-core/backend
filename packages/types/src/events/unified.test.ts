@@ -21,6 +21,11 @@ describe("validateEventPattern", () => {
       expect(validateEventPattern("message.received")).toBe("message.received");
     });
 
+    it("accepts the `message.sent` outbound alias and its wildcard form", () => {
+      expect(validateEventPattern("message.sent")).toBe("message.sent");
+      expect(validateEventPattern("message.sent.*")).toBe("message.sent.*");
+    });
+
     it("still rejects an unknown action on the message subject", () => {
       // `message` is a real CRUD subject, so only the alias set escapes the
       // strict action check — a bogus verb must still throw.

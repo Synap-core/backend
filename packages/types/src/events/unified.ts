@@ -77,19 +77,30 @@ export type ConnectorSubjectType = (typeof CONNECTOR_SUBJECT_TYPES)[number];
  * The synthetic message-alias patterns. `message.received` is the documented
  * cross-transport proactive-from-messages trigger — it fires for BOTH physical
  * message events (`external_message.*` and `channel_message.*`) without binding
- * to one transport. `message.*` also validates as a plain full wildcard, but is
- * listed here so the whole alias set is a SINGLE source of truth.
+ * to one transport. `message.sent` is the outbound counterpart, added for the
+ * `message.sent` channel-activity fact (see `unified.ts` events log). `message.*`
+ * also validates as a plain full wildcard, but is listed here so the whole alias
+ * set is a SINGLE source of truth.
  *
- * The action segment `received` is a domain verb outside the CRUD vocab, so
- * `validateEventPattern` must accept this set explicitly (below) — otherwise the
- * authoring door rejects the very pattern the runtime matcher is built to match.
- * The runtime matcher (`matchesMessageAlias` in @synap/jobs) matches this EXACT
- * set; it consumes this constant (re-exported through @synap/database) rather
- * than re-listing it, so validator and matcher can never drift.
+ * The action segments `received`/`sent` are domain verbs outside the CRUD vocab,
+ * so `validateEventPattern` must accept this set explicitly (below) — otherwise
+ * the authoring door rejects the very patterns the runtime matcher is built to
+ * match. The runtime matcher (`matchesMessageAlias` in @synap/jobs) matches this
+ * EXACT set; it consumes this constant (re-exported through @synap/database)
+ * rather than re-listing it, so validator and matcher can never drift.
+ *
+ * NOTE: unlike the physical `external_message.*`/`channel_message.*` events
+ * `matchesMessageAlias` exists to bridge, the literal `message.received` /
+ * `message.sent` event rows the channel/message-activity log emits already
+ * begin with the `message.` prefix, so the generic trailing-wildcard walk in
+ * `matchPattern` matches them against every pattern here WITHOUT needing an
+ * entry in `MESSAGE_ALIAS_EVENT_TYPES` — that list stays physical-types-only.
  */
 export const MESSAGE_ALIAS_PATTERNS = [
   "message.received",
   "message.received.*",
+  "message.sent",
+  "message.sent.*",
   "message.*",
 ] as const;
 

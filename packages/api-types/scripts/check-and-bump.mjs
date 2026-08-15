@@ -173,7 +173,8 @@ function main() {
 
   log(
     `\n✅ Bumped to ${nextVersion}. Review the diff, commit, then publish:\n` +
-      `     cd packages/api-types && npm publish`
+      `     ./dev ship api-types publish\n` +
+      `     # or:  cd packages/api-types && npm publish`
   );
 }
 

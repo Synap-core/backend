@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/api-types",
-  "version": "1.26.0",
+  "version": "1.26.1",
   "description": "Type definitions for Synap API Router - tRPC types for frontend",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,7 +22,10 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm run build",
     "release:check": "node scripts/check-and-bump.mjs --check",
-    "release:bump": "node scripts/check-and-bump.mjs"
+    "release:bump": "node scripts/check-and-bump.mjs",
+    "ship": "bash scripts/ship.sh",
+    "ship:verify": "bash scripts/ship.sh verify",
+    "ship:publish": "bash scripts/ship.sh publish"
   },
   "dependencies": {
     "@synap-core/types": "workspace:*",

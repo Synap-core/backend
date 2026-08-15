@@ -201,8 +201,9 @@ export const focusSessionsRouter = router({
    *
    * Returns `participants` — the agents that actually WORKED in this session,
    * DERIVED from the proposals they filed against it. The `agentIds` column is
-   * not that set: nothing anywhere appends to it (it only ever holds what the
-   * creating call passed as an invite list), so a session driven by an agent
+   * not that set. It is an INVITE LIST: the create and update doors REPLACE it
+   * wholesale (here, the Hub PATCH, and sync's conflict update), but nothing
+   * ever APPENDS to it when an agent does work — so a session driven by an agent
    * nobody named up front reads as empty. The derived set is authoritative.
    */
   get: protectedProcedure
@@ -235,9 +236,15 @@ export const focusSessionsRouter = router({
             userVisibleWhere(proposals.workspaceId, requireUserId(ctx.userId))
           )
         );
+      // SORTED. Postgres guarantees no ordering for SELECT DISTINCT, and the UI
+      // assigns each party a colour by INDEX — so an unsorted set lets two agents
+      // swap tones between two refetches of the same session, on a surface that
+      // polls. Deterministic order is the difference between a stable roster and
+      // a flickering one.
       const participantIds = participantRows
         .map((p) => p.agentUserId)
-        .filter((id): id is string => Boolean(id));
+        .filter((id): id is string => Boolean(id))
+        .sort();
 
       // Resolve to display names in the SAME batch shape `proposals.list` uses
       // for its agent labels — one `inArray`, one `displayNameForUser`. A bare

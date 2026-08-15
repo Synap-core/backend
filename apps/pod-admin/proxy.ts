@@ -87,7 +87,11 @@ export async function proxy(req: NextRequest) {
     // `proposals.get`/`.approve` re-check editor role server-side, so we only
     // need a valid Kratos session here — requiring pod_admin would 403 every
     // non-admin reviewer landing from an AI-sent /open/<id> link.
-    path.startsWith("/proposal/");
+    path.startsWith("/proposal/") ||
+    // Signed-in `/open` is the compact web host for one entity or view.
+    // `entities.get` / `views.get` re-check access server-side; requiring
+    // pod_admin would 403 every non-admin operator landing from a share link.
+    path.startsWith("/open/");
   if (!isSelfService) {
     const admin = await isPodAdmin(cookie);
     if (!admin) {

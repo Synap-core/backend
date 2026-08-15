@@ -47,6 +47,7 @@ import {
   type InboundAttachmentJobData,
 } from "@synap/jobs/workers/inbound-attachment-worker.js";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
+import { emitMessageObservation } from "../../utils/emit-message-observation.js";
 import {
   recordChannelOrigin,
   type ChannelOrigin,
@@ -65,6 +66,11 @@ export async function resolveExternalChannel(args: {
   userId: string;
   workspaceId: string | null;
   contextObjectId: string | null;
+  // The KIND of the bound context object — `contextObjectId` can point at a
+  // document/view/proposal, not only an entity (see channels/helpers.ts
+  // CONTEXT_OBJECT_TYPE_VALUES). Carried so callers can stay honest about what
+  // the id names (e.g. only label it `entityId` when this is "entity").
+  contextObjectType: string | null;
   branchPurpose: string | null;
 } | null> {
   const row = await db.query.channels.findFirst({
@@ -78,6 +84,7 @@ export async function resolveExternalChannel(args: {
       userId: true,
       workspaceId: true,
       contextObjectId: true,
+      contextObjectType: true,
       branchPurpose: true,
     },
     // Deterministic oldest-wins so a duplicate external channel resolves to a
@@ -90,6 +97,7 @@ export async function resolveExternalChannel(args: {
         userId: row.userId,
         workspaceId: row.workspaceId,
         contextObjectId: row.contextObjectId,
+        contextObjectType: row.contextObjectType,
         branchPurpose: row.branchPurpose,
       }
     : null;
@@ -190,7 +198,11 @@ function externalMetadataPatch(
  */
 export async function resolveOrCreateExternalChannel(
   args: ResolveOrCreateExternalChannelArgs
-): Promise<{ channelId: string; contextObjectId: string | null }> {
+): Promise<{
+  channelId: string;
+  contextObjectId: string | null;
+  contextObjectType: string | null;
+}> {
   const lastMessageAt = args.lastMessageAt ?? new Date().toISOString();
   const externalPatch = externalMetadataPatch(args.externalCoordinates);
 
@@ -234,6 +246,7 @@ export async function resolveOrCreateExternalChannel(
     return {
       channelId: existing.id,
       contextObjectId: existing.contextObjectId,
+      contextObjectType: existing.contextObjectType,
     };
   }
 
@@ -330,7 +343,11 @@ export async function resolveOrCreateExternalChannel(
         ? "Auto-created EXTERNAL channel for inbound message, linked at birth (strong signal)"
         : "Auto-created EXTERNAL channel for inbound message (unlinked — no strong match)"
     );
-    return { channelId: inserted.id, contextObjectId: bornContextObjectId };
+    return {
+      channelId: inserted.id,
+      contextObjectId: bornContextObjectId,
+      contextObjectType: bornContextObjectType,
+    };
   }
 
   // Lost the race — re-SELECT the surviving row.
@@ -344,7 +361,11 @@ export async function resolveOrCreateExternalChannel(
     );
   }
   assertExternalChannelOwner(survivor, args);
-  return { channelId: survivor.id, contextObjectId: survivor.contextObjectId };
+  return {
+    channelId: survivor.id,
+    contextObjectId: survivor.contextObjectId,
+    contextObjectType: survivor.contextObjectType,
+  };
 }
 
 // ── Inbound message record ─────────────────────────────────────────────────────
@@ -490,22 +511,23 @@ export async function recordInboundMessage(
   const preview = args.text.slice(0, 120);
   const sentAt = args.sentAt ? new Date(args.sentAt) : new Date();
 
-  const { channelId, contextObjectId } = await resolveOrCreateExternalChannel({
-    provider: args.provider,
-    externalId: args.externalId,
-    userId: args.userId,
-    workspaceId: args.workspaceId,
-    projectId: args.projectId ?? null,
-    title: args.title,
-    participant: args.participant,
-    participantExternalId: args.participantExternalId,
-    accountExternalId: args.accountExternalId,
-    preview,
-    lastMessageAt:
-      typeof args.sentAt === "string" ? args.sentAt : sentAt.toISOString(),
-    origin: args.origin,
-    externalCoordinates: args.externalCoordinates,
-  });
+  const { channelId, contextObjectId, contextObjectType } =
+    await resolveOrCreateExternalChannel({
+      provider: args.provider,
+      externalId: args.externalId,
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      projectId: args.projectId ?? null,
+      title: args.title,
+      participant: args.participant,
+      participantExternalId: args.participantExternalId,
+      accountExternalId: args.accountExternalId,
+      preview,
+      lastMessageAt:
+        typeof args.sentAt === "string" ? args.sentAt : sentAt.toISOString(),
+      origin: args.origin,
+      externalCoordinates: args.externalCoordinates,
+    });
 
   // Dual-use note: this is an inbound *delivery* fingerprint
   // (sha256(provider:seed)), NOT computeMessageHash(id, content). Both live in
@@ -634,6 +656,37 @@ export async function recordInboundMessage(
   } catch (err) {
     logger.warn({ err, channelId }, "search-index enqueue failed (non-fatal)");
   }
+
+  // Keystone fact write: append `message.received` to the `events` log
+  // alongside the `messages` insert above, so analyzers can read the log and
+  // replay over history — today an inbound message wrote ONLY to `messages`.
+  // Guarded on `inserted` (this branch only runs when a NEW row landed, i.e.
+  // NOT on an idempotent-conflict re-delivery — see the `if (!inserted)`
+  // early-return above). Runs regardless of `suppressSideEffects`, same as
+  // `search-index` above: this is a STORE of a fact (including for a
+  // historical backfill), not a fan-out replay. Points at the real channel
+  // (+ the bound entity, when linked) — never copies the message body.
+  await emitMessageObservation({
+    type: "message.received",
+    userId: args.userId,
+    channelId,
+    messageId: inserted.id,
+    workspaceId: args.workspaceId,
+    // Only label the bound object an `entityId` when it actually IS an entity —
+    // an EXTERNAL channel can later be rebound to a document/view/proposal via
+    // channel.bind/updateChannel, and `contextObjectId` would then name one of
+    // those. Mirrors the outbound guard in channels/send-message.ts.
+    entityId: contextObjectType === "entity" ? contextObjectId : undefined,
+    // The message's REAL time, not now — so a historical backfill
+    // (channel.ingest, ≤2000 msgs) stamps each fact with when it actually
+    // happened, which is the whole point of a replayable-over-history log.
+    timestamp: sentAt,
+    data: {
+      authorType: args.authorType ?? MessageAuthorType.EXTERNAL,
+      externalSource: args.provider,
+      threadId: args.externalId,
+    },
+  });
 
   // Attachment ingest OFF the sensor path: fetch each attachment's bytes and
   // store it through the GOVERNED file door in a background job, then link the

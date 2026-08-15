@@ -58,7 +58,17 @@ describe("formatGrounding", () => {
 
   it("states the WRITE rule explicitly, not just the read rule", () => {
     const out = formatGrounding("", [ws("b", "CRM", 5)], false);
-    expect(out).toMatch(/For WRITES always pass the workspaceId/);
+    // The WRITE rule inverted in 609b4946: placement is DERIVED from installed
+    // profile metadata, so the model passes kind/profile and omits workspaceId
+    // unless it deliberately pins one domain. The old assertion ("always pass
+    // the workspaceId") pinned the pre-inversion prose and went red at that
+    // commit — unnoticed, because the full suite is rarely run. Assert the rule
+    // that ships today, and keep asserting BOTH halves so a future one-sided
+    // reword can't quietly drop the write guidance again.
+    expect(out).toMatch(/For WRITES pass kind\/profile/);
+    expect(out).toMatch(
+      /omit workspaceId unless you deliberately pin one domain/
+    );
     expect(out).toMatch(/For READS omit workspaceId/);
   });
 

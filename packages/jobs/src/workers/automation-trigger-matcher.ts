@@ -169,6 +169,16 @@ export const MESSAGE_ALIAS_EVENT_TYPES = [
  * automations are untouched.
  */
 function matchesMessageAlias(eventType: string, pattern: string): boolean {
+  // `message.sent` / `message.sent.*` match ONLY the literal `message.sent`
+  // event rows (via matchPattern's exact/generic walk) — they must NOT bridge to
+  // the physical types here. The physical set (MESSAGE_ALIAS_EVENT_TYPES) is the
+  // RECEIVED/created pair, so bridging `message.sent` would fire a "sent" trigger
+  // on an INBOUND `external_message.received.completed` — semantically wrong. The
+  // `message.received` / `message.*` aliases keep their historical "any physical
+  // message event" bridge unchanged.
+  if (pattern === "message.sent" || pattern === "message.sent.*") {
+    return false;
+  }
   if (!(MESSAGE_ALIAS_PATTERNS as readonly string[]).includes(pattern)) {
     return false;
   }

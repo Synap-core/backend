@@ -516,6 +516,50 @@ describe("message.received alias + envelope + shape", () => {
     expect(firedAutomationIds()).toEqual([]);
   });
 
+  // ── message.sent: outbound-only, never fires on an inbound received event ──
+  it("a message.sent automation does NOT fire on an inbound received event", async () => {
+    // Regression: `message.sent` is a valid pattern, but it must match ONLY the
+    // literal `message.sent` rows — never bridge to the physical RECEIVED event,
+    // or a 'sent' trigger would fire on an INBOUND message.
+    selectResults = [
+      [
+        {
+          id: "auto-sent",
+          workspaceId: "ws-1",
+          triggerConfig: { eventPattern: "message.sent" },
+        },
+      ],
+    ];
+
+    await handleAutomationTriggerMatch({ data: { ...EXTERNAL_EVENT } });
+
+    expect(firedAutomationIds()).toEqual([]);
+  });
+
+  it("a message.sent automation fires for a literal message.sent event", async () => {
+    selectResults = [
+      [
+        {
+          id: "auto-sent",
+          workspaceId: "ws-1",
+          triggerConfig: { eventPattern: "message.sent" },
+        },
+      ],
+    ];
+
+    await handleAutomationTriggerMatch({
+      data: {
+        eventType: "message.sent",
+        subjectId: "chan-A",
+        userId: "user-1",
+        workspaceId: "ws-1",
+        data: { channelId: "chan-A", messageId: "msg-9", authorType: "human" },
+      },
+    });
+
+    expect(firedAutomationIds()).toEqual(["auto-sent"]);
+  });
+
   // ── (d) owner-floor + depth guard inherited ──────────────────────────────
   it("owner-bounds the pod-wide branch for a message event (owner-floor inherited)", async () => {
     selectResults = [[]]; // inspect the predicate only

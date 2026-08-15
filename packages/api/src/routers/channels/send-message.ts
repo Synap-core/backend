@@ -43,6 +43,7 @@ import {
   ChannelType,
   ChannelStatus,
   MessageRole,
+  MessageAuthorType,
   users,
   workspaceMembers,
   workspaces,
@@ -60,6 +61,7 @@ import {
 } from "../../utils/permission-check.js";
 
 import { resolveOrCreateChannel } from "../../utils/resolve-or-create-channel.js";
+import { emitMessageObservation } from "../../utils/emit-message-observation.js";
 
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
@@ -396,6 +398,34 @@ export const sendMessageProcedure = protectedProcedure
     } else {
       await db.insert(messages).values(userMessage);
     }
+
+    // Keystone fact write: append `message.sent` to the `events` log
+    // alongside the `messages` insert above, so analyzers can read the log
+    // and replay over history. Reached ONLY when a NEW user-message row just
+    // landed — the durable-turn dedup path above (`!claimed.created`) already
+    // returned early for a reused/duplicate `clientRequestId`, so there is no
+    // idempotent-conflict re-delivery case to guard here (unlike the inbound
+    // `onConflictDoNothing` path). Points at the real channel (+ the bound
+    // entity, when linked via `contextObjectId`) — never copies the message
+    // body.
+    await emitMessageObservation({
+      type: "message.sent",
+      userId,
+      channelId,
+      messageId: userMessageId,
+      workspaceId: workspaceId ?? channel.workspaceId ?? undefined,
+      // Only pass through when the binding is actually entity-typed —
+      // `contextObjectId` can also point at a workspace/document/view (see
+      // channels.contextObjectType), and `entityId` must stay honest about
+      // what kind of real object it names.
+      entityId:
+        channel.contextObjectType === "entity"
+          ? (channel.contextObjectId ?? undefined)
+          : undefined,
+      data: {
+        authorType: MessageAuthorType.HUMAN,
+      },
+    });
 
     // Additive lifecycle event. Existing Socket.IO consumers can ignore it;
     // the canonical HTTP sender stream uses it to establish turnId exactly

@@ -38,6 +38,7 @@ import {
   ProposalStatus,
   entities,
   workspaces,
+  channels,
   profiles,
   views,
   projects,
@@ -54,6 +55,7 @@ import {
   inArray,
 } from "@synap/database";
 import { entityReadVisibleWhere } from "./entities/helpers.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import type {
   Reaction,
   ReactionEvent,
@@ -300,6 +302,7 @@ async function resolveSubjectNames(
   const viewIds = new Set<string>();
   const projectIds = new Set<string>();
   const skillIds = new Set<string>();
+  const channelIds = new Set<string>();
 
   for (const e of events) {
     const id = e.subjectId;
@@ -314,6 +317,9 @@ async function resolveSubjectNames(
         break;
       case "notification":
         notificationIds.add(id);
+        break;
+      case "channel":
+        channelIds.add(id);
         break;
       case "profile":
         profileIds.add(id);
@@ -345,6 +351,7 @@ async function resolveSubjectNames(
   const viewIdList = uuidsOf(viewIds);
   const projectIdList = uuidsOf(projectIds);
   const skillIdList = uuidsOf(skillIds);
+  const channelIdList = uuidsOf(channelIds);
   // Profiles may key by SLUG (text) OR uuid — query both branches.
   const profileSlugList = Array.from(profileIds);
   const profileUuidList = uuidsOf(profileIds);
@@ -359,6 +366,7 @@ async function resolveSubjectNames(
     viewRows,
     projectRows,
     skillRows,
+    channelRows,
     profileRows,
   ] = await Promise.all([
     // entity → entities.title, scoped by the entity READ visibility floor.
@@ -425,6 +433,21 @@ async function resolveSubjectNames(
             and(inArray(skills.id, skillIdList), eq(skills.userId, userId))
           )
       : empty,
+    // channel → channels.title, scoped by the canonical channel READ
+    // visibility predicate (owner / member / shared-in-workspace / pod-wide
+    // shared) — mirrors the access-layer `channels` VisibilityRule so a
+    // resolved name never outruns what the caller could otherwise read.
+    channelIdList.length
+      ? db
+          .select({ id: channels.id, name: channels.title })
+          .from(channels)
+          .where(
+            and(
+              inArray(channels.id, channelIdList),
+              channelVisibilityWhere(userId)
+            )
+          )
+      : empty,
     // profile → profiles.displayName. Match by uuid id OR slug. Scope: SYSTEM /
     // SHARED vocabulary is pod-wide by design; USER/WORKSPACE profiles floor on
     // the caller's own userId or their member/owned workspaces so a foreign
@@ -483,6 +506,7 @@ async function resolveSubjectNames(
   putById(viewRows, ["view"], viewIds);
   putById(projectRows, ["project"], projectIds);
   putById(skillRows, ["skill"], skillIds);
+  putById(channelRows, ["channel"], channelIds);
 
   // Profiles: resolve each subjectId by uuid id first, then by slug.
   const profileById = new Map<string, string>();
