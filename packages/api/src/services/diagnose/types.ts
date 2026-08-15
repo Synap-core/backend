@@ -67,7 +67,8 @@ export interface GlobalHealthReport {
   status: HealthStatus;
   /** One paragraph a human can read; says "all clear" when nothing is wrong. */
   summary: string;
-  thresholds: { stuckHours: number };
+  /** `idleMinutes` present only when the progress-based signal was computed. */
+  thresholds: { stuckHours: number; idleMinutes?: number };
   scope: { workspaceId: string | null };
   sections: HealthSection[];
 }

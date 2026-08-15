@@ -5,20 +5,35 @@
  * Pings the /health endpoint of all active intelligence services and updates
  * `lastHealthCheck` + `lastHealthStatus` in the DB.
  *
- * Service status values: "healthy" | "degraded" | "unhealthy"
+ * Service status values: "healthy" | "degraded" | "unhealthy" | "unmonitored"
  * - healthy:  /health returned 2xx with status "ok"
  * - degraded: /health returned 2xx but status was not "ok" (e.g. "degraded")
  * - unhealthy: /health timed out or returned non-2xx
+ * - unmonitored: this worker CANNOT ping it (no webhookUrl) — recorded
+ *   explicitly so an unwatched service is VISIBLE rather than silently absent
+ *   from a green list. See `classifyServicesForHealthCheck`.
  */
 
-import { db, intelligenceServices, eq, and } from "@synap/database";
+import { db, intelligenceServices, eq } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "intelligence-health-check" });
 
 const HEALTH_TIMEOUT_MS = 5_000;
 
-type ServiceHealthStatus = "healthy" | "degraded" | "unhealthy";
+type ServiceHealthStatus = "healthy" | "degraded" | "unhealthy" | "unmonitored";
+
+/**
+ * Lifecycle states this worker still monitors.
+ *
+ * `expiring` is included DELIBERATELY: this worker itself writes
+ * `status:'expiring'` when the IS reports a key nearing expiry, so a query that
+ * only accepted `'active'` made the worker SILENCE ITSELF — the first expiry
+ * warning was also the last health check that service ever got. Filtering in TS
+ * (rather than widening the SQL predicate) keeps the whole monitored/unmonitored
+ * decision readable in ONE place, which is the entire point of this file.
+ */
+const MONITORED_STATUSES = new Set(["active", "expiring"]);
 
 /**
  * IoC slot for the operator nudge (in-app notification + Discord notice),
@@ -60,7 +75,11 @@ function summarizeFailingChecks(body: unknown): string | undefined {
   for (const [name, raw] of Object.entries(checks)) {
     const check = raw as { status?: unknown; detail?: unknown } | null;
     const status = typeof check?.status === "string" ? check.status : undefined;
-    if (!status || status === "ok" || status === "healthy") continue;
+    // "skip" = the IS declined to assert anything (e.g. no embedding call since
+    // boot). Not-asserted is not failing — reporting it as evidence of an
+    // outage would train the operator to ignore this alert.
+    if (!status || status === "ok" || status === "healthy" || status === "skip")
+      continue;
     const detail = typeof check?.detail === "string" ? check.detail : status;
     failing.push(`${name}: ${detail}`);
   }
@@ -127,43 +146,117 @@ async function pingService(webhookUrl: string): Promise<{
   }
 }
 
+/** The shape this worker needs off an `intelligence_services` row. */
+export interface HealthCheckCandidate {
+  id: string;
+  serviceId: string;
+  name: string;
+  webhookUrl: string | null;
+  status: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * Split enabled services into the ones this worker CAN ping and the ones it
+ * cannot — the honesty seam.
+ *
+ * The old filter was `serviceId !== "default" && webhookUrl`, and BOTH halves
+ * were wrong in the same way: a skipped pod simply vanished from the summary,
+ * so "0 unhealthy" was reported over a fleet nobody was watching.
+ *
+ *  • `serviceId === "default"` was excluded as "synthetic, no real URL to ping".
+ *    That is falsified by the row itself: a default-registration pod carries a
+ *    perfectly pingable `webhookUrl` (it is the very endpoint
+ *    `resolveDefaultIntelligenceEndpoint` hands every worker). The URL check
+ *    below already excludes URL-less rows, so the serviceId test only ever
+ *    removed monitorable services. It is GONE — default pods are pinged.
+ *  • A row with no `webhookUrl` genuinely cannot be pinged. It is now returned
+ *    as `unmonitored` and RECORDED as such, instead of being dropped.
+ *
+ * Pure + exported so the classification is unit-testable without HTTP or a DB.
+ */
+export function classifyServicesForHealthCheck(
+  services: HealthCheckCandidate[]
+): {
+  pingable: PingableService[];
+  unmonitored: HealthCheckCandidate[];
+} {
+  const monitored = services.filter((s) =>
+    MONITORED_STATUSES.has(s.status ?? "")
+  );
+  return {
+    pingable: monitored.filter((s): s is PingableService =>
+      Boolean(s.webhookUrl)
+    ),
+    unmonitored: monitored.filter((s) => !s.webhookUrl),
+  };
+}
+
+/** A candidate proven to carry a URL — the only thing `pingService` accepts. */
+export type PingableService = HealthCheckCandidate & { webhookUrl: string };
+
 /**
  * Called by the cron scheduler every 2 minutes.
- * Fetches all active, non-default services and pings them.
+ * Pings every enabled, monitorable service — and records the un-pingable ones.
  */
 export async function handleIntelligenceHealthCheck(): Promise<void> {
   const services = await db.query.intelligenceServices.findMany({
-    where: and(
-      eq(intelligenceServices.status, "active"),
-      eq(intelligenceServices.enabled, true)
-    ),
+    where: eq(intelligenceServices.enabled, true),
     columns: {
       id: true,
       serviceId: true,
       name: true,
       webhookUrl: true,
+      status: true,
       // Carries the alert's 6h dedup watermark (connectionHealth.<key>).
       metadata: true,
     },
   });
 
-  // Filter out the synthetic default service (no real URL to ping)
-  const external = services.filter(
-    (s) => s.serviceId !== "default" && s.webhookUrl
+  const { pingable, unmonitored } = classifyServicesForHealthCheck(
+    services as HealthCheckCandidate[]
   );
 
-  if (external.length === 0) {
-    logger.debug("No external intelligence services to health-check");
+  // Stamp the un-pingable ones so they read "unmonitored" on every surface that
+  // renders `lastHealthStatus`, instead of keeping a stale green verdict (or no
+  // verdict at all, which the pod-admin card painted as "Not pinged" only by
+  // accident). This is the whole fix: silent absence must not read as health.
+  if (unmonitored.length > 0) {
+    const checkedAt = new Date();
+    for (const svc of unmonitored) {
+      await db
+        .update(intelligenceServices)
+        .set({
+          lastHealthCheck: checkedAt,
+          lastHealthStatus: "unmonitored",
+          updatedAt: checkedAt,
+        })
+        .where(eq(intelligenceServices.id, svc.id));
+    }
+    logger.warn(
+      {
+        count: unmonitored.length,
+        serviceIds: unmonitored.map((s) => s.serviceId),
+      },
+      "Intelligence services have no webhookUrl — NOT health-monitored"
+    );
+  }
+
+  if (pingable.length === 0) {
+    logger.debug(
+      { unmonitored: unmonitored.length },
+      "No pingable intelligence services"
+    );
     return;
   }
 
   logger.debug(
-    { count: external.length },
+    { count: pingable.length },
     "Running intelligence service health checks"
   );
 
   const results = await Promise.allSettled(
-    external.map(async (svc) => {
+    pingable.map(async (svc) => {
       const { status, latencyMs, keyExpiresSoon, keyExpiresAt, detail } =
         await pingService(svc.webhookUrl);
 
@@ -179,14 +272,22 @@ export async function handleIntelligenceHealthCheck(): Promise<void> {
       }
 
       const checkedAt = new Date();
+      // The LIFECYCLE column moves to "expiring" so the frontend can warn —
+      // but NEVER for the default service. `resolveDefaultIntelligenceEndpoint`
+      // resolves the pod's IS endpoint with `status IN ('active',
+      // 'credential_error')`; flipping the default row to "expiring" would drop
+      // the pod to its env-var fallback (usually wrong) as a side effect of a
+      // health check. The `lastHealthStatus` verdict below still records
+      // "expiring", so the signal is visible without moving routing.
+      const moveLifecycle =
+        effectiveStatus === "expiring" && svc.serviceId !== "default";
       await db
         .update(intelligenceServices)
         .set({
           lastHealthCheck: checkedAt,
           lastHealthStatus: effectiveStatus,
           updatedAt: checkedAt,
-          // Update main status to "expiring" if key is nearing expiry
-          ...(effectiveStatus === "expiring" ? { status: "expiring" } : {}),
+          ...(moveLifecycle ? { status: "expiring" } : {}),
         })
         .where(eq(intelligenceServices.id, svc.id));
 
@@ -236,15 +337,24 @@ export async function handleIntelligenceHealthCheck(): Promise<void> {
   const unhealthy = summary.filter((s) => s.status === "unhealthy").length;
   const degraded = summary.filter((s) => s.status === "degraded").length;
 
+  // `unmonitored` is carried into BOTH branches on purpose: a summary that says
+  // "all healthy" while N services are unwatched is the exact lie this worker
+  // used to tell.
   if (unhealthy > 0 || degraded > 0) {
     logger.warn(
-      { healthy, degraded, unhealthy, total: external.length },
+      {
+        healthy,
+        degraded,
+        unhealthy,
+        unmonitored: unmonitored.length,
+        total: pingable.length,
+      },
       "Intelligence service health check: some services are unhealthy"
     );
   } else {
     logger.debug(
-      { healthy, total: external.length },
-      "Intelligence service health check: all healthy"
+      { healthy, unmonitored: unmonitored.length, total: pingable.length },
+      "Intelligence service health check: all pinged services healthy"
     );
   }
 }

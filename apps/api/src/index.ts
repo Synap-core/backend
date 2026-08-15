@@ -71,8 +71,8 @@ import {
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import {
   dispatchOpen,
+  isTypedOpenKind,
   podAdminTarget,
-  TYPED_OPEN_KINDS,
 } from "./open-dispatch.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import {
@@ -724,12 +724,11 @@ app.get("/open/:type/:id", (c) => {
   // `project` / `workspace` are lens targets (not rows the app "opens" as a
   // surface) — the browser deep-link handler switches the active lens and lands
   // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
-  const ALLOWED = new Set(TYPED_OPEN_KINDS);
   const type = c.req.param("type").trim().toLowerCase();
   const id = c.req.param("id");
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
   // interpolated into href/JS without escaping concerns.
-  if (!ALLOWED.has(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+  if (!isTypedOpenKind(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     return c.text("Invalid deep link", 400);
   }
   // Keep this typed route in lock-step with bare-id `/open/:id`. No producer

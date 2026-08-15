@@ -28,6 +28,7 @@ import {
   getChannelStack,
   resolveChannelRerun,
 } from "../services/signal/index.js";
+import { getIntegrationRoutingRules } from "../services/signal/integration-routing.js";
 import { automationsRouter } from "./automations.js";
 
 export const signalRouter = router({
@@ -266,5 +267,19 @@ export const signalRouter = router({
         scanned: resolved.scanned,
         message: `Re-run started over ${resolved.scanned} message(s)`,
       };
+    }),
+
+  /**
+   * Integration dashboard — Analyzers facet: the automations bound to ONE
+   * integration (capability composition)'s produced channels. "Bound" is a
+   * union of the matcher-faithful per-channel binding (`channelStack`'s own
+   * primitive) and capability-embedded `member_of` automations. Read-only,
+   * additive — see `services/signal/integration-routing.ts`.
+   */
+  integrationRoutingRules: protectedProcedure
+    .input(z.object({ capabilityId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return getIntegrationRoutingRules(userId, input.capabilityId);
     }),
 });

@@ -56,6 +56,7 @@ import {
 } from "@synap/database";
 import { entityReadVisibleWhere } from "./entities/helpers.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { resolveCapabilityChannelIds } from "../services/signal/index.js";
 import type {
   Reaction,
   ReactionEvent,
@@ -1023,5 +1024,67 @@ export const subscriptionsRouter = router({
       );
 
       return shell;
+    }),
+
+  /**
+   * Integration dashboard — Stream facet: the event feed for ONE integration
+   * (a standing-mode capability composition, identified by `capabilityId`).
+   * Channels are resolved via `resolveCapabilityChannelIds` — the SAME
+   * canonical capability→channels derivation every other capability-lens read
+   * in `signal.ts` uses (produced-edge ∪ legacy externalSource-slug channels,
+   * floored by `channelVisibilityWhere`). Events are then the spine rows whose
+   * `subject_id` is one of those channels — the shape channel activity
+   * (`message.received`/`message.sent`, subjectType='channel') now emits.
+   *
+   * Returns the SAME `ReactionEvent[]` shape `listAll` returns (shells only,
+   * no fan-out — same as `listAll`, reactions[] populated on demand via
+   * `eventFanout`). Deliberately does NOT replicate `listAll`'s pending-
+   * proposal decision-inbox enrichment (`pending`/`proposalId`) — that signal
+   * is specific to the Activity decision inbox, not the per-integration
+   * stream; the fields stay optional/undefined here, so the shape is still
+   * exactly `ReactionEvent`.
+   */
+  integrationStream: protectedProcedure
+    .input(
+      z.object({
+        capabilityId: z.string().uuid(),
+        limit: z.number().min(1).max(500).default(100),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const channelIds = await resolveCapabilityChannelIds(
+        userId,
+        input.capabilityId
+      );
+      if (channelIds.length === 0) {
+        return { items: [] as ReactionEvent[] };
+      }
+
+      const events = await eventRepository.searchEvents({
+        userId,
+        subjectIds: channelIds,
+        limit: input.limit,
+      });
+
+      const actorIds = events.flatMap((e) => {
+        const data = e.data ?? {};
+        return [
+          typeof data.agentUserId === "string" ? data.agentUserId : undefined,
+          typeof data.actorId === "string" ? data.actorId : undefined,
+          e.userId,
+        ].filter((v): v is string => Boolean(v));
+      });
+      const [actorNameById, subjectNameByKey] = await Promise.all([
+        resolveActorNames(actorIds),
+        resolveSubjectNames(events, userId),
+      ]);
+
+      const items = events.map((e) =>
+        toReactionEventShell(e, actorNameById, subjectNameByKey)
+      );
+
+      return { items };
     }),
 });

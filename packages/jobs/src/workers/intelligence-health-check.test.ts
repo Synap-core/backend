@@ -39,6 +39,9 @@ const service = {
   serviceId: "synap-is",
   name: "Synap Intelligence",
   webhookUrl: "https://is.example",
+  // The worker now filters lifecycle status in TS (see MONITORED_STATUSES) so
+  // the monitored/unmonitored decision is readable in one place.
+  status: "active",
   metadata: {},
 };
 
@@ -131,16 +134,119 @@ describe("intelligence health check → operator alert", () => {
     expect(notifier).not.toHaveBeenCalled();
   });
 
-  it("skips the synthetic default service (nothing to ping)", async () => {
+  /**
+   * REPLACES a test that pinned "skips the synthetic default service (nothing
+   * to ping)". That test asserted the DEFECT: a default-registration pod
+   * carries a perfectly real webhookUrl, so skipping it left that customer with
+   * NO health monitoring and no signal that they had none.
+   */
+  it("pings a default-registration service that has a URL", async () => {
     h.findMany.mockResolvedValue([
       { ...service, serviceId: "default", webhookUrl: "https://is.example" },
     ]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(healthResponse({ status: "degraded" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleIntelligenceHealthCheck();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(notifier.mock.calls[0]![0].serviceId).toBe("default");
+  });
+
+  it("records a URL-less service as unmonitored instead of dropping it", async () => {
+    h.findMany.mockResolvedValue([{ ...service, webhookUrl: null }]);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     await handleIntelligenceHealthCheck();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(notifier).not.toHaveBeenCalled();
+    // The verdict is WRITTEN — silent absence from a green list is the bug.
+    expect(h.set).toHaveBeenCalledTimes(1);
+    expect(h.set.mock.calls[0]![0].lastHealthStatus).toBe("unmonitored");
+  });
+
+  it("keeps monitoring a service it already flagged as expiring", async () => {
+    // The worker itself writes status:'expiring'. A query accepting only
+    // 'active' would make the first expiry warning the last check it ever ran.
+    h.findMany.mockResolvedValue([{ ...service, status: "expiring" }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(healthResponse({ status: "degraded" }))
+    );
+
+    await handleIntelligenceHealthCheck();
+
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not move the DEFAULT service's lifecycle status to expiring", async () => {
+    // resolveDefaultIntelligenceEndpoint resolves on status IN
+    // ('active','credential_error') — flipping the default row to 'expiring'
+    // would silently drop the pod to its env-var fallback.
+    h.findMany.mockResolvedValue([{ ...service, serviceId: "default" }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: (k: string) => (k === "X-Key-Expires-Soon" ? "true" : null),
+        },
+        json: async () => ({ status: "ok" }),
+      } as unknown as Response)
+    );
+
+    await handleIntelligenceHealthCheck();
+
+    const written = h.set.mock.calls[0]![0];
+    expect(written.lastHealthStatus).toBe("expiring");
+    expect(written.status).toBeUndefined();
+  });
+
+  it("still moves a NON-default service's lifecycle status to expiring", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: (k: string) => (k === "X-Key-Expires-Soon" ? "true" : null),
+        },
+        json: async () => ({ status: "ok" }),
+      } as unknown as Response)
+    );
+
+    await handleIntelligenceHealthCheck();
+
+    expect(h.set.mock.calls[0]![0].status).toBe("expiring");
+  });
+
+  it("treats a 'skip' check as not-failing evidence", async () => {
+    // The IS reports `embeddings: {status:'skip'}` when it has had no embedding
+    // call since boot. Not-asserted must not be reported as an outage.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        healthResponse({
+          status: "degraded",
+          checks: {
+            embeddings: { status: "skip", detail: "no call since boot" },
+            agentTurns: { status: "error", detail: "402" },
+          },
+        })
+      )
+    );
+
+    await handleIntelligenceHealthCheck();
+
+    const detail = notifier.mock.calls[0]![0].detail as string;
+    expect(detail).toContain("agentTurns: 402");
+    expect(detail).not.toContain("embeddings");
   });
 });

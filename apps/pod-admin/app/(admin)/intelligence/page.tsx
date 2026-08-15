@@ -674,10 +674,12 @@ function ProviderHealthSection() {
     const isBuiltIn = s.serviceId === "default";
     let status: StatusKind = "unknown";
     let statusLabel = "Unknown";
-    if (isBuiltIn) {
-      status = "healthy";
-      statusLabel = "Configured";
-    } else if (s.lastHealthStatus === "healthy") {
+    // NOTE: `isBuiltIn` no longer short-circuits to "healthy". Painting the
+    // default service green because it is "Configured" reported the EASY fact
+    // (a row exists) instead of the TRUE one (did a ping succeed) — and the
+    // health worker skipped default services entirely, so that green was never
+    // backed by evidence. The worker now pings them; this renders its verdict.
+    if (s.lastHealthStatus === "healthy") {
       status = "healthy";
       statusLabel = "Healthy";
     } else if (s.lastHealthStatus === "degraded") {
@@ -686,6 +688,11 @@ function ProviderHealthSection() {
     } else if (s.lastHealthStatus === "unhealthy") {
       status = "down";
       statusLabel = "Unhealthy";
+    } else if (s.lastHealthStatus === "unmonitored") {
+      // The worker looked and found nothing to ping (no webhookUrl). Distinct
+      // from "never looked" — an unmonitored service is a REPORTED state.
+      status = "stale";
+      statusLabel = "Not monitored";
     } else {
       status = "unknown";
       statusLabel = "Not pinged";

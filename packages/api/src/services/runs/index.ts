@@ -357,6 +357,14 @@ async function listAutomationRuns(
     status: r.status as RunStatus,
     startedAt: r.startedAt,
     completedAt: r.completedAt ?? null,
+    // `automation_runs` has no updated_at, and the step-level activity that
+    // would stand in for one cannot distinguish a hang from a legitimately
+    // delay-suspended run (a delay node can wait DAYS — see
+    // `RUN_NOT_DELAY_SUSPENDED`). Reporting UNKNOWN is the honest answer;
+    // automation hangs are covered by `automation-run-reaper` instead, which
+    // force-fails an orphan within 45min and thereby surfaces it under
+    // `failed_flows`, delay-exemption and all.
+    lastActivityAt: null,
     workspaceId: r.workspaceId ?? null,
     projectId: null,
     subjectEntityId: r.subjectEntityId ?? null,
@@ -400,6 +408,11 @@ async function listPlaybookRuns(
       channelId: focusSessions.channelId,
       subjectEntityId: focusSessions.subjectEntityId,
       projectId: focusSessions.projectId,
+      // Progress signal: `playbook_runs` has no updated_at, so "actively
+      // worked" is read off the linked session — the SAME column
+      // `playbook-run-reaper` uses to decide a run is orphaned. One signal, two
+      // consumers (it reports, the reaper acts), never two definitions.
+      lastActivityAt: focusSessions.updatedAt,
       replayOf: playbookRuns.replayOf,
       // NULL snapshot → NULL version (tolerant); ::int for a numeric field.
       definitionVersion: drizzleSql<
@@ -437,6 +450,7 @@ async function listPlaybookRuns(
     status: r.status as RunStatus,
     startedAt: r.startedAt,
     completedAt: r.completedAt ?? null,
+    lastActivityAt: r.lastActivityAt ?? null,
     workspaceId: r.workspaceId ?? null,
     projectId: r.projectId ?? null,
     subjectEntityId: r.subjectEntityId ?? null,
@@ -521,6 +535,9 @@ async function listCaptureRuns(
       status: "completed" as const,
       startedAt: r.createdAt,
       completedAt: r.reviewedAt ?? r.createdAt,
+      // Synthesised from a terminal proposal — a capture run is never "running",
+      // so there is nothing for a progress signal to watch.
+      lastActivityAt: null,
       workspaceId: r.workspaceId ?? null,
       projectId: r.projectId ?? null,
       subjectEntityId: firstEntity ?? null,
@@ -625,6 +642,8 @@ async function listCapabilityRuns(
       status: capabilityRunStatus(r.status),
       startedAt: r.createdAt,
       completedAt: r.reviewedAt ?? null,
+      // Synthesised from a proposal row — no per-run progress column exists.
+      lastActivityAt: null,
       workspaceId: r.workspaceId ?? null,
       projectId: r.projectId ?? null,
       subjectEntityId: null,
@@ -698,6 +717,8 @@ async function listCapabilityRuns(
             status: "completed" as const,
             startedAt: e.timestamp,
             completedAt: e.timestamp,
+            // Synthesised from a single terminal event — never "running".
+            lastActivityAt: null,
             workspaceId:
               typeof data.workspaceId === "string" ? data.workspaceId : null,
             projectId: null,
@@ -829,6 +850,8 @@ async function listAgentWriteRuns(
       status: "completed" as const,
       startedAt: r.createdAt,
       completedAt: r.createdAt,
+      // A write receipt is instantaneous — never "running".
+      lastActivityAt: null,
       workspaceId: r.workspaceId ?? null,
       projectId: r.projectId ?? null,
       subjectEntityId: null,
@@ -873,6 +896,9 @@ async function listSessionRuns(
       projectId: focusSessions.projectId,
       subjectEntityId: focusSessions.subjectEntityId,
       channelId: focusSessions.channelId,
+      // Every real step on a session touches updated_at — this is the only
+      // minutes-scale "is it still moving?" signal a session ledger carries.
+      lastActivityAt: focusSessions.updatedAt,
     })
     .from(focusSessions)
     .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
@@ -916,6 +942,7 @@ async function listSessionRuns(
     status: sessionStatus(r.status),
     startedAt: r.startedAt,
     completedAt: r.closedAt ?? null,
+    lastActivityAt: r.lastActivityAt ?? null,
     workspaceId: r.workspaceId ?? null,
     projectId: r.projectId ?? null,
     subjectEntityId: r.subjectEntityId ?? null,
@@ -959,6 +986,7 @@ async function listChatRuns(
       startedAt: chatTurns.startedAt,
       completedAt: chatTurns.completedAt,
       channelId: chatTurns.channelId,
+      lastActivityAt: chatTurns.updatedAt,
       error: chatTurns.error,
       workspaceId: channels.workspaceId,
       channelTitle: channels.title,
@@ -997,6 +1025,7 @@ async function listChatRuns(
       status: chatRunStatus(r.status),
       startedAt: r.startedAt,
       completedAt: r.completedAt ?? null,
+      lastActivityAt: r.lastActivityAt ?? null,
       workspaceId: r.workspaceId ?? null,
       projectId: null,
       subjectEntityId: null,

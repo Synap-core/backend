@@ -23,9 +23,55 @@ const EMBEDDING_STALE_MS = 24 * 60 * 60 * 1000;
 /** A catalog kind whose last sync was this old counts as stale. */
 const CATALOG_STALE_MS = 60 * 60 * 1000;
 
+/**
+ * The pg-boss queue that owns the POD side of the embedding pipeline: call the
+ * IS `/api/embeddings`, then `INSERT INTO entity_vectors … ::vector`.
+ * (`packages/jobs/src/workers/entity-embedding.ts`.)
+ */
+const EMBEDDING_QUEUE = "entity-embedding";
+
+/**
+ * Window for the pod-side embedding OUTCOME signal.
+ *
+ * It MUST be a window, not a lifetime count: pg-boss keeps failed rows in
+ * `pgboss.job` for 7 days (`archiveCompletedAfterSeconds`), so `count(*) WHERE
+ * state='failed'` is a week-long cumulative counter — a check built on it goes
+ * red once and stays red, which is the always-red trap. Scoping on
+ * `completed_on` inside this window means the signal DECAYS on its own: 15
+ * quiet minutes and it is green again, with no reset step and no watermark.
+ */
+const EMBEDDING_FAILURE_WINDOW_MINUTES = 15;
+
 export interface QueueHealth {
   failed: number;
   pastDue: number;
+}
+
+/**
+ * The pod-side embedding-pipeline outcome — the half the IS structurally CANNOT
+ * see.
+ *
+ * The IS `/health` `checks.embeddings` reports the last outcome of an IS-side
+ * PROVIDER call. That is a real signal, but it is blind to everything that
+ * happens on this side of the wire, and every one of these is a total recall
+ * outage that leaves the IS reporting `embeddings: ok`:
+ *   • the pod cannot reach the IS at all (endpoint/key misresolved, 401, DNS),
+ *   • the pgvector write fails (extension missing, dimension mismatch, the
+ *     `::vector` cast throwing),
+ *   • the queue is unstaffed and nothing runs.
+ * The IS cannot report any of them from where it sits — so the POD reports
+ * them, from the outcome ledger it already owns. No proxy signal, no probe, no
+ * new table: the job rows are the evidence.
+ *
+ * `readable:false` means the QUERY ITSELF failed. That is deliberately distinct
+ * from "zero failures": the previous code returned null on catch and the caller
+ * silently pushed no reason, so a broken pgboss schema read as perfect health.
+ */
+export interface EmbeddingPipelineHealth {
+  readable: boolean;
+  recentFailed: number;
+  recentCompleted: number;
+  windowMinutes: number;
 }
 
 /**
@@ -67,6 +113,50 @@ async function readEmbeddingFreshness(): Promise<Date | null> {
 }
 
 /**
+ * Windowed per-queue outcome for `entity-embedding` (see
+ * EmbeddingPipelineHealth). PER-QUEUE on purpose: the fleet-wide
+ * `FAILED_JOB_DEGRADE_THRESHOLD = 200` above cannot see a completely dead
+ * embedding pipeline, because a stone-dead queue produces far fewer than 200
+ * failures — reading the TOTAL instead of the per-queue split is the same shape
+ * of blindness the IS hit reading total free pool slots.
+ *
+ * `pgboss.job` is `PARTITION BY LIST (name)` in pg-boss 10.4.2, so the `name`
+ * predicate prunes to this queue's partition. A terminal failure sets
+ * `completed_on = now()` (plans.js `failJobs`), which is what makes the window
+ * work.
+ */
+async function readEmbeddingPipeline(): Promise<EmbeddingPipelineHealth> {
+  const windowMinutes = EMBEDDING_FAILURE_WINDOW_MINUTES;
+  try {
+    const rows = (await db.execute(drizzleSql`
+      SELECT
+        count(*) FILTER (WHERE state = 'failed')::int AS recent_failed,
+        count(*) FILTER (WHERE state = 'completed')::int AS recent_completed
+      FROM pgboss.job
+      WHERE name = ${EMBEDDING_QUEUE}
+        AND completed_on > now() - (${windowMinutes}::int * interval '1 minute')
+    `)) as unknown as Array<{
+      recent_failed: number;
+      recent_completed: number;
+    }>;
+    const row = rows[0];
+    return {
+      readable: true,
+      recentFailed: Number(row?.recent_failed ?? 0),
+      recentCompleted: Number(row?.recent_completed ?? 0),
+      windowMinutes,
+    };
+  } catch {
+    return {
+      readable: false,
+      recentFailed: 0,
+      recentCompleted: 0,
+      windowMinutes,
+    };
+  }
+}
+
+/**
  * Readiness probes fire at LB/orchestrator frequency; the two soft-signal
  * aggregates above scan pgboss.job and entity_vectors (no updated_at index),
  * so their results are memoized for a minute — staleness signals measured in
@@ -78,22 +168,67 @@ let signalCache: {
   at: number;
   queue: QueueHealth | null;
   freshness: Date | null;
+  pipeline: EmbeddingPipelineHealth;
 } | null = null;
 
 async function readSoftSignals(): Promise<{
   queue: QueueHealth | null;
   freshness: Date | null;
+  pipeline: EmbeddingPipelineHealth;
 }> {
   const now = Date.now();
   if (signalCache && now - signalCache.at < SIGNAL_CACHE_MS) {
-    return { queue: signalCache.queue, freshness: signalCache.freshness };
+    const { queue, freshness, pipeline } = signalCache;
+    return { queue, freshness, pipeline };
   }
-  const [queue, freshness] = await Promise.all([
+  const [queue, freshness, pipeline] = await Promise.all([
     readQueueHealth(),
     readEmbeddingFreshness(),
+    readEmbeddingPipeline(),
   ]);
-  signalCache = { at: now, queue, freshness };
-  return { queue, freshness };
+  signalCache = { at: now, queue, freshness, pipeline };
+  return { queue, freshness, pipeline };
+}
+
+/**
+ * PURE: the soft-degradation reasons for the embedding pipeline. DB-free so the
+ * decay contract is unit-testable.
+ *
+ * What makes each reason go GREEN again — every one decays on its own, none
+ * needs a reset:
+ *  • `embeddings:failing` — the failures age out of the
+ *    EMBEDDING_FAILURE_WINDOW_MINUTES window, or successes start outnumbering
+ *    them. A quiet queue (0 failed, 0 completed) is NOT failing.
+ *  • `embeddings:unreadable` — the next successful read of `pgboss.job` clears
+ *    it. This reason exists because "the query threw" previously produced
+ *    silence, which read as health.
+ *  • `embeddings:stale` — the next successful `entity_vectors` write. Requires
+ *    a KNOWN last-write time; a null (empty table / unreadable) never fabricates
+ *    staleness, it reports `embeddings:unreadable` when the read itself failed.
+ */
+export function embeddingDegradeReasons(
+  pipeline: EmbeddingPipelineHealth,
+  lastVectorWriteAt: Date | null,
+  now: number
+): string[] {
+  const reasons: string[] = [];
+  if (!pipeline.readable) {
+    reasons.push("embeddings:unreadable");
+  } else if (
+    pipeline.recentFailed > 0 &&
+    pipeline.recentFailed >= pipeline.recentCompleted
+  ) {
+    // Failing at least as often as it succeeds, inside the window. A pipeline
+    // that fails a few jobs while succeeding at many is retrying, not down.
+    reasons.push("embeddings:failing");
+  }
+  if (
+    lastVectorWriteAt &&
+    now - lastVectorWriteAt.getTime() > EMBEDDING_STALE_MS
+  ) {
+    reasons.push("embeddings:stale");
+  }
+  return reasons;
 }
 
 /** Catalog kinds whose last sync is empty/unreachable AND older than the stale window. */
@@ -134,7 +269,11 @@ export const healthRouter = router({
         () => ({}) as Record<string, CatalogSyncStamp>
       ),
     ]);
-    const { queue: queueHealth, freshness: embeddingLast } = softSignals;
+    const {
+      queue: queueHealth,
+      freshness: embeddingLast,
+      pipeline: embeddingPipeline,
+    } = softSignals;
 
     const databaseOk = checks[0].status === "fulfilled";
     const jobQueueOk = checks[1].status === "fulfilled";
@@ -146,15 +285,20 @@ export const healthRouter = router({
     // Soft degradation — additive signals that keep HTTP 200 / status unchanged
     // but tell a monitor a dependency is failing behind a green readiness probe.
     const degraded: string[] = [];
+    // A NULL queueHealth means the aggregate query FAILED. It used to produce
+    // no reason at all — an unreadable queue read as a healthy queue. Say so.
+    if (!queueHealth) {
+      degraded.push("queue:unreadable");
+    }
     if (queueHealth && queueHealth.failed > FAILED_JOB_DEGRADE_THRESHOLD) {
       degraded.push("queue:failed-backlog");
     }
     if (queueHealth && queueHealth.pastDue > PAST_DUE_JOB_DEGRADE_THRESHOLD) {
       degraded.push("queue:past-due-backlog");
     }
-    if (embeddingLast && now - embeddingLast.getTime() > EMBEDDING_STALE_MS) {
-      degraded.push("embeddings:stale");
-    }
+    degraded.push(
+      ...embeddingDegradeReasons(embeddingPipeline, embeddingLast, now)
+    );
     degraded.push(...staleCatalogReasons(catalogStamps, now));
 
     return {
@@ -180,6 +324,12 @@ export const healthRouter = router({
         embeddings: {
           lastUpdatedAt: embeddingLast ? embeddingLast.toISOString() : null,
           stale: degraded.includes("embeddings:stale"),
+          // The pod-side OUTCOME of the embedding pipeline — the half the IS
+          // /health cannot observe (see EmbeddingPipelineHealth). `readable`
+          // false means this pod could not read its own job ledger, which is
+          // reported, never swallowed.
+          pipeline: embeddingPipeline,
+          failing: degraded.includes("embeddings:failing"),
         },
         catalogSync: catalogStamps,
       },

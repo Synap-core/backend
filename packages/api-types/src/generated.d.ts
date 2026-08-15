@@ -5362,6 +5362,32 @@ export interface QueueHealth {
 	failed: number;
 	pastDue: number;
 }
+/**
+ * The pod-side embedding-pipeline outcome — the half the IS structurally CANNOT
+ * see.
+ *
+ * The IS `/health` `checks.embeddings` reports the last outcome of an IS-side
+ * PROVIDER call. That is a real signal, but it is blind to everything that
+ * happens on this side of the wire, and every one of these is a total recall
+ * outage that leaves the IS reporting `embeddings: ok`:
+ *   • the pod cannot reach the IS at all (endpoint/key misresolved, 401, DNS),
+ *   • the pgvector write fails (extension missing, dimension mismatch, the
+ *     `::vector` cast throwing),
+ *   • the queue is unstaffed and nothing runs.
+ * The IS cannot report any of them from where it sits — so the POD reports
+ * them, from the outcome ledger it already owns. No proxy signal, no probe, no
+ * new table: the job rows are the evidence.
+ *
+ * `readable:false` means the QUERY ITSELF failed. That is deliberately distinct
+ * from "zero failures": the previous code returned null on catch and the caller
+ * silently pushed no reason, so a broken pgboss schema read as perfect health.
+ */
+export interface EmbeddingPipelineHealth {
+	readable: boolean;
+	recentFailed: number;
+	recentCompleted: number;
+	windowMinutes: number;
+}
 export interface ToolLog {
 	id?: string;
 	toolName?: string;
@@ -5794,6 +5820,18 @@ export interface UnifiedRun {
 	status: RunStatus;
 	startedAt: Date;
 	completedAt: Date | null;
+	/**
+	 * Most recent evidence this run is still MAKING PROGRESS — not merely that it
+	 * exists. `null` means UNKNOWN (this ledger records no activity timestamp),
+	 * and it must never be read as "no activity": age is the only honest signal
+	 * for those, and the stall classifier says so explicitly.
+	 *
+	 * Per ledger: session/playbook → `focus_sessions.updated_at` (every real step
+	 * touches it — the same signal `playbook-run-reaper` keys on); chat →
+	 * `chat_turns.updated_at`; automation/capture/capability/agent_write → null
+	 * (no such column; see `classifyRunStall` for what covers them instead).
+	 */
+	lastActivityAt: Date | null;
 	workspaceId: string | null;
 	projectId: string | null;
 	/** The entity this run is "about", when the ledger records one. */
@@ -6053,8 +6091,10 @@ export interface GlobalHealthReport {
 	status: HealthStatus;
 	/** One paragraph a human can read; says "all clear" when nothing is wrong. */
 	summary: string;
+	/** `idleMinutes` present only when the progress-based signal was computed. */
 	thresholds: {
 		stuckHours: number;
+		idleMinutes?: number;
 	};
 	scope: {
 		workspaceId: string | null;
@@ -7591,6 +7631,40 @@ export interface CapabilityIssuesResult {
 	 * a recent-prefix census, not a whole-history total. The caller must disclose it.
 	 */
 	truncated: boolean;
+}
+/**
+ * Integration routing rules — "which automations are bound to THIS integration
+ * instance's channels" (the Integration dashboard's Analyzers facet).
+ *
+ * An "Integration" = a standing-mode capability composition, identified by
+ * `capabilityId`. Its channels are resolved via the SAME canonical door every
+ * other capability-lens read uses: `resolveCapabilityChannelIds` (this
+ * package's `signal/index.ts`) — produced-edge channels ∪ legacy
+ * externalSource-slug channels, floored by `channelVisibilityWhere`.
+ *
+ * "Bound" (matcher-faithful, NOT hand-rolled) is the union of two doors that
+ * already exist:
+ *   1. `classifyChannelAutomationBinding` (channel-automation-binding.ts) —
+ *      the SAME per-channel mirror of the fire-time trigger matcher that
+ *      `channel-stack.ts`'s `channelStack.automations` facet uses. An
+ *      automation binds when its trigger can fire for ANY of the
+ *      integration's channels (by explicit `channelId`, a bound-entity
+ *      filter, or an unscoped workspace-wide event-pattern match).
+ *   2. `automation --member_of--> capability` links (the SAME edge
+ *      `channel-stack.ts` reads for its `capability` binding kind) — an
+ *      automation embedded IN this capability container binds regardless of
+ *      its own trigger pattern, mirroring the capability-composition reader.
+ *
+ * NO new store, NO new matching logic — this file only unions two existing,
+ * already-tested read primitives over one capability's channel scope.
+ */
+export interface IntegrationRoutingRule {
+	id: string;
+	name: string;
+	eventPattern: string | null;
+	status: string;
+	channelId: string | null;
+	lastRunAt: string | null;
 }
 /**
  * Core API Router
@@ -12158,6 +12232,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					embeddings: {
 						lastUpdatedAt: string | null;
 						stale: boolean;
+						pipeline: EmbeddingPipelineHealth;
+						failing: boolean;
 					};
 					catalogSync: Record<string, CatalogSyncStamp>;
 				};
@@ -23273,6 +23349,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: ReactionEvent;
 			meta: object;
 		}>;
+		integrationStream: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				capabilityId: string;
+				limit?: number | undefined;
+			};
+			output: {
+				items: ReactionEvent[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	aiProviders: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -25418,6 +25504,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId?: undefined;
 			};
+			meta: object;
+		}>;
+		integrationRoutingRules: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				capabilityId: string;
+			};
+			output: IntegrationRoutingRule[];
 			meta: object;
 		}>;
 	}>>;

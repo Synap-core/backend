@@ -71,6 +71,18 @@ export interface UnifiedRun {
   status: RunStatus;
   startedAt: Date;
   completedAt: Date | null;
+  /**
+   * Most recent evidence this run is still MAKING PROGRESS — not merely that it
+   * exists. `null` means UNKNOWN (this ledger records no activity timestamp),
+   * and it must never be read as "no activity": age is the only honest signal
+   * for those, and the stall classifier says so explicitly.
+   *
+   * Per ledger: session/playbook → `focus_sessions.updated_at` (every real step
+   * touches it — the same signal `playbook-run-reaper` keys on); chat →
+   * `chat_turns.updated_at`; automation/capture/capability/agent_write → null
+   * (no such column; see `classifyRunStall` for what covers them instead).
+   */
+  lastActivityAt: Date | null;
   workspaceId: string | null;
   projectId: string | null;
   /** The entity this run is "about", when the ledger records one. */

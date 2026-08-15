@@ -65,6 +65,7 @@ const SERVICE = {
   serviceId: "synap-is",
   name: "Synap IS",
   webhookUrl: "https://is.example.test",
+  status: "active",
   metadata: null,
 };
 

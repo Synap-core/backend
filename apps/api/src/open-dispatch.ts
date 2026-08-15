@@ -36,6 +36,14 @@ export const TYPED_OPEN_KINDS = [
   "workspace",
 ] as const;
 
+export type TypedOpenKind = (typeof TYPED_OPEN_KINDS)[number];
+
+const TYPED_OPEN_KIND_SET: ReadonlySet<string> = new Set(TYPED_OPEN_KINDS);
+
+export function isTypedOpenKind(value: string): value is TypedOpenKind {
+  return TYPED_OPEN_KIND_SET.has(value);
+}
+
 export type OpenWebKind = "proposal" | "entity" | "view";
 
 export function podAdminTarget(

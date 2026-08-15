@@ -41,6 +41,11 @@ import {
   type HealthSection,
   type HealthStatus,
 } from "./types.js";
+import {
+  IDLE_STALL_MINUTES,
+  classifyStalls,
+  type StallReport,
+} from "./stall.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const PENDING_SCAN_LIMIT = 1000;
@@ -57,6 +62,15 @@ export interface GlobalSignals {
     flowName: string;
     ageHours: number;
   }>;
+  /**
+   * The progress-based half of the stuck signal (see ./stall.ts). Optional so
+   * existing callers/tests that only supply `stuck` keep working and simply get
+   * the historical age-only verdict — absent means "not computed", and the
+   * section says nothing about idleness rather than claiming none.
+   */
+  stall?: StallReport;
+  /** Minutes of no-progress that counts as idle (echoed into thresholds). */
+  idleMinutes?: number;
   failedFlows: Array<{
     flowName: string;
     failedCount: number;
@@ -78,18 +92,45 @@ export function summarizeGlobalHealth(
 ): GlobalHealthReport {
   const sections: HealthSection[] = [];
 
-  // Stuck runs — degraded if any.
+  // Stuck runs — TWO signals, ranked (see ./stall.ts for why age alone lied).
+  //   aged (past the hour boundary)      → degraded, the historical verdict
+  //   idle (no progress, minutes-scale)  → attention, "worth a look"
+  // `count` / `oldest` keep meaning EXACTLY what they meant (the aged list), so
+  // the browser's FlowHealthBand and the Raycast card read unchanged; idleness
+  // is additive detail. `unobservableRunning` is stated out loud: a section that
+  // silently omits the runs it cannot judge is how "No stuck runs" got printed
+  // over a hung session in the first place.
+  const idle = signals.stall?.idle ?? [];
+  const unobservable = signals.stall?.unobservable ?? 0;
+  const idleMinutes = signals.idleMinutes ?? null;
   sections.push({
     key: "stuck_runs",
-    status: signals.stuck.length > 0 ? "degraded" : "ok",
+    status:
+      signals.stuck.length > 0
+        ? "degraded"
+        : idle.length > 0
+          ? "attention"
+          : "ok",
     headline:
       signals.stuck.length > 0
-        ? `${signals.stuck.length} run(s) still running past ${signals.stuckHours}h`
-        : "No stuck runs",
+        ? `${signals.stuck.length} run(s) still running past ${signals.stuckHours}h` +
+          (idle.length > 0 ? `, ${idle.length} more idle` : "")
+        : idle.length > 0
+          ? `${idle.length} run(s) running but idle${
+              idleMinutes !== null
+                ? ` for over ${Math.round(idleMinutes)}m`
+                : ""
+            }`
+          : "No stuck runs",
     detail: {
       count: signals.stuck.length,
       thresholdHours: signals.stuckHours,
       oldest: signals.stuck.slice(0, 5),
+      idleCount: idle.length,
+      idleThresholdMinutes: idleMinutes,
+      idlest: idle.slice(0, 5),
+      /** Running runs whose ledger records no progress timestamp at all. */
+      unobservableRunning: unobservable,
     },
   });
 
@@ -201,7 +242,10 @@ export function summarizeGlobalHealth(
     mode: "global",
     status,
     summary,
-    thresholds: { stuckHours: signals.stuckHours },
+    thresholds: {
+      stuckHours: signals.stuckHours,
+      ...(idleMinutes !== null ? { idleMinutes } : {}),
+    },
     scope,
     sections,
   };
@@ -306,15 +350,25 @@ export async function diagnoseGlobal(params: {
       .groupBy(proposals.agentUserId),
   ]);
 
-  const stuck = runningRuns
-    .map((r) => ({
+  // ONE pass over the running set produces BOTH halves of the signal — the aged
+  // list (unchanged shape, unchanged meaning) and the progress-based idle list.
+  const stall = classifyStalls(
+    runningRuns.map((r) => ({
       id: r.id,
       flowType: r.flowType,
       flowName: r.flowName,
-      ageHours: (now - r.startedAt.getTime()) / HOUR_MS,
-    }))
-    .filter((r) => r.ageHours > stuckHours)
-    .sort((a, b) => b.ageHours - a.ageHours);
+      startedAt: r.startedAt,
+      lastActivityAt: r.lastActivityAt,
+    })),
+    now,
+    { agedHours: stuckHours, idleMinutes: IDLE_STALL_MINUTES }
+  );
+  const stuck = stall.aged.map((r) => ({
+    id: r.id,
+    flowType: r.flowType,
+    flowName: r.flowName,
+    ageHours: r.ageHours,
+  }));
 
   const failedFlows = groups
     .filter((g) => g.failedCount > 0)
@@ -372,6 +426,8 @@ export async function diagnoseGlobal(params: {
     {
       stuckHours,
       stuck,
+      stall,
+      idleMinutes: IDLE_STALL_MINUTES,
       failedFlows,
       backlog,
       duplicateClusters,
