@@ -158,6 +158,13 @@ export async function createFocusSession(
         correlationId: correlationId ?? null,
         templateId,
         playbookId: playbook?.id ?? null,
+        // Typed origin (migration 0240) — stamped from what this door already
+        // resolved, never re-sniffed from metadata. A session created here is a
+        // playbook run exactly when `templateId` resolved to a real playbook;
+        // automation-origin sessions never come through here, they come through
+        // `openRunSession`. Readers prefer this column and fall back to the
+        // legacy metadata sniff only for rows a non-stamping writer produced.
+        origin: playbook ? "playbook" : "agent",
         expectedOutputs,
         channelId,
         agentIds,

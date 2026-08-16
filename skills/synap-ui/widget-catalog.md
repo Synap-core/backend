@@ -2,7 +2,9 @@
 
 Widgets (cells) are the universal rendering unit. A bento is composed of cells. Views embed cells. Side panels host cells.
 
-**Never guess a widget kind.** Always call `GET /api/hub/widget-definitions?workspaceId={workspaceId}` first — the response is the authoritative registry for what's installed.
+**Never guess a widget kind.** Call `synap_list_widgets` (or `GET /api/hub/widget-definitions?workspaceId={workspaceId}`) first. That list is the compose allowlist: curated builtins the Browser actually registers, plus `generated:<slug>` cells on the pod.
+
+Do **not** invent `entity-count` — use `stat-card` with `profileSlug`. Do **not** pass `profileSlug` to `view-table` / `view` and expect a table — those widgets need a saved `viewId`. Use `entity-list` + `profileSlug` when you have no saved view.
 
 This file is a categorized snapshot of what typically exists in a Synap pod. Use it for planning ("can I build X?") — but verify against the registry before committing.
 
@@ -13,9 +15,7 @@ This file is a categorized snapshot of what typically exists in a Synap pod. Use
   "id": "block-123",
   "kind": "widget",
   "widgetKind": "stat-card",
-  "config": {
-    /* widget-specific, see configSchema in registry */
-  },
+  "config": {/* widget-specific, see configSchema in registry */},
   "layout": { "x": 0, "y": 0, "w": 4, "h": 2 }
 }
 ```
@@ -45,14 +45,9 @@ Single metric on a card. Best for top-of-dashboard KPIs.
   "widgetKind": "stat-card",
   "config": {
     "label": "Tasks completed this week",
-    "metric": "count",
-    "filter": {
-      "profileSlug": "task",
-      "properties.status": "done",
-      "updatedAt.gte": "this-week"
-    },
-    "trend": true, // show vs. last period
-    "icon": "check-circle"
+    "profileSlug": "task",
+    "aggregation": "count",
+    "icon": "Hash"
   }
 }
 ```
@@ -174,20 +169,21 @@ Any saved view rendered inside a bento. Usually easier than configuring widgets 
 
 Note: `{ "kind": "view", "viewId": … }` is a bento block type, not a widget. Use it when you have a saved view and just want to embed it.
 
-### `view-kanban` / `view-table` / `view-calendar` / `view-grid` / `view-list`
+### `view` / `view-table` / `view-list` / `view-kanban` / `view-calendar` / `view-grid`
 
-Inline view configs — no saved view required. Good for one-off dashboard pieces.
+Embed a **saved** view. `config.viewId` is required (a view UUID from `synap_list_views`). `profileSlug` alone renders "No Table selected".
 
 ```json
 {
-  "widgetKind": "view-kanban",
+  "widgetKind": "view",
   "config": {
-    "profileSlug": "task",
-    "groupBy": { "property": "status" },
-    "filters": [{ "property": "projectId", "op": "eq", "value": "ent_current" }]
+    "viewId": "<savedViewId>",
+    "layout": "table"
   }
 }
 ```
+
+No saved view for that profile? Use `entity-list` + `profileSlug` instead — do not invent an inline table.
 
 ## Entity widgets (for entity-detail pages / side panels)
 

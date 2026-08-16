@@ -525,6 +525,23 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0136_focus_sessions_project.sql",
   },
 
+  // The Process Plane — typed tier discriminators (0240)
+  {
+    table: "focus_sessions",
+    column: "origin",
+    addedBy: "0240_process_plane_tiers.sql",
+  },
+  {
+    table: "playbooks",
+    column: "scope",
+    addedBy: "0240_process_plane_tiers.sql",
+  },
+  {
+    table: "projects",
+    column: "phase",
+    addedBy: "0240_process_plane_tiers.sql",
+  },
+
   // focus_sessions — Process North Star subject spine (0139)
   {
     table: "focus_sessions",

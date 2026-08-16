@@ -84,6 +84,10 @@ export function registerPlaybookExecutors(): void {
         metadata: innerData.metadata as Record<string, unknown> | undefined,
         executor: innerData.executor,
         status: innerData.status,
+        // 0240: a project-scoped BLUEPRINT approved without its scope would
+        // materialize as a session template — the one field that decides what
+        // the template even is.
+        scope: innerData.scope as "session" | "project" | undefined,
         // The propose gate stores the Layer-2 context skill in `data`; without
         // reading it back here an APPROVED playbook materialized with no context
         // skill at all — i.e. the feature was a no-op on the agent-proposed path,
@@ -108,6 +112,115 @@ export function registerPlaybookExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── playbook / update ────────────────────────────────────────────────────────
+  // An agent editing a playbook — retuning a goal template, reordering stages,
+  // or setting `scope: 'project'` — files a proposal. Until this executor
+  // existed, approving one hit the `*/*` catch-all and threw NOT_IMPLEMENTED:
+  // the reviewer said yes and NOTHING happened. Same defect class as
+  // project/update; the write door and its approval half ship together.
+  //
+  // Replays through the SAME playbooksRouter.update the direct path uses, as
+  // the APPROVER (no agentUserId ⇒ the re-entrant gate auto-grants), so the
+  // definition-version bump, cron re-materialization and events are identical
+  // to a direct update.
+  registerProposalExecutor({
+    key: "playbook/update",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const playbookId =
+        (innerData.id as string | undefined) ?? proposal.targetId;
+      if (!playbookId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook update proposal is missing the playbook id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // `playbooksRouter.update` loads the row by id and gates on the LOADED
+      // row's workspace, so the caller ctx needs only a workspace the approver
+      // belongs to — take it from the PROPOSAL, and verify membership.
+      const workspaceId = proposal.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook update proposal is missing a valid workspaceId",
+        });
+      }
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { playbooksRouter } = await import("../../playbooks.js");
+      const playbookCaller = playbooksRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+
+      // Only the keys the proposal actually carries are replayed — an absent
+      // key must stay absent so `update` leaves that field untouched.
+      const REPLAYED = [
+        "name",
+        "description",
+        "goalTemplate",
+        "params",
+        "inputStrategy",
+        "channelSpec",
+        "expectedOutputs",
+        "stages",
+        "subjectProfile",
+        "schedule",
+        "executor",
+        "status",
+        "scope",
+      ] as const;
+      const patch: Record<string, unknown> = { id: playbookId };
+      for (const key of REPLAYED) {
+        if (key in innerData) patch[key] = innerData[key];
+      }
+
+      await playbookCaller.update(
+        patch as Parameters<typeof playbookCaller.update>[0]
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

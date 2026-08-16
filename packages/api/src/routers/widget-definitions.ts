@@ -266,26 +266,37 @@ export const widgetDefinitionsRouter = router({
   get: podProcedure
     .input(z.object({ typeKey: z.string() }))
     .query(async ({ ctx, input }) => {
-      const db = await getDb();
       // Single-object read: the active workspace lens only PROJECTS (prefer this
       // workspace's override over the system-wide default) — it can never gate
-      // the fetch. With no active workspace (pod-wide lens) it falls back to the
-      // system-wide definition instead of blocking. Hence podProcedure.
+      // the fetch. With no active workspace, scopedDb uses the caller's user
+      // floor so workspace-scoped generated cells still resolve. Hence podProcedure.
       const wsId = ctx.workspaceId ?? null;
-      const row = await db.query.widgetDefinitions.findFirst({
+      // Workspace lens PROJECTS (this workspace's override over the system
+      // default). With no active workspace the floor is the caller's visible
+      // rows — NOT globals-only. A generated cell is usually workspace-scoped;
+      // Host open after approve happens at pod altitude, and the old
+      // `isNull(workspaceId)` fallback made `generated:*` unresolvable.
+      const rows = await scopedDb(
+        accessFor(ctx, { workspacelessFloor: "user" })
+      ).findMany<typeof widgetDefinitions.$inferSelect>(widgetDefinitions, {
         where: and(
           eq(widgetDefinitions.typeKey, input.typeKey),
-          wsId
-            ? or(
-                isNull(widgetDefinitions.workspaceId),
-                eq(widgetDefinitions.workspaceId, wsId)
-              )
-            : isNull(widgetDefinitions.workspaceId),
-          eq(widgetDefinitions.isActive, true)
+          eq(widgetDefinitions.isActive, true),
+          ...(wsId
+            ? [
+                or(
+                  isNull(widgetDefinitions.workspaceId),
+                  eq(widgetDefinitions.workspaceId, wsId)
+                )!,
+              ]
+            : [])
         ),
-        orderBy: (t, { desc }) => [desc(t.workspaceId)], // workspace-specific first
       });
-      return row ?? null;
+      return (
+        [...rows].sort(
+          (a, b) => Number(!!b.workspaceId) - Number(!!a.workspaceId)
+        )[0] ?? null
+      );
     }),
 
   /**

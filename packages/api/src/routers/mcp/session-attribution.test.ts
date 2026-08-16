@@ -68,6 +68,7 @@ describe("MCP session attribution — read-only deny-list", () => {
     "synap_list_automations",
     "synap_list_playbooks",
     "synap_list_views",
+    "synap_list_widgets",
     // NOTE: `synap_list_projects` is deliberately absent — it was retired into
     // `synap_orient` (scope:['projects']) and only survives as a verb alias. The
     // `synap_list_` prefix still covers it if it ever returns.

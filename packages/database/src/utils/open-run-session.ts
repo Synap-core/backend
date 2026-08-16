@@ -74,6 +74,19 @@ export async function openRunSession(
     return isRunSession ? existing!.id : null;
   };
 
+  // Typed origin (`focus_sessions.origin`, migration 0240) derived from the
+  // caller's OWN typed inputs — never from the metadata bag. A run is automation
+  // origin exactly when the caller named the automation lane (`source` /
+  // automation ids); every other run source ("enrichment", "import", "digest")
+  // is an agent-driven run. This is the ONLY writer that produces
+  // automation-origin rows.
+  const origin: "automation" | "agent" =
+    input.source === "automation" ||
+    !!input.automationId ||
+    !!input.automationRunId
+      ? "automation"
+      : "agent";
+
   const reusedId = await findReusableRunSession();
   if (reusedId) {
     // Stamp the CURRENT occupant onto the reused session: the run reaper closes
@@ -87,6 +100,12 @@ export async function openRunSession(
           metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
             { automationRunId: input.automationRunId }
           )}::jsonb`,
+          // Re-stamp origin with the CURRENT occupant for the same reason the
+          // metadata is re-stamped: merging an automationRunId onto a session
+          // opened by a non-automation run (e.g. "enrichment") makes the legacy
+          // metadata sniff read "automation", so leaving the column at its
+          // opening value would split the two readings of this one row.
+          origin,
         })
         .where(eq(focusSessions.id, reusedId));
     }
@@ -115,6 +134,7 @@ export async function openRunSession(
         subjectEntityId: input.subjectEntityId ?? null,
         // The template that spawned this session — the automation itself.
         templateId: input.automationId ?? null,
+        origin,
         agentIds: input.agentUserId ? [input.agentUserId] : [],
         expectedOutputs: (input.expectedOutputs ?? []) as never[],
         metadata,

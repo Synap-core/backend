@@ -220,6 +220,17 @@ const createInputSchema = z.object({
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
   /**
+   * What this template instantiates (0240). `session` = today's meaning, a
+   * template of ONE focus session. `project` = a blueprint for a long-running
+   * container, whose ordered `stages` coordinate rather than execute.
+   *
+   * ONE object with two scopes, deliberately, rather than a second template
+   * table to drift out of sync: the coordinating playbooks that already exist
+   * are exactly the ones stuck in `draft` because they did not fit the session
+   * runtime. Omitted reads as `session` — nothing reclassifies itself.
+   */
+  scope: z.enum(["session", "project"]).optional(),
+  /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
    * linked to the playbook via a `documents` edge; the executor prepends its
@@ -251,6 +262,8 @@ export const updateInputSchema = z.object({
   schedule: jsonValue.optional(),
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
+  /** See `createInputSchema.scope`. */
+  scope: z.enum(["session", "project"]).optional(),
 });
 
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
@@ -1297,6 +1310,7 @@ export const playbooksRouter = router({
           metadata: input.metadata,
           executor: input.executor,
           status: input.status,
+          scope: input.scope,
           contextSkill: input.contextSkill,
         },
       };
@@ -1388,6 +1402,10 @@ export const playbooksRouter = router({
             metadata: input.metadata ?? {},
             executor: input.executor,
             status: input.status,
+            // NULL, not a defaulted 'session': the column's documented reading
+            // is "NULL means session", and writing the default eagerly would
+            // make an unstated scope indistinguishable from a chosen one.
+            scope: input.scope ?? null,
           })
           .returning();
         created = row as Playbook;
@@ -1522,7 +1540,38 @@ export const playbooksRouter = router({
         action: "update",
         source: input.source,
         reasoning: input.reasoning,
-        data: { id: input.id, name: input.name },
+        // The WHOLE patch, not `{ id, name }`: the `playbook/update` executor
+        // replays these fields, and a reviewer shown only a name cannot judge a
+        // change to a goal template, a stage list, or the scope that decides
+        // what kind of template this is.
+        data: {
+          id: input.id,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          ...(input.goalTemplate !== undefined
+            ? { goalTemplate: input.goalTemplate }
+            : {}),
+          ...(input.params !== undefined ? { params: input.params } : {}),
+          ...(input.inputStrategy !== undefined
+            ? { inputStrategy: input.inputStrategy }
+            : {}),
+          ...(input.channelSpec !== undefined
+            ? { channelSpec: input.channelSpec }
+            : {}),
+          ...(input.expectedOutputs !== undefined
+            ? { expectedOutputs: input.expectedOutputs }
+            : {}),
+          ...(input.stages !== undefined ? { stages: input.stages } : {}),
+          ...(input.subjectProfile !== undefined
+            ? { subjectProfile: input.subjectProfile }
+            : {}),
+          ...(input.schedule !== undefined ? { schedule: input.schedule } : {}),
+          ...(input.executor !== undefined ? { executor: input.executor } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.scope !== undefined ? { scope: input.scope } : {}),
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -1557,6 +1606,7 @@ export const playbooksRouter = router({
       if (input.schedule !== undefined) set.schedule = input.schedule;
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
+      if (input.scope !== undefined) set.scope = input.scope;
 
       // D3c: bump the monotonic definition version when a definition-affecting
       // field actually changes (compared against the loaded row, so a no-op

@@ -67,6 +67,7 @@ import {
 } from "@synap-core/types";
 import { randomUUID } from "crypto";
 import { computeMessageHash } from "@synap/database";
+import { emitMessageEvent } from "@synap/database";
 
 import { AgentRepository } from "@synap/database";
 
@@ -690,6 +691,19 @@ export const crudProcedures = {
         workspaceId,
       });
 
+      // Keystone fact write: user-authored doc comment is a new conversational
+      // message — guarded by reaching here only after the insert above. A
+      // document is not an entity, so no `entityId` is passed (honest
+      // absence over a forced mismatch).
+      await emitMessageEvent({
+        type: "message.sent",
+        userId: ctx.userId,
+        channelId,
+        messageId: userMessageId,
+        workspaceId,
+        data: { origin: "comment", documentId: input.documentId },
+      });
+
       emitChatEvent({
         event: "channel:created",
         data: { channelId, userId: ctx.userId },
@@ -753,6 +767,19 @@ export const crudProcedures = {
         relationshipType: MessageLinkRelationshipType.COMMENTS,
         userId: ctx.userId,
         workspaceId,
+      });
+
+      // Keystone fact write: user-authored entity comment is a new
+      // conversational message — guarded by reaching here only after the
+      // insert above. The entity IS in scope here, so `entityId` is honest.
+      await emitMessageEvent({
+        type: "message.sent",
+        userId: ctx.userId,
+        channelId,
+        messageId: userMessageId,
+        workspaceId,
+        entityId: input.entityId,
+        data: { origin: "comment" },
       });
 
       emitChatEvent({

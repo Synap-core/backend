@@ -79,6 +79,25 @@ export const playbooks = pgTable(
       .notNull()
       .default("draft"),
     /**
+     * What this playbook is a template OF (migration 0240).
+     *
+     * `"session"` — today's meaning: a template of ONE work unit (goal, params,
+     * capabilities, room, expected outputs, executor).
+     * `"project"` — an ENGAGEMENT BLUEPRINT: its ordered `stages` reference
+     * session-scoped playbooks, and automations attach via the existing
+     * `automation --member_of--> playbook` edge.
+     *
+     * ONE object with two scopes rather than a second template table: wherever a
+     * higher template is a separate object it ends up embedding a COPY of the
+     * lower one, and the two drift. Because a playbook is already addressable by
+     * id, a blueprint can REFERENCE its stage playbooks instead — with the
+     * instance snapshotting at launch, so an in-flight engagement never mutates
+     * when someone edits a playbook.
+     *
+     * NULL reads as `"session"` — no existing playbook reclassifies itself.
+     */
+    scope: text("scope").$type<"session" | "project">(),
+    /**
      * The automation that drives this playbook's flow.
      * Process North Star Wave 0: links a playbook to a specific automation
      * so it can be triggered or governed by that automation.

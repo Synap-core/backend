@@ -55,6 +55,13 @@ export function registerFocusSessionExecutors(): void {
           userId,
           goal,
           templateId: (innerData.templateId as string | undefined) ?? null,
+          // Typed origin (migration 0240). Unlike create-session.ts this door
+          // does not resolve templateId against the playbooks table, so it
+          // cannot know whether the session is a playbook run — but it CAN know
+          // it is never an automation run (automation sessions come from
+          // openRunSession and never propose). "agent" is what the sniff also
+          // returns for these rows (no playbookId, no automation metadata).
+          origin: "agent",
           expectedOutputs:
             (innerData.expectedOutputs as unknown[] | undefined) ?? [],
           channelId: (innerData.channelId as string | undefined) ?? null,

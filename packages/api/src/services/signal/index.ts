@@ -66,6 +66,12 @@ import {
   resolveMostSpecificPosture,
   MessageAuthorType,
   ProposalStatus,
+  entities,
+  profiles,
+  entityFacets,
+  facetVisibilityConditions,
+  workspaceMembers,
+  workspaces,
 } from "@synap/database";
 import type {
   FlowDefinition,
@@ -888,6 +894,136 @@ async function resolveChannelOriginTrust(
   return out;
 }
 
+/**
+ * Batched, fail-open, no-N+1 "set-wise mirror" — the SAME shape as
+ * {@link resolveChannelOriginTrust} above, applied to the rollup's bound
+ * entities instead of its channels: ids in, a `Map` out, folded back into the
+ * rollups at the call site. Lets the caller group channels by the ROLE their
+ * bound entity plays (client / partner / team / …) without inventing a new
+ * per-row query.
+ *
+ * Two batched reads for the whole entity-id set:
+ *   1. `entities` ⋈ `profiles` — the bound entity's own kind (profileSlug +
+ *      profileKind, e.g. a `company` or `person` kind).
+ *   2. `entity_facets` ⋈ `profiles` — the role-profiles (`profileKind='role'`,
+ *      e.g. `client`/`partner`) attached to that entity, through the SAME
+ *      visibility predicate the entity-facets access layer and
+ *      `countEntitiesByProfile` use (`facetVisibilityConditions`, scoped via
+ *      `resolveFacetVisibilityScope` — see `routers/entities/helpers.ts`
+ *      `countEntitiesByProfile`) so this read can never drift from the one
+ *      facet-read door.
+ *
+ * Fail-open: a missing/unreadable entity is simply absent from the returned
+ * map (never thrown) — the caller backfills `null`/`[]` for it.
+ */
+async function resolveBoundEntityProfiles(
+  entityIds: string[],
+  userId: string
+): Promise<
+  Map<
+    string,
+    {
+      profileSlug: string | null;
+      profileKind: string | null;
+      roleFacets: string[];
+    }
+  >
+> {
+  const out = new Map<
+    string,
+    {
+      profileSlug: string | null;
+      profileKind: string | null;
+      roleFacets: string[];
+    }
+  >();
+  if (entityIds.length === 0) return out;
+
+  // 1. Batched kind read — the bound entity's own profile (slug + kind).
+  const kindRows = await db
+    .select({
+      entityId: entities.id,
+      profileSlug: profiles.slug,
+      profileKind: profiles.profileKind,
+    })
+    .from(entities)
+    .innerJoin(profiles, eq(entities.profileId, profiles.id))
+    .where(inArray(entities.id, entityIds));
+
+  for (const row of kindRows) {
+    out.set(row.entityId, {
+      profileSlug: row.profileSlug ?? null,
+      profileKind: row.profileKind ?? null,
+      roleFacets: [],
+    });
+  }
+
+  // 2. Batched role-facet read — same visibility predicate the entity-facets
+  //    access layer uses (facetVisibilityConditions), scoped identity-wide (no
+  //    single workspace lens here — the rollup spans every channel/entity the
+  //    caller can already see). Resolving the caller's allowed workspace ids is
+  //    the SAME membership rule `getUserWorkspaceIds`/`validateWorkspaceAccess`
+  //    (utils/workspace-membership.ts) apply, restated as plain `db.select`
+  //    reads — matching this file's batched-select shape (that helper uses the
+  //    relational `db.query.*` API, which the origin-trust mirror above never
+  //    touches).
+  const [memberRows, podReadableRows] = await Promise.all([
+    db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId)),
+    db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(
+        drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+      ),
+  ]);
+  const allowedWorkspaceIds = [
+    ...new Set([
+      ...memberRows.map((r) => r.workspaceId),
+      ...podReadableRows.map((r) => r.id),
+    ]),
+  ];
+  const facetVisibilityScope = {
+    userId,
+    workspaceId: undefined as string | undefined,
+    allowedWorkspaceIds,
+  };
+  const facetRows = await db
+    .select({
+      entityId: entityFacets.entityId,
+      profileSlug: profiles.slug,
+    })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+    .where(
+      and(
+        inArray(entityFacets.entityId, entityIds),
+        isNull(entityFacets.deletedAt),
+        ...facetVisibilityConditions(facetVisibilityScope)
+      )
+    );
+
+  for (const row of facetRows) {
+    if (!row.profileSlug) continue;
+    const existing = out.get(row.entityId);
+    if (existing) {
+      existing.roleFacets.push(row.profileSlug);
+    } else {
+      // Entity kind row absent (e.g. filtered by a floor the facet read
+      // doesn't share) but a facet was readable — still surface it, fail-open.
+      out.set(row.entityId, {
+        profileSlug: null,
+        profileKind: null,
+        roleFacets: [row.profileSlug],
+      });
+    }
+  }
+
+  return out;
+}
+
 // ── Door: per-channel rollup (channel-first navigation spine) ─────────────────
 
 /**
@@ -926,6 +1062,22 @@ export interface SignalChannelRollup {
   originTrust: "trusted" | "untrusted";
   /** Most recent inbound message on the channel within the scan prefix. */
   lastActivityAt: Date;
+  /**
+   * The bound entity's own KIND profile slug (e.g. `company`, `person`) — NOT
+   * `profiles.profileKind` (the `kind`|`role` enum); this is the profile
+   * `slug` for the entity's primary kind. The SAME batched, fail-open mirror
+   * pattern as `originTrust`, resolved via `resolveBoundEntityProfiles`.
+   * `null` when unbound, unreadable, or not yet resolved. OPTIONAL / additive
+   * — older readers can ignore it.
+   */
+  boundEntityProfileKind?: string | null;
+  /**
+   * Role-facet slugs (e.g. `client`, `partner`) attached to the bound entity,
+   * through the SAME visibility predicate the entity-facets access layer uses
+   * (`facetVisibilityConditions`). Empty when unbound or no role facets.
+   * OPTIONAL / additive — older readers can ignore it.
+   */
+  boundEntityRoleFacets?: string[];
 }
 
 export interface ListChannelsInput {
@@ -1074,6 +1226,27 @@ export async function listChannels(
   );
   for (const r of rollups) {
     r.originTrust = trustByChannel.get(r.channelId) ?? r.originTrust;
+  }
+
+  // Bound-entity profile + role facets per channel — the SAME batched,
+  // fail-open mirror pattern as the origin-trust fold above, so a rollup row
+  // can group by the role its bound entity plays (client/partner/team/…)
+  // without a per-row query.
+  const boundEntityIds = [
+    ...new Set(
+      rollups.map((r) => r.boundEntityId).filter((id): id is string => !!id)
+    ),
+  ];
+  const profilesByEntity = await resolveBoundEntityProfiles(
+    boundEntityIds,
+    userId
+  );
+  for (const r of rollups) {
+    const resolved = r.boundEntityId
+      ? profilesByEntity.get(r.boundEntityId)
+      : undefined;
+    r.boundEntityProfileKind = resolved?.profileSlug ?? null;
+    r.boundEntityRoleFacets = resolved?.roleFacets ?? [];
   }
 
   // A channel needs attention when it is UNBOUND (structural wiring gap) OR has

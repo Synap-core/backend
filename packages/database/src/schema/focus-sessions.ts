@@ -58,9 +58,29 @@ export const focusSessions = pgTable(
      * When set, the session belongs to a project and may span multiple
      * workspaces. Mutually exclusive with a workspace-only scope: at least one
      * of workspaceId / projectId should be non-null (enforced by the caller).
-     * FK to entities.id (projects are entities with profileSlug='project').
+     *
+     * Points at the `projects` TABLE. (This comment previously said "FK to
+     * entities.id — projects are entities with profileSlug='project'"; that was
+     * written before migration 0151, which consolidated entity-based projects
+     * into the table and deactivated the `project` profile. The table is the
+     * canonical project.)
      */
     projectId: uuid("project_id"),
+    /**
+     * How this session came to exist — the TYPED replacement for sniffing
+     * `metadata.automationId` / `metadata.source` (migration 0240).
+     *
+     * `"automation"` sessions are an automation run wearing a session's shape;
+     * they belong on the automation ledger, not in a list of work sessions.
+     * Deriving that from untyped JSONB in the UI meant every list and filter
+     * re-computed the distinction, and none could group by it. Values mirror the
+     * app-level `FocusSessionOrigin` union — deliberately not a DB enum so the
+     * vocabulary can extend without a migration.
+     *
+     * NULL means "not yet classified": readers fall back to the legacy metadata
+     * sniff, so a row written by an un-migrated writer still resolves correctly.
+     */
+    origin: text("origin").$type<"playbook" | "automation" | "agent">(),
     /**
      * The entity this session is "about" — the subject spine anchor.
      * Process North Star Wave 0: links a session to a specific subject entity

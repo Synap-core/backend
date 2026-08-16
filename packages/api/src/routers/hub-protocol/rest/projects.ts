@@ -616,8 +616,15 @@ export function registerProjectsRoutes(app: HubHono): void {
       workspaceId: workspaceId ?? undefined,
       subjectType: "project",
       action: "create",
+      // Carry the full create payload, matching the tRPC door — the
+      // `project/create` executor replays these, and a reviewer cannot judge a
+      // create they are shown only the name of.
       data: {
         name: body.name,
+        ...(body.description ? { description: body.description } : {}),
+        ...(body.status ? { status: body.status } : {}),
+        ...(body.settings ? { settings: body.settings } : {}),
+        ...(body.metadata ? { metadata: body.metadata } : {}),
         ...(isAgent && body.evidenceEntityIds
           ? { evidenceEntityIds: body.evidenceEntityIds }
           : {}),

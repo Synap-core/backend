@@ -58,8 +58,11 @@ export type LinkEndpointType =
   // The matcher resolves a produced entity's session → playbook → these
   // automations, so playbook automations fire for their session's entities.
   | "automation"
-  // A project entity (profileSlug='project'). Sessions may be scoped to a
-  // project (project-centric-scope Phase 4): `session --targets--> project`.
+  // A row of the `projects` TABLE (migration 0151 consolidated projects off the
+  // `project` entity profile — this is NOT an entity id). Two edges use it:
+  //   session --targets--> project   (session scoped to a container)
+  //   project --targets--> entity    (the container's SUBJECT — the real-world
+  //                                   thing it is about; drives the UI noun)
   | "project"
   // A vault secret, as the TARGET of a `provides_credential` edge (dynamic
   // tool auth binding: a principal/entity provides the credential for a tool).
@@ -94,6 +97,17 @@ export type LinkType =
   | "concerns"
   // automation → playbook activation edge (Process North Star Wave 0)
   | "activates"
+  /**
+   * session --spawned_from--> session. Work lineage: this session was forked
+   * from that one.
+   *
+   * Deliberately NOT called "branched_from", and there is deliberately no
+   * "merged_into" twin. Git's branch/merge model is a researched conceptual
+   * defect, and no comparable system merges units of work — the pattern that
+   * actually ships is a coordinator with sibling children, where fan-in is a
+   * SUMMARY, not a merge. The UI says "forked from"; it never draws a graph.
+   */
+  | "spawned_from"
   // dynamic tool-auth binding: principal|entity --provides_credential--> secret.
   // metadata.toolId scopes the credential to a specific tool. Resolved at
   // execution by the dispatcher per the tool's `authBinding`.

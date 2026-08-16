@@ -209,7 +209,14 @@ export type LinkType =
   | "documents"
   | "concerns"
   // automation → playbook (the activator relationship; mirrors links.ts schema)
-  | "activates";
+  | "activates"
+  // principal|entity --provides_credential--> secret (dynamic tool auth).
+  // Present in the links.ts schema union since it shipped; this copy had
+  // silently drifted without it — see the coherence tripwire below.
+  | "provides_credential"
+  // session --spawned_from--> session. Work lineage: forked from, never
+  // "branched from", and with no "merged_into" twin — nothing merges work.
+  | "spawned_from";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

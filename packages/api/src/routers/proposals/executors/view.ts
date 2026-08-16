@@ -1,10 +1,32 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  and,
+  getWorkspaceMembership,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { viewsRouter } from "../../views.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+
+function isUniqueViolation(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let i = 0; i < 5 && cur && typeof cur === "object"; i++) {
+    const rec = cur as { code?: string; cause?: unknown; message?: string };
+    if (rec.code === "23505") return true;
+    if (
+      typeof rec.message === "string" &&
+      /duplicate key|unique constraint/i.test(rec.message)
+    ) {
+      return true;
+    }
+    cur = rec.cause;
+  }
+  return false;
+}
 
 /** Register the view/* approve executors. */
 export function registerViewExecutors(): void {
@@ -18,12 +40,9 @@ export function registerViewExecutors(): void {
   // match the direct create exactly. Pod-wide (null workspace) views run at pod
   // scope; workspace-scoped views verify the approver's membership (entity/create).
   //
-  // DATA-SHAPE NOTE: the propose gate (routers/views.ts + hub-protocol/views.ts)
-  // stores only { name, type, scopeProfileIds } — enough to materialize a
-  // structured view; `config` / `initialContent` (bento layout, canvas content)
-  // are NOT carried through the proposal and fall to create-time defaults
-  // (create-then-configure). Fields are read defensively so a future gate-`data`
-  // widening flows through unchanged.
+  // Gate data is the FULL create payload (id, name, type, config, …). We
+  // re-run viewsRouter.create with that reserved id so approve does not mint
+  // an empty clone. Unique PK on views.id is the lock against double-approve.
   registerProposalExecutor({
     key: "view/create",
     async execute({ proposal, userId, input, deps }) {
@@ -36,16 +55,6 @@ export function registerViewExecutors(): void {
           code: "BAD_REQUEST",
           message: "View proposal is missing name/type",
         });
-      }
-
-      // Idempotency: skip if already materialized (createCaller mints a fresh
-      // view id each run).
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
       }
 
       const workspaceId = proposal.workspaceId ?? null;
@@ -88,28 +97,54 @@ export function registerViewExecutors(): void {
       const viewCaller = viewsRouter.createCaller(
         viewCallerCtx as unknown as Context
       );
+      const reservedId =
+        (typeof innerData.id === "string" && innerData.id) ||
+        (typeof proposal.targetId === "string" && proposal.targetId) ||
+        undefined;
       const createArgs = {
+        id: reservedId,
         name,
         type,
         workspaceId: workspaceId ?? undefined,
         scopeProfileIds: innerData.scopeProfileIds as string[] | undefined,
+        scopeMode: innerData.scopeMode as "explicit" | "observed" | undefined,
         description: innerData.description as string | undefined,
+        query: innerData.query as Record<string, unknown> | undefined,
         config: innerData.config as Record<string, unknown> | undefined,
+        embeddedViewIds: innerData.embeddedViewIds as string[] | undefined,
+        metadata: innerData.metadata as Record<string, unknown> | undefined,
         initialContent: innerData.initialContent,
       };
-      await viewCaller.create(
-        createArgs as Parameters<typeof viewCaller.create>[0]
-      );
+      try {
+        await viewCaller.create(
+          createArgs as Parameters<typeof viewCaller.create>[0]
+        );
+      } catch (err) {
+        // Second approve: the reserved id is already the view row.
+        // Drizzle / postgres.js / TRPC wrap 23505 at different depths.
+        if (!isUniqueViolation(err)) throw err;
+      }
 
-      await db
+      const [claimed] = await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
+          ...(reservedId ? { targetId: reservedId } : {}),
         })
-        .where(eq(proposals.id, input.proposalId));
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        )
+        .returning({ id: proposals.id });
+
+      if (!claimed) {
+        return { success: true, alreadyApproved: true };
+      }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);

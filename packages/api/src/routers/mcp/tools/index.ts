@@ -1871,7 +1871,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view-table needs a saved viewId, not a profileSlug). Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1929,6 +1929,26 @@ export const tools = {
               type: "string",
               description:
                 "Optional profile UUID to filter views scoped to that entity type.",
+            },
+          },
+        },
+      },
+      {
+        name: "synap_list_widgets",
+        annotations: {
+          title: "List compose widgets",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Live allowlist of cells you may place in a bento. Call this BEFORE arranging or generating a dashboard — never guess a widget key. Returns builtins (stat-card, entity-list, view, …) with requiredConfig, plus generated:<slug> frame cells already on the pod. view-table / view require a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card, not entity-count.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace UUID. Include it so workspace-scoped generated cells appear.",
             },
           },
         },

@@ -276,7 +276,15 @@ export const relationsRouter = router({
         relationReadAccess(ctx, input.workspaceId)
       ).findMany<typeof relations.$inferSelect>(relations, {
         where: input.type ? eq(relations.type, input.type) : undefined,
-        orderBy: [desc(relations.createdAt)],
+        // `id` is the unique tiebreak, and it is NOT optional. Postgres gives no
+        // stable order across separate LIMIT/OFFSET queries when the sort key
+        // ties, and bulk writes (seeding, import, agent link runs) share
+        // `created_at` to the millisecond — so a tied order can SKIP a row
+        // between pages, not merely repeat it. A skipped relation makes a
+        // paginating caller believe it holds a complete snapshot when it does
+        // not; the whiteboard then treats the absence as "deleted elsewhere"
+        // and removes that relation's projected arrow. Do not drop this.
+        orderBy: [desc(relations.createdAt), desc(relations.id)],
         limit: input.limit,
         offset: input.offset,
       });
@@ -910,11 +918,28 @@ export const relationsRouter = router({
         // 500 on a re-link. On a unique violation, return the existing edge
         // instead of throwing — re-filing an entity into a project is a no-op.
         if ((err as { code?: string })?.code === "23505") {
+          // Match the SAME key the index conflicted on (migration 0239), not just
+          // the (source,target,type) triple — otherwise we hand the caller back a
+          // row they may not even be allowed to see.
+          //
+          // Two regimes, mirroring access/registry.ts (`nullWorkspaceMeans:
+          // "ownerPrivate"`):
+          //   · workspace-scoped → the edge is one shared workspace fact; key on
+          //     the workspace.
+          //   · pod-wide         → the edge is OWNER-PRIVATE; key on the owner.
+          //     Without the userId predicate this would return another user's
+          //     relation id — an existence oracle across the owner floor.
           const existing = await database.query.relations.findFirst({
             where: and(
               eq(relations.sourceEntityId, input.sourceEntityId),
               eq(relations.targetEntityId, input.targetEntityId),
-              eq(relations.type, input.type)
+              eq(relations.type, input.type),
+              relationWorkspaceId
+                ? eq(relations.workspaceId, relationWorkspaceId)
+                : and(
+                    isNull(relations.workspaceId),
+                    eq(relations.userId, ctx.userId)
+                  )
             ),
           });
           if (existing) return { id: existing.id, status: "exists" as const };

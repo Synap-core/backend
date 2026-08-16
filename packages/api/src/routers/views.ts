@@ -276,10 +276,15 @@ export const viewsRouter = router({
         source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        // Approve executor re-runs this door with the reserved proposal.targetId
+        // so /open/view/<targetId> is the same row the reviewer approved.
+        id: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
+      const { randomUUID: genId } = await import("crypto");
+      const reservedViewId = input.id ?? genId();
 
       // Resolve placement: omitted workspace means an intentional pod-wide view.
       const effectiveWorkspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
@@ -294,7 +299,7 @@ export const viewsRouter = router({
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
         correlationId,
-        data: { name: input.name, type: input.type },
+        data: { name: input.name, type: input.type, id: reservedViewId },
       });
 
       // If workspace available, check permissions (including AI proposal gate)
@@ -309,10 +314,20 @@ export const viewsRouter = router({
           reasoning: input.reasoning,
           correlationId,
           requestedEventId: requestedEvent?.id,
+          // FULL create payload — a review that only stored {name,type} produced
+          // an empty bento on approve (config dropped; executor minted a new id).
           data: {
+            id: reservedViewId,
             name: input.name,
             type: input.type,
+            description: input.description,
             scopeProfileIds: input.scopeProfileIds,
+            scopeMode: input.scopeMode,
+            query: input.query,
+            config: input.config,
+            embeddedViewIds: input.embeddedViewIds,
+            metadata: input.metadata,
+            initialContent: input.initialContent,
           },
         };
 
@@ -420,8 +435,7 @@ export const viewsRouter = router({
         workspaceId: effectiveWorkspaceId ?? undefined,
       });
 
-      const { randomUUID: genId } = await import("crypto");
-      const viewId = genId();
+      const viewId = reservedViewId;
 
       // Canvas views (whiteboard, mindmap) need a document for Yjs + MinIO + versioning.
       // Structured and bento views store their config directly in views.config (JSONB) —

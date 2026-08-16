@@ -20,6 +20,7 @@ import { documents } from "../schema/documents.js";
 import { relations } from "../schema/relations.js";
 import { profiles, ProfileScope } from "../schema/profiles.js";
 import { syncConflicts } from "../schema/sync.js";
+import { reservedProfileSlugReason } from "./reserved-profile-slugs.js";
 
 const logger = createLogger({ module: "sync-materializer" });
 
@@ -552,7 +553,15 @@ async function materializeRelation(
         type: (data.type as string) ?? "related_to",
         metadata: data.metadata ?? {},
       })
-      .onConflictDoNothing({ target: relations.id });
+      // UNTARGETED on purpose. A targeted `ON CONFLICT (id)` arbitrates the
+      // primary key ONLY, so any other unique violation still raises 23505 and
+      // aborts the whole sync job. Since migration 0239 `relations` also carries
+      // partial unique indexes on the entity↔entity edge, and peer sync
+      // legitimately replays an edge the pod already has, that would turn a
+      // routine no-op into a failed sync. Untargeted suppresses every unique
+      // conflict, which is exactly the intended semantics here: "if this edge
+      // already exists in any form, do nothing".
+      .onConflictDoNothing();
     return true;
   }
 
@@ -570,6 +579,27 @@ async function materializeProfile(
   data: Record<string, unknown>
 ): Promise<boolean> {
   if (action === "create" || action === "update") {
+    const slug = (data.slug as string) ?? "unknown";
+
+    // The ONE write to `profiles` that does not go through
+    // `ProfileRepository.create()`, so the reservation has to be restated here
+    // or peer sync is an open back door — and not only for inserts: the
+    // `onConflictDoUpdate` below writes `slug`, so a peer could RENAME an
+    // existing local profile onto a reserved slug.
+    //
+    // Skipped rather than thrown: the caller turns a throw into `"error"`,
+    // which reads as "retry me". A reserved slug will never become valid, so
+    // this is a permanent, deliberate refusal — logged with the reason so an
+    // operator can see which peer is publishing it.
+    const reservedReason = reservedProfileSlugReason(slug);
+    if (reservedReason) {
+      logger.warn(
+        { subjectId, slug, action },
+        `Sync: refusing peer profile — ${reservedReason}`
+      );
+      return false;
+    }
+
     const scopeValue = (data.scope as string) ?? ProfileScope.WORKSPACE;
     const validScope = Object.values(ProfileScope).includes(
       scopeValue as ProfileScope
@@ -581,7 +611,7 @@ async function materializeProfile(
       .insert(profiles)
       .values({
         id: subjectId,
-        slug: (data.slug as string) ?? "unknown",
+        slug,
         displayName: (data.displayName as string) ?? "Synced Profile",
         parentProfileId: data.parentProfileId as string | undefined,
         uiHints: data.uiHints ?? {},

@@ -27,9 +27,19 @@ import {
   getQualityByVersion,
   getChannelStack,
   resolveChannelRerun,
+  resolveCapabilityChannelIds,
 } from "../services/signal/index.js";
 import { getIntegrationRoutingRules } from "../services/signal/integration-routing.js";
 import { automationsRouter } from "./automations.js";
+
+/**
+ * Bound on `integrationReplay` — the number of channels a single bulk-replay
+ * call will sweep. Deliberately small: each channel sweep opens (or proposes)
+ * a real automation run, so an unbounded fan-out would be an unbounded write
+ * storm. `channelsScanned < totalChannels` (i.e. `capped: true`) tells the
+ * caller to re-invoke for the remainder rather than silently dropping them.
+ */
+const MAX_REPLAY_CHANNELS = 50;
 
 export const signalRouter = router({
   /** Newest-first (or problems-first) stream of inbound signals + their fate. */
@@ -266,6 +276,91 @@ export const signalRouter = router({
         runId: result.runId ?? undefined,
         scanned: resolved.scanned,
         message: `Re-run started over ${resolved.scanned} message(s)`,
+      };
+    }),
+
+  /**
+   * Integration dashboard — Stream facet "Replay": bulk re-analysis over ALL
+   * of an integration's channels. NOT a new extraction path — this is
+   * `channelRerun` above, looped over the capability's channel lens
+   * (`resolveCapabilityChannelIds`, the same resolver `integrationStream`
+   * scopes to). Each channel sweep goes through the identical governed door
+   * (`automations.trigger` → `checkPermissionOrPropose`), so a bulk replay
+   * can produce proposals exactly like a single one — never an auto-exec
+   * shortcut. Bounded to `MAX_REPLAY_CHANNELS` per call so it can't become an
+   * unbounded run-creation storm; `capped: true` means call again to sweep
+   * the remainder.
+   */
+  integrationReplay: protectedProcedure
+    .input(
+      z.object({
+        capabilityId: z.string().uuid(),
+        /** Per-channel message-scan cap, forwarded to `resolveChannelRerun`. */
+        limit: z.number().int().min(1).max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const channelIds = await resolveCapabilityChannelIds(
+        userId,
+        input.capabilityId
+      );
+      const capped = channelIds.length > MAX_REPLAY_CHANNELS;
+      const scoped = channelIds.slice(0, MAX_REPLAY_CHANNELS);
+
+      const caller = automationsRouter.createCaller(ctx);
+      let channelsQueued = 0;
+      let channelsProposed = 0;
+      let channelsSkipped = 0;
+
+      for (const channelId of scoped) {
+        let resolved;
+        try {
+          // Same resolver `channelRerun` uses — picks the channel's bound
+          // extraction automation and floors the message scan. A channel
+          // with no bound automation (BAD_REQUEST) or that fell out of
+          // visibility between the lens read and here (NOT_FOUND) is
+          // skipped, not fatal to the rest of the sweep.
+          resolved = await resolveChannelRerun({
+            userId,
+            channelId,
+            limit: input.limit,
+          });
+        } catch {
+          channelsSkipped++;
+          continue;
+        }
+
+        const result = await caller.trigger({
+          id: resolved.automationId,
+          ...(resolved.boundEntityId
+            ? { subjectEntityId: resolved.boundEntityId }
+            : {}),
+          payload: {
+            type: "channel_rerun",
+            channelId: resolved.channelId,
+            entityId: resolved.boundEntityId,
+            limit: resolved.scanned,
+          },
+          reasoning: `Integration replay: re-running "${
+            resolved.automationName ?? resolved.automationId
+          }" over ${resolved.scanned} message(s) on this channel`,
+        });
+
+        if (result.status === "proposed") {
+          channelsProposed++;
+        } else {
+          channelsQueued++;
+        }
+      }
+
+      return {
+        channelsQueued,
+        channelsProposed,
+        channelsSkipped,
+        channelsScanned: scoped.length,
+        totalChannels: channelIds.length,
+        capped,
       };
     }),
 

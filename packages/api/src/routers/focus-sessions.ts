@@ -328,6 +328,11 @@ export const focusSessionsRouter = router({
           channelId: input.channelId ?? null,
           agentIds: input.agentIds,
           projectId: input.projectId ?? null,
+          // Typed origin (migration 0240). This door writes no playbookId and
+          // no automation metadata — a human starting a bare work session — so
+          // it is "agent", which is also what the legacy sniff returns for the
+          // row it produces.
+          origin: "agent",
           status: "active",
         })
         .returning();

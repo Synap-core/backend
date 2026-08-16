@@ -159,6 +159,10 @@ export async function instantiateSession(
       userId: input.userId,
       goal,
       playbookId: playbook.id,
+      // Typed origin (migration 0240) — instantiating from a playbook IS the
+      // definition of a playbook-origin session; the caller knows it without
+      // inspecting metadata.
+      origin: "playbook",
       projectId: input.projectId ?? null,
       subjectEntityId: input.subjectId ?? null,
       expectedOutputs,

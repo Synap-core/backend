@@ -191,6 +191,56 @@ async function handleBridgeRequest(
 }
 
 /**
+ * Validate the bridge secret (if configured).
+ *
+ * Returns true when the request may proceed. On failure it writes the 401 and
+ * returns false — the caller must return immediately.
+ *
+ * When BRIDGE_SECRET is unset the bridge stays local-dev compatible and every
+ * request passes, which is the pre-existing behaviour of /bridge/emit.
+ */
+/**
+ * Warn ONCE, loudly, if the bridge is running unauthenticated in a non-dev env.
+ *
+ * `BRIDGE_SECRET` is empty by default (`deploy/docker-compose.yml` passes
+ * `${BRIDGE_SECRET:-}`), and `bridgeSecretOk` passes everything when it is
+ * unset — so on a default deploy `POST /yjs/:roomId/restore`, which can
+ * OVERWRITE any board, is open to anything that can reach the port. The
+ * loopback bind is what actually contains that today; the auth is opt-in.
+ * `ALLOW_INSECURE_YJS` shouts when it weakens the Yjs gate, so this should too.
+ */
+let warnedMissingBridgeSecret = false;
+function warnIfBridgeUnauthenticated(): void {
+  if (warnedMissingBridgeSecret) return;
+  warnedMissingBridgeSecret = true;
+  if (process.env.NODE_ENV === "production") {
+    console.warn(
+      "[Bridge] ⚠️  BRIDGE_SECRET is not set in production — /bridge/emit and " +
+        "the /yjs/:roomId/{state,restore} endpoints are UNAUTHENTICATED. " +
+        "/restore can overwrite any board. Set BRIDGE_SECRET in .env (it is " +
+        "shared by backend, workers and realtime) and keep the realtime port " +
+        "bound to 127.0.0.1."
+    );
+  }
+}
+
+function bridgeSecretOk(req: IncomingMessage, res: ServerResponse): boolean {
+  const bridgeSecret = process.env.BRIDGE_SECRET;
+  if (!bridgeSecret) {
+    warnIfBridgeUnauthenticated();
+    return true;
+  }
+
+  const provided = req.headers["x-bridge-secret"];
+  if (provided !== bridgeSecret) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Unauthorized" }));
+    return false;
+  }
+  return true;
+}
+
+/**
  * Handle event emission
  */
 async function handleEmit(
@@ -200,15 +250,7 @@ async function handleEmit(
 ) {
   try {
     // Validate bridge secret (if configured)
-    const bridgeSecret = process.env.BRIDGE_SECRET;
-    if (bridgeSecret) {
-      const provided = req.headers["x-bridge-secret"];
-      if (provided !== bridgeSecret) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Unauthorized" }));
-        return;
-      }
-    }
+    if (!bridgeSecretOk(req, res)) return;
 
     // Parse request body
     const body = await parseBody(req);
@@ -337,6 +379,9 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
  */
 async function handleYjsGetState(req: IncomingMessage, res: ServerResponse) {
   try {
+    // Same gate as /bridge/emit — this listener binds 0.0.0.0:4001.
+    if (!bridgeSecretOk(req, res)) return;
+
     const match = req.url?.match(/\/yjs\/([^/]+)\/state/);
     if (!match) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -393,6 +438,9 @@ async function handleYjsGetState(req: IncomingMessage, res: ServerResponse) {
  */
 async function handleYjsRestore(req: IncomingMessage, res: ServerResponse) {
   try {
+    // Same gate as /bridge/emit — this is a data-destruction door on 0.0.0.0:4001.
+    if (!bridgeSecretOk(req, res)) return;
+
     const match = req.url?.match(/\/yjs\/([^/]+)\/restore/);
     if (!match) {
       res.writeHead(400, { "Content-Type": "application/json" });

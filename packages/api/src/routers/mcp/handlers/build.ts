@@ -300,6 +300,44 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { COMPOSE_WIDGET_CATALOG } =
+      await import("../../../services/cells/compose-widget-catalog.js");
+    const workspaceId =
+      confinedWorkspaceId ??
+      (typeof args.workspaceId === "string" ? args.workspaceId : null);
+    const rows = (await caller.widgetDefinitions.listWidgetDefs({
+      workspaceId,
+    })) as Array<Record<string, unknown>>;
+    const generated = rows
+      .filter(
+        (row) =>
+          row.source !== "compose-catalog" &&
+          typeof row.typeKey === "string" &&
+          (String(row.typeKey).startsWith("generated:") ||
+            row.rendererType === "frame")
+      )
+      .map((row) => ({
+        key: row.typeKey,
+        name: row.name,
+        description: row.description ?? "",
+        rendererType: row.rendererType,
+        workspaceId: row.workspaceId ?? null,
+      }));
+    return ok({
+      builtins: COMPOSE_WIDGET_CATALOG.filter((w) => !w.aliasOf),
+      aliases: COMPOSE_WIDGET_CATALOG.filter((w) => w.aliasOf),
+      generated,
+      notes: [
+        "Never guess a widget key — use this list.",
+        "view / view-table / view-* require config.viewId (a saved view UUID). profileSlug is not enough.",
+        "Counts: stat-card + profileSlug. entity-count is a legacy alias.",
+        "Profile-scoped collections without a saved view: entity-list + profileSlug.",
+      ],
+    });
+  },
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);

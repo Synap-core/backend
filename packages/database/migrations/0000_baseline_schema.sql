@@ -957,6 +957,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS "relations_belongs_to_project_unique"
     AND "source_entity_id" IS NOT NULL
     AND "target_entity_id" IS NOT NULL;
 
+-- 0239: entity↔entity edge idempotency — makes relations.create's 23505 catch real.
+-- TWO indexes because relations have two visibility regimes (access/registry.ts,
+-- `nullWorkspaceMeans: "ownerPrivate"`): a workspace-scoped edge is ONE shared
+-- fact and dedupes across owners; a pod-wide edge is OWNER-PRIVATE and must key
+-- on user_id, or one user's row would block or delete another's.
+-- See 0239_relations_edge_unique.sql.
+CREATE UNIQUE INDEX IF NOT EXISTS "relations_entity_edge_ws_unique"
+  ON "relations" ("source_entity_id", "target_entity_id", "type", "workspace_id")
+  WHERE "source_kind" = 'entity'
+    AND "target_kind" = 'entity'
+    AND "source_entity_id" IS NOT NULL
+    AND "target_entity_id" IS NOT NULL
+    AND "workspace_id" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "relations_entity_edge_pod_unique"
+  ON "relations" ("source_entity_id", "target_entity_id", "type", "user_id")
+  WHERE "source_kind" = 'entity'
+    AND "target_kind" = 'entity'
+    AND "source_entity_id" IS NOT NULL
+    AND "target_entity_id" IS NOT NULL
+    AND "workspace_id" IS NULL;
+
 -- ─── 16a. entity_facets (0174) ───────────────────────────────────────────────
 -- Kind + Facets — role-profiles attached to entities. See 0174_entity_facets.sql.
 
@@ -3670,6 +3692,9 @@ CREATE TABLE IF NOT EXISTS "focus_sessions" (
   "correlation_id"   text,
   "goal"             text        NOT NULL,
   "status"           text        NOT NULL DEFAULT 'active',
+  -- 0240: typed origin discriminator. Replaces sniffing metadata.automationId
+  -- to tell an automation run from a real work session.
+  "origin"           text,
   "template_id"      text,
   "expected_outputs" jsonb       NOT NULL DEFAULT '[]'::jsonb,
   "channel_id"       uuid,
@@ -3837,6 +3862,10 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
   "schedule"         jsonb,
   "executor"         text        NOT NULL DEFAULT 'is-agent',
   "status"           text        NOT NULL DEFAULT 'draft',
+  -- 0240: 'session' (a template of one work unit) vs 'project' (an engagement
+  -- blueprint whose ordered `stages` reference session playbooks). NULL reads
+  -- as 'session'.
+  "scope"            text,
   "metadata"         jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "created_at"       timestamptz NOT NULL DEFAULT now(),
   "updated_at"       timestamptz NOT NULL DEFAULT now()
@@ -4314,3 +4343,16 @@ CREATE INDEX IF NOT EXISTS "governance_ceilings_agent_active_idx"
   WHERE "revoked_at" IS NULL;
 CREATE INDEX IF NOT EXISTS "governance_ceilings_source_proposal_idx"
   ON "governance_ceilings" ("source_proposal_id");
+
+-- ── The Process Plane — typed tier discriminators (0240) ─────────────────────
+-- Three additive, nullable columns that let the work tiers stop pretending to
+-- be each other. Full rationale in migrations/0240_process_plane_tiers.sql.
+-- Deliberately plain `text`, not DB enums: each vocabulary is an app-level
+-- union that must extend without a migration (same reasoning as 0238's
+-- governance_reason). The BACKFILL lives only in 0240 — a fresh database has no
+-- pre-existing rows to reclassify.
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "origin" text;  -- 0240 (playbook | automation | agent — an automation run wearing a session's shape is no longer a JSONB sniff)
+CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("origin");
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "scope" text;  -- 0240 (session template vs project/engagement blueprint; NULL reads as 'session')
+CREATE INDEX IF NOT EXISTS "idx_playbooks_scope" ON "playbooks" ("scope");
+ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "phase" text;  -- 0240 (the long-running container's lifecycle position; free text — the label is a config concern)

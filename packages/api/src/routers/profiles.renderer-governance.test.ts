@@ -21,10 +21,15 @@ vi.mock("../services/profiles/set-profile-renderer.js", () => ({
 vi.mock("@synap/database", async () => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
+  // The REAL reservation, not a stub — see profiles.role-create.test.ts.
+  const reserved = await vi.importActual<
+    typeof import("../../../database/src/utils/reserved-profile-slugs.js")
+  >("../../../database/src/utils/reserved-profile-slugs.js");
 
   return {
     eq: drizzle.eq,
     and: drizzle.and,
+    reservedProfileSlugReason: reserved.reservedProfileSlugReason,
     db: {
       query: {
         workspaceMembers: {

@@ -28,6 +28,7 @@ import {
   MessageCategory,
   tools,
   computeMessageHash,
+  emitMessageEvent,
 } from "@synap/database";
 import {
   channels,
@@ -722,6 +723,20 @@ export async function sendExternalMessage(
       .returning({ id: messages.id });
 
     messageId = msg?.id;
+
+    // Keystone fact write: append `message.sent` to the `events` log — ONLY
+    // when the mirror insert actually landed a NEW row (`onConflictDoNothing`
+    // no-op means a redelivered producer already emitted this fact).
+    if (msg?.id) {
+      await emitMessageEvent({
+        type: "message.sent",
+        userId,
+        channelId: linkedChannel.id,
+        messageId: msg.id,
+        workspaceId: input.workspaceId ?? null,
+        data: { provider, accountId },
+      });
+    }
   }
 
   // Universal-sink audit append (this wave): every confirmed dispatch (owner

@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this door — its only caller
 // was the `native` branch below. Kept on disk at utils/widget-compiler.ts.
 import { assertMayActAs } from "./guard.js";
+import { composeCatalogAsDefinitionRows } from "../../services/cells/compose-widget-catalog.js";
 
 /**
  * SECURITY — rejection message for `rendererType: "native"`. DO-NOT-REVIVE-AS-IS.
@@ -70,7 +71,15 @@ export const hubWidgetDefinitionsRouter = router({
         ),
         orderBy: (t, { asc }) => [asc(t.workspaceId), asc(t.name)],
       });
-      return rows;
+      // Builtins live in the Browser cellRegistry, not necessarily in this
+      // table (the seeder is best-effort and often missing on a live pod).
+      // Agents were told this endpoint is the compose registry — without the
+      // catalog merge they only see generated:* rows and invent keys.
+      const existing = new Set(rows.map((r) => r.typeKey));
+      const catalog = composeCatalogAsDefinitionRows().filter(
+        (row) => !existing.has(row.typeKey as string)
+      );
+      return [...catalog, ...rows];
     }),
 
   /**

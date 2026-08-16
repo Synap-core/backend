@@ -208,7 +208,13 @@ services:
       minio:
         condition: service_healthy
     ports:
-      - "4001:4001"
+      # Loopback-only. Every legitimate caller reaches this service over the
+      # docker network by name — backend/workers via REALTIME_URL
+      # (http://realtime:4001) and Caddy via `reverse_proxy realtime:4001` — so
+      # nothing needs the port published on a public interface. The /yjs/:room
+      # state+restore endpoints are BRIDGE_SECRET-gated now, but those endpoints
+      # can read and overwrite any board, so defence-in-depth is cheap here.
+      - "127.0.0.1:4001:4001"
     healthcheck:
       test:
         [

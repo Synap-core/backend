@@ -689,13 +689,20 @@ export async function buildCapabilityCatalog(
     .where(
       and(
         // Pod-wide (NULL) always; the active workspace's own containers ADD to
-        // that only when a workspace lens is present. Absent lens = pod-wide only.
+        // that when a lens is present. NO lens = the canonical FULL FLOOR (every
+        // workspace the caller can see, via `userVisibleWhere`) — the same
+        // three-state contract `listCapabilityCompositions` (Integrations) uses.
+        // The prior `isNull(workspaceId)` narrowing hid the caller's OWN
+        // workspace-scoped containers whenever no lens was active, so a
+        // workspace-scoped standing capability (e.g. a bridge) showed in
+        // Integrations but NOT here, and `nav('capability', id)` — which carries
+        // no workspaceId — could not focus it and dumped the user on the list.
         workspaceId
           ? or(
               isNull(capabilities.workspaceId),
               eq(capabilities.workspaceId, workspaceId)
             )
-          : isNull(capabilities.workspaceId),
+          : undefined,
         userVisibleWhere(capabilities.workspaceId, userId)
       )
     );

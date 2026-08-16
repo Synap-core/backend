@@ -227,6 +227,9 @@ export async function handleDocumentPersistence(): Promise<void> {
         headers: {
           "X-Internal-Request": "true",
           "Content-Type": "application/json",
+          ...(process.env.BRIDGE_SECRET
+            ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
+            : {}),
         },
       });
 
@@ -271,6 +274,9 @@ export async function handleWhiteboardSnapshot(
     headers: {
       "X-Internal-Request": "true",
       "Content-Type": "application/json",
+      ...(process.env.BRIDGE_SECRET
+        ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
+        : {}),
     },
   });
   if (!response.ok)
@@ -355,6 +361,9 @@ export async function handleWhiteboardRestore(
     headers: {
       "Content-Type": "application/json",
       "X-Internal-Request": "true",
+      ...(process.env.BRIDGE_SECRET
+        ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
+        : {}),
     },
     body: JSON.stringify({ state: content }),
   });

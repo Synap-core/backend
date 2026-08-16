@@ -329,7 +329,7 @@ export async function suggestViewsFromImportGraph(
           ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
           data: {
             // Request-shaped envelope (matches checkPermissionOrPropose / views.create gate)
-            // so approve-executors `view/create` reads proposal.data.data.{name,type,scopeProfileIds}.
+            // so approve-executors `view/create` reads proposal.data.data.{name,type,scopeProfileIds,config}.
             requestId: randomUUID(),
             source,
             sourceId: ctx.userId,

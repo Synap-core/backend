@@ -182,6 +182,34 @@ describe("views.create — agent idempotency before the propose path", () => {
     expect(result.proposalId).toBe("prop-1");
   });
 
+  it("the propose gate stores the full config (not just name/type)", async () => {
+    selectLimit.mockResolvedValue([]);
+    mockCheckPermission.mockResolvedValue({
+      granted: false,
+      proposalId: "prop-cfg",
+      proposalType: "view.create",
+      summary: "Create view",
+      reasoning: "needs review",
+      reviewPath: "/open/prop-cfg",
+      reviewUrl: "https://pod/open/prop-cfg",
+    });
+
+    const config = {
+      blocks: [{ id: "b1", kind: "widget", widgetType: "stat-card" }],
+    };
+    const caller = viewsRouter.createCaller(callerCtx());
+    await caller.create({ ...agentInput, config });
+
+    const gate = mockCheckPermission.mock.calls[0]?.[0] as {
+      data?: { id?: string; config?: unknown; name?: string };
+    };
+    expect(gate.data?.name).toBe(agentInput.name);
+    expect(gate.data?.config).toEqual(config);
+    expect(gate.data?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+  });
+
   it("a HUMAN create never dry-runs and never short-circuits on an existing name", async () => {
     // A same-named view exists; a human may legitimately want a second one, so
     // the lookup must not even happen.

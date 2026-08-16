@@ -26,6 +26,7 @@ import {
   ViewRepository,
   WorkspaceRepository,
   eventRepository,
+  reservedProfileSlugReason,
   workspaces,
   eq,
 } from "@synap/database";
@@ -269,6 +270,17 @@ export const profilesRouter = router({
 
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
+
+      // Reserved slugs are refused BEFORE governance, not only at the
+      // repository floor. `checkPermissionOrPropose` below would otherwise mint
+      // a proposal for a write that can never be applied — the human reviews
+      // and approves it, and the materializer then throws. Refusing here means
+      // the caller (usually an agent, via MCP `synap_define_kind`) gets the
+      // actionable message immediately, naming the door to use instead.
+      const reservedReason = reservedProfileSlugReason(input.slug);
+      if (reservedReason) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: reservedReason });
+      }
 
       // Check for slug conflict within this workspace context.
       // Returns workspace-owned profile first, then shared/system if accessible.

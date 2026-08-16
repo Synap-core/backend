@@ -19,8 +19,9 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { getDb, and, eq } from "@synap/database";
-import { views } from "@synap/database/schema";
+import { getDb, and, eq, or, isNull } from "@synap/database";
+import { views, widgetDefinitions } from "@synap/database/schema";
+import { composeWidgetError } from "../../services/cells/compose-widget-catalog.js";
 
 /** A single widget placement in the bento grid */
 const BentoWidgetInputSchema = z.object({
@@ -294,6 +295,41 @@ export const hubViewsRouter = router({
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
         };
+      }
+
+      const generatedKeys = new Set(
+        (
+          await db.query.widgetDefinitions.findMany({
+            columns: { typeKey: true },
+            where: and(
+              eq(widgetDefinitions.isActive, true),
+              or(
+                isNull(widgetDefinitions.workspaceId),
+                eq(widgetDefinitions.workspaceId, input.workspaceId)
+              )
+            ),
+          })
+        )
+          .map((r) => r.typeKey)
+          .filter(
+            (k): k is string =>
+              typeof k === "string" && k.startsWith("generated:")
+          )
+      );
+      const invalid = input.widgets
+        .map((w) =>
+          composeWidgetError(
+            w.key,
+            { ...(w.props ?? {}), ...(w.config ?? {}) },
+            generatedKeys
+          )
+        )
+        .filter((msg): msg is string => !!msg);
+      if (invalid.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Bento arrange rejected unknown or under-specified widgets:\n- ${invalid.join("\n- ")}`,
+        });
       }
 
       // Build bento config from widget input

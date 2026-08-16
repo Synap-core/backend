@@ -26,6 +26,12 @@ export interface CreateProjectInput {
   name: string;
   description?: string;
   status?: "active" | "archived" | "completed";
+  /**
+   * The container's lifecycle position (0240). Deliberately free text, not an
+   * enum: a consulting engagement, a marketing campaign and a product each name
+   * their phases differently, and the vocabulary is a config concern.
+   */
+  phase?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   userId: string;
@@ -53,6 +59,8 @@ export interface UpdateProjectInput {
   name?: string;
   description?: string;
   status?: "active" | "archived" | "completed";
+  /** See `CreateProjectInput.phase`. `null` clears it. */
+  phase?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -134,6 +142,7 @@ export class ProjectRepository extends BaseRepository<
           slug,
           description: data.description,
           status: data.status || "active",
+          phase: data.phase ?? null,
           settings: data.settings || {},
           metadata,
           userId,
@@ -186,6 +195,9 @@ export class ProjectRepository extends BaseRepository<
         name: data.name,
         description: data.description,
         status: data.status,
+        // `undefined` is skipped by Drizzle (field untouched); an explicit
+        // `null` is what CLEARS the phase. Both reach `.set()` unchanged.
+        phase: data.phase,
         settings: data.settings,
         metadata: data.metadata,
         updatedAt: new Date(),

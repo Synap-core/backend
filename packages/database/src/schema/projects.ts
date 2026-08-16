@@ -44,6 +44,21 @@ export const projects = pgTable(
     })
       .notNull()
       .default("active"),
+    /**
+     * Where this engagement is in its own lifecycle (migration 0240) — the
+     * before/during/after state a months-long piece of work moves through.
+     *
+     * Distinct from `status`, which is the ROW's lifecycle (active / archived /
+     * completed). `phase` is the WORK's lifecycle and is user-defined: a
+     * consulting engagement, a marketing campaign and a product launch each name
+     * their phases differently, so this is free text rather than an enum and the
+     * vocabulary lives in config.
+     *
+     * Progress is rolled up from contained work — never a percentage invented for
+     * something with no end date. The phase plus a human-written update is the
+     * health signal.
+     */
+    phase: text("phase"),
 
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),

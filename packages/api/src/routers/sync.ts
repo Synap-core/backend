@@ -61,6 +61,18 @@ import { safeTokenEqual } from "@synap/auth";
 
 const logger = createLogger({ module: "sync-receive" });
 
+/**
+ * Narrow an untrusted peer value to the `focus_sessions.origin` union
+ * (migration 0240). Anything else — including a peer on an older schema that
+ * sends nothing — becomes NULL, which readers resolve via the legacy metadata
+ * sniff. A cast here would let a peer write a value no reader understands.
+ */
+function isFocusSessionOrigin(
+  value: unknown
+): value is NonNullable<typeof focusSessions.$inferInsert.origin> {
+  return value === "playbook" || value === "automation" || value === "agent";
+}
+
 // ============================================================================
 // Auth helpers
 // ============================================================================
@@ -1000,6 +1012,11 @@ const SUPPLEMENTARY_TABLES: Record<
             (row.status as typeof focusSessions.$inferInsert.status) ??
             "active",
           templateId: (row.templateId as string) ?? null,
+          // Typed origin (migration 0240) carried from the peer. Validated
+          // against the union rather than cast: a peer is untrusted input, and
+          // an unknown value would make the column lie where NULL only makes it
+          // fall back to the legacy sniff.
+          origin: isFocusSessionOrigin(row.origin) ? row.origin : null,
           expectedOutputs:
             (row.expectedOutputs as typeof focusSessions.$inferInsert.expectedOutputs) ??
             [],
@@ -1019,6 +1036,11 @@ const SUPPLEMENTARY_TABLES: Record<
             ? new Date(row.updatedAt as string)
             : new Date(),
         };
+        // `origin` is deliberately ABSENT from the update set. On conflict the
+        // local row already exists and its origin was stamped by the writer
+        // that actually created the session; a peer replaying the row with a
+        // NULL (or stale) origin must never overwrite that. Insert-only means a
+        // peer can add the fact but never erase it.
         const updateSet: Partial<typeof focusSessions.$inferInsert> = {
           status: values.status,
           progress: values.progress,

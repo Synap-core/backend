@@ -24,6 +24,7 @@ import {
   documents,
   documentVersions,
   documentSessions,
+  views,
   workspaceMembers,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
@@ -51,6 +52,70 @@ function parseRoomName(roomName: string): string | null {
   return null;
 }
 
+/** A room name only maps to a document when its id is a real UUID. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Authorize a user against the ROOM they are joining.
+ *
+ * The room name carries the documentId, so the owning workspace is *derived*
+ * here rather than taken from the client-supplied handshake — a client can no
+ * longer claim membership of workspace A and then open a document of workspace B.
+ *
+ * Resolution order:
+ *   1. `documents.workspace_id` — set for workspace-scoped documents.
+ *   2. the owning `views` row (`views.document_id`) — canvas surfaces created
+ *      pod-wide leave `documents.workspace_id` NULL but may still carry a
+ *      workspace on the view.
+ *   3. neither → a genuinely pod-wide surface. Any member of any workspace on
+ *      this pod may open it (matching `entityScope: 'pod'` semantics); a
+ *      non-member is still refused.
+ *
+ * Exported for `__tests__/yjs-room-auth.test.ts` — this is the security floor
+ * for every Yjs room, so it is covered directly rather than only through the
+ * middleware that calls it.
+ */
+export async function authorizeRoomAccess(
+  roomName: string,
+  userId: string
+): Promise<boolean> {
+  const documentId = parseRoomName(roomName);
+  if (!documentId || !UUID_RE.test(documentId)) return false;
+
+  const doc = await db.query.documents.findFirst({
+    where: eq(documents.id, documentId),
+    columns: { id: true, workspaceId: true },
+  });
+  if (!doc) return false;
+
+  let owningWorkspaceId: string | null = doc.workspaceId ?? null;
+  if (!owningWorkspaceId) {
+    const view = await db.query.views.findFirst({
+      where: eq(views.documentId, documentId),
+      columns: { workspaceId: true },
+    });
+    owningWorkspaceId = view?.workspaceId ?? null;
+  }
+
+  if (!owningWorkspaceId) {
+    const anyMembership = await db.query.workspaceMembers.findFirst({
+      where: eq(workspaceMembers.userId, userId),
+      columns: { id: true },
+    });
+    return anyMembership != null;
+  }
+
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, owningWorkspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { id: true },
+  });
+  return membership != null;
+}
+
 /** Tldraw store snapshot format: Record<id, record> */
 type TldrawStoreSnapshot = Record<string, unknown>;
 
@@ -74,6 +139,16 @@ class DatabasePersistence {
       });
 
       if (!doc) {
+        // Defensive tolerance, NOT a supported flow — and formally unreachable
+        // now: `authorizeRoomAccess` denies an unknown documentId before a
+        // connection ever reaches bindState. Every real caller resolves the id
+        // from a committed row first (views.create inserts the document before
+        // deriving yjsRoomId; the TipTap path reads it out of the create
+        // mutation's result), so a room cannot even be NAMED before its row
+        // exists. If you ever need a legitimate open-then-create flow, widen the
+        // GATE deliberately — do not lean on this branch. Leaving it as the only
+        // permission would fail silently and look exactly like the months-long
+        // outage where `initialize()` was never called.
         console.log(`[Yjs] New document for room: ${roomName}`);
         return;
       }
@@ -525,14 +600,30 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
 
   // Create YSocketIO server with database persistence and access control.
   //
-  // Access model: any workspace member may read/write any document in that workspace.
-  // The client sends { userId, workspaceId } in the SocketIOProvider auth object;
-  // we verify the document belongs to that workspace and the user is a member.
+  // Access model — TWO gates, both of which must pass:
   //
-  // If auth is missing (legacy clients, local dev without auth), we fail open with a
-  // warning so existing flows aren't broken. Set REQUIRE_YJS_AUTH=true in production
-  // to make the check strict.
-  const requireAuth = process.env.REQUIRE_YJS_AUTH === "true";
+  //   1. `authenticate` (handshake gate, below). The client sends
+  //      { userId, workspaceId } in the SocketIOProvider auth object; the user
+  //      must be a member of that workspace.
+  //   2. the room gate (namespace middleware, installed further down). It derives
+  //      the documentId from the room name and checks the user against the
+  //      document's *own* workspace.
+  //
+  // Gate 2 has to be a separate middleware because y-socket.io@1.1.3 hands
+  // `authenticate` only the handshake — `dist/server/index.js` calls
+  // `this.configuration.authenticate(e.handshake)`, and the room name lives on
+  // `socket.nsp.name`, not on the handshake. Gate 1 therefore structurally
+  // cannot see which document is being opened; on its own it lets any member of
+  // any one workspace open any room pod-wide.
+  //
+  // Both gates fail CLOSED, including on DB error. `ALLOW_INSECURE_YJS=true`
+  // is an explicit opt-IN to the old permissive behaviour, for local dev only.
+  const allowInsecure = process.env.ALLOW_INSECURE_YJS === "true";
+  if (allowInsecure) {
+    console.warn(
+      "[Yjs] ⚠️  ALLOW_INSECURE_YJS=true — document authorization is DISABLED. Never set this in production."
+    );
+  }
 
   const yServer = new YSocketIO(io, {
     gcEnabled: true,
@@ -543,25 +634,28 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
       };
 
       if (!userId) {
-        if (requireAuth) {
-          console.warn("[Yjs] Auth rejected: missing userId");
-          return false;
-        }
-        return true; // lenient in dev
+        console.warn("[Yjs] Auth rejected: missing userId");
+        return allowInsecure;
       }
 
-      // The room name is either "whiteboard-{docId}" or "{docId}" — parse documentId
-      // We can't get the room name from the handshake alone (it's per-namespace middleware),
-      // so we verify workspace membership instead: userId ∈ workspaceId.
-      // This is sufficient because all documents in a workspace share the same access gate.
+      // NOTE: `workspaceId` is OPTIONAL here by design. It is client-supplied and
+      // therefore NOT load-bearing for access control — the room middleware below
+      // derives the owning workspace from the document itself and authorizes against
+      // that. Gate 1 only establishes *who* is connecting; gate 2 decides *what* they
+      // may open.
+      //
+      // Requiring it here would also break every pod-wide surface: pod-scoped
+      // boards and documents legitimately carry no workspace, so the client
+      // sends `auth: { userId }` with no workspaceId.
+      //
+      // (History, because it bit us: both clients used to omit the `auth` object
+      // ENTIRELY when workspaceId was falsy, which meant fail-closing on a
+      // missing userId silently reconnect-looped every pod-wide surface. They now
+      // always send `userId` — `useWhiteboardCollaboration.ts` and
+      // `documentRoomCache.ts`. Do not re-tighten this branch without checking
+      // BOTH clients first.)
       if (!workspaceId) {
-        if (requireAuth) {
-          console.warn(
-            `[Yjs] Auth rejected for userId=${userId}: missing workspaceId`
-          );
-          return false;
-        }
-        return true; // lenient in dev
+        return true; // identity established; room authorization happens in gate 2
       }
 
       try {
@@ -582,9 +676,10 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
 
         return true;
       } catch (err) {
-        // DB error — fail open to avoid locking out users during transient outages
-        console.error("[Yjs] Auth check failed (DB error), failing open:", err);
-        return true;
+        // DB error — fail CLOSED. A transient outage must not open every
+        // document on the pod to every connecting client.
+        console.error("[Yjs] Auth check failed (DB error), rejecting:", err);
+        return allowInsecure;
       }
     },
   });
@@ -632,6 +727,50 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
     },
     provider: null,
   };
+
+  // Register the /yjs|* dynamic namespace. y-socket.io@1.1.3 does this in
+  // `initialize()` — the constructor leaves `nsp` null — so nothing (including
+  // the `authenticate` gate above) runs until it is called. Called AFTER the
+  // persistence assignment so the library never binds a document without it.
+  yServer.initialize();
+
+  const yjsNamespace = yServer.nsp;
+  if (!yjsNamespace) {
+    // Refuse to run an unauthorized Yjs server rather than degrade silently.
+    throw new Error(
+      "[Yjs] YSocketIO.nsp is null after initialize() — cannot install the room authorization gate"
+    );
+  }
+
+  // Gate 2: the room gate. Runs after the library's `authenticate` middleware
+  // (socket.io applies namespace middlewares in registration order, and
+  // ParentNamespace.createChild copies them into every child namespace).
+  yjsNamespace.use((socket, next) => {
+    const roomName = socket.nsp.name.replace(/^\/yjs\|/, "");
+    const { userId } = (socket.handshake.auth ?? {}) as { userId?: string };
+
+    if (typeof userId !== "string" || userId.length === 0) {
+      if (allowInsecure) return next();
+      return next(new Error("Unauthorized"));
+    }
+
+    void authorizeRoomAccess(roomName, userId)
+      .then((allowed) => {
+        if (allowed) return next();
+        console.warn(
+          `[Yjs] Room access denied: userId=${userId} room=${roomName}`
+        );
+        next(new Error("Unauthorized"));
+      })
+      .catch((err) => {
+        console.error(
+          `[Yjs] Room auth failed (DB error) for room=${roomName}, rejecting:`,
+          err
+        );
+        if (allowInsecure) return next();
+        next(new Error("Unauthorized"));
+      });
+  });
 
   // Debounced auto-save using interval
   const saveIntervals = new Map<string, NodeJS.Timeout>();

@@ -11,6 +11,7 @@ import {
   ownedWorkspaceIds as ownedWorkspaceIdsQuery,
   podVisibleWorkspaceIds as podVisibleWorkspaceIdsQuery,
 } from "../utils/user-visible-where.js";
+import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
 import {
   profiles,
   profileWorkspaceAccess,
@@ -169,6 +170,14 @@ export class ProfileRepository {
    * Create a new profile
    */
   async create(input: CreateProfileInput): Promise<Profile> {
+    // A slug whose concept has a first-class home elsewhere (`project` ⇒ the
+    // `projects` table) can never become an entity profile. Checked HERE
+    // because this method is the floor under every create door — tRPC
+    // `profiles.createProfile`, MCP `synap_define_kind`, the proposal
+    // materializer, template install, workspace-definition reconcile, and
+    // `ensureSystemProfiles` all land on it.
+    assertProfileSlugNotReserved(input.slug);
+
     // Validate parent profile exists if provided
     if (input.parentProfileId) {
       const parent = await this.getById(input.parentProfileId);
@@ -693,6 +702,14 @@ export class ProfileRepository {
    * Returns the revived row so the caller can reuse it directly.
    */
   async reactivate(id: string): Promise<Profile> {
+    // The reservation is a floor on the LIVE state of the table, not only on
+    // inserts: migration 0151 retired the `project` profile by flipping
+    // `is_active = false`, and this method is the exact inverse of that flip.
+    // Without the check here the reservation would be one `reactivate()` call
+    // deep. Takes an id, so the slug has to be loaded to be judged.
+    const current = await this.getById(id);
+    if (current) assertProfileSlugNotReserved(current.slug);
+
     const [profile] = await this.db
       .update(profiles)
       .set({ isActive: true, updatedAt: new Date() })

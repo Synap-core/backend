@@ -33,6 +33,12 @@ vi.mock("../utils/audit-log.js", () => ({
 vi.mock("@synap/database", async () => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
+  // The REAL reservation, not a stub: the router refuses reserved profile
+  // slugs before governance, and a stubbed second implementation here would
+  // let the two drift.
+  const reserved = await vi.importActual<
+    typeof import("../../../database/src/utils/reserved-profile-slugs.js")
+  >("../../../database/src/utils/reserved-profile-slugs.js");
 
   class ProfileRepository {
     async getBySlug() {
@@ -71,6 +77,7 @@ vi.mock("@synap/database", async () => {
     eq: drizzle.eq,
     and: drizzle.and,
     inArray: drizzle.inArray,
+    reservedProfileSlugReason: reserved.reservedProfileSlugReason,
     getDb: vi.fn(async () => ({})),
     db: {
       query: {

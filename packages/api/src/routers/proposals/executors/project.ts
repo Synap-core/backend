@@ -33,12 +33,11 @@ export function registerProjectExecutors(): void {
   // create exactly. Mirrors entity/create's membership-scoped caller +
   // focus_session/create's idempotency guard.
   //
-  // DATA-SHAPE NOTE: the propose gate (routers/projects.ts + hub-protocol/rest/
-  // projects.ts) stores only { name } in the proposal `data`, so only the name is
-  // reconstructed today — description/status/settings/metadata are NOT carried
-  // through the proposal and fall to create-time defaults (create-then-configure:
-  // a name is the minimum for the project to exist). The other fields are read
-  // defensively so a future gate-`data` widening flows through with no change here.
+  // DATA-SHAPE NOTE: the propose gate now carries the FULL create payload
+  // (name, description, status, phase, subjectEntityId, settings, metadata), so
+  // an approved project no longer loses everything but its name. Each field is
+  // still read defensively — proposals filed before that widening carry only
+  // `{ name }`, and those must keep approving cleanly rather than throwing.
   registerProposalExecutor({
     key: "project/create",
     async execute({ proposal, userId, input, deps }) {
@@ -89,6 +88,8 @@ export function registerProjectExecutors(): void {
         description: innerData.description as string | undefined,
         status: innerData.status as
           "active" | "archived" | "completed" | undefined,
+        phase: innerData.phase as string | undefined,
+        subjectEntityId: innerData.subjectEntityId as string | undefined,
         settings: innerData.settings as Record<string, unknown> | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,
       });
@@ -104,6 +105,146 @@ export function registerProjectExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── project / update ─────────────────────────────────────────────────────────
+  // An agent advancing a project's phase, renaming it, or rebinding its subject
+  // files a proposal. Until this executor existed, approving one hit the `*/*`
+  // catch-all and threw NOT_IMPLEMENTED — the reviewer said yes and NOTHING
+  // happened. That is the create-side-effect-without-an-approval-half defect
+  // this codebase has now hit more than once, so the write door and its
+  // approval half ship together.
+  //
+  // Replays through the SAME projectsRouter.update the direct path uses, as the
+  // APPROVER (no agentUserId ⇒ the re-entrant gate auto-grants), so audit,
+  // events and the subject-link write are identical to a direct update.
+  registerProposalExecutor({
+    key: "project/update",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      // The gate stamps the id into `data`; `targetId` is the fallback for
+      // proposals filed by paths that only set the target.
+      const projectId =
+        (innerData.id as string | undefined) ?? proposal.targetId;
+      if (!projectId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Project update proposal is missing the project id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // The workspace comes from the PROJECT ROW, never from the proposal — a
+      // proposal's workspaceId is request-shaped, and `workspaceProcedure`
+      // trusts whatever workspace the caller is constructed with.
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project to update no longer exists",
+        });
+      }
+      if (!project.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Pod-wide projects cannot be updated through a proposal (workspaceProcedure requires a workspace)",
+        });
+      }
+
+      const membership = await getWorkspaceMembership(
+        db,
+        project.workspaceId,
+        userId
+      );
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const projectCaller = projectsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: project.workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+
+      // TWO doors share the `project/update` key: the field patch, and the
+      // automation-membership change (both are governed as a project update,
+      // because the project is the thing whose composition changes). They carry
+      // different payloads, so replaying a membership proposal through `update`
+      // would call it with only an id — a silent no-op wearing an approval.
+      // Discriminate on the payload the membership door stamps.
+      if ("automationId" in innerData && "member" in innerData) {
+        await projectCaller.setAutomationMembership({
+          projectId,
+          automationId: innerData.automationId as string,
+          member: innerData.member === true,
+        });
+      } else {
+        // Only fields the proposal actually carries are replayed — an absent key
+        // must stay absent, because `null` MEANS "clear it" for phase/subject.
+        await projectCaller.update({
+          id: projectId,
+          ...("name" in innerData ? { name: innerData.name as string } : {}),
+          ...("description" in innerData
+            ? { description: innerData.description as string }
+            : {}),
+          ...("status" in innerData
+            ? {
+                status: innerData.status as "active" | "archived" | "completed",
+              }
+            : {}),
+          ...("phase" in innerData
+            ? { phase: innerData.phase as string | null }
+            : {}),
+          ...("subjectEntityId" in innerData
+            ? { subjectEntityId: innerData.subjectEntityId as string | null }
+            : {}),
+          ...("settings" in innerData
+            ? { settings: innerData.settings as Record<string, unknown> }
+            : {}),
+          ...("metadata" in innerData
+            ? { metadata: innerData.metadata as Record<string, unknown> }
+            : {}),
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(
