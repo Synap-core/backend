@@ -24,6 +24,7 @@ import {
   pickAdvisoryWorkspaceId,
   resolveSessionHandle,
   type McpHandlerMap,
+  type ResolvedSession,
 } from "./handlers/shared.js";
 import { readHandlers } from "./handlers/read.js";
 import { entityHandlers } from "./handlers/entity.js";
@@ -62,12 +63,6 @@ export async function executeMCPToolViaHubProtocol(
   _sessionUserId?: string,
   agentUserId?: string,
   /**
-   * AMBIENT focus-session handle from the MCP URL's `?sessionId=` — injected
-   * server-side by the transport, never advertised on a tool schema. An explicit
-   * `args.sessionId` wins over it; both are ownership-checked before use.
-   */
-  ambientSessionId?: string,
-  /**
    * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` + workspace
    * binding. When it is a bound `service` key, EVERY workspace this call would
    * touch (the injected `?workspaceId=` lens and every `args.workspaceId` a
@@ -78,12 +73,8 @@ export async function executeMCPToolViaHubProtocol(
   keyType?: string | null,
   keyWorkspaceId?: string | null
 ): Promise<CallToolResult> {
-  const sessionId = await resolveSessionHandle(
-    toolName,
-    args,
-    userId,
-    ambientSessionId
-  );
+  const session = await resolveSessionHandle(toolName, args, userId);
+  const sessionId = session?.sessionId;
 
   const caller = await createHubProtocolCaller(
     userId,
@@ -177,7 +168,7 @@ export async function executeMCPToolViaHubProtocol(
       `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`
     );
   }
-  return handler({
+  const result = await handler({
     toolName,
     args,
     userId,
@@ -193,6 +184,35 @@ export async function executeMCPToolViaHubProtocol(
     confinedWorkspaceId,
     workspaceAccessible,
   });
+
+  // A GUESS MUST ANNOUNCE ITSELF. When several sessions were open we attributed
+  // this write to the most recently started one — usually right, occasionally
+  // not. Disclosing it here (once, in the adapter) is what makes the guess
+  // legitimate: the model learns the write was grouped by inference and can
+  // re-issue with an explicit `sessionId` if it was wrong. Silent inference is
+  // the thing we refuse, not inference.
+  //
+  // Deliberately NOT threaded through every handler's own payload shape — one
+  // place, no per-handler drift.
+  return session?.ambiguous ? withSessionDisclosure(result, session) : result;
+}
+
+/** Appends the ambiguity note to a tool result without disturbing its payload. */
+function withSessionDisclosure(
+  result: CallToolResult,
+  session: ResolvedSession
+): CallToolResult {
+  const note =
+    `Note: ${session.openCount} of your focus sessions are open. This write was ` +
+    `attributed to the most recently started one (${session.sessionId}). If it ` +
+    `belongs to another, pass that session's id as \`sessionId\`.`;
+  return {
+    ...result,
+    content: [
+      ...(Array.isArray(result.content) ? result.content : []),
+      { type: "text" as const, text: note },
+    ],
+  };
 }
 
 /**

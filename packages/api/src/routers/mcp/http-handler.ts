@@ -478,13 +478,16 @@ mcpHttpApp.post("/", async (c) => {
   // ?projectId= (project focus lens). Both narrow tool calls; orthogonal.
   const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
   const defaultProjectId = c.req.query("projectId") ?? undefined;
-  // `?sessionId=` — a `focus_sessions` row id used as an out-of-band SCOPE
-  // HINT. It is NOT transport session state (this handler is stateless and
-  // sets no `Mcp-Session-Id`), and downstream governance still authorizes
-  // independently of it. (Do NOT re-label this a SEP-2567 state handle — that
-  // is a model-visible tool ARGUMENT; this rides the URL and is never
-  // advertised on a schema. The two are unrelated.)
-  const defaultSessionId = c.req.query("sessionId") ?? undefined;
+  // `?sessionId=` USED TO BE READ HERE as an out-of-band scope hint, threaded
+  // through four files to the executor. Nothing ever set it — MCP server URLs
+  // are registered once per client, so the value was permanently `undefined`,
+  // and a grep across the whole monorepo (CP, CLI, docs, configs) found zero
+  // producers. Session attribution is now derived server-side from the caller's
+  // open sessions, with an optional `sessionId` ARGUMENT on the three write
+  // doors as the disambiguator — which is also what MCP's own SEP-2567 points
+  // at ("server-minted handles passed as ordinary tool arguments") after it
+  // removed transport-level session state.
+  //
   // Live grounding is only consumed by the client at the `initialize` handshake
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a
   // tools/call request would otherwise pay 2 DB queries for instructions no one
@@ -503,7 +506,6 @@ mcpHttpApp.post("/", async (c) => {
     // The validated key's OWN scopes — never the process-global MCP_SCOPES env
     // var, which is meaningless per-key over HTTP.
     deriveMcpScopes(keyRecord.scope),
-    defaultSessionId,
     // SERVICE-KEY CONFINEMENT: a bound `service` key is positively pinned to its
     // workspace. Threaded into the executor so `resolveConfinedWorkspace` (the
     // SAME primitive the REST door uses) 403s a bound key that targets another

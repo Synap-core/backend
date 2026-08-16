@@ -16,7 +16,11 @@ import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
-import { describeAiFailure } from "../../utils/ai-failure.js";
+import {
+  describeAiFailure,
+  type AiFailureDescription,
+} from "../../utils/ai-failure.js";
+import { ChatTurnFailureError } from "../../utils/ai-failure-error.js";
 import {
   resolveAgentHandle,
   extractMentionAgentType,
@@ -991,8 +995,18 @@ export const sendMessageProcedure = protectedProcedure
 
     let receivedStreamOutput = false;
     let turnCancelled = false;
+    // `failure` carries the CLASSIFICATION across the throw (see
+    // utils/ai-failure-error.ts). Without it the verdict computed below was
+    // recomputed nowhere and simply lost at the tRPC boundary, which is what
+    // made the SSE error frame hardcode `recoverable: false`. Null = no failure
+    // class: either a user cancellation, or a path that never classified.
     let terminalTurnFailure:
-      { status: "failed" | "cancelled"; error: string } | undefined;
+      | {
+          status: "failed" | "cancelled";
+          error: string;
+          failure: AiFailureDescription | null;
+        }
+      | undefined;
     const intelligenceRequest = {
       query: content,
       threadId: channelId,
@@ -1329,6 +1343,9 @@ export const sendMessageProcedure = protectedProcedure
         terminalTurnFailure = {
           status: turnCancelled ? "cancelled" : "failed",
           error,
+          // Null for a cancellation — the user ended the turn, there is no
+          // failure to classify. Everything else carries its real verdict.
+          failure: streamFailure,
         };
         emitChatEvent({
           event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
@@ -1359,7 +1376,11 @@ export const sendMessageProcedure = protectedProcedure
             error: {
               code: turnCancelled ? "CHAT_TURN_CANCELLED" : "CHAT_TURN_FAILED",
               message: error,
-              recoverable: false,
+              // Same defect as the SSE frame, same fix: the verdict is already
+              // computed, so stop hardcoding a pessimistic constant over it.
+              // Fail-safe — a cancellation (no failure class) stays false, as
+              // does anything unclassified.
+              recoverable: streamFailure?.retryable ?? false,
             },
           },
           workspaceId: workspaceId ?? null,
@@ -1444,6 +1465,7 @@ export const sendMessageProcedure = protectedProcedure
           terminalTurnFailure = {
             status: "failed",
             error: failure.message,
+            failure,
           };
 
           emitChatEvent({
@@ -1506,9 +1528,17 @@ export const sendMessageProcedure = protectedProcedure
       clearTimeout(streamDeadlineTimer);
       if (cancellationPoll) clearInterval(cancellationPoll);
       if (streamDeadlineExceeded && !terminalTurnFailure) {
+        // Route the deadline through the SAME classifier as every other path
+        // instead of a hand-written sentence. Our own timer firing IS the
+        // evidence, so the class is `timeout` — which carries
+        // `retryable: true`, the honest verdict for a deadline.
+        const failure = describeAiFailure("timeout", {
+          reference: input.clientRequestId,
+        });
         terminalTurnFailure = {
           status: "failed",
-          error: "The AI response timed out. Please try again.",
+          error: failure.message,
+          failure,
         };
       }
     }
@@ -1522,9 +1552,13 @@ export const sendMessageProcedure = protectedProcedure
         });
         completeActiveChatTurn(durableTurn.id);
       }
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
+      // Carry the verdict ACROSS the boundary. A bare TRPCError holds only
+      // code + message, so everything classified above used to die right here
+      // and the SSE error frame had nothing left to report.
+      throw new ChatTurnFailureError({
         message: terminalTurnFailure.error,
+        failure: terminalTurnFailure.failure,
+        cancelled: terminalTurnFailure.status === "cancelled",
       });
     }
 

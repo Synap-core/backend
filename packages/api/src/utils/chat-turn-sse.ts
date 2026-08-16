@@ -2,14 +2,10 @@ import { EventNames } from "@synap-core/types/events";
 import { randomUUID } from "node:crypto";
 import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import type { ChatBroadcastOptions } from "./chat-realtime-broadcast.js";
+import { readAiFailure } from "./ai-failure-error.js";
 
 export type ChatTurnFrameType =
-  | "start"
-  | "step"
-  | "delta"
-  | "proposal"
-  | "complete"
-  | "error";
+  "start" | "step" | "delta" | "proposal" | "complete" | "error";
 
 export type ChatTurnFrame = {
   type: ChatTurnFrameType;
@@ -156,11 +152,45 @@ export function createChatTurnFrameSequencer() {
       });
     },
 
+    /**
+     * The terminal error frame — and the ONLY error channel this surface has
+     * (the `CHAT_STREAM_ERROR` broadcast is deliberately dropped above, and the
+     * legacy socket handler early-returns in observer mode), so every field the
+     * client needs must be on it.
+     *
+     * `recoverable` used to be hardcoded `false`. It is not a measurement: the
+     * real verdict is computed by `describeAiFailure` inside `sendMessage` and
+     * now rides across the throw (see utils/ai-failure-error.ts). Hardcoding it
+     * made `showRetry = error.recoverable !== false && Boolean(onRetry)`
+     * (chat-ui/StreamError.tsx) unsatisfiable, so the Retry button was
+     * structurally unreachable even though every other wire was connected.
+     *
+     * FIELD NAMES ARE THE CLIENT'S, not this module's: `turn-decode.ts` reads
+     * `code` / `message` / `recoverable` off the error frame. Emitting
+     * `retryable` here instead would typecheck, ship, and leave the button
+     * exactly as dead as before.
+     *
+     * FAIL-SAFE: no carried verdict → `recoverable: false` and
+     * `code: "unknown"`. Never default to true. An unearned Retry can re-bill
+     * an out-of-credit provider (`provider_no_credit`) or re-hammer rejected
+     * credentials (`provider_auth`) — both `retryable: false`, and both
+     * correctly stay unrecoverable here.
+     */
     error(error: unknown): ChatTurnFrame {
+      const readout = readAiFailure(error);
+      const failure = readout?.failure ?? null;
       return frame({
         type: "error",
-        recoverable: false,
-        message: error instanceof Error ? error.message : "Chat turn failed",
+        recoverable: failure?.retryable ?? false,
+        code: readout?.cancelled ? "cancelled" : (failure?.code ?? "unknown"),
+        message:
+          failure?.message ??
+          (error instanceof Error ? error.message : "Chat turn failed"),
+        // Does a human operator have to act before this can EVER work? Distinct
+        // from "not retryable": it tells the surface whether to point at the
+        // user or at the operator. Omitted rather than guessed when unknown.
+        ...(failure ? { needsOperator: failure.needsOperator } : {}),
+        ...(readout?.cancelled ? { cancelled: true } : {}),
       });
     },
   };

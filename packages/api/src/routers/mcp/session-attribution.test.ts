@@ -120,3 +120,64 @@ describe("MCP session attribution — read-only deny-list", () => {
     expect(stale).toEqual([]);
   });
 });
+
+/**
+ * The DISAMBIGUATION escape hatch must stay DISCOVERABLE.
+ *
+ * `resolveSessionHandle` has always honoured an explicit `args.sessionId` as its
+ * highest-precedence rung — but for the write doors that rung was unreachable in
+ * practice, because no tool DECLARED the parameter, so a model had no way to
+ * know it could send one. Automatic attribution deliberately declines when two
+ * or more focus sessions are open (mis-grouping a write is worse than not
+ * grouping it), and with no declared override that decline was terminal: the
+ * write simply lost its provenance and nothing could recover it.
+ *
+ * A capability that exists in the resolver but in no schema is not a capability.
+ * This pins the three doors where the loss actually hurts.
+ */
+describe("MCP session attribution — explicit override is declared", () => {
+  const OVERRIDE_DOORS = [
+    "synap_capture",
+    "synap_create_entity",
+    "synap_create_document",
+  ];
+
+  const manifestTools = () => {
+    const manifest = JSON.parse(
+      readFileSync(join(__dirname, "tools/mcp-tools.manifest.json"), "utf8")
+    ) as {
+      tools: {
+        name: string;
+        inputSchema?: { properties?: Record<string, unknown> };
+      }[];
+    };
+    return new Map(manifest.tools.map((t) => [t.name, t]));
+  };
+
+  it("the write doors that can lose provenance declare a sessionId override", () => {
+    const byName = manifestTools();
+    const missing = OVERRIDE_DOORS.filter(
+      (name) => !byName.get(name)?.inputSchema?.properties?.sessionId
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("those doors are session-linked in the first place (else the override is moot)", () => {
+    expect(OVERRIDE_DOORS.filter(isReadOnlyTool)).toEqual([]);
+  });
+
+  /**
+   * The override is a DISAMBIGUATOR, not the normal path. If it ever becomes
+   * `required`, every caller pays the bookkeeping cost the derived rung exists
+   * to avoid — the exact thing `mcp/index.ts` argues against.
+   */
+  it("the override is never required", () => {
+    const byName = manifestTools();
+    for (const name of OVERRIDE_DOORS) {
+      const required = (
+        byName.get(name)?.inputSchema as { required?: string[] } | undefined
+      )?.required;
+      expect(required ?? []).not.toContain("sessionId");
+    }
+  });
+});

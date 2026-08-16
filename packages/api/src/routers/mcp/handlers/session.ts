@@ -12,7 +12,6 @@ import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import {
   ok,
   requireScope,
-  listOpenFocusSessions,
   resolveAmbientSession,
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -83,25 +82,22 @@ export const sessionHandlers: McpHandlerMap = {
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const wantedId =
+    // `resolveAmbientSession` now always answers when ANY session is open (it
+    // picks the newest and reports `ambiguous`), so the old "multiple open →
+    // refuse and list them" branch here is unreachable: it could only fire when
+    // the resolver returned undefined, which now means zero open sessions.
+    // Deleted rather than left behind a flag — two live definitions of what
+    // ambiguity means is exactly the two-store divergence this codebase keeps
+    // getting bitten by. The disclosure lives on the answer instead.
+    const explicitId =
       typeof args.sessionId === "string" && args.sessionId.trim() !== ""
         ? args.sessionId
-        : await resolveAmbientSession(userId);
+        : undefined;
+    const ambient = explicitId
+      ? undefined
+      : await resolveAmbientSession(userId);
+    const wantedId = explicitId ?? ambient?.sessionId;
     if (!wantedId) {
-      const open = await listOpenFocusSessions(userId, 5);
-      if (open.length > 1) {
-        return ok({
-          session: null,
-          multiSession: true,
-          openSessions: open.map((s) => ({
-            id: s.id,
-            goal: s.goal,
-            startedAt: s.startedAt,
-          })),
-          message:
-            "Multiple open focus sessions — pass sessionId explicitly (or set ?sessionId= on the MCP URL). Ambient attach is disabled to prevent mis-attribution.",
-        });
-      }
       return ok({
         session: null,
         message:
@@ -118,7 +114,20 @@ export const sessionHandlers: McpHandlerMap = {
     if (!session) {
       return ok({ error: `Focus session ${wantedId} not found` });
     }
-    return ok({ session });
+    // Disclose an inferred answer. Asking "which session am I in?" and getting a
+    // confident one back while three are open is precisely the mis-attribution
+    // the old refusal guarded against — the fix is to answer AND say it was
+    // inferred, not to withhold the answer.
+    return ok({
+      session,
+      ...(ambient?.ambiguous
+        ? {
+            inferred: true,
+            openCount: ambient.openCount,
+            message: `${ambient.openCount} sessions are open — this is the most recently started. Pass sessionId to ask about another.`,
+          }
+        : {}),
+    });
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;

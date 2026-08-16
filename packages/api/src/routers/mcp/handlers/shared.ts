@@ -436,44 +436,83 @@ export async function listOpenFocusSessions(
 }
 
 /**
- * Most recent open session — only when **exactly one** open session exists.
- * Multiple open sessions refuse silent ambient attach (mis-attribution risk);
- * caller must pass sessionId or set ?sessionId= on the MCP URL.
+ * How `ctx.sessionId` was arrived at — carried so a GUESS can announce itself.
+ *
+ * There was a third rung, `"url"` (the MCP URL's `?sessionId=`). It is gone:
+ * nothing in the monorepo ever set that query param (server URLs are registered
+ * once per client), so it was permanently `undefined` while threading a
+ * parameter through four files — and MCP's SEP-2567 points at tool ARGUMENTS,
+ * not transport-adjacent state, for exactly this job.
+ */
+export type SessionAttribution = "explicit" | "derived";
+
+export interface ResolvedSession {
+  sessionId: string;
+  attribution: SessionAttribution;
+  /**
+   * More than one session was open and the newest was chosen. Only ever set on
+   * `derived` — an explicit id is never a guess.
+   */
+  ambiguous?: boolean;
+  /** Open-session count at resolution time; present only when `ambiguous`. */
+  openCount?: number;
+}
+
+/**
+ * The user's most recently STARTED open session.
+ *
+ * This used to REFUSE whenever more than one session was open, on the reasoning
+ * that mis-grouping a write is worse than not grouping it. Measurement said
+ * otherwise: the refusal is unrecoverable (the write lands with no session and
+ * nothing can ever reattach it), while a wrong guess is visible and repairable.
+ * In practice the refusal was the 100% case — two abandoned verification
+ * sessions latched ambient attach off pod-wide — and the mis-grouping it
+ * protected against stayed hypothetical.
+ *
+ * So it now picks the newest and SAYS SO (`ambiguous`), which the caller
+ * surfaces. A hint that is usually right and discloses itself beats a hint that
+ * is absent every time; the explicit `sessionId` arg on the write doors is the
+ * override when the guess is wrong.
  */
 export async function resolveAmbientSession(
   userId: string
-): Promise<string | undefined> {
-  const open = await listOpenFocusSessions(userId, 2);
-  if (open.length === 0) return undefined;
-  if (open.length > 1) {
+): Promise<
+  { sessionId: string; ambiguous: boolean; openCount: number } | undefined
+> {
+  // Fetch >2 so `openCount` is informative rather than clamped at the old
+  // "is there more than one" boundary.
+  const open = await listOpenFocusSessions(userId, 10);
+  const newest = open[0]?.id;
+  if (!newest) return undefined;
+  const ambiguous = open.length > 1;
+  if (ambiguous) {
     logger.info(
       {
         userId,
         openCount: open.length,
+        chosenSessionId: newest,
         sessionIds: open.map((s) => s.id),
       },
-      "mcp: multiple open focus sessions — refusing ambient attach; pass sessionId explicitly"
+      "mcp: multiple open focus sessions — attributing to the most recently started; pass sessionId to override"
     );
-    return undefined;
   }
-  return open[0]?.id;
+  return { sessionId: newest, ambiguous, openCount: open.length };
 }
 
 /**
  * Resolve the focus-session handle for THIS tool call.
  *
- * Precedence: explicit `args.sessionId` > validated ambient (`?sessionId=`) >
- * derived (most recent open session). Every candidate is ownership-checked
- * before it becomes `ctx.sessionId`; a handle that isn't the caller's is dropped
- * rather than rejected — it is a grouping hint, and refusing the whole tool call
- * over it would be a worse failure than losing the grouping.
+ * Precedence: explicit `args.sessionId` > derived (most recent open session).
+ * The explicit id is ownership-checked before it becomes `ctx.sessionId`; a
+ * handle that isn't the caller's is dropped rather than rejected — it is a
+ * grouping hint, and failing the whole tool call over it would be a worse
+ * outcome than losing the grouping.
  */
 export async function resolveSessionHandle(
   toolName: string,
   args: Record<string, unknown>,
-  userId: string,
-  ambientSessionId?: string
-): Promise<string | undefined> {
+  userId: string
+): Promise<ResolvedSession | undefined> {
   if (isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
   // dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
@@ -482,21 +521,30 @@ export async function resolveSessionHandle(
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
-  const candidate = explicit ?? ambientSessionId;
-  if (candidate) {
-    if (await ownsFocusSession(userId, candidate)) return candidate;
+  if (explicit) {
+    if (await ownsFocusSession(userId, explicit)) {
+      return { sessionId: explicit, attribution: "explicit" };
+    }
     logger.warn(
       {
         userId,
-        sessionId: candidate,
+        sessionId: explicit,
         toolName,
-        source: explicit ? "arg" : "url",
+        source: "arg",
       },
       "mcp: focus-session handle does not belong to the caller — ignoring"
     );
     return undefined;
   }
-  return resolveAmbientSession(userId);
+  const ambient = await resolveAmbientSession(userId);
+  if (!ambient) return undefined;
+  return {
+    sessionId: ambient.sessionId,
+    attribution: "derived",
+    ...(ambient.ambiguous
+      ? { ambiguous: true, openCount: ambient.openCount }
+      : {}),
+  };
 }
 
 // ── THE ONE CAPTURE DOOR — shared helpers (design doc §2.2 / §2.3) ────────────

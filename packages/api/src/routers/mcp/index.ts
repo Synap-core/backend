@@ -98,21 +98,6 @@ export function createMCPServer(
    */
   apiKeyScopes?: string[],
   /**
-   * The active `focus_sessions` row id, from `?sessionId=` in the HTTP URL —
-   * an EXPLICIT STATE HANDLE, never transport session state. (MCP 2026-07-28
-   * removes `Mcp-Session-Id`, the initialize handshake and resumability —
-   * SEP-2575 / SEP-2567 — so state must be a handle passed per request.)
-   *
-   * Unlike `defaultWorkspaceId` / `defaultProjectId` it is NOT spread into the
-   * tool arguments: it is handed to the executor server-side so no tool has to
-   * declare `sessionId` in its JSON schema. Scope becomes an authorization
-   * concern, not an attention concern — the model never sees or reasons about
-   * the handle. It is a SCOPE HINT ONLY: it groups a run's writes (proposals,
-   * `session --produced--> entity` links, project placement rung 2) and never
-   * itself authorizes anything — downstream governance still applies.
-   */
-  defaultSessionId?: string,
-  /**
    * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` and workspace
    * binding (`keyWorkspaceId`), from the HTTP door. Threaded into the executor
    * so a bound `service` key is positively pinned to its workspace via the
@@ -217,12 +202,12 @@ export function createMCPServer(
       ...args,
     };
 
-    // `sessionId` is deliberately NOT part of `scopedArgs`: spreading it would
-    // only reach tools that DECLARE the param, and declaring it everywhere puts
-    // a bookkeeping handle in front of the model on every schema. It travels
-    // server-side instead — explicit on the wire, hidden from the tool schema —
-    // so advertised schemas stay honest. An explicit `args.sessionId` (the
-    // session tools) still wins; the adapter treats this as the fallback.
+    // Session attribution is resolved SERVER-SIDE in the adapter (derived from
+    // the caller's open sessions), so nothing session-shaped is spread into
+    // `scopedArgs` — declaring a bookkeeping handle on every schema would make
+    // the advertised schemas dishonest. The three write doors that can lose
+    // provenance declare an OPTIONAL `sessionId` purely as a disambiguator, and
+    // an explicit one always wins.
     return await tools.execute(
       request.params.name,
       scopedArgs,
@@ -230,7 +215,6 @@ export function createMCPServer(
       scopes,
       sessionUserId,
       agentUserId,
-      defaultSessionId,
       // Service-key confinement — pinned per-request through to the executor.
       keyType,
       keyWorkspaceId

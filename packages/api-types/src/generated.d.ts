@@ -24651,7 +24651,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType?: "session" | "capability" | "chat" | "playbook" | "automation" | "capture" | undefined;
+				flowType?: "session" | "capability" | "chat" | "playbook" | "automation" | "capture" | "agent_write" | undefined;
 				flowId?: string | undefined;
 				scope?: {
 					workspaceId?: string | undefined;
@@ -24696,7 +24696,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType: "session" | "capability" | "chat" | "playbook" | "automation" | "capture";
+				flowType: "session" | "capability" | "chat" | "playbook" | "automation" | "capture" | "agent_write";
 				id: string;
 			};
 			output: UnifiedRunDetail | null;

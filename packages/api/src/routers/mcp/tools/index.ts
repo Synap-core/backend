@@ -558,6 +558,11 @@ export const tools = {
               description:
                 "Optional project id to file the created entity into — stamps belongs_to_project membership.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+            },
             forceCreate: {
               type: "boolean",
               description:
@@ -648,6 +653,11 @@ export const tools = {
                 "Optional UUID of an EXISTING entity to attach this document to. The attach is a separate governed entity update — its own outcome comes back under `attached`.",
             },
             workspaceId: { type: "string" },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+            },
           },
           required: ["title"],
         },
@@ -1737,6 +1747,11 @@ export const tools = {
               description:
                 "How much latitude the backend resolver has to place the capture. Placement is DERIVED by the backend, not free-picked by you: the resolver files pod-wide kinds pod-wide and computes a workspace lens from the ontology (a role enabled in exactly one of your workspaces) and context (bound channel / focus session). You do NOT choose a workspace and cannot invent one — you are only ever consulted as a TIE-BREAKER among the pre-approved candidates the resolver could not separate, and you may abstain. 'auto' (default) = let the resolver place it (deterministic when possible; tie-break only when >1 candidate survive; returned as movedToWorkspace). 'ask' = never move silently; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = keep the caller's/session workspace, no resolution. To force a specific workspace, pass an explicit workspaceId (rung-1 explicit placement) rather than expecting to route there by inference.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+            },
           },
           // No `required`: the payload is a gradient — `text` OR `entities[]`
           // (or both). An empty call is REJECTED at the door with
@@ -2465,15 +2480,6 @@ export const tools = {
     sessionUserId?: string,
     agentUserId?: string,
     /**
-     * AMBIENT focus-session handle — the MCP URL's `?sessionId=`, injected
-     * server-side by the transport (routers/mcp/index.ts). It is deliberately
-     * NOT part of `scopedArgs` and is NEVER advertised on a tool schema: putting
-     * a bookkeeping handle in front of the model on every tool would make the
-     * advertised schemas dishonest. An explicit `args.sessionId` (the session
-     * tools) always wins; this is only the fallback.
-     */
-    ambientSessionId?: string,
-    /**
      * SERVICE-KEY CONFINEMENT: the authenticating key's `keyType` + workspace
      * binding. Forwarded to the adapter so a bound `service` key is confined to
      * its workspace via `resolveConfinedWorkspace`. Undefined/null → passthrough.
@@ -2507,7 +2513,6 @@ export const tools = {
         apiKeyScopes,
         sessionUserId,
         agentUserId,
-        ambientSessionId,
         keyType,
         keyWorkspaceId
       );

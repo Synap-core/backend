@@ -17,6 +17,19 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { listRuns, getRun, listRunGroupsPage } from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
 
+/**
+ * Must mirror the domain type `FlowType` (`services/runs/types.ts`) exactly.
+ *
+ * `agent_write` was added to the domain type — and to the unified feed, and to
+ * `getRun`, which carries a complete `agent_write` branch (`services/runs/
+ * index.ts:1476`) that resolves the run and joins its correlationId events — but
+ * this input enum was never widened to match. So the runs feed listed
+ * agent-write runs the detail door then refused to fetch: click one and it 400s.
+ * The service could always serve it; only the door was narrower than the room
+ * behind it.
+ *
+ * If you add a member to `FlowType`, add it here in the same change.
+ */
 const flowType = z.enum([
   "automation",
   "playbook",
@@ -24,6 +37,7 @@ const flowType = z.enum([
   "capability",
   "session",
   "chat",
+  "agent_write",
 ]);
 const runStatus = z.enum([
   "running",

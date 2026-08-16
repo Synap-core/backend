@@ -440,6 +440,10 @@
             "type": "string",
             "description": "Optional project id to file the created entity into — stamps belongs_to_project membership."
           },
+          "sessionId": {
+            "type": "string",
+            "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error."
+          },
           "forceCreate": {
             "type": "boolean",
             "description": "Bypass the weak same-name gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does NOT bypass strong-signal auto-merge (email/phone/url). Default false."
@@ -531,6 +535,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error."
           }
         },
         "required": ["title"]
@@ -1433,7 +1441,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n\nEXAMPLE 1 — raw text:\n{ \"text\": \"Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March.\" }\n\nEXAMPLE 2 — one structured entity, with properties + a long body:\n{ \"entities\": [ { \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\", \"role\": \"Head of Data\" }, \"content\": \"## Notes\\nOwns the data platform. Wants a March demo.\" } ] }\n\nEXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ \"entities\": [ { \"ref\": \"p1\", \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\" } }, { \"ref\": \"c1\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"relations\": [ { \"sourceRef\": \"p1\", \"targetRef\": \"c1\", \"type\": \"works_at\" } ] }\n\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent) or \"structuring-unavailable\" (text lane only: the AI structurer is down — tell the user and retry later).",
+      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n\nEXAMPLE 1 — raw text:\n{ \"text\": \"Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March.\" }\n\nEXAMPLE 2 — one structured entity, with properties + a long body:\n{ \"entities\": [ { \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\", \"role\": \"Head of Data\" }, \"content\": \"## Notes\\nOwns the data platform. Wants a March demo.\" } ] }\n\nEXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ \"entities\": [ { \"ref\": \"p1\", \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\" } }, { \"ref\": \"c1\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"relations\": [ { \"sourceRef\": \"p1\", \"targetRef\": \"c1\", \"type\": \"works_at\" } ] }\n\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1554,6 +1562,10 @@
             "type": "string",
             "enum": ["auto", "ask", "locked"],
             "description": "How much latitude the backend resolver has to place the capture. Placement is DERIVED by the backend, not free-picked by you: the resolver files pod-wide kinds pod-wide and computes a workspace lens from the ontology (a role enabled in exactly one of your workspaces) and context (bound channel / focus session). You do NOT choose a workspace and cannot invent one — you are only ever consulted as a TIE-BREAKER among the pre-approved candidates the resolver could not separate, and you may abstain. 'auto' (default) = let the resolver place it (deterministic when possible; tie-break only when >1 candidate survive; returned as movedToWorkspace). 'ask' = never move silently; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = keep the caller's/session workspace, no resolution. To force a specific workspace, pass an explicit workspaceId (rung-1 explicit placement) rather than expecting to route there by inference."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error."
           }
         }
       }
@@ -1853,6 +1865,20 @@
           "reason": {
             "type": "string",
             "description": "Why you are rejecting it (recorded on the proposal). Always give one."
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "wrong_entity",
+              "duplicate",
+              "wrong_kind_or_facet",
+              "wrong_link_type",
+              "wrong_workspace",
+              "bad_data",
+              "not_relevant",
+              "other"
+            ],
+            "description": "Optional structured cause, one of the fixed set — recorded alongside `reason` and fed to the calibration/scorecard loop. Use `other` (or omit) when none fits and rely on the free-text `reason`."
           }
         },
         "required": ["proposalId"]
