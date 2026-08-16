@@ -32,6 +32,7 @@ import {
   automations,
   links,
   channels,
+  workspaces,
 } from "@synap/database";
 import {
   getLinksFor,
@@ -65,6 +66,10 @@ export interface CapabilityCompositionInput {
     approved: boolean;
     description?: string | null;
     metadata: Record<string, unknown> | null;
+    /** `capabilities.workspaceId` — optional so existing callers that don't
+     *  load it keep compiling; pass it whenever available so the output can
+     *  carry it (labeling) and the channel-count fallback can scope by it. */
+    workspaceId?: string | null;
   };
 }
 
@@ -206,7 +211,8 @@ export async function buildCapabilityComposition(
     .filter((n): n is string => !!n);
   const producedChannelCount = await countBridgeChannels(
     capabilityParts.map((p) => p.id),
-    memberToolNames
+    memberToolNames,
+    cap.workspaceId ?? null
   );
 
   // ── Mode: standing vs callable vs unknown — reuses the already-loaded
@@ -241,6 +247,7 @@ export async function buildCapabilityComposition(
     name: cap.name,
     description: cap.description ?? null,
     approved: cap.approved,
+    workspaceId: cap.workspaceId ?? null,
     provenance,
     members,
     health,
@@ -278,10 +285,29 @@ export async function listCapabilityCompositions(args: {
       description: capabilities.description,
       approved: capabilities.approved,
       metadata: capabilities.metadata,
+      workspaceId: capabilities.workspaceId,
     })
     .from(capabilities)
     .where(and(lens, userVisibleWhere(capabilities.workspaceId, userId)))
     .orderBy(desc(capabilities.createdAt));
+
+  // Batched name lookup for every distinct workspace the page's containers
+  // belong to — ONE extra query for the whole list, not per-row. Feeds
+  // `workspaceName` below so the UI can label two same-named installs
+  // ("Discord Bot" in Marketing vs Discord Bot in Ops) without an N+1.
+  const distinctWorkspaceIds = [
+    ...new Set(
+      rows.map((r) => r.workspaceId).filter((id): id is string => !!id)
+    ),
+  ];
+  const workspaceNames = new Map<string, string>();
+  if (distinctWorkspaceIds.length > 0) {
+    const wsRows = await db
+      .select({ id: workspaces.id, name: workspaces.name })
+      .from(workspaces)
+      .where(inArray(workspaces.id, distinctWorkspaceIds));
+    for (const w of wsRows) workspaceNames.set(w.id, w.name);
+  }
 
   // Fan the per-container builds out in parallel. Each buildCapabilityComposition
   // does ~6 independent reads plus a per-flow listRuns; this list backs a Studio
@@ -297,7 +323,7 @@ export async function listCapabilityCompositions(args: {
   const built = await Promise.all(
     rows.map(async (row) => {
       try {
-        return await buildCapabilityComposition({
+        const composition = await buildCapabilityComposition({
           userId,
           capability: {
             id: row.id,
@@ -305,8 +331,16 @@ export async function listCapabilityCompositions(args: {
             description: row.description,
             approved: row.approved,
             metadata: row.metadata as Record<string, unknown> | null,
+            workspaceId: row.workspaceId,
           },
         });
+        const enriched: CapabilityComposition = {
+          ...composition,
+          workspaceName: row.workspaceId
+            ? (workspaceNames.get(row.workspaceId) ?? null)
+            : null,
+        };
+        return enriched;
       } catch (err) {
         logger.warn(
           { capabilityId: row.id, err },
@@ -437,10 +471,30 @@ function normalizeExtractionPolicy(
  * different, smaller number by design. Queried locally instead of via
  * `resolveCapabilityChannelIds` itself to avoid the exact circular import
  * `capability-mode.ts`'s split-out already documents — see the call site.
+ *
+ * LEAK GUARD (`capabilityWorkspaceId`): the legacy slug half is keyed by TOOL
+ * NAME, not tool id — two containers whose member tool shares a name (e.g.
+ * two "Discord Bot" installs in different workspaces, each with its own
+ * `tools` row named "discord") would otherwise both slug-match the SAME
+ * `channels.externalSource = 'discord'` rows and both report the same count.
+ * The `produced` half can't leak this way (it's keyed by this capability's
+ * own tool/skill/command ids), so it stays authoritative and unscoped; the
+ * slug half is scoped to channels that are either workspace-less (pod-wide,
+ * e.g. genuinely ambiguous pre-0234 legacy rows the birth-time resolver in
+ * `channel-origin.ts` deliberately left un-upgraded — see migration 0234's
+ * comment) or already IN this capability's own workspace. This can't be
+ * simply deleted: `recordChannelOrigin`/`resolveSourceProducerTool` leaves a
+ * channel on the honest `source` slug (no `tool --produced--> channel` edge
+ * at all) whenever tool-name resolution is ambiguous, so some channels rely
+ * on this fallback permanently, not just pre-0234. A capability with
+ * `workspaceId == null` (itself pod-wide) keeps the old unscoped match —
+ * there is no workspace to scope against, and a pod-wide install's slug
+ * match legitimately spans every workspace's channels of that provider.
  */
 async function countBridgeChannels(
   memberIds: string[],
-  memberToolNames: string[]
+  memberToolNames: string[],
+  capabilityWorkspaceId: string | null
 ): Promise<number> {
   if (memberIds.length === 0 && memberToolNames.length === 0) return 0;
 
@@ -463,7 +517,17 @@ async function countBridgeChannels(
         await db
           .select({ id: channels.id })
           .from(channels)
-          .where(inArray(channels.externalSource, memberToolNames))
+          .where(
+            and(
+              inArray(channels.externalSource, memberToolNames),
+              capabilityWorkspaceId
+                ? or(
+                    isNull(channels.workspaceId),
+                    eq(channels.workspaceId, capabilityWorkspaceId)
+                  )
+                : undefined
+            )
+          )
       ).map((r) => r.id)
     : [];
 

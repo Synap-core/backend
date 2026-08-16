@@ -3,7 +3,7 @@ import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
 
 /** Register the playbook/* approve executors. */
 export function registerPlaybookExecutors(): void {
@@ -97,8 +97,11 @@ export function registerPlaybookExecutors(): void {
         contextSkill: innerData.contextSkill as
           { name?: string; body: string } | undefined,
       };
-      await playbookCaller.create(
-        createArgs as Parameters<typeof playbookCaller.create>[0]
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await playbookCaller.create(
+          createArgs as Parameters<typeof playbookCaller.create>[0]
+        )
       );
 
       await db
@@ -207,8 +210,11 @@ export function registerPlaybookExecutors(): void {
         if (key in innerData) patch[key] = innerData[key];
       }
 
-      await playbookCaller.update(
-        patch as Parameters<typeof playbookCaller.update>[0]
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await playbookCaller.update(
+          patch as Parameters<typeof playbookCaller.update>[0]
+        )
       );
 
       await db

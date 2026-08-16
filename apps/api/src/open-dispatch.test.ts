@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { dispatchOpen, isUnfurlBot, podAdminTarget } from "./open-dispatch.js";
+import {
+  dispatchOpen,
+  inferOpenTypeFromId,
+  isSafeOpenId,
+  isUnfurlBot,
+  podAdminTarget,
+} from "./open-dispatch.js";
 
 const ADMIN = "https://pod-admin.example.test";
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -30,6 +36,31 @@ describe("isUnfurlBot", () => {
     expect(
       isUnfurlBot("Mozilla/5.0 (Macintosh) discord/1.0.9000 Chrome/120.0.0.0")
     ).toBe(false);
+  });
+});
+
+describe("isSafeOpenId / inferOpenTypeFromId", () => {
+  it("accepts UUIDs, keywords, and generated cell typeKeys", () => {
+    expect(isSafeOpenId("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(true);
+    expect(isSafeOpenId("proposals")).toBe(true);
+    expect(isSafeOpenId("generated:product-development-board")).toBe(true);
+    expect(isSafeOpenId("generated:dogfood-test-cell-1783097951")).toBe(true);
+    expect(isSafeOpenId("generated%3Aproduct-development-board")).toBe(true);
+  });
+
+  it("rejects HTML / path metacharacters", () => {
+    expect(isSafeOpenId("generated:<script>")).toBe(false);
+    expect(isSafeOpenId("../etc/passwd")).toBe(false);
+    expect(isSafeOpenId("generated:foo/bar")).toBe(false);
+    expect(isSafeOpenId("")).toBe(false);
+  });
+
+  it("treats generated: tokens as cells", () => {
+    expect(inferOpenTypeFromId("generated:product-development-board")).toBe(
+      "cell"
+    );
+    expect(inferOpenTypeFromId("proposals")).toBeUndefined();
+    expect(inferOpenTypeFromId(ID)).toBeUndefined();
   });
 });
 
@@ -141,6 +172,20 @@ describe("dispatchOpen", () => {
     ).toEqual({
       action: "bounce",
       deep: "synap://open/proposals",
+    });
+  });
+
+  it("cell typeKey + human + admin → bounce synap://open/cell/<typeKey>", () => {
+    expect(
+      dispatchOpen({
+        type: "cell",
+        id: "generated:product-development-board",
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+      })
+    ).toEqual({
+      action: "bounce",
+      deep: "synap://open/cell/generated:product-development-board",
     });
   });
 

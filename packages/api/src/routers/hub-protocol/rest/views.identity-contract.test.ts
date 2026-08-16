@@ -27,6 +27,21 @@ vi.mock("./_shared.js", () => ({
     ok: true,
     workspaceId: requested,
   })),
+  httpStatusForTrpcError: (err: unknown) => {
+    let cursor: unknown = err;
+    for (
+      let depth = 0;
+      cursor && typeof cursor === "object" && depth < 4;
+      depth++
+    ) {
+      const code = (cursor as { code?: unknown }).code;
+      if (code === "BAD_REQUEST") return 400;
+      if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
+      if (code === "NOT_FOUND") return 404;
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
+    return 500;
+  },
 }));
 
 import { registerViewsRoutes } from "./views.js";
@@ -91,5 +106,28 @@ describe("POST /views/:viewId/arrange identity binding", () => {
         workspaceId: ACTING_WORKSPACE_ID,
       })
     );
+  });
+
+  it("maps a compose-catalog BAD_REQUEST onto HTTP 400, not 500", async () => {
+    arrangeBento.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'Bento arrange rejected unknown or under-specified widgets:\n- Unknown widget "entity-metric"'
+        ),
+        { code: "BAD_REQUEST" }
+      )
+    );
+    const response = await buildApp().request("/views/view-1/arrange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: ACTING_USER_ID,
+        workspaceId: ACTING_WORKSPACE_ID,
+        widgets: [{ key: "entity-metric", x: 0, y: 0, w: 3, h: 3 }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toMatch(/entity-metric/);
   });
 });

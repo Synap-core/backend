@@ -110,3 +110,36 @@ export async function dispatchExternalOnce(
     );
   }
 }
+
+/**
+ * Guard: an approve executor's replay must APPLY, never re-propose.
+ *
+ * Executors materialize a proposal by re-running the SAME router mutation the
+ * direct path uses, as the APPROVER. That mutation calls
+ * `checkPermissionOrPropose` again, and the gate can legitimately answer
+ * "proposed" for a caller who lacks the permission — so the replay can file a
+ * SECOND proposal instead of applying the first.
+ *
+ * That is always wrong, and it fails SILENTLY: the executor marks the original
+ * APPROVED, the reviewer sees success, nothing is written, and a fresh pending
+ * proposal appears with no explanation.
+ *
+ * It is reachable today: `canReviewProposal` treats `isOwner` as "approver IS
+ * the proposer" (`proposals.ts` — `data?.sourceId === reviewerId`), so under the
+ * default `owner_and_admins` policy a member whose ROLE cannot execute the write
+ * can still approve their OWN proposal. The replay then re-enters the same
+ * insufficient-role branch that created it.
+ *
+ * Throwing converts a silent no-op into a loud, diagnosable failure and leaves
+ * the original proposal PENDING (the status update runs after this), so a
+ * reviewer with sufficient authority can still approve it.
+ */
+export function assertApplied(result: { status?: string } | undefined): void {
+  if (result?.status === "proposed") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Approval could not be applied: your workspace role cannot execute this write, so re-running it only filed another proposal. Ask a workspace admin or owner to approve.",
+    });
+  }
+}

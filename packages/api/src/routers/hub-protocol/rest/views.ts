@@ -17,6 +17,7 @@ import {
   confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActorId,
   resolveActingContext,
@@ -329,7 +330,7 @@ export function registerViewsRoutes(app: HubHono): void {
       logger.error({ err, viewId }, "arrangeBento failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

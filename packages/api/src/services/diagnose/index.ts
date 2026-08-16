@@ -342,6 +342,7 @@ async function diagnoseObject(
             description: row.description,
             approved: row.approved,
             metadata: row.metadata as Record<string, unknown> | null,
+            workspaceId: row.workspaceId,
           },
         });
       }

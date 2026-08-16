@@ -71,7 +71,10 @@ import {
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import {
   dispatchOpen,
+  inferOpenTypeFromId,
+  isSafeOpenId,
   isTypedOpenKind,
+  normalizeOpenId,
   podAdminTarget,
 } from "./open-dispatch.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
@@ -725,10 +728,10 @@ app.get("/open/:type/:id", (c) => {
   // surface) — the browser deep-link handler switches the active lens and lands
   // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
   const type = c.req.param("type").trim().toLowerCase();
-  const id = c.req.param("id");
+  const id = normalizeOpenId(c.req.param("id"));
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
   // interpolated into href/JS without escaping concerns.
-  if (!isTypedOpenKind(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+  if (!isTypedOpenKind(type) || !isSafeOpenId(id)) {
     return c.text("Invalid deep link", 400);
   }
   // Keep this typed route in lock-step with bare-id `/open/:id`. No producer
@@ -746,9 +749,13 @@ app.get("/open/:type/:id", (c) => {
 // access-gated inside the app. Unknown ids (incl. the `proposals` keyword)
 // gracefully bounce to `synap://open/<id>`.
 app.get("/open/:id", async (c) => {
-  const id = c.req.param("id");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+  const id = normalizeOpenId(c.req.param("id"));
+  if (!isSafeOpenId(id)) {
     return c.text("Invalid deep link", 400);
+  }
+  const inferred = inferOpenTypeFromId(id);
+  if (inferred) {
+    return applyOpenDispatch(c, inferred, id);
   }
   // Keywords such as `proposals` are not UUIDs. Bounce without probing —
   // uuid `eq` would throw and `exists()` would swallow five queries.

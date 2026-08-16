@@ -34,12 +34,12 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import {
+  isSubjectEntityVisible,
   listProjectAutomations,
   loadProjectSubjects,
   setProjectAutomationMembership,
   setProjectSubject,
 } from "../utils/project-subject.js";
-import { workspaceMembers } from "@synap/database";
 
 /**
  * Count how many of `entityIds` actually exist and are visible to `userId`,
@@ -70,6 +70,36 @@ async function countVisibleEntities(
     );
   return new Set(rows.map((r) => r.id)).size;
 }
+/**
+ * Load a project ONLY if the caller may see it — the ONE visibility floor for
+ * single-project reads and for any write that must gate on the project itself.
+ *
+ * Pod-personal projects (NULL workspace) are owner-only; workspace-scoped ones
+ * are visible to every member. Extracted from `get`'s inline predicate so a
+ * second caller cannot drift from it — the `automations` read and the
+ * membership write both need exactly this floor, and re-typing it is how the
+ * two would silently diverge.
+ */
+async function loadVisibleProject(
+  db: Awaited<ReturnType<typeof getDb>>,
+  projectId: string,
+  userId: string
+): Promise<{ id: string; workspaceId: string | null } | undefined> {
+  return db.query.projects.findFirst({
+    columns: { id: true, workspaceId: true },
+    where: and(
+      eq(projects.id, projectId),
+      or(
+        and(isNull(projects.workspaceId), eq(projects.userId, userId)),
+        and(
+          isNotNull(projects.workspaceId),
+          userVisibleWhere(projects.workspaceId, userId)
+        )
+      )!
+    ),
+  });
+}
+
 export const projectsRouter = router({
   /**
    * List all projects for the current user
@@ -123,7 +153,8 @@ export const projectsRouter = router({
       // relabel them — a visible flicker on the primary surface.
       const subjects = await loadProjectSubjects(
         db,
-        items.map((p) => p.id)
+        items.map((p) => p.id),
+        ctx.userId
       );
       const withSubject = items.map((p) => ({
         ...p,
@@ -169,7 +200,7 @@ export const projectsRouter = router({
         });
       }
 
-      const subjects = await loadProjectSubjects(db, [project.id]);
+      const subjects = await loadProjectSubjects(db, [project.id], ctx.userId);
       return { project, subject: subjects.get(project.id) ?? null };
     }),
 
@@ -218,10 +249,12 @@ export const projectsRouter = router({
       // re-checks it too (it is the door's own floor), but failing there would
       // leave a project already inserted and a caller told it failed.
       if (input.subjectEntityId) {
-        const visible = await countVisibleEntities(db, ctx.userId, [
+        const visible = await isSubjectEntityVisible(
+          db,
           input.subjectEntityId,
-        ]);
-        if (visible === 0) {
+          ctx.userId
+        );
+        if (!visible) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Subject entity not found",
@@ -291,16 +324,21 @@ export const projectsRouter = router({
         // always found them absent — so an approved project lost its
         // description, status, phase and subject. A reviewer also cannot judge
         // a create they are only shown the name of.
+        // `!== undefined`, not truthiness — matching `update` below. An empty
+        // string is a MEANT value (clearing a description); truthiness dropped
+        // it from the proposal, so approving restored the old text instead.
         data: {
           name: input.name,
-          ...(input.description ? { description: input.description } : {}),
-          ...(input.status ? { status: input.status } : {}),
-          ...(input.phase ? { phase: input.phase } : {}),
-          ...(input.subjectEntityId
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.phase !== undefined ? { phase: input.phase } : {}),
+          ...(input.subjectEntityId !== undefined
             ? { subjectEntityId: input.subjectEntityId }
             : {}),
-          ...(input.settings ? { settings: input.settings } : {}),
-          ...(input.metadata ? { metadata: input.metadata } : {}),
+          ...(input.settings !== undefined ? { settings: input.settings } : {}),
+          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
           ...(isAgent && input.evidenceEntityIds
             ? { evidenceEntityIds: input.evidenceEntityIds }
             : {}),
@@ -352,14 +390,25 @@ export const projectsRouter = router({
       // Bind the subject only on a REAL create. A deduped create returned above
       // is somebody else's project being reused — rebinding its subject from
       // this caller's payload would silently retitle a project they did not make.
+      //
+      // The result is CHECKED, and a failure is reported as a partial success
+      // rather than thrown. The project genuinely exists at this point and its
+      // `create.completed` event has fired, so throwing would tell the caller
+      // "failed" about a project that is now in their list — and retrying the
+      // identical create hits the exact-name dedup above, which deliberately
+      // skips the bind, leaving no way to repair it through this door at all.
+      // `subjectBound: false` says exactly what happened; the fix is one
+      // `projects.update`.
+      let subjectBound: boolean | undefined;
       if (input.subjectEntityId) {
-        await setProjectSubject({
+        const bound = await setProjectSubject({
           db,
           projectId: created.id,
           workspaceId: ctx.workspaceId ?? null,
           entityId: input.subjectEntityId,
           userId: ctx.userId,
         });
+        subjectBound = bound.ok;
       }
 
       auditLog({
@@ -382,6 +431,11 @@ export const projectsRouter = router({
       return {
         status: "created",
         projectId: created.id,
+        // Present ONLY when a subject was requested. `false` = the project was
+        // created but the binding did not land (the entity became unreachable
+        // between the pre-check and the write) — the caller should surface that
+        // rather than showing a silently unbound project.
+        ...(subjectBound !== undefined ? { subjectBound } : {}),
         ...(created.dedupCandidates
           ? { dedupCandidates: created.dedupCandidates }
           : {}),
@@ -445,6 +499,26 @@ export const projectsRouter = router({
       const eventRepo = new EventRepository(sql);
       const projectRepo = new ProjectRepository(db, eventRepo);
 
+      // Validate the subject BEFORE writing anything. These are two separate
+      // statements, not one transaction — so a subject that fails validation
+      // AFTER the field patch landed would report failure on a change that
+      // partly applied (the caller retries, and the phase is already set).
+      // `setProjectSubject` re-checks this itself (it owns its own floor); this
+      // is about ORDER, so the failing case writes nothing at all.
+      if (input.subjectEntityId) {
+        const visible = await isSubjectEntityVisible(
+          db,
+          input.subjectEntityId,
+          ctx.userId
+        );
+        if (!visible) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Subject entity not found",
+          });
+        }
+      }
+
       await projectRepo.update(input.id, input, ctx.userId);
 
       // `undefined` = untouched; `null` = unbind. Both are distinguishable here
@@ -494,16 +568,22 @@ export const projectsRouter = router({
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      const memberships = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, ctx.userId));
+
+      // The PROJECT must be visible first — the same floor `get` applies.
+      // Without it, passing any project id returned the automations of yours
+      // enrolled in it: not a content leak (they are already your automations),
+      // but it discloses the RELATIONSHIP "this automation belongs to that
+      // project" for a project the caller cannot see.
+      const project = await loadVisibleProject(db, input.projectId, ctx.userId);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
       return {
-        items: await listProjectAutomations(
-          db,
-          input.projectId,
-          memberships.map((m) => m.workspaceId)
-        ),
+        items: await listProjectAutomations(db, input.projectId, ctx.userId),
       };
     }),
 
@@ -523,10 +603,27 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+
+      // Load the PROJECT first and gate on ITS workspace — never on
+      // `ctx.workspaceId`, which is only the caller's active lens. Gating on the
+      // lens meant a member of workspace A could enrol an automation into a
+      // project in workspace B they cannot see: the permission check passed
+      // against A, and nothing downstream ever looked at the project's own
+      // workspace. This is the "gate on the LOADED row's workspaceId, never
+      // request-supplied" rule.
+      const project = await loadVisibleProject(db, input.projectId, ctx.userId);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: ctx.workspaceId,
+        workspaceId: project.workspaceId ?? undefined,
         subjectType: "project",
         action: "update",
         data: {
@@ -543,19 +640,15 @@ export const projectsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      const db = await getDb();
-      const memberships = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, ctx.userId));
-
       const result = await setProjectAutomationMembership({
         db,
         projectId: input.projectId,
         automationId: input.automationId,
-        workspaceId: ctx.workspaceId ?? null,
+        // The EDGE belongs to the project's workspace, not the caller's lens —
+        // it is what scopes the edge for every later read.
+        workspaceId: project.workspaceId,
         member: input.member,
-        visibleWorkspaceIds: memberships.map((m) => m.workspaceId),
+        actingUserId: ctx.userId,
       });
       if (!result.ok) {
         throw new TRPCError({ code: "NOT_FOUND", message: result.reason });
@@ -567,7 +660,19 @@ export const projectsRouter = router({
         phase: "completed",
         subjectId: input.projectId,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: project.workspaceId ?? undefined,
+      });
+
+      // A composition change IS a project update — without this it was audited
+      // but invisible to the event spine, so nothing downstream (feeds,
+      // detectors, cache invalidation) could see an automation join or leave a
+      // container. `update` emits it; this door must too.
+      emitSideEffects({
+        subjectType: "project",
+        action: "update",
+        subjectId: input.projectId,
+        userId: ctx.userId,
+        workspaceId: project.workspaceId ?? undefined,
       });
 
       return { status: "updated" as const };

@@ -141,6 +141,21 @@ export interface CapabilityComposition {
    *  `null` when absent — never fabricated. */
   description: string | null;
   approved: boolean;
+  /**
+   * The container's own `capabilities.workspaceId` — `null` for a pod-wide
+   * capability. ADDITIVE (optional: single-object callers that don't load it
+   * simply omit it). Exists so the UI can label/distinguish two same-named
+   * installs living in different workspaces (the "two identical Discord Bot
+   * cards" bug) — never used to change which rows this builder returns.
+   */
+  workspaceId?: string | null;
+  /**
+   * Resolved `workspaces.name` for `workspaceId`, batched in LIST mode only
+   * (`listCapabilityCompositions`) — cheap, one extra query for the whole
+   * page. `undefined` when not resolved (single-object callers), `null` when
+   * `workspaceId` is null (pod-wide).
+   */
+  workspaceName?: string | null;
   provenance: { templateKey?: string; contentHash?: string } | null;
   members: Array<{
     kind: "tool" | "skill" | "playbook" | "automation";

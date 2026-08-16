@@ -1,25 +1,58 @@
 import type { Metadata } from "next";
-import { DM_Sans, Fraunces, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+/**
+ * SELF-HOSTED, deliberately — `next/font/google` fetches from
+ * `fonts.gstatic.com` AT BUILD TIME, which made `docker build` depend on
+ * Google being reachable from the build host. That is a real dependency, not a
+ * theoretical one: the team pod's builder can reach the npm registry (its
+ * `pnpm install --frozen-lockfile` succeeds) but not gstatic, so the image
+ * build failed on `Failed to fetch JetBrains Mono` while the same commit built
+ * fine on a host with open egress.
+ *
+ * The woff2 files in ./fonts are the same latin-subset files Google serves,
+ * committed once. The build is now hermetic: no network, no third-party
+ * uptime, identical output on every host.
+ *
+ * Keep `variable` and `display` identical to the previous google-font config —
+ * `globals.css` consumes these CSS variables and nothing else changes.
+ */
+const dmSans = localFont({
+  src: [
+    { path: "./fonts/dm-sans-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/dm-sans-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/dm-sans-600.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/dm-sans-700.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-sans",
   display: "swap",
 });
 
-const fraunces = Fraunces({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const fraunces = localFont({
+  src: [
+    { path: "./fonts/fraunces-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/fraunces-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/fraunces-600.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-heading",
   display: "swap",
 });
 
-const jetMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
+const jetMono = localFont({
+  src: [
+    {
+      path: "./fonts/jetbrains-mono-400.woff2",
+      weight: "400",
+      style: "normal",
+    },
+    {
+      path: "./fonts/jetbrains-mono-500.woff2",
+      weight: "500",
+      style: "normal",
+    },
+  ],
   variable: "--font-mono",
   display: "swap",
 });

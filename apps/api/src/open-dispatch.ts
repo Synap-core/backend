@@ -44,6 +44,35 @@ export function isTypedOpenKind(value: string): value is TypedOpenKind {
   return TYPED_OPEN_KIND_SET.has(value);
 }
 
+/**
+ * Safe `/open/:id` / `/open/:type/:id` token.
+ *
+ * UUIDs and keywords (`proposals`) are `[A-Za-z0-9_-]`. Cell typeKeys from
+ * `defineCell` are `generated:<slug>` — the colon is load-bearing. Quotes,
+ * slashes, and HTML metacharacters stay out so the token can be interpolated
+ * into an href / JS string without escaping.
+ */
+export const OPEN_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+/** Decode a path token (`generated%3Afoo` → `generated:foo`). */
+export function normalizeOpenId(id: string): string {
+  if (typeof id !== "string") return "";
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}
+
+export function isSafeOpenId(id: string): boolean {
+  return OPEN_ID_RE.test(normalizeOpenId(id));
+}
+
+/** Bare `/open/<id>` — a `generated:` token is a cell typeKey, not a UUID. */
+export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
+  return normalizeOpenId(id).startsWith("generated:") ? "cell" : undefined;
+}
+
 export type OpenWebKind = "proposal" | "entity" | "view";
 
 export function podAdminTarget(

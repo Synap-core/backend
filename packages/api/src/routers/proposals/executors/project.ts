@@ -19,7 +19,7 @@ import { auditLog } from "../../../utils/audit-log.js";
 import { projectsRouter } from "../../projects.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
 
 /** Register the project/* approve executors. */
 export function registerProjectExecutors(): void {
@@ -83,16 +83,19 @@ export function registerProjectExecutors(): void {
         workspaceId,
         workspaceRole: membership.role,
       } as unknown as Context);
-      await projectCaller.create({
-        name,
-        description: innerData.description as string | undefined,
-        status: innerData.status as
-          "active" | "archived" | "completed" | undefined,
-        phase: innerData.phase as string | undefined,
-        subjectEntityId: innerData.subjectEntityId as string | undefined,
-        settings: innerData.settings as Record<string, unknown> | undefined,
-        metadata: innerData.metadata as Record<string, unknown> | undefined,
-      });
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await projectCaller.create({
+          name,
+          description: innerData.description as string | undefined,
+          status: innerData.status as
+            "active" | "archived" | "completed" | undefined,
+          phase: innerData.phase as string | undefined,
+          subjectEntityId: innerData.subjectEntityId as string | undefined,
+          settings: innerData.settings as Record<string, unknown> | undefined,
+          metadata: innerData.metadata as Record<string, unknown> | undefined,
+        })
+      );
 
       await db
         .update(proposals)
@@ -158,7 +161,7 @@ export function registerProjectExecutors(): void {
       // trusts whatever workspace the caller is constructed with.
       const project = await db.query.projects.findFirst({
         where: eq(projects.id, projectId),
-        columns: { id: true, workspaceId: true },
+        columns: { id: true, workspaceId: true, userId: true },
       });
       if (!project) {
         throw new TRPCError({
@@ -186,10 +189,23 @@ export function registerProjectExecutors(): void {
         });
       }
 
+      // Act as the project's OWNER, not the approver — the same choice
+      // `project/archive` below makes, and for the same reason:
+      // `ProjectRepository.update` gates `.where(eq(projects.userId, userId))`,
+      // an OWNERSHIP predicate. Replaying as the approver meant a workspace
+      // ADMIN approving a teammate's project matched no row and threw a raw
+      // `Error("Project not found")` → 500. Because that throw precedes the
+      // status update below, the proposal then stayed PENDING forever,
+      // approvable only by whoever happened to create the project.
+      //
+      // The APPROVER's authority was already established above (membership +
+      // the review-authority gate upstream); this only decides which identity
+      // the write executes as. `reviewedBy` on the proposal still records who
+      // actually approved, so attribution is not lost.
       const projectCaller = projectsRouter.createCaller({
         db,
         authenticated: true as const,
-        userId,
+        userId: project.userId,
         workspaceId: project.workspaceId,
         workspaceRole: membership.role,
       } as unknown as Context);
@@ -201,38 +217,43 @@ export function registerProjectExecutors(): void {
       // would call it with only an id — a silent no-op wearing an approval.
       // Discriminate on the payload the membership door stamps.
       if ("automationId" in innerData && "member" in innerData) {
-        await projectCaller.setAutomationMembership({
-          projectId,
-          automationId: innerData.automationId as string,
-          member: innerData.member === true,
-        });
+        assertApplied(
+          await projectCaller.setAutomationMembership({
+            projectId,
+            automationId: innerData.automationId as string,
+            member: innerData.member === true,
+          })
+        );
       } else {
         // Only fields the proposal actually carries are replayed — an absent key
         // must stay absent, because `null` MEANS "clear it" for phase/subject.
-        await projectCaller.update({
-          id: projectId,
-          ...("name" in innerData ? { name: innerData.name as string } : {}),
-          ...("description" in innerData
-            ? { description: innerData.description as string }
-            : {}),
-          ...("status" in innerData
-            ? {
-                status: innerData.status as "active" | "archived" | "completed",
-              }
-            : {}),
-          ...("phase" in innerData
-            ? { phase: innerData.phase as string | null }
-            : {}),
-          ...("subjectEntityId" in innerData
-            ? { subjectEntityId: innerData.subjectEntityId as string | null }
-            : {}),
-          ...("settings" in innerData
-            ? { settings: innerData.settings as Record<string, unknown> }
-            : {}),
-          ...("metadata" in innerData
-            ? { metadata: innerData.metadata as Record<string, unknown> }
-            : {}),
-        });
+        assertApplied(
+          await projectCaller.update({
+            id: projectId,
+            ...("name" in innerData ? { name: innerData.name as string } : {}),
+            ...("description" in innerData
+              ? { description: innerData.description as string }
+              : {}),
+            ...("status" in innerData
+              ? {
+                  status: innerData.status as
+                    "active" | "archived" | "completed",
+                }
+              : {}),
+            ...("phase" in innerData
+              ? { phase: innerData.phase as string | null }
+              : {}),
+            ...("subjectEntityId" in innerData
+              ? { subjectEntityId: innerData.subjectEntityId as string | null }
+              : {}),
+            ...("settings" in innerData
+              ? { settings: innerData.settings as Record<string, unknown> }
+              : {}),
+            ...("metadata" in innerData
+              ? { metadata: innerData.metadata as Record<string, unknown> }
+              : {}),
+          })
+        );
       }
 
       await db

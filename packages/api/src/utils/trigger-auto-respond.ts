@@ -49,6 +49,25 @@ export async function triggerAutoRespond(params: {
     channel?.channelType === ChannelType.PERSONAL ||
     channel?.channelType === ChannelType.RUN;
   if (!channel || !isEligibleType) {
+    // LOUD ON PURPOSE. This returned a bare `false` with no log at all, and
+    // only 2 of the 6 call sites read the return value — so a user message
+    // that never became a turn produced NO error row, NO failed chat_turn, NO
+    // history entry, and NO counter anywhere. `agentTurns.completed` only
+    // counts turns the IS *started*, so a message dropped here is invisible to
+    // that metric too: "the AI is thinking" and "your message went nowhere"
+    // were indistinguishable, to the user AND to us.
+    // Until every caller reads the boolean, this log is the only evidence the
+    // drop happened. Keep it at `warn` and keep it distinguishable from the
+    // catch below — the two silent paths have different causes and fixes.
+    logger.warn(
+      {
+        channelId: params.channelId,
+        userMessageId: params.userMessageId,
+        channelType: channel?.channelType ?? null,
+        reason: !channel ? "channel_not_found" : "channel_type_not_is_eligible",
+      },
+      "triggerAutoRespond skipped — user message will never produce an agent turn"
+    );
     return false;
   }
   try {
@@ -104,9 +123,18 @@ export async function triggerAutoRespond(params: {
     );
     return true;
   } catch (err) {
-    logger.warn(
-      { err, channelId: params.channelId },
-      "triggerAutoRespond failed"
+    // Same invisibility as the eligibility skip above, but a different cause:
+    // the channel WAS eligible and the enqueue itself threw (IS resolution,
+    // pg-boss). Carry `userMessageId` so a dropped message is traceable back to
+    // the exact row the user sees sitting unanswered in their thread.
+    logger.error(
+      {
+        err,
+        channelId: params.channelId,
+        userMessageId: params.userMessageId,
+        reason: "enqueue_failed",
+      },
+      "triggerAutoRespond failed — user message will never produce an agent turn"
     );
     return false;
   }

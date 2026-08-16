@@ -64,8 +64,9 @@ async function dualWritePlaybookAutomation(
  * no-op and returns the existing row (or undefined if a concurrent racer won
  * and the conflict skipped the RETURNING row).
  */
-// NOTE: reserved for P5 link UI (ad-hoc single-edge writes). Today every link
-// write goes through `createLinks` (batch); this single-item form has no caller yet.
+// Single-edge writes: used by the project SUBJECT bind (`project --targets-->
+// entity`) and the project MEMBERSHIP enrol (`automation --member_of-->
+// project`) in `utils/project-subject.ts`, alongside the batch `createLinks`.
 export async function createLink(input: LinkInput): Promise<Link | undefined> {
   const db = await getDb();
   const [created] = await db
@@ -167,8 +168,11 @@ export async function getLinksFor(
 }
 
 /** Delete a single link edge by id. */
-// NOTE: reserved for P5 link UI (unlink). No caller yet — link removal is not
-// yet exposed; when it is, the caller must gate (links-service is caller-gated).
+// NOTE: links-service is CALLER-GATED — this performs no authorization of its
+// own. Callers today: the project SUBJECT rebind (clears the previous
+// `targets`→entity edge) and the project MEMBERSHIP withdraw, both in
+// `utils/project-subject.ts`, which gate on the project and the automation
+// before calling. Any new caller owes the same check.
 export async function deleteLink(id: string): Promise<void> {
   const db = await getDb();
   await db.delete(links).where(eq(links.id, id));

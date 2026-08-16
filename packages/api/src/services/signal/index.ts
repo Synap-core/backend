@@ -2913,6 +2913,7 @@ export async function getCapabilityIssues(
       name: capabilities.name,
       approved: capabilities.approved,
       metadata: capabilities.metadata,
+      workspaceId: capabilities.workspaceId,
     })
     .from(capabilities)
     .where(
@@ -2932,6 +2933,7 @@ export async function getCapabilityIssues(
         name: capRow.name,
         approved: capRow.approved,
         metadata: capRow.metadata as Record<string, unknown> | null,
+        workspaceId: capRow.workspaceId,
       },
     }),
     resolveCapabilityMode(userId, capabilityId),

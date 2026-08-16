@@ -679,7 +679,22 @@ export function registerProjectsRoutes(app: HubHono): void {
       userId,
       subjectType: "project",
       action: "update",
-      data: { id },
+      // The WHOLE patch, matching the tRPC twin. This gate stored `{ id }`
+      // alone, which was survivable only while `project/update` had no approve
+      // executor and every such proposal failed loudly with NOT_IMPLEMENTED.
+      // Now that the executor exists it would replay `update({ id })` — setting
+      // nothing, marking the proposal APPROVED, and turning a visible failure
+      // into a silent one.
+      data: {
+        id,
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.description !== undefined
+          ? { description: body.description }
+          : {}),
+        ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.settings !== undefined ? { settings: body.settings } : {}),
+        ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+      },
     });
 
     if ("denied" in perm && perm.denied) {

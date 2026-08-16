@@ -28,6 +28,7 @@ import {
   isNull,
   getDb,
 } from "@synap/database";
+import { userVisibleWhere } from "./user-visible-where.js";
 import { createLink, deleteLink } from "../services/links/links-service.js";
 import { accessScopeWhere } from "./project-scope.js";
 
@@ -45,10 +46,23 @@ export interface ProjectSubject {
 /**
  * Load the subject of each project in one query pair (never N+1).
  * Returns a Map keyed by project id; projects with no subject are absent.
+ *
+ * FLOORED ON THE READER, not on whoever bound the subject. `setProjectSubject`
+ * checks the BINDER's access; that says nothing about who may later READ the
+ * bound entity's name. Without this, an owner binding their pod-private entity
+ * as the subject of a workspace-shared project published that entity's id,
+ * title, profile slug and label to every member of the workspace — off an
+ * ordinary `projects.list`.
+ *
+ * A reader who cannot see the entity gets NO subject for that project, so it
+ * falls back to its plain typed name. Degrading to the generic noun is the
+ * correct failure here: a project row must never be the thing that discloses an
+ * entity the reader was not granted.
  */
 export async function loadProjectSubjects(
   db: Awaited<ReturnType<typeof getDb>>,
-  projectIds: string[]
+  projectIds: string[],
+  readerUserId: string
 ): Promise<Map<string, ProjectSubject>> {
   const result = new Map<string, ProjectSubject>();
   if (projectIds.length === 0) return result;
@@ -81,7 +95,19 @@ export async function loadProjectSubjects(
           entities.id,
           edges.map((e) => e.toId)
         ),
-        isNull(entities.deletedAt)
+        isNull(entities.deletedAt),
+        // `facetLens: true` because this is the `entities` table — the registered
+        // VisibilityRule for entities uses it, and every other entity reader
+        // passes it. Omitting it would ALSO hide role-shared pod-wide entities
+        // the reader legitimately has, so this keeps the floor identical to the
+        // one the rest of the codebase applies.
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId: readerUserId,
+          facetLens: true,
+        })
       )
     );
   const byEntityId = new Map(rows.map((r) => [r.id, r]));
@@ -100,6 +126,39 @@ export async function loadProjectSubjects(
     });
   }
   return result;
+}
+
+/**
+ * Is `entityId` bindable as a subject BY this user?
+ *
+ * The exact predicate `setProjectSubject` enforces, exported so a caller can
+ * pre-check before writing anything else. Keeping the pre-check and the write
+ * on ONE predicate is the point: a tighter pre-check rejects binds the write
+ * would have accepted, and a looser one lets a caller get half-way through a
+ * mutation before failing.
+ */
+export async function isSubjectEntityVisible(
+  db: Awaited<ReturnType<typeof getDb>>,
+  entityId: string,
+  userId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          facetLens: true,
+        })
+      )
+    );
+  return Boolean(row);
 }
 
 /**
@@ -122,22 +181,10 @@ export async function setProjectSubject(input: {
   const { db, projectId, entityId, userId } = input;
 
   if (entityId) {
-    const [visible] = await db
-      .select({ id: entities.id })
-      .from(entities)
-      .where(
-        and(
-          eq(entities.id, entityId),
-          isNull(entities.deletedAt),
-          accessScopeWhere({
-            workspaceIdColumn: entities.workspaceId,
-            entityIdColumn: entities.id,
-            ownerColumn: entities.userId,
-            userId,
-          })
-        )
-      );
-    if (!visible) {
+    // ONE predicate, shared with the pre-check callers use — see
+    // `isSubjectEntityVisible`. This is the write's own floor and does not
+    // assume a caller ran the pre-check.
+    if (!(await isSubjectEntityVisible(db, entityId, userId))) {
       return { ok: false, reason: "Subject entity not found" };
     }
   }
@@ -205,10 +252,8 @@ export interface ProjectAutomation {
 export async function listProjectAutomations(
   db: Awaited<ReturnType<typeof getDb>>,
   projectId: string,
-  visibleWorkspaceIds: string[]
+  readerUserId: string
 ): Promise<ProjectAutomation[]> {
-  if (visibleWorkspaceIds.length === 0) return [];
-
   const edges = await db
     .select({ fromId: links.fromId })
     .from(links)
@@ -240,7 +285,13 @@ export async function listProjectAutomations(
           automations.id,
           edges.map((e) => e.fromId)
         ),
-        inArray(automations.workspaceId, visibleWorkspaceIds)
+        // `userVisibleWhere`, NOT a membership id-list: the registered
+        // VisibilityRule for `automations` is `nullWorkspaceMeans:
+        // "podGlobalConfig"`, so a POD-GLOBAL automation (NULL workspace) is
+        // visible to everyone. An `inArray(workspaceId, …)` never matches NULL,
+        // which silently made every pod-global automation impossible to list,
+        // enrol, or withdraw.
+        userVisibleWhere(automations.workspaceId, readerUserId)
       )
     );
   return rows.map((r) => ({
@@ -263,22 +314,19 @@ export async function setProjectAutomationMembership(input: {
   automationId: string;
   workspaceId: string | null;
   member: boolean;
-  visibleWorkspaceIds: string[];
+  actingUserId: string;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const { db, projectId, automationId, member, visibleWorkspaceIds } = input;
+  const { db, projectId, automationId, member, actingUserId } = input;
 
-  if (visibleWorkspaceIds.length === 0) {
-    return { ok: false, reason: "Automation not found" };
-  }
-
-  // Gate on the LOADED automation's workspace, never a request-supplied one.
+  // Gate on the LOADED automation's own visibility (same canonical floor as the
+  // read above — pod-global automations included), never a request-supplied one.
   const [automation] = await db
     .select({ id: automations.id })
     .from(automations)
     .where(
       and(
         eq(automations.id, automationId),
-        inArray(automations.workspaceId, visibleWorkspaceIds)
+        userVisibleWhere(automations.workspaceId, actingUserId)
       )
     );
   if (!automation) return { ok: false, reason: "Automation not found" };
