@@ -1758,7 +1758,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Live allowlist of cells you may place in a bento. Call this BEFORE arranging or generating a dashboard — never guess a widget key. Returns builtins (stat-card, entity-list, view, …) with requiredConfig, plus generated:<slug> cells already on the pod. view-table / view require a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card, not entity-count.",
+      "description": "Live allowlist of cells you may place in a bento. Call this BEFORE arranging or generating a dashboard — never guess a widget key. Returns builtins (stat-card, entity-list, view, …) with requiredConfig, plus generated:<slug> frame cells already on the pod. view-table / view require a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card, not entity-count.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2108,7 +2108,7 @@
           },
           "triggerConfig": {
             "type": "object",
-            "description": "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { profileSlug } }."
+            "description": "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { 'properties.score': { $gt: 30 } }. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data."
           },
           "flowDefinition": {
             "type": "object",

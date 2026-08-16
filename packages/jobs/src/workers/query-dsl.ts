@@ -15,6 +15,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { Column, SQL } from "@synap/database";
+import { TRIGGER_FILTER_OPERATORS } from "@synap-core/types/automations/filter-operators";
 import { resolveTemplate } from "./template-resolve.js";
 import { logger } from "./automation-executor-logger.js";
 import type { StepContext } from "./automation-executor-types.js";
@@ -56,7 +57,24 @@ export interface QueryColumnCondition {
 
 export type QueryCondition = QueryPropertyCondition | QueryColumnCondition;
 
+/**
+ * The `$`-operators this SQL compiler implements, keyed by the SHARED
+ * vocabulary in `@synap-core/types/automations/filter-operators`
+ * (`TRIGGER_FILTER_OPERATORS`) — the same names the automation TRIGGER filters
+ * use and the create door validates. One vocabulary, two evaluators (SQL here,
+ * in-memory there); see that module's header for why the implementations cannot
+ * be shared.
+ *
+ * `$eq` maps to the same `eq` a plain (non-object) filter value produces — it
+ * was missing before 2026-08-16, so `{ x: { $eq: "v" } }` in a query node hit
+ * the `!op` branch and was DROPPED silently, quietly widening the result set.
+ * `$in` is deliberately absent: compiling it would need an `ANY`/`inArray` over
+ * a jsonb text extraction, which is beyond this change. It is not silent — an
+ * operator in the shared vocabulary that this compiler does not implement is
+ * logged below rather than dropped invisibly.
+ */
 const QUERY_FILTER_OPERATORS: Record<string, QueryFilterOperator> = {
+  $eq: "eq",
   $gt: "gt",
   $gte: "gte",
   $lt: "lt",
@@ -181,7 +199,20 @@ export function parseQueryFilterConditions(
         rawValue as Record<string, unknown>
       )) {
         const op = QUERY_FILTER_OPERATORS[opKey];
-        if (!op || opValue === undefined || opValue === null) continue;
+        if (!op) {
+          // A dropped term WIDENS the result set, which is at least visible —
+          // but dropping it silently is how `$eq` went unnoticed. Say so.
+          logger.warn(
+            { filterKey: rawKey, operator: opKey },
+            TRIGGER_FILTER_OPERATORS.includes(
+              opKey as (typeof TRIGGER_FILTER_OPERATORS)[number]
+            )
+              ? "query node: dropping filter term — operator is in the shared filter vocabulary but is not compiled to SQL by the query node"
+              : "query node: dropping filter term — unknown operator"
+          );
+          continue;
+        }
+        if (opValue === undefined || opValue === null) continue;
         push(rawKey, column, propKey, op, opValue);
       }
     } else {

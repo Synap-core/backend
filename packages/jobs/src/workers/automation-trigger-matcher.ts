@@ -30,6 +30,7 @@ import {
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
 import { MESSAGE_ALIAS_PATTERNS } from "@synap-core/types";
+import { evaluateTriggerFilterValue } from "@synap-core/types/automations/filter-operators";
 // Re-export to preserve this module's public surface (tests + downstream imports)
 // after MessageEnvelope + matchMessageShape moved to `@synap/database`.
 export type { MessageEnvelope };
@@ -216,9 +217,24 @@ export function matchPattern(eventType: string, pattern?: string): boolean {
 
 /**
  * Check if event data matches trigger filters.
- * Filters are simple key-value equality checks on the event data.
+ *
+ * A filter value is EITHER a plain literal (compared with `===`, exactly as
+ * this function has always behaved) OR an operator object
+ * (`{ $in: [...] }`, `{ $eq: … }`, `{ $gt: … }`, …). Both forms are evaluated by
+ * `evaluateTriggerFilterValue`, whose operator vocabulary is the SAME constant
+ * the create door validates against (`@synap-core/types/automations/filter-operators`)
+ * and the same names `query-dsl.ts` compiles to SQL — so an automation the door
+ * accepts is always one this matcher can evaluate.
+ *
+ * HISTORY: until 2026-08-16 this was a bare `actual !== expected`, while every
+ * live event-automation on the pod had been authored with operator objects
+ * (learned from the executor's query node, which has always accepted them). The
+ * comparison was therefore always true → `return false` → the automation was
+ * permanently unreachable while reporting `status: active`.
+ *
+ * Exported for the unit test that pins both halves of that contract.
  */
-function matchFilters(
+export function matchFilters(
   data: Record<string, unknown> | undefined,
   filters: Record<string, unknown> | undefined
 ): boolean {
@@ -228,7 +244,7 @@ function matchFilters(
   for (const [key, expectedValue] of Object.entries(filters)) {
     // Support dot-notation for nested access: "entity.metadata.priority"
     const actualValue = getNestedValue(data, key);
-    if (actualValue !== expectedValue) return false;
+    if (!evaluateTriggerFilterValue(actualValue, expectedValue)) return false;
   }
   return true;
 }

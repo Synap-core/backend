@@ -636,7 +636,23 @@ export const readProcs = {
   /**
    * Search entities (vector + text)
    */
-  search: workspaceProcedure
+  /**
+   * podProcedure, NOT workspaceProcedure — pod-wide must SHOW MORE, never 400.
+   *
+   * The body below was already written for a missing workspace, but the
+   * builder rejected the request before that branch could ever run, so it was
+   * dead code and every pod-wide caller got "Workspace ID required. Set active
+   * workspace in frontend." The project SUBJECT picker is one such caller: a
+   * project is a cross-cutting lens usable with no workspace active, so the
+   * picker that binds it must be too.
+   *
+   * Safety is unchanged: `entityReadVisibleWhere(ctx.userId)` is applied
+   * UNCONDITIONALLY as the floor (it is what stops another user's pod-personal
+   * entities leaking). The workspace narrow is only an ADDITIONAL lens on top,
+   * so dropping it pod-wide widens to exactly "everything this user may read"
+   * — the .list/.listAll doctrine — and can never widen past the floor.
+   */
+  search: podProcedure
     .input(
       z.object({
         query: z.string(),
@@ -676,16 +692,21 @@ export const readProcs = {
       // floor above, so it can only surface a row the floor already admits; a
       // forged workspace can't widen. Globals-only when there is no active
       // workspace (facet branch needs a concrete workspace to key on).
+      // POD-WIDE (no active workspace) ⇒ NO narrow at all: the floor alone is
+      // the answer, which is every entity across every workspace the user
+      // belongs to, plus globals, plus their own pod-personal rows.
+      //
+      // This branch previously narrowed to globals-only. That was written when
+      // it was unreachable (the builder required a workspace), and globals-only
+      // is the wrong reading of "pod-wide" — it shows LESS than any single
+      // workspace does, when pod-wide is the widest lens there is.
       const searchWorkspaceNarrow = ctx.workspaceId
         ? or(
             eq(entities.workspaceId, ctx.workspaceId),
             isNull(entities.workspaceId),
             facetInWorkspaceLensWhere(entities.id, ctx.userId, ctx.workspaceId)
           )!
-        : or(
-            eq(entities.workspaceId, ctx.workspaceId),
-            isNull(entities.workspaceId)
-          )!;
+        : undefined;
 
       if (input.profileSlug) {
         // Polymorphic (Kind + Facets): a role slug matches via the facet
@@ -714,10 +735,10 @@ export const readProcs = {
           ctx.workspaceId
         );
 
-        if (entityScope !== "pod") {
+        if (entityScope !== "pod" && searchWorkspaceNarrow) {
           conditions.push(searchWorkspaceNarrow);
         }
-      } else {
+      } else if (searchWorkspaceNarrow) {
         conditions.push(searchWorkspaceNarrow);
       }
 

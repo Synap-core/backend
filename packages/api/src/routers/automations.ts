@@ -17,6 +17,7 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
+import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import {
   flowValidationErrorMessage,
   type FlowValidationResolvers,
@@ -483,6 +484,29 @@ interface AutomationMaterializationInput {
   source?: "user" | "ai" | "intelligence" | "system" | "agent";
 }
 
+/**
+ * CREATE/UPDATE-DOOR GATE for `triggerConfig.filters`.
+ *
+ * The runtime evaluator (`@synap/jobs` automation-trigger-matcher `matchFilters`)
+ * and this validator share ONE operator vocabulary
+ * (`@synap-core/types/automations/filter-operators`), so the door can never
+ * accept a filter the matcher cannot evaluate — the exact drift that left every
+ * event-automation on the pod permanently unreachable while reporting
+ * `status: active`.
+ *
+ * This gate matters MORE than a normal input check because `automation.create`
+ * sits on the pod's auto-approve list: an agent-authored automation materializes
+ * with no human review, so there is no second reader to notice a filter that can
+ * never match. Every shape rejected here matches zero events under BOTH the old
+ * and the new matcher, so it can never reject an automation that works.
+ */
+function assertValidTriggerFilters(filters: unknown): void {
+  const result = validateTriggerFilters(filters);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+  }
+}
+
 async function prepareAutomationForMaterialization(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
@@ -523,6 +547,10 @@ async function prepareAutomationForMaterialization(
         message: (error as Error).message,
       });
     }
+  }
+
+  if (input.triggerType === "event") {
+    assertValidTriggerFilters(input.triggerConfig.filters);
   }
 
   const resolvers = await loadFlowValidationResolvers(
@@ -1260,6 +1288,20 @@ export const automationsRouter = router({
             code: "BAD_REQUEST",
             message: (err as Error).message,
           });
+        }
+      }
+
+      // Validate generic `filters` on update too. Gated on the triggerConfig
+      // actually being submitted (a partial update that omits it never
+      // retroactively rejects an already-persisted automation), and on the
+      // effective trigger type being `event` — the only type the matcher applies
+      // `filters` for.
+      if (input.triggerConfig !== undefined) {
+        const effectiveTriggerType = input.triggerType ?? existing.triggerType;
+        if (effectiveTriggerType === "event") {
+          assertValidTriggerFilters(
+            (input.triggerConfig as Record<string, unknown>).filters
+          );
         }
       }
 

@@ -23,7 +23,7 @@ export const AUTOMATION_SCHEMA = {
         eventPattern:
           "string — event path with optional trailing wildcard. E.g. 'entity.create.completed', 'entity.*', 'capture.complete.completed'",
         filters:
-          "Record<string,unknown> — dot-notation key-value equality checks on event.data. E.g. { 'profileSlug': 'note', 'metadata.priority': 'high' }",
+          "Record<string,unknown> — each KEY is a dot-notation path into event.data; each VALUE is either a plain string/number/boolean/null (exact match) or an operator object. Supported operators: $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (compared numerically). E.g. { 'profileSlug': 'note' }, { 'profileSlug': { '$in': ['person','contact'] } }, { 'metadata.priority': 'high' }, { 'properties.score': { '$gt': 30 } }. ENFORCED at create/update: a bare ARRAY value or a NESTED OBJECT value is REJECTED (use $in for several values; use a dot-notation key to reach nested data) — such a filter can never match, and the automation would install 'active' and silently never fire.",
       },
       // PHASE GUIDANCE: `.completed` is the phase that ALWAYS fires when a
       // mutation materializes — use it to react to every write. `.validated`

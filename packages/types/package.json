@@ -76,6 +76,10 @@
       "types": "./dist/events/unified.d.ts",
       "import": "./dist/events/unified.js"
     },
+    "./automations/filter-operators": {
+      "types": "./dist/automations/filter-operators.d.ts",
+      "import": "./dist/automations/filter-operators.js"
+    },
     "./proposals": {
       "types": "./dist/proposals/index.d.ts",
       "import": "./dist/proposals/index.js"

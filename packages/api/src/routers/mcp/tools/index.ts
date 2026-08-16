@@ -2304,7 +2304,7 @@ export const tools = {
             triggerConfig: {
               type: "object",
               description:
-                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { profileSlug } }.",
+                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { 'properties.score': { $gt: 30 } }. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data.",
             },
             flowDefinition: {
               type: "object",

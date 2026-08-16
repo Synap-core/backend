@@ -1290,7 +1290,20 @@ export interface MessageShapePredicate {
 export interface AutomationTriggerConfig {
 	/** Event pattern to match. Supports trailing wildcard: "entities.*", "capture.complete.completed" */
 	eventPattern?: string;
-	/** Generic key-value filters applied to event.data (dot-notation supported) */
+	/**
+	 * Filters applied to `event.data`. Each KEY is a dot-notation path
+	 * ("profileSlug", "channel.contextObjectType"); each VALUE is either a plain
+	 * literal (exact `===` match) or an operator object — `$eq`, `$ne`, `$in`,
+	 * `$gt`, `$gte`, `$lt`, `$lte`.
+	 *
+	 * The grammar is declared ONCE in
+	 * `@synap-core/types/automations/filter-operators`: the matcher evaluates it
+	 * (`@synap/jobs` automation-trigger-matcher `matchFilters`) and the create /
+	 * update doors validate against the same constant, so this stays
+	 * `Record<string, unknown>` at the type level without the door accepting a
+	 * shape the runtime cannot evaluate. An array or a nested-object value is
+	 * REJECTED at the door — both compare by identity and can never match.
+	 */
 	filters?: Record<string, unknown>;
 	/** Cron expression (e.g. "0 9 * * MON") */
 	expression?: string;
@@ -7465,6 +7478,28 @@ export interface SignalChannelRollup {
 	 * OPTIONAL / additive — older readers can ignore it.
 	 */
 	boundEntityRoleFacets?: string[];
+	/**
+	 * Section label written by the channel's producing bridge into
+	 * `channels.metadata.section` (e.g. Discord's guild/category grouping).
+	 * `null` when the channel carries no section. OPTIONAL / additive — older
+	 * readers can ignore it.
+	 */
+	section?: string | null;
+	/**
+	 * Hint for what KIND of section this is (e.g. `discord_category`), written
+	 * alongside `section` into `channels.metadata.sectionKindHint` by the same
+	 * bridge. `null` when absent. OPTIONAL / additive.
+	 */
+	sectionKindHint?: string | null;
+	/**
+	 * True when this is a Discord DM (or any provider's direct-message room),
+	 * read from `channels.metadata.external.kind === 'dm'` — the same marker
+	 * `correctDmChannel` (hub-protocol/rest/discord.ts) sets at birth and
+	 * backfills onto pre-existing DM channels. `false` for a guild/group room
+	 * or when the provider carries no such marker. OPTIONAL / additive — older
+	 * readers can ignore it.
+	 */
+	isDm?: boolean;
 }
 export interface ListChannelsResult {
 	channels: SignalChannelRollup[];

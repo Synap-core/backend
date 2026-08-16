@@ -1078,6 +1078,28 @@ export interface SignalChannelRollup {
    * OPTIONAL / additive — older readers can ignore it.
    */
   boundEntityRoleFacets?: string[];
+  /**
+   * Section label written by the channel's producing bridge into
+   * `channels.metadata.section` (e.g. Discord's guild/category grouping).
+   * `null` when the channel carries no section. OPTIONAL / additive — older
+   * readers can ignore it.
+   */
+  section?: string | null;
+  /**
+   * Hint for what KIND of section this is (e.g. `discord_category`), written
+   * alongside `section` into `channels.metadata.sectionKindHint` by the same
+   * bridge. `null` when absent. OPTIONAL / additive.
+   */
+  sectionKindHint?: string | null;
+  /**
+   * True when this is a Discord DM (or any provider's direct-message room),
+   * read from `channels.metadata.external.kind === 'dm'` — the same marker
+   * `correctDmChannel` (hub-protocol/rest/discord.ts) sets at birth and
+   * backfills onto pre-existing DM channels. `false` for a guild/group room
+   * or when the provider carries no such marker. OPTIONAL / additive — older
+   * readers can ignore it.
+   */
+  isDm?: boolean;
 }
 
 export interface ListChannelsInput {
@@ -1149,6 +1171,7 @@ export async function listChannels(
       channelName: channels.title,
       provider: channels.externalSource,
       boundEntityId: channels.contextObjectId,
+      channelMetadata: channels.metadata,
     })
     .from(messages)
     .innerJoin(channels, eq(channels.id, messages.channelId))
@@ -1165,6 +1188,34 @@ export async function listChannels(
     .orderBy(desc(messages.timestamp), desc(messages.id))
     .limit(CHANNEL_SCAN_CAP);
 
+  // Section (e.g. Discord category) per channel, from the same row set — the
+  // rollup's units carry no channel.metadata, so this is looked up separately
+  // when a channel's roll is first created below.
+  const sectionByChannel = new Map<
+    string,
+    {
+      section: string | null;
+      sectionKindHint: string | null;
+      isDm: boolean;
+    }
+  >();
+  for (const row of msgRows) {
+    if (sectionByChannel.has(row.channelId)) continue;
+    const meta = row.channelMetadata as
+      | {
+          section?: string;
+          sectionKindHint?: string;
+          external?: { kind?: string };
+        }
+      | null
+      | undefined;
+    sectionByChannel.set(row.channelId, {
+      section: meta?.section ?? null,
+      sectionKindHint: meta?.sectionKindHint ?? null,
+      isDm: meta?.external?.kind === "dm",
+    });
+  }
+
   const scanned = msgRows.length;
   const truncated = scanned === CHANNEL_SCAN_CAP;
 
@@ -1179,6 +1230,7 @@ export async function listChannels(
   for (const u of units) {
     let roll = byChannel.get(u.channel.id);
     if (!roll) {
+      const section = sectionByChannel.get(u.channel.id);
       roll = {
         channelId: u.channel.id,
         name: u.channel.name,
@@ -1199,6 +1251,9 @@ export async function listChannels(
         // until then so the field is always present.
         originTrust: "trusted",
         lastActivityAt: u.ts,
+        section: section?.section ?? null,
+        sectionKindHint: section?.sectionKindHint ?? null,
+        isDm: section?.isDm ?? false,
       };
       byChannel.set(u.channel.id, roll);
     }

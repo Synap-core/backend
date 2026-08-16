@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, podProcedure } from "../trpc.js";
+import { router, podProcedure } from "../trpc.js";
 import {
   projects,
   entities,
@@ -102,9 +102,25 @@ async function loadVisibleProject(
 
 export const projectsRouter = router({
   /**
-   * List all projects for the current user
+   * List all projects for the current user.
+   *
+   * podProcedure, NOT workspaceProcedure — the same reasoning `get` below
+   * already carries. The WHERE is a pure USER floor (pod-personal projects the
+   * caller owns, plus workspace-scoped projects in workspaces they belong to);
+   * it never reads `ctx.workspaceId`, so requiring an active workspace gated a
+   * read that does not use one.
+   *
+   * That gate is what broke the Projects app: a project is a CROSS-CUTTING lens
+   * that composes with workspaces rather than living inside one, so the app is
+   * reachable pod-wide — and pod-wide is precisely when the client's
+   * `workspaceLink` refuses a workspace-required procedure ("No active
+   * workspace for projects.list"). The list a user opens to see every project
+   * they have cannot be the one read that demands they first pick a workspace.
+   *
+   * Pod-personal projects (NULL workspace) are ONLY visible to their owner, so
+   * dropping the workspace requirement widens nothing.
    */
-  list: workspaceProcedure
+  list: podProcedure
     .input(
       paginatedInput
         .extend({
@@ -207,7 +223,23 @@ export const projectsRouter = router({
   /**
    * Create a new project
    */
-  create: workspaceProcedure
+  /**
+   * Create a project.
+   *
+   * podProcedure — a project created with no active workspace is a POD-PERSONAL
+   * project (`workspaceId: null`), which is already a first-class shape: every
+   * `ctx.workspaceId` use below is `?? null` or optional, `ProjectRepository`
+   * stores it, and `list` above explicitly surfaces NULL-workspace projects to
+   * their owner. Only the builder forbade it, so the app could LIST projects
+   * pod-wide and then fail on "New".
+   *
+   * Authorization is not weakened: at pod scope there is no membership to
+   * verify because the authenticated bearer IS the owner (the project is
+   * written with `userId: ctx.userId` and only that user can ever see it), and
+   * `checkPermissionOrPropose` still runs the AGENT governance ladder — an
+   * agent-authored create is proposed exactly as before.
+   */
+  create: podProcedure
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -445,7 +477,18 @@ export const projectsRouter = router({
   /**
    * Update an existing project
    */
-  update: workspaceProcedure
+  /**
+   * Update a project.
+   *
+   * podProcedure + gate on the LOADED PROJECT's workspace, not `ctx.workspaceId`.
+   * Two bugs in one: (1) it 400'd pod-wide, so a pod-personal project — which
+   * has no workspace at all — could never be edited from the lens it lives in;
+   * (2) it gated on the caller's ACTIVE LENS rather than the row, which is the
+   * "gate on the loaded row's workspaceId, never request-supplied" rule this
+   * codebase states explicitly. Editing a workspace-A project while workspace B
+   * was active checked the wrong workspace's permissions.
+   */
+  update: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -464,9 +507,19 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      // Load first: the project's OWN workspace is the gate's subject.
+      const target = await loadVisibleProject(db, input.id, ctx.userId);
+      if (!target) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
         subjectType: "project",
         action: "update",
         // The WHOLE patch, not just the id: an approver has to see what the
@@ -495,7 +548,6 @@ export const projectsRouter = router({
         return { status: "proposed", proposalId: perm.proposalId };
       }
 
-      const db = await getDb();
       const eventRepo = new EventRepository(sql);
       const projectRepo = new ProjectRepository(db, eventRepo);
 
@@ -527,7 +579,7 @@ export const projectsRouter = router({
         const bound = await setProjectSubject({
           db,
           projectId: input.id,
-          workspaceId: ctx.workspaceId ?? null,
+          workspaceId: target.workspaceId,
           entityId: input.subjectEntityId,
           userId: ctx.userId,
         });
@@ -542,7 +594,7 @@ export const projectsRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
       });
 
       emitSideEffects({
@@ -550,7 +602,7 @@ export const projectsRouter = router({
         action: "update",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
       });
 
       return { status: "updated" };
@@ -594,7 +646,10 @@ export const projectsRouter = router({
    * changes, and gating on the automation instead would let anyone who can edit
    * an automation silently add it to someone else's container.
    */
-  setAutomationMembership: workspaceProcedure
+  // podProcedure: it already loads the project and gates on the PROJECT's
+  // workspace (see below), so the caller's active lens is irrelevant — and a
+  // project's own tab must work from the lens the project is reachable in.
+  setAutomationMembership: podProcedure
     .input(
       z.object({
         projectId: z.string().uuid(),
@@ -681,12 +736,24 @@ export const projectsRouter = router({
   /**
    * Delete a project
    */
-  delete: workspaceProcedure
+  delete: podProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      // Same shape as `update`: pod-wide must work (a pod-personal project has
+      // no workspace to be active in), and the gate's subject is the PROJECT's
+      // workspace, never the caller's lens.
+      const db = await getDb();
+      const target = await loadVisibleProject(db, input.id, ctx.userId);
+      if (!target) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
         subjectType: "project",
         action: "delete",
         data: { id: input.id },
@@ -699,7 +766,6 @@ export const projectsRouter = router({
         return { status: "proposed", proposalId: perm.proposalId };
       }
 
-      const db = await getDb();
       const eventRepo = new EventRepository(sql);
       const projectRepo = new ProjectRepository(db, eventRepo);
 
@@ -711,7 +777,7 @@ export const projectsRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
       });
 
       emitSideEffects({
@@ -719,7 +785,7 @@ export const projectsRouter = router({
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: target.workspaceId ?? undefined,
       });
 
       return { status: "deleted" };

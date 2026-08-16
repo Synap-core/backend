@@ -50,13 +50,11 @@ export function registerProjectExecutors(): void {
           message: "Project proposal is missing name",
         });
       }
+      // A NULL workspace is legitimate now that `projects.create` is a
+      // podProcedure: an agent creating with no active workspace proposes a
+      // POD-PERSONAL project. Rejecting that here would file a proposal that
+      // could never be approved — the reviewer would see it forever.
       const workspaceId = proposal.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Project creation proposal is missing a valid workspaceId",
-        });
-      }
 
       // Idempotency: approve is not status-guarded before dispatch, so skip if
       // this proposal was already materialized (createCaller mints a fresh id
@@ -69,8 +67,13 @@ export function registerProjectExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const membership = await getWorkspaceMembership(db, workspaceId, userId);
-      if (!membership) {
+      // Membership is verified only when the proposal HAS a workspace. A
+      // pod-personal project has none to be a member of; its floor is ownership,
+      // which the create itself applies (`userId: ctx.userId`).
+      const membership = workspaceId
+        ? await getWorkspaceMembership(db, workspaceId, userId)
+        : null;
+      if (workspaceId && !membership) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "No workspace access",
@@ -80,8 +83,8 @@ export function registerProjectExecutors(): void {
         db,
         authenticated: true as const,
         userId,
-        workspaceId,
-        workspaceRole: membership.role,
+        workspaceId: workspaceId ?? undefined,
+        workspaceRole: membership?.role,
       } as unknown as Context);
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(

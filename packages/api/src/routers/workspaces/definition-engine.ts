@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import { protectedProcedure } from "../../trpc.js";
 import {
   db,
@@ -60,6 +61,34 @@ import {
   buildPostWorkspaceBodyFromDefinition,
   type CreateDefinitionPostWorkspaceSlice,
 } from "./helpers.js";
+
+/**
+ * `triggerConfig` shape for a definition-seeded flow automation.
+ *
+ * FOURTH CREATE DOOR. `createFromDefinition` / `applyDefinition` reach
+ * `reconcileWorkspaceFromDefinition` (@synap/database), which inserts the
+ * definition's automations `status: "active"` — so a package/template can seed
+ * an event automation whose `filters` the matcher cannot evaluate, landing the
+ * same permanently-unreachable-but-healthy-looking row the tRPC door now
+ * rejects. The validator cannot be applied inside `@synap/database` itself:
+ * `@synap-core/types` depends on `@synap/database`, so importing it there would
+ * close a dependency cycle. Validating at the DEFINITION PARSE boundary (here,
+ * in `@synap/api`) is the honest fix — it is where the untrusted payload enters.
+ *
+ * Zero shipped capability/workspace JSON carries a trigger `filters` key today
+ * (verified by a full JSON walk over both repos), so this cannot reject any
+ * template that installs now.
+ */
+const flowAutomationTriggerConfigSchema = z
+  .record(z.string(), z.unknown())
+  .optional()
+  .superRefine((config, ctx) => {
+    if (!config) return;
+    const result = validateTriggerFilters(config.filters);
+    if (!result.ok) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: result.error });
+    }
+  });
 
 export const definitionEngineProcedures = {
   /**
@@ -519,7 +548,7 @@ export const definitionEngineProcedures = {
                   name: z.string().min(1),
                   description: z.string().optional(),
                   triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-                  triggerConfig: z.record(z.string(), z.unknown()).optional(),
+                  triggerConfig: flowAutomationTriggerConfigSchema,
                   flowDefinition: z
                     .object({
                       nodes: z.array(z.unknown()),
@@ -1622,7 +1651,7 @@ export const definitionEngineProcedures = {
                 name: z.string().min(1),
                 description: z.string().optional(),
                 triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-                triggerConfig: z.record(z.string(), z.unknown()).optional(),
+                triggerConfig: flowAutomationTriggerConfigSchema,
                 flowDefinition: z
                   .object({
                     nodes: z.array(z.unknown()),

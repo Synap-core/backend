@@ -47,6 +47,7 @@ import {
   MessageRole,
   MessageCategory,
   persistAssistantReply,
+  drizzleSql,
 } from "@synap/database";
 import { resolveClientBinding } from "../../../utils/resolve-client-binding.js";
 import type { AIStep } from "@synap-core/types";
@@ -127,6 +128,49 @@ const DISCORD_BRIDGE_ORIGIN: ChannelOrigin = {
   producerName: "Discord bridge",
 };
 
+/** Old hard-coded birth-title fallback for a Discord channel (guild or DM). */
+const LEGACY_DISCORD_TITLE_PREFIX = "Discord · ";
+
+/**
+ * DM marking + one-time title correction (contract: bridge now sends
+ * `channelKind: 'dm'`). Runs AFTER every DM inbound — birth-time or not —
+ * so an already-existing DM channel (title set once at birth, never
+ * updated) is corrected on its next activity instead of staying stuck as an
+ * indistinguishable `Discord · <user>` room. Idempotent: the metadata merge
+ * is a no-op once `external.kind` is already "dm"; the title branch only
+ * fires while the title still carries the legacy fallback prefix, so a
+ * user-renamed DM (or a guild channel — never called for those) is left
+ * alone.
+ */
+async function correctDmChannel(
+  channelId: string,
+  discordUsername: string | undefined,
+  discordUserId: string
+): Promise<void> {
+  try {
+    const row = await db.query.channels.findFirst({
+      where: eq(channels.id, channelId),
+      columns: { title: true },
+    });
+    const titlePatch = row?.title?.startsWith(LEGACY_DISCORD_TITLE_PREFIX)
+      ? { title: `DM · ${discordUsername ?? discordUserId}` }
+      : {};
+    await db
+      .update(channels)
+      .set({
+        metadata: drizzleSql`jsonb_set(coalesce(${channels.metadata}, '{}'::jsonb), '{external}', coalesce(${channels.metadata}->'external', '{}'::jsonb) || '{"kind":"dm"}'::jsonb)`,
+        ...titlePatch,
+        updatedAt: new Date(),
+      })
+      .where(eq(channels.id, channelId));
+  } catch (err) {
+    logger.warn(
+      { err, channelId },
+      "correctDmChannel: DM metadata/title correction failed (non-fatal)"
+    );
+  }
+}
+
 // Re-export for tests / callers that import from the route module.
 export { accumulateAgentTurnStream } from "./discord-agent-turn-stream.js";
 export type { AgentTurnStreamResult } from "./discord-agent-turn-stream.js";
@@ -160,6 +204,10 @@ const IngestRequestSchema = z
     guildId: z.string().min(1).max(64).optional(),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1).optional(),
+    // DM vs guild room — the bridge always knows which, a guild message never
+    // omits its guildId while a DM never has one. Optional/unspecified keeps
+    // today's behavior (guild-shaped birth title, no DM metadata marker).
+    channelKind: z.enum(["dm", "guild"]).optional(),
     // Relaxed from min(1): an attachment-only message (photo, no caption) is a
     // valid inbound. The `.refine` below still rejects a wholly empty message.
     text: z.string().max(50_000).optional().default(""),
@@ -192,6 +240,8 @@ const AgentTurnRequestSchema = z
     guildId: z.string().min(1).max(64).optional(),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1),
+    // DM vs guild room — see DiscordIngestRequest.channelKind.
+    channelKind: z.enum(["dm", "guild"]).optional(),
     // Relaxed from min(1): an attachment-only message (photo, no caption) is a
     // valid inbound. The `.refine` below still rejects a wholly empty message.
     text: z.string().max(50_000).optional().default(""),
@@ -345,7 +395,8 @@ export function registerDiscordRoutes(app: HubHono): void {
       // Provider-agnostic lander (Wave A). Discord passes an explicit channel key
       // + title + idempotency seed, so this is byte-identical to the prior direct
       // recordInboundMessage call (no subject-fold, no email-resolve for discord).
-      const { recorded } = await landInboundMessage({
+      const isDm = body.channelKind === "dm";
+      const { channelId, recorded } = await landInboundMessage({
         provider: "discord",
         externalId: body.discordChannelId,
         userId,
@@ -353,7 +404,7 @@ export function registerDiscordRoutes(app: HubHono): void {
         text: body.text,
         participant: body.discordUsername,
         participantExternalId: body.discordUserId,
-        title: `Discord · ${body.discordUsername ?? body.discordUserId}`,
+        title: `${isDm ? "DM" : "Discord"} · ${body.discordUsername ?? body.discordUserId}`,
         idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
         senderExternalId: body.discordUserId,
         senderKeyId: callerKeyId,
@@ -364,6 +415,15 @@ export function registerDiscordRoutes(app: HubHono): void {
           ? { externalCoordinates: { guildId: body.guildId } }
           : {}),
       });
+      // Correct existing DMs (title birth-only) + mark metadata.external.kind
+      // on every DM inbound, fresh or not — see correctDmChannel above.
+      if (isDm) {
+        await correctDmChannel(
+          channelId,
+          body.discordUsername,
+          body.discordUserId
+        );
+      }
       return c.json({ recorded }, 200);
     } catch (err) {
       logger.error(
@@ -482,6 +542,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       // must NOT re-run the IS turn or post a second reply: the recorder reports
       // `recorded: false` for a duplicate, and we replay the prior assistant
       // reply (chained off the same inbound hash) instead of doing the work again.
+      const isDm = body.channelKind === "dm";
       const { channelId, contextObjectId, inboundHash, recorded } =
         await landInboundMessage({
           provider: "discord",
@@ -491,7 +552,7 @@ export function registerDiscordRoutes(app: HubHono): void {
           text: body.text,
           participant: body.discordUsername,
           participantExternalId: body.discordUserId,
-          title: `Discord · ${body.discordUsername}`,
+          title: `${isDm ? "DM" : "Discord"} · ${body.discordUsername}`,
           // Discord exposes a native message id — deterministic over (channel, id).
           idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
           // Attribution: resolve whether this Discord user is linked to a Synap
@@ -505,6 +566,15 @@ export function registerDiscordRoutes(app: HubHono): void {
             ? { externalCoordinates: { guildId: body.guildId } }
             : {}),
         });
+      // Correct existing DMs (title birth-only) + mark metadata.external.kind
+      // on every DM inbound, fresh or not — see correctDmChannel above.
+      if (isDm) {
+        await correctDmChannel(
+          channelId,
+          body.discordUsername,
+          body.discordUserId
+        );
+      }
 
       // Stable request key for chat_turns (UUID column; Discord snowflakes are
       // not UUIDs — derive deterministically from the same idempotency seed).

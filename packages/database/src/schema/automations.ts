@@ -65,7 +65,20 @@ export interface AutomationTriggerConfig {
   // ── event trigger ──────────────────────────────────────────────────────
   /** Event pattern to match. Supports trailing wildcard: "entities.*", "capture.complete.completed" */
   eventPattern?: string;
-  /** Generic key-value filters applied to event.data (dot-notation supported) */
+  /**
+   * Filters applied to `event.data`. Each KEY is a dot-notation path
+   * ("profileSlug", "channel.contextObjectType"); each VALUE is either a plain
+   * literal (exact `===` match) or an operator object — `$eq`, `$ne`, `$in`,
+   * `$gt`, `$gte`, `$lt`, `$lte`.
+   *
+   * The grammar is declared ONCE in
+   * `@synap-core/types/automations/filter-operators`: the matcher evaluates it
+   * (`@synap/jobs` automation-trigger-matcher `matchFilters`) and the create /
+   * update doors validate against the same constant, so this stays
+   * `Record<string, unknown>` at the type level without the door accepting a
+   * shape the runtime cannot evaluate. An array or a nested-object value is
+   * REJECTED at the door — both compare by identity and can never match.
+   */
   filters?: Record<string, unknown>;
 
   // ── cron trigger ───────────────────────────────────────────────────────
