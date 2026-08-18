@@ -3,7 +3,10 @@ import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { RendererRef } from "@synap/database";
 import { profilesRouter } from "../../profiles.js";
-import { setProfileRenderer } from "../../../services/profiles/set-profile-renderer.js";
+import {
+  setProfileRenderer,
+  type RendererSlot,
+} from "../../../services/profiles/set-profile-renderer.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -137,8 +140,10 @@ export function registerProfileExecutors(): void {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const profileSlug = innerData.profileSlug as string | undefined;
-      const slot = innerData.slot as
-        "list" | "detail" | "dashboard" | undefined;
+      // Read as the exported `RendererSlot`, not a re-typed literal union — a
+      // hand-copied union here would silently mis-declare any slot added later
+      // (`card`) while the runtime value flowed through unchanged.
+      const slot = innerData.slot as RendererSlot | undefined;
       const ref = innerData.ref as RendererRef | null | undefined;
       const scope =
         (innerData.scope as "workspace" | "pod" | undefined) ?? "workspace";

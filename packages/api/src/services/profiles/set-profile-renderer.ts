@@ -22,14 +22,30 @@ import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 
 /** The wire-level slot names external agents use. */
-export type RendererSlot = "list" | "detail" | "dashboard";
+export type RendererSlot = "list" | "detail" | "card" | "dashboard";
 export type RendererScope = "workspace" | "pod";
 
 /** slot → ContentKind (the canonical taxonomy used by workspace overlays). */
 const SLOT_TO_CONTENT_KIND: Record<RendererSlot, string> = {
   list: "collection",
   detail: "entity-detail",
+  card: "entity-card",
   dashboard: "entity-profile",
+};
+
+/**
+ * The deprecated singular column a slot ALSO writes, for back-compat with rows
+ * that predate `default_renderers` (migration 0112). `card` is deliberately
+ * absent: `entity-card` is newer than the column era, so it has no legacy
+ * column and lives ONLY in the `default_renderers` map. Written as a lookup
+ * rather than a ternary chain because a chain's final `else` silently swallows
+ * any slot added later — which is exactly how `card` would have landed in
+ * `defaultDashboardRenderer`.
+ */
+const LEGACY_COLUMN_BY_SLOT: Partial<Record<RendererSlot, string>> = {
+  list: "defaultListRenderer",
+  detail: "defaultDetailRenderer",
+  dashboard: "defaultDashboardRenderer",
 };
 
 export interface SetProfileRendererInput {
@@ -78,12 +94,9 @@ export async function setProfileRenderer(
       string,
       RendererRef | undefined
     >;
+    const legacyColumn = LEGACY_COLUMN_BY_SLOT[slot];
     const patch = {
-      ...(slot === "list"
-        ? { defaultListRenderer: ref }
-        : slot === "detail"
-          ? { defaultDetailRenderer: ref }
-          : { defaultDashboardRenderer: ref }),
+      ...(legacyColumn ? { [legacyColumn]: ref } : {}),
       defaultRenderers: { ...currentDefaultRenderers, [contentKind]: ref },
     };
     await profileRepo.update(profile.id, patch);

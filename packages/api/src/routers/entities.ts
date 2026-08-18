@@ -73,6 +73,7 @@ export const entitiesRouter = router({
   listMulti: readProcs.listMulti,
   listSavedUrls: readProcs.listSavedUrls,
   search: readProcs.search,
+  searchAll: readProcs.searchAll,
   getByDocumentId: readProcs.getByDocumentId,
 
   /**

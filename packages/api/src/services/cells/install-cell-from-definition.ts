@@ -24,6 +24,7 @@ import type { ContentKind } from "@synap/database/schema";
 
 const CONTENT_KINDS: readonly string[] = [
   "entity-detail",
+  "entity-card",
   "entity-profile",
   "collection",
   "widget",

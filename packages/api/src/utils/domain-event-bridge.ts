@@ -42,17 +42,26 @@ function mapToSocketEvent(
   eventType: string
 ): { event: string; workspaceIdRequired: boolean } | null {
   const m: Record<string, { event: string; workspaceIdRequired: boolean }> = {
+    // Entities are pod-wide-capable (workspaceId NULL = visible in every
+    // workspace). Per the unified room rule, a NULL-workspace entity falls back
+    // to the owner's `user:<ownerUserId>` room instead of being DROPPED — so
+    // pod-wide entities (the bridge-discovered person/company, the pod-wide
+    // bridge model) still push realtime. This MUST be `false`: with `true` the
+    // guard at emitDomainEventToRealtime (workspaceIdRequired && !workspaceId)
+    // silently skipped every pod-wide entity emit — the "pod-wide = no realtime"
+    // gap. Workspace-scoped entities are unaffected (they carry a workspaceId →
+    // still route to workspace:<id>). Mirrors entity_facet.* below.
     "entity.create.completed": {
       event: EventNames.ENTITY_CREATED,
-      workspaceIdRequired: true,
+      workspaceIdRequired: false,
     },
     "entity.update.completed": {
       event: EventNames.ENTITY_UPDATED,
-      workspaceIdRequired: true,
+      workspaceIdRequired: false,
     },
     "entity.delete.completed": {
       event: EventNames.ENTITY_DELETED,
-      workspaceIdRequired: true,
+      workspaceIdRequired: false,
     },
     "view.create.completed": {
       event: "view:created",

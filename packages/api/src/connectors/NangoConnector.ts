@@ -44,6 +44,11 @@ const NangoConnectionSchema = z.object({
     })
     .nullable()
     .optional(),
+  // Nango's own per-connection error state (refresh failures etc). LIVE-VERIFIED
+  // present on self-hosted 0.70.9's `GET /connection` list. A non-empty array is
+  // the PROACTIVE "this credential is dead" signal the health mirror needs —
+  // otherwise a dead connection only surfaces when a dispatch picks it.
+  errors: z.array(z.unknown()).nullable().optional(),
 });
 
 const NangoConnectionsResponseSchema = z.object({
@@ -317,6 +322,7 @@ export class NangoConnector implements SyncConnector {
         userId,
         createdAt: c.created_at ? new Date(c.created_at) : new Date(),
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
+        hasError: Array.isArray(c.errors) && c.errors.length > 0,
       }));
     return { ok: true, connections };
   }

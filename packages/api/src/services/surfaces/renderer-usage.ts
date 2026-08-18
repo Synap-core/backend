@@ -122,9 +122,10 @@ export interface RendererUsageInput {
   access: AccessContext;
 }
 
-/** The 3 ContentKind keys the live renderer writer uses. */
+/** The ContentKind keys the live renderer writer uses. */
 const CONTENT_KINDS = [
   "entity-detail",
+  "entity-card",
   "entity-profile",
   "collection",
 ] as const;
@@ -141,6 +142,7 @@ const LAYER3_SENTINELS = new Set([
   "list",
   "entity-detail",
   "profile-dashboard",
+  "__entity-block",
 ]);
 /** The browser's per-profile convention cells — frontend-registered only. */
 const FRONTEND_CONVENTION = /^entity-detail-/;

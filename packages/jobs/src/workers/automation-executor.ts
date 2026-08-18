@@ -229,6 +229,21 @@ export function buildRunDefinitionSnapshot(
   return { version, flowDefinition };
 }
 
+/**
+ * `automation_step_runs.command_id` is a `uuid` column, but a flow node's
+ * `data.commandId` is author-supplied and is often a command SLUG. Record it
+ * only when it is actually a uuid; anything else becomes NULL rather than
+ * failing the INSERT (and with it the entire run) inside postgres.
+ */
+const COMMAND_ID_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeCommandId(raw: unknown): string | undefined {
+  return typeof raw === "string" && COMMAND_ID_UUID_RE.test(raw)
+    ? raw
+    : undefined;
+}
+
 // ── Main Executor ───────────────────────────────────────────────────────────
 
 /**
@@ -686,10 +701,29 @@ async function executeAutomationFlow(params: {
         .values({
           runId,
           nodeId: node.id,
+          // `command_id` is a `uuid` column (FK-by-convention to
+          // intelligence_commands). A flow node's `data.commandId` is
+          // AUTHOR-SUPPLIED and is routinely a command SLUG, not a uuid —
+          // the shipped `relay-new-contact-enrichment` template writes
+          // `"intelligence_execute"`, which appears nowhere in this codebase.
+          // Handing that straight to postgres fails the INSERT with
+          // `invalid input syntax for type uuid`, and because this row is
+          // written BEFORE the step executes, the whole run dies at step 1 —
+          // every automation that actually reaches a `command` node.
+          // (The `as string | undefined` cast that used to sit here told tsc
+          // the value was fine; only postgres disagreed.)
+          //
+          // Nothing reads this column to dispatch: the command step resolves
+          // its own `node.data.commandId` (steps/command-skill-capability.ts,
+          // where it is only a taskId label). So a non-uuid is recorded as
+          // NULL — the column is nullable and its FK is unenforced — and the
+          // slug stays on the node where the executor actually reads it.
+          // Same guard, same reason as ProfileResolutionService's UUID_RE.
           commandId:
             node.type === "command"
-              ? ((node.data as Record<string, unknown>).commandId as
-                  string | undefined)
+              ? normalizeCommandId(
+                  (node.data as Record<string, unknown>).commandId
+                )
               : undefined,
           status: "running",
           startedAt: new Date(),

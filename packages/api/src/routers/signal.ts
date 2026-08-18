@@ -13,8 +13,14 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { db, eq } from "@synap/database";
+import { channels } from "@synap/database/schema";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { proposeChannelUnbind } from "../utils/propose-channel-unbind.js";
+import { channelsRouter } from "./channels.js";
 import {
   listPipeline,
   resolveProvenance,
@@ -376,5 +382,85 @@ export const signalRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       return getIntegrationRoutingRules(userId, input.capabilityId);
+    }),
+
+  /**
+   * Unbind an ALREADY-BOUND channel from its context object — the "Remove"
+   * action in the Channels view. Inverse of the hub-protocol `bindChannel`
+   * door (`hub-protocol/channels.ts`): clears `contextObjectId` /
+   * `contextObjectType` back to null. `branchPurpose` (the firewall role) is
+   * DELIBERATELY left untouched — see `propose-channel-unbind.ts`.
+   *
+   *   User clicks "Remove"
+   *     → checkPermissionOrPropose({ subjectType:"channel", action:"unbind" })
+   *   Granted (ordinary editor+ member — the common case)
+   *     → this procedure applies the clear itself via the GOVERNED
+   *       channelsRouter.updateChannel (contextObjectType/Id: null) — the
+   *       SAME one-door write the channel/bind and channel/unbind
+   *       approve-executors both delegate to. NO raw UPDATE here.
+   *   Insufficient role
+   *     → a `channel/unbind` proposal is filed (PENDING) in the user's inbox;
+   *       `"proposed"` is a normal outcome, not an error. On approval, the
+   *       `channel/unbind` executor (executors/channel.ts) applies the same
+   *       clear.
+   *
+   * ACCESS: gated on the CHANNEL ROW's own workspaceId (loaded from the DB via
+   * `assertWorkspaceWrite`), never a client-supplied workspaceId — the
+   * cross-workspace write-leak class `assertWorkspaceWrite` exists to close.
+   */
+  unbindChannel: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+
+      // Gate on the LOADED row's workspaceId — never `ctx.workspaceId` / any
+      // request-supplied value.
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: channel.workspaceId,
+      });
+
+      const result = await proposeChannelUnbind({
+        userId,
+        workspaceId: channel.workspaceId,
+        channelId: input.channelId,
+        reasoning: input.reasoning,
+      });
+
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+
+      if (result.status === "proposed") {
+        return {
+          status: "proposed" as const,
+          proposalId: result.proposalId,
+          reviewUrl: result.reviewUrl,
+        };
+      }
+
+      // Granted — apply the clear through the ONE governed write door.
+      await channelsRouter.createCaller(ctx).updateChannel({
+        channelId: input.channelId,
+        contextObjectType: null,
+        contextObjectId: null,
+      });
+
+      return { status: "unbound" as const };
     }),
 });

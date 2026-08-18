@@ -86,12 +86,15 @@ export type RendererRef =
  *   collection      ← old `list`
  *   entity-detail   ← old `detail`
  *   entity-profile  ← old `dashboard`
+ *   entity-card     — NEW; postdates the slot era, so it has NO legacy slot and
+ *                     NO legacy column. It lives only in `default_renderers`
+ *                     and in the workspace overlay, both keyed by ContentKind.
  *
  * Structural mirror of `ProfileContentKind` from `@synap-core/capabilities`,
  * kept inline so the database layer stays UI-free.
  */
 export type ProfileRendererContentKind =
-  "entity-detail" | "entity-profile" | "collection";
+  "entity-detail" | "entity-card" | "entity-profile" | "collection";
 
 /**
  * Which layer of `getEffectiveRenderer`'s chain produced the ref.
@@ -102,10 +105,13 @@ export type ProfileRendererSource = "workspace" | "profile" | "default";
 /**
  * Back-compat: map a ContentKind to the legacy slot key still written into old
  * workspace overlays and the deprecated `default_*_renderer` columns.
+ *
+ * PARTIAL by design — `entity-card` has no legacy twin, and a missing entry is
+ * the honest encoding of that. Callers must treat `undefined` as "there is no
+ * legacy key to also look under", never as a slot to synthesize.
  */
-const LEGACY_SLOT_BY_CONTENT_KIND: Record<
-  ProfileRendererContentKind,
-  "list" | "detail" | "dashboard"
+const LEGACY_SLOT_BY_CONTENT_KIND: Partial<
+  Record<ProfileRendererContentKind, "list" | "detail" | "dashboard">
 > = {
   collection: "list",
   "entity-detail": "detail",
@@ -511,7 +517,8 @@ export class ProfileResolutionService {
         Record<string, Record<string, RendererRef | undefined>> | undefined;
       const profileOverlay = overlayRoot?.[profileSlug];
       const overlay =
-        profileOverlay?.[contentKind] ?? profileOverlay?.[legacySlot];
+        profileOverlay?.[contentKind] ??
+        (legacySlot ? profileOverlay?.[legacySlot] : undefined);
       if (overlay) return { ref: overlay, source: "workspace" };
     }
 
@@ -529,13 +536,18 @@ export class ProfileResolutionService {
       const mapped = defaultRenderers?.[contentKind];
       if (mapped) return { ref: mapped as RendererRef, source: "profile" };
 
+      // Keyed off the legacy SLOT, not the ContentKind, so a kind with no
+      // legacy twin (`entity-card`) reads no column at all instead of falling
+      // through an else-branch into someone else's binding.
       const legacyColumn =
-        contentKind === "collection"
+        legacySlot === "list"
           ? profile.defaultListRenderer
-          : contentKind === "entity-profile"
+          : legacySlot === "dashboard"
             ? (profile as { defaultDashboardRenderer?: unknown })
                 .defaultDashboardRenderer
-            : profile.defaultDetailRenderer;
+            : legacySlot === "detail"
+              ? profile.defaultDetailRenderer
+              : undefined;
       if (legacyColumn)
         return { ref: legacyColumn as RendererRef, source: "profile" };
     }
@@ -548,6 +560,16 @@ export class ProfileResolutionService {
     if (contentKind === "entity-profile")
       return {
         ref: { kind: "cell", cellKey: "profile-dashboard", props: {} },
+        source: "default",
+      };
+    // `__entity-block` is the cell that ALREADY renders every entity card
+    // (bento block, document embed, whiteboard shape, sheet). Naming it here is
+    // the honest sentinel — but it is also the cell that ASKS this question, so
+    // it must recognise its own key and stop, exactly as it does for
+    // `source === "default"`.
+    if (contentKind === "entity-card")
+      return {
+        ref: { kind: "cell", cellKey: "__entity-block", props: {} },
         source: "default",
       };
     return contentKind === "collection"

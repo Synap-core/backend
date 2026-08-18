@@ -136,7 +136,13 @@ const WidgetUpsertSchema = z.object({
   /** What this cell renders — the de-conflated content taxonomy. Selected by the
    *  author (Cell Studio) / AI generator; defaults to the content-agnostic `widget`. */
   contentKind: z
-    .enum(["entity-detail", "entity-profile", "collection", "widget"])
+    .enum([
+      "entity-detail",
+      "entity-card",
+      "entity-profile",
+      "collection",
+      "widget",
+    ])
     .optional(),
   rendererSource: z.string().optional(),
   /** Original JSX/TSX source for native widgets (compiled server-side) */

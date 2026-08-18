@@ -177,7 +177,14 @@ export function collectLoopBindingRefs(data: unknown): string[] {
       return;
     }
     if (v && typeof v === "object") {
-      for (const x of Object.values(v)) walk(x);
+      // Skip AUTHORING NOTES — `_`-prefixed keys are documentation the runtime
+      // never evaluates. Kept in lockstep with the two validate-flow copies of
+      // this walker; if they diverge, save-time validation and run-time binding
+      // collection disagree about what a flow references.
+      for (const [k, x] of Object.entries(v)) {
+        if (k.startsWith("_")) continue;
+        walk(x);
+      }
     }
   };
   walk(data);

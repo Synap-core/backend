@@ -109,9 +109,11 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
  *   collection      ← old `list`
  *   entity-detail   ← old `detail`
  *   entity-profile  ← old `dashboard`
+ *   entity-card     — NEW, no legacy slot (the small embeddable block)
  */
 const ProfileContentKindSchema = z.enum([
   "entity-detail",
+  "entity-card",
   "entity-profile",
   "collection",
 ]);
@@ -120,6 +122,7 @@ type ProfileContentKind = z.infer<typeof ProfileContentKindSchema>;
 const PROFILE_CONTENT_KIND_TO_SLOT: Record<ProfileContentKind, RendererSlot> = {
   collection: "list",
   "entity-detail": "detail",
+  "entity-card": "card",
   "entity-profile": "dashboard",
 };
 
@@ -1229,6 +1232,7 @@ export const profilesRouter = router({
       // given, only that one is resolved (the rest stay null).
       const base: Record<ProfileContentKind, RendererRef | null> = {
         "entity-detail": null,
+        "entity-card": null,
         "entity-profile": null,
         collection: null,
       };
@@ -1237,6 +1241,7 @@ export const profilesRouter = router({
         ProfileRendererSource | null
       > = {
         "entity-detail": null,
+        "entity-card": null,
         "entity-profile": null,
         collection: null,
       };
@@ -1254,29 +1259,37 @@ export const profilesRouter = router({
         };
       }
 
-      const [entityDetail, entityProfile, collection] = await Promise.all([
-        resolutionService.getEffectiveRendererWithSource(
-          profileSlug,
-          lensWorkspaceId,
-          "entity-detail"
-        ),
-        resolutionService.getEffectiveRendererWithSource(
-          profileSlug,
-          lensWorkspaceId,
-          "entity-profile"
-        ),
-        resolutionService.getEffectiveRendererWithSource(
-          profileSlug,
-          lensWorkspaceId,
-          "collection"
-        ),
-      ]);
+      const [entityDetail, entityCard, entityProfile, collection] =
+        await Promise.all([
+          resolutionService.getEffectiveRendererWithSource(
+            profileSlug,
+            lensWorkspaceId,
+            "entity-detail"
+          ),
+          resolutionService.getEffectiveRendererWithSource(
+            profileSlug,
+            lensWorkspaceId,
+            "entity-card"
+          ),
+          resolutionService.getEffectiveRendererWithSource(
+            profileSlug,
+            lensWorkspaceId,
+            "entity-profile"
+          ),
+          resolutionService.getEffectiveRendererWithSource(
+            profileSlug,
+            lensWorkspaceId,
+            "collection"
+          ),
+        ]);
       return {
         "entity-detail": entityDetail.ref,
+        "entity-card": entityCard.ref,
         "entity-profile": entityProfile.ref,
         collection: collection.ref,
         sources: {
           "entity-detail": entityDetail.source,
+          "entity-card": entityCard.source,
           "entity-profile": entityProfile.source,
           collection: collection.source,
         },

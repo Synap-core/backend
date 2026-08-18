@@ -217,4 +217,141 @@ describe("ProfileResolutionService.getEffectiveRendererWithSource", () => {
 
     expect(ref).toEqual({ kind: "cell", cellKey: "list", props: {} });
   });
+
+  // ── entity-card ──────────────────────────────────────────────────────────
+  // `entity-card` postdates the list/detail/dashboard slot era, so it has NO
+  // legacy slot key and NO legacy column. Every one of these pins that it does
+  // not silently borrow `entity-detail`'s.
+
+  it("entity-card resolves its own workspace overlay key", async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({ defaultRenderers: {} });
+    const svc = new ProfileResolutionService(
+      makeDb({
+        profileRenderers: {
+          task: {
+            "entity-card": { kind: "cell", cellKey: "card-from-ws", props: {} },
+          },
+        },
+      })
+    );
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-card"
+    );
+
+    expect(result.source).toBe("workspace");
+    expect((result.ref as { cellKey: string }).cellKey).toBe("card-from-ws");
+  });
+
+  it("entity-card resolves its own profile default", async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: {
+        "entity-card": {
+          kind: "cell",
+          cellKey: "card-from-profile",
+          props: {},
+        },
+      },
+    });
+    const svc = new ProfileResolutionService(makeDb({}));
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-card"
+    );
+
+    expect(result.source).toBe("profile");
+    expect((result.ref as { cellKey: string }).cellKey).toBe(
+      "card-from-profile"
+    );
+  });
+
+  it("entity-card does NOT read entity-detail's legacy column", async () => {
+    // The pre-fix ternary chain ended in `: profile.defaultDetailRenderer`, so
+    // a profile with only a legacy detail column would have handed that
+    // full-page cell to every card. It must fall to layer 3 instead.
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: null,
+      defaultDetailRenderer: {
+        kind: "cell",
+        cellKey: "from-legacy-column",
+        props: {},
+      },
+    });
+    const svc = new ProfileResolutionService(makeDb({}));
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-card"
+    );
+
+    expect(result.source).toBe("default");
+    expect((result.ref as { cellKey: string }).cellKey).not.toBe(
+      "from-legacy-column"
+    );
+  });
+
+  it("entity-card does NOT read a legacy `detail` overlay key", async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({ defaultRenderers: {} });
+    const svc = new ProfileResolutionService(
+      makeDb({
+        profileRenderers: {
+          task: { detail: { kind: "cell", cellKey: "from-ws", props: {} } },
+        },
+      })
+    );
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-card"
+    );
+
+    expect(result.source).toBe("default");
+  });
+
+  it("entity-card's layer 3 sentinel is the entity-block cell", async () => {
+    getBySlugMock.mockResolvedValue(null);
+    const svc = new ProfileResolutionService(makeDb());
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      null,
+      "entity-card"
+    );
+
+    expect(result.source).toBe("default");
+    expect(result.ref).toEqual({
+      kind: "cell",
+      cellKey: "__entity-block",
+      props: {},
+    });
+  });
+
+  it("entity-detail is unaffected by the entity-card addition", async () => {
+    getBySlugForWorkspaceMock.mockResolvedValue({
+      defaultRenderers: null,
+      defaultDetailRenderer: {
+        kind: "cell",
+        cellKey: "from-legacy-column",
+        props: {},
+      },
+    });
+    const svc = new ProfileResolutionService(makeDb({}));
+
+    const result = await svc.getEffectiveRendererWithSource(
+      "task",
+      "ws-1",
+      "entity-detail"
+    );
+
+    expect(result.source).toBe("profile");
+    expect((result.ref as { cellKey: string }).cellKey).toBe(
+      "from-legacy-column"
+    );
+  });
 });

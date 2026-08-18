@@ -28,9 +28,12 @@ import {
 
 const ProfileRendererContentKindSchema = z.enum([
   "entity-detail",
+  "entity-card",
   "entity-profile",
   "collection",
 ]);
+// Frozen at the three kinds that HAD slots. `entity-card` postdates the slot
+// era and is reachable only through `contentKind` — never widen this.
 const LegacyRendererSlotSchema = z.enum(["list", "detail", "dashboard"]);
 const legacySlotToContentKind = {
   list: "collection",

@@ -16,6 +16,14 @@ export interface SyncConnectorConnection {
   userId: string;
   createdAt: Date;
   lastSyncAt?: Date;
+  /**
+   * The broker reports this connection as errored (e.g. its refresh token died,
+   * "refresh limit reached"). LIVE-VERIFIED: self-hosted Nango's `GET /connection`
+   * returns a per-connection `errors[]` array. This is the PROACTIVE health
+   * signal — without it a dead connection only reveals itself when a dispatch
+   * happens to pick it, so the registry keeps reporting it "healthy".
+   */
+  hasError?: boolean;
 }
 
 export interface SyncConnector {

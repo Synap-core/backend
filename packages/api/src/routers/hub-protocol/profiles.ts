@@ -65,6 +65,7 @@ export function buildCellRendererRef(
 
 const ProfileRendererContentKindSchema = z.enum([
   "entity-detail",
+  "entity-card",
   "entity-profile",
   "collection",
 ]);

@@ -55,6 +55,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
+import { deleteDocumentAndBlobs } from "../utils/delete-document-and-blobs.js";
 import { emitSideEffects } from "@synap/events";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import {
@@ -1614,9 +1615,12 @@ export const viewsRouter = router({
 
       await viewRepo.delete(input.id, ctx.userId);
 
-      // Also delete the associated document
+      // Also delete the associated document — through the ONE door, which removes
+      // the row AND its storage objects. A bare `db.delete(documents)` here used to
+      // orphan the board's entire tldraw snapshot in MinIO, plus every version blob
+      // (the `document_versions` CASCADE drops the rows holding those keys first).
       if (view.documentId) {
-        await db.delete(documents).where(eq(documents.id, view.documentId));
+        await deleteDocumentAndBlobs(view.documentId);
       }
 
       // Audit log (fire-and-forget)

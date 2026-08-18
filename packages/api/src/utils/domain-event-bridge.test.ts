@@ -99,7 +99,11 @@ describe("domain-event-bridge — facet events", () => {
     expect(body.userId).toBe("user_1");
   });
 
-  it("still requires workspaceId for workspace-scoped events (e.g. entity.*) — unaffected", async () => {
+  it("pod-wide entity (null/absent workspaceId) falls back to the owner's user room", async () => {
+    // Pod-wide bridge model: a NULL-workspace entity is no longer DROPPED — it
+    // publishes to `user:<ownerUserId>` via the unified room rule (was the
+    // "pod-wide = no realtime" gap). Workspace-scoped entities still route to
+    // the workspace room (next test).
     emitDomainEventToRealtime(
       makeEvent({
         eventType: "entity.create.completed",
@@ -109,7 +113,26 @@ describe("domain-event-bridge — facet events", () => {
     );
     await Promise.resolve();
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.event).toBe("entity:created");
+    expect(body.workspaceId).toBeUndefined();
+    expect(body.userId).toBe("user_1");
+  });
+
+  it("workspace-scoped entity still targets the workspace room (unaffected)", async () => {
+    emitDomainEventToRealtime(
+      makeEvent({
+        eventType: "entity.update.completed",
+        userId: "user_1",
+        data: { workspaceId: "ws_1" },
+      })
+    );
+    await Promise.resolve();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.workspaceId).toBe("ws_1");
+    expect(body.userId).toBeUndefined();
   });
 
   it("broadcasts workspace updates in the cache envelope without settings secrets", async () => {

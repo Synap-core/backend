@@ -2330,12 +2330,16 @@ export type WidgetRole = "widget" | "view-renderer" | "entity-renderer" | "panel
  * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
  *
  *   - "entity-detail"  → renders ONE entity (its full page)
+ *   - "entity-card"    → renders ONE entity (its small, embeddable block)
  *   - "entity-profile" → renders the WHOLE profile/type (its dashboard / home)
  *   - "collection"     → renders a view of MANY entities
  *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
  *                        profile assignment, only placeable
+ *
+ * The column is plain `text` with no CHECK (migration 0111), so widening this
+ * union needs no migration.
  */
-export type ContentKind = "entity-detail" | "entity-profile" | "collection" | "widget";
+export type ContentKind = "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 export interface PodIntelligenceDefaults {
 	chatModelId: string | null;
 	reasoningModelId: string | null;
@@ -9002,6 +9006,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		searchAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				profileSlug?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				entities: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						slug: string;
+						properties: Record<string, unknown>;
+						status: string | null;
+					}[] | undefined;
+				}[];
+			};
+			meta: object;
+		}>;
 		getByDocumentId: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				documentId: string;
@@ -10226,8 +10268,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiReactionMode?: "only_mentioned" | "when_confident" | "off" | undefined;
 				addAgentMemberId?: string | undefined;
 				removeAgentMemberId?: string | undefined;
-				contextObjectType?: "entity" | "proposal" | "view" | "document" | undefined;
-				contextObjectId?: string | undefined;
+				contextObjectType?: "entity" | "proposal" | "view" | "document" | null | undefined;
+				contextObjectId?: string | null | undefined;
 				branchPurpose?: string | undefined;
 			};
 			output: {
@@ -19252,16 +19294,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getEffectiveRenderers: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug: string;
-				contentKind?: "entity-detail" | "entity-profile" | "collection" | undefined;
+				contentKind?: "entity-detail" | "entity-card" | "entity-profile" | "collection" | undefined;
 				workspaceId?: string | null | undefined;
 			};
 			output: {
 				sources: {
 					"entity-detail": ProfileRendererSource | null;
+					"entity-card": ProfileRendererSource | null;
 					"entity-profile": ProfileRendererSource | null;
 					collection: ProfileRendererSource | null;
 				};
 				"entity-detail": RendererRef | null;
+				"entity-card": RendererRef | null;
 				"entity-profile": RendererRef | null;
 				collection: RendererRef | null;
 			};
@@ -19270,7 +19314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setProfileRendererOverride: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				profileSlug: string;
-				contentKind: "entity-detail" | "entity-profile" | "collection";
+				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection";
 				ref: {
 					kind: "cell";
 					cellKey: string;
@@ -20776,7 +20820,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon?: string | undefined;
 				category?: string | undefined;
 				rendererType?: "builtin" | "iframe" | "native" | "frame" | undefined;
-				contentKind?: "widget" | "entity-detail" | "entity-profile" | "collection" | undefined;
+				contentKind?: "widget" | "entity-detail" | "entity-card" | "entity-profile" | "collection" | undefined;
 				rendererSource?: string | undefined;
 				source?: string | undefined;
 				deps?: Record<string, string> | undefined;
@@ -25718,6 +25762,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilityId: string;
 			};
 			output: IntegrationRoutingRule[];
+			meta: object;
+		}>;
+		unbindChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				reasoning?: string | undefined;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				reviewUrl: string;
+			} | {
+				status: "unbound";
+				proposalId?: undefined;
+				reviewUrl?: undefined;
+			};
 			meta: object;
 		}>;
 	}>>;

@@ -57,7 +57,10 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
-import { proposeChannelBind } from "../../../utils/propose-channel-bind.js";
+import {
+  proposeChannelBind,
+  derivePodWideBindWorkspace,
+} from "../../../utils/propose-channel-bind.js";
 
 /**
  * Shared gate for Discord channel write operations (rename, pin).
@@ -693,7 +696,10 @@ export function registerChannelsRoutes(app: HubHono): void {
   // into autoApproveFor; branchPurpose is human-confirmed, never default-forced.
   const bindBodySchema = z.object({
     userId: z.string(),
-    workspaceId: z.string().uuid(),
+    // Optional (pod-wide bridge model): omit for a pod-wide bind — the home
+    // workspace is DERIVED from the bound entity's role (item 5). A bound
+    // service key still confines to its workspace via getConfinedWorkspace.
+    workspaceId: z.string().uuid().optional(),
     contextObjectId: z.string().uuid(),
     contextObjectType: z.enum(["entity", "document", "view"]).optional(),
     branchPurpose: z.string().max(500).optional(),
@@ -740,14 +746,12 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
     }
     // Confine the workspace to the bound service key (Item 3 — mismatch → 403)
-    // BEFORE it reaches resolveActingContext.
-    let clampedWorkspaceId: string;
+    // BEFORE it reaches resolveActingContext. Pod-wide bridge model: an UNBOUND
+    // key with no explicit workspace resolves to null (pod-wide) — that is NOT
+    // an error here; the home workspace is DERIVED from the bound entity below.
+    let confined: string | null | undefined;
     try {
-      const confined = getConfinedWorkspace(c, body.workspaceId);
-      if (!confined) {
-        return c.json({ error: "workspaceId is required" }, 400);
-      }
-      clampedWorkspaceId = confined;
+      confined = getConfinedWorkspace(c, body.workspaceId);
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN") {
         return c.json(
@@ -760,15 +764,49 @@ export function registerChannelsRoutes(app: HubHono): void {
     // SECURITY — acting identity MUST come from the verified auth context,
     // never `body.userId` directly (governed-agent-write → ungoverned-
     // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
+    // workspaceId may be null (pod-wide) — resolveActingContext allows it.
     const acting = await resolveActingContext(c, {
       userId: body.userId,
-      workspaceId: clampedWorkspaceId,
+      ...(confined ? { workspaceId: confined } : {}),
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    if (!acting.workspaceId) {
-      return c.json({ error: "workspaceId is required" }, 400);
+
+    // ROUTING ⊥ BINDING (item 5): the channel binds to the ENTITY; the
+    // governance/home workspace is DERIVED. When no workspace was supplied
+    // (pod-wide bridge key), resolve it from the bound entity's role via the ONE
+    // placement door. Deterministic single winner → file there; ambiguous → 409
+    // with candidates so the human PICKS a workspace (propose-on-ambiguity),
+    // never a silent pod-wide misfile. Governance stays intact.
+    let workspaceId = acting.workspaceId;
+    if (!workspaceId) {
+      const contextObjectType = body.contextObjectType ?? "entity";
+      if (contextObjectType !== "entity") {
+        return c.json(
+          {
+            error:
+              "workspaceId is required for a pod-wide bind to a non-entity object",
+          },
+          400
+        );
+      }
+      const derived = await derivePodWideBindWorkspace({
+        userId: acting.userId,
+        contextObjectId: body.contextObjectId,
+      });
+      if (!derived.ok) {
+        return c.json(
+          {
+            status: "ambiguous",
+            error:
+              "Could not derive a single workspace for this pod-wide bind — specify workspaceId.",
+            reason: derived.reason,
+            candidates: derived.candidates,
+          },
+          409
+        );
+      }
+      workspaceId = derived.workspaceId;
     }
-    const workspaceId = acting.workspaceId;
     try {
       const result = await proposeChannelBind({
         userId: acting.userId,

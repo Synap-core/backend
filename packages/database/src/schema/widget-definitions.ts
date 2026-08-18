@@ -59,13 +59,17 @@ export type WidgetRole =
  * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
  *
  *   - "entity-detail"  → renders ONE entity (its full page)
+ *   - "entity-card"    → renders ONE entity (its small, embeddable block)
  *   - "entity-profile" → renders the WHOLE profile/type (its dashboard / home)
  *   - "collection"     → renders a view of MANY entities
  *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
  *                        profile assignment, only placeable
+ *
+ * The column is plain `text` with no CHECK (migration 0111), so widening this
+ * union needs no migration.
  */
 export type ContentKind =
-  "entity-detail" | "entity-profile" | "collection" | "widget";
+  "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 
 export const widgetDefinitions = pgTable(
   "widget_definitions",

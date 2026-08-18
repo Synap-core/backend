@@ -197,6 +197,35 @@ export function resolveKindWritePin(input: {
   return { targetWorkspaceId: undefined, workspaceScoped: false };
 }
 
+/**
+ * Config-first resolver for the guild→workspace hint (item 4 of the pod-wide
+ * bridge model). Reads a `guildWorkspaceMap` (`{ [guildId]: workspaceId }`) off
+ * a bridge tool/capability's metadata bag and looks up the given guild id.
+ *
+ * Pure — no DB, no I/O — so the inbound path can resolve the operator's declared
+ * mapping and pass the result as `guildHint` to `resolveWorkspacePlacement`
+ * (mirrors how `aiHint` is pre-resolved by the caller). Returns undefined when
+ * there is no guild id, no map, or no mapping for that guild, so placement
+ * cleanly falls through to ontology role-routing.
+ *
+ * Membership is NOT checked here — that is the resolver's I2 floor (a mapping to
+ * a workspace the caller can't see is ignored downstream).
+ */
+export function resolveGuildWorkspaceHint(
+  metadata: unknown,
+  guildId: string | null | undefined
+): { workspaceId: string; guildId: string } | undefined {
+  if (!guildId) return undefined;
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const map = (metadata as { guildWorkspaceMap?: unknown }).guildWorkspaceMap;
+  if (!map || typeof map !== "object") return undefined;
+  const workspaceId = (map as Record<string, unknown>)[guildId];
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    return undefined;
+  }
+  return { workspaceId, guildId };
+}
+
 export function resolveEntityWorkspacePlacement(input: {
   global: boolean;
   targetWorkspaceId?: string | null;
@@ -425,6 +454,25 @@ export interface ResolveWorkspacePlacementInput {
   context?: { channelId?: string | null; sessionId?: string | null };
   /** Entities this one links to (rung-4 relational gravity). */
   relatedEntityIds?: string[];
+  /**
+   * A DECLARED guild→workspace mapping (operator config on the bridge
+   * tool/capability, e.g. `guildWorkspaceMap` on the Discord tool metadata).
+   * When present it is a HIGH-priority, deterministic signal that OVERRIDES
+   * ontology role-routing (rung 2) — a guild that a human has explicitly pinned
+   * to a workspace wins over "which lens enables this role". Still floored by I2
+   * membership: a mapping to a workspace the caller can't see is ignored (falls
+   * through to ontology). Config-first: the CALLER resolves the guildId → this
+   * workspace via `resolveGuildWorkspaceHint`, mirroring how `aiHint` is passed
+   * in pre-resolved rather than the resolver loading config itself.
+   *
+   * Ranked BELOW an explicit caller pin (rung 1 proper) — an explicit
+   * `explicitWorkspaceId`/`global` still wins over guild config.
+   */
+  guildHint?: {
+    workspaceId: string;
+    /** The guild id, for the audit reason string. */
+    guildId?: string;
+  };
   /** The AI's tie-break suggestion (rung 5). Only consulted over candidates. */
   aiHint?: {
     workspaceId: string;
@@ -607,6 +655,30 @@ export async function resolveWorkspacePlacement(
   let memberMap: Map<string, MemberWorkspace> | null = null;
   const getMemberMap = async () =>
     (memberMap ??= await loadRoutableMemberWorkspaces(db, input.userId));
+
+  // ── Rung 1 (guild override) — a DECLARED guild→workspace mapping pins
+  // placement for traffic from that guild, OVERRIDING ontology role-routing.
+  // Additive: only consulted when the caller passed a resolved guildHint.
+  // Floored by I2 — a mapping to a non-member workspace is ignored (falls
+  // through to ontology). Ranked below explicit caller pin / global (rung 1
+  // proper, handled above), above rung 2 ontology.
+  if (input.guildHint?.workspaceId) {
+    const map = await getMemberMap();
+    const w = map.get(input.guildHint.workspaceId);
+    if (w) {
+      return {
+        workspaceId: w.id,
+        rung: 1,
+        reason: input.guildHint.guildId
+          ? `guild '${input.guildHint.guildId}' is mapped to workspace '${w.name}' (declared guild→workspace config)`
+          : `guild mapped to workspace '${w.name}' (declared guild→workspace config)`,
+        confidence: 1,
+        candidates: [],
+        ask: false,
+      };
+    }
+    // Non-member / unknown mapping → ignore; ontology (rung 2) decides.
+  }
 
   let candidates: WorkspaceCandidate[] = [];
 

@@ -294,4 +294,82 @@ export function registerChannelExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── channel / unbind ───────────────────────────────────────────────────────
+  // Approve a `channel/unbind` proposal (tRPC signal.unbindChannel): clear an
+  // ALREADY-BOUND channel's context pointer. Inverse of channel/bind — same
+  // membership-floor + governed channelsRouter caller, but delegates to
+  // updateChannel with contextObjectType/contextObjectId set to null. NO raw
+  // UPDATE here. `branchPurpose` (the firewall role) is DELIBERATELY never
+  // touched — unbind only clears WHERE the channel points, never WHAT KIND of
+  // channel it is (client-comms stays immutable).
+  registerProposalExecutor({
+    key: "channel/unbind",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const outer = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = (outer.data ?? outer ?? {}) as Record<string, unknown>;
+      const unbindWorkspaceId = proposal.workspaceId || null;
+      if (!unbindWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Proposal is missing a valid workspaceId",
+        });
+      }
+      const channelId = data.channelId as string | undefined;
+      if (!channelId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "channel/unbind proposal is missing channelId",
+        });
+      }
+      const membership = await getWorkspaceMembership(
+        db,
+        unbindWorkspaceId,
+        userId
+      );
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const unbindCallerCtx = {
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: unbindWorkspaceId,
+        workspaceRole: membership.role,
+      };
+      const caller = channelsRouter.createCaller(
+        unbindCallerCtx as unknown as Context
+      );
+      await caller.updateChannel({
+        channelId,
+        contextObjectType: null,
+        contextObjectId: null,
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
 }

@@ -10,6 +10,18 @@
  *     (`keyWorkspaceId == null`) → return `requested` UNCHANGED. This is the
  *     ONLY behavior for those keys — legacy passthrough with ZERO back-compat
  *     impact. No existing key type ever changes behavior.
+ *
+ *     POD-WIDE BRIDGE MODEL: an UNBOUND service key (`keyType === "service"` &&
+ *     `keyWorkspaceId == null`) is DELIBERATELY pod-wide — it never 403s on a
+ *     pod-wide (null) request, so a single bridge/bot key can land inbound
+ *     traffic across every workspace and let role-routing derive placement.
+ *     This is NOT a hole: pod-wide ≠ unattributed. The ATTRIBUTION floor is a
+ *     separate, orthogonal guard — a write with no acting user (null
+ *     `linkedUserId` on a bare user_pat/hub_inbound key) is still hard-rejected
+ *     upstream by `shouldRejectUnattributedWrite` (MCP) / `resolveActingContext`
+ *     (Hub REST, which 403s when `c.get("userId")` is absent). Confinement
+ *     answers "which workspace"; attribution answers "who". Both must hold; the
+ *     tripwire `__tripwires__/pod-wide-bridge-attribution.test.ts` locks it.
  *   - service key WITH a binding (`keyType === "service"` && `keyWorkspaceId`):
  *       · `requested == null`          → return `keyWorkspaceId` (positive pin:
  *                                         default to the bound workspace, never

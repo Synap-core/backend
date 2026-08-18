@@ -19,6 +19,7 @@ import {
   resolveMaterializedEntityWorkspaceId,
   resolveKindWritePin,
   normalizeEntityScope,
+  resolveGuildWorkspaceHint,
 } from "./workspace-resolution-service.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 
@@ -164,6 +165,84 @@ describe("resolveWorkspacePlacement — rung 1 (explicit / deliberate)", () => {
       kindSlug: "client",
     });
     expect(r).toMatchObject({ workspaceId: null, rung: 1 });
+  });
+});
+
+describe("resolveWorkspacePlacement — rung 1 (guild override)", () => {
+  it("guild hint OVERRIDES an ontology role signal → the mapped workspace, rung 1", async () => {
+    // 'client' ontology would place in WS_A (rung 2), but the guild is mapped to
+    // WS_B — the declared config wins.
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "CRM" },
+        { id: WS_B, name: "Ops" },
+      ],
+      profiles: [
+        { id: "p", slug: "client", scope: "workspace", workspaceId: WS_A },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "client",
+      guildHint: { workspaceId: WS_B, guildId: "guild-123" },
+    });
+    expect(r.workspaceId).toBe(WS_B);
+    expect(r.rung).toBe(1);
+    expect(r.reason).toContain("guild-123");
+    expect(r.reason).toContain("Ops");
+  });
+
+  it("explicit caller pin still wins over a guild hint", async () => {
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "CRM" },
+        { id: WS_B, name: "Ops" },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      explicitWorkspaceId: WS_A,
+      guildHint: { workspaceId: WS_B, guildId: "guild-123" },
+    });
+    expect(r.workspaceId).toBe(WS_A);
+    expect(r.rung).toBe(1);
+  });
+
+  it("guild mapping to a NON-member workspace is ignored (I2 floor) → falls through to ontology", async () => {
+    const db = makeDb({
+      members: [WS_A],
+      workspaces: [{ id: WS_A, name: "CRM" }],
+      profiles: [
+        { id: "p", slug: "client", scope: "workspace", workspaceId: WS_A },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "client",
+      guildHint: { workspaceId: WS_OTHER, guildId: "guild-xyz" },
+    });
+    // WS_OTHER is not a member workspace → hint ignored → ontology places in WS_A.
+    expect(r.workspaceId).toBe(WS_A);
+    expect(r.rung).toBe(2);
+  });
+});
+
+describe("resolveGuildWorkspaceHint (config-first helper)", () => {
+  const meta = { guildWorkspaceMap: { "guild-1": WS_A, "guild-2": WS_B } };
+  it("returns the mapped workspace for a known guild", () => {
+    expect(resolveGuildWorkspaceHint(meta, "guild-1")).toEqual({
+      workspaceId: WS_A,
+      guildId: "guild-1",
+    });
+  });
+  it("returns undefined for an unmapped guild / no guild / no map", () => {
+    expect(resolveGuildWorkspaceHint(meta, "guild-none")).toBeUndefined();
+    expect(resolveGuildWorkspaceHint(meta, undefined)).toBeUndefined();
+    expect(resolveGuildWorkspaceHint(meta, null)).toBeUndefined();
+    expect(resolveGuildWorkspaceHint({}, "guild-1")).toBeUndefined();
+    expect(resolveGuildWorkspaceHint(null, "guild-1")).toBeUndefined();
   });
 });
 

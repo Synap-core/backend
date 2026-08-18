@@ -193,6 +193,119 @@ export async function syncNangoConnectionsToRegistry(
       }
     }
   }
+
+  // 5. Health half — PROACTIVE. Nango reports a per-connection `errors[]`; a
+  //    non-empty array means the credential is dead (refresh failed) even though
+  //    the connection still EXISTS, so the removal half above never touches it.
+  //    Without this the registry reports a dead connection as "healthy" until a
+  //    dispatch happens to pick it — which it may never do, because dispatch
+  //    prefers the most-recent connection.
+  //
+  //    ESCALATE-ONLY: we mark `needs_reauth`, we never clear it here. Clearing is
+  //    owned by the authoritative "a real call just succeeded" signal
+  //    (`mirrorConnectionAuthOutcome("ok")` in external-dispatch), so a lagging
+  //    broker view can't flip a genuinely-dead connection back to healthy.
+  const erroredHints = liveConnections
+    .filter((c) => c.hasError)
+    .map((c) => c.connectionId);
+  if (erroredHints.length > 0) {
+    const marked = await db
+      .update(secrets)
+      .set({ connectionState: "needs_reauth", lastAuthErrorAt: new Date() })
+      .where(
+        and(
+          eq(secrets.capabilityId, capabilityId),
+          eq(secrets.userId, actorUserId),
+          inArray(secrets.accountHint, erroredHints),
+          isNull(secrets.deletedAt)
+        )
+      )
+      .returning({ id: secrets.id });
+    if (marked.length > 0) {
+      logger.info(
+        { capabilityId, actorUserId, count: marked.length },
+        "Reconciler marked connections needs_reauth from Nango's own error state"
+      );
+    }
+  }
+
+  // 6. The default must point at a connection that WORKS. A default stuck on a
+  //    dead account is worse than no default: an explicit-default run fails while
+  //    a healthy account sits unused right beside it. Demote a dead default and
+  //    promote the newest healthy pointer.
+  const activeRows = await db
+    .select({
+      id: secrets.id,
+      accountHint: secrets.accountHint,
+      isDefault: secrets.isDefault,
+      connectionState: secrets.connectionState,
+      createdAt: secrets.createdAt,
+    })
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.capabilityId, capabilityId),
+        eq(secrets.userId, actorUserId),
+        isNull(secrets.deletedAt)
+      )
+    );
+  const move = chooseHealthyDefault(activeRows, erroredHints);
+  if (move) {
+    // Demote FIRST: `idx_secrets_capability_default` allows only one default per
+    // capability, so promoting before demoting would violate it.
+    await db
+      .update(secrets)
+      .set({ isDefault: false })
+      .where(eq(secrets.id, move.demoteId));
+    await db
+      .update(secrets)
+      .set({ isDefault: true })
+      .where(eq(secrets.id, move.promoteId));
+    logger.info(
+      { capabilityId, actorUserId, from: move.demoteId, to: move.promoteId },
+      "Reconciler moved the default off a dead connection onto a healthy one"
+    );
+  }
+}
+
+/** A registry pointer row, reduced to what the default-choice decision reads. */
+export interface DefaultCandidateRow {
+  id: string;
+  accountHint: string | null;
+  isDefault: boolean;
+  connectionState: string | null;
+  createdAt: Date;
+}
+
+/**
+ * Decide whether the default must move off a dead connection — the pure core of
+ * step 6 (exported for test).
+ *
+ * A connection is dead when the health mirror says `needs_reauth` OR the broker
+ * currently reports an error for it. Returns the demote/promote pair, or null
+ * when the default is fine (or when there is no healthy alternative — a lone
+ * dead default is LEFT in place, because dropping it would leave the capability
+ * with no default at all and tell the user nothing).
+ *
+ * Picks the NEWEST healthy pointer, matching what the dispatcher picks when no
+ * account is pinned, so the stored default and the implicit pick agree.
+ */
+export function chooseHealthyDefault(
+  rows: DefaultCandidateRow[],
+  erroredHints: string[]
+): { demoteId: string; promoteId: string } | null {
+  const errored = new Set(erroredHints);
+  const isDead = (r: DefaultCandidateRow): boolean =>
+    r.connectionState === "needs_reauth" ||
+    (!!r.accountHint && errored.has(r.accountHint));
+
+  const current = rows.find((r) => r.isDefault);
+  if (!current || !isDead(current)) return null;
+
+  const healthy = rows
+    .filter((r) => !r.isDefault && !isDead(r))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  return healthy ? { demoteId: current.id, promoteId: healthy.id } : null;
 }
 
 /**

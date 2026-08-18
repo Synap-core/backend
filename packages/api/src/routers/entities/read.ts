@@ -754,6 +754,86 @@ export const readProcs = {
     }),
 
   /**
+   * Pod-wide search (pod-wide bridge model) — spans EVERY workspace the caller
+   * belongs to, plus globals, plus their own pod-personal rows. Unlike `search`
+   * (which narrows to the ACTIVE workspace + globals when a workspace is set),
+   * `searchAll` NEVER applies a workspace narrow: the caller's read floor
+   * (`entityReadVisibleWhere`) IS the answer, which is the widest lens there is.
+   *
+   * `protectedProcedure` (not workspace/pod): it deliberately ignores any
+   * ambient workspace, so a pod-wide caller (bridge routing, cross-workspace
+   * pickers) can resolve an entity without pinning a lens first. Safety is the
+   * same floor as `search`: `entityReadVisibleWhere` is applied unconditionally
+   * and is what stops another user's pod-personal entities from leaking.
+   *
+   * Contract (PINNED — browser depends on it): same input/output SHAPE as
+   * `entities.search` minus the workspace lens. `{ query, limit?, profileSlug? }`
+   * → `{ entities: EntitySchema[] }`.
+   */
+  searchAll: protectedProcedure
+    .input(
+      z.object({
+        query: z.string(),
+        profileSlug: z.string().optional(),
+        limit: z.number().min(1).max(50).default(10),
+      })
+    )
+    .output(
+      z.object({
+        entities: z.array(EntitySchema),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      // Pod-wide facet scope: the caller's COMPLETE role/facet floor across
+      // every workspace they belong to (undefined ⇒ full user floor), never a
+      // single-workspace lens.
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        undefined
+      );
+
+      // Floor: every result must belong to the caller (spans all their
+      // workspaces + globals + own pod-personal). This is the ONLY scope
+      // predicate — there is no workspace narrow, by design.
+      const conditions: any[] = [entityReadVisibleWhere(ctx.userId)];
+
+      const trimmedQuery = input.query.trim();
+      if (trimmedQuery.length > 0) {
+        conditions.push(ilike(entities.title, `%${trimmedQuery}%`));
+      }
+
+      if (input.profileSlug) {
+        // Polymorphic (Kind + Facets): role slug via facet EXISTS, kind slug via
+        // entities.type — same routing as entities.search, through the shared
+        // one-door helper. Fail closed on an unknown slug. No workspace narrow
+        // is added even for a workspace-scoped profile: pod-wide is the point.
+        const database = await getDb();
+        const slugRows = await assertKnownProfileSlug(
+          database,
+          input.profileSlug
+        );
+        conditions.push(
+          profileSlugScopeConditionFromRows(
+            database,
+            input.profileSlug,
+            slugRows,
+            facetVisibilityScope
+          )
+        );
+      }
+
+      const results = await db.query.entities.findMany({
+        where: and(...conditions),
+        orderBy: [desc(entities.createdAt)],
+        limit: input.limit,
+      });
+
+      return {
+        entities: await toApiEntitiesWithFacets(results, facetVisibilityScope),
+      };
+    }),
+
+  /**
    * Get entity by document ID (reverse lookup)
    */
   getByDocumentId: podProcedure

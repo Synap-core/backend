@@ -1417,9 +1417,16 @@ export const crudProcedures = {
         /** Bind this channel to a context object (e.g. a client entity). Set all
          *  three (or the pair) together — the governed home for "point this
          *  existing channel at this object", used by the channel.bind builtin verb
-         *  for the inbound-first case where the channel already exists. */
-        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
-        contextObjectId: z.string().uuid().optional(),
+         *  for the inbound-first case where the channel already exists.
+         *  Pass `null` (not `undefined`) to CLEAR the binding — the channel.unbind
+         *  door's write path. `undefined` means "leave unchanged" (the .set()
+         *  below only writes a key when the input value is not undefined), so the
+         *  tri-state (undefined / null / value) is load-bearing. */
+        contextObjectType: z
+          .enum(CONTEXT_OBJECT_TYPE_VALUES)
+          .nullable()
+          .optional(),
+        contextObjectId: z.string().uuid().nullable().optional(),
         /** Firewall role label ("client-comms" / "team") — see the delivery firewall. */
         branchPurpose: z.string().max(500).optional(),
       })
