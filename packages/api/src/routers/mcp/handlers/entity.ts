@@ -420,7 +420,12 @@ export const entityHandlers: McpHandlerMap = {
       ...(requestedWorkspaceId ? { workspaceId: requestedWorkspaceId } : {}),
       sourceEntityId: args.sourceEntityId as string,
       targetEntityId: args.targetEntityId as string,
-      type: (args.type as string) || "related",
+      // `relates_to` — NOT `related`. The default must name a relation def that
+      // actually exists: `relations.createRelation` requires a `relation_defs`
+      // row for the slug, and `related` is not one of the 22 pod-wide defaults
+      // (`database/src/utils/default-relation-defs.ts`) — so every type-omitting
+      // link call used to 400, silently blocking agent-authored graph edges.
+      type: (args.type as string) || "relates_to",
       ...(agentUserId ? { agentUserId } : {}),
     });
     return ok(result);
