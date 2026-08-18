@@ -1744,8 +1744,7 @@ async function executeAutomationFlow(params: {
       } else {
         // All attempts failed
         stepsFailed++;
-        const errorMessage =
-          lastError instanceof Error ? lastError.message : "Unknown error";
+        const errorMessage = describeLedgerError(lastError);
 
         // A governance policy-block (or the older workflow-guard precondition
         // halt) is a deliberate NON-PROCEED verdict, not a broken step — record it
@@ -1883,6 +1882,43 @@ async function executeAutomationFlow(params: {
 /**
  * pg-boss handler: parse the job payload and delegate to executeAutomationFlow.
  */
+
+/**
+ * Human-readable failure text for a run/step ledger row.
+ *
+ * `err.message` alone is NOT enough for the errors that actually kill runs
+ * here. A Drizzle failure's `message` is only the `Failed query: …` wrapper —
+ * the sentence that names the real problem (`invalid input syntax for type
+ * uuid`, a constraint name, a column) lives on `err.cause`, and dropping it is
+ * why a one-line postgres bug took an hour to find instead of thirty seconds.
+ *
+ * Appends the cause only when it adds something the message does not already
+ * contain, and caps the result so a pathological driver error cannot bloat the
+ * column.
+ */
+const LEDGER_ERROR_MAX = 2000;
+
+function describeLedgerError(err: unknown): string {
+  const base =
+    err instanceof Error
+      ? err.message
+      : err == null
+        ? "Unknown error"
+        : String(err);
+  const cause =
+    err instanceof Error ? (err as { cause?: unknown }).cause : undefined;
+  if (cause == null) return base.slice(0, LEDGER_ERROR_MAX);
+  const causeText =
+    cause instanceof Error
+      ? cause.message
+      : typeof cause === "string"
+        ? cause
+        : String(cause);
+  if (!causeText || base.includes(causeText))
+    return base.slice(0, LEDGER_ERROR_MAX);
+  return `${base} — cause: ${causeText}`.slice(0, LEDGER_ERROR_MAX);
+}
+
 export async function handleAutomationExecute(job: {
   data: ExecutionPayload;
 }): Promise<void> {
@@ -1959,7 +1995,7 @@ export async function handleAutomationExecute(job: {
       .update(automationRuns)
       .set({
         status: blockedByPolicy ? "blocked_by_policy" : "failed",
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: describeLedgerError(err),
         completedAt: new Date(),
       })
       .where(

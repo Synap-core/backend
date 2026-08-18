@@ -172,6 +172,19 @@ export const proposalsRouter = router({
         correlationId: z.string().optional(),
         /** Filter to proposals linked to a specific focus session via session_id FK */
         sessionId: z.string().uuid().optional(),
+        /**
+         * Filter to proposals belonging to a PROJECT (`proposals.project_id`).
+         *
+         * A pure filter on an existing, indexed column
+         * (`proposals_project_id_idx`) — the same column `activity.summary`
+         * already groups by to produce per-project attention counts. It exists
+         * so a project surface can show the REAL pending proposals rather than
+         * only a number: a count tells you something is waiting, an object lets
+         * you go and decide it.
+         *
+         * Adds no reach — every visibility predicate below still applies.
+         */
+        projectId: z.string().uuid().optional(),
         /** Filter to proposals created by a specific agent */
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
@@ -229,6 +242,10 @@ export const proposalsRouter = router({
       /** Filter to proposals with a specific correlationId (used to link back to focus sessions) */
       if (input.correlationId) {
         conditions.push(eq(proposals.correlationId, input.correlationId));
+      }
+
+      if (input.projectId) {
+        conditions.push(eq(proposals.projectId, input.projectId));
       }
 
       if (input.sessionId) {

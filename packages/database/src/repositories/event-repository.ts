@@ -887,6 +887,83 @@ export class EventRepository {
   }
 
   /**
+   * Aggregate agent-run spend, grouped by UTC calendar day.
+   *
+   * The AGGREGATE counterpart of `listAgentRuns`: "what did I spend yesterday /
+   * this week / this month?". Everything is summed in SQL (one round trip, one
+   * pass) — the day rows AND the window total come back from a single
+   * GROUPING SETS query, so the total can never drift from the series.
+   *
+   * SECURITY: same clamp as `listAgentRuns` — `userId` is required and always
+   * bounds the result; `workspaceId` only ever NARROWS (never widens), and
+   * resolves through the same `COALESCE(workspace_id, data->>'workspaceId')`
+   * fallback for rows written before migration 0223 backfilled the column.
+   *
+   * TIMEZONE: days are UTC calendar days (`timestamp AT TIME ZONE 'UTC'`),
+   * matching the pod's existing `startOfUtcDay()` convention for "today"
+   * (`utils/permission-check.ts`, used by `subscriptions.activityStats`). There
+   * is no per-user timezone in the schema, so UTC is the only honest boundary.
+   *
+   * NULL vs 0 — THE CRUX: `cost_usd` is NULL when the provider reported no
+   * price (a free-tier or local model), NOT when the run was free. `SUM()`
+   * skips NULLs, which is correct, but a day whose runs ALL have NULL cost must
+   * NOT surface as "$0.00" — that reads as "this was free" and is a lie. So
+   * `costUsd` stays `null` in exactly that case (never coerced to 0), and every
+   * bucket also carries `costedRunCount` / `uncostedRunCount` so a caller can
+   * render "$1.62 (+3 runs of unknown cost)" instead of a false total.
+   *
+   * @param filters.userId      owner clamp (required)
+   * @param filters.workspaceId optional workspace narrowing
+   * @param filters.days        window length in UTC days, inclusive of today
+   * @param filters.now         clock injection point (tests); defaults to now
+   */
+  async summarizeAgentRuns(filters: {
+    userId: string;
+    workspaceId?: string;
+    days: number;
+    now?: Date;
+  }): Promise<AgentSpendSummary> {
+    const params: unknown[] = [filters.userId, filters.days];
+
+    let wsClause = "";
+    if (filters.workspaceId) {
+      params.push(filters.workspaceId);
+      wsClause = ` AND COALESCE(workspace_id, data->>'workspaceId') = $${params.length}`;
+    }
+
+    // The UTC calendar day of each run. Repeated verbatim in GROUPING() and in
+    // the GROUPING SETS list — Postgres matches grouping expressions
+    // syntactically, so these three must stay identical.
+    const DAY = "(timestamp AT TIME ZONE 'UTC')::date";
+
+    const query = `
+      SELECT
+        to_char(${DAY}, 'YYYY-MM-DD')                 AS day,
+        GROUPING(${DAY})                              AS is_total,
+        SUM(cost_usd)                                 AS cost_usd,
+        SUM(tokens_in)                                AS tokens_in,
+        SUM(tokens_out)                               AS tokens_out,
+        COUNT(*)                                      AS run_count,
+        COUNT(*) FILTER (WHERE run_status = 'failed') AS failed_count,
+        COUNT(*) FILTER (WHERE cost_usd IS NOT NULL)  AS costed_run_count,
+        COUNT(*) FILTER (WHERE cost_usd IS NULL)      AS uncosted_run_count
+      FROM events
+      WHERE type = 'agentRun.create.completed'
+        AND user_id = $1
+        AND timestamp >= ((date_trunc('day', now() AT TIME ZONE 'UTC')
+                           - make_interval(days => $2::int - 1)) AT TIME ZONE 'UTC')${wsClause}
+      GROUP BY GROUPING SETS ((${DAY}), ())
+      ORDER BY is_total ASC, day ASC
+    `;
+
+    const result = await this.query(query, params);
+    return shapeAgentSpend(result.rows as AgentSpendRawRow[], {
+      windowDays: filters.days,
+      now: filters.now ?? new Date(),
+    });
+  }
+
+  /**
    * Count events (for analytics)
    */
   async countEvents(
@@ -1140,6 +1217,150 @@ export class EventRepository {
       proposalId: (row.proposal_id as string | null) ?? undefined,
     };
   }
+}
+
+// ============================================================================
+// AGENT SPEND AGGREGATE (types + pure row shaper)
+// ============================================================================
+
+/**
+ * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
+ *
+ * `costUsd === null` means NOT "$0": it means no run in the bucket carried a
+ * known price. Read it together with `costedRunCount` / `uncostedRunCount`
+ * before rendering any currency. Same contract for `tokensIn` / `tokensOut`.
+ */
+export interface AgentSpendBucket {
+  /** SUM of the known prices. null = nothing in this bucket had a known price. */
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  /** All runs in the bucket, priced or not. */
+  runCount: number;
+  /** Runs with `run_status = 'failed'`. */
+  failedCount: number;
+  /** Runs the provider DID report a price for — the denominator of `costUsd`. */
+  costedRunCount: number;
+  /** Runs with NO reported price. `> 0` means `costUsd` is a FLOOR, not a total. */
+  uncostedRunCount: number;
+}
+
+/** A single UTC calendar day of the window. */
+export interface AgentSpendDay extends AgentSpendBucket {
+  /** UTC calendar day, ISO `YYYY-MM-DD`. */
+  day: string;
+}
+
+export interface AgentSpendSummary {
+  /** Every UTC day in the window, oldest → newest, gaps filled with empties. */
+  days: AgentSpendDay[];
+  /** The whole window, aggregated in the SAME SQL pass as `days`. */
+  total: AgentSpendBucket;
+  /** Inclusive window bounds as UTC calendar days (ISO `YYYY-MM-DD`). */
+  windowStart: string;
+  windowEnd: string;
+}
+
+/** Raw row shape of the `summarizeAgentRuns` GROUPING SETS query. */
+export interface AgentSpendRawRow {
+  day: string | null;
+  is_total: number | string;
+  cost_usd: number | string | null;
+  tokens_in: number | string | null;
+  tokens_out: number | string | null;
+  run_count: number | string;
+  failed_count: number | string;
+  costed_run_count: number | string;
+  uncosted_run_count: number | string;
+}
+
+/** COUNT()/SUM() come back as strings from postgres.js — parse, never trust. */
+function toInt(v: unknown): number {
+  return parseInt(String(v ?? 0), 10) || 0;
+}
+
+/**
+ * NULL-PRESERVING numeric parse. This is the whole NULL-vs-0 contract in one
+ * function: a NULL/absent SUM stays `null` and is NEVER coerced to 0, because
+ * "we do not know what this cost" and "this cost nothing" are different facts.
+ */
+function toNullableNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const parsed = Number(v);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** UTC calendar day of a Date, as ISO `YYYY-MM-DD`. */
+function utcDayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+const EMPTY_BUCKET: Readonly<AgentSpendBucket> = Object.freeze({
+  costUsd: null,
+  tokensIn: null,
+  tokensOut: null,
+  runCount: 0,
+  failedCount: 0,
+  costedRunCount: 0,
+  uncostedRunCount: 0,
+});
+
+function bucketFromRow(row: AgentSpendRawRow): AgentSpendBucket {
+  return {
+    costUsd: toNullableNum(row.cost_usd),
+    tokensIn: toNullableNum(row.tokens_in),
+    tokensOut: toNullableNum(row.tokens_out),
+    runCount: toInt(row.run_count),
+    failedCount: toInt(row.failed_count),
+    costedRunCount: toInt(row.costed_run_count),
+    uncostedRunCount: toInt(row.uncosted_run_count),
+  };
+}
+
+/**
+ * Shape the raw GROUPING SETS rows into `{ days, total }` — PURE, so the
+ * NULL-vs-0 contract is testable without a database.
+ *
+ * The `is_total = 1` row is the `()` grouping set (the whole window); every
+ * other row is one UTC day. Days with no runs are filled with an EMPTY bucket
+ * (`runCount: 0`, `costUsd: null`) so a chart gets a continuous series — an
+ * absent day is "nothing ran", which is not a priced fact either.
+ */
+export function shapeAgentSpend(
+  rows: AgentSpendRawRow[],
+  opts: { windowDays: number; now: Date }
+): AgentSpendSummary {
+  const byDay = new Map<string, AgentSpendBucket>();
+  let total: AgentSpendBucket = { ...EMPTY_BUCKET };
+
+  for (const row of rows) {
+    if (toInt(row.is_total) === 1) {
+      total = bucketFromRow(row);
+    } else if (row.day) {
+      byDay.set(row.day, bucketFromRow(row));
+    }
+  }
+
+  const endMs = Date.UTC(
+    opts.now.getUTCFullYear(),
+    opts.now.getUTCMonth(),
+    opts.now.getUTCDate()
+  );
+  const DAY_MS = 86_400_000;
+  const span = Math.max(1, Math.floor(opts.windowDays));
+
+  const days: AgentSpendDay[] = [];
+  for (let i = span - 1; i >= 0; i--) {
+    const key = utcDayKey(new Date(endMs - i * DAY_MS));
+    days.push({ day: key, ...(byDay.get(key) ?? EMPTY_BUCKET) });
+  }
+
+  return {
+    days,
+    total,
+    windowStart: days[0].day,
+    windowEnd: days[days.length - 1].day,
+  };
 }
 
 // ============================================================================

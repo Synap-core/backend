@@ -224,7 +224,10 @@ function warnIfBridgeUnauthenticated(): void {
   }
 }
 
-function bridgeSecretOk(req: IncomingMessage, res: ServerResponse): boolean {
+export function bridgeSecretOk(
+  req: IncomingMessage,
+  res: ServerResponse
+): boolean {
   const bridgeSecret = process.env.BRIDGE_SECRET;
   if (!bridgeSecret) {
     warnIfBridgeUnauthenticated();

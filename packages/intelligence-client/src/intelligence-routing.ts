@@ -128,8 +128,7 @@ export async function resolveIntelligenceService(
 
     const wsSettings = workspace?.settings as WorkspaceSettings | undefined;
     const wsOverrides = wsSettings?.intelligenceServiceOverrides as
-      | Record<string, string>
-      | undefined;
+      Record<string, string> | undefined;
     const wsServiceId =
       (capability !== "default" && wsOverrides?.[capability]) ||
       wsSettings?.intelligenceServiceId;
@@ -169,8 +168,7 @@ export async function resolveIntelligenceService(
 
   const userServicePrefs =
     (userPrefs?.intelligenceServicePreferences as
-      | Record<string, string>
-      | undefined) || {};
+      Record<string, string> | undefined) || {};
   const userServiceId =
     userServicePrefs[capability] || userServicePrefs.default;
 
@@ -285,28 +283,57 @@ export async function resolveIntelligenceService(
 }
 
 /**
- * Find the dedicated AI agent user for a given human user+workspace pair.
- * Returns undefined if no agent user exists (graceful degradation).
+ * Find the dedicated AI agent user acting for a human — optionally narrowed to
+ * one workspace.
+ *
+ * The OWNER signal is `users.createdByUserId` (the same one `ownAdjunctFilter`
+ * in `agent-identity-service.ts` calls canonical). The workspace-membership
+ * join is only a DISAMBIGUATOR for a human who owns several agent-users.
+ *
+ * This used to bail on `!workspaceId`, which made every pod-wide turn
+ * actor-less: `agentUserId` came back undefined, so agent-run telemetry (and
+ * therefore LLM cost) was dropped for every Companion turn taken outside a
+ * workspace lens. The lens is not the actor — absence of a lens must not erase
+ * who is acting.
+ *
+ * Without a workspace we resolve on ownership alone, but we REFUSE TO GUESS:
+ * if the human owns more than one agent-user we return undefined rather than
+ * pick one, because mis-attributing a run (and its cost) to the wrong actor is
+ * worse than not attributing it. That case is resolvable by passing a
+ * workspaceId; a single-adjunct user — the common case — now resolves.
  */
 async function lookupAgentUser(
   userId: string | undefined,
   workspaceId?: string
 ): Promise<string | undefined> {
-  if (!userId || !workspaceId) return undefined;
+  if (!userId) return undefined;
   try {
-    const [row] = await db
+    if (workspaceId) {
+      const [row] = await db
+        .select({ id: users.id })
+        .from(users)
+        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+        .where(
+          and(
+            eq(users.userType, "agent"),
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(users.createdByUserId, userId)
+          )
+        )
+        .limit(1);
+      return row?.id;
+    }
+
+    // Pod-wide: ownership only. Take 2 so "exactly one" is decidable — a
+    // `.limit(1)` could not tell a unique match from an arbitrary pick.
+    const rows = await db
       .select({ id: users.id })
       .from(users)
-      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
       .where(
-        and(
-          eq(users.userType, "agent"),
-          eq(workspaceMembers.workspaceId, workspaceId),
-          eq(users.createdByUserId, userId)
-        )
+        and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
       )
-      .limit(1);
-    return row?.id;
+      .limit(2);
+    return rows.length === 1 ? rows[0]!.id : undefined;
   } catch {
     // Agent user lookup is non-critical; degrade gracefully
     return undefined;

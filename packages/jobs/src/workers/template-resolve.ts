@@ -101,13 +101,24 @@ export function deepResolveTemplates(
 
 /**
  * Resolve all input mappings for a command step.
+ *
+ * `mapping` is OPTIONAL at runtime even though most callers have one: a flow
+ * node authored without an `inputMapping` (the shipped
+ * `relay-new-contact-enrichment` command node is one) reaches here as
+ * `undefined`, and `Object.entries(undefined)` throws "Cannot convert
+ * undefined or null to object" — which killed the whole run at step 1.
+ *
+ * Three of the four call sites already defended with `?? {}` / a ternary, so
+ * the optionality was known; only the extracted command-step path did not, and
+ * the non-optional signature meant tsc could never say so. Absorbing it here
+ * fixes every caller and makes a fourth guard unnecessary.
  */
 export function resolveInputMapping(
-  mapping: Record<string, string>,
+  mapping: Record<string, string> | null | undefined,
   context: StepContext
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = {};
-  for (const [key, template] of Object.entries(mapping)) {
+  for (const [key, template] of Object.entries(mapping ?? {})) {
     resolved[key] = resolveTemplate(template, context);
   }
   return resolved;

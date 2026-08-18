@@ -11,6 +11,7 @@ import { ProfilePropertyRepository } from "../repositories/profile-property-repo
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { workspaces } from "../schema/workspaces.js";
 import { profiles } from "../schema/profiles.js";
+import { capabilities } from "../schema/capabilities.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { AiPosture } from "../schema/profiles.js";
 import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
@@ -38,6 +39,26 @@ export interface EffectiveProperty extends PropertyDef {
  *
  * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
  */
+/**
+ * DeclarativeBlock — a MINIMAL, bounded Block-Kit-style schema for a
+ * `declarative` renderer (the config-first surface a capability page can carry
+ * without a coded cell or a saved view). Intentionally small: five block kinds,
+ * each a plain data shape the browser can render generically. Additive — it
+ * exists ONLY to give the new `RendererRef.declarative` kind a typed `schema`.
+ */
+export type DeclarativeBlock =
+  | { type: "heading"; text: string; level?: 1 | 2 | 3 }
+  | { type: "text"; text: string }
+  | { type: "stat"; label: string; value: string | number; hint?: string }
+  | { type: "list"; items: string[]; ordered?: boolean }
+  | {
+      type: "button";
+      label: string;
+      /** A capability verb key or a route the browser knows how to open. */
+      action: string;
+      params?: Record<string, unknown>;
+    };
+
 export type RendererRef =
   | {
       kind: "cell";
@@ -78,6 +99,13 @@ export type RendererRef =
       adapterKey: string;
       props?: Record<string, unknown>;
       title?: string;
+    }
+  | {
+      kind: "declarative";
+      schema: DeclarativeBlock[];
+      title?: string;
+      props?: Record<string, unknown>;
+      displayMode?: string;
     };
 
 /**
@@ -101,6 +129,100 @@ export type ProfileRendererContentKind =
  * `"default"` means NOTHING is bound — layer 3's hardcoded fallback answered.
  */
 export type ProfileRendererSource = "workspace" | "profile" | "default";
+
+/**
+ * Capability renderers — the capability-subject analogue of a profile's
+ * `defaultRenderers`. A capability is NOT a row in `profiles` (it lives in the
+ * `capabilities` table), so it cannot reuse the profile resolver; the parallel
+ * store + `getEffectiveCapabilityRenderer` below mirror it one subject over.
+ *
+ * A capability carries an ORDERED, multi-PAGE set (a capability detail is a
+ * page-set, not a single slot): `capabilities.metadata.renderers = { pages }`.
+ * Each page pins one `RendererRef` (cell | view | declarative | …) under a
+ * stable `slot` with a human `title`. The workspace overlay analogue is
+ * `workspaces.settings.capabilityRenderers[capabilityId]`, mirroring
+ * `settings.profileRenderers[slug]`.
+ */
+export interface CapabilityRendererPage {
+  /** Stable page key within the capability's page-set (e.g. "overview"). */
+  slot: string;
+  title: string;
+  ref: RendererRef;
+}
+
+/** The stored shape at `capabilities.metadata.renderers` and in the overlay. */
+export interface CapabilityRenderersConfig {
+  pages: CapabilityRendererPage[];
+}
+
+/**
+ * Which layer answered `getEffectiveCapabilityRenderer`:
+ *   - `"workspace"`  — `workspaces.settings.capabilityRenderers[capabilityId]`
+ *   - `"capability"` — `capabilities.metadata.renderers`
+ *   - `"default"`    — NOTHING bound; the page-set is empty and the browser must
+ *                      fall back to its hardcoded capability surface.
+ */
+export type CapabilityRendererSource = "workspace" | "capability" | "default";
+
+export interface EffectiveCapabilityRenderer {
+  pages: CapabilityRendererPage[];
+  source: CapabilityRendererSource;
+}
+
+/**
+ * Resolve a capability's effective renderer page-set — a direct clone of
+ * `ProfileResolutionService.getEffectiveRendererWithSource`, one subject over.
+ *
+ * 3-layer precedence:
+ *   1. workspace overlay — `workspaces.settings.capabilityRenderers[capabilityId]`
+ *   2. capability default — `capabilities.metadata.renderers`
+ *   3. system default — nothing bound → `{ pages: [], source: "default" }`, the
+ *      honest "not configured" signal so the browser keeps its hardcoded surface.
+ *
+ * A layer is only taken when it holds a NON-EMPTY `pages` array; an empty page
+ * set is treated as "no binding here" and falls through, so a workspace can't
+ * accidentally blank a capability's own default by storing `{ pages: [] }`.
+ *
+ * Standalone (not a method) because a capability is not a `profiles` row and the
+ * resolver only needs the raw `db` handle, `capabilityId`, and an optional
+ * workspace lens.
+ */
+export async function getEffectiveCapabilityRenderer(
+  db: PostgresJsDatabase<typeof schema>,
+  capabilityId: string,
+  workspaceId?: string | null
+): Promise<EffectiveCapabilityRenderer> {
+  // 1. Workspace overlay.
+  if (workspaceId) {
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { settings: true },
+    });
+    const settings = workspace?.settings as
+      Record<string, unknown> | null | undefined;
+    const overlayRoot = settings?.capabilityRenderers as
+      Record<string, CapabilityRenderersConfig | undefined> | undefined;
+    const overlay = overlayRoot?.[capabilityId];
+    if (overlay && Array.isArray(overlay.pages) && overlay.pages.length > 0) {
+      return { pages: overlay.pages, source: "workspace" };
+    }
+  }
+
+  // 2. Capability default.
+  const capability = await db.query.capabilities.findFirst({
+    where: eq(capabilities.id, capabilityId),
+    columns: { metadata: true },
+  });
+  const metadata = capability?.metadata as
+    Record<string, unknown> | null | undefined;
+  const config = metadata?.renderers as CapabilityRenderersConfig | undefined;
+  if (config && Array.isArray(config.pages) && config.pages.length > 0) {
+    return { pages: config.pages, source: "capability" };
+  }
+
+  // 3. Nothing bound — empty page-set so the browser keeps its hardcoded surface.
+  return { pages: [], source: "default" };
+}
 
 /**
  * Back-compat: map a ContentKind to the legacy slot key still written into old

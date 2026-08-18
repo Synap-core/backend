@@ -645,6 +645,18 @@ export interface WorkspaceSettings {
   >;
 
   /**
+   * Per-capability renderer override for THIS workspace — the capability-subject
+   * analogue of `profileRenderers`, keyed by capabilityId. Each value is a
+   * `CapabilityRenderersConfig` (`{ pages: Array<{ slot, title, ref }> }`), stored
+   * as an opaque object here to keep the schema package UI-free. Resolved by
+   * `getEffectiveCapabilityRenderer(db, capabilityId, workspaceId)`:
+   *   1. this workspace overlay (capabilityRenderers[capabilityId])
+   *   2. capability default (capabilities.metadata.renderers)
+   *   3. empty page-set (browser keeps its hardcoded capability surface)
+   */
+  capabilityRenderers?: Record<string, { pages: unknown[] }>;
+
+  /**
    * Per-profile AI-teaching-posture overlay for THIS workspace (AI Teaching
    * Substrate D4). Shallow-merged over the profile's base `profiles.aiPosture`
    * column, which is itself layered over the code-defaults constant

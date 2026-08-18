@@ -1,5 +1,5 @@
 {
-  "$comment": "Teaching-metadata SSOT for baseline skill topic files (AI Teaching Substrate Wave 3). One entry per `<package>/<file-stem>` (matching a .md file under this dir's synap/synap-schema/synap-ui packages). Consumers: synap-backend `services/capabilities/system-skill-teaching.ts` (loads + validates this file, projects onto seeded `skills` rows) and the IS `apps/intelligence-hub/src/skills/skill-loader.ts` bundled catalog (via the synced copy at `src/skills/baseline/_teaching.json`). Edit here only — both consumers derive from this one file. A handful of IS-only bundled files (native-widget, propose-workspace, cli-execution, is-expertise) have no backend counterpart and are NOT listed here; the IS loader keeps a small hardcoded fallback entry for those.",
+  "$comment": "Teaching-metadata SSOT for baseline skill topic files (AI Teaching Substrate Wave 3). One entry per `<package>/<file-stem>` (matching a .md file under this dir's synap/synap-schema/synap-ui packages). Consumers: synap-backend `services/capabilities/system-skill-teaching.ts` (loads + validates this file, projects onto seeded `skills` rows) and the IS `apps/intelligence-hub/src/skills/skill-loader.ts` bundled catalog (via the synced copy at `src/skills/baseline/_teaching.json`). Edit here only — both consumers derive from this one file. A handful of IS-only bundled files (native-widget, propose-workspace, cli-execution, is-expertise) have no backend counterpart and are NOT listed here; the IS loader keeps a small hardcoded fallback entry for those. OPTIONAL `agentTypes`: restricts an entry to those agent types (IS `agents/*` `agentType`, e.g. `meta` = the orchestrator). Absent = every agent type, exactly as before. Only the IS loader gates on it; the backend seeder ignores it (a seeded `system/*` row carries no role scope, so the IS keeps the bundled value when a pod overlay replaces the row).",
   "synap/creative-loop": {
     "teachesTools": [
       "create_cell",
@@ -409,7 +409,8 @@
   "synap/next-action": {
     "teachesTools": [],
     "skillGroup": "core",
-    "alwaysOn": false,
+    "agentTypes": ["meta"],
+    "alwaysOn": true,
     "summary": "Deciding the next action instead of just answering.",
     "delivery": {
       "autoSeed": true,
@@ -501,6 +502,7 @@
   "synap/response-style": {
     "teachesTools": [],
     "skillGroup": "core",
+    "agentTypes": ["meta"],
     "alwaysOn": true,
     "summary": "Respond as a co-founder: direct answer first, proportional depth, one insight only when useful; never render Layer 1/2/3/4 as headers.",
     "delivery": {

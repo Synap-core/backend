@@ -394,23 +394,40 @@ export function registerEntityExecutors(): void {
         unknown
       >;
       const entityId = (innerData.id as string) || proposal.targetId;
-      const membership = await getWorkspaceMembership(
-        db,
-        proposal.workspaceId!,
-        userId
-      );
-      if (!membership) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "No workspace access",
-        });
+      // Workspace-scoped: verify the approver's membership + role. Pod-wide
+      // (`proposal.workspaceId === null`) runs at pod scope — the SAME branch
+      // `entity/create`'s pod-wide home and `entity/delete` already take.
+      //
+      // The `proposal.workspaceId!` this replaces was not a type nicety: for a
+      // pod-wide entity (`entities.workspaceId` NULL = global, the documented
+      // doctrine) it made `eq(workspace_members.workspace_id, NULL)` — a
+      // predicate that can never match — so EVERY pod-wide entity/update
+      // approval threw FORBIDDEN "No workspace access" and the proposal was
+      // stuck pending forever. Approve-authority is NOT weakened by dropping
+      // it: `computeCanReviewApproval` has already gated this call upstream
+      // (pod-wide ⇒ proposal owner / agent-owner / pod-admin ONLY), and the
+      // `entities.update` podProcedure below re-applies its own floor
+      // (`entityWriteVisibleWhere(userId)`), which is what actually authorizes
+      // the write. The membership row was a THIRD, redundant gate that only
+      // ever spoke workspace.
+      const wsId = proposal.workspaceId ?? null;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
       }
       const entityCallerCtx = {
         db,
         authenticated: true as const,
         userId,
-        workspaceId: proposal.workspaceId!,
-        workspaceRole: membership.role,
+        workspaceId: wsId,
+        workspaceRole,
       };
       const entityCaller = regularEntitiesRouter.createCaller(
         entityCallerCtx as unknown as Context

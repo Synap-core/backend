@@ -45,9 +45,19 @@ const AGENT_FAILURE_RENOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
  * Body contract for POST /agent-runs. costUsd is nullable (NULL = provider did
  * not report a price — honest, never a fabricated 0). latencyMs / toolCount /
  * runStatus are required; everything else is optional.
+ *
+ * `workspaceId` is NULLABLE + OPTIONAL because a pod-scoped run has no
+ * workspace BY DESIGN: the personal/Companion channel is `scope: 'pod'` with
+ * `workspaceId: null`, so nearly every Companion turn was UNREPRESENTABLE under
+ * the previous `z.string()` and 400'd at the door — which is why 206 completed
+ * agent turns produced ZERO agent-run rows. Everything downstream was already
+ * null-ready: `events.workspace_id` is nullable by design, `listAgentRuns`
+ * applies its workspace predicate only `if (filters.workspaceId)`, and the
+ * tRPC/REST readers are user-scoped (workspaceId narrows, never widens). The
+ * only thing that needed a decision was the failure notification — see below.
  */
 const AgentRunBodySchema = z.object({
-  workspaceId: z.string(),
+  workspaceId: z.string().nullable().optional(),
   agentUserId: z.string(),
   agentType: z.string(),
   threadId: z.string().optional(),
@@ -546,9 +556,37 @@ export function registerEventsRoutes(app: HubHono): void {
       // cooldown. `groupKey` alone only groups the bell visually (it is set on the
       // row but there is no insert-time dedup), so the actual suppressor is this
       // recent-row check — the SAME pattern the scan producers use.
+      //
+      // POD-WIDE RUNS (workspaceId == null — the personal/Companion channel):
+      // there is no workspace membership to fan out to, so `createForWorkspace`
+      // is structurally wrong (it would query `workspaceMembers` for "null" and
+      // find nobody — a notification that is never created). The correct
+      // recipient is the run's OWNER: `userId` is already pinned to the
+      // authenticated bearer-key user above, and a pod-scoped Companion run is
+      // that person's own agent failing.
+      //
+      // We deliberately do NOT reuse `notifyPodWideProposal` /
+      // `resolvePodAdminUserIds` — that door exists for pod-wide PROPOSALS,
+      // where the attention is a governance concern belonging to pod
+      // owner+admins. Routing someone's personal Companion failure to every pod
+      // admin would be a privacy regression, not reuse.
+      //
+      // The pod-wide notification IS visible: `notif-center.ts` list /
+      // unreadCount / markAllRead / dismiss / dismissAll all use
+      // `or(eq(workspaceId, ctx.workspaceId), isNull(workspaceId))` — the
+      // `eq(col, NULL)` never-matches bug is fixed on every one of those five
+      // readers (verified by reading them, not assumed).
+      //
+      // Collapse scope: the workspace path keys the groupKey on the workspace;
+      // the pod path has none, so the natural collapse scope is the RECIPIENT
+      // (`pod:${userId}:…`). Keying it on `pod:` alone would let one user's
+      // failure cooldown suppress another user's alert for the same agent id,
+      // since the cooldown probe below matches on groupKey only.
       if (b.runStatus === "failed") {
         const agentKey = b.agentUserId ?? b.agentType ?? runId;
-        const groupKey = `${b.workspaceId}:agent.task_failed:${agentKey}`;
+        const groupKey = b.workspaceId
+          ? `${b.workspaceId}:agent.task_failed:${agentKey}`
+          : `pod:${userId}:agent.task_failed:${agentKey}`;
         const cooldownFloor = new Date(
           Date.now() - AGENT_FAILURE_RENOTIFY_COOLDOWN_MS
         );
@@ -564,17 +602,27 @@ export function registerEventsRoutes(app: HubHono): void {
           )
           .limit(1);
         if (!recent) {
-          await NotificationService.createForWorkspace({
+          const notifyBase = {
             type: "agent.task_failed",
-            sourceType: "agent",
+            sourceType: "agent" as const,
             sourceId: runId,
-            workspaceId: b.workspaceId,
             groupKey,
             data: {
               agentName: b.agentType,
               errorMessage: b.errorMessage ?? "The agent run failed.",
             },
-          }).catch((err) =>
+          };
+          const notify = b.workspaceId
+            ? NotificationService.createForWorkspace({
+                ...notifyBase,
+                workspaceId: b.workspaceId,
+              })
+            : NotificationService.create({
+                ...notifyBase,
+                workspaceId: null,
+                userId,
+              });
+          await notify.catch((err) =>
             logger.warn({ err, runId }, "agent.task_failed notify failed")
           );
         }

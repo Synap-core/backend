@@ -34,6 +34,7 @@ import {
   signalsFromExplicit,
   normalizeIdentitySignal,
   ownedWorkspaceIds,
+  getEffectiveCapabilityRenderer,
   eq,
   and,
   or,
@@ -41,6 +42,7 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
+import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
@@ -81,6 +83,8 @@ import {
   loadCapabilityTemplate,
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
+import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import { reconcileCapabilitiesToTemplates } from "../services/capabilities/reconcile-capabilities-to-templates.js";
 import { CAPABILITY_UPDATE_GROUP_KEY } from "../services/capabilities/notify-capability-updates.js";
@@ -483,6 +487,96 @@ async function findDependentProcesses(
   return { automationRows, playbookRows };
 }
 
+// ─── Capability renderer schemas ──────────────────────────────────────────────
+
+/**
+ * The MINIMAL, bounded declarative-block schema — the zod mirror of
+ * `DeclarativeBlock` (@synap/database). Five block kinds, Block-Kit style.
+ */
+const DeclarativeBlockSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("heading"),
+    text: z.string(),
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  }),
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("stat"),
+    label: z.string(),
+    value: z.union([z.string(), z.number()]),
+    hint: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("list"),
+    items: z.array(z.string()),
+    ordered: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.literal("button"),
+    label: z.string(),
+    action: z.string(),
+    params: z.record(z.string(), z.unknown()).optional(),
+  }),
+]);
+
+/** zod mirror of `RendererRef` (@synap/database) — the polymorphic renderer union. */
+const RendererRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("cell"),
+    cellKey: z.string(),
+    props: z.record(z.string(), z.unknown()),
+    title: z.string().optional(),
+    displayMode: z.string().optional(),
+    rendererHint: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("view"),
+    viewId: z.string(),
+    title: z.string().optional(),
+    displayMode: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("iframe-srcdoc"),
+    appId: z.string(),
+    srcdoc: z.string(),
+    title: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("external-app"),
+    appId: z.string(),
+    url: z.string(),
+    title: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("url"),
+    url: z.string(),
+    external: z.boolean().optional(),
+    title: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("view-adapter"),
+    adapterKey: z.string(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("declarative"),
+    schema: z.array(DeclarativeBlockSchema),
+    title: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    displayMode: z.string().optional(),
+  }),
+]);
+
+/** One page of a capability's ORDERED renderer page-set. */
+const CapabilityRendererPageSchema = z.object({
+  slot: z.string().min(1),
+  title: z.string().min(1),
+  ref: RendererRefSchema,
+});
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export const capabilitiesRouter = router({
@@ -527,6 +621,133 @@ export const capabilitiesRouter = router({
         userId,
         workspaceId: input?.workspaceId ?? null,
       });
+    }),
+
+  /**
+   * Resolve a capability's EFFECTIVE renderer page-set — the browser hook's read
+   * door. A direct clone of the profile renderer resolver, one subject over.
+   *
+   * Contract (what the browser consumes):
+   *   { pages: Array<{ slot, title, ref: RendererRef }>, source }
+   * 3-layer precedence (workspace overlay → capability default → system default).
+   * `source: "default"` with `pages: []` is the honest "nothing bound" signal —
+   * the browser keeps its hardcoded capability surface.
+   */
+  getEffectiveRenderer: protectedProcedure
+    .input(
+      z.object({
+        capabilityId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      return getEffectiveCapabilityRenderer(
+        db,
+        input.capabilityId,
+        input.workspaceId ?? null
+      );
+    }),
+
+  /**
+   * Bind a capability's renderer page-set — the WRITE door. Governed via
+   * `checkPermissionOrPropose` (subjectType 'capability', action 'renderer.set',
+   * DELIBERATELY absent from DEFAULT_AUTO_APPROVE like every meta-model write):
+   * an operator applies immediately; an agent caller gets `status:"proposed"`,
+   * which the `capability/renderer.set` proposal executor materializes on
+   * approval via the SAME `setCapabilityRenderer` service used here.
+   *
+   * scope 'workspace' (default) writes the per-workspace overlay
+   * (workspaces.settings.capabilityRenderers[capabilityId]); scope 'capability'
+   * writes the capability's own default (capabilities.metadata.renderers).
+   * An empty `pages` array CLEARS the binding for the scope.
+   */
+  setRenderer: protectedProcedure
+    .input(
+      z.object({
+        capabilityId: z.string().uuid(),
+        /** Required for scope 'workspace'; the overlay's target workspace. */
+        workspaceId: z.string().uuid().optional(),
+        pages: z.array(CapabilityRendererPageSchema),
+        scope: z.enum(["workspace", "capability"]).optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const scope = input.scope ?? "workspace";
+      const workspaceId = input.workspaceId ?? null;
+
+      // Load the capability by id ALONE, then gate on the LOADED row's workspace
+      // (never a request-supplied workspaceId — the cross-workspace write-leak
+      // class). assertWorkspaceWrite is the AUTHZ floor; the governance gate
+      // below decides auto-apply vs propose, not access.
+      const [cap] = await db
+        .select({
+          id: capabilitiesTable.id,
+          workspaceId: capabilitiesTable.workspaceId,
+          createdBy: capabilitiesTable.createdBy,
+        })
+        .from(capabilitiesTable)
+        .where(eq(capabilitiesTable.id, input.capabilityId))
+        .limit(1);
+      if (!cap) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Capability not found",
+        });
+      }
+
+      if (scope === "capability") {
+        // Editing the capability's own default → must be able to write ITS
+        // workspace (or own it, if pod-wide).
+        await assertWorkspaceWrite(db, userId, {
+          workspaceId: cap.workspaceId,
+          ownerId: cap.createdBy,
+        });
+      } else {
+        if (!workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "workspaceId is required for a workspace-scoped renderer",
+          });
+        }
+        // Writing a per-workspace overlay → must be able to write THAT workspace.
+        await assertWorkspaceWrite(db, userId, { workspaceId });
+      }
+
+      const pages = input.pages as CapabilityRendererPage[];
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        // Governance lens: the capability's own workspace for a default write,
+        // the overlay target for a workspace-scoped write.
+        workspaceId: scope === "capability" ? cap.workspaceId : workspaceId,
+        subjectType: "capability",
+        action: "renderer.set",
+        source: "operator",
+        reasoning: input.reasoning,
+        // STORE EVERYTHING approval needs — the executor reads capabilityId +
+        // scope + the full pages payload, so approving actually applies the
+        // binding (not a {id}-only gate that no-ops).
+        data: { capabilityId: input.capabilityId, scope, pages },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // Granted (operator) → apply immediately via the shared write path.
+      await setCapabilityRenderer({
+        userId,
+        workspaceId,
+        capabilityId: input.capabilityId,
+        pages,
+        scope,
+      });
+      return { status: "applied" as const, proposalId: null };
     }),
 
   /**

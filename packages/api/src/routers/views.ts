@@ -81,6 +81,59 @@ function viewVisibleWhere(userId: string) {
   )!;
 }
 
+/**
+ * The ONE row-level access predicate for a single, already-loaded view — the
+ * imperative twin of `viewVisibleWhere` above, and now the only place any
+ * `views.*` door decides "may this caller act on this view?".
+ *
+ * - workspace-scoped view (`views.workspaceId` set) → the workspace membership
+ *   ladder, via `verifyPermission` at the requested level. UNCHANGED.
+ * - pod-wide view (`views.workspaceId` NULL) → its OWNER and nobody else.
+ *   `views.userId` is `notNull` (schema: "Creator"), so this is a total,
+ *   single-identity predicate that cannot be satisfied by a null match.
+ *
+ * WHY this exists: `get` and `getContent` already carried the pod-wide owner
+ * branch, while `save` / `update` / `delete` / `reorderEntity` /
+ * `getAvailableColumns` hard-threw FORBIDDEN "View must belong to a workspace".
+ * So a user's own pod-wide view was READABLE and permanently UNEDITABLE and
+ * UNDELETABLE — the same read-aware / write-blind split that broke pod-wide
+ * proposal approval. Two independently-maintained gates disagreeing is the
+ * defect; folding both into one function is what stops it recurring.
+ *
+ * This can NEVER over-admit: for a workspace view it calls exactly the
+ * `verifyPermission` the call sites called before, and for a pod-wide view it
+ * admits strictly ONE user (the creator) where the old write doors admitted
+ * NOBODY and the old read doors already admitted exactly that same one user.
+ */
+export async function assertViewAccess(
+  view: { workspaceId: string | null; userId: string },
+  callerUserId: string,
+  requiredPermission: "read" | "write"
+): Promise<void> {
+  if (!view.workspaceId) {
+    if (view.userId !== callerUserId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Insufficient permissions",
+      });
+    }
+    return;
+  }
+
+  const permResult = await verifyPermission({
+    db,
+    userId: callerUserId,
+    workspace: { id: view.workspaceId },
+    requiredPermission,
+  });
+  if (!permResult.allowed) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: permResult.reason || "Insufficient permissions",
+    });
+  }
+}
+
 function viewLensWhere(
   userId: string,
   lens?: string | null,
@@ -937,26 +990,7 @@ export const viewsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
-      if (!view.workspaceId && view.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Insufficient permissions",
-        });
-      }
-      // Check access
-      if (view.workspaceId) {
-        const permResult = await verifyPermission({
-          db,
-          userId: ctx.userId,
-          workspace: { id: view.workspaceId },
-          requiredPermission: "read", // or 'read' for requireViewer
-        });
-        if (!permResult.allowed)
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: permResult.reason || "Insufficient permissions",
-          });
-      }
+      await assertViewAccess(view, ctx.userId, "read");
 
       // Load content: whiteboards from MinIO (canonical), others from document_versions
       let content = {};
@@ -1010,26 +1044,7 @@ export const viewsRouter = router({
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-      if (!view.workspaceId && view.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Insufficient permissions",
-        });
-      }
-      // Check access
-      if (view.workspaceId) {
-        const permResult = await verifyPermission({
-          db,
-          userId: ctx.userId,
-          workspace: { id: view.workspaceId },
-          requiredPermission: "read", // or 'read' for requireViewer
-        });
-        if (!permResult.allowed)
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: permResult.reason || "Insufficient permissions",
-          });
-      }
+      await assertViewAccess(view, ctx.userId, "read");
 
       const category = getViewCategory(view.type);
 
@@ -1313,23 +1328,7 @@ export const viewsRouter = router({
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-      if (!view.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "View must belong to a workspace",
-        });
-      }
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "write", // or 'read' for requireViewer
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
-        });
+      await assertViewAccess(view, ctx.userId, "write");
       // Validate content structure
       const parseResult = ViewContentSchema.safeParse(input.content);
       if (!parseResult.success) {
@@ -1457,29 +1456,11 @@ export const viewsRouter = router({
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-      if (!view.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "View must belong to a workspace",
-        });
-      }
-
-      // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "write",
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
-        });
+      await assertViewAccess(view, ctx.userId, "write");
 
       // Workspace Home (metadata.homeScope === 'workspace') is editable only by admin/owner
       const metadata = (view.metadata as Record<string, unknown>) || {};
-      if (metadata.homeScope === "workspace") {
+      if (view.workspaceId && metadata.homeScope === "workspace") {
         const member = await getWorkspaceMembership(
           db,
           view.workspaceId,
@@ -1585,25 +1566,7 @@ export const viewsRouter = router({
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-      if (!view.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "View must belong to a workspace",
-        });
-      }
-
-      // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "write", // or 'read' for requireViewer
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
-        });
+      await assertViewAccess(view, ctx.userId, "write");
 
       // Delete view via ViewRepository
       const dbInstance = await getDb();
@@ -1668,25 +1631,7 @@ export const viewsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
-      if (!view.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "View must belong to a workspace",
-        });
-      }
-
-      // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "write", // or 'read' for requireViewer
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
-        });
+      await assertViewAccess(view, ctx.userId, "write");
 
       // Get current entity orders
       const metadata = (view.metadata as ViewMetadata) || {};
@@ -1748,25 +1693,7 @@ export const viewsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
-      if (!view.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "View must belong to a workspace",
-        });
-      }
-
-      // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "read",
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
-        });
+      await assertViewAccess(view, ctx.userId, "read");
 
       // Only structured views have columns
       if (view.category !== "structured") {

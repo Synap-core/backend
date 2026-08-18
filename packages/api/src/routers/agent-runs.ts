@@ -68,4 +68,41 @@ export const agentRunsRouter = router({
         };
       });
     }),
+
+  /**
+   * Aggregate agent-run spend over a trailing window, grouped by UTC day.
+   *
+   * The AGGREGATE half of `list`: answers "what did I spend yesterday / this
+   * week / this month?". Summed in SQL (`eventRepo.summarizeAgentRuns`) — the
+   * day series AND the window total come from a single GROUPING SETS pass, so
+   * they can never disagree.
+   *
+   * Scoping is identical to `list`: USER-scoped via `requireUserId`, and an
+   * optional `workspaceId` NARROWS the window but never widens it. The
+   * request-supplied `workspaceId` is a filter, never an authorization input.
+   *
+   * Days are UTC calendar days (the pod's `startOfUtcDay()` convention) —
+   * there is no per-user timezone in the schema.
+   *
+   * NULL vs 0: `costUsd` is `null` when NO run in a bucket carried a known
+   * price — never 0. Pair it with `costedRunCount` / `uncostedRunCount`:
+   * `uncostedRunCount > 0` means the returned cost is a FLOOR, not a total.
+   */
+  summary: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        days: z.number().int().min(1).max(90).default(30),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const eventRepo = getEventRepository();
+
+      return eventRepo.summarizeAgentRuns({
+        userId,
+        workspaceId: input.workspaceId,
+        days: input.days,
+      });
+    }),
 });

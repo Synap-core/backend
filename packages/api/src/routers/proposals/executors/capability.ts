@@ -15,6 +15,8 @@ import {
   assertApprovalTargetResolves,
 } from "../../../services/capabilities/execute-capability.js";
 import { applyMarketInstall } from "../../../services/capabilities/marketplace-install.js";
+import { setCapabilityRenderer } from "../../../services/capabilities/set-capability-renderer.js";
+import type { CapabilityRendererPage } from "@synap/database";
 import {
   triggerProviderAction,
   type ConnectionSelector,
@@ -589,6 +591,71 @@ export function registerCapabilityExecutors(): void {
         .set({
           status: ProposalStatus.APPROVED,
           ...(materializedPayload ? { data: materializedPayload } : {}),
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability / renderer.set ───────────────────────────────────────────────
+  // Materializes an approved "bind a capability renderer page-set" proposal via
+  // the SAME shared write path the governed tRPC route uses on operator
+  // auto-apply. Without this the proposal would fall to the `*/*` catch-all,
+  // which emits a `.validated` event but never writes the renderer. The gate
+  // (capabilities.setRenderer) stores `{ capabilityId, scope, pages }` under
+  // `proposal.data.data`, so approval has EVERYTHING it needs to apply the
+  // binding — not a `{id}`-only gate that no-ops. Clone of profile/renderer.set.
+  registerProposalExecutor({
+    key: "capability/renderer.set",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const capabilityId = innerData.capabilityId as string | undefined;
+      const pages = innerData.pages as CapabilityRendererPage[] | undefined;
+      const scope =
+        (innerData.scope as "workspace" | "capability" | undefined) ??
+        "workspace";
+      if (!capabilityId || !Array.isArray(pages)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Renderer proposal is missing capabilityId/pages",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      await setCapabilityRenderer({
+        userId,
+        workspaceId: proposal.workspaceId,
+        capabilityId,
+        pages,
+        scope,
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

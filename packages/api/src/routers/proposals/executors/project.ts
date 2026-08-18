@@ -172,20 +172,29 @@ export function registerProjectExecutors(): void {
           message: "Project to update no longer exists",
         });
       }
-      if (!project.workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Pod-wide projects cannot be updated through a proposal (workspaceProcedure requires a workspace)",
-        });
-      }
-
-      const membership = await getWorkspaceMembership(
-        db,
-        project.workspaceId,
-        userId
-      );
-      if (!membership) {
+      // Pod-personal project (`projects.workspaceId` NULL): there is no
+      // membership row to check — `eq(workspace_members.workspace_id, NULL)`
+      // matches nothing — so run at pod scope, exactly as `project/create` and
+      // `project/archive` in this same file already do.
+      //
+      // The BAD_REQUEST this replaces said "workspaceProcedure requires a
+      // workspace". That premise is STALE: `projectsRouter.update` and
+      // `setAutomationMembership` are both `podProcedure` now, and `update`'s
+      // own doc comment records fixing precisely this ("it 400'd pod-wide, so a
+      // pod-personal project could never be edited"). The executor kept the
+      // 400, so an approver saw the Approve button (review-authority is
+      // pod-wide-aware) and got a hard error with no path forward.
+      //
+      // No authority is widened: `computeCanReviewApproval` already gated this
+      // call upstream (pod-wide ⇒ owner / agent-owner / pod-admin ONLY), and
+      // the write below still executes as `project.userId`, so
+      // `ProjectRepository.update`'s `eq(projects.userId, …)` ownership
+      // predicate — plus `loadVisibleProject` inside the podProcedure — remain
+      // the floor exactly as on the workspace path.
+      const membership = project.workspaceId
+        ? await getWorkspaceMembership(db, project.workspaceId, userId)
+        : null;
+      if (project.workspaceId && !membership) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "No workspace access",
@@ -209,8 +218,8 @@ export function registerProjectExecutors(): void {
         db,
         authenticated: true as const,
         userId: project.userId,
-        workspaceId: project.workspaceId,
-        workspaceRole: membership.role,
+        workspaceId: project.workspaceId ?? undefined,
+        workspaceRole: membership?.role,
       } as unknown as Context);
 
       // TWO doors share the `project/update` key: the field patch, and the
