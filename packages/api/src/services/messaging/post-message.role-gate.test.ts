@@ -52,6 +52,18 @@ vi.mock("@synap/database", () => ({
     timestamp: "timestamp",
   },
   MessageRole: { USER: "user", ASSISTANT: "assistant", SYSTEM: "system" },
+  // PRE-EXISTING GAP (not introduced by the attribution change): the module has
+  // imported `emitMessageEvent` since the keystone fact-write landed, but this
+  // mock never exported it — so all 4 tests in this file were already failing at
+  // HEAD with "No export is defined on the mock". Added so the role gate is
+  // actually exercised again.
+  emitMessageEvent: async () => undefined,
+  MessageAuthorType: {
+    HUMAN: "human",
+    AI_AGENT: "ai_agent",
+    EXTERNAL: "external",
+    BOT: "bot",
+  },
   computeMessageHash: (id: string, content: string) => `hash:${id}:${content}`,
   and: () => undefined,
   eq: () => undefined,

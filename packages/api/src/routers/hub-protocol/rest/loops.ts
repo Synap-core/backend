@@ -36,6 +36,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { playbookStagesSchema } from "../../../schemas/playbook-stage.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
@@ -80,8 +81,9 @@ const LoopPlaybookDefSchema = z.object({
   grants: z.array(GrantSchema).optional(),
   schedule: ScheduleSchema.optional(),
   // First-class stages + subject profile — threaded into playbooks.create so the
-  // authored (.loop.json) path no longer drops them (root-cause fix).
-  stages: z.array(z.record(z.string(), z.unknown())).optional(),
+  // authored (.loop.json) path no longer drops them (root-cause fix). Validated
+  // by the ONE runtime schema (@synap/playbooks): `category` required, keys unique.
+  stages: playbookStagesSchema.optional(),
   subjectProfile: z.record(z.string(), z.unknown()).optional(),
   // Kind + Facets: subject-FACET selector (the facet twin of subjectProfile).
   // Type-level / forward-compat — validated here, not yet persisted.

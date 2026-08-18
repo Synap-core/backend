@@ -33,7 +33,12 @@ import {
   computeMessageHash,
   emitMessageEvent,
 } from "@synap/database";
-import { ChannelType, type MessageRole } from "@synap/database/schema";
+import {
+  ChannelType,
+  MessageAuthorType,
+  RoutedSource,
+  type MessageRole,
+} from "@synap/database/schema";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -948,12 +953,49 @@ export function registerThreadsRoutes(app: HubHono): void {
       // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
       // (see @synap/database message-hash.ts).
       const hash = computeMessageHash(msgId, body.content);
+
+      // ATTRIBUTION — `userId` is the HUMAN owner even for an agent key
+      // (`api-key-auth.ts` remaps the agent principal to its owner), so a row
+      // carrying only `userId` cannot say WHICH agent wrote it: two agents in one
+      // channel produce byte-identical rows. The columns to fix that already
+      // exist; they were simply never written.
+      //
+      // The agent id comes ONLY from the verified auth context — never from the
+      // body. A body-supplied agent id would be spoofable and would reintroduce
+      // the exact governed-agent-write → ungoverned-operator-write IDOR that
+      // `resolveActingContext` exists to prevent.
+      //
+      // `routedSource` MUST be set alongside `routedTeammateId`: the UI resolver
+      // (`@synap-core/channels` room-adapters/message.ts:92) returns undefined
+      // unless BOTH are present, so writing the teammate id alone leaves the
+      // attribution invisible in the surface it was added for. DIRECT is the
+      // honest value — this agent posted on its own behalf, it was not routed
+      // by an orchestrator and not summoned by a mention.
+      //
+      // This is the prerequisite for BOTH single-writer enforcement (who
+      // committed?) and any "see what the agent did" audit trail. `sessionId`
+      // comes from the global `sessionMiddleware`, which already verifies
+      // ownership of the header — the insert just never read it.
+      // Hash-safe: `computeMessageHash` covers (id, content, previousHash) only.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const ctxSessionId = (c.get("sessionId") as string | undefined) ?? null;
+
       await db.insert(messages).values({
         id: msgId,
         channelId: threadId,
         role: body.role as MessageRole,
         content: body.content,
         userId,
+        authorType: ctxAgentUserId
+          ? MessageAuthorType.AI_AGENT
+          : MessageAuthorType.HUMAN,
+        ...(ctxAgentUserId
+          ? {
+              routedTeammateId: ctxAgentUserId,
+              routedSource: RoutedSource.DIRECT,
+            }
+          : {}),
+        ...(ctxSessionId ? { sessionId: ctxSessionId } : {}),
         hash,
         ...(body.metadata ? { metadata: body.metadata } : {}),
       });

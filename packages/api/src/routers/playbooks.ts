@@ -52,6 +52,11 @@ import type {
   FocusSession,
   Automation,
 } from "@synap/database/schema";
+import {
+  resolveStageCategory,
+  type PlaybookStageCategory,
+} from "@synap/playbooks";
+import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -206,7 +211,13 @@ const createInputSchema = z.object({
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   expectedOutputs: z.array(jsonRecord).optional(),
-  stages: z.array(jsonRecord).optional(),
+  /**
+   * First-class stages — the ONE runtime schema (@synap/playbooks). Unlike the
+   * neighbouring jsonb bags these are VALIDATED: `category` is required so a
+   * cross-playbook board can roll up on it, and `key` must be unique (it is what
+   * `focus_sessions.currentStage` stores).
+   */
+  stages: playbookStagesSchema.optional(),
   subjectProfile: jsonRecord.optional(),
   schedule: jsonValue.optional(),
   /**
@@ -257,7 +268,8 @@ export const updateInputSchema = z.object({
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   expectedOutputs: z.array(jsonRecord).optional(),
-  stages: z.array(jsonRecord).optional(),
+  /** See `createInputSchema.stages` — validated, `category` required. */
+  stages: playbookStagesSchema.optional(),
   subjectProfile: jsonRecord.optional(),
   schedule: jsonValue.optional(),
   executor: executorRefSchema.optional(),
@@ -671,7 +683,26 @@ export interface EnrollmentRow {
 export interface FunnelStep {
   stepKey: string;
   label: string;
+  /** Closed rollup category — resolved via `resolveStageCategory` (legacy-safe). */
+  category: PlaybookStageCategory;
   count: number;
+}
+
+/**
+ * Read a playbook's stored `stages` jsonb for DISPLAY. Tolerant on purpose: a
+ * stage stored before `category` existed must still render, so the category
+ * comes from `resolveStageCategory` — the ONE place that default lives — rather
+ * than being re-derived here.
+ */
+function readStoredStages(
+  stored: unknown
+): Array<{ key: string; name: string; category: PlaybookStageCategory }> {
+  if (!Array.isArray(stored)) return [];
+  return (stored as Array<{ key: string; name: string }>).map((stage) => ({
+    key: stage.key,
+    name: stage.name,
+    category: resolveStageCategory(stage),
+  }));
 }
 
 /**
@@ -712,9 +743,7 @@ const playbookEnrollmentsRouter = router({
         });
       }
 
-      const stages = Array.isArray(playbook.stages)
-        ? (playbook.stages as Array<{ key: string; name: string }>)
-        : [];
+      const stages = readStoredStages(playbook.stages);
       const stageLabelByKey = new Map(stages.map((s) => [s.key, s.name]));
 
       const database = await getDb();
@@ -764,9 +793,7 @@ const playbookEnrollmentsRouter = router({
         });
       }
 
-      const stages = Array.isArray(playbook.stages)
-        ? (playbook.stages as Array<{ key: string; name: string }>)
-        : [];
+      const stages = readStoredStages(playbook.stages);
 
       const database = await getDb();
       const activeEnrollments = await database
@@ -789,6 +816,7 @@ const playbookEnrollmentsRouter = router({
       const result: FunnelStep[] = stages.map((stage) => ({
         stepKey: stage.key,
         label: stage.name,
+        category: stage.category,
         count: countByStepKey.get(stage.key) ?? 0,
       }));
 

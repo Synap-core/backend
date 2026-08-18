@@ -40,6 +40,20 @@ vi.mock("@synap/database", () => {
       timestamp: "timestamp",
     },
     MessageRole: { USER: "user", ASSISTANT: "assistant", SYSTEM: "system" },
+    // PRE-EXISTING GAP (not from the attribution change): the module has
+    // imported `emitMessageEvent` since the keystone fact-write landed, but this
+    // mock never exported it — so every test reaching the INSERT path (3 of 5)
+    // was already failing at HEAD. The 2 that passed return early on the dedup
+    // path before the call. Added so the ack-integrity suite runs for real.
+    emitMessageEvent: async () => undefined,
+    // Attribution: the insert stamps authorType (agent vs human) from the
+    // acting principal — see `agentUserId` on PostChannelMessageParams.
+    MessageAuthorType: {
+      HUMAN: "human",
+      AI_AGENT: "ai_agent",
+      EXTERNAL: "external",
+      BOT: "bot",
+    },
     computeMessageHash: () => "hash",
     and: vi.fn(),
     eq: vi.fn(),

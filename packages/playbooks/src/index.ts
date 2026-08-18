@@ -141,15 +141,43 @@ export interface ExpectedOutput {
 }
 
 /**
+ * The CLOSED rollup category a stage declares membership in. Copied verbatim
+ * from Linear's `ProjectStatusType` — the convergent answer across eight
+ * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
+ * Productive.io, Odoo, ERPNext).
+ *
+ * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
+ * sets are disjoint by construction, and no product has ever shipped a
+ * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
+ * vocabularies exactly like ours — makes the category a MANDATORY field.
+ */
+export type PlaybookStageCategory =
+  "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
  * `focus_sessions.currentStage`; it NEVER becomes required.
+ *
+ * `key`/`name` are this playbook's own vocabulary; `category` is the shared
+ * axis every playbook's stages roll up onto, so a cross-playbook board can group
+ * them without reconciling names. Read a stored stage's category ONLY through
+ * `resolveStageCategory` (below) — never by reading the field directly. The zod
+ * WRITE-boundary schema lives at the door (`@synap/api` src/schemas/playbook-stage),
+ * keeping this package dependency-free.
  */
 export interface PlaybookStage {
   /** Stable id; value stored in focus_sessions.currentStage. */
   key: string;
   name: string;
+  /**
+   * Closed rollup category. OPTIONAL in TypeScript because stages stored before
+   * this field existed carry none — but REQUIRED at every write boundary
+   * (the door's `playbookStageSchema`), so nothing new lands without one. Read it
+   * via `resolveStageCategory`, which owns the legacy default.
+   */
+  category?: PlaybookStageCategory;
   description?: string;
   /** Stage-scoped goal when this stage is active. */
   goal?: string;
@@ -158,6 +186,62 @@ export interface PlaybookStage {
   /** Deliverables expected from this stage. */
   expectedOutputs?: ExpectedOutput[];
   suggestedTasks?: string[];
+  /**
+   * Order of this stage WITHIN its category group — not a global order. This is
+   * why ordering never needs cross-playbook reconciliation (Linear's `position`
+   * is documented the same way).
+   */
+  position?: number;
+  /**
+   * May a subject sit in this stage forever? `false`/absent means a long dwell
+   * is worth surfacing — the cheap input to stall detection (the detector itself
+   * is not built).
+   */
+  indefinite?: boolean;
+}
+
+/**
+ * The closed rollup category set as a VALUE — the door's zod enum and the
+ * resolver below both read it, so the six live in exactly one place.
+ */
+export const PLAYBOOK_STAGE_CATEGORIES: readonly PlaybookStageCategory[] = [
+  "backlog",
+  "planned",
+  "started",
+  "paused",
+  "completed",
+  "canceled",
+];
+
+/**
+ * The category for a stage that declares none — i.e. every stage stored before
+ * the category existed. `"started"` is the honest reading: the stage exists and
+ * a subject sitting in it is under way; it is neither a backlog bucket nor a
+ * terminal state, and guessing either would be a claim the data does not
+ * support. Exported only so a caller can NAME the default; never re-implement
+ * the fallback — call `resolveStageCategory`.
+ */
+export const DEFAULT_PLAYBOOK_STAGE_CATEGORY: PlaybookStageCategory = "started";
+
+/**
+ * Resolve a possibly-legacy stage's rollup category. THE SINGLE SOURCE OF TRUTH
+ * — this must remain the ONLY place a category is defaulted.
+ *
+ * Why that matters: Jira derives its status categories in more than one place
+ * (its Scrum boards and its Plans product), and the two now report the same
+ * status inconsistently. A second defaulting site is how a rollup silently
+ * starts disagreeing with itself, with no way to notice from either side.
+ *
+ * Takes `unknown` on purpose: callers read a jsonb bag, and a stage stored
+ * before the category existed must RESOLVE, not throw. Pure — no zod, so this
+ * stays in the dependency-free contract package next to the type it reads.
+ */
+export function resolveStageCategory(stage: unknown): PlaybookStageCategory {
+  const raw = (stage as { category?: unknown } | null | undefined)?.category;
+  return typeof raw === "string" &&
+    (PLAYBOOK_STAGE_CATEGORIES as readonly string[]).includes(raw)
+    ? (raw as PlaybookStageCategory)
+    : DEFAULT_PLAYBOOK_STAGE_CATEGORY;
 }
 
 export interface PlaybookSchedule {

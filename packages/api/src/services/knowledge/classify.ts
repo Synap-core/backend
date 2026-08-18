@@ -26,7 +26,10 @@
  * against false positives.
  */
 
-import { KIND_CUES } from "../retrieval/understand-query.js";
+import {
+  KIND_CUES,
+  type ProfileCatalogEntry,
+} from "../retrieval/understand-query.js";
 
 export type SubstrateKind =
   "semantic" | "structured" | "procedural" | "episodic";
@@ -59,11 +62,22 @@ const ENUMERATIVE_CUES = [
 const ENUMERATIVE_LEAD_RE = /^\s*what(?:'s|s)?\b/;
 
 /** True when any KIND_CUES single-word cue appears in PLURAL form. */
-function namesPluralKind(tokenSet: Set<string>): boolean {
-  return Object.values(KIND_CUES).some((cues) =>
+function namesPluralKind(
+  tokenSet: Set<string>,
+  catalog?: ProfileCatalogEntry[]
+): boolean {
+  const pluralized = (cues: string[]) =>
     cues.some(
       (c) => !c.includes(" ") && !c.endsWith("s") && tokenSet.has(`${c}s`)
-    )
+    );
+
+  // The catalog arm must be applied HERE too, not only in the other enumerative
+  // arm. This is the "what <kind> do we have" lead — and "what clients do we
+  // have" is the exact phrasing that answered "you have no clients". Extending
+  // one arm and not the other left the bug alive for half the phrasings.
+  return (
+    Object.values(KIND_CUES).some(pluralized) ||
+    (catalog ? catalog.some((e) => pluralized(catalogWords(e))) : false)
   );
 }
 
@@ -144,6 +158,59 @@ function tokenize(s: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Does the query name any profile the POD actually has?
+ *
+ * `KIND_CUES` is a hardcoded 9-key map of built-in kinds. It cannot know about
+ * profiles a pod defines at runtime — and, critically, it contains NO role
+ * profiles (client, partner, lead, sponsor …). Because role-profiles are how
+ * Synap models relationships (`profileKind: 'role'`, attached as facets), a
+ * pod could hold 20 clients and "list our clients" would still never reach the
+ * structured lane: the enumerative gate below requires a NAMED kind, and no
+ * role noun was nameable. The answer came back "you have no clients" while 20
+ * client facets sat one indexed query away.
+ *
+ * The fix is to let the caller supply the pod's own catalog rather than to add
+ * more literals here — `classifySubstrates` stays PURE and synchronous (it is
+ * called on the parse-only fast path and must never touch a store); the caller
+ * already loads this catalog for `understandQuery`, so nothing new is fetched.
+ *
+ * Matching mirrors `cuesKind`: whole tokens, with naive plural/singular
+ * tolerance, plus the profile's own data-driven vocabulary (`plural`,
+ * `synonyms`) so a pod that renames "Company" to "Account" works for free.
+ */
+function namesCatalogProfile(
+  q: string,
+  tokenSet: Set<string>,
+  catalog: ProfileCatalogEntry[]
+): boolean {
+  return catalog.some((entry) => cuesKind(q, tokenSet, catalogWords(entry)));
+}
+
+/**
+ * The vocabulary one catalog entry answers to, normalized for `cuesKind`.
+ *
+ * Normalize BEFORE filtering, not after: a slug of `"-"` or `"_"` is non-empty
+ * as authored but normalizes to `""`, and an empty cue makes `tokenSet.has("s")`
+ * true — so any query containing the token "s" would name that profile and drag
+ * an unrelated 200-row enumeration to the front of the answer.
+ */
+function catalogWords(entry: ProfileCatalogEntry): string[] {
+  return (
+    [
+      entry.slug,
+      entry.displayName,
+      entry.plural ?? undefined,
+      ...(entry.synonyms ?? []),
+    ]
+      .filter((w): w is string => typeof w === "string")
+      // A slug is kebab-case ("team-member"); tokenize() splits on non-alphanum,
+      // so compare against the spaced form for multi-word terms.
+      .map((w) => w.toLowerCase().replace(/[-_]+/g, " ").trim())
+      .filter((w) => w.length > 0)
+  );
+}
+
 export interface SubstrateRoute {
   /** Every substrate to query (semantic always present). */
   substrates: SubstrateKind[];
@@ -157,7 +224,16 @@ export interface SubstrateRoute {
   structuredStatus?: string;
 }
 
-export function classifySubstrates(query: string): SubstrateRoute {
+export function classifySubstrates(
+  query: string,
+  /**
+   * The pod's own profile catalog. Optional so the function stays usable (and
+   * pure) without a store; when supplied it makes runtime-defined profiles —
+   * above all ROLE profiles — nameable by the enumerative gate. See
+   * `namesCatalogProfile`.
+   */
+  catalog?: ProfileCatalogEntry[]
+): SubstrateRoute {
   const q = ` ${query.toLowerCase()} `;
   const tokenSet = new Set(tokenize(query));
 
@@ -168,10 +244,17 @@ export function classifySubstrates(query: string): SubstrateRoute {
   // query is really a how-to (procedural) or a raw-capture recall (episodic), so
   // "what did I note about the project" stays episodic rather than listing every
   // project. Enumerative + typed = the user wants the whole set, not fuzzy top-k.
+  // A kind is "named" by the builtin cues OR by the pod's own catalog. The
+  // catalog arm is what makes role profiles (client, partner, lead …) reachable
+  // at all — without it the structured lane is limited to 9 hardcoded kinds.
+  const namesKind =
+    Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues)) ||
+    (catalog ? namesCatalogProfile(q, tokenSet, catalog) : false);
+
   const enumerative =
     (ENUMERATIVE_RE.some((re) => re.test(q)) ||
-      (ENUMERATIVE_LEAD_RE.test(q) && namesPluralKind(tokenSet))) &&
-    Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues));
+      (ENUMERATIVE_LEAD_RE.test(q) && namesPluralKind(tokenSet, catalog))) &&
+    namesKind;
   const structured = enumerative && !procedural && !episodic;
 
   // Task-lane status filter — only meaningful when the enumerative query named

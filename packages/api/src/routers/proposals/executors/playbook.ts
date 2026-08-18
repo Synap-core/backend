@@ -4,6 +4,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
+import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 
 /** Register the playbook/* approve executors. */
 export function registerPlaybookExecutors(): void {
@@ -74,7 +75,11 @@ export function registerPlaybookExecutors(): void {
           Record<string, unknown> | undefined,
         expectedOutputs: innerData.expectedOutputs as
           Record<string, unknown>[] | undefined,
-        stages: innerData.stages as Record<string, unknown>[] | undefined,
+        // Re-validated by `playbooks.create` (`playbookStagesSchema`). NOTE: a
+        // proposal created BEFORE stage categories existed carries
+        // category-less stages and will be rejected on approval — by design;
+        // the proposal must be revised to declare categories.
+        stages: innerData.stages as PlaybookStageInput[] | undefined,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,

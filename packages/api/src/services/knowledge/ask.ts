@@ -188,7 +188,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
     substrates,
     primary: intent,
     structuredStatus,
-  } = classifySubstrates(query);
+    // Pass the pod's catalog so ROLE profiles (client, partner, lead …) can be
+    // named by the enumerative gate. Without it `classifySubstrates` only knows
+    // 9 hardcoded kinds, so "list our clients" never reached the structured lane
+    // and answered "you have no clients" over a pod holding 20 client facets.
+  } = classifySubstrates(query, catalog);
 
   // PARSE-ONLY: understanding + glass-box routing, NO retrieval. understandQuery
   // is pure + deterministic — the same call retrieve() makes internally — so

@@ -52,6 +52,7 @@ import type {
   CapabilityVaultDef,
   ToolVerbKind,
 } from "@synap/playbooks";
+import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 
 import { createLogger } from "@synap-core/core";
@@ -144,8 +145,11 @@ export interface CapabilityPlaybookDef {
   inputStrategy?: Record<string, unknown>;
   channelSpec?: Record<string, unknown>;
   expectedOutputs?: Record<string, unknown>[];
-  /** PlaybookStage[] — first-class stages (stored loosely, validated at the boundary). */
-  stages?: Record<string, unknown>[];
+  /**
+   * PlaybookStage[] — validated by the ONE runtime schema (`playbookStagesSchema`)
+   * at the Hub REST door and again by `playbooks.create`. `category` is required.
+   */
+  stages?: PlaybookStageInput[];
   /** { profileSlug, filter? } — which entity type this playbook operates over (Wave 0 subject spine). */
   subjectProfile?: Record<string, unknown>;
   schedule?: unknown;

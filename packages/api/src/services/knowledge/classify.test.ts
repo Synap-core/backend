@@ -177,4 +177,92 @@ describe("classifySubstrates", () => {
       expect(r.primary).toBe("procedural");
     });
   });
+
+  // ── Catalog-driven kinds ───────────────────────────────────────────────────
+  // Regression guard for a live defect: a pod holding 20 `client` role-facets
+  // answered "list our clients" with "you have no clients". KIND_CUES is a
+  // hardcoded 9-key map with NO role profiles, so the enumerative gate could
+  // never name one, and the structured lane never ran. The catalog arm fixes it.
+  describe("role profiles are reachable via the pod catalog", () => {
+    const catalog = [
+      { slug: "client", displayName: "Client", plural: "clients" },
+      {
+        slug: "team-member",
+        displayName: "Team Member",
+        plural: "team members",
+      },
+      {
+        slug: "company",
+        displayName: "Company",
+        plural: "companies",
+        synonyms: ["account"],
+      },
+    ];
+
+    it("WITHOUT a catalog, a role noun cannot reach structured (the bug)", () => {
+      const r = classifySubstrates("list our clients");
+      expect(r.substrates).not.toContain("structured");
+    });
+
+    it("WITH the catalog, 'list our clients' routes to structured", () => {
+      const r = classifySubstrates("list our clients", catalog);
+      expect(r.substrates).toContain("structured");
+      expect(r.primary).toBe("structured");
+    });
+
+    it("matches a multi-word slug via its spaced form ('team members')", () => {
+      const r = classifySubstrates("list all team members", catalog);
+      expect(r.substrates).toContain("structured");
+    });
+
+    it("matches a profile's synonym, so a renamed kind works ('accounts')", () => {
+      const r = classifySubstrates("list all accounts", catalog);
+      expect(r.substrates).toContain("structured");
+    });
+
+    it("a catalog does NOT make every query enumerative", () => {
+      // No collection lead → still not structured, catalog or not.
+      const r = classifySubstrates("what is the Acme client", catalog);
+      expect(r.substrates).not.toContain("structured");
+    });
+
+    it("procedural still suppresses structured even with a catalog match", () => {
+      const r = classifySubstrates("how to list our clients", catalog);
+      expect(r.substrates).not.toContain("structured");
+      expect(r.primary).toBe("procedural");
+    });
+
+    // The enumerative gate has TWO arms. Extending only the first left this
+    // phrasing broken — and it is the exact shape that answered "you have no
+    // clients" over a pod holding 20 of them.
+    it("the 'what <kind> do we have' arm also sees the catalog", () => {
+      const r = classifySubstrates("what clients do we have", catalog);
+      expect(r.substrates).toContain("structured");
+    });
+
+    it("'who are our clients' routes to structured", () => {
+      const r = classifySubstrates("who are our clients", catalog);
+      expect(r.substrates).toContain("structured");
+    });
+  });
+
+  // A false positive is not merely a wasted query: `structured` becomes primary,
+  // and the structured lane resolves its slug from a DIFFERENT resolver — so a
+  // bogus match can drag an unrelated kind's 200-row enumeration to the front.
+  describe("catalog matching does not over-fire", () => {
+    it("a degenerate slug cannot match every query containing 's'", () => {
+      // "-" is non-empty as authored but normalizes to "", and an empty cue
+      // makes tokenSet.has("s") true for any query mentioning "s".
+      const r = classifySubstrates("list all s things", [
+        { slug: "-", displayName: "-" },
+      ]);
+      expect(r.substrates).not.toContain("structured");
+    });
+
+    it("an empty catalog behaves exactly like no catalog", () => {
+      expect(classifySubstrates("list our clients", []).substrates).toEqual(
+        classifySubstrates("list our clients").substrates
+      );
+    });
+  });
 });

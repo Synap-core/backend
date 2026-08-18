@@ -34,6 +34,7 @@
         {
           "key": "prep",
           "name": "Prep",
+          "category": "planned",
           "description": "Before the event.",
           "goal": "Research who is attending and set concrete goals for {{eventName}}.",
           "expectedOutputs": [{ "kind": "note", "label": "Prep notes" }],
@@ -45,6 +46,7 @@
         {
           "key": "during",
           "name": "During",
+          "category": "started",
           "description": "While the event is running.",
           "goal": "Capture every person you meet as a contact, with context notes, as you go.",
           "expectedOutputs": [
@@ -59,6 +61,7 @@
         {
           "key": "post",
           "name": "Post",
+          "category": "completed",
           "description": "After the event ends — reached automatically when the event's endDate crosses.",
           "goal": "Review the auto-generated recap and act on the proposed follow-ups (intros, messages, deals).",
           "expectedOutputs": [{ "kind": "report", "label": "Recap" }],

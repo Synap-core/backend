@@ -189,11 +189,22 @@ export const contextRouter = router({
           : {}),
         contextSummary: thread?.contextSummary ?? null,
         metadata: thread?.metadata ?? null,
+        // Attribution travels with the message. The underlying query already
+        // returns these columns; this projection used to drop them, which is why
+        // a reader of a multi-agent room could not tell two agents apart — every
+        // message looked like the same human owner. `authorType` distinguishes
+        // human/agent/external/bot, `routedTeammateId` names WHICH agent, and
+        // `sessionId` ties the message to the session it was written in.
+        // `@synap-core/chat-ui`'s MessageBubble already renders on these fields.
         messages: messagesResult.messages.map((m) => ({
           id: m.id,
           role: m.role,
           content: m.content,
           timestamp: m.timestamp,
+          authorType: m.authorType ?? null,
+          userId: m.userId ?? null,
+          routedTeammateId: m.routedTeammateId ?? null,
+          sessionId: m.sessionId ?? null,
         })),
         recentEntities: entitiesResult.entities.slice(0, 10).map((e) => ({
           id: e.id,

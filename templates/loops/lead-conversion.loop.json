@@ -24,6 +24,7 @@
         {
           "key": "new",
           "name": "New",
+          "category": "backlog",
           "description": "The lead just arrived.",
           "goal": "Triage the new lead: confirm it is a real fit and decide the first move.",
           "expectedOutputs": [{ "kind": "note", "label": "Fit assessment" }],
@@ -35,6 +36,7 @@
         {
           "key": "contacted",
           "name": "Contacted",
+          "category": "started",
           "description": "First outreach is out.",
           "goal": "Make first contact and earn a reply.",
           "expectedOutputs": [{ "kind": "task", "label": "Follow-up" }],
@@ -46,6 +48,7 @@
         {
           "key": "engaged",
           "name": "Engaged",
+          "category": "started",
           "description": "A two-way conversation is happening.",
           "goal": "Understand what they need and whether we can help.",
           "suggestedTasks": [
@@ -56,6 +59,7 @@
         {
           "key": "qualified",
           "name": "Qualified",
+          "category": "started",
           "description": "A real opportunity.",
           "goal": "Confirm this is a real opportunity worth a proposal.",
           "expectedOutputs": [{ "kind": "note", "label": "Proposal scope" }],
@@ -67,6 +71,7 @@
         {
           "key": "handoff",
           "name": "Hand-off",
+          "category": "completed",
           "description": "Won — becoming a client.",
           "goal": "Convert to a client and hand off to delivery.",
           "expectedOutputs": [{ "kind": "task", "label": "Kickoff" }],
@@ -97,6 +102,7 @@
         {
           "key": "new",
           "name": "Research & target",
+          "category": "backlog",
           "goal": "Research the prospect and build a real reason to reach out — this is a cold lead with no prior relationship.",
           "suggestedTasks": [
             "Research the prospect's company, role, and recent activity.",
@@ -106,6 +112,7 @@
         {
           "key": "contacted",
           "name": "Outreach sequence",
+          "category": "started",
           "goal": "Run a multi-touch outreach sequence until they respond.",
           "suggestedTasks": [
             "Send the first personalized message on the chosen channel.",
@@ -124,6 +131,7 @@
         {
           "key": "new",
           "name": "Acknowledge fast",
+          "category": "backlog",
           "goal": "Respond FAST — an inbound lead expects a reply within minutes, not days.",
           "suggestedTasks": [
             "Acknowledge the inbound within the hour.",
@@ -133,6 +141,7 @@
         {
           "key": "contacted",
           "name": "Fast qualify",
+          "category": "started",
           "goal": "Qualify quickly while intent is hot.",
           "suggestedTasks": [
             "Confirm what they are looking for and their timeline.",
@@ -151,6 +160,7 @@
         {
           "key": "new",
           "name": "Thank the referrer",
+          "category": "backlog",
           "goal": "Acknowledge the warm intro and thank whoever referred them.",
           "suggestedTasks": [
             "Thank the referrer and confirm you will follow up.",
@@ -160,6 +170,7 @@
         {
           "key": "contacted",
           "name": "Warm follow-up",
+          "category": "started",
           "goal": "Lean on the warm intro — this lead already has a reason to trust you.",
           "suggestedTasks": [
             "Reach out referencing the shared context.",

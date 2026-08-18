@@ -44,6 +44,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { playbookStagesSchema } from "../../../schemas/playbook-stage.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
@@ -123,8 +124,9 @@ export const PlaybookDefSchema = z.object({
   inputStrategy: z.record(z.string(), z.unknown()).optional(),
   channelSpec: z.record(z.string(), z.unknown()).optional(),
   expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
-  // PlaybookStage[] — first-class stages carried by the template (stored loosely).
-  stages: z.array(z.record(z.string(), z.unknown())).optional(),
+  // PlaybookStage[] — the ONE runtime schema (@synap/playbooks): `category` is
+  // REQUIRED and stage keys must be unique. No longer a loose bag.
+  stages: playbookStagesSchema.optional(),
   // { profileSlug, filter? } — Wave 0 subject spine: which entity type the playbook operates over.
   subjectProfile: z.record(z.string(), z.unknown()).optional(),
   // Kind + Facets: { facetSlug, filter? } — the facet twin of subjectProfile

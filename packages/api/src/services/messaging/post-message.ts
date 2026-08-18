@@ -34,6 +34,8 @@ import {
   db,
   messages,
   MessageRole,
+  MessageAuthorType,
+  RoutedSource,
   computeMessageHash,
   emitMessageEvent,
   and,
@@ -72,6 +74,17 @@ export interface PostChannelMessageParams {
    * absent, a short-window content-equality dedup guards fast retries.
    */
   idempotencyKey?: string;
+  /**
+   * The acting AGENT's principal, when an agent key authored this post.
+   *
+   * `userId` is always the HUMAN owner — `api-key-auth.ts` remaps an agent key
+   * to its owner — so without this, two agents posting into one channel produce
+   * byte-identical rows and a reader cannot attribute either. Mirrors the
+   * established door `rest/entities.ts:1027`. Absent ⇒ a human wrote it.
+   */
+  agentUserId?: string;
+  /** Focus session this post belongs to (from the verified `X-Session-Id` lens). */
+  sessionId?: string | null;
 }
 
 export interface PostChannelMessageResult {
@@ -101,7 +114,8 @@ function duplicateReceipt(
 export async function postChannelMessage(
   params: PostChannelMessageParams
 ): Promise<PostChannelMessageResult> {
-  const { channelId, content, userId } = params;
+  const { channelId, content, userId, agentUserId } = params;
+  const sessionId = params.sessionId ?? null;
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
   const roleEnum =
@@ -173,6 +187,23 @@ export async function postChannelMessage(
       role: roleEnum,
       content,
       userId,
+      // See `agentUserId` on the params type: without this an agent post is
+      // indistinguishable from its owner's. Hash-safe — `computeMessageHash`
+      // covers (id, content, previousHash) only.
+      authorType: agentUserId
+        ? MessageAuthorType.AI_AGENT
+        : MessageAuthorType.HUMAN,
+      // `routedSource` must accompany `routedTeammateId` — the UI resolver
+      // (`@synap-core/channels` room-adapters/message.ts:92) requires BOTH or it
+      // renders no attribution at all. DIRECT = this agent posted on its own
+      // behalf (not orchestrator-routed, not mention-summoned).
+      ...(agentUserId
+        ? {
+            routedTeammateId: agentUserId,
+            routedSource: RoutedSource.DIRECT,
+          }
+        : {}),
+      ...(sessionId ? { sessionId } : {}),
       hash,
       previousHash: "",
     })

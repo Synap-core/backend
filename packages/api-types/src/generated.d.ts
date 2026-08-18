@@ -5668,33 +5668,6 @@ export interface RankComparison {
 		moved: MovedItem[];
 	};
 }
-/**
- * Substrate classification for the unified knowledge router (`ask`).
- *
- * Synap has four addressable memory kinds (see
- * team/platform/unified-knowledge-access.mdx): SEMANTIC (relevance recall over
- * the typed entity graph), STRUCTURED (an ENUMERATIVE typed listing — "what are
- * my tasks"), PROCEDURAL (knowledge_keys — institutional how-to docs), EPISODIC
- * (knowledge_facts — raw personal captures). The agent shouldn't pick a door;
- * `ask` routes for it. This pure classifier decides WHICH substrate(s) a query
- * touches, from cheap heuristics.
- *
- * SEMANTIC is the backbone and is ALWAYS queried (the entity graph answers most
- * "what do I know about X"). STRUCTURED / procedural / episodic are ADDED only
- * when their cues fire — so the common case stays a single SRE call, and we
- * never silently miss the enumerative list, the how-to-doc, or the raw capture
- * when the query clearly wants it.
- *
- * Matching is WORD-BOUNDARY, not raw substring: "deploy" must be the word
- * "deploy", not the tail of "redeployment"; "remember" won't fire on
- * "Remembrance Inc". And the cue lists deliberately avoid bare single-word nouns
- * that collide with this product's own entity vocabulary ("deploy", "setup",
- * "guide" are common entity names here) — a procedural intent is signalled by a
- * PHRASE ("how to …", "set up", "steps to") or a distinctive noun ("runbook"),
- * never by a lone verb that's just as likely an entity title. Over-routing only
- * adds a cheap extra query; mis-labelling `primary` actively misleads, so we bias
- * against false positives.
- */
 export type SubstrateKind = "semantic" | "structured" | "procedural" | "episodic";
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
@@ -5829,6 +5802,18 @@ export type GrantableKind = "tool" | "skill" | "command";
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
  */
 export type ExecMode = "auto" | "propose" | "dry-run";
+/**
+ * The CLOSED rollup category a stage declares membership in. Copied verbatim
+ * from Linear's `ProjectStatusType` — the convergent answer across eight
+ * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
+ * Productive.io, Odoo, ERPNext).
+ *
+ * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
+ * sets are disjoint by construction, and no product has ever shipped a
+ * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
+ * vocabularies exactly like ours — makes the category a MANDATORY field.
+ */
+export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
  * code/instruction skills, intelligence_commands, and source providers — so a
@@ -7213,6 +7198,8 @@ export interface EnrollmentRow {
 export interface FunnelStep {
 	stepKey: string;
 	label: string;
+	/** Closed rollup category — resolved via `resolveStageCategory` (legacy-safe). */
+	category: PlaybookStageCategory;
 	count: number;
 }
 export interface RunGroupsPage {
@@ -24629,7 +24616,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				expectedOutputs?: Record<string, unknown>[] | undefined;
-				stages?: Record<string, unknown>[] | undefined;
+				stages?: {
+					[x: string]: unknown;
+					key: string;
+					name: string;
+					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
+					description?: string | undefined;
+					goal?: string | undefined;
+					grants?: {
+						[x: string]: unknown;
+						kind: "command" | "tool" | "skill";
+						id: string;
+					}[] | undefined;
+					expectedOutputs?: {
+						[x: string]: unknown;
+						kind: string;
+						label: string;
+						icon?: string | undefined;
+					}[] | undefined;
+					suggestedTasks?: string[] | undefined;
+					position?: number | undefined;
+					indefinite?: boolean | undefined;
+				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				metadata?: Record<string, unknown> | undefined;
@@ -24689,7 +24697,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				expectedOutputs?: Record<string, unknown>[] | undefined;
-				stages?: Record<string, unknown>[] | undefined;
+				stages?: {
+					[x: string]: unknown;
+					key: string;
+					name: string;
+					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
+					description?: string | undefined;
+					goal?: string | undefined;
+					grants?: {
+						[x: string]: unknown;
+						kind: "command" | "tool" | "skill";
+						id: string;
+					}[] | undefined;
+					expectedOutputs?: {
+						[x: string]: unknown;
+						kind: string;
+						label: string;
+						icon?: string | undefined;
+					}[] | undefined;
+					suggestedTasks?: string[] | undefined;
+					position?: number | undefined;
+					indefinite?: boolean | undefined;
+				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;

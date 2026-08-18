@@ -22,10 +22,11 @@ import {
   ok,
   requireScope,
   rejectMissingWriteWorkspace,
-  McpToolContext,
-  CallToolResult,
-  McpHandlerMap,
+  type McpToolContext,
+  type CallToolResult,
+  type McpHandlerMap,
 } from "./shared.js";
+import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 
 export const buildHandlers: McpHandlerMap = {
   synap_create_cell: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -245,7 +246,9 @@ export const buildHandlers: McpHandlerMap = {
       name: args.name as string,
       goalTemplate: args.goalTemplate as string,
       description: args.description as string | undefined,
-      stages: args.stages as Record<string, unknown>[] | undefined,
+      // `playbooks.create` validates these with `playbookStagesSchema`
+      // (category required, keys unique); this only types the untyped args.
+      stages: args.stages as PlaybookStageInput[] | undefined,
       // Default to `active` so a created template is immediately runnable via
       // synap_start_session(templateId) — a draft would be invisible to run.
       status:
@@ -339,7 +342,8 @@ export const buildHandlers: McpHandlerMap = {
     });
   },
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const { postChannelMessage } =
       await import("../../../services/messaging/post-message.js");
@@ -352,6 +356,14 @@ export const buildHandlers: McpHandlerMap = {
       role: args.role as string | undefined,
       triggerAI: Boolean(args.triggerAI),
       userId,
+      // `userId` is the human OWNER even on an agent key. Pass the agent
+      // principal so the row records WHICH agent posted — otherwise every agent
+      // in a shared channel writes an identical-looking message.
+      ...(agentUserId ? { agentUserId } : {}),
+      // Session too, or this door and the REST door write two different row
+      // shapes into the SAME channel: agent-attributed but session-blind here,
+      // both there.
+      ...(sessionId ? { sessionId } : {}),
     });
     return ok(result);
   },

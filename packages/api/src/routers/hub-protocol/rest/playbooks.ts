@@ -7,6 +7,7 @@
  * callers get `status: 'proposed'`, operators get the executed result.
  */
 
+import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import {
   getCaller,
   hasScope,
@@ -60,7 +61,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         channelSpec: body.channelSpec as Record<string, unknown> | undefined,
         expectedOutputs: body.expectedOutputs as
           Record<string, unknown>[] | undefined,
-        stages: body.stages as Record<string, unknown>[] | undefined,
+        // Validated for real by `playbooks.update`'s `playbookStagesSchema`
+        // (category required, keys unique) — this only types the untyped body.
+        stages: body.stages as PlaybookStageInput[] | undefined,
         subjectProfile: body.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: body.schedule as string | number | boolean | null | undefined,

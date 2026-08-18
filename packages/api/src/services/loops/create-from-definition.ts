@@ -45,6 +45,7 @@ import { createLinks } from "../links/links-service.js";
 import { buildPlaybookRunFlowDefinition } from "../playbooks/cron-automation.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
 import type { Context } from "../../types/context.js";
+import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -233,7 +234,9 @@ export async function createLoopFromDefinition(
       inputStrategy: pb.inputStrategy,
       channelSpec: pb.channelSpec,
       expectedOutputs: pb.expectedOutputs,
-      stages: pb.stages,
+      // `LoopPlaybookDef.stages` is the package's deliberately-loose jsonb
+      // shape; `playbooks.create` validates it with `playbookStagesSchema`.
+      stages: pb.stages as PlaybookStageInput[] | undefined,
       subjectProfile: pb.subjectProfile,
       schedule: pb.schedule,
       executor: pb.executor ?? "is-agent",

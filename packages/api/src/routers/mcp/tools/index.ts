@@ -778,9 +778,14 @@ export const tools = {
             },
             type: {
               type: "string",
+              // Must name an existing `relation_defs` slug — `relations.create`
+              // rejects anything else. The previous examples ('related',
+              // 'parent', 'child', 'belongs-to') were ALL invalid slugs, so an
+              // agent following this schema got a 400. These are real defaults
+              // from `database/src/utils/default-relation-defs.ts`.
               description:
-                "Relation type (e.g., 'related', 'parent', 'child', 'belongs-to')",
-              default: "related",
+                "Relation type — an existing relation-def slug (e.g. 'relates_to', 'references', 'mentions', 'parent_of', 'belongs_to_project', 'works_at')",
+              default: "relates_to",
             },
             workspaceId: {
               type: "string",
@@ -1525,20 +1530,43 @@ export const tools = {
             stages: {
               type: "array",
               description:
-                "Ordered stages. Each: { key, name, description?, goal?, suggestedTasks? }.",
+                "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
               items: {
                 type: "object",
                 properties: {
                   key: { type: "string" },
                   name: { type: "string" },
+                  category: {
+                    type: "string",
+                    enum: [
+                      "backlog",
+                      "planned",
+                      "started",
+                      "paused",
+                      "completed",
+                      "canceled",
+                    ],
+                    description:
+                      "Which rollup bucket this stage belongs to: backlog (not committed) · planned (committed, not begun) · started (work under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
+                  },
                   description: { type: "string" },
                   goal: { type: "string" },
                   suggestedTasks: {
                     type: "array",
                     items: { type: "string" },
                   },
+                  position: {
+                    type: "number",
+                    description:
+                      "Order WITHIN this stage's category group — not a global order.",
+                  },
+                  indefinite: {
+                    type: "boolean",
+                    description:
+                      "True if a subject may sit here indefinitely; otherwise a long dwell is worth surfacing.",
+                  },
                 },
-                required: ["key", "name"],
+                required: ["key", "name", "category"],
               },
             },
             status: {
