@@ -148,6 +148,62 @@ export interface ProposalExecutorArgs {
   deps: ProposalExecutorDeps;
 }
 
+/**
+ * THE EFFECT RECEIPT — what the approval ACTUALLY did to storage.
+ *
+ * WHY THIS EXISTS: `{ success: true }` is authored by the same optimistic code
+ * path that decides to return it, so it can report a write that never happened.
+ * That is not hypothetical — the `*\/*` catch-all returned it for every door
+ * with no approval half, and approved playbook runs that never ran and approved
+ * deletes that deleted nothing all read GREEN to the reviewer.
+ *
+ * THE RULE (borrowed from the Kubernetes `spec` vs `status`-subresource split,
+ * which is the load-bearing half of that design — not "reconcile"): the actor
+ * that DECLARES the intent must not be the actor that REPORTS the observed
+ * outcome. Here the executor declares; the STORAGE ENGINE reports. So a
+ * `verified` receipt may only be built from a value the engine itself produced —
+ * a `RETURNING` row, an affected-row count — never from a service-layer boolean
+ * or from "we got here without throwing". A `{ rowsAffected }` computed by the
+ * optimistic path reproduces the bug one level down.
+ *
+ * "Did nothing" is a FIRST-CLASS value (`applied: "none"`), not an absent field,
+ * and it must carry a reason: an unexplained no-op is the defect itself.
+ */
+export type ProposalEffect =
+  | {
+      /** The storage engine confirmed the write. */
+      applied: "verified";
+      /**
+       * Rows the WRITE STATEMENT reported — `returning().length`, or the driver's
+       * affected-row count. Must come from the statement, not be inferred.
+       * `0` is legal and meaningful (an `onConflictDoNothing` that hit a conflict).
+       */
+      rows: number;
+      /** Primary keys the engine returned, when the statement returns ids. */
+      ids?: string[];
+      /** What was written (table / subject), for the reviewer-facing receipt. */
+      subject?: string;
+    }
+  | {
+      /**
+       * The executor did NOT write; it recorded a `.validated` event, and the
+       * materializer worker is what will write. The event id is a real receipt —
+       * of the HANDOFF, not of the write. Deliberately a distinct value from
+       * `verified` so nothing can read an enqueue as an applied change.
+       */
+      applied: "deferred";
+      /** Event row id returned by the event append — the handoff receipt. */
+      validatedEventId: string;
+      /** `${subjectType}` the materializer will dispatch on. */
+      subject?: string;
+    }
+  | {
+      /** Nothing was written, ON PURPOSE. */
+      applied: "none";
+      /** WHY nothing was written. Required — an unexplained no-op is the bug. */
+      reason: string;
+    };
+
 /** The shape every approve branch returns today (superset — branches set a subset). */
 export interface ProposalExecutorResult {
   success: boolean;
@@ -155,6 +211,14 @@ export interface ProposalExecutorResult {
   primaryId?: string;
   created?: number;
   linked?: number;
+  /**
+   * The effect receipt (above). OPTIONAL so the ~11 pre-existing executors keep
+   * compiling untouched — but ABSENT means "this executor has not been converted
+   * and its success is UNVERIFIED", never "nothing happened". Converting an
+   * executor means sourcing this from its actual write; `executors/focus-session.ts`
+   * (`focus_session/create`) is the reference conversion.
+   */
+  effect?: ProposalEffect;
 }
 
 export interface ProposalExecutor {

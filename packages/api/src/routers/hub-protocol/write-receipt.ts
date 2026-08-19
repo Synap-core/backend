@@ -16,6 +16,7 @@
  */
 
 import type { UnmodeledProperty } from "@synap/database";
+import type { ProposalEffect } from "../proposals/execution-registry.js";
 import { resolveEntityByName } from "../../services/entity-resolution.js";
 import { relationsRouter } from "../relations.js";
 import { createHubProtocolCallerContext } from "./utils.js";
@@ -61,9 +62,33 @@ export interface CreateWriteReceiptFacet {
  *
  * NOT modelled (no data source behind them yet — deliberately NOT invented):
  * - `next[]` affordances — nothing produces them.
+ *
+ * THE FOUR STATES — mutually exclusive, and the distinction is the whole point:
+ * - `pending`   → NOTHING is in storage yet and nothing will be until a human
+ *                 acts. A proposal exists (`proposalId`/`reviewUrl`), or the
+ *                 write was handed off to the materializer worker
+ *                 (`ProposalEffect.applied === "deferred"` — the handoff is
+ *                 receipted, the write is not).
+ * - `applied`   → storage changed, and the STORAGE ENGINE said so (a
+ *                 `RETURNING` row / an affected-row count > 0). Every declared
+ *                 sub-write landed.
+ * - `partial`   → storage changed for SOME sub-writes and failed for others.
+ *                 The primary write landed and a non-atomic follow-up errored
+ *                 (today: a facet with `outcome: "error"`). Never a claim of
+ *                 rollback.
+ * - `no_effect` → the operation COMPLETED SUCCESSFULLY and deliberately changed
+ *                 nothing. Not a failure, not a partial, and NOT `applied`:
+ *                 zero rows were written and that is the correct outcome —
+ *                 an acknowledged no-op door (`ACKNOWLEDGED_NOOP_KEYS` in
+ *                 `proposals/executors/catch-all.ts`: `proactive/recap`,
+ *                 `bento/arrange`, `context/link`, `whiteboard/place`), a
+ *                 governance advisory that only records acknowledgement, or an
+ *                 idempotent re-apply whose statement reported 0 rows. It ALWAYS
+ *                 has a reason behind it (`ProposalEffect.applied === "none"`
+ *                 carries `reason`) — an unexplained no-op is the defect itself.
  */
 export interface CreateWriteReceipt {
-  state: "pending" | "applied" | "partial";
+  state: "pending" | "applied" | "partial" | "no_effect";
   proposalId?: string;
   reviewUrl?: string;
   entityId?: string;
@@ -79,6 +104,33 @@ export interface CreateWriteReceipt {
 }
 
 /**
+ * THE ONE MAPPING from a storage-engine effect receipt (`ProposalEffect`, the
+ * approval/executor vocabulary) onto the transport receipt `state` (the
+ * REST/MCP/CLI vocabulary). Both halves of the same contract — this function is
+ * the only place they are related, so a new `applied` value cannot silently
+ * become an over-claiming `state`.
+ *
+ *   verified + rows > 0 → "applied"    storage changed, engine confirmed it
+ *   verified + rows = 0 → "no_effect"  the statement ran and matched nothing
+ *                                      (idempotent re-apply / onConflictDoNothing)
+ *   deferred            → "pending"    the WRITE has not happened; only a
+ *                                      handoff (`.validated` event) is receipted
+ *   none                → "no_effect"  deliberately wrote nothing, with a reason
+ */
+export function receiptStateForEffect(
+  effect: ProposalEffect
+): CreateWriteReceipt["state"] {
+  switch (effect.applied) {
+    case "verified":
+      return effect.rows > 0 ? "applied" : "no_effect";
+    case "deferred":
+      return "pending";
+    case "none":
+      return "no_effect";
+  }
+}
+
+/**
  * Normalize the tRPC create result into a truthful transport receipt without
  * changing the legacy status/id envelope. The create router can materialize
  * the primary entity before a non-atomic facet follow-up fails, so callers
@@ -90,6 +142,14 @@ export function buildCreateWriteReceipt(input: {
   effectiveWorkspaceId: string | null;
   projectId?: string;
   source?: string;
+  /**
+   * STORAGE-ENGINE EVIDENCE, when the caller has it (every approve branch in
+   * `proposals/apply-approval.ts` now produces one). Present ⇒ it DECIDES the
+   * state via `receiptStateForEffect`, because a `RETURNING`/affected-row count
+   * outranks anything inferred from the optimistic result envelope. Absent ⇒
+   * the legacy status/facet derivation below, unchanged.
+   */
+  effect?: ProposalEffect;
 }): CreateWriteReceipt {
   const rawFacets = Array.isArray(input.result.facets)
     ? input.result.facets
@@ -146,11 +206,19 @@ export function buildCreateWriteReceipt(input: {
         : `Facet ${facet.slug} was ${facet.outcome}`
     );
 
-  const state: "pending" | "applied" | "partial" = pending
+  // Engine evidence wins; a facet error still degrades a would-be `applied`
+  // to `partial` (a verified primary write + a failed follow-up is exactly
+  // what `partial` means), but it can never upgrade a `no_effect`/`pending`.
+  const derived: CreateWriteReceipt["state"] = pending
     ? "pending"
     : partial
       ? "partial"
       : "applied";
+  const state: CreateWriteReceipt["state"] = input.effect
+    ? receiptStateForEffect(input.effect) === "applied" && partial
+      ? "partial"
+      : receiptStateForEffect(input.effect)
+    : derived;
   return {
     state,
     ...(typeof input.result.proposalId === "string"
@@ -308,6 +376,8 @@ export async function buildCreateEntityReceipt(params: {
   projectId?: string;
   source?: string;
   resolvedAgentUserId?: string;
+  /** Storage-engine evidence, when the caller has it. See `buildCreateWriteReceipt`. */
+  effect?: ProposalEffect;
 }): Promise<{
   writeReceipt: CreateWriteReceipt;
   resolution?: CreateResolutionBlock;
@@ -332,6 +402,7 @@ export async function buildCreateEntityReceipt(params: {
     effectiveWorkspaceId: params.effectiveWorkspaceId,
     ...(params.projectId ? { projectId: params.projectId } : {}),
     ...(params.source ? { source: params.source } : {}),
+    ...(params.effect ? { effect: params.effect } : {}),
   });
 
   return { writeReceipt, ...(resolution ? { resolution } : {}) };

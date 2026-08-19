@@ -253,11 +253,14 @@ export const CreateEntityResponseSchema = z
     /**
      * Additive, write-aware receipt. `pending` means only a proposal exists;
      * `partial` means independent follow-up operations failed after the entity
-     * write applied — it never claims an atomic rollback.
+     * write applied — it never claims an atomic rollback; `no_effect` means the
+     * operation completed and deliberately changed nothing (see the state
+     * documentation on `CreateWriteReceipt` in `../../write-receipt.ts`, which
+     * this enum MIRRORS — the two must stay in lockstep).
      */
     writeReceipt: z
       .object({
-        state: z.enum(["pending", "applied", "partial"]),
+        state: z.enum(["pending", "applied", "partial", "no_effect"]),
         proposalId: z.string().optional(),
         reviewUrl: z.string().optional(),
         entityId: z.string().optional(),

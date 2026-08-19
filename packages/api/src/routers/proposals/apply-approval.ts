@@ -918,24 +918,32 @@ export async function applyProposalApproval(args: {
       content,
     });
 
-    await db.insert(documentVersions).values({
-      id: versionId,
-      documentId: proposal.targetId,
-      version: newVersion,
-      ...storedVersionValues(snapshot),
-      author: "user",
-      authorId: userId,
-      message: "AI edit accepted",
-    });
+    // EVIDENCE (storage engine): both statements RETURN their rows. `rows` is
+    // what the two write statements themselves reported — not "we reached the
+    // end of the branch". If the document row vanished between the read above
+    // and this update, `updatedDocs` is empty and the receipt says so.
+    const insertedVersions = await db
+      .insert(documentVersions)
+      .values({
+        id: versionId,
+        documentId: proposal.targetId,
+        version: newVersion,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: userId,
+        message: "AI edit accepted",
+      })
+      .returning({ id: documentVersions.id });
 
-    await db
+    const updatedDocs = await db
       .update(documents)
       .set({
         currentVersion: newVersion,
         lastSavedVersion: newVersion,
         updatedAt: new Date(),
       })
-      .where(eq(documents.id, proposal.targetId));
+      .where(eq(documents.id, proposal.targetId))
+      .returning({ id: documents.id });
 
     await db
       .update(proposals)
@@ -965,7 +973,15 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: insertedVersions.length + updatedDocs.length,
+        ids: insertedVersions.map((r) => r.id),
+        subject: "document_versions+documents",
+      },
+    };
   }
 
   // POD-ADMIN FLOOR for every `governance.*` meta-proposal.
@@ -1007,21 +1023,26 @@ export async function applyProposalApproval(args: {
       });
     }
 
-    await db.insert(governanceRules).values({
-      principalKind: "agent",
-      agentUserId: widenData.agentUserId,
-      scopeKind: widenData.scopeKind,
-      workspaceId:
-        widenData.scopeKind === "workspace"
-          ? (widenData.workspaceId ?? null)
-          : null,
-      targetKind: widenData.targetKind,
-      targetPattern: widenData.targetPattern,
-      targetProfile: widenData.targetProfile ?? null,
-      verdict: "auto",
-      sourceProposalId: proposal.id,
-      createdBy: userId,
-    });
+    // EVIDENCE (storage engine): the INSERT's own RETURNING row is the receipt
+    // that the rule row exists. Nothing here is inferred from reaching this line.
+    const insertedWidenRules = await db
+      .insert(governanceRules)
+      .values({
+        principalKind: "agent",
+        agentUserId: widenData.agentUserId,
+        scopeKind: widenData.scopeKind,
+        workspaceId:
+          widenData.scopeKind === "workspace"
+            ? (widenData.workspaceId ?? null)
+            : null,
+        targetKind: widenData.targetKind,
+        targetPattern: widenData.targetPattern,
+        targetProfile: widenData.targetProfile ?? null,
+        verdict: "auto",
+        sourceProposalId: proposal.id,
+        createdBy: userId,
+      })
+      .returning({ id: governanceRules.id });
 
     await db
       .update(proposals)
@@ -1050,7 +1071,15 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: insertedWidenRules.length,
+        ids: insertedWidenRules.map((r) => r.id),
+        subject: "governance_rules",
+      },
+    };
   }
 
   // B4b: governance.tighten_lane — the TIGHTEN mirror of B4. Approving inserts
@@ -1077,21 +1106,25 @@ export async function applyProposalApproval(args: {
       });
     }
 
-    await db.insert(governanceRules).values({
-      principalKind: "agent",
-      agentUserId: tightenData.agentUserId,
-      scopeKind: tightenData.scopeKind,
-      workspaceId:
-        tightenData.scopeKind === "workspace"
-          ? (tightenData.workspaceId ?? null)
-          : null,
-      targetKind: tightenData.targetKind,
-      targetPattern: tightenData.targetPattern,
-      targetProfile: tightenData.targetProfile ?? null,
-      verdict: "propose",
-      sourceProposalId: proposal.id,
-      createdBy: userId,
-    });
+    // EVIDENCE (storage engine): same as widen — the INSERT's RETURNING row.
+    const insertedTightenRules = await db
+      .insert(governanceRules)
+      .values({
+        principalKind: "agent",
+        agentUserId: tightenData.agentUserId,
+        scopeKind: tightenData.scopeKind,
+        workspaceId:
+          tightenData.scopeKind === "workspace"
+            ? (tightenData.workspaceId ?? null)
+            : null,
+        targetKind: tightenData.targetKind,
+        targetPattern: tightenData.targetPattern,
+        targetProfile: tightenData.targetProfile ?? null,
+        verdict: "propose",
+        sourceProposalId: proposal.id,
+        createdBy: userId,
+      })
+      .returning({ id: governanceRules.id });
 
     await db
       .update(proposals)
@@ -1120,7 +1153,15 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: insertedTightenRules.length,
+        ids: insertedTightenRules.map((r) => r.id),
+        subject: "governance_rules",
+      },
+    };
   }
 
   // B4b': governance.advisory — the NO-OP sibling of B4b. Approving an advisory
@@ -1173,7 +1214,24 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    // NO STORAGE WRITE EXISTS ON THIS BRANCH — and that is the correct
+    // outcome, not a severed door (see the branch comment above: an advisory
+    // ACKNOWLEDGES a malformed-write finding; a rule is the wrong remedy). So
+    // the receipt is `applied: "none"` WITH the reason, which maps to the
+    // transport state `no_effect` via `receiptStateForEffect`. The only rows
+    // this branch touches are the proposal's own status/reviewedAt columns,
+    // which are bookkeeping about the review, never the reviewed change.
+    return {
+      success: true,
+      effect: {
+        applied: "none",
+        reason:
+          "governance.advisory is acknowledgement-only by design: it writes no " +
+          "governance_rules row, no ceiling and no config_setting. The finding " +
+          "reports a malformed agent write, whose remedy is code (existence " +
+          "check / tool schema), not a policy row.",
+      },
+    };
   }
 
   // B4d: governance.raise_ceiling — the numeric-limit twin of B4b. Approving
@@ -1199,7 +1257,10 @@ export async function applyProposalApproval(args: {
     // Supersede the agent's prior active pod-scoped daily-write ceiling (if any)
     // so the new one is the single effective row — same soft-revoke the ceilings
     // router uses, scoped to this agent's pod ceilings.
-    await db
+    // EVIDENCE (storage engine): the supersede UPDATE and the new-ceiling
+    // INSERT each RETURN their rows; `rows` is their sum. A supersede that
+    // matched nothing (no prior ceiling) is legal and shows as 1, not 2.
+    const supersededCeilings = await db
       .update(governanceCeilings)
       .set({ revokedAt: new Date() })
       .where(
@@ -1210,18 +1271,22 @@ export async function applyProposalApproval(args: {
           eq(governanceCeilings.scopeKind, "pod"),
           isNull(governanceCeilings.revokedAt)
         )
-      );
+      )
+      .returning({ id: governanceCeilings.id });
 
-    await db.insert(governanceCeilings).values({
-      axis: "daily_write_count",
-      principalKind: "agent",
-      agentUserId: raiseData.agentUserId,
-      scopeKind: "pod",
-      workspaceId: null,
-      limitValue: raiseData.proposedLimit,
-      sourceProposalId: proposal.id,
-      createdBy: userId,
-    });
+    const insertedCeilings = await db
+      .insert(governanceCeilings)
+      .values({
+        axis: "daily_write_count",
+        principalKind: "agent",
+        agentUserId: raiseData.agentUserId,
+        scopeKind: "pod",
+        workspaceId: null,
+        limitValue: raiseData.proposedLimit,
+        sourceProposalId: proposal.id,
+        createdBy: userId,
+      })
+      .returning({ id: governanceCeilings.id });
 
     await db
       .update(proposals)
@@ -1250,7 +1315,15 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: supersededCeilings.length + insertedCeilings.length,
+        ids: insertedCeilings.map((r) => r.id),
+        subject: "governance_ceilings",
+      },
+    };
   }
 
   // B4c: governance.tighten_posture — the channel-scoped twin of B4b. Approving
@@ -1274,7 +1347,12 @@ export async function applyProposalApproval(args: {
       });
     }
 
-    await createGuideline({
+    // EVIDENCE (storage engine, one call deep): `createGuideline` is the ONE
+    // guideline write door and it returns the row from its own INSERT ...
+    // `.returning()` (database/src/utils/config-settings.ts). That row is the
+    // engine's, not a service-layer boolean — an insert that produced no row
+    // yields `rows: 0` here rather than a green `{success:true}`.
+    const guideline = await createGuideline({
       db,
       text: `Auto-tightened: this channel produced ${postureData.clusterSize} rejected agent writes (${Math.round(
         postureData.rejectRate * 100
@@ -1314,7 +1392,15 @@ export async function applyProposalApproval(args: {
       "approved",
       userId
     );
-    return { success: true };
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: guideline?.id ? 1 : 0,
+        ...(guideline?.id ? { ids: [guideline.id] } : {}),
+        subject: "config_settings(guideline)",
+      },
+    };
   }
 
   // ── Registry dispatch ──────────────────────────────────────────────────

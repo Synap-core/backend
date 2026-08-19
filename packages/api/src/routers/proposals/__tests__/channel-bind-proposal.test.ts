@@ -123,7 +123,15 @@ describe("(a) channel.bind is never auto-approved", () => {
     // The route handler (from app.post to the end of the block) gates on write
     // scope and never binds directly — the executor does, on approval.
     const start = rest.indexOf('app.post("/channels/:channelId/bind"');
-    const door = rest.slice(start, start + 2600);
+    // Slice to the NEXT route registration, not a fixed character count. The
+    // window used to be `start + 2600`, which stopped ~100 lines SHORT of the
+    // `proposeChannelBind` call this test exists to pin — so the assertion
+    // failed while the invariant it guards was perfectly intact. A guard that
+    // reports a break that isn't there is worse than no guard: it gets muted,
+    // and then it stops catching the real thing. (Same fix shape as the
+    // `bindChannel:` → `sendExternalMessage:` boundary slice above.)
+    const nextRoute = rest.indexOf("app.post(", start + 1);
+    const door = rest.slice(start, nextRoute === -1 ? undefined : nextRoute);
     expect(door).toContain("hasScope");
     expect(door).toContain("hub-protocol.write");
     expect(door).toContain("proposeChannelBind");

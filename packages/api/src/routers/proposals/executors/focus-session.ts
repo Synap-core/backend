@@ -2,7 +2,10 @@ import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, focusSessions } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalEffect,
+} from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 
 /** Register the focus_session/* approve executors. */
@@ -38,10 +41,19 @@ export function registerFocusSessionExecutors(): void {
         .from(proposals)
         .where(eq(proposals.id, input.proposalId));
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
+        return {
+          success: true,
+          alreadyApproved: true,
+          effect: {
+            applied: "none",
+            reason:
+              "Already approved — this proposal's session row was materialized " +
+              "by the winning attempt; a re-approve writes nothing by design.",
+          },
+        };
       }
 
-      const [created] = await db
+      const insertedSessions = await db
         .insert(focusSessions)
         .values({
           // id = proposal.targetId so any link built at propose time resolves.
@@ -70,6 +82,24 @@ export function registerFocusSessionExecutors(): void {
         })
         .onConflictDoNothing()
         .returning();
+
+      // ── THE EFFECT RECEIPT (reference conversion — template for the rest) ──
+      // `insertedSessions` is what POSTGRES returned for THIS statement, not a
+      // service-layer boolean and not "we reached this line". `onConflictDoNothing`
+      // makes ZERO rows a real, reachable outcome (double-approve, or a session
+      // row already at `proposal.targetId`), and until now that case still
+      // returned a bare `{ success: true }` — an approval reporting a write it
+      // did not perform, which is the exact defect this receipt closes.
+      // Convert the other executors by doing the same thing: name the statement's
+      // own `.returning()` / affected-row count as the evidence, never re-derive
+      // it from the code path that decided to write.
+      const created = insertedSessions[0];
+      const effect: ProposalEffect = {
+        applied: "verified",
+        rows: insertedSessions.length,
+        ids: insertedSessions.map((row) => row.id),
+        subject: "focus_session",
+      };
 
       // Gate 2: mint work channel if none (parity with createFocusSession).
       if (created && !created.channelId) {
@@ -118,7 +148,7 @@ export function registerFocusSessionExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, effect };
     },
   });
 
