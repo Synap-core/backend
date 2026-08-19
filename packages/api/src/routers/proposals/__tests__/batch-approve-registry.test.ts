@@ -43,6 +43,7 @@ import {
   proposalExecRegistry,
   dispatchProposalApproval,
   type ProposalExecutorArgs,
+  type ProposalExecutor,
   type ProposalExecutorResult,
 } from "../execution-registry.js";
 import { readExecutorsSource } from "./read-executors-source.js";
@@ -193,7 +194,9 @@ describe("(a) a key with no materializer case runs its specific executor", () =>
       // Every one of these keys is really registered in approve-executors.ts…
       expect(EXECUTORS).toContain(`key: "${key}"`);
       proposalExecRegistry.register({
-        key,
+        // The loop iterates plain strings; the registry key type is the
+        // door vocabulary. Narrow at the seam rather than typing the array.
+        key: key as ProposalExecutor["key"],
         async execute() {
           registered.add(key);
           return { success: true };

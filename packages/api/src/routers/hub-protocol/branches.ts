@@ -207,7 +207,19 @@ export const branchesRouter = router({
         agentUserId,
         workspaceId,
         subjectType: "channel",
-        action: "merge",
+        // `merge_branch`, NOT `merge` — the approve-executor is registered as
+        // `channel/merge_branch` (`proposals/executors/channel.ts:78`), and the
+        // key is resolved EXACTLY. Under `merge` the proposal fell through to
+        // the wildcard executor, which for a gate-made proposal does not throw:
+        // it emits `.validated`, flips the status to APPROVED and returns
+        // success — so approving a branch merge reported green and merged
+        // nothing. The payload already matches field-for-field (`branchId`,
+        // `summary`), so this is a rename, not new behaviour.
+        //
+        // This pairing is guaranteed to be exercised: merge is on the rung-2.5
+        // DESTRUCTIVE floor, which no rung can widen, so it ALWAYS proposes —
+        // as the comment above already says.
+        action: "merge_branch",
         source: "intelligence",
         reasoning:
           input.reasoning ?? "AI proposes merging branch into parent thread",

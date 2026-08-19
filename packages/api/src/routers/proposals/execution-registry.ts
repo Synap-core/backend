@@ -20,6 +20,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import type { ProposalExecutorKey } from "@synap/governance-policy";
 import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
 import type {
@@ -157,8 +158,20 @@ export interface ProposalExecutorResult {
 }
 
 export interface ProposalExecutor {
-  /** Exact `${targetType}/${proposalType}`, a proposalType-only key, or trailing-`*` wildcard. */
-  key: string;
+  /**
+   * Exact `${targetType}/${proposalType}`, a proposalType-only key, or the
+   * trailing-wildcard catch-all.
+   *
+   * TYPED AGAINST THE SAME VOCABULARY AS THE CREATION SIDE
+   * (`ProposalExecutorKey` ← `GOVERNED_WRITE_DOORS` in
+   * `@synap/governance-policy`). Both ends of the governed-write contract now
+   * draw their keys from one list, so registering an executor under a key no
+   * door files against — `channel/merge` when the real door is
+   * `channel/merge_branch` — is a COMPILE error instead of an executor that
+   * silently never resolves while the catch-all "approves" the real proposal
+   * with no effect.
+   */
+  key: ProposalExecutorKey;
   execute(args: ProposalExecutorArgs): Promise<ProposalExecutorResult>;
 }
 

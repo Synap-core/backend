@@ -94,7 +94,29 @@ vi.mock("../notifications/NotificationService.js", () => ({
   NotificationService: { fromProposal: vi.fn().mockResolvedValue(undefined) },
 }));
 
-import { checkPermissionOrPropose } from "./permission-check.js";
+import { checkPermissionOrPropose as checkPermissionOrProposeStrict } from "./permission-check.js";
+import type { PermissionCheckOpts } from "./permission-check.js";
+
+/**
+ * OFF-VOCABULARY TEST DOOR.
+ *
+ * `PermissionCheckOpts` now pins the `(subjectType, action)` PAIR to
+ * `GATE_WRITE_DOORS` in `@synap/governance-policy`, so a real call site cannot
+ * invent a door. These tests deliberately probe the ladder with pairs that are
+ * NOT production doors (`filesystem/write`, `document/update`, ...) to prove the
+ * generic behaviour, so they widen the door back to plain strings here.
+ *
+ * This shim is CONFINED to test files on purpose: production narrowing is
+ * unaffected, and the tripwire's LEFT side stays the real vocabulary. Do NOT
+ * copy it into src.
+ */
+type OffVocabularyOpts = Omit<PermissionCheckOpts, "subjectType" | "action"> & {
+  subjectType: string;
+  action: string;
+};
+
+const checkPermissionOrPropose = (opts: OffVocabularyOpts) =>
+  checkPermissionOrProposeStrict(opts as unknown as PermissionCheckOpts);
 
 const CORRELATION = "11111111-1111-1111-1111-111111111111";
 const SESSION = "22222222-2222-2222-2222-222222222222";

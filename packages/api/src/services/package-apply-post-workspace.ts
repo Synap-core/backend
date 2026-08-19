@@ -22,6 +22,13 @@ import {
   type PackageCellDefinition,
 } from "./cells/install-cell-from-definition.js";
 import type { WorkspaceSettings } from "@synap/database";
+import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import type { playbooksRouter as playbooksRouterType } from "../routers/playbooks.js";
+
+/** The `playbooks.create` input, as the applier must satisfy it. */
+type PlaybookCreateInput = Parameters<
+  ReturnType<typeof playbooksRouterType.createCaller>["create"]
+>[0];
 
 /**
  * Resolve a playbook's authored `grants` (tool/skill NAMES — see
@@ -277,6 +284,23 @@ export interface PackagePostWorkspaceBody {
      */
     metadata?: Record<string, unknown>;
     status?: string;
+    /**
+     * Authored ordered stages → `playbooks.stages`. Deliberately `unknown[]` at
+     * the wire boundary (a package definition is untrusted JSON); the applier
+     * validates with the ONE runtime schema `playbookStagesSchema` before
+     * forwarding, so a category-less authored stage is REJECTED at this door.
+     *
+     * Never threaded until now: grants.yaml's authored stages had never reached
+     * the database on any pod.
+     */
+    stages?: unknown[];
+    /**
+     * `session` (default) | `project` — see `createInputSchema.scope`
+     * (routers/playbooks.ts). A workspace template ships a PROJECT template by
+     * authoring `scope: project` + `stages`; dropping it forced every shipped
+     * playbook session-scoped.
+     */
+    scope?: "session" | "project";
   }>;
   loops?: Array<{
     templateKey?: string;
@@ -612,23 +636,41 @@ async function applyPackagePostWorkspaceInner(
             continue;
           }
         }
+        // `playbooks.create` requires a goalTemplate; the wire type has it
+        // optional. The blanket `as never` below used to make that hole
+        // invisible — fail loudly (and per-playbook) instead of sending "".
+        if (!p.goalTemplate) {
+          throw new Error(
+            `Playbook "${p.name}" has no goalTemplate (required by playbooks.create)`
+          );
+        }
+        // Validate authored stages at THIS door with the ONE runtime schema —
+        // not a second validator, and not a second category-defaulting site.
+        // Throwing here is caught by the per-playbook catch below and surfaces
+        // as {status:"error"} rather than aborting the whole package.
+        const stages =
+          p.stages === undefined
+            ? undefined
+            : playbookStagesSchema.parse(p.stages);
         const r = await caller.create({
           name: p.name,
           description: p.description,
           goalTemplate: p.goalTemplate,
-          params: p.params as never,
-          executor: p.executor,
-          inputStrategy: p.inputStrategy as never,
-          channelSpec: p.channelSpec as never,
+          params: p.params as Record<string, unknown>[] | undefined,
+          executor: p.executor as PlaybookCreateInput["executor"],
+          inputStrategy: p.inputStrategy as Record<string, unknown> | undefined,
+          channelSpec: p.channelSpec as Record<string, unknown> | undefined,
           schedule: p.schedule,
+          stages,
+          scope: p.scope,
           // Subject kind → `playbooks.subject_profile`; unlocks matchForEntity.
-          subjectProfile: p.subjectProfile as never,
+          subjectProfile: p.subjectProfile,
           // Propose-only governance marker (maintenance playbooks) → playbooks.metadata.
-          metadata: p.metadata as never,
-          status: p.status,
+          metadata: p.metadata,
+          status: p.status as PlaybookCreateInput["status"],
           agentUserId,
           source: "intelligence",
-        } as never);
+        });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via
         // `createLinks`, exactly as `createLoopFromDefinition` (loops door)

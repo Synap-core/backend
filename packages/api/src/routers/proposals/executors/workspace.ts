@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
+import type { Context } from "../../../context.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-workspace" });
 
@@ -727,6 +728,304 @@ export function registerWorkspaceExecutors(): void {
         userId
       );
       return { success: true, primaryId: workspaceId };
+    },
+  });
+  // ── workspace / delete ───────────────────────────────────────────────────
+  // ⚠️ KEY NAME: the gate at `routers/workspaces.ts:776` passes
+  // `subjectType: "workspaces"` (plural), but `permission-check.ts:1893` stores
+  // `targetType: singularType` after stripping a trailing "s" — so the row
+  // lands as `workspace/delete` and THAT is the key approval resolves. A
+  // `workspaces/delete` executor would never match. Verified against
+  // `permission-check.ts` lines 1763-1766 (the strip) and 1874/1915/1967 (the
+  // three places `singularType` becomes the stored `targetType`).
+  //
+  // `delete` sits on the rung-2.5 DESTRUCTIVE floor, which no rung can widen,
+  // so an agent deleting a workspace ALWAYS proposes. With no executor the
+  // `*​/*` catch-all flipped it APPROVED and deleted nothing.
+  //
+  // PAYLOAD: FLAT `data: { id }` (nested as `data.data.id`); `proposal.targetId`
+  // holds the same id. All three shapes are read.
+  //
+  // SECOND EFFECT: the direct path is THREE writes — `WorkspaceRepository.delete`
+  // (row + `workspaces.delete.completed`, emitted through the SHARED
+  // `eventRepository` singleton, because a fresh EventRepository has no
+  // registered hooks and its append would never reach realtime /
+  // materialization / sync), then `auditLog`, then `emitSideEffects`. Replayed
+  // through `workspacesRouter.delete` so the shared singleton is the one used.
+  //
+  // IDENTITY: acts as the APPROVER. There is no ownership row predicate to trip
+  // (`WorkspaceRepository.delete` deletes by id), and the re-entrant
+  // `checkPermissionOrPropose` inside the procedure re-runs RBAC for the
+  // approver — which is exactly the floor that should decide a workspace
+  // deletion. Membership is verified up front so a non-member fails loudly
+  // before anything is written.
+  registerProposalExecutor({
+    key: "workspace/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const workspaceId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace delete proposal is missing the workspace id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { workspacesRouter } = await import("../../workspaces.js");
+      const workspaceCaller = workspacesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(await workspaceCaller.delete({ id: workspaceId }));
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── role / delete ────────────────────────────────────────────────────────
+  // Lives in this file because a role is a workspace-scoped object and there is
+  // no `executors/role.ts` (adding one would mean editing the aggregator).
+  //
+  // `roles.delete` (routers/roles.ts:226) sits on the rung-2.5 DESTRUCTIVE
+  // floor, so an agent deleting a role ALWAYS proposes; with no executor the
+  // `*​/*` catch-all flipped it APPROVED and the role survived.
+  //
+  // PAYLOAD: FLAT `data: { id }` (nested as `data.data.id`); `proposal.targetId`
+  // holds the same id. Note the gate's `workspaceId` comes from the OPTIONAL
+  // `input.workspaceId`, so `proposal.workspaceId` can legitimately be null —
+  // the router re-resolves the role's REAL workspace itself and gates on that.
+  //
+  // SECOND EFFECT: the direct path is `scopedDb` visibility load →
+  // `assertWorkspaceWrite` on the ROLE's real workspace → `RoleRepository.delete`
+  // (row + `role.delete.completed`) → `recordDomainMutation` (the ONE audit +
+  // reactor door). Replayed through `rolesRouter.delete` so all of it fires.
+  //
+  // IDENTITY: acts as the APPROVER — `RoleRepository.delete` carries no
+  // ownership predicate, and the router's own `scopedDb` + `assertWorkspaceWrite`
+  // are authorization floors that must be cleared by whoever approves.
+  registerProposalExecutor({
+    key: "role/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const roleId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!roleId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Role delete proposal is missing the role id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const roleWorkspaceId = proposal.workspaceId ?? undefined;
+      const membership = roleWorkspaceId
+        ? await getWorkspaceMembership(db, roleWorkspaceId, userId)
+        : null;
+      if (roleWorkspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { rolesRouter } = await import("../../roles.js");
+      const roleCaller = rolesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: roleWorkspaceId,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await roleCaller.delete({
+          id: roleId,
+          ...(roleWorkspaceId ? { workspaceId: roleWorkspaceId } : {}),
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── apiKey / delete ──────────────────────────────────────────────────────
+  // Lives in this file for the same reason as `role/delete` (no
+  // `executors/api-key.ts`, and the aggregator is off-limits).
+  //
+  // ⚠️ The GATE is inside `apiKeys.revoke` (routers/api-keys.ts:317) but it
+  // declares `action: "delete"`, so the stored key is `apiKey/delete` while the
+  // door to replay is `revoke`. `delete` sits on the rung-2.5 DESTRUCTIVE
+  // floor, so an agent revoking a key ALWAYS proposes; with no executor the
+  // `*​/*` catch-all flipped the proposal APPROVED and the key STAYED LIVE —
+  // the worst possible false-green, because the whole point of the action is
+  // to stop a credential from working.
+  //
+  // PAYLOAD: FLAT `data: { id }` — the gate stamps `id: input.keyId` (nested as
+  // `data.data.id`); `proposal.targetId` holds the same id.
+  //
+  // ⚠️ FIDELITY LOSS (stated, not hidden): the gate does NOT store
+  // `input.reason`, so the replayed revoke writes `revokedReason: undefined`.
+  // The revocation itself is complete — only the human note is lost. Fixing it
+  // means widening the gate payload, which is a router edit.
+  //
+  // SECOND EFFECT: the direct path is `ApiKeyRepository.revoke` (sets
+  // `isActive: false` + `revokedAt` + `revokedBy`; it deliberately emits NO
+  // spine event — "revoke is a state change, not a delete"), then `auditLog`,
+  // then `emitSideEffects`. Replayed through `apiKeysRouter.revoke`.
+  //
+  // IDENTITY: acts as the APPROVER. `revoke` answers NOT_FOUND when
+  // `key.userId !== ctx.userId` — an API key is strictly personal, so replaying
+  // as the key's owner would let a workspace admin revoke someone else's
+  // credential through the approval door. A non-owner approver therefore gets a
+  // loud NOT_FOUND, which is the correct answer, not a silent no-op.
+  registerProposalExecutor({
+    key: "apiKey/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const keyId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!keyId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "API key revoke proposal is missing the key id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch. (`revoke`
+      // is itself idempotent — re-setting isActive:false is a no-op — but the
+      // guard keeps the double-click path identical to every sibling.)
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const keyWorkspaceId = proposal.workspaceId ?? undefined;
+      const membership = keyWorkspaceId
+        ? await getWorkspaceMembership(db, keyWorkspaceId, userId)
+        : null;
+      if (keyWorkspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { apiKeysRouter } = await import("../../api-keys.js");
+      const apiKeyCaller = apiKeysRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: keyWorkspaceId,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await apiKeyCaller.revoke({
+          keyId,
+          ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
     },
   });
 }

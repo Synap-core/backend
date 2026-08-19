@@ -1314,8 +1314,8 @@ export const playbooksRouter = router({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
-        subjectType: "playbook",
-        action: "create",
+        subjectType: "playbook" as const,
+        action: "create" as const,
         source: input.source,
         reasoning: input.reasoning,
         // Widened (object-proposal manifest W1): carry the FULL create input so

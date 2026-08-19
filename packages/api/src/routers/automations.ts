@@ -16,7 +16,26 @@ import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
-import { validateEventPattern } from "@synap-core/types/events/unified";
+// The same sub-path is the SSOT for the emittable-event grammar (SUBJECT_TYPES
+// × EVENT_ACTIONS) + the connector / message-alias / observation families that
+// `validateEventPattern` accepts — the honest-menu "catalog" tier derives from
+// these constants rather than a hand-invented list.
+import {
+  validateEventPattern,
+  SUBJECT_TYPES,
+  EVENT_ACTIONS,
+  CONNECTOR_SUBJECT_TYPES,
+  MESSAGE_ALIAS_PATTERNS,
+  OBSERVATION_NAMESPACES,
+} from "@synap-core/types/events/unified";
+// Vocabulary door — the ONE place machine tokens become human words. Trigger
+// events use PAST mood ("A task was created"); actions use IMPERATIVE mood
+// ("Create an entity"). Never a hand-written label map (see .claude/rules/vocabulary.md).
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+  humanizeToken,
+} from "@synap-core/types/vocabulary";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import {
   flowValidationErrorMessage,
@@ -35,6 +54,7 @@ import {
   lt,
   asc,
   desc,
+  count,
   drizzleSql,
   automations,
   automationRuns,
@@ -42,9 +62,15 @@ import {
   channels,
   playbooks,
   skills,
+  events,
+  links,
   ChannelRepository,
 } from "@synap/database";
-import type { AutomationTriggerConfig, FlowDefinition } from "@synap/database";
+import type {
+  AutomationTriggerConfig,
+  FlowDefinition,
+  OutputNodeDef,
+} from "@synap/database";
 // Shared with the runtime run-narration resolver (post-run-summary.ts): the ONE
 // SSOT for `metadata.resultRouting`. Imported (not re-copied) — the static
 // feedTargets resolver must classify routing identically to `resolveRunChannel`.
@@ -719,6 +745,186 @@ export async function materializeApprovedAutomation(input: {
   );
 }
 
+// ============================================================================
+// Rules ecosystem — honest WHEN / THEN menus (SLICE 1)
+//
+// A "rule" reads "WHEN <event> (WHERE <filter>) → THEN <action>". These two
+// read-only queries feed the authoring menus. The founder's hard requirement is
+// that the WHEN menu shows ONLY genuinely-real events: the union of an
+// authoritative catalog, what a source has ACTUALLY emitted (with counts), and
+// what a capability DECLARES it produces.
+// ============================================================================
+
+/**
+ * RuleScope — the lens a rule is authored under. Every field optional: a rule
+ * can be pod-wide or narrowed by any combination.
+ */
+const ruleScopeSchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+  projectId: z.string().uuid().optional(),
+  capabilityId: z.string().uuid().optional(),
+  channelId: z.string().uuid().optional(),
+  entityId: z.string().uuid().optional(),
+});
+export type RuleScope = z.infer<typeof ruleScopeSchema>;
+
+/** PINNED CONTRACT — do NOT rename/reshape (seam-fork has bitten this 4×). */
+const eventOptionSchema = z.object({
+  pattern: z.string(),
+  label: z.string(),
+  profileSlug: z.string().optional(),
+  source: z.enum(["observed", "declared", "catalog"]),
+  observedCount: z.number().int().nonnegative().optional(),
+});
+export type EventOption = z.infer<typeof eventOptionSchema>;
+
+const actionOptionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  outputType: z.string(),
+  params: z
+    .array(
+      z.object({
+        key: z.string(),
+        label: z.string(),
+        required: z.boolean(),
+      })
+    )
+    .optional(),
+});
+export type ActionOption = z.infer<typeof actionOptionSchema>;
+
+/**
+ * The automation OUTPUT-node vocabulary — the THEN half of a rule.
+ * SSOT: the `OutputNodeDef['data']['outputType']` union in
+ * packages/database/src/schema/automations.ts (lines 239-250). That union is a
+ * TYPE (erased at runtime), so this array mirrors it; the `satisfies` (array ⊆
+ * union) plus the coverage assertion below (union ⊆ array) make tsc FAIL if the
+ * two ever drift — it can never silently fall out of sync with the executor
+ * switch in packages/jobs/src/workers/steps/output.ts.
+ */
+const OUTPUT_NODE_TYPES = [
+  "notification",
+  "entity_create",
+  "entity_update",
+  "facet_attach",
+  "facet_update",
+  "facet_detach",
+  "relation_create",
+  "webhook",
+  "channel_message",
+  "session_update",
+  "set_state",
+] as const satisfies readonly OutputNodeDef["data"]["outputType"][];
+
+// Coverage guard: fails to compile if a new outputType is added to the schema
+// union but not mirrored above (Record<never, true> === {} is legal; any missing
+// member becomes a required key with no value).
+const _assertOutputCoverage: Record<
+  Exclude<
+    OutputNodeDef["data"]["outputType"],
+    (typeof OUTPUT_NODE_TYPES)[number]
+  >,
+  true
+> = {};
+void _assertOutputCoverage;
+
+/**
+ * Structural decomposition of each output type into (verb, objectKind) TOKENS —
+ * NOT an English label map. Every English word still comes exclusively from the
+ * vocabulary door; this only records which verb/noun token each output node is
+ * built from, which is the router's own structural knowledge of its output
+ * types. A new output type is caught by the coverage assertion above.
+ */
+const OUTPUT_ACTION_SHAPES: Record<
+  (typeof OUTPUT_NODE_TYPES)[number],
+  { verb: string; objectKind: string }
+> = {
+  entity_create: { verb: "create", objectKind: "entity" },
+  entity_update: { verb: "update", objectKind: "entity" },
+  facet_attach: { verb: "attach", objectKind: "entity_facet" },
+  facet_update: { verb: "update", objectKind: "entity_facet" },
+  facet_detach: { verb: "detach", objectKind: "entity_facet" },
+  relation_create: { verb: "create", objectKind: "relation" },
+  channel_message: { verb: "send", objectKind: "message" },
+  notification: { verb: "send", objectKind: "notification" },
+  webhook: { verb: "send", objectKind: "webhook" },
+  session_update: { verb: "update", objectKind: "focus_session" },
+  set_state: { verb: "set", objectKind: "state" },
+};
+
+const capitalize = (s: string): string =>
+  s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+const withArticle = (noun: string): string =>
+  `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
+
+/** IMPERATIVE-mood label for a THEN action, via the vocabulary door. */
+function actionLabelFor(
+  outputType: (typeof OUTPUT_NODE_TYPES)[number]
+): string {
+  const shape = OUTPUT_ACTION_SHAPES[outputType];
+  const verb = resolveActionLabel(shape.verb, "imperative");
+  const noun = resolveObjectNoun(shape.objectKind).toLowerCase();
+  return `${verb} ${withArticle(noun)}`;
+}
+
+/** PAST-mood label for a WHEN trigger event pattern, via the vocabulary door. */
+function eventLabelFor(pattern: string, subject: string): string {
+  const parts = pattern.split(".");
+  const noun = resolveObjectNoun(subject).toLowerCase();
+  const action = parts[1];
+  // Full/action wildcard ("<subject>.*", "<subject>.<action>.*") — no single verb.
+  if (!action || action === "*") return `Any ${noun} activity`;
+  const past = resolveActionLabel(action, "past").toLowerCase();
+  return `${capitalize(withArticle(noun))} was ${past}`;
+}
+
+/** The `profileSlug` an event option carries — the object kind it concerns. */
+function profileSlugForSubject(subject: string): string | undefined {
+  // The generic `entity` base kind's concrete profile is unknown at this layer
+  // (the WHERE step binds it); every other subject IS its own object kind.
+  return subject === "entity" ? undefined : subject;
+}
+
+/**
+ * The authoritative "catalog" tier — the emittable-event universe DERIVED from
+ * the grammar SSOT (SUBJECT_TYPES × EVENT_ACTIONS) at the `.completed` phase
+ * (the phase automations match: `matchForEntity` hardcodes
+ * `entity.create.completed`; unified.ts notes "Most automations should use
+ * completed"), plus the connector / message-alias / observation families the
+ * matcher accepts. Everything here is a pattern `validateEventPattern` accepts.
+ */
+function buildEventCatalog(): EventOption[] {
+  const out: EventOption[] = [];
+  const seen = new Set<string>();
+  const push = (pattern: string, subject: string) => {
+    if (seen.has(pattern)) return;
+    seen.add(pattern);
+    out.push({
+      pattern,
+      label: eventLabelFor(pattern, subject),
+      profileSlug: profileSlugForSubject(subject),
+      source: "catalog",
+    });
+  };
+  for (const subject of SUBJECT_TYPES) {
+    for (const action of EVENT_ACTIONS) {
+      push(`${subject}.${action}.completed`, subject);
+    }
+  }
+  for (const subject of CONNECTOR_SUBJECT_TYPES) {
+    push(`${subject}.*`, subject);
+  }
+  for (const pattern of MESSAGE_ALIAS_PATTERNS) {
+    push(pattern, pattern.split(".")[0]!);
+  }
+  for (const ns of OBSERVATION_NAMESPACES) {
+    push(`${ns}.*`, ns);
+  }
+  return out;
+}
+
 export const automationsRouter = router({
   // ── List automations ────────────────────────────────────────────────────────
 
@@ -1054,6 +1260,204 @@ export const automationsRouter = router({
         description: a.description ?? undefined,
         triggerSummary: summarizeEntityCreateTrigger(a.triggerConfig),
       }));
+    }),
+
+  // ── Rules ecosystem: honest WHEN menu ────────────────────────────────────────
+
+  /**
+   * The WHEN menu — every trigger event a rule may fire on, UNIONed from three
+   * sources and deduped by `pattern` with precedence declared > observed >
+   * catalog:
+   *   • catalog  — the emittable-event grammar (see `buildEventCatalog`).
+   *   • observed — patterns ACTUALLY seen in this user's `events` log, with a
+   *                real `observedCount`. `events` has no VisibilityRule (it is
+   *                append-only user-owned history), so the access floor is the
+   *                RESOLVED userId — never a caller-supplied one (same contract
+   *                as hub-protocol/rest/observability.ts). RuleScope narrows.
+   *   • declared — `capability --produced--> event` edges in `links`, carrying
+   *                the pattern in `metadata.eventPattern`. None exist yet ⇒ []
+   *                today (expected); the source is wired so it lights up the
+   *                moment a capability declares one.
+   */
+  availableTriggerEvents: protectedProcedure
+    .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const scope = input?.scope ?? {};
+      const database = await getDb();
+      const access = AccessContext.from(ctx);
+
+      // Merge map keyed by pattern; higher-precedence source overwrites but
+      // preserves any observedCount already discovered.
+      const byPattern = new Map<string, EventOption>();
+      for (const opt of buildEventCatalog()) byPattern.set(opt.pattern, opt);
+
+      // ── observed ────────────────────────────────────────────────────────────
+      const userId = access.userId;
+      if (userId) {
+        const wsExpr = drizzleSql`COALESCE(${events.workspaceId}, ${events.data}->>'workspaceId')`;
+        const observedRows = await database
+          .select({ type: events.type, n: count() })
+          .from(events)
+          .where(
+            and(
+              eq(events.userId, userId),
+              scope.workspaceId
+                ? drizzleSql`${wsExpr} = ${scope.workspaceId}`
+                : undefined,
+              scope.entityId ? eq(events.subjectId, scope.entityId) : undefined,
+              scope.projectId
+                ? drizzleSql`${events.data}->>'projectId' = ${scope.projectId}`
+                : undefined,
+              scope.capabilityId
+                ? drizzleSql`${events.data}->>'capabilityId' = ${scope.capabilityId}`
+                : undefined,
+              scope.channelId
+                ? drizzleSql`${events.data}->>'channelId' = ${scope.channelId}`
+                : undefined
+            )
+          )
+          .groupBy(events.type);
+
+        for (const row of observedRows) {
+          if (!row.type) continue;
+          const subject = row.type.split(".")[0]!;
+          const existing = byPattern.get(row.type);
+          byPattern.set(row.type, {
+            pattern: row.type,
+            label: existing?.label ?? eventLabelFor(row.type, subject),
+            profileSlug:
+              existing?.profileSlug ?? profileSlugForSubject(subject),
+            source: "observed",
+            observedCount: Number(row.n) || 0,
+          });
+        }
+      }
+
+      // ── declared ──────────────────────────────────────────────────────────────
+      // The links schema has no dedicated `event` endpoint type / `produces`
+      // linkType (LinkEndpointType / LinkType unions in schema/links.ts), so a
+      // capability declares a produced event as a `produced` edge whose pattern
+      // lives in metadata.eventPattern. Read floor via the links VisibilityRule.
+      const linkPred = scopedDb(access).predicate(links);
+      const declaredRows = await database
+        .select({
+          pattern: drizzleSql<
+            string | null
+          >`${links.metadata}->>'eventPattern'`,
+        })
+        .from(links)
+        .where(
+          and(
+            linkPred,
+            eq(links.fromType, "capability"),
+            eq(links.linkType, "produced"),
+            drizzleSql`${links.metadata}->>'eventPattern' IS NOT NULL`,
+            scope.capabilityId
+              ? eq(links.fromId, scope.capabilityId)
+              : undefined,
+            scope.workspaceId
+              ? or(
+                  isNull(links.workspaceId),
+                  eq(links.workspaceId, scope.workspaceId)
+                )
+              : undefined
+          )
+        );
+
+      for (const row of declaredRows) {
+        if (!row.pattern) continue;
+        let pattern: string;
+        try {
+          // Defensive: only surface validator-legal declarations.
+          pattern = validateEventPattern(row.pattern);
+        } catch {
+          continue;
+        }
+        const subject = pattern.split(".")[0]!;
+        const existing = byPattern.get(pattern);
+        byPattern.set(pattern, {
+          pattern,
+          label: existing?.label ?? eventLabelFor(pattern, subject),
+          profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
+          source: "declared",
+          observedCount: existing?.observedCount,
+        });
+      }
+
+      // Stable order: declared, then observed (busiest first), then catalog.
+      const rank = { declared: 0, observed: 1, catalog: 2 } as const;
+      const eventsOut = Array.from(byPattern.values()).sort(
+        (a, b) =>
+          rank[a.source] - rank[b.source] ||
+          (b.observedCount ?? 0) - (a.observedCount ?? 0) ||
+          a.pattern.localeCompare(b.pattern)
+      );
+
+      return { events: eventOptionSchema.array().parse(eventsOut) };
+    }),
+
+  // ── Rules ecosystem: THEN menu ───────────────────────────────────────────────
+
+  /**
+   * The THEN menu — every action a rule may take. Always the automation
+   * output-node vocabulary (`OUTPUT_NODE_TYPES`); when `scope.capabilityId` is
+   * set, also that capability's in-scope VERBS (its member skills — a capability
+   * flow node's `verbId` = the requiring skill's name, per `CapabilityNodeDef`),
+   * resolved from the `skill --member_of--> capability` links.
+   */
+  availableActions: protectedProcedure
+    .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const scope = input?.scope ?? {};
+      const access = AccessContext.from(ctx);
+
+      const actions: ActionOption[] = OUTPUT_NODE_TYPES.map((outputType) => ({
+        key: outputType,
+        label: actionLabelFor(outputType),
+        outputType,
+      }));
+
+      if (scope.capabilityId) {
+        const database = await getDb();
+        const linkPred = scopedDb(access).predicate(links);
+        const memberSkillRows = await database
+          .select({ skillId: links.fromId })
+          .from(links)
+          .where(
+            and(
+              linkPred,
+              eq(links.toType, "capability"),
+              eq(links.toId, scope.capabilityId),
+              eq(links.fromType, "skill"),
+              eq(links.linkType, "member_of")
+            )
+          );
+
+        const skillIds = memberSkillRows
+          .map((r) => r.skillId)
+          .filter((id): id is string => Boolean(id));
+
+        if (skillIds.length > 0) {
+          const skillRows = await database
+            .select({ id: skills.id, name: skills.name })
+            .from(skills)
+            .where(
+              and(
+                visibleSkillsWhere(access.userId, scope.workspaceId),
+                inArray(skills.id, skillIds)
+              )
+            );
+          for (const s of skillRows) {
+            actions.push({
+              key: `capability:${s.name}`,
+              label: humanizeToken(s.name),
+              outputType: "capability",
+            });
+          }
+        }
+      }
+
+      return { actions: actionOptionSchema.array().parse(actions) };
     }),
 
   // ── Get single automation ───────────────────────────────────────────────────

@@ -237,6 +237,11 @@ export async function createLoopFromDefinition(
       // `LoopPlaybookDef.stages` is the package's deliberately-loose jsonb
       // shape; `playbooks.create` validates it with `playbookStagesSchema`.
       stages: pb.stages as PlaybookStageInput[] | undefined,
+      // `session` (default) | `project` — see `createInputSchema.scope`. Read
+      // off the def locally because `LoopPlaybookDef` (@synap/playbooks, a
+      // frozen contract package) has no `scope` field yet; absent → undefined →
+      // `playbooks.create` reads it as `session`, i.e. no behaviour change.
+      scope: (pb as { scope?: "session" | "project" }).scope,
       subjectProfile: pb.subjectProfile,
       schedule: pb.schedule,
       executor: pb.executor ?? "is-agent",

@@ -157,6 +157,16 @@ export interface CapabilityPlaybookDef {
   metadata?: Record<string, unknown>;
   executor?: "is-agent" | "external-agent" | "hybrid";
   status?: "draft" | "active" | "paused" | "archived";
+  /**
+   * What this template instantiates (0240): `session` (a template of ONE focus
+   * session — today's default) or `project` (a blueprint for a long-running
+   * container whose ordered `stages` coordinate rather than execute). Omitted
+   * reads as `session` at `playbooks.create`, so absence is a no-op.
+   *
+   * Without this a package could never SHIP a project template: every playbook
+   * a capability seeded was forced session-scoped regardless of what it authored.
+   */
+  scope?: "session" | "project";
 }
 
 // Mirrors the `automations.create` tRPC input (routers/automations.ts:164). An
@@ -878,6 +888,7 @@ export async function createCapabilityFromDefinition(
           metadata: p.metadata,
           executor: p.executor ?? "is-agent",
           status: p.status ?? "draft",
+          scope: p.scope,
         });
 
         if (result.proposalId) proposals.push(result.proposalId);

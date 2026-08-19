@@ -349,11 +349,11 @@ describe("automation/create approval preserves governed provenance", () => {
 describe("(e) an exact key wins over the catch-all", () => {
   it("resolve('automation/execute') prefers the exact executor", () => {
     const exact = {
-      key: "automation/execute",
+      key: "automation/execute" as const,
       execute: async () => ({ success: true }),
     };
     const catchAll = {
-      key: "*/*",
+      key: "*/*" as const,
       execute: async () => ({ success: false }),
     };
     proposalExecRegistry._reset();

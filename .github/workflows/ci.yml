@@ -221,6 +221,20 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
 
+      # `pnpm test` above runs tripwire files transitively (they're plain
+      # `.test.ts` files under each package), but never reports whether
+      # tripwire COVERAGE itself silently dropped. `scripts/tripwires.mjs`
+      # discovers every tripwire BY PATTERN (never a hardcoded path list —
+      # see the script's own header for why) and prints the discovered
+      # count, which is the one signal that would catch a naming-convention
+      # drift or a directory the walk stopped seeing. Without this step
+      # that discovery report never runs anywhere but a human's terminal.
+      - name: Tripwires (architectural invariants, discovered by pattern)
+        run: pnpm tripwires
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
       - name: Build
         run: pnpm build
 

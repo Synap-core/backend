@@ -4,7 +4,8 @@ import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
+import type { Context } from "../../../context.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-tool" });
 
@@ -100,6 +101,97 @@ export function registerToolExecutors(): void {
         userId,
         ...(wsLens ? { workspaceId: wsLens } : {}),
       });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+  // ── tool / delete ────────────────────────────────────────────────────────
+  // `tools.delete` (routers/tools.ts:631) sits on the rung-2.5 DESTRUCTIVE
+  // floor, which no rung can widen, so an agent deleting a tool ALWAYS
+  // proposes — and with no executor, approval fell to the `*​/*` catch-all,
+  // which flips the row APPROVED and deletes nothing. Same unrecoverable-
+  // approval defect `tool/create` above records, on the destructive side.
+  //
+  // PAYLOAD: the gate stores FLAT `data: { id }` (nested as `data.data.id`);
+  // `proposal.targetId` holds the same id. All three shapes are read.
+  //
+  // SECOND EFFECT: the direct path is `assertWorkspaceWrite` → `db.delete(tools)`
+  // → `auditLog` → `emitSideEffects`. Deleting the row here would skip the
+  // reactor bus AND the write floor. Replayed through `toolsRouter.delete`.
+  //
+  // IDENTITY: acts as the APPROVER — unlike `project/delete` / `skill/delete`,
+  // nothing downstream carries an ownership ROW predicate that would 404 the
+  // approver; the only gate is `assertWorkspaceWrite` on the loaded row
+  // (`{ workspaceId, ownerId: createdBy }`), which is an explicit AUTHORIZATION
+  // floor. Replaying as the row's owner would step past it, so the approver
+  // must clear it themselves. A pod-wide tool created BY an agent
+  // (`tool/create` stamps `createdBy: proposal.agentUserId ?? userId`) is
+  // therefore not deletable by a different human here — a loud FORBIDDEN that
+  // exactly matches what the direct path does, never a silent no-op.
+  registerProposalExecutor({
+    key: "tool/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const toolId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!toolId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Tool delete proposal is missing the tool id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, toolId),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Tool to delete no longer exists",
+        });
+      }
+
+      const { toolsRouter } = await import("../../tools.js");
+      const toolCaller = toolsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(await toolCaller.delete({ id: toolId }));
 
       await db
         .update(proposals)

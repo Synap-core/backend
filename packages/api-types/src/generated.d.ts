@@ -22941,6 +22941,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		availableTriggerEvents: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				scope?: {
+					workspaceId?: string | undefined;
+					projectId?: string | undefined;
+					capabilityId?: string | undefined;
+					channelId?: string | undefined;
+					entityId?: string | undefined;
+				} | undefined;
+			} | undefined;
+			output: {
+				events: {
+					pattern: string;
+					label: string;
+					source: "observed" | "declared" | "catalog";
+					profileSlug?: string | undefined;
+					observedCount?: number | undefined;
+				}[];
+			};
+			meta: object;
+		}>;
+		availableActions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				scope?: {
+					workspaceId?: string | undefined;
+					projectId?: string | undefined;
+					capabilityId?: string | undefined;
+					channelId?: string | undefined;
+					entityId?: string | undefined;
+				} | undefined;
+			} | undefined;
+			output: {
+				actions: {
+					key: string;
+					label: string;
+					outputType: string;
+					params?: {
+						key: string;
+						label: string;
+						required: boolean;
+					}[] | undefined;
+				}[];
+			};
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -25320,6 +25365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				items: {
 					subject: ProjectSubject | null;
+					phaseCategory: PlaybookStageCategory;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -25341,6 +25387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				projects: {
 					subject: ProjectSubject | null;
+					phaseCategory: PlaybookStageCategory;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -25377,6 +25424,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					settings: unknown;
 				};
 				subject: ProjectSubject | null;
+				phaseCategory: PlaybookStageCategory;
 			};
 			meta: object;
 		}>;
@@ -25428,6 +25476,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			} | {
 				status: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		instantiateFromPlaybook: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				projectId: string;
+				playbookId: string;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				playbookId?: undefined;
+				playbookVersion?: undefined;
+				stageCount?: undefined;
+				phase?: undefined;
+				phaseSeeded?: undefined;
+				phaseKept?: undefined;
+			} | {
+				status: "instantiated";
+				playbookId: string;
+				playbookVersion: number;
+				stageCount: number;
+				phase: string | null;
+				phaseSeeded: boolean;
+				phaseKept: boolean;
 				proposalId?: undefined;
 			};
 			meta: object;

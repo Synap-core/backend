@@ -16,10 +16,19 @@
  * static manifest can carry).
  *
  * Run: `pnpm --filter @synap/api gen:mcp-manifest`.
+ *
+ * Output formatting: the raw `JSON.stringify(manifest, null, 2)` does not
+ * match this repo's committed style (prettier reflows short arrays like
+ * `["query"]` onto one line; `stringify` never does) — running the plain
+ * serializer produces a huge, purely-cosmetic diff that buries the real
+ * change. So the output is run through prettier itself, using THIS repo's
+ * own `.prettierrc.json` (via `resolveConfig`) rather than a hand-matched
+ * set of options here that could drift from it.
  */
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import prettier from "prettier";
 import { tools } from "./index.js";
 import { SYNAP_INSTRUCTIONS } from "../index.js";
 
@@ -32,7 +41,13 @@ async function main() {
     tools: toolDefs,
     instructions: SYNAP_INSTRUCTIONS,
   };
-  writeFileSync(OUT_PATH, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  const raw = JSON.stringify(manifest, null, 2) + "\n";
+  const config = await prettier.resolveConfig(OUT_PATH);
+  const formatted = await prettier.format(raw, {
+    ...config,
+    parser: "json",
+  });
+  writeFileSync(OUT_PATH, formatted, "utf8");
   // eslint-disable-next-line no-console
   console.log(`Wrote ${toolDefs.length} tools + instructions to ${OUT_PATH}`);
 }

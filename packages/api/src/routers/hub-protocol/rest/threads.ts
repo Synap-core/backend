@@ -62,6 +62,7 @@ import {
   getUserAccessibleWorkspaceIds,
   hasScope,
   httpStatusForTrpcError,
+  isUuid,
   logger,
   resolveActingContext,
   resolveActorId,
@@ -71,6 +72,46 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
+
+/**
+ * Channel WRITE floor for the two message-append doors below.
+ *
+ * Neither door used to verify that the caller may write to `threadId` at all:
+ * any key holding `hub-protocol.write` plus a known channel UUID could append
+ * to that channel — and, with `autoRespond`, make an agent answer inside it.
+ *
+ * The predicate is `channelVisibilityWhere` — the canonical channel access
+ * predicate, the SAME one the list route below and `hub-protocol/sessions.ts`
+ * (`assertChannelVisible`) floor on. It is deliberately not a new rule.
+ *
+ * ⚠️ It is a READ predicate: "can SEE the channel" is APPROXIMATING "may WRITE
+ * to the channel", because no write-side channel predicate exists today. A
+ * true write predicate would additionally have to honor a read-only membership
+ * role (`channel_members` carries no role column) and an archived/closed
+ * channel state — neither of which is modelled yet.
+ *
+ * `userId` MUST be the AUTHENTICATED key owner (`c.get("userId")`), never a
+ * body- or item-supplied author: a service key legitimately mirrors messages
+ * authored by OTHER people into a channel its owner can see, and that
+ * delegation is separately gated by `resolveActingContext`.
+ *
+ * A non-UUID `threadId` is rejected here rather than being bound into a
+ * Postgres `uuid` comparison (which throws `invalid input syntax for type
+ * uuid` and escapes as a bare 500) — the path param is validated as
+ * `z.string()`, not `.uuid()`.
+ */
+async function callerMayWriteToChannel(
+  channelId: string,
+  userId: string
+): Promise<boolean> {
+  if (!isUuid(channelId)) return false;
+  const row = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
+    .limit(1);
+  return !!row[0];
+}
 
 export function registerThreadsRoutes(app: HubHono): void {
   // ── GET /threads ────────────────────────────────────────────────────────
@@ -812,22 +853,65 @@ export function registerThreadsRoutes(app: HubHono): void {
     // Schema enforces min(1), max(100), and per-item required fields.
 
     try {
+      // WRITE FLOOR — the caller must be able to reach this channel BEFORE any
+      // identity work or insert. See `callerMayWriteToChannel` for why the
+      // floor is the authenticated key owner and why a read predicate is
+      // standing in for a write one.
+      const authUserId = c.get("userId") as string | undefined;
+      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+      if (!(await callerMayWriteToChannel(threadId, authUserId))) {
+        return c.json({ error: "Thread not found or not accessible" }, 403);
+      }
+
+      // SECURITY — the acting identity of EVERY item MUST come from the
+      // verified auth context, never the per-item `userId` (governed-agent-
+      // write → ungoverned-operator-write IDOR). Same door, same semantics as
+      // the single-message route below: a service key may still delegate (this
+      // door mirrors a whole conversation, whose turns belong to several
+      // people), while any other key may only write as itself.
+      const actingUserIds: string[] = [];
+      for (const m of items) {
+        const acting = await resolveActingContext(c, { userId: m.userId });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        actingUserIds.push(acting.userId);
+      }
+
+      // ATTRIBUTION — mirrors the single-message door below: the agent id comes
+      // ONLY from the verified auth context (a body-supplied one would be
+      // spoofable), and `routedSource` MUST accompany `routedTeammateId` or the
+      // UI resolver drops the attribution entirely. Without this the batch door
+      // writes UNATTRIBUTED rows into the very same channel whose
+      // single-message rows are attributed.
+      // ⚠️ `sessionId` is deliberately NOT written here either — see the
+      // single-message handler for why (focus-session id vs `sessions` FK).
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+
       const { randomUUID } = await import("crypto");
 
-      const prepared = items.map((m) => {
+      const prepared = items.map((m, i) => {
         const id = randomUUID();
         // Canonical tamper-hash: computeMessageHash(id, content) — the ONE
         // formula (see @synap/database message-hash.ts).
         const hash = computeMessageHash(id, m.content);
-        return {
+        const row: typeof messages.$inferInsert & { id: string } = {
           id,
           channelId: threadId,
           role: m.role as MessageRole,
           content: m.content,
-          userId: m.userId,
+          userId: actingUserIds[i],
+          authorType: ctxAgentUserId
+            ? MessageAuthorType.AI_AGENT
+            : MessageAuthorType.HUMAN,
+          ...(ctxAgentUserId
+            ? {
+                routedTeammateId: ctxAgentUserId,
+                routedSource: RoutedSource.DIRECT,
+              }
+            : {}),
           hash,
           ...(m.metadata ? { metadata: m.metadata } : {}),
         };
+        return row;
       });
 
       const messageIds = await db.transaction(async (tx) => {
@@ -849,7 +933,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         await emitMessageEvent({
           type:
             prepared[i].role === "user" ? "message.received" : "message.sent",
-          userId: prepared[i].userId,
+          userId: actingUserIds[i],
           channelId: threadId,
           messageId: prepared[i].id,
           data: { role: prepared[i].role },
@@ -876,7 +960,9 @@ export function registerThreadsRoutes(app: HubHono): void {
             channelId: threadId,
             userMessageId: lastUserMsgId,
             content: lastUser.content,
-            sourceUserId: lastUser.userId,
+            // Verified acting identity, never the item-supplied `userId` — this
+            // value reaches the IS turn as the requesting operator.
+            sourceUserId: actingUserIds[lastUserIdx],
             agentType: dispatchAgentType,
           });
         }
@@ -947,6 +1033,15 @@ export function registerThreadsRoutes(app: HubHono): void {
       const acting = await resolveActingContext(c, { userId: body.userId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const userId = acting.userId;
+
+      // WRITE FLOOR — identity answers "who", not "may they write HERE": this
+      // door never checked the caller against `threadId`, so a key with
+      // `hub-protocol.write` and a known channel UUID could post into any
+      // channel on the pod. See `callerMayWriteToChannel`.
+      const authUserId = c.get("userId") as string;
+      if (!(await callerMayWriteToChannel(threadId, authUserId))) {
+        return c.json({ error: "Thread not found or not accessible" }, 403);
+      }
 
       const { randomUUID } = await import("crypto");
       const msgId = randomUUID();

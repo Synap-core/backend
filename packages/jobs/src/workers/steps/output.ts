@@ -413,6 +413,21 @@ export async function executeOutputStep(
     case "entity_update": {
       const entityId = config.entityId as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
+      // `title` / `description` are first-class COLUMNS, not properties, so an
+      // automation that only passes `properties` can never rename an entity.
+      // That gap made the whole enrichment class inert: `Bookmark Enrichment`
+      // fires, its skill resolves a real page title, and the write silently
+      // cannot land — the row keeps the raw URL as its name. Verified live:
+      // the automation completed and the entity was unchanged.
+      // The APPROVE side already accepts both (`proposals/executors/entity.ts`
+      // passes `title`/`description` into `entityCaller.update`), so this is the
+      // missing propose/direct half, not a new capability.
+      const title =
+        typeof config.title === "string" && config.title.trim()
+          ? config.title.trim()
+          : undefined;
+      const description =
+        typeof config.description === "string" ? config.description : undefined;
 
       if (!entityId)
         throw new Error("entity_update requires entityId in config");
@@ -436,7 +451,16 @@ export async function executeOutputStep(
         workspaceId,
         subjectType: "entity",
         action: "update",
-        data: { entityId, properties },
+        // Carry title/description in the gate payload too — otherwise an
+        // automation write that gets PROPOSED loses them at approval time
+        // (the executor reads them from `data`), which is the "gate stored
+        // only {id}" defect this repo has already been bitten by.
+        data: {
+          entityId,
+          properties,
+          ...(title !== undefined ? { title } : {}),
+          ...(description !== undefined ? { description } : {}),
+        },
         reasoning: "Automation proposed updating an entity.",
         subjectProfileSlug: targetEntity?.type,
         automationRunId: automationContext.automationRunId,
@@ -468,6 +492,8 @@ export async function executeOutputStep(
         entityId,
         {
           properties,
+          ...(title !== undefined ? { title } : {}),
+          ...(description !== undefined ? { description } : {}),
           workspaceId,
           skipEvent: true,
         },
@@ -480,7 +506,10 @@ export async function executeOutputStep(
         subjectId: entityId,
         userId: ownerId,
         workspaceId,
-        data: { updatedProperties: Object.keys(properties) },
+        data: {
+          updatedProperties: Object.keys(properties),
+          ...(title !== undefined ? { titleChanged: true } : {}),
+        },
         automationContext,
       });
 

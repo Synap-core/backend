@@ -6,7 +6,9 @@ import { createLogger } from "@synap-core/core";
 // the value paths below avoid via dynamic `import("../../skills.js")`.
 import type { InsertSkillGovernedInput } from "../../skills.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import type { Context } from "../../../context.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-skill" });
 
@@ -174,6 +176,101 @@ export function registerSkillExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+  // ── skill / delete ───────────────────────────────────────────────────────
+  // `skills.delete` (routers/skills.ts:809) sits on the rung-2.5 DESTRUCTIVE
+  // floor, which no rung can widen, so an agent deleting a skill ALWAYS
+  // proposes. With no `skill/delete` executor, approval fell to the `*​/*`
+  // catch-all — which for a gate-made proposal does not throw: it emits
+  // `.validated`, flips the row APPROVED and returns success. The skill was
+  // never deleted and the reviewer was told it was.
+  //
+  // PAYLOAD: the gate stores FLAT `data: { id }` (nested as `data.data.id`);
+  // `proposal.targetId` holds the same id. All three shapes are read.
+  //
+  // SECOND EFFECT: the direct path is THREE writes — `db.delete(skills)`,
+  // `auditLog`, and `emitSideEffects` (the automation-reactor bus, which is a
+  // DIFFERENT bus from the event spine). Deleting the row alone would have left
+  // the delete invisible to every reactor. Replayed through `skillsRouter.delete`
+  // so all three fire exactly as on the direct path.
+  //
+  // IDENTITY: acts as the skill's OWNER. `skills.delete` loads the row under
+  // `or(eq(skills.scope, "pod"), eq(skills.userId, userId))` — a VISIBILITY
+  // predicate, so a user-scoped skill approved by anyone else would 404 before
+  // the status update and strand the proposal PENDING. The APPROVER's own floor
+  // is asserted first against the LOADED row, so no authority is widened.
+  registerProposalExecutor({
+    key: "skill/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const skillId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!skillId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Skill delete proposal is missing the skill id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const skill = await db.query.skills.findFirst({
+        where: eq(skills.id, skillId),
+        columns: { id: true, userId: true, workspaceId: true },
+      });
+      if (!skill) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Skill to delete no longer exists",
+        });
+      }
+
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: skill.workspaceId,
+        ownerId: skill.userId,
+      });
+
+      const { skillsRouter } = await import("../../skills.js");
+      const skillCaller = skillsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: skill.userId,
+        workspaceId: skill.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(await skillCaller.delete({ id: skillId }));
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

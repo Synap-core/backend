@@ -168,7 +168,7 @@ describe("(B) tool/create approval materializes instead of no-op", () => {
 
   it("the exact key wins over the wildcard catch-all", () => {
     const mk = (key: string): ProposalExecutor => ({
-      key,
+      key: key as ProposalExecutor["key"],
       execute: async (): Promise<ProposalExecutorResult> => ({ success: true }),
     });
     const catchAll = mk("*/*");

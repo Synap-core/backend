@@ -44,11 +44,29 @@ export interface SynthesisResult {
   failureClass?: AiFailureClass;
 }
 
-const MAX_CONTEXT_CHARS = 16_000;
+const MAX_CONTEXT_CHARS = 40_000;
 /** Per-snippet-field slice — generous enough to carry a real body/verdict/
  * conclusion instead of the old 300-char stub, while MAX_CONTEXT_CHARS still
  * bounds the total context sent to the IS. */
 const MAX_FIELD_CHARS = 1500;
+/**
+ * Procedural rows (`knowledge_keys`) get a LARGER slice than an entity field.
+ *
+ * Measured, not guessed: with `MAX_FIELD_CHARS`, asking the pod "why is the
+ * cost chokepoint in buildClient and not callCascade?" returned the runbook's
+ * opening (what was built) and then said "the context does not explicitly
+ * explain WHY" — because the WHY section sits ~1,800 chars into a ~4,000-char
+ * note. A curated runbook is a whole document written to be recalled, not one
+ * field of a record, and the answer-bearing part is routinely NOT the opening.
+ * Procedural hits are also few (single digits) where entity hits are many, so
+ * the extra budget lands where it buys the most and costs the least.
+ *
+ * `MAX_CONTEXT_CHARS` still bounds the total; it was raised alongside this so
+ * a couple of long runbooks cannot silently push every other source out of the
+ * context window (the loop DROPS remaining items once the cap is hit — a
+ * budget too large is its own failure mode, just a quieter one).
+ */
+const MAX_PROCEDURAL_CHARS = 6_000;
 /** Common JSONB `properties` keys that hold prose worth surfacing verbatim. */
 const PROPERTY_TEXT_KEYS = [
   "content",
@@ -144,7 +162,7 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       //     while holding the exact note that answered it. `value` IS the
       //     document here, so it gets the same budget `content` does.
       if (typeof rec.value === "string" && rec.value.trim()) {
-        snippetBits.push(`value: ${rec.value.slice(0, MAX_FIELD_CHARS)}`);
+        snippetBits.push(`value: ${rec.value.slice(0, MAX_PROCEDURAL_CHARS)}`);
       }
 
       // 2. Prose buried inside the JSONB `properties` object — previously

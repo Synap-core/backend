@@ -1,0 +1,268 @@
+import { describe, it, expect } from "vitest";
+import {
+  resolveStatusLabel,
+  STATUS_LABELS,
+  humanizeToken,
+  resolveActionLabel,
+  resolveObjectNoun,
+  OBJECT_NOUNS,
+  buildObjectActionTitle,
+  ACTION_VERBS,
+  OBJECT_KINDS,
+  OBJECT_KIND_ALIASES,
+} from "./index.js";
+import { buildFallbackTitle } from "../proposals/proposal-utils.js";
+
+describe("humanizeToken", () => {
+  it("never leaks a raw machine token", () => {
+    // The defect: `channel-facts.ts` rendered "entity.create" verbatim to users.
+    expect(humanizeToken("entity.create")).toBe("Create");
+    expect(humanizeToken("governance.widen_lane")).toBe("Widen lane");
+    expect(humanizeToken("focus_session")).toBe("Focus session");
+    expect(humanizeToken("capabilityKind")).toBe("Capability kind");
+    expect(humanizeToken("api-key")).toBe("Api key");
+  });
+});
+
+describe("resolveActionLabel — two moods", () => {
+  it("keeps imperative and past DISTINCT (they were an accidental fork)", () => {
+    // event-renderer said "Created"; ProposalChrome said "Create". Both right.
+    expect(resolveActionLabel("create", "imperative")).toBe("Create");
+    expect(resolveActionLabel("create", "past")).toBe("Created");
+    expect(resolveActionLabel("run", "imperative")).toBe("Run");
+    expect(resolveActionLabel("run", "past")).toBe("Ran");
+  });
+
+  it("resolves a dotted proposalType by its last segment", () => {
+    expect(resolveActionLabel("capability.run")).toBe("Run");
+    expect(resolveActionLabel("messaging.external.send", "past")).toBe("Sent");
+  });
+
+  it("settles the Refused/Rejected split on one canonical pair", () => {
+    expect(resolveActionLabel("reject", "imperative")).toBe("Reject");
+    expect(resolveActionLabel("reject", "past")).toBe("Rejected");
+  });
+
+  it("humanizes an unknown verb instead of leaking it", () => {
+    expect(resolveActionLabel("declare_source")).toBe("Declare source");
+  });
+
+  it("every curated verb defines both moods", () => {
+    for (const [key, verb] of Object.entries(ACTION_VERBS)) {
+      expect(verb.imperative, `${key}.imperative`).toBeTruthy();
+      expect(verb.past, `${key}.past`).toBeTruthy();
+    }
+  });
+});
+
+describe("resolveObjectNoun", () => {
+  it("de-underscores kinds that used to render raw", () => {
+    // Canonical names come from OBJECT_KIND_ALIASES + OBJECT_KINDS, NOT from
+    // naive humanization — the registry calls this kind "Session", so we must
+    // too. These pairs used to be a hand-mirrored table guarded by a drift test
+    // in synap-app; there is now ONE table, so they are asserted here.
+    expect(resolveObjectNoun("focus_session")).toBe("Session");
+    expect(resolveObjectNoun("focus_sessions")).toBe("Session");
+    expect(resolveObjectNoun("entity_facet")).toBe("Facet");
+    expect(resolveObjectNoun("entity_facets")).toBe("Facet");
+    expect(resolveObjectNoun("property_def")).toBe("Property");
+    expect(resolveObjectNoun("property_defs")).toBe("Property");
+    expect(resolveObjectNoun("relation")).toBe("Link");
+    expect(resolveObjectNoun("relations")).toBe("Link");
+  });
+
+  it("titles the backend-only kinds the registry does not model", () => {
+    expect(resolveObjectNoun("relation_def")).toBe("Relation type");
+    expect(resolveObjectNoun("api_key")).toBe("API key");
+    expect(resolveObjectNoun("env_variable")).toBe("Environment variable");
+  });
+
+  /**
+   * PORTED from the deleted `vocabulary-noun-drift.test.ts` (synap-app). The
+   * drift assertion itself is vacuous now that there is one table, but the
+   * property it protected is not: no registered kind may render as a raw token,
+   * and every kind's rendered noun must be its registry label.
+   */
+  it("renders every registered kind as its registry label, never a raw token", () => {
+    const disagreements: string[] = [];
+    for (const [slug, def] of Object.entries(OBJECT_KINDS)) {
+      const rendered = resolveObjectNoun(slug);
+      if (rendered !== def.label) {
+        disagreements.push(
+          `${slug}: registry="${def.label}" rendered="${rendered}"`
+        );
+      }
+      expect(rendered, slug).not.toMatch(/[_.]/);
+      expect(rendered[0], slug).toBe(rendered[0]?.toUpperCase());
+    }
+    expect(disagreements).toEqual([]);
+  });
+
+  it("the backend-only tail never shadows a registry kind (one table, no fork)", () => {
+    for (const key of Object.keys(OBJECT_NOUNS)) {
+      expect(OBJECT_KINDS[key], key).toBeUndefined();
+      expect(OBJECT_KIND_ALIASES[key], key).toBeUndefined();
+    }
+  });
+});
+
+describe("buildFallbackTitle — the regressions it shipped", () => {
+  it('titles a capability RUN as a run, not "Update Capability"', () => {
+    // THE bug: a run carries no changeType, gets defaulted to "update"
+    // upstream, and was rendered "Update Capability" — it updates nothing.
+    const title = buildFallbackTitle({
+      changeType: "update",
+      proposalType: "run",
+      targetType: "capability",
+    });
+    expect(title).toBe("Run Capability");
+    expect(title).not.toBe("Update Capability");
+  });
+
+  it("de-underscores the TYPE label, not just the action", () => {
+    // Users saw "Focus_session" / "Property_def".
+    expect(
+      buildFallbackTitle({ changeType: "create", targetType: "focus_session" })
+    ).toBe("Create Session");
+    expect(
+      buildFallbackTitle({ changeType: "update", targetType: "property_def" })
+    ).toBe("Update Property");
+  });
+
+  it("keeps the historical shape for ordinary proposals", () => {
+    expect(
+      buildFallbackTitle({
+        changeType: "create",
+        profileSlug: "task",
+        targetName: "Design onboarding",
+      })
+    ).toBe('Create Task "Design onboarding"');
+    // `entity` is the generic base kind — suppressed, never "Create Entity".
+    expect(
+      buildFallbackTitle({ changeType: "create", targetType: "entity" })
+    ).toBe("Create");
+    expect(buildFallbackTitle({})).toBe("Proposal");
+  });
+
+  it("never emits the double-space the old concat band-aided away", () => {
+    const title = buildFallbackTitle({
+      changeType: "update",
+      targetType: "entity",
+      targetName: "X",
+    });
+    expect(title).not.toMatch(/ {2}/);
+  });
+});
+
+describe("buildObjectActionTitle", () => {
+  it("prefers proposalType over changeType", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "run",
+        fallbackAction: "update",
+        objectKind: "capability",
+      })
+    ).toBe("Run Capability");
+  });
+
+  it("falls back to changeType when no proposalType", () => {
+    expect(
+      buildObjectActionTitle({
+        fallbackAction: "delete",
+        objectKind: "view",
+        objectName: "To-dos",
+      })
+    ).toBe('Delete View "To-dos"');
+  });
+});
+
+/**
+ * TRIPWIRE — no proposal type may reach a human as a raw machine token.
+ *
+ * The vocabulary deliberately FALLS BACK to `humanizeToken` rather than
+ * requiring an entry per type, so this asserts the property that actually
+ * matters (nothing leaks) instead of demanding a hand-maintained list that
+ * would rot. The sample is the real vocabulary observed in the executor
+ * registry and on live pods.
+ */
+describe("tripwire: no raw machine token reaches a title", () => {
+  const REAL_PROPOSAL_TYPES = [
+    "create",
+    "update",
+    "delete",
+    "run",
+    "capability.run",
+    "capability.install",
+    "capability.enable",
+    "merge",
+    "merge_branch",
+    "join",
+    "import.graph",
+    "capture.graph",
+    "governance.widen_lane",
+    "governance.tighten_lane",
+    "governance.raise_ceiling",
+    "governance.tighten_posture",
+    "messaging.external.send",
+    "vault.request",
+    "channel.mcp.add",
+    "renderer.set",
+    "declare_source",
+    "configure_public_projection",
+  ];
+  const REAL_TARGET_TYPES = [
+    "entity",
+    "capability",
+    "view",
+    "workspace",
+    "focus_session",
+    "property_def",
+    "relation_def",
+    "channel",
+    "automation",
+    "playbook",
+    "document",
+    "project",
+  ];
+
+  for (const proposalType of REAL_PROPOSAL_TYPES) {
+    it(`"${proposalType}" renders as words`, () => {
+      for (const targetType of REAL_TARGET_TYPES) {
+        const title = buildFallbackTitle({ proposalType, targetType });
+        expect(title, `${proposalType} / ${targetType}`).not.toMatch(/[_.]/);
+        expect(title.trim()).not.toBe("");
+        // A leaked token would still be lowercase mid-string; a rendered
+        // sentence always starts with a capital.
+        expect(title[0]).toBe(title[0]?.toUpperCase());
+      }
+    });
+  }
+});
+
+describe("resolveStatusLabel", () => {
+  it("settles the Refused/Rejected split (one canonical word)", () => {
+    expect(resolveStatusLabel("rejected")).toBe("Rejected");
+    expect(resolveStatusLabel("denied")).toBe("Rejected");
+  });
+
+  it("settles the failed/stale renderings for LIFECYCLE states", () => {
+    expect(resolveStatusLabel("failed")).toBe("Failed");
+    // Deliberately the neutral word: `stale` is overloaded across three domains
+    // (session progress / sync freshness / broken binding), so a GLOBAL table
+    // must not impose one reading.
+    expect(resolveStatusLabel("stale")).toBe("Stale");
+  });
+
+  it("humanizes an unknown status instead of leaking it", () => {
+    expect(resolveStatusLabel("some_new_state")).toBe("Some new state");
+    expect(resolveStatusLabel("")).toBe("");
+  });
+
+  it("never renders a raw token for any known status", () => {
+    for (const key of Object.keys(STATUS_LABELS)) {
+      const label = resolveStatusLabel(key);
+      expect(label, key).not.toMatch(/[_.]/);
+      expect(label[0], key).toBe(label[0]?.toUpperCase());
+    }
+  });
+});

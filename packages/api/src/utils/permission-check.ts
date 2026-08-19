@@ -75,6 +75,7 @@ import {
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   type ChannelCapabilityGrant,
+  type GovernedWritePair,
 } from "@synap/governance-policy";
 
 // Back-compat: these governance-policy symbols historically lived in this
@@ -577,13 +578,24 @@ export async function resolveChannelCapabilities(
   };
 }
 
-export interface PermissionCheckOpts {
+/**
+ * Everything the gate needs EXCEPT the governed-write door itself. The door —
+ * the `(subjectType, action)` PAIR — is intersected in below as
+ * {@link GovernedWritePair}, derived from `GATE_WRITE_DOORS` in
+ * `@synap/governance-policy`.
+ *
+ * WHY A PAIR and not two independent unions: two unions accept their cartesian
+ * product, so `subjectType: "channel", action: "merge"` would typecheck even
+ * though the only real door is `channel/merge_branch`. That silent miss — a
+ * proposal filed under a key no executor claims, which the star-slash-star
+ * catch-all then "approves" with no effect — is precisely the defect this
+ * codebase has already been bitten by three times.
+ */
+export interface PermissionCheckBaseOpts {
   userId: string;
   agentUserId?: string;
   /** Pass null for workspace-less (hydration / pod-wide personal) operations. */
   workspaceId?: string | null;
-  subjectType: string;
-  action: string;
   source?: string;
   /**
    * Effective per-channel capability grant for the acting AI teammate, when the
@@ -659,6 +671,17 @@ export interface PermissionCheckOpts {
    */
   ignoreSessionForcePropose?: boolean;
 }
+
+/**
+ * The gate's full options: everything in {@link PermissionCheckBaseOpts} PLUS
+ * exactly one governed-write door pair from `GATE_WRITE_DOORS`.
+ *
+ * Adding a call site with a NEW `(subjectType, action)` pair is now a compile
+ * error until the pair is declared in `@synap/governance-policy` — which is
+ * what makes the tripwire's LEFT side enumerable from the type system instead
+ * of from a source regex that rots.
+ */
+export type PermissionCheckOpts = PermissionCheckBaseOpts & GovernedWritePair;
 
 /**
  * Check permissions and optionally create a proposal.
@@ -788,7 +811,14 @@ async function evaluatePermission(
   // 1a. Filesystem path blocklist — enforced before any role check.
   // These paths are hard-blocked regardless of user approval or workspace settings.
   // This is a defence-in-depth layer: the synap-os skill also enforces these rules.
-  if (subjectType === "filesystem" && data?.path) {
+  // NOTE (door-vocabulary narrowing, 2026-08-19): `subjectType` is now the union
+  // derived from GATE_WRITE_DOORS, and "filesystem" is NOT in it. The narrowing
+  // PROVED that NO production call site passes `subjectType: "filesystem"` —
+  // only `permission-check.test.ts` does. The branch is kept (not deleted)
+  // because it is a security floor a future `filesystem/*` door must inherit;
+  // the widening cast is what lets the otherwise-dead comparison compile.
+  // Declare the door in GATE_WRITE_DOORS when one ships and this cast goes away.
+  if ((subjectType as string) === "filesystem" && data?.path) {
     const path = String(data.path);
     const isBlocked = isBlockedFilesystemPath(path);
     if (isBlocked) {

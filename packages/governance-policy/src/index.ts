@@ -239,26 +239,124 @@ export function getWorkspaceGovernanceMode(
  * auto-approve overrides, the writesRequireProposal flag, or the whitelist.
  * Even a twin agent (writesRequireProposal=false) must propose these.
  */
-export const ADMIN_ACTIONS: readonly string[] = [
+/**
+ * ⚠️ THE INVARIANT — READ BEFORE EDITING EITHER LIST BELOW.
+ *
+ * Every entry is an `${subjectType}.${action}` EVENT KEY, matched by EXACT
+ * EQUALITY at rung 2 (`ADMIN_ACTIONS.includes(eventKey)`). The key is composed
+ * from the RAW gate arguments — `permission-check.ts:1186` builds
+ * `${subjectType}.${action}` BEFORE the trailing-`s` singularization at
+ * `:1764`, so the raw spelling a call site passes is the spelling that must
+ * appear here.
+ *
+ * `matchesActionPattern` / `findMatchingPattern` (the `subject.*` glob helpers)
+ * are a DIFFERENT function and are NOT used at rung 2. There is no globbing and
+ * no pluralization forgiveness here.
+ *
+ * ⇒ A wrong string is INVISIBLE. It does not error, does not warn, does not
+ * log — it simply never fires, and the admin hard floor silently does not apply
+ * to that write. That is exactly what happened: `member.updateRole`,
+ * `member.remove`, `member.invite` and `apiKey.revoke` named doors that do not
+ * exist (the real gates pass `workspaceMember` + `add`/`remove`/`updateRole`
+ * and `apiKey` + `delete`), and `workspace.delete` missed because
+ * `routers/workspaces.ts` passes the PLURAL `"workspaces"`. Four admin writes —
+ * adding a member, removing one, changing a role, deleting an API key — were
+ * not floored at all.
+ *
+ * The fix is structural, not just textual: {@link ADMIN_ACTIONS_LIVE} is typed
+ * as {@link GateEventKey}, derived from `GATE_WRITE_DOORS`, so an entry naming
+ * no real gate door is now a COMPILE ERROR. Anything that cannot be typed that
+ * way goes in {@link ADMIN_ACTIONS_RESERVED} with a reason — never silently
+ * into the live list.
+ */
+
+/**
+ * Admin floors that correspond to a REAL gate door. Type-checked against
+ * `GATE_WRITE_DOORS`: a typo, a renamed subject, or a singular/plural slip is a
+ * compile error rather than a floor that quietly stops firing.
+ *
+ * BOTH SPELLINGS are listed wherever a subject could reasonably be passed
+ * either way. Listing both is free and strictly tightening; listing one is how
+ * `workspace.delete` came to miss a door that has existed all along.
+ */
+export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
+  // `routers/workspaces.ts` passes the PLURAL; the MCP + hub-protocol doors
+  // pass the singular. Both reach rung 2 with their own raw spelling.
+  // `workspaces` (plural) is the ONLY plural subjectType any gate actually
+  // passes (`routers/workspaces.ts:75,467,776`) — verified by enumerating
+  // every `subjectType: "<...>s"` in the routers. The eventKey is composed
+  // from the RAW subjectType (`permission-check.ts:1156,1224`); the
+  // singularization at `:1794` applies only to the proposal's `targetType`,
+  // NOT to this match. So every other plural spelling would be a dead entry
+  // naming a door that does not exist — which is the exact defect this list
+  // was just corrected for. Add a spelling ONLY after grepping for its gate.
   "workspace.update",
+  "workspaces.update",
   "workspace.delete",
+  "workspaces.delete",
+  // Membership. Real gates: `routers/workspaces/invites.ts` — `workspaceMember`
+  // + add / remove / updateRole. (The old `member.*` spellings never matched;
+  // they are retained in ADMIN_ACTIONS_RESERVED below.)
+  "workspaceMember.add",
+  "workspaceMember.remove",
+  "workspaceMember.updateRole",
+  // Agent capability grants — `routers/agent-users.ts`.
+  "agent.updateCapabilities",
+  // API keys. `apiKey.create` was already correct; the DELETE door is spelled
+  // `delete`, never `revoke` (`routers/api-keys.ts`).
+  "apiKey.create",
+  "apiKey.delete",
+];
+
+/**
+ * Admin floors for doors that DO NOT EXIST as gate call sites today.
+ *
+ * They are deliberately kept: removing a floor is the one direction this list
+ * must never move, and if such a door ever ships it inherits the floor on day
+ * one instead of arriving ungoverned. They are OUT of the typed list because
+ * they cannot be typed — and being out of it is the honest signal that they
+ * currently match nothing.
+ *
+ * Verified 2026-08-19 against every `checkPermissionOrPropose` call site: none
+ * of these keys is produced by any live gate.
+ */
+export const ADMIN_ACTIONS_RESERVED: readonly string[] = [
+  // Superseded spellings — the real doors are the `workspaceMember.*` entries
+  // above. Kept only so a future `member`-subject door cannot slip through.
   "member.updateRole",
   "member.remove",
   "member.invite",
+  // No agent lifecycle door goes through the gate today (only
+  // `agent.updateCapabilities`, which IS live above).
   "agent.create",
   "agent.delete",
   "agent.updateRole",
-  "agent.updateCapabilities",
   "agent.update",
-  "apiKey.create",
+  // The api-keys router exposes create / update / delete — never revoke or
+  // rotate. NOTE: `apiKey.update` IS a real door and is NOT floored; whether it
+  // should be is a policy decision, not a drift fix, so it is left alone here.
   "apiKey.revoke",
   "apiKey.rotate",
+  // No gate door for any of these subjects exists yet.
   "intelligence.connect",
   "intelligence.disconnect",
   "trustedIssuer.create",
   "trustedIssuer.delete",
   "connector.connect",
   "connector.disconnect",
+];
+
+/**
+ * Administrative actions that ALWAYS require a proposal, regardless of
+ * auto-approve overrides, the writesRequireProposal flag, or the whitelist.
+ * Even a twin agent (writesRequireProposal=false) must propose these.
+ *
+ * The concatenation of {@link ADMIN_ACTIONS_LIVE} and
+ * {@link ADMIN_ACTIONS_RESERVED} — consumers are unchanged.
+ */
+export const ADMIN_ACTIONS: readonly string[] = [
+  ...ADMIN_ACTIONS_LIVE,
+  ...ADMIN_ACTIONS_RESERVED,
 ];
 
 /**
@@ -1035,3 +1133,233 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // 9. Default → propose (caller supplies its own reasoning).
   return { verdict: "propose" };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GOVERNED-WRITE DOOR VOCABULARY
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * The `${targetType}/${proposalType}` keys a governed write can file a proposal
+ * under. This is the TYPE-LEVEL half of the "every governed write door has an
+ * approval half" contract:
+ *
+ *   • LEFT  (this file)  — the set of keys a proposal can be CREATED under.
+ *   • RIGHT (runtime)    — `proposalExecRegistry` + the materializer's action
+ *                          guards + the inline `apply-approval.ts` branches.
+ *
+ * The tripwire `packages/api/src/__tripwires__/governed-writes-have-approval-half.test.ts`
+ * asserts LEFT ⊆ RIGHT ∪ ACKNOWLEDGED_GAPS. It reads the RIGHT side LIVE; the
+ * LEFT side is these two maps. That is the whole point of putting the
+ * vocabulary in the type system: a hand-typed list in the test could only ever
+ * find what someone remembered to add.
+ *
+ * WHY A PAIR-KEYED MAP, and not two unions (`SubjectType` × `Action`):
+ * two independent unions accept their full CARTESIAN PRODUCT — with ~45
+ * subjects and ~30 actions that is ~1350 accepted combinations for ~90 real
+ * doors. `channel/merge` would typecheck perfectly even though the only real
+ * door is `channel/merge_branch`, which is exactly the silent miss this
+ * contract exists to catch. Only a map keyed on the PAIR pins the pairs that
+ * actually exist. The `subjectType`/`action` unions below are DERIVED from the
+ * pairs (see {@link GovernedWritePair}) so there is one source, not three.
+ *
+ * This package is the right home: it has zero Synap dependencies, is already a
+ * dependency of `@synap/api`, `@synap/jobs` and `@synap/database` (no new edge,
+ * no cycle), and already owns `DEFAULT_AUTO_APPROVE` / `DESTRUCTIVE_ACTIONS`.
+ */
+
+/** Which creation door files a proposal under this key. */
+export type GovernedWriteCreator =
+  /** `checkPermissionOrPropose` (packages/api/src/utils/permission-check.ts). */
+  | "gate"
+  /** ...and also `checkAutomationWriteOrPropose` (packages/jobs). */
+  | "gate+automation"
+  /** Filed directly via `insertPendingProposal` / a bespoke proposal insert. */
+  | "direct";
+
+/**
+ * Doors reachable through the `checkPermissionOrPropose` GATE.
+ *
+ * `PermissionCheckOpts` is typed as an intersection with the pair union derived
+ * from these keys, so a call site CANNOT introduce a new `(subjectType, action)`
+ * pair without adding it here — which is what keeps the LEFT side complete
+ * without a regex that rots.
+ */
+export const GATE_WRITE_DOORS = {
+  "a2ai/join": "gate",
+  "agent/updateCapabilities": "gate",
+  "apiKey/create": "gate",
+  "apiKey/delete": "gate",
+  "apiKey/update": "gate",
+  "artifact/create": "gate",
+  "artifact/setState": "gate",
+  "automation/create": "gate",
+  "automation/execute": "gate",
+  "bento/arrange": "gate",
+  "capability/attach": "gate",
+  "capability/create": "gate",
+  "capability/renderer.set": "gate",
+  "cell/create": "gate",
+  "cell/define": "gate",
+  "cell/update": "gate",
+  "channel/bind": "gate",
+  "channel/create_branch": "gate",
+  "channel/create_external": "gate",
+  "channel/merge_branch": "gate",
+  "channel/unbind": "gate",
+  "command/execute": "gate",
+  "context/link": "gate",
+  "document/create": "gate",
+  "entity/create": "gate+automation",
+  "entity/delete": "gate",
+  "entity/renderer.set": "gate",
+  "entity/update": "gate+automation",
+  "facet/attach": "gate",
+  "facet/detach": "gate",
+  "facet/update": "gate",
+  "focus_session/create": "gate",
+  "focus_session/grant_capability": "gate",
+  "focus_session/update": "gate+automation",
+  "link/create": "gate",
+  "playbook/archive": "gate",
+  "playbook/create": "gate",
+  "playbook/promote": "gate",
+  "playbook/run": "gate",
+  "playbook/update": "gate",
+  "playbook_run/update": "gate",
+  "proactive/recap": "gate",
+  "profile/create": "gate",
+  "profile/renderer.set": "gate",
+  "project/create": "gate",
+  "project/delete": "gate",
+  "project/instantiate_from_playbook": "gate",
+  "project/update": "gate",
+  "projectMember/create": "gate",
+  "property_def/create": "gate",
+  "relation/create": "gate",
+  "relation/delete": "gate",
+  "relation/update": "gate",
+  "relation_def/create": "gate",
+  "role/create": "gate",
+  "role/delete": "gate",
+  "role/update": "gate",
+  "skill/create": "gate",
+  "skill/delete": "gate",
+  "skill/update": "gate",
+  "tool/create": "gate",
+  "tool/delete": "gate",
+  "tool/update": "gate",
+  "view/create": "gate",
+  "view/update": "gate",
+  "whiteboard/place": "gate",
+  "widget/register": "gate",
+  "workspace/adopt": "gate",
+  "workspace/configure_public_projection": "gate",
+  "workspace/create": "gate",
+  "workspace/declare_source": "gate",
+  "workspace/delete": "gate",
+  "workspace/update": "gate",
+  "workspaceMember/add": "gate",
+  "workspaceMember/remove": "gate",
+  "workspaceMember/updateRole": "gate",
+} as const satisfies Record<string, GovernedWriteCreator>;
+
+/**
+ * Doors whose proposals are filed WITHOUT the gate — `insertPendingProposal`
+ * directly, or a bespoke insert that stamps `targetType`/`proposalType`.
+ *
+ * These cannot be type-enforced from the creation side (the inserts live in
+ * `@synap/database`, below this package's consumers), so the tripwire's source
+ * scan cross-checks them instead: every literal `targetType`/`proposalType`
+ * pair it finds must appear in one of these two maps.
+ */
+export const DIRECT_PROPOSAL_DOORS = {
+  "capability/capability.install": "direct",
+  "capability/capability.run": "direct",
+  "capability/run": "direct",
+  "document/user_edit": "direct",
+  "entity/capture.graph": "direct",
+  "entity/import.graph": "direct",
+  "entity/merge": "direct",
+  "governance/governance.advisory": "direct",
+  "governance/governance.raise_ceiling": "direct",
+  "governance/governance.tighten_lane": "direct",
+  "governance/governance.tighten_posture": "direct",
+  "governance/governance.widen_lane": "direct",
+  "messaging/messaging.external.send": "direct",
+  "project/archive": "direct",
+  "vault/vault.request": "direct",
+  "workspace/join": "direct",
+} as const satisfies Record<string, GovernedWriteCreator>;
+
+/** Every governed-write door — the tripwire's LEFT side. */
+export const GOVERNED_WRITE_DOORS = {
+  ...GATE_WRITE_DOORS,
+  ...DIRECT_PROPOSAL_DOORS,
+} as const;
+
+/** A door reachable through `checkPermissionOrPropose`. */
+export type GateWriteDoor = keyof typeof GATE_WRITE_DOORS;
+/** A door whose proposal is filed without the gate. */
+export type DirectProposalDoor = keyof typeof DIRECT_PROPOSAL_DOORS;
+/** Any `${targetType}/${proposalType}` key a proposal can be filed under. */
+export type GovernedWriteDoor = GateWriteDoor | DirectProposalDoor;
+
+/**
+ * The gate's `(subjectType, action)` pair, DERIVED from {@link GATE_WRITE_DOORS}
+ * so the two can never disagree.
+ *
+ * `subjectType` also accepts the naive PLURAL (`workspaces` alongside
+ * `workspace`): the gate singularizes a trailing `s` before building the
+ * proposal key (`permission-check.ts` `singularType`), and several live call
+ * sites pass the plural (`routers/workspaces.ts` uses `"workspaces"` while
+ * `routers/mcp/handlers/workspace.ts` uses `"workspace"` — both land on
+ * `workspace/...`). Accepting both keeps this a zero-edit narrowing instead of
+ * a rename wave.
+ */
+export type GovernedWritePair<K extends GateWriteDoor = GateWriteDoor> =
+  K extends `${infer S}/${infer A}`
+    ? { subjectType: S | `${S}s`; action: A }
+    : never;
+
+/**
+ * Executor keys that match on `proposalType` ALONE (no `targetType` segment) —
+ * `proposalExecRegistry.resolve()` tries these AFTER the exact composite key and
+ * BEFORE the wildcard. They are a real, deliberate second key space, so
+ * `ProposalExecutor.key` must accept them alongside the composite doors.
+ */
+export const PROPOSAL_TYPE_ONLY_EXECUTOR_KEYS = [
+  "capability.enable",
+  "capability.install",
+  "capability.run",
+  "messaging.external.send",
+  "provider.action",
+] as const;
+
+export type ProposalTypeOnlyExecutorKey =
+  (typeof PROPOSAL_TYPE_ONLY_EXECUTOR_KEYS)[number];
+
+/**
+ * Every key `proposalExecRegistry.register()` accepts: a composite door, a
+ * proposalType-only key, or the star-slash-star catch-all. Typing BOTH ends of the
+ * contract with the same vocabulary is what turns a typo like `channel/merge`
+ * (the real door is `channel/merge_branch`) from a silent runtime miss into a
+ * compile error.
+ */
+export type ProposalExecutorKey =
+  GovernedWriteDoor | ProposalTypeOnlyExecutorKey | "*/*";
+
+/**
+ * The `${subjectType}.${action}` EVENT KEY a gate call site produces — derived
+ * from {@link GATE_WRITE_DOORS}, the same source as {@link GovernedWritePair}.
+ *
+ * Both the singular and the naive plural spelling are admitted, because both
+ * genuinely reach rung 2: `permission-check.ts` composes the event key from the
+ * RAW `subjectType` and only singularizes later, when it builds the proposal
+ * row. `routers/workspaces.ts` passes `"workspaces"` while
+ * `routers/mcp/handlers/workspace.ts` passes `"workspace"` — same door, two
+ * event keys, and a floor must name the one the caller actually emits.
+ *
+ * This is what makes {@link ADMIN_ACTIONS_LIVE} checkable: an entry that names
+ * no real door no longer compiles.
+ */
+export type GateEventKey<K extends GateWriteDoor = GateWriteDoor> =
+  K extends `${infer S}/${infer A}` ? `${S}.${A}` | `${S}s.${A}` : never;

@@ -72,9 +72,22 @@ describe("buildSynthesisContext — procedural runbooks", () => {
   });
 
   it("still budget-limits a runaway body rather than dumping it whole", () => {
-    const huge = "x".repeat(50_000);
+    const huge = "x".repeat(80_000);
     const { context } = buildSynthesisContext(proceduralAnswer(huge));
-    expect(context.length).toBeLessThan(20_000);
+    expect(context.length).toBeLessThan(10_000);
+  });
+
+  // Measured against a REAL note: the "why" section of a ~4k-char runbook sits
+  // ~1,800 chars in, past the 1500-char field budget an entity gets. Live
+  // `synap ask` proved this: it recited what was built, then said the context
+  // "does not explicitly explain WHY". A runbook is a document, not a field.
+  it("carries a full-length runbook past the entity field budget", () => {
+    const marker = "THE-WHY-SECTION";
+    const realistic = `${"Prelude line about what landed. ".repeat(70)}${marker}${" trailing detail.".repeat(60)}`;
+    expect(realistic.indexOf(marker)).toBeGreaterThan(1500);
+
+    const { context } = buildSynthesisContext(proceduralAnswer(realistic));
+    expect(context).toContain(marker);
   });
 
   it("leaves entity-shaped rows unchanged (content path still wins)", () => {

@@ -16,6 +16,7 @@ import {
 import { ProposalStatus } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { auditLog } from "../../../utils/audit-log.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { projectsRouter } from "../../projects.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -290,6 +291,108 @@ export function registerProjectExecutors(): void {
     },
   });
 
+  // ── project / instantiate_from_playbook ──────────────────────────────────────
+  // An agent binding a project to a project-scoped playbook files a proposal.
+  // Registering the executor is NOT optional: without it the `*​/*` catch-all
+  // throws NOT_IMPLEMENTED, the reviewer approves, and nothing happens — the
+  // exact defect this file's `project/update` comment records having shipped
+  // more than once. The tripwire in `__tripwires__/governed-writes-have-approval-
+  // half.test.ts` now names this key too.
+  //
+  // The gate stores `{ id, playbookId }` — both ids the replay needs. Nothing
+  // DERIVED from them (the copied stages, the seeded phase) is stored: the
+  // replay re-reads the playbook, so an approval materializes the template as it
+  // stands at approval time, and the scope check + visibility floors run again.
+  registerProposalExecutor({
+    key: "project/instantiate_from_playbook",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const projectId =
+        (innerData.id as string | undefined) ?? proposal.targetId;
+      const playbookId = innerData.playbookId as string | undefined;
+      if (!projectId || !playbookId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Project playbook-binding proposal is missing the project or playbook id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Workspace from the PROJECT ROW, never from the proposal.
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { id: true, workspaceId: true, userId: true },
+      });
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project to bind no longer exists",
+        });
+      }
+      const membership = project.workspaceId
+        ? await getWorkspaceMembership(db, project.workspaceId, userId)
+        : null;
+      if (project.workspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      // Act as the project's OWNER, not the approver — the same choice
+      // `project/update` and `project/archive` make, and for the same reason:
+      // the write goes through `ProjectRepository.update`, whose
+      // `.where(eq(projects.userId, userId))` is an OWNERSHIP predicate. Running
+      // as the approver would match no row and throw a raw
+      // `Error("Project not found")` → 500, BEFORE the status update below, so
+      // the proposal would stay PENDING forever. The approver's authority was
+      // already established by `computeCanReviewApproval` upstream plus the
+      // membership check above; `reviewedBy` still records who approved.
+      const projectCaller = projectsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: project.userId,
+        workspaceId: project.workspaceId ?? undefined,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await projectCaller.instantiateFromPlaybook({ projectId, playbookId })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── project / archive ─────────────────────────────────────────────────────────
   // The librarian archiver (packages/jobs) files these: a stale ACTIVE project
   // (>30d old, zero belongs_to_project members, zero project_members) is proposed
@@ -400,6 +503,114 @@ export function registerProjectExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+  // ── project / delete ─────────────────────────────────────────────────────
+  // `projects.delete` (routers/projects.ts:1040) sits on the rung-2.5
+  // DESTRUCTIVE floor, which NO governance rung can widen — so an agent
+  // deleting a project ALWAYS proposes. There was no `project/delete`
+  // executor, so approval fell to the `*​/*` catch-all, which for a gate-made
+  // proposal does NOT throw: it emits `.validated`, flips the row APPROVED and
+  // returns success. The reviewer saw green on a destructive action that never
+  // happened. Same defect class as `project/update` and `playbook/archive`
+  // above; this is the third time it has shipped in this file's domain.
+  //
+  // PAYLOAD: the gate stores FLAT `data: { id }`, which the request-shaped
+  // envelope nests as `data.data.id`; `proposal.targetId` carries the same id.
+  // All three shapes are read so a proposal filed by either convention applies.
+  //
+  // SECOND EFFECT: the direct path is THREE writes, not one —
+  // `ProjectRepository.delete` (row + `project.delete.completed` spine event +
+  // `triggerCpProjectSync`, which is what lets the CP tombstone the directory
+  // row), then `auditLog`, then `emitSideEffects` (the automation reactor bus).
+  // Deleting the row here would have left the CP directory and every reactor
+  // blind. So this replays through `projectsRouter.delete` — ONE door, all
+  // three effects, and it cannot drift from the direct path.
+  //
+  // IDENTITY: acts as the project's OWNER, exactly as `project/update` above
+  // and for the same reason — `loadVisibleProject` is a VISIBILITY predicate,
+  // and a pod-personal project (`workspaceId` NULL) is visible only to its
+  // owner, so replaying as a workspace admin would throw NOT_FOUND *before*
+  // the status update and strand the proposal PENDING forever. No authority is
+  // widened: the APPROVER's own floor is asserted first against the LOADED row
+  // (`assertWorkspaceWrite`), which is the same-or-stricter check the direct
+  // path applies, and `reviewedBy` still records who actually approved.
+  registerProposalExecutor({
+    key: "project/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const projectId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!projectId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Project delete proposal is missing the project id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { id: true, workspaceId: true, userId: true },
+      });
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project to delete no longer exists",
+        });
+      }
+
+      // The APPROVER's floor, on the LOADED row's workspace (never the
+      // request-shaped `proposal.workspaceId`).
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: project.workspaceId,
+        ownerId: project.userId,
+      });
+      const membership = project.workspaceId
+        ? await getWorkspaceMembership(db, project.workspaceId, userId)
+        : null;
+
+      const projectCaller = projectsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: project.userId,
+        workspaceId: project.workspaceId ?? undefined,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(await projectCaller.delete({ id: projectId }));
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

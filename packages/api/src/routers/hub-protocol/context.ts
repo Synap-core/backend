@@ -204,6 +204,11 @@ export const contextRouter = router({
           authorType: m.authorType ?? null,
           userId: m.userId ?? null,
           routedTeammateId: m.routedTeammateId ?? null,
+          // Both halves or neither: the UI resolver
+          // (`@synap-core/channels` room-adapters/message.ts:92) returns
+          // undefined unless `routedSource` AND `routedTeammateId` are present,
+          // so projecting the teammate alone still renders no attribution.
+          routedSource: m.routedSource ?? null,
           sessionId: m.sessionId ?? null,
         })),
         recentEntities: entitiesResult.entities.slice(0, 10).map((e) => ({

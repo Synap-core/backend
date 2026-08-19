@@ -8,6 +8,11 @@
  * from browser, Electron, and server contexts.
  */
 
+import {
+  buildObjectActionTitle,
+  resolveObjectNoun,
+} from "../vocabulary/index.js";
+
 /**
  * Determine if a string looks like a UUID (v4 hex format).
  * Used to decide whether to show a raw ID or attempt name resolution.
@@ -88,35 +93,42 @@ export function resolveTargetName(params: {
 /**
  * Build a fallback title from proposal metadata.
  * Used when no explicit summary or name is available.
+ *
+ * Composition now delegates to the vocabulary SSOT (`../vocabulary`) instead of
+ * hand-rolling the verb/noun casing here. That fixed three defects this
+ * function shipped:
+ *   1. a capability RUN titled "Update Capability" — it runs a call, it updates
+ *      nothing. `changeType` is defaulted to "update" upstream for any payload
+ *      that carries none, so the ACTION must prefer `proposalType`.
+ *   2. `targetType` was never de-underscored, so users saw "Focus_session" and
+ *      "Property_def" while `changeType` right beside it was cleaned.
+ *   3. the `.replace(/  +/, " ")` band-aid — the tell of positional string
+ *      concat with a possibly-empty middle. Composition handles it now.
  */
 export function buildFallbackTitle(params: {
   changeType?: string;
   profileSlug?: string;
   targetType?: string;
   targetName?: string;
+  /** The proposal's own type (e.g. `run`, `capability.run`) — preferred over
+   *  `changeType`, which is unreliable (see defect 1 above). */
+  proposalType?: string;
 }): string {
-  const { changeType, profileSlug, targetType, targetName } = params;
+  const { changeType, profileSlug, targetType, targetName, proposalType } =
+    params;
 
-  const action = !changeType
-    ? "Proposal"
-    : changeType.includes("create")
-      ? "Create"
-      : changeType.includes("update")
-        ? "Update"
-        : changeType.includes("delete")
-          ? "Delete"
-          : changeType.charAt(0).toUpperCase() +
-            changeType.slice(1).replace(/[._]/g, " ");
-
-  const typeLabel = profileSlug
-    ? profileSlug.charAt(0).toUpperCase() + profileSlug.slice(1)
-    : targetType && targetType !== "entity"
-      ? targetType.charAt(0).toUpperCase() + targetType.slice(1)
-      : "";
-
-  if (targetName) {
-    return `${action} ${typeLabel} "${targetName}"`.replace(/  +/, " ").trim();
+  if (!changeType && !proposalType) {
+    // Preserve the historical shape: with no action at all this produced
+    // "Proposal" (optionally with a type label), never a bare noun.
+    const noun =
+      profileSlug ?? (targetType !== "entity" ? targetType : undefined);
+    return noun ? `Proposal ${resolveObjectNoun(noun)}` : "Proposal";
   }
 
-  return `${action} ${typeLabel}`.trim() || "Proposal";
+  return buildObjectActionTitle({
+    action: proposalType,
+    fallbackAction: changeType,
+    objectKind: profileSlug ?? targetType,
+    objectName: targetName,
+  });
 }

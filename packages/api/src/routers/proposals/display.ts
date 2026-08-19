@@ -351,6 +351,7 @@ export async function enrichProposalsForDisplay(
       request.summary ??
       buildFallbackTitle({
         changeType: request.changeType,
+        proposalType: row.proposalType,
         profileSlug,
         targetType: request.targetType,
         targetName,
@@ -544,6 +545,7 @@ function buildProposalReviewModel(params: {
       request.summary ??
       buildFallbackTitle({
         changeType: request.changeType,
+        proposalType: row.proposalType,
         targetType: request.targetType,
         targetName,
       }),

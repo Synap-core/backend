@@ -9,6 +9,7 @@ import {
   links,
   workspaces,
   getWorkspaceMembership,
+  relations,
   ProfileResolutionService,
   mergeEntities,
   PropertyIndexService,
@@ -37,7 +38,8 @@ import {
   registerProposalExecutor,
   type StoredProposalData,
 } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { assertApplied, reportApproved } from "./shared.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-entity" });
 
@@ -939,6 +941,120 @@ export function registerEntityExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+  // ── relation / delete ────────────────────────────────────────────────────
+  // Lives in this file because a relation is an entity-graph edge — there is no
+  // `executors/relation.ts`, and adding one would mean editing the aggregator.
+  //
+  // `relations.delete` (routers/relations.ts:1437) sits on the rung-2.5
+  // DESTRUCTIVE floor, which no rung can widen, so an agent unlinking two
+  // entities ALWAYS proposes. With no executor, approval fell to the `*​/*`
+  // catch-all and the edge survived while the reviewer was told "approved".
+  // The materializer is not a backstop here: `materializeRelation` handles only
+  // `"create"`, so a `relation.delete.validated` event dies at its INNER guard.
+  //
+  // PAYLOAD: the gate stores FLAT `data: { id }` (nested as `data.data.id`);
+  // `proposal.targetId` holds the same id. All three shapes are read.
+  //
+  // SECOND EFFECT: the direct path is FOUR effects, not one —
+  // `RelationRepository.delete` (row + `relation.delete.completed`, which must
+  // carry the workspaceId or the realtime bridge drops it), the
+  // `belongs_to_project` AI-CORRECTION feedback signal (`emitAiCorrection` —
+  // how the project-placement recommender learns it was wrong), the
+  // relation→property REVERSE SYNC (`syncRelationToPropertyOnDelete`, which
+  // clears the mirrored entity_id property), and `recordDomainMutation`
+  // (audit + reactor bus). Writing the row delete here would have silently
+  // dropped three of them. So this replays through `relationsRouter.delete`.
+  //
+  // IDENTITY: acts as the relation's OWNER. `RelationRepository.delete` gates
+  // `.where(and(eq(relations.id, …), eq(relations.userId, userId)))` — an
+  // OWNERSHIP predicate that throws a RAW `Error("Relation not found")` (a 500)
+  // for any other caller, before the status update, stranding the proposal
+  // PENDING forever. The APPROVER's own floor is asserted first against the
+  // LOADED row and is same-or-stricter than the router's own
+  // `assertWorkspaceWrite` (it additionally pins the pod-wide case to the
+  // owner), so no authority is widened.
+  registerProposalExecutor({
+    key: "relation/delete",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const relationId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!relationId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Relation delete proposal is missing the relation id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const relation = await db.query.relations.findFirst({
+        where: eq(relations.id, relationId),
+        columns: { id: true, userId: true, workspaceId: true },
+      });
+      if (!relation) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Relation to delete no longer exists",
+        });
+      }
+
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: relation.workspaceId,
+        ownerId: relation.userId,
+      });
+
+      const { relationsRouter } = await import("../../relations.js");
+      const relationCaller = relationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: relation.userId,
+        workspaceId: relation.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // Pass the ROW's workspace explicitly: `delete` derives
+      // `effectiveWorkspaceId` from input/ctx, and that value is what the
+      // reverse-sync and the audit/reactor emit key off.
+      assertApplied(
+        await relationCaller.delete({
+          id: relationId,
+          ...(relation.workspaceId
+            ? { workspaceId: relation.workspaceId }
+            : {}),
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

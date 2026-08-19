@@ -11,6 +11,8 @@ import {
   resolveChannelCapabilityDecision,
   DEFAULT_AUTO_APPROVE,
   ADMIN_ACTIONS,
+  ADMIN_ACTIONS_LIVE,
+  ADMIN_ACTIONS_RESERVED,
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
   findUnsafeAutoApproveEntries,
@@ -268,6 +270,70 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       autoApproveFor: ["agent.create"],
     });
     expect(v.verdict).toBe("propose");
+  });
+
+  /**
+   * REGRESSION (2026-08-19) — the admin floor named doors that did not exist.
+   *
+   * Rung 2 matches by EXACT EQUALITY on `${subjectType}.${action}` composed
+   * from the RAW gate arguments. `ADMIN_ACTIONS` carried `member.updateRole`,
+   * `member.remove`, `member.invite` and `apiKey.revoke`, while the real gates
+   * pass `workspaceMember` + add/remove/updateRole and `apiKey` + delete; and
+   * `workspace.delete` missed because `routers/workspaces.ts` passes the PLURAL
+   * `"workspaces"`. Result: adding a member, removing one, changing a role and
+   * deleting an API key were NOT floored — a twin agent
+   * (`writesRequireProposal: false`) executed them outright.
+   *
+   * Each case below uses the EXACT (subjectType, action) a live gate passes.
+   * `writesRequireProposal: false` is the point: only a rung-2 hit can force a
+   * proposal here, so a pass proves the floor itself fired.
+   */
+  it.each([
+    ["workspaceMember", "add"],
+    ["workspaceMember", "remove"],
+    ["workspaceMember", "updateRole"],
+    ["apiKey", "delete"],
+    // routers/workspaces.ts passes the PLURAL subject.
+    ["workspaces", "delete"],
+    ["workspaces", "update"],
+  ])(
+    "2. REGRESSION: the admin floor fires for the real gate key %s.%s",
+    (subjectType, action) => {
+      expect(
+        decideAgentPolicy({
+          subjectType,
+          action,
+          writesRequireProposal: false,
+          isAgentOwnedWorkspace: true,
+        })
+      ).toMatchObject({ verdict: "propose", reasonCode: "ADMIN" });
+    }
+  );
+
+  it("2. REGRESSION: the drifted spellings really did match nothing", () => {
+    // Proof the fix was necessary and not cosmetic: these are the strings the
+    // list USED to carry. Composed as event keys they hit no live gate — which
+    // is why the floor was silent. They stay in ADMIN_ACTIONS_RESERVED so a
+    // future `member.*` door still inherits the floor, but nothing emits them.
+    for (const k of [
+      "member.updateRole",
+      "member.remove",
+      "member.invite",
+      "apiKey.revoke",
+    ]) {
+      expect(ADMIN_ACTIONS_RESERVED).toContain(k);
+      expect(ADMIN_ACTIONS_LIVE as readonly string[]).not.toContain(k);
+    }
+    // ...and the corrected keys are the ones that are type-checked.
+    for (const k of [
+      "workspaceMember.add",
+      "workspaceMember.remove",
+      "workspaceMember.updateRole",
+      "apiKey.delete",
+      "workspaces.delete",
+    ]) {
+      expect(ADMIN_ACTIONS_LIVE as readonly string[]).toContain(k);
+    }
   });
 
   it("3. isAgentOwnedWorkspace: non-destructive → execute (beats writesRequireProposal)", () => {
