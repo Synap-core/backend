@@ -342,8 +342,7 @@ export const buildHandlers: McpHandlerMap = {
     });
   },
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
-      ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const { postChannelMessage } =
       await import("../../../services/messaging/post-message.js");
@@ -360,10 +359,6 @@ export const buildHandlers: McpHandlerMap = {
       // principal so the row records WHICH agent posted — otherwise every agent
       // in a shared channel writes an identical-looking message.
       ...(agentUserId ? { agentUserId } : {}),
-      // Session too, or this door and the REST door write two different row
-      // shapes into the SAME channel: agent-attributed but session-blind here,
-      // both there.
-      ...(sessionId ? { sessionId } : {}),
     });
     return ok(result);
   },

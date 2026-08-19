@@ -703,7 +703,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       compare?: boolean;
       parseOnly?: boolean;
     },
-    getCatalog: (wsId: string) => Promise<HubProtocolCaller>
+    // `null` = pod-wide. The catalog lens must be able to be as wide as the
+    // query lens; forcing a concrete workspace here is what made a pod-wide
+    // `ask` type-infer against one arbitrary workspace's vocabulary.
+    getCatalog: (wsId: string | null) => Promise<HubProtocolCaller>
   ) {
     // Membership-gate the caller-supplied lens (see the list/get routes above):
     // a hub key scoped to one workspace must not recall another workspace's
@@ -717,21 +720,26 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       if (!accessible.includes(workspaceId)) workspaceId = null;
     }
 
-    // The semantic engine's CATALOG (type inference) needs a concrete workspace;
-    // resolve the user's first accessible one when no lens is pinned.
-    // Routing/recall keep the caller's lens (null = pod-wide).
-    let catalogWs = workspaceId;
-    if (!catalogWs) {
-      const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      catalogWs = wsIds[0] ?? null;
-    }
-
+    // CATALOG LENS MUST MATCH THE QUERY LENS.
+    //
+    // This used to substitute `wsIds[0]` when no workspace was pinned, on the
+    // belief that the catalog "needs a concrete workspace". It does not:
+    // `profiles.list` is a podProcedure whose workspace-LESS branch unions the
+    // caller's member + shared + pod-visible profiles in ONE query
+    // (`profile-repository.ts`, `hasWorkspace === false`). Substituting the
+    // FIRST accessible workspace made a pod-wide query type-infer against one
+    // arbitrary workspace's vocabulary — so a profile living anywhere else was
+    // unnameable, the enumerative gate never fired, and `ask` answered
+    // "you have no clients" over a pod holding 20 of them in another workspace.
+    //
+    // Passing the caller's real lens through (null = pod-wide) makes the catalog
+    // exactly as wide as the retrieval it is classifying.
     let catalog: ProfileCatalogEntry[] = [];
-    if (catalogWs) {
-      const caller = await getCatalog(catalogWs);
+    {
+      const caller = await getCatalog(workspaceId);
       const { profiles: profileRows } = await caller.profiles.listProfiles({
         userId,
-        workspaceId: catalogWs,
+        workspaceId,
       });
       catalog = profileRows.flatMap((p) => {
         const entry = toProfileCatalogEntry(p);
@@ -983,18 +991,15 @@ export function registerKnowledgeRoutes(app: HubHono): void {
 
     try {
       // Same catalog resolution + retrieval as /knowledge/ask (the ONE read door).
-      let catalogWs = workspaceId;
-      if (!catalogWs) {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        catalogWs = wsIds[0] ?? null;
-      }
-
+      // The catalog lens tracks the QUERY lens — see the long note on that door.
+      // A pod-wide query must type-infer against the pod-wide profile union, not
+      // against whichever workspace happened to sort first.
       let catalog: ProfileCatalogEntry[] = [];
-      if (catalogWs) {
-        const caller = await getCaller(c, { workspaceId: catalogWs });
+      {
+        const caller = await getCaller(c, { workspaceId });
         const { profiles: profileRows } = await caller.profiles.listProfiles({
           userId,
-          workspaceId: catalogWs,
+          workspaceId,
         });
         catalog = profileRows.flatMap((p) => {
           const entry = toProfileCatalogEntry(p);

@@ -83,7 +83,14 @@ export interface PostChannelMessageParams {
    * established door `rest/entities.ts:1027`. Absent ⇒ a human wrote it.
    */
   agentUserId?: string;
-  /** Focus session this post belongs to (from the verified `X-Session-Id` lens). */
+  /**
+   * ⚠️ NOT written to `messages.sessionId`. That column FKs to `sessions` (the
+   * channel-scoped conversation-memory session), whereas `X-Session-Id` carries
+   * a FOCUS session id — writing one into the other violates the FK and 500s the
+   * post. A focus session owns its channel (`focus_sessions.channelId`), so the
+   * linkage already exists through the channel. Kept only so callers may pass it
+   * without error; it is deliberately unused.
+   */
   sessionId?: string | null;
 }
 
@@ -115,7 +122,6 @@ export async function postChannelMessage(
   params: PostChannelMessageParams
 ): Promise<PostChannelMessageResult> {
   const { channelId, content, userId, agentUserId } = params;
-  const sessionId = params.sessionId ?? null;
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
   const roleEnum =
@@ -203,7 +209,6 @@ export async function postChannelMessage(
             routedSource: RoutedSource.DIRECT,
           }
         : {}),
-      ...(sessionId ? { sessionId } : {}),
       hash,
       previousHash: "",
     })

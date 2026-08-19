@@ -317,6 +317,20 @@ export {
   runGcalImport,
   type RunGcalImportResult,
 } from "./services/event-sync/run-gcal-import.js";
+export {
+  runConnectionSync,
+  registerSyncKind,
+  getSyncKinds,
+  isProviderSyncEnabled,
+  type RunConnectionSyncResult,
+  type SyncKindHandler,
+  type SyncKindContext,
+  type KindSyncResult,
+  type ProviderSyncConfig,
+  type StoredKindSyncConfig,
+  type ResolvedKindSyncConfig,
+  type SyncScope,
+} from "./services/event-sync/connection-sync.js";
 export { scanStaleProposals } from "./services/proposals/scan-stale-proposals.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the

@@ -89,6 +89,99 @@ function prependPendingNotice(answer: string, pendingCount: number): string {
  * Build context + sources from retrieved answer blocks, then call the IS
  * synthesis endpoint. Returns a SynthesisResult regardless of IS availability.
  */
+/**
+ * Build the model-facing context block + the source list from raw substrate
+ * answers. Extracted PURE (no network, no db) so the field-budget contract is
+ * testable directly — the same reason `shapeAgentSpend` is pure in the event
+ * repository. `synthesizeAnswer` is otherwise an IS round-trip and cannot be
+ * asserted on cheaply.
+ */
+export function buildSynthesisContext(answers: AskAnswer[]): {
+  sources: SynthesisSource[];
+  context: string;
+} {
+  const sources: SynthesisSource[] = [];
+  const contextParts: string[] = [];
+  let contextLen = 0;
+
+  for (const block of answers) {
+    if (block.status !== "ok") continue;
+    for (const item of block.items) {
+      const rec = item as Record<string, unknown>;
+      const id = typeof rec.id === "string" ? rec.id : "";
+      const title =
+        (typeof rec.name === "string" && rec.name) ||
+        (typeof rec.title === "string" && rec.title) ||
+        (typeof rec.claim === "string" && rec.claim) ||
+        (typeof rec.fact === "string" && rec.fact) ||
+        (typeof rec.content === "string" && rec.content) ||
+        // Procedural rows (knowledge_keys) carry NONE of the above — their
+        // human name is `key` ("namespace:slug"). Without this they fell all
+        // the way through to the raw UUID, so every runbook source rendered as
+        // an opaque id the reader (and the model) could not identify.
+        (typeof rec.key === "string" && rec.key) ||
+        id ||
+        "(item)";
+
+      if (id) sources.push({ substrate: block.substrate, id, title });
+
+      // Snippet: title + the entity BODY + a few key string props. The body
+      // is the fix — without it synthesis only ever saw title/metadata and
+      // could never answer questions whose answer lives in the content.
+      const snippetBits: string[] = [String(title)];
+
+      // 1. The attached document body (retrieve.ts's `fetchOrdered` join) —
+      //    the actual long-form content, not a metadata field.
+      if (typeof rec.content === "string" && rec.content.trim()) {
+        snippetBits.push(`content: ${rec.content.slice(0, MAX_FIELD_CHARS)}`);
+      }
+
+      // 1b. Procedural runbooks (knowledge_keys) keep their whole body in
+      //     `value`. It is not `content` and not inside `properties`, so it
+      //     used to fall through to the generic 300-char branch below — a
+      //     runbook is routinely thousands of characters, so synthesis saw
+      //     only its opening lines and would answer "I cannot find that"
+      //     while holding the exact note that answered it. `value` IS the
+      //     document here, so it gets the same budget `content` does.
+      if (typeof rec.value === "string" && rec.value.trim()) {
+        snippetBits.push(`value: ${rec.value.slice(0, MAX_FIELD_CHARS)}`);
+      }
+
+      // 2. Prose buried inside the JSONB `properties` object — previously
+      //    dropped entirely because it's an object, not a top-level string.
+      if (rec.properties && typeof rec.properties === "object") {
+        const props = rec.properties as Record<string, unknown>;
+        for (const key of PROPERTY_TEXT_KEYS) {
+          const v = props[key];
+          if (typeof v === "string" && v.trim()) {
+            snippetBits.push(`${key}: ${v.slice(0, MAX_FIELD_CHARS)}`);
+          }
+        }
+      }
+
+      // 3. Fall back to other short top-level string props (pre-existing
+      //    behavior), skipping fields already handled above.
+      for (const [k, v] of Object.entries(rec)) {
+        if (
+          ["id", "name", "title", "content", "properties", "value"].includes(k)
+        )
+          continue;
+        if (typeof v === "string" && v.trim()) {
+          snippetBits.push(`${k}: ${v.slice(0, 300)}`);
+        }
+        if (snippetBits.length >= 8) break;
+      }
+      const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
+      if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
+      contextParts.push(entry);
+      contextLen += entry.length + 1;
+    }
+    if (contextLen >= MAX_CONTEXT_CHARS) break;
+  }
+
+  return { sources, context: contextParts.join("\n") };
+}
+
 export async function synthesizeAnswer(
   answers: AskAnswer[],
   question: string,
@@ -110,68 +203,7 @@ export async function synthesizeAnswer(
    */
   pendingCount = 0
 ): Promise<SynthesisResult> {
-  const sources: SynthesisSource[] = [];
-  const contextParts: string[] = [];
-  let contextLen = 0;
-
-  for (const block of answers) {
-    if (block.status !== "ok") continue;
-    for (const item of block.items) {
-      const rec = item as Record<string, unknown>;
-      const id = typeof rec.id === "string" ? rec.id : "";
-      const title =
-        (typeof rec.name === "string" && rec.name) ||
-        (typeof rec.title === "string" && rec.title) ||
-        (typeof rec.claim === "string" && rec.claim) ||
-        (typeof rec.fact === "string" && rec.fact) ||
-        (typeof rec.content === "string" && rec.content) ||
-        id ||
-        "(item)";
-
-      if (id) sources.push({ substrate: block.substrate, id, title });
-
-      // Snippet: title + the entity BODY + a few key string props. The body
-      // is the fix — without it synthesis only ever saw title/metadata and
-      // could never answer questions whose answer lives in the content.
-      const snippetBits: string[] = [String(title)];
-
-      // 1. The attached document body (retrieve.ts's `fetchOrdered` join) —
-      //    the actual long-form content, not a metadata field.
-      if (typeof rec.content === "string" && rec.content.trim()) {
-        snippetBits.push(`content: ${rec.content.slice(0, MAX_FIELD_CHARS)}`);
-      }
-
-      // 2. Prose buried inside the JSONB `properties` object — previously
-      //    dropped entirely because it's an object, not a top-level string.
-      if (rec.properties && typeof rec.properties === "object") {
-        const props = rec.properties as Record<string, unknown>;
-        for (const key of PROPERTY_TEXT_KEYS) {
-          const v = props[key];
-          if (typeof v === "string" && v.trim()) {
-            snippetBits.push(`${key}: ${v.slice(0, MAX_FIELD_CHARS)}`);
-          }
-        }
-      }
-
-      // 3. Fall back to other short top-level string props (pre-existing
-      //    behavior), skipping fields already handled above.
-      for (const [k, v] of Object.entries(rec)) {
-        if (["id", "name", "title", "content", "properties"].includes(k))
-          continue;
-        if (typeof v === "string" && v.trim()) {
-          snippetBits.push(`${k}: ${v.slice(0, 300)}`);
-        }
-        if (snippetBits.length >= 8) break;
-      }
-      const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
-      if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
-      contextParts.push(entry);
-      contextLen += entry.length + 1;
-    }
-    if (contextLen >= MAX_CONTEXT_CHARS) break;
-  }
-
-  const context = contextParts.join("\n");
+  const { sources, context } = buildSynthesisContext(answers);
 
   // Call the IS "answer" door — one focused LLM call. Resolve the IS endpoint +
   // the pod's PER-CONNECTION key from the DB (registered IS), NEVER from env.

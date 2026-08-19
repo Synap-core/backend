@@ -977,8 +977,19 @@ export function registerThreadsRoutes(app: HubHono): void {
       // comes from the global `sessionMiddleware`, which already verifies
       // ownership of the header — the insert just never read it.
       // Hash-safe: `computeMessageHash` covers (id, content, previousHash) only.
+      // ⚠️ DO NOT stamp `ctx.sessionId` onto `messages.sessionId`. They are two
+      // different session concepts: `messages.sessionId` FKs to `sessions` (the
+      // channel-scoped CONVERSATION-MEMORY session — see `schema/sessions.ts`,
+      // SessionStatus active|compacting|closed), while `X-Session-Id` carries a
+      // FOCUS session id (`focus_sessions`). Writing one into the other violates
+      // the foreign key and 500s the whole post — verified live against a
+      // deployed pod, which is the only way this surfaces (tsc and the unit
+      // suites are both blind to it, since the FK only exists in the database).
+      //
+      // It is also redundant: a focus session owns its channel
+      // (`focus_sessions.channelId`), so every message in that channel is
+      // already attributable to the session through the channel.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const ctxSessionId = (c.get("sessionId") as string | undefined) ?? null;
 
       await db.insert(messages).values({
         id: msgId,
@@ -995,7 +1006,6 @@ export function registerThreadsRoutes(app: HubHono): void {
               routedSource: RoutedSource.DIRECT,
             }
           : {}),
-        ...(ctxSessionId ? { sessionId: ctxSessionId } : {}),
         hash,
         ...(body.metadata ? { metadata: body.metadata } : {}),
       });

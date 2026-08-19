@@ -379,6 +379,29 @@ export async function executeOutputStep(
         }
       );
 
+      // REACTOR BUS (severance fix). `materializeEntity` → `EntityRepository.create`
+      // fires ONLY the FACT bus (`emitCompleted` → events/SSE/materialization);
+      // the reactor registry — search index, embeddings, and
+      // `automation-trigger-match` (THE rules-fire hop) — is NEVER reached from the
+      // fact bus (no event hook bridges the two). So an automation-CREATED entity
+      // used to be invisible to every rule: `entity_update` manually fires
+      // `emitSideEffects` (below), but `entity_create` did not, and rules never
+      // fired on the rows automations produced (the "bare bookmark" severance).
+      // Mirror the update branch: fire `emitSideEffects` with the SAME
+      // `automationContext` so rules fire AND the chain-depth guard prevents a
+      // create→trigger→create loop. This does NOT double-fire the fact bus —
+      // `emitSideEffects` only drives reactors, never `eventRepo.append` (which
+      // `materializeEntity` already did once, above).
+      await emitSideEffects({
+        subjectType: "entity",
+        action: "create",
+        subjectId: entity.id,
+        userId: ownerId,
+        workspaceId,
+        data: { profileSlug, createdProperties: Object.keys(properties) },
+        automationContext,
+      });
+
       return {
         status: "created",
         entityId: entity.id,

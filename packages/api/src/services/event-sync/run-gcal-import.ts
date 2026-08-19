@@ -1,11 +1,18 @@
 /**
- * Google Calendar → Synap importer (the event-sync redesign).
+ * Google Calendar → Synap sync (the `google`/`event` sync-kind handler).
  *
- * Runs FIRST inside the `event-sync-cron` tick, BEFORE the source-A Discord
- * mirror pass. Lists upcoming Google Calendar events via the `calendar_list`
- * capability and, for each, ensures a Synap `event` entity exists — so the
- * SAME source-A mirror that already pushes `event` entities → native Discord
- * scheduled events also covers Google events, with NO direct Google→Discord path.
+ * Lists upcoming Google Calendar events via the `calendar_list` capability and,
+ * for each, lands a sovereign Synap `event` entity — so the SAME source-A
+ * mirror that already pushes `event` entities → native Discord scheduled events
+ * also covers Google events, with NO direct Google→Discord path.
+ *
+ * DECOUPLED FROM DISCORD (was: gated on the Discord tool's `discord.eventSync`
+ * metadata + unscoped). The enable-gate + config now live on the GOOGLE
+ * connection's own `metadata.sync` (per-kind), resolved by the reusable
+ * `runConnectionSync` substrate (connection-sync.ts). This module only owns the
+ * CALENDAR read verb + the map→create→external-link landing; it registers itself
+ * as the `google`/`event` sync kind. Gmail/Drive add `google`/`email` etc. the
+ * same way — declare a kind + mapper, no change here.
  *
  * WHY THE EVENT IS CREATED DIRECTLY (R4): the composite `submitCaptureGraph`
  * door auto-applies ONLY when EVERY op auto-approves; a non-approvable
@@ -14,6 +21,14 @@
  * DIRECTLY via `EntityRepository.create` (it always lands + mirrors), and the
  * attendee person/company links ride a SEPARATE best-effort `submitCaptureGraph`
  * that anchors to the already-created event.
+ *
+ * REACTOR-BUS FAN-OUT (the "landed → automations react" half): a newly-created
+ * event fires `emitSideEffects` (reactor bus — search index, embeddings,
+ * automation-trigger-match) so rules can act on synced events. A FULL BACKFILL
+ * (`scope: "all"`) SUPPRESSES that fan-out so imported history does not replay
+ * into automations — the same throttle `inbound-recorder`'s `suppressSideEffects`
+ * applies to bulk message backfill. The FACT bus (`EntityRepository.create` →
+ * `emitCompleted`, i.e. history/SSE/mirror) fires either way, unchanged.
  *
  * DEDUP is done IN THIS RUNNER (never via submitCaptureGraph/resolveIdentity —
  * its weak path matches TITLE ALONE and would collapse recurring same-title
@@ -24,10 +39,6 @@
  *     hour bucket for timed events, DAY bucket for all-day — so an event already
  *     created by another source (Cal.com booking, manual entry) is adopted, not
  *     duplicated.
- *
- * Lives in @synap/api because `calendar_list` (executeCapability) + the entity
- * repo + submitCaptureGraph are api-side; the jobs `event-sync-cron` worker
- * invokes it in-process via the `registerEventSyncRunner` IoC slot.
  */
 
 import {
@@ -39,6 +50,7 @@ import {
   EntityRepository,
   eventRepository,
 } from "@synap/database";
+import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { submitCaptureGraph } from "../capture-agent/submit-capture-graph.js";
@@ -56,27 +68,18 @@ import {
   startBucketWindow,
   type GCalItem,
 } from "./map-gcal-to-graph.js";
-import { resolveTool } from "../tools/resolve-tool.js";
-import { isDiscordEventSyncEnabled } from "./discord-metadata.js";
+import {
+  registerSyncKind,
+  runConnectionSync,
+  type SyncKindContext,
+  type KindSyncResult,
+} from "./connection-sync.js";
 
 const logger = createLogger({ module: "gcal-import" });
 
 const GOOGLE_PROVIDER = "google";
-
-// ── Config (read off the same Discord tool as event-sync) ──────────────────────
-
-interface EventSyncConfig {
-  enabled?: boolean;
-  sources?: string[];
-  announceChannelId?: string;
-  /** Optional: pin the Google sync to a specific connection (1-of-N). */
-  connectionId?: string;
-}
-
-interface DiscordToolMetadata {
-  discord?: { eventSync?: EventSyncConfig } & Record<string, unknown>;
-  [k: string]: unknown;
-}
+/** Full-backfill window: pull events back this far when `scope: "all"`. */
+const BACKFILL_WINDOW_MS = 365 * 24 * 3_600_000;
 
 export interface RunGcalImportResult {
   skipped?: boolean;
@@ -134,71 +137,124 @@ async function patchEventTimes(
     .where(eq(entities.id, entityId));
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Per-item landing ────────────────────────────────────────────────────────────
 
-export async function runGcalImport(): Promise<RunGcalImportResult> {
-  // No caller-scoped invocation exists today (unlike runEventSync, this has
-  // zero callers passing a workspace) — unscoped, same tie-break predicate
-  // as runEventSync so the two agree on the row if/when this IS wired in.
-  const discordTool = await resolveTool("discord", isDiscordEventSyncEnabled);
-  if (!discordTool) return { skipped: true, reason: "no_discord_tool" };
+type LandOutcome = "created" | "linked" | "skipped" | "failed";
 
-  const metadata = (discordTool.metadata ?? {}) as DiscordToolMetadata;
-  const eventSync = metadata.discord?.eventSync;
-  if (!eventSync?.enabled) {
-    return { skipped: true, reason: "event_sync_disabled" };
+async function landCalendarItem(
+  item: GCalItem,
+  ctx: {
+    entityRepo: EntityRepository;
+    idempotency: ReturnType<typeof makeExternalLinkIdempotency>;
+    actor: string;
+    owner: string;
+    workspaceId: string | null;
+    backfill: boolean;
   }
-  // The Google import runs when the operator opted into the "calendar" source
-  // (or left `sources` unset — the pre-redesign default was calendar-inclusive).
-  const wantsCalendar =
-    !Array.isArray(eventSync.sources) || eventSync.sources.includes("calendar");
-  if (!wantsCalendar) {
-    return { skipped: true, reason: "calendar_source_disabled" };
+): Promise<LandOutcome> {
+  const graph = mapGcalToGraph(item);
+  if (!graph) return "skipped";
+  const { googleEventId, event, isAllDay } = graph;
+
+  try {
+    // Layer-1: same Google event already imported? Refresh its times, done.
+    const linkedId = await ctx.idempotency.lookup(
+      GOOGLE_PROVIDER,
+      googleEventId
+    );
+    if (linkedId) {
+      await patchEventTimes(linkedId, event.properties);
+      return "linked";
+    }
+
+    // Layer-2: an event another source already created (same normalized title +
+    // start bucket)? Adopt it — register the Google external id + refresh times,
+    // so future runs hit Layer-1 and it never duplicates.
+    const adoptedId = await findExistingEventByBucket(
+      event.title,
+      typeof event.properties.startDate === "string"
+        ? event.properties.startDate
+        : "",
+      isAllDay
+    );
+    if (adoptedId) {
+      await ctx.idempotency.register(adoptedId, GOOGLE_PROVIDER, googleEventId);
+      await patchEventTimes(adoptedId, event.properties);
+      return "linked";
+    }
+
+    // New event → create the BARE entity DIRECTLY (R4) so it always lands.
+    const createdEvent = await ctx.entityRepo.create(
+      {
+        profileSlug: "event",
+        title: event.title,
+        properties: event.properties,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.owner,
+      },
+      ctx.owner
+    );
+    // Register the stable external id (entity_external_links + identity signal).
+    await ctx.idempotency.register(
+      createdEvent.id,
+      GOOGLE_PROVIDER,
+      googleEventId
+    );
+
+    // REACTOR BUS (the "landed → automations react" half). `EntityRepository.create`
+    // fires only the FACT bus (emitCompleted → events/SSE/mirror); it does NOT
+    // reach the reactor registry, so without this an automation could never react
+    // to a synced event. A FULL BACKFILL suppresses the fan-out so history does
+    // not replay into automations (parity with inbound-recorder's
+    // `suppressSideEffects`). Best-effort — never un-lands the event.
+    if (!ctx.backfill) {
+      await emitSideEffects({
+        subjectType: "entity",
+        action: "create",
+        subjectId: createdEvent.id,
+        userId: ctx.owner,
+        workspaceId: ctx.workspaceId,
+        data: { profileSlug: "event", source: "google" },
+      }).catch((err) =>
+        logger.warn(
+          { err, googleEventId },
+          "gcal sync: reactor-bus emit failed (event kept)"
+        )
+      );
+    }
+
+    // BEST-EFFORT: attach attendee person/company + relations, anchored to the
+    // just-created event (existingEntityId), through the composite door — its
+    // resolver strong-signal auto-links people by email / companies by website.
+    // A failure here must NEVER un-create the event (which already mirrors).
+    if (graph.entities.length > 1) {
+      const graphEntities = graph.entities.map((e) =>
+        e.ref === "event" ? { ...e, existingEntityId: createdEvent.id } : e
+      );
+      await submitCaptureGraph({
+        userId: ctx.actor,
+        workspaceId: ctx.workspaceId,
+        entities: graphEntities,
+        relations: graph.relations,
+        summary: `Google Calendar event — ${event.title}`,
+      }).catch((err) =>
+        logger.warn(
+          { err, googleEventId },
+          "gcal sync: attendee graph failed (event kept)"
+        )
+      );
+    }
+    return "created";
+  } catch (err) {
+    logger.warn({ err, googleEventId }, "gcal sync: event → entity failed");
+    return "failed";
   }
+}
 
-  const owner = discordTool.createdBy;
-  const workspaceId = discordTool.workspaceId ?? null;
+// ── The `google`/`event` sync-kind handler ───────────────────────────────────────
 
-  // Fetch upcoming Google events via the capability (maxResults at the clamp
-  // ceiling to reduce the chance an in-window event is missed).
-  const cap = await executeCapability({
-    verbId: "calendar_list",
-    parameters: { timeMin: "@now", maxResults: 50 },
-    userId: owner,
-    workspaceId,
-    connectionSelector: eventSync.connectionId
-      ? { connectionId: eventSync.connectionId }
-      : undefined,
-  });
-
-  const capErr = capErrorMessage(cap);
-  if (capErr && isConnectionAuthError(capErr)) {
-    // Dead Google connection → nudge the operator to reconnect (deduped), instead
-    // of silently importing nothing every tick.
-    await notifyConnectorUnhealthy({
-      connectorKey: "google",
-      connectorName: "Google Workspace",
-      reconnectHint:
-        "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
-      userId: owner,
-      workspaceId,
-      watermarkToolId: discordTool.id,
-      watermarkMetadata: metadata as Record<string, unknown>,
-      discordTeamChannelId: resolveNoticeChannelId(
-        metadata,
-        eventSync.announceChannelId
-      ),
-      errorMessage: capErr,
-    });
-    return { skipped: true, reason: "google_connection_unhealthy" };
-  }
-  if (cap.kind !== "run") {
-    logger.warn({ capKind: cap.kind }, "calendar_list did not run — skipping");
-    return { skipped: true, reason: `calendar_list_${cap.kind}` };
-  }
-
-  const result = cap.result as { events?: GCalItem[] } | undefined;
-  const items = Array.isArray(result?.events) ? result!.events : [];
+async function runCalendarSync(ctx: SyncKindContext): Promise<KindSyncResult> {
+  const { owner, workspaceId, connectionId, backfill } = ctx;
 
   const actor = (await getCaptureAgentUserId()) ?? owner;
   const entityRepo = new EntityRepository(db, eventRepository);
@@ -208,90 +264,129 @@ export async function runGcalImport(): Promise<RunGcalImportResult> {
     userId: owner,
   });
 
+  // Scope → verb window. `recent` = the ongoing window from now (maxResults at
+  // the clamp ceiling to reduce the chance an in-window event is missed).
+  // `all` = a full backfill reaching BACKFILL_WINDOW_MS into the past. (Deep
+  // pagination past the 50-item clamp is a deliberate follow-up.)
+  const baseParams: Record<string, unknown> = backfill
+    ? {
+        timeMin: new Date(Date.now() - BACKFILL_WINDOW_MS).toISOString(),
+        maxResults: 50,
+      }
+    : { timeMin: "@now", maxResults: 50 };
+
+  // One pass per configured calendar; UNCONFIGURED = a single default pass with
+  // NO `calendarId` param — byte-for-byte the pre-redesign call (lists primary).
+  const calendarIds: (string | null)[] =
+    ctx.kindConfig.sources.length > 0 ? ctx.kindConfig.sources : [null];
+
+  let processed = 0;
   let created = 0;
   let linkedExisting = 0;
   let failed = 0;
 
-  for (const item of items) {
-    const graph = mapGcalToGraph(item);
-    if (!graph) continue;
-    const { googleEventId, event, isAllDay } = graph;
+  for (const calendarId of calendarIds) {
+    const cap = await executeCapability({
+      verbId: "calendar_list",
+      parameters: { ...baseParams, ...(calendarId ? { calendarId } : {}) },
+      userId: owner,
+      workspaceId,
+      connectionSelector: connectionId ? { connectionId } : undefined,
+    });
 
-    try {
-      // Layer-1: same Google event already imported? Refresh its times, done.
-      const linkedId = await idempotency.lookup(GOOGLE_PROVIDER, googleEventId);
-      if (linkedId) {
-        await patchEventTimes(linkedId, event.properties);
-        linkedExisting += 1;
-        continue;
-      }
-
-      // Layer-2: an event another source already created (same normalized title +
-      // start bucket)? Adopt it — register the Google external id + refresh times,
-      // so future runs hit Layer-1 and it never duplicates.
-      const adoptedId = await findExistingEventByBucket(
-        event.title,
-        typeof event.properties.startDate === "string"
-          ? event.properties.startDate
-          : "",
-        isAllDay
+    const capErr = capErrorMessage(cap);
+    if (capErr && isConnectionAuthError(capErr)) {
+      // Dead Google connection → nudge the operator to reconnect (deduped),
+      // instead of silently importing nothing every tick. The dedup watermark
+      // now lives on the GOOGLE connection tool (the source of truth for this
+      // sync), not a foreign Discord row.
+      await notifyConnectorUnhealthy({
+        connectorKey: "google",
+        connectorName: "Google Workspace",
+        reconnectHint:
+          "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
+        userId: owner,
+        workspaceId,
+        watermarkToolId: ctx.toolId,
+        watermarkMetadata: ctx.toolMetadata,
+        discordTeamChannelId: resolveNoticeChannelId(
+          ctx.toolMetadata,
+          ctx.announceChannelId
+        ),
+        errorMessage: capErr,
+      });
+      return { skipped: true, reason: "google_connection_unhealthy" };
+    }
+    if (cap.kind !== "run") {
+      logger.warn(
+        { capKind: cap.kind, calendarId },
+        "calendar_list did not run — skipping calendar"
       );
-      if (adoptedId) {
-        await idempotency.register(adoptedId, GOOGLE_PROVIDER, googleEventId);
-        await patchEventTimes(adoptedId, event.properties);
-        linkedExisting += 1;
-        continue;
-      }
+      continue;
+    }
 
-      // New event → create the BARE entity DIRECTLY (R4) so it always lands.
-      const createdEvent = await entityRepo.create(
-        {
-          profileSlug: "event",
-          title: event.title,
-          properties: event.properties,
-          workspaceId,
-          userId: owner,
-        },
-        owner
-      );
-      // Register the stable external id (entity_external_links + identity signal).
-      await idempotency.register(
-        createdEvent.id,
-        GOOGLE_PROVIDER,
-        googleEventId
-      );
-      created += 1;
+    const result = cap.result as { events?: GCalItem[] } | undefined;
+    const items = Array.isArray(result?.events) ? result!.events : [];
+    processed += items.length;
 
-      // BEST-EFFORT: attach attendee person/company + relations, anchored to the
-      // just-created event (existingEntityId), through the composite door — its
-      // resolver strong-signal auto-links people by email / companies by website.
-      // A failure here must NEVER un-create the event (which already mirrors).
-      if (graph.entities.length > 1) {
-        const graphEntities = graph.entities.map((e) =>
-          e.ref === "event" ? { ...e, existingEntityId: createdEvent.id } : e
-        );
-        await submitCaptureGraph({
-          userId: actor,
-          workspaceId,
-          entities: graphEntities,
-          relations: graph.relations,
-          summary: `Google Calendar event — ${event.title}`,
-        }).catch((err) =>
-          logger.warn(
-            { err, googleEventId },
-            "gcal import: attendee graph failed (event kept)"
-          )
-        );
-      }
-    } catch (err) {
-      failed += 1;
-      logger.warn({ err, googleEventId }, "gcal import: event → entity failed");
+    for (const item of items) {
+      const outcome = await landCalendarItem(item, {
+        entityRepo,
+        idempotency,
+        actor,
+        owner,
+        workspaceId,
+        backfill,
+      });
+      if (outcome === "created") created += 1;
+      else if (outcome === "linked") linkedExisting += 1;
+      else if (outcome === "failed") failed += 1;
     }
   }
 
   logger.info(
-    { processed: items.length, created, linkedExisting, failed },
-    "gcal import run complete"
+    { processed, created, linkedExisting, failed, backfill },
+    "gcal sync run complete"
   );
-  return { processed: items.length, created, linkedExisting, failed };
+  return { processed, created, linkedExisting, failed };
+}
+
+// Register the calendar sync kind on module load (side-effect). Importing this
+// module — which every `runGcalImport` caller and the api barrel do — makes the
+// `google`/`event` handler visible to `runConnectionSync`.
+registerSyncKind({
+  provider: GOOGLE_PROVIDER,
+  kind: "event",
+  // Template default: sync is on, ongoing (recent) window, primary calendar.
+  defaults: { enabled: true, scope: "recent", sources: [] },
+  run: runCalendarSync,
+});
+
+// ── Back-compat entry (the cron + api barrel call this) ───────────────────────────
+
+/**
+ * Sync Google Calendar → Synap `event` entities. Thin adapter over the
+ * connection-sync substrate that projects the `event` kind's result back into
+ * the historical `RunGcalImportResult` shape the cron logs.
+ *
+ * @param workspaceId optional caller scope — provided narrows to that
+ *   workspace's Google connection; omitted (the cron) uses the unscoped tie-break.
+ */
+export async function runGcalImport(
+  workspaceId?: string | null
+): Promise<RunGcalImportResult> {
+  const res = await runConnectionSync({
+    provider: GOOGLE_PROVIDER,
+    workspaceId,
+  });
+  if (res.skipped) return { skipped: true, reason: res.reason };
+  const event = res.kinds?.["event"];
+  if (!event) return { skipped: true, reason: "event_kind_not_run" };
+  if ("skipped" in event) return { skipped: true, reason: event.reason };
+  return {
+    processed: event.processed,
+    created: event.created,
+    linkedExisting: event.linkedExisting,
+    failed: event.failed,
+  };
 }

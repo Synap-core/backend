@@ -1283,6 +1283,13 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           props: {},
         },
       },
+      // NOTE: the `event` kind intentionally has NO seeded collection renderer.
+      // The mature `CalendarApp` (dock "Calendar") is the canonical calendar
+      // surface and already renders `event` entities via `entities.list`; a
+      // separate agenda cell was a duplication and was retired. Pointing the
+      // event kind-renderer at the real calendar is a follow-up (extract
+      // CalendarApp's body into a registered cell), tracked with the
+      // renderer-choice feature — not a second divergent calendar.
     };
     for (const [slug, renderers] of Object.entries(PROFILE_DEFAULT_RENDERERS)) {
       const profileId = createdProfiles.get(slug);

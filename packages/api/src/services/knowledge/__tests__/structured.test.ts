@@ -134,7 +134,14 @@ describe("structuredLookup — fails closed on unknown vocabulary", () => {
 });
 
 describe("structuredLookup — floor is always intersected", () => {
-  it("no-project lane: uses workspaceLensWhere floor, AND-ed at the top", async () => {
+  // The no-project lane used to floor on bare `workspaceLensWhere`, whose
+  // `userVisibleWhere` NULL clause treats `workspace_id IS NULL` as pod-wide
+  // -visible-to-ALL. For `entities` a NULL workspace means owner-PRIVATE, so
+  // that leaked every user's pod-wide entities. It now floors on
+  // `accessScopeWhere`, whose pod-personal branch gates NULL rows to their
+  // owner. This test asserts the SECURE shape and, just as importantly, that
+  // the leaky one has not come back.
+  it("no-project lane: uses the accessScopeWhere floor, AND-ed at the top", async () => {
     await structuredLookup({
       profileSlug: "company",
       userId: USER,
@@ -142,7 +149,8 @@ describe("structuredLookup — floor is always intersected", () => {
       limit: 10,
     });
     expect(h.captured.where?._tag).toBe("and");
-    expect(hasTag("workspaceLensWhere")).toBe(true);
+    expect(hasTag("accessScopeWhere")).toBe(true);
+    expect(hasTag("workspaceLensWhere")).toBe(false);
     // The polymorphic type match is always present too.
     expect(hasTag("profileSlugScope")).toBe(true);
   });
@@ -161,15 +169,22 @@ describe("structuredLookup — floor is always intersected", () => {
 });
 
 describe("structuredLookup — includeGlobals ORs pod-wide rows", () => {
-  it("passes includeGlobals:true to the workspace floor (no-project lane)", async () => {
+  // `includeGlobalsInLens` is accessScopeWhere's name for what the old floor
+  // called `includeGlobals: true` — surface pod-wide globals under a lens. The
+  // capability is unchanged; only the door it is passed through moved.
+  it("passes includeGlobalsInLens:true to the access floor (no-project lane)", async () => {
     await structuredLookup({
       profileSlug: "task",
       userId: USER,
       workspaceId: "ws-1",
       limit: 10,
     });
-    const floor = conditionsOf().find((c) => c?._tag === "workspaceLensWhere");
-    expect(floor?.opts).toMatchObject({ includeGlobals: true });
+    const floor = conditionsOf().find((c) => c?._tag === "accessScopeWhere");
+    // The stub captures the call's single options object as `args`.
+    expect(floor?.args).toMatchObject({
+      includeGlobalsInLens: true,
+      workspaceLens: "ws-1",
+    });
   });
 });
 
