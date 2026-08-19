@@ -31,6 +31,7 @@ import {
   ensureCaptureAgent,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
+  backfillCapabilityEmits,
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
   fetchFederationMetadata,
@@ -749,6 +750,31 @@ export async function runStartupHooks(): Promise<void> {
     logger.warn(
       { err },
       "Failed to reconcile standalone configs to templates on startup (non-fatal)"
+    );
+  }
+
+  // Light up the rules-ecosystem "WHEN" menu: declare `metadata.emits` for genuine
+  // event producers (standing/channel bridges) that carry no explicit declaration
+  // yet. Idempotent + non-fatal; MUST run AFTER the capability reconcile above so
+  // freshly-installed capabilities and their `produced-->channel` edges exist to be
+  // classified. NEVER overwrites an explicit `emits` declaration.
+  try {
+    const emitsReport = await backfillCapabilityEmits();
+    if (emitsReport.litUp.length > 0) {
+      logger.info(
+        {
+          litUp: emitsReport.litUp.map((c) => ({
+            name: c.name,
+            emits: c.emits,
+          })),
+        },
+        "Declared metadata.emits for standing (bridge) capabilities — honest WHEN menu"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to backfill capability emits on startup (non-fatal)"
     );
   }
 

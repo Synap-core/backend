@@ -56,6 +56,10 @@ import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 
 import { createLogger } from "@synap-core/core";
+// Validate DECLARED emit patterns before persisting them to `metadata.emits` —
+// the SAME grammar the honest-menu "catalog"/"declared" tiers use. Sub-path
+// import for the same tsup code-splitting reason routers/automations.ts cites.
+import { validateEventPattern } from "@synap-core/types/events/unified";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -79,6 +83,32 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
     !Array.isArray(v) &&
     Object.getPrototypeOf(v) === Object.prototype
   );
+}
+
+/**
+ * Normalize a definition's declared `emits` into the validated, deduped pattern
+ * list stored on `capabilities.metadata.emits`. Each entry is checked with
+ * `validateEventPattern`; a non-string or validator-illegal entry is silently
+ * dropped so a phantom pattern is NEVER persisted (it would surface a fake
+ * option in the honest WHEN menu). Returns `undefined` when the definition
+ * declares no `emits` at all — so the applier leaves any existing declaration
+ * untouched, and a boot backfill can tell "never declared" apart from
+ * "explicitly declares nothing" (`[]`).
+ */
+export function sanitizeEmitPatterns(
+  raw: string[] | undefined
+): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const out: string[] = [];
+  for (const p of raw) {
+    if (typeof p !== "string") continue;
+    try {
+      out.push(validateEventPattern(p));
+    } catch {
+      // Drop the phantom — never store an option the matcher can't fire.
+    }
+  }
+  return [...new Set(out)];
 }
 
 /**
@@ -1053,6 +1083,12 @@ export async function createCapabilityFromDefinition(
       string,
       unknown
     >;
+    // DECLARED emit patterns (rules-ecosystem WHEN menu). Read off the RAW
+    // definition — patterns carry no `{{param}}` so interpolation is a no-op, and
+    // this keeps the field validator-checked at the source. `undefined` (the
+    // definition declares no `emits`) leaves any existing declaration untouched;
+    // an explicit `[]` is persisted so a boot backfill knows not to fill it.
+    const declaredEmits = sanitizeEmitPatterns(rawDef.emits);
     await db
       .update(capabilitiesTable)
       .set({
@@ -1061,6 +1097,7 @@ export async function createCapabilityFromDefinition(
           ...(def.metadata ?? {}),
           templateKey: def.key,
           ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
+          ...(declaredEmits !== undefined ? { emits: declaredEmits } : {}),
         },
         updatedAt: new Date(),
       })

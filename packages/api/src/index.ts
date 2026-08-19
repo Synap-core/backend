@@ -49,6 +49,7 @@ export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
 export { ensureSystemSkills } from "./services/capabilities/ensure-system-skills.js";
+export { backfillCapabilityEmits } from "./services/capabilities/backfill-capability-emits.js";
 // Boot-seed the widget_definitions table from the @synap/capabilities manifest
 // (idempotent upsert). Previously invoked via the now-deleted plugins/init.ts;
 // re-homed onto the canonical startup-hooks path so it survives the registry KILL.

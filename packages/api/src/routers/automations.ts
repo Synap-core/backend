@@ -9,6 +9,11 @@ import { z } from "zod";
 import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+// The `capabilities` table has NO access-registry VisibilityRule, so its floor is
+// the canonical `userVisibleWhere` (same predicate `resolveCapabilityMode` and the
+// capabilities router apply) — a pod-wide (null-workspace) capability is visible to
+// all, a workspace one only to its members/owner.
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
@@ -34,7 +39,6 @@ import {
 import {
   resolveActionLabel,
   resolveObjectNoun,
-  humanizeToken,
 } from "@synap-core/types/vocabulary";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import {
@@ -63,7 +67,7 @@ import {
   playbooks,
   skills,
   events,
-  links,
+  capabilities,
   ChannelRepository,
 } from "@synap/database";
 import type {
@@ -888,6 +892,39 @@ function profileSlugForSubject(subject: string): string | undefined {
 }
 
 /**
+ * Fold one capability's declared `metadata.emits` patterns into the by-pattern
+ * merge map as `source:"declared"`. PURE (no DB) — shared by
+ * `availableTriggerEvents` and unit-tested. Each entry is re-validated with
+ * `validateEventPattern` (defence in depth against a hand-edited jsonb); a
+ * non-string or validator-illegal entry is dropped, never surfaced as a phantom
+ * option. `declared` OUTRANKS `observed`/`catalog` but PRESERVES any
+ * `observedCount` already discovered on the same pattern.
+ */
+export function foldDeclaredEmits(
+  byPattern: Map<string, EventOption>,
+  emits: readonly unknown[]
+): void {
+  for (const raw of emits) {
+    if (typeof raw !== "string") continue;
+    let pattern: string;
+    try {
+      pattern = validateEventPattern(raw);
+    } catch {
+      continue;
+    }
+    const subject = pattern.split(".")[0]!;
+    const existing = byPattern.get(pattern);
+    byPattern.set(pattern, {
+      pattern,
+      label: existing?.label ?? eventLabelFor(pattern, subject),
+      profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
+      source: "declared",
+      observedCount: existing?.observedCount,
+    });
+  }
+}
+
+/**
  * The authoritative "catalog" tier — the emittable-event universe DERIVED from
  * the grammar SSOT (SUBJECT_TYPES × EVENT_ACTIONS) at the `.completed` phase
  * (the phase automations match: `matchForEntity` hardcodes
@@ -1274,10 +1311,11 @@ export const automationsRouter = router({
    *                append-only user-owned history), so the access floor is the
    *                RESOLVED userId — never a caller-supplied one (same contract
    *                as hub-protocol/rest/observability.ts). RuleScope narrows.
-   *   • declared — `capability --produced--> event` edges in `links`, carrying
-   *                the pattern in `metadata.eventPattern`. None exist yet ⇒ []
-   *                today (expected); the source is wired so it lights up the
-   *                moment a capability declares one.
+   *   • declared — the `metadata.emits: string[]` a capability declares (set by
+   *                the applier from a `CapabilityDefinition.emits`, and by the
+   *                boot backfill for genuine producers). Floored by
+   *                `userVisibleWhere` (capabilities has no access-registry
+   *                VisibilityRule). `scope.capabilityId` narrows to one.
    */
   availableTriggerEvents: protectedProcedure
     .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
@@ -1334,54 +1372,35 @@ export const automationsRouter = router({
       }
 
       // ── declared ──────────────────────────────────────────────────────────────
-      // The links schema has no dedicated `event` endpoint type / `produces`
-      // linkType (LinkEndpointType / LinkType unions in schema/links.ts), so a
-      // capability declares a produced event as a `produced` edge whose pattern
-      // lives in metadata.eventPattern. Read floor via the links VisibilityRule.
-      const linkPred = scopedDb(access).predicate(links);
-      const declaredRows = await database
-        .select({
-          pattern: drizzleSql<
-            string | null
-          >`${links.metadata}->>'eventPattern'`,
-        })
-        .from(links)
-        .where(
-          and(
-            linkPred,
-            eq(links.fromType, "capability"),
-            eq(links.linkType, "produced"),
-            drizzleSql`${links.metadata}->>'eventPattern' IS NOT NULL`,
-            scope.capabilityId
-              ? eq(links.fromId, scope.capabilityId)
-              : undefined,
-            scope.workspaceId
-              ? or(
-                  isNull(links.workspaceId),
-                  eq(links.workspaceId, scope.workspaceId)
-                )
-              : undefined
-          )
-        );
+      // A capability DECLARES the event patterns it can emit in
+      // `metadata.emits: string[]`. Floor: `userVisibleWhere` (capabilities has no
+      // access-registry VisibilityRule — same floor resolveCapabilityMode uses).
+      // The `jsonb_typeof = 'array'` guard skips capabilities that never declared.
+      if (userId) {
+        const declaredRows = await database
+          .select({
+            emits: drizzleSql<unknown>`${capabilities.metadata}->'emits'`,
+          })
+          .from(capabilities)
+          .where(
+            and(
+              userVisibleWhere(capabilities.workspaceId, userId),
+              drizzleSql`jsonb_typeof(${capabilities.metadata}->'emits') = 'array'`,
+              scope.capabilityId
+                ? eq(capabilities.id, scope.capabilityId)
+                : undefined,
+              scope.workspaceId
+                ? or(
+                    isNull(capabilities.workspaceId),
+                    eq(capabilities.workspaceId, scope.workspaceId)
+                  )
+                : undefined
+            )
+          );
 
-      for (const row of declaredRows) {
-        if (!row.pattern) continue;
-        let pattern: string;
-        try {
-          // Defensive: only surface validator-legal declarations.
-          pattern = validateEventPattern(row.pattern);
-        } catch {
-          continue;
+        for (const row of declaredRows) {
+          if (Array.isArray(row.emits)) foldDeclaredEmits(byPattern, row.emits);
         }
-        const subject = pattern.split(".")[0]!;
-        const existing = byPattern.get(pattern);
-        byPattern.set(pattern, {
-          pattern,
-          label: existing?.label ?? eventLabelFor(pattern, subject),
-          profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
-          source: "declared",
-          observedCount: existing?.observedCount,
-        });
       }
 
       // Stable order: declared, then observed (busiest first), then catalog.
@@ -1407,55 +1426,20 @@ export const automationsRouter = router({
    */
   availableActions: protectedProcedure
     .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
-    .query(async ({ input, ctx }) => {
-      const scope = input?.scope ?? {};
-      const access = AccessContext.from(ctx);
-
+    .query(async () => {
+      // NOTE(rules-slice2): the THEN menu is the executable output vocabulary.
+      // Capability-verb actions are intentionally NOT offered yet — a capability
+      // action must compile to a `type:"capability"` flow node (executor:
+      // automation-executor.ts `case "capability"`), NOT an `output` node (there
+      // is no `outputType:"capability"` the output executor in steps/output.ts can
+      // run), so surfacing one here would be a menu entry that silently never
+      // fires. Wire it (keyed off scope.capabilityId) once the sentence path can
+      // emit a capability node; until then the menu stays honest.
       const actions: ActionOption[] = OUTPUT_NODE_TYPES.map((outputType) => ({
         key: outputType,
         label: actionLabelFor(outputType),
         outputType,
       }));
-
-      if (scope.capabilityId) {
-        const database = await getDb();
-        const linkPred = scopedDb(access).predicate(links);
-        const memberSkillRows = await database
-          .select({ skillId: links.fromId })
-          .from(links)
-          .where(
-            and(
-              linkPred,
-              eq(links.toType, "capability"),
-              eq(links.toId, scope.capabilityId),
-              eq(links.fromType, "skill"),
-              eq(links.linkType, "member_of")
-            )
-          );
-
-        const skillIds = memberSkillRows
-          .map((r) => r.skillId)
-          .filter((id): id is string => Boolean(id));
-
-        if (skillIds.length > 0) {
-          const skillRows = await database
-            .select({ id: skills.id, name: skills.name })
-            .from(skills)
-            .where(
-              and(
-                visibleSkillsWhere(access.userId, scope.workspaceId),
-                inArray(skills.id, skillIds)
-              )
-            );
-          for (const s of skillRows) {
-            actions.push({
-              key: `capability:${s.name}`,
-              label: humanizeToken(s.name),
-              outputType: "capability",
-            });
-          }
-        }
-      }
 
       return { actions: actionOptionSchema.array().parse(actions) };
     }),

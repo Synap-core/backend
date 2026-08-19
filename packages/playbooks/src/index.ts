@@ -683,6 +683,18 @@ export interface CapabilityDefinition {
    * next reconcile, not just a fresh install.
    */
   metadata?: Record<string, unknown>;
+  /**
+   * Event patterns this capability can EMIT (e.g. a messaging bridge declares
+   * `["external_message.received.completed", "channel_message.created.completed"]`).
+   * Persisted verbatim to the installed capability's `metadata.emits` jsonb by the
+   * applier (`createCapabilityFromDefinition`), each pattern validated via
+   * `validateEventPattern` (invalid ones silently dropped — never a phantom). This
+   * is the DECLARED source of the rules-ecosystem "WHEN" menu
+   * (`automations.availableTriggerEvents`): a capability's trigger menu is honest
+   * about what it produces even before any observation. Doubles as the
+   * list-by-producer index ("which capabilities emit event X").
+   */
+  emits?: string[];
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────
