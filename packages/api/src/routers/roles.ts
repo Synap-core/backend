@@ -90,7 +90,22 @@ export const rolesRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "role",
         action: "create",
-        data: { id, name: input.name },
+        // Widened (gate-payload sufficiency): `{ id, name }` LOST `permissions`
+        // — a required, non-defaultable input — so an approved role proposal
+        // could never materialize a role that grants anything. Carry the FULL
+        // insert shape (exactly what `roleRepo.create` reads below) so the
+        // approve-executor can replay this procedure verbatim. `permissions`/
+        // `filters` are RBAC CONFIG, not secrets: showing them in the review UI
+        // is the point — approving a role IS approving its grants. Only the
+        // PROPOSED row's stored data widens; the granted path below is untouched.
+        data: {
+          id,
+          name: input.name,
+          description: input.description,
+          workspaceId: input.workspaceId,
+          permissions: input.permissions,
+          filters: input.filters,
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -154,7 +169,19 @@ export const rolesRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "role",
         action: "update",
-        data: { id: input.id },
+        // Widened (gate-payload sufficiency): `{ id }` alone described NO change
+        // — an approved update proposal had nothing to apply. Carry the same
+        // patch fields `roleRepo.update` reads below. `permissions`/`filters` are
+        // RBAC config, not secrets (see `create`). `undefined` keys drop out at
+        // JSON-serialization, so an omitted field stays omitted on replay.
+        data: {
+          id: input.id,
+          name: input.name,
+          description: input.description,
+          permissions: input.permissions,
+          filters: input.filters,
+          workspaceId: input.workspaceId,
+        },
       });
 
       if ("denied" in perm && perm.denied) {

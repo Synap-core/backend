@@ -513,7 +513,13 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         action: "update",
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: "intelligence",
-        data: { id },
+        // Widened (gate-payload sufficiency): `{ id }` described NO change — the
+        // whole point of this door is the new `config`, and without it an
+        // approved proposal had nothing to write. `workspaceId` is the CONFINED
+        // value (never raw `body.workspaceId`) so a replay re-scopes the same
+        // way the direct `.set()` below does. A cell config is user/agent
+        // content, not a secret.
+        data: { id, config: body.config, workspaceId },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,
       });

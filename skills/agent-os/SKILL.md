@@ -3,17 +3,19 @@ name: agent-os
 description: >
   Use this skill when the user wants to set up a complete company operating
   system in Synap — multiple connected workspaces (CRM, Marketing, Builder,
-  Project Management, etc.) under one project. Triggers: "set up my company",
+  Project Management, etc.). A project is optional (reuse if present; never
+  invent one on a team pod). Triggers: "set up my company",
   "launch agent OS", "create a workspace for my business", "I need a CRM and
   a content workspace", "build my company OS", "onboard my company", "set up
   marketing + sales + dev workspaces". ALSO use it to add a SINGLE domain to an
   existing project — "add a Marketing workspace to my project", "this project
   needs a Finance domain", or when you've noticed a project is missing an
   operational domain it clearly needs and offered to set it up. This skill
-  orchestrates provisioning: create or reuse a PROJECT (the lens that ties the
-  work together), pick the right domain workspace(s), install each from a
-  template, link them to the project, and onboard. Ask, don't assume — infer
-  which domains fit, then confirm with the user before provisioning.
+  orchestrates provisioning: optionally reuse or create a PROJECT (never
+  required; never invent one on a team pod), pick the right domain
+  workspace(s), install each from a template, link them to the project when
+  one exists, and onboard. Ask, don't assume — infer which domains fit, then
+  confirm with the user before provisioning.
 metadata:
   openclaw:
     requires:
@@ -27,14 +29,16 @@ metadata:
 
 # Company OS — launch a complete company operating system
 
-You provision a full company OS in Synap: a **project** (the cross-cutting lens
-that ties everything together) plus the **domain workspaces** the user needs,
-each installed from a ready-made template and linked back to the project.
+You provision a full company OS in Synap: the **domain workspaces** the user
+needs, each installed from a ready-made template. A **project** is an _optional_
+cross-cutting lens — reuse one if it already exists, create one only on a
+personal pod when the user wants a company OS and none is present. Never invent
+a company project on a team pod (the pod IS the company).
 
 The CLI equivalent is `synap launch` (bare — it runs the guided one-per-company
-setup and takes no template argument; `synap launch --list` shows what is
-launchable). As the AI, you do the same flow conversationally — **ask, don't
-assume.**
+setup, defaults to pod-wide, and takes no template argument; `synap launch
+--list` shows what is launchable). As the AI, you do the same flow
+conversationally — **ask, don't assume.**
 
 ## The available domain templates
 
@@ -71,9 +75,17 @@ Foundation/Radar/Brand are the **strategic base** other workspaces inherit from
 
 ## The flow
 
-### 1. Get the project name
+### 1. Orient — decide whether a project is even needed
 
-Ask: "What's your company or project called?" → this becomes the **project**.
+Run `synap_orient` / `synap lens` first. A project is optional; do not assume
+you need one.
+
+- **Already have a project** in the lens or orient's `projects` list → **reuse
+  its `id`**. Skip Step 4. Don't POST.
+- **Team pod**, or the user does not want a company project → skip the project
+  entirely. The pod is the company. Do **not** invent one.
+- **Personal pod** + user wants a company OS + no project yet → ask: "What's
+  your company or project called?" — that name is what Step 4 will POST.
 
 ### 2. Understand the business, infer domains
 
@@ -90,7 +102,15 @@ Say: "Based on that, I suggest: **CRM, Dev Dashboard, Project Management**.
 Want to add Marketing/Content? Remove any?" Wait for the user to confirm the
 set. This is the core principle — **the user decides the final set.**
 
-### 4. Create the project
+### 4. Create the project — OPTIONAL
+
+Never a required step. Never create a company project on a team pod.
+
+- **Reuse.** If Step 1 already found a project, you have its `id`. Skip the POST.
+- **Skip.** Team pod, or the user does not want a company project: provision
+  domain workspaces **without** `projectId`. Do not invent a company project.
+- **Create (the only POST case).** Personal pod + user wants a company OS + no
+  project yet:
 
 ```bash
 curl -s -X POST "$SYNAP_POD_URL/api/hub/projects" \
@@ -100,12 +120,16 @@ curl -s -X POST "$SYNAP_POD_URL/api/hub/projects" \
 
 Capture the returned `id` — that's the `projectId`.
 
+This matches the single-domain case below: an existing project is reused, never
+re-created.
+
 ### 5. Provision each chosen workspace
 
 For each domain slug, POST the template's `PackageDefinition` to the packages
-endpoint, **injecting the `projectId` from Step 4** so the workspace's seed
-entities link to the project (`belongs_to_project`). Without `projectId`, the
-workspaces are created but orphaned from the project — breaking the lens.
+endpoint. If you have a `projectId` (reused or newly created), inject it so the
+workspace's seed entities link (`belongs_to_project`). If you skipped the
+project, **omit `projectId`** — workspaces provision pod-wide. That is correct
+on a team pod.
 
 Templates are sourced from the canonical **`@synap-core/workspace-templates`**
 package (the single source of truth shared by the CLI, the control-plane
@@ -113,7 +137,7 @@ registry, and the browser) — **not** from repo files. The simplest path is the
 CLI, which does this whole flow end-to-end:
 
 ```bash
-synap launch          # asks project + domains, applies each template, links to the project
+synap launch          # asks where (pod-wide default) + domains, applies each template
 synap launch --list   # what's launchable (local templates, no pod needed)
 ```
 
@@ -123,7 +147,7 @@ output.
 
 Conversationally (or programmatically), obtain each template's PackageDefinition
 from the package (`toPackageDefinition(slug)`) or the registry (`GET
-/api/packages`), inject `projectId`, and POST:
+/api/packages`) and POST. Include `projectId` only when you have one:
 
 ```bash
 curl -s -X POST "$SYNAP_POD_URL/api/hub/packages/apply" \
@@ -175,9 +199,9 @@ skill for the exact sequence.)
 
 ### 8. Summarize
 
-"Your Company OS is ready: **CRM, Dev Dashboard, Project Management** — all under
-the **<project>** project. I've onboarded CRM (pipeline + 4 accounts). Want to
-onboard the others now, or later?"
+"Your Company OS is ready: **CRM, Dev Dashboard, Project Management**" — under
+the **<project>** project when one exists, otherwise pod-wide. Then: "I've
+onboarded CRM (pipeline + 4 accounts). Want to onboard the others now, or later?"
 
 ## Adding ONE domain to an existing project (the common in-conversation case)
 
@@ -207,8 +231,10 @@ lens; give them that one, linked and onboarded.
 - **Ask, don't assume.** Infer domains, but the user confirms the final set.
 - **No overwhelm.** Don't install all 6 by default. Suggest 2-4 that fit.
 - **Capabilities are opt-in.** Never connect an external tool without asking.
-- **Everything links to the project.** The project is the lens that unifies the
-  workspaces — an agent scoped to the project sees data across all of them.
+- **Project is optional.** Reuse an existing one; skip entirely on a team pod
+  or when the user doesn't want one; POST `/projects` only on a personal pod
+  when they want a company OS and none exists. Never invent a company project
+  on a team pod. When a project _is_ in play, link the workspaces to it.
 - **Idempotent.** `packages/apply` is safe to re-run (keyed by template slug).
 
 ## When NOT to use this skill

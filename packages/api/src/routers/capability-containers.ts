@@ -224,7 +224,17 @@ export const capabilityContainersRouter = router({
         action: "create",
         source: input.source,
         reasoning: input.reasoning,
-        data: { name: input.name },
+        // Widened (gate-payload sufficiency, mirrors tools.create): `{ name }`
+        // alone lost `description` and the workspace SCOPE — an approved
+        // capability proposal would have materialized an unscoped, undescribed
+        // shell (the documented "empty shell" defect). Carry the full insert
+        // shape the `.values()` below reads. Only the PROPOSED row's stored data
+        // widens; the granted-path insert is untouched.
+        data: {
+          name: input.name,
+          description: input.description ?? null,
+          workspaceId: input.workspaceId ?? null,
+        },
       });
       if ("denied" in perm && perm.denied)
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

@@ -247,7 +247,18 @@ export function registerRunsRoutes(app: HubHono): void {
         // hard 500. Agent identity is carried by agentUserId above; the valid,
         // closest source is "intelligence".
         source: "intelligence",
-        data: { runId, status: body.status, summary: body.summary },
+        // Widened (gate-payload sufficiency): the payload omitted `error` and
+        // `producedEntityIds`, so approving a failed-run capture lost the failure
+        // reason AND every provenance edge the direct path writes below. Carry
+        // both. `producedEntityIds` are ids only — they are re-validated against
+        // the run's own workspace at apply time, so storing them grants nothing.
+        data: {
+          runId,
+          status: body.status,
+          summary: body.summary,
+          error: body.error,
+          producedEntityIds: body.producedEntityIds,
+        },
       });
       if ("denied" in perm && perm.denied) {
         return c.json({ error: perm.reason }, 403);

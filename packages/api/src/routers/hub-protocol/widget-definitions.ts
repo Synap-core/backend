@@ -153,11 +153,28 @@ export const hubWidgetDefinitionsRouter = router({
         source: "intelligence",
         reasoning: input.reasoning,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        // Widened (gate-payload sufficiency): the payload stored the LENGTH of
+        // the renderer source instead of the source, so an approved widget
+        // proposal had no renderer to register — and a reviewer was asked to
+        // approve agent-authored render code they could not read. Carry the full
+        // upsert shape the `.values()`/`.onConflictDoUpdate()` below read.
+        // `rendererSource`/`source` are agent-authored CODE, not credentials:
+        // surfacing them in the review UI is exactly what this gate is for
+        // (`rendererType: "native"` is already rejected at the schema, so no
+        // executable bundle can ride in here).
         data: {
           typeKey: input.typeKey,
+          workspaceId: input.workspaceId ?? null,
           name: input.name,
+          description: input.description,
+          icon: input.icon,
+          category: input.category,
           rendererType: input.rendererType,
-          rendererSourceLength: input.rendererSource?.length,
+          rendererSource: input.rendererSource,
+          source: input.source,
+          configSchema: input.configSchema,
+          defaultConfig: input.defaultConfig,
+          defaultSize: input.defaultSize,
         },
       });
 

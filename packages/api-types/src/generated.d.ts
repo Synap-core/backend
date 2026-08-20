@@ -18633,6 +18633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				includeProposed?: boolean | undefined;
 			} | undefined;
 			output: {
 				rules: any;

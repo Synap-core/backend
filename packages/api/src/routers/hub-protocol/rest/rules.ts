@@ -50,6 +50,7 @@ import {
   readRuleMetadata,
 } from "../../../services/rules/index.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
+import { listPendingRuleProposals } from "../../../services/proposals/pending-rules.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -108,6 +109,15 @@ const ListRulesQuerySchema = z.object({
   workspaceId: z.string().uuid().optional(),
   limit: z.coerce.number().min(1).max(100).optional(),
   offset: z.coerce.number().min(0).optional(),
+  /**
+   * Also return rules that exist only as a PENDING proposal (no `skills` row
+   * yet). Default FALSE — a caller reading this list to decide what is IN
+   * EFFECT must keep getting only materialized rules. Accepts "1"/"true".
+   */
+  includeProposed: z
+    .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
+    .transform((v) => v === true || v === "true" || v === "1")
+    .optional(),
 });
 
 const WireRuleSchema = z.object({
@@ -117,6 +127,13 @@ const WireRuleSchema = z.object({
   workspaceId: z.string().nullable(),
   createdAt: z.string(),
   rule: z.record(z.string(), z.unknown()),
+  /**
+   * `"active"` = a real `skills` row. `"proposed"` = awaiting review, returned
+   * only under `includeProposed`, and carrying the `proposalId` to review it.
+   * Present on EVERY row so no consumer can mistake one for the other.
+   */
+  status: z.enum(["active", "proposed"]),
+  proposalId: z.string().optional(),
 });
 
 // ── Register ───────────────────────────────────────────────────────────────
@@ -162,7 +179,7 @@ export function registerRulesRoutes(app: HubHono): void {
     tags: ["Rules"],
     summary: "List rules",
     description:
-      "Rules visible to the caller, newest first. Floored by the canonical `visibleSkillsWhere` predicate.",
+      'Rules visible to the caller, newest first. Floored by the canonical `visibleSkillsWhere` predicate. Every row carries `status`: `"active"` for a materialized rule. With `includeProposed=true` the list ALSO contains rules that exist only as a pending proposal — `status:"proposed"` + the `proposalId` to review them (`synap open proposal <id>`) — floored by `proposals.list`\'s own `userVisibleWhere` predicate plus the rule scope tiers. Default OFF, so a caller reading "what is in effect" is unaffected.',
     request: { query: ListRulesQuerySchema },
     responses: {
       200: {
@@ -314,6 +331,9 @@ export function registerRulesRoutes(app: HubHono): void {
         : {}),
       ...(c.req.query("limit") ? { limit: c.req.query("limit") } : {}),
       ...(c.req.query("offset") ? { offset: c.req.query("offset") } : {}),
+      ...(c.req.query("includeProposed")
+        ? { includeProposed: c.req.query("includeProposed") }
+        : {}),
     });
     if (!parsed.success) {
       return c.json(
@@ -332,23 +352,35 @@ export function registerRulesRoutes(app: HubHono): void {
         limit: parsed.data.limit ?? 50,
         offset: parsed.data.offset ?? 0,
       });
-      return c.json({
-        rules: rows.flatMap((row: typeof skills.$inferSelect) => {
-          const rule = readRuleMetadata(row.metadata);
-          return rule
-            ? [
-                {
-                  id: row.id,
-                  name: row.name,
-                  approved: row.approved,
-                  workspaceId: row.workspaceId,
-                  createdAt: row.createdAt,
-                  rule,
-                },
-              ]
-            : [];
-        }),
+      const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
+        const rule = readRuleMetadata(row.metadata);
+        return rule
+          ? [
+              {
+                id: row.id,
+                name: row.name,
+                approved: row.approved,
+                workspaceId: row.workspaceId,
+                createdAt: row.createdAt,
+                rule,
+                status: "active" as const,
+              },
+            ]
+          : [];
       });
+      if (!parsed.data.includeProposed) return c.json({ rules: materialized });
+
+      // Rules that exist only as a pending proposal — floored by the same
+      // predicate `proposals.list` uses, then by `visibleSkillsWhere`'s scope
+      // tiers mirrored onto the payload. Proposed FIRST: they await a decision.
+      const proposed = await listPendingRuleProposals({
+        userId,
+        ...(parsed.data.workspaceId
+          ? { workspaceId: parsed.data.workspaceId }
+          : {}),
+        limit: parsed.data.limit ?? 50,
+      });
+      return c.json({ rules: [...proposed, ...materialized] });
     } catch (err) {
       logger.error({ err }, "rules.list failed");
       return c.json(

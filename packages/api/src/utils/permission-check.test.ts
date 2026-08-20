@@ -243,6 +243,33 @@ describe("buildProposalSummary", () => {
     expect(summary).toBe("Delete workspace");
   });
 
+  // A rule carries none of the generic label fields, so without its own case it
+  // rendered a bare "Create rule" — a reviewer could see THAT a rule was
+  // proposed but not WHICH one. Found by dogfooding the live pod.
+  it("names a rule by the sentence the user actually said", () => {
+    const summary = buildProposalSummary("rule", "create", {
+      id: "r1",
+      intent: "inside the company Drive folder there is one folder per client",
+    });
+    expect(summary).toBe(
+      'Add rule "inside the company Drive folder there is one folder per client"'
+    );
+  });
+
+  it("truncates rule prose rather than flooding a queue row", () => {
+    const summary = buildProposalSummary("rule", "create", {
+      intent: "x".repeat(120),
+    });
+    expect(summary.length).toBeLessThan(95);
+    expect(summary).toContain("…");
+  });
+
+  it("falls back cleanly when a rule payload carries no intent", () => {
+    expect(buildProposalSummary("rule", "create", { id: "r1" })).toBe(
+      "Create rule"
+    );
+  });
+
   it("uses slug as label of last resort", () => {
     const summary = buildProposalSummary("profile", "create", { slug: "crm" });
     expect(summary).toBe('Create profile "crm"');

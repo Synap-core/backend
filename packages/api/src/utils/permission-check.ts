@@ -1402,6 +1402,22 @@ export function buildProposalSummary(
     if (goal) return `Start session "${goal}"`;
   }
 
+  // A RULE is identified by the sentence the user actually said — its `intent`.
+  // Without this it falls through to the generic branch, which finds no
+  // targetName/title/name/goal/slug on a rule payload and renders a bare
+  // "Create rule": a reviewer would see that a rule is proposed but not WHICH
+  // rule, which is the review-theatre failure this repo has already logged
+  // (approving what you cannot read). Truncated because a rule is prose, not a
+  // label, and this string sits in a queue row.
+  if (subjectType === "rule" && typeof data.intent === "string") {
+    const intent = data.intent.trim();
+    if (intent) {
+      const shown = intent.length > 80 ? `${intent.slice(0, 79)}…` : intent;
+      const verb = action === "create" ? "Add" : "Update";
+      return `${verb} rule "${shown}"`;
+    }
+  }
+
   const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
   // goal is a first-class label for focus_session (and harmless elsewhere)
   const label = (data.targetName ||

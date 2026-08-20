@@ -286,11 +286,23 @@ export function registerArtifactsRoutes(app: HubHono): void {
         action: "create",
         source: "intelligence",
         reasoning: body.reasoning,
+        // Widened (gate-payload sufficiency): the payload carried only the
+        // artifact's LABEL — `props` (the actual content), `cellKey`,
+        // `originKind`, `actorId` and `sessionId` were all dropped, so an
+        // approved artifact proposal could only ever materialize an empty
+        // titled husk. Carry the full insert shape the `.values()` below reads.
+        // `workspaceId` is the CONFINED value, never raw `body.workspaceId`.
         data: {
+          workspaceId,
           kind: body.kind,
           title: body.title,
           placement: body.placement ?? "desk",
           refId: body.refId,
+          cellKey: body.cellKey,
+          props: body.props,
+          originKind: body.originKind,
+          actorId: body.actorId,
+          sessionId: body.sessionId,
         },
       });
 

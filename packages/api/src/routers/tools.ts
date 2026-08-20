@@ -270,7 +270,25 @@ export const toolsRouter = router({
           workspaceId: existing.workspaceId ?? undefined,
           subjectType: "tool",
           action: "update",
-          data: { id: input.id },
+          // Widened (gate-payload sufficiency): `{ id }` described NO change —
+          // an approved tool-update proposal had nothing to apply. Carry the
+          // patch fields the `.set()` below reads. This branch is reached ONLY
+          // when `execChanged`, so the payload is precisely the egress-defining
+          // change a reviewer must SEE. `credentialRef` is a vault REFERENCE
+          // (an opaque key name), never a secret value — the secret itself lives
+          // in the vault and is not readable here.
+          data: {
+            id: input.id,
+            name: input.name,
+            description: input.description,
+            credentialRef: input.credentialRef,
+            config: input.config,
+            metadata: input.metadata,
+            executor: input.executor,
+            kind: input.kind,
+            inputSchema: input.inputSchema,
+            status: input.status,
+          },
         });
         if ("denied" in perm && perm.denied)
           throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

@@ -1379,7 +1379,16 @@ export const relationsRouter = router({
         workspaceId: effectiveWorkspaceId,
         subjectType: "relation",
         action: "update",
-        data: { id: relationId },
+        // Widened (gate-payload sufficiency): `{ id }` described NO change — an
+        // approved relation-update proposal had nothing to apply. Carry the two
+        // patch fields `relationRepo.update` reads below (`type`, `metadata`);
+        // `undefined` keys drop at serialization, preserving the "only patch
+        // what was sent" semantics of the direct path.
+        data: {
+          id: relationId,
+          type: input.type,
+          metadata: input.metadata,
+        },
       });
 
       if ("denied" in perm && perm.denied) {

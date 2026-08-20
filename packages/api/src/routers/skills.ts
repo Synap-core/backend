@@ -468,6 +468,16 @@ export const skillsRouter = router({
    * List rules under the caller's visibility floor — the SAME
    * `visibleSkillsWhere` predicate every other skills read uses (a rule is a
    * skill row, so it can never be more visible than a skill).
+   *
+   * `includeProposed` (default FALSE) additionally returns rules that exist
+   * only as a PENDING proposal — no `skills` row yet. Default-off is
+   * deliberate: a caller that reads this list to decide what is IN EFFECT must
+   * keep getting only materialized rules. It is opt-in for the surfaces whose
+   * job is to show what EXISTS (the CLI listing, an agent checking "did anyone
+   * already ask for this?") — the read that stops a duplicate proposal.
+   * Proposed rows are never merged silently: each carries
+   * `status: "proposed"` + `proposalId`, and approved rows carry
+   * `status: "active"`.
    */
   listRules: protectedProcedure
     .input(
@@ -476,6 +486,8 @@ export const skillsRouter = router({
           workspaceId: z.string().uuid().optional(),
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
+          /** Also return rules that exist only as a pending proposal. */
+          includeProposed: z.boolean().default(false),
         })
         .optional()
     )
@@ -492,23 +504,34 @@ export const skillsRouter = router({
         limit: input?.limit || 50,
         offset: input?.offset || 0,
       });
-      return {
-        rules: rows.flatMap((row: typeof skills.$inferSelect) => {
-          const rule = readRuleMetadata(row.metadata);
-          return rule
-            ? [
-                {
-                  id: row.id,
-                  name: row.name,
-                  approved: row.approved,
-                  workspaceId: row.workspaceId,
-                  createdAt: row.createdAt,
-                  rule,
-                },
-              ]
-            : [];
-        }),
-      };
+      const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
+        const rule = readRuleMetadata(row.metadata);
+        return rule
+          ? [
+              {
+                id: row.id,
+                name: row.name,
+                approved: row.approved,
+                workspaceId: row.workspaceId,
+                createdAt: row.createdAt,
+                rule,
+                status: "active" as const,
+                proposalId: undefined as string | undefined,
+              },
+            ]
+          : [];
+      });
+      if (!input?.includeProposed) return { rules: materialized };
+
+      const { listPendingRuleProposals } =
+        await import("../services/proposals/pending-rules.js");
+      const proposed = await listPendingRuleProposals({
+        userId,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        limit: input.limit || 50,
+      });
+      // Proposed FIRST: they are the ones awaiting a decision.
+      return { rules: [...proposed, ...materialized] };
     }),
 
   /**
@@ -812,7 +835,19 @@ export const skillsRouter = router({
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "update",
-        data: { id },
+        // Widened (gate-payload sufficiency): `{ id }` described NO change, so an
+        // approved skill-update proposal had nothing to apply. Carry the raw
+        // patch (`updateData` = input minus `id`/`agentUserId`/`metadata`, plus
+        // the metadata patch under its own key) — i.e. exactly the procedure
+        // INPUT, so an approve-executor replays this same mutation and re-derives
+        // `kind`/`code`-emptying and the `execChanged` re-approval reset itself
+        // rather than storing a half-applied result. Only the PROPOSED row's
+        // stored data widens; the granted path below is byte-untouched.
+        data: {
+          id,
+          ...updateData,
+          ...(metadataPatch ? { metadata: metadataPatch } : {}),
+        },
       });
 
       if ("denied" in perm && perm.denied) {
