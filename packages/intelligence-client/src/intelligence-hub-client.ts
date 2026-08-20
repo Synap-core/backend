@@ -401,6 +401,74 @@ async function fetchWithTimeout(
 /**
  * Intelligence Hub REST Client
  */
+/**
+ * Pull a short, user-safe reason out of the IS's validation envelope.
+ *
+ * The IS answers a schema rejection with `{ error: "Validation error",
+ * details: ZodIssue[] }` (see `routes/chat-stream.ts`). Those messages are
+ * OUR OWN strings, written to be read, so they are safe to surface. Anything
+ * that is not that exact shape returns undefined and stays in the logs only.
+ */
+function extractValidationDetail(body: string): string | undefined {
+  if (!body) return undefined;
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: unknown;
+      details?: Array<{ message?: unknown; path?: unknown }>;
+    };
+    if (
+      parsed?.error !== "Validation error" ||
+      !Array.isArray(parsed.details)
+    ) {
+      return undefined;
+    }
+    const messages = parsed.details
+      .map((issue) => {
+        const message =
+          typeof issue?.message === "string" ? issue.message : undefined;
+        if (!message) return undefined;
+        const path = Array.isArray(issue.path)
+          ? issue.path
+              .filter((p) => typeof p === "string" || typeof p === "number")
+              .join(".")
+          : "";
+        return path ? `${path}: ${message}` : message;
+      })
+      .filter((m): m is string => Boolean(m));
+    if (messages.length === 0) return undefined;
+    // Bounded — this text can reach a user-facing sentence.
+    return messages.slice(0, 3).join("; ").slice(0, 300);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Is a thrown Intelligence Hub error worth retrying with the SAME payload?
+ *
+ * Lives here because this module is what throws it (and what stamps `.status`),
+ * so there is one owner for the question rather than a second copy of the
+ * status ladder in every worker.
+ *
+ * A 4xx means the request itself was refused: replaying it byte-for-byte
+ * produces the identical refusal. The 2026-08-20 Companion outage made this
+ * concrete — a schema rejection was retried three times (`retryLimit: 3`),
+ * turning one impossible request into four, quadrupling the log noise and
+ * delaying the user's error by the whole retry chain.
+ *
+ * 408 and 429 are the deliberate exceptions: they are 4xx by number but
+ * temporal by meaning — the same payload can succeed later.
+ */
+export function isRetryableHubError(error: unknown): boolean {
+  const status =
+    typeof error === "object" && error !== null
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status !== "number") return true; // no evidence ⇒ keep today's behaviour
+  if (status === 408 || status === 429) return true;
+  return !(status >= 400 && status < 500);
+}
+
 export class IntelligenceHubClient {
   private baseUrl: string;
   private apiKey: string;
@@ -469,9 +537,27 @@ export class IntelligenceHubClient {
           console.error(
             `[IntelligenceHubClient] Request failed: url=${this.baseUrl}/api/chat/stream, status=${response.status}, statusText=${response.statusText}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1}`
           );
-          throw new Error(
+          const hubError = new Error(
             `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
           );
+          // Carry the IS's OWN validation reason forward.
+          //
+          // This body used to be logged here and then dropped: the thrown
+          // Error held only `status statusText baseUrl`, so a request the IS
+          // rejected for a precise, stateable reason reached the user as the
+          // generic "the request was rejected as invalid". The 2026-08-20
+          // Companion outage was exactly this — the IS said "turnContext may
+          // not contain more than 20 items" and nobody downstream could see it.
+          //
+          // ONLY our own validation envelope is attached. A raw upstream body
+          // is left in the logs, because it is not ours to put in front of a
+          // user and may carry provider detail we have not reviewed.
+          const parsedDetail = extractValidationDetail(responseBody);
+          if (parsedDetail) {
+            (hubError as Error & { detail?: string }).detail = parsedDetail;
+          }
+          (hubError as Error & { status?: number }).status = response.status;
+          throw hubError;
         }
 
         const data = (await response.json()) as IntelligenceHubResponse;

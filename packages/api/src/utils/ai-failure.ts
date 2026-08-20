@@ -121,6 +121,23 @@ function extractStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * A short, already-vetted reason carried on the error by the caller.
+ *
+ * `intelligence-hub-client` attaches `.detail` ONLY for the Intelligence
+ * Service's own validation envelope, whose messages are our own strings. It is
+ * never a raw upstream body, so it is safe to put in front of a user — and it
+ * is the difference between "invalid" and "turnContext may not contain more
+ * than 20 items".
+ */
+function detailOf(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const value = (error as Record<string, unknown>).detail;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 300) : undefined;
+}
+
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -317,8 +334,15 @@ const COPY: Record<
     code: "bad_request",
     retryable: false,
     needsOperator: true,
+    // Deliberately does NOT name an actor. A 4xx on the AI call can come from
+    // the AI provider OR from the Intelligence Service's own request
+    // validation, and at this layer we cannot tell which — the 2026-08-20
+    // Companion outage was our own zod schema, reported to users as "the AI
+    // service rejected" it. Naming an unverified culprit is exactly what this
+    // module exists to prevent. When a reason IS available it is appended by
+    // `describeAiFailure` below.
     message:
-      "The AI service rejected the request itself as invalid. Retrying the same request will not help — this one needs a fix on our side.",
+      "The request was rejected as invalid before the AI could answer. Retrying the same request will not help — this one needs a fix on our side.",
   },
   invalid_response: {
     code: "invalid_response",
@@ -387,12 +411,22 @@ export function describeAiFailure(
       ? " The AI service reports that retrying will not help."
       : "";
 
+  // The concrete reason, when the caller vetted one. Placed BEFORE the advice
+  // and reference so the sentence reads cause-then-consequence, and only for
+  // classes where a caller-supplied reason is meaningful — a quota or auth
+  // failure already states its own cause exactly.
+  const detail = detailOf(failure);
+  const because =
+    detail && (failureClass === "bad_request" || failureClass === "unknown")
+      ? ` Reason: ${detail}.`
+      : "";
+
   return {
     class: failureClass,
     code: copy.code,
     retryable,
     needsOperator: copy.needsOperator,
-    message: `${copy.message}${advice}${reference}`,
+    message: `${copy.message}${because}${advice}${reference}`,
   };
 }
 

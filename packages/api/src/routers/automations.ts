@@ -873,6 +873,64 @@ function actionLabelFor(
   return `${verb} ${withArticle(noun)}`;
 }
 
+/**
+ * SENTENCE-CONFIGURABLE output actions — the subset of OUTPUT_NODE_TYPES that the
+ * rule-SENTENCE create modal can actually configure, because OutputSettings
+ * (synap-app packages/features/workflows/src/flow/node-settings/OutputSettings.tsx)
+ * renders a config branch for exactly these five. The advanced graph-only output
+ * types (facet_attach/facet_update/facet_detach/relation_create/session_update/
+ * set_state) have NO sentence config UI, so offering them in the sentence menu
+ * yields a rule the sentence path can't fill (and whose required config the
+ * "activate" gate can't check) — they stay available on the node/canvas flow
+ * editor, which is out of scope here.
+ *
+ * Each entry's `params` are the REQUIRED (+ key optional) config fields. They are
+ * read from the EXECUTOR ground truth (packages/jobs/src/workers/steps/output.ts —
+ * the fields it reads / THROWS on) and aligned to the exact key OutputSettings
+ * WRITES, so for every field: param.key === OutputSettings write key === executor
+ * read key. A mismatch on any of the three reintroduces the seam-fork this repo
+ * has been bitten by, which is why every key below is cross-checked against all
+ * three sources (cited per field).
+ */
+const SENTENCE_ACTION_PARAMS: Record<
+  string,
+  NonNullable<ActionOption["params"]>
+> = {
+  // title: executor reads config.title (output.ts:145); profileSlug defaults to
+  // "note" (output.ts:144) and the branch does NOT throw — but activating with no
+  // title spawns blank entities, a real honesty problem, so title is REQUIRED here.
+  // OutputSettings writes config.title (OutputSettings.tsx:109) and config.profileSlug (:98).
+  entity_create: [
+    { key: "title", label: "Title", required: true },
+    { key: "profileSlug", label: "Profile type", required: false },
+  ],
+  // entityId: executor reads config.entityId (output.ts:414) and THROWS if absent
+  // (output.ts:432-433). OutputSettings writes config.entityId (OutputSettings.tsx:126).
+  entity_update: [{ key: "entityId", label: "Entity ID", required: true }],
+  // url: executor reads config.url (output.ts:543) and THROWS if absent
+  // (output.ts:547). OutputSettings writes config.url (OutputSettings.tsx:155).
+  webhook: [{ key: "url", label: "URL", required: true }],
+  // content: executor reads config.content (output.ts:678) and THROWS if absent
+  // (output.ts:681); the destination is optional. OutputSettings writes
+  // config.content (OutputSettings.tsx:182) and config.channelId (:170).
+  channel_message: [
+    { key: "content", label: "Message", required: true },
+    { key: "channelId", label: "Channel", required: false },
+  ],
+  // message: executor reads config.body ?? config.message (output.ts:596) and
+  // SKIPS if both absent (output.ts:607-613). OutputSettings writes config.message
+  // (OutputSettings.tsx:82) — so `message` is the key aligned across all three
+  // (the sentence UI never writes `body`).
+  notification: [{ key: "message", label: "Message", required: true }],
+};
+
+// The sentence menu is exactly the OUTPUT_NODE_TYPES that have a config branch
+// above — derived (not a second literal list) so it can never drift from the
+// params map, and typed as the OUTPUT_NODE_TYPES member so actionLabelFor accepts it.
+const SENTENCE_OUTPUT_TYPES = OUTPUT_NODE_TYPES.filter(
+  (t): t is (typeof OUTPUT_NODE_TYPES)[number] => t in SENTENCE_ACTION_PARAMS
+);
+
 /** PAST-mood label for a WHEN trigger event pattern, via the vocabulary door. */
 function eventLabelFor(pattern: string, subject: string): string {
   const parts = pattern.split(".");
@@ -1435,11 +1493,22 @@ export const automationsRouter = router({
       // run), so surfacing one here would be a menu entry that silently never
       // fires. Wire it (keyed off scope.capabilityId) once the sentence path can
       // emit a capability node; until then the menu stays honest.
-      const actions: ActionOption[] = OUTPUT_NODE_TYPES.map((outputType) => ({
-        key: outputType,
-        label: actionLabelFor(outputType),
-        outputType,
-      }));
+      // Only the SENTENCE-CONFIGURABLE outputs are offered here: those with a
+      // config branch in OutputSettings (see SENTENCE_ACTION_PARAMS). The advanced
+      // graph-only types (facet_*/relation_create/session_update/set_state) have
+      // no sentence config UI, so surfacing them would let a user activate a rule
+      // whose required config the "activate" gate cannot check — they remain
+      // available on the node/canvas flow editor. `params` carries each output's
+      // required (+ key optional) fields so the create modal's required-config
+      // check is real, not vacuous.
+      const actions: ActionOption[] = SENTENCE_OUTPUT_TYPES.map(
+        (outputType) => ({
+          key: outputType,
+          label: actionLabelFor(outputType),
+          outputType,
+          params: SENTENCE_ACTION_PARAMS[outputType],
+        })
+      );
 
       return { actions: actionOptionSchema.array().parse(actions) };
     }),

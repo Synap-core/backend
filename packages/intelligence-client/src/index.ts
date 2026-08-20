@@ -3,6 +3,7 @@ export {
   AgentHubClient,
   intelligenceHubClient,
   IntelligenceAuthError,
+  isRetryableHubError,
 } from "./intelligence-hub-client.js";
 
 export type {

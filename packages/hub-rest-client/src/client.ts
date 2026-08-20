@@ -132,23 +132,47 @@ function formatHubErrorMessage(
   return msg;
 }
 
-function unwrapList<T>(result: T[] | HubListResponse<T>): T[] {
-  return Array.isArray(result)
-    ? result
-    : ((result as HubListResponse<T>).data ?? []);
-}
-
-/** Hub GET /workspaces returns `{ workspaces }`, not `{ data }`. */
-function unwrapWorkspacesResponse(
-  result:
-    HubWorkspace[] | HubListResponse<HubWorkspace> | HubWorkspacesListResponse
-): HubWorkspace[] {
+/**
+ * Unwrap a Hub list body into a plain array.
+ *
+ * The Hub does NOT have one list envelope. Endpoints return, variously:
+ *   - a bare array                       (`/views`, `/commands`, `/entities`, …)
+ *   - `{ data: [...] }`                  (the nominal envelope)
+ *   - `{ <resourceName>: [...] }`        (`/relations`, `/proposals`,
+ *                                         `/property-defs`, `/automations`)
+ *   - `{ items: [...], lens }`           (`/subscriptions`)
+ *
+ * `envelopeKey` names the resource-specific key for that last family. Passing
+ * it is NOT optional decoration: without it a `{ relations: [...] }` body falls
+ * through to `[]`, and the caller sees an empty list instead of an error. That
+ * is exactly what happened — FIVE methods here returned `[]` unconditionally,
+ * on every call, for as long as they have existed:
+ * `getRelations`, `listProposals`, `listPropertyDefs`, `listAutomations`,
+ * `listSubscriptions`. All five verified live against a pod.
+ *
+ * The `{ workspaces }` case had already been found ONCE and fixed with a
+ * bespoke `unwrapWorkspacesResponse` helper, whose comment noted the exact
+ * defect — and it was never generalized, so the same bug kept shipping. That
+ * helper is now folded in here: one door, no second table to drift.
+ *
+ * If you add a list method, CHECK THE BODY the route actually returns (curl it)
+ * rather than assuming `{ data }`. A silent `[]` is indistinguishable from an
+ * empty result at every call site.
+ */
+function unwrapList<T>(
+  // `object` (not `Record<string, unknown>`) so declared interfaces without an
+  // index signature — e.g. `HubWorkspacesListResponse` — are accepted too.
+  result: T[] | HubListResponse<T> | object,
+  envelopeKey?: string
+): T[] {
   if (Array.isArray(result)) return result;
-  if (result && typeof result === "object" && "workspaces" in result) {
-    const w = (result as HubWorkspacesListResponse).workspaces;
-    return Array.isArray(w) ? w : [];
+  if (!result || typeof result !== "object") return [];
+  const obj = result as Record<string, unknown>;
+  if (Array.isArray(obj.data)) return obj.data as T[];
+  if (envelopeKey && Array.isArray(obj[envelopeKey])) {
+    return obj[envelopeKey] as T[];
   }
-  return unwrapList(result as HubWorkspace[] | HubListResponse<HubWorkspace>);
+  return [];
 }
 
 function unwrapSingle<T>(result: T | HubSingleResponse<T>): T {
@@ -309,7 +333,7 @@ export class HubRestClient {
     const result = await this.request<
       HubWorkspace[] | HubListResponse<HubWorkspace> | HubWorkspacesListResponse
     >("GET", "/api/hub/workspaces");
-    return unwrapWorkspacesResponse(result);
+    return unwrapList<HubWorkspace>(result, "workspaces");
   }
 
   async provisionAgentWorkspace(input: {
@@ -506,7 +530,7 @@ export class HubRestClient {
     const result = await this.request<
       HubRelation[] | HubListResponse<HubRelation>
     >("GET", `/api/hub/relations?${params}`);
-    return unwrapList(result);
+    return unwrapList(result, "relations");
   }
 
   /**
@@ -671,7 +695,7 @@ export class HubRestClient {
     const result = await this.request<
       HubPropertyDef[] | HubListResponse<HubPropertyDef>
     >("GET", `/api/hub/property-defs?${params}`);
-    return unwrapList(result);
+    return unwrapList(result, "propertyDefs");
   }
 
   /**
@@ -938,6 +962,8 @@ export class HubRestClient {
      */
     scope?: "workspace" | "all";
     limit?: number;
+    /** Rows to skip. Pair with `listProposalsPage` to page a queue. */
+    offset?: number;
   }): Promise<HubProposal[]> {
     const userId = await this.resolveUserId();
     const params = new URLSearchParams({ userId });
@@ -950,10 +976,85 @@ export class HubRestClient {
     }
     if (options?.status) params.set("status", options.status);
     if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.offset !== undefined) {
+      params.set("offset", String(options.offset));
+    }
     const result = await this.request<
       HubProposal[] | HubListResponse<HubProposal>
     >("GET", `/api/hub/proposals?${params}`);
-    return unwrapList(result);
+    return unwrapList(result, "proposals");
+  }
+
+  /**
+   * Same query as `listProposals`, but returns the SERVER'S pagination envelope
+   * instead of just the rows.
+   *
+   * `listProposals` is typed to an array, so `total` / `hasMore` are dropped on
+   * the floor — and a caller that cannot see `total` has to infer the size of
+   * the queue from the size of the page. That inference is the exact bug this
+   * pagination work exists to kill: three surfaces rendered 322 / 100 / 50 for
+   * one question, two of them page sizes wearing a total's clothes.
+   *
+   * This is an ADDITIVE sibling rather than a changed return type on
+   * `listProposals`, on purpose: the Intelligence Service overrides
+   * `listProposals` with a deliberately different signature, and widening the
+   * base method's return would break that override silently.
+   *
+   * `total` is the size of the whole matching queue; `proposals.length` is the
+   * size of this page. They are different numbers — do not render the second
+   * where you mean the first.
+   */
+  async listProposalsPage(options?: {
+    status?:
+      | "pending"
+      | "approved"
+      | "rejected"
+      | "auto_approved"
+      | "reverted"
+      | "approval_failed"
+      | "withdrawn"
+      | "all";
+    workspaceId?: string;
+    scope?: "workspace" | "all";
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    proposals: HubProposal[];
+    total: number;
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  }> {
+    const userId = await this.resolveUserId();
+    const params = new URLSearchParams({ userId });
+    if (options?.scope !== "all") {
+      const wsId = options?.workspaceId ?? this.workspaceId;
+      if (wsId) params.set("workspaceId", wsId);
+    }
+    if (options?.status) params.set("status", options.status);
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    if (options?.offset !== undefined) {
+      params.set("offset", String(options.offset));
+    }
+    const result = await this.request<Record<string, unknown>>(
+      "GET",
+      `/api/hub/proposals?${params}`
+    );
+    const proposals = unwrapList<HubProposal>(result, "proposals");
+    // A pod that predates the pagination fix returns `{ proposals }` with no
+    // envelope fields. Degrade HONESTLY rather than inventing a total: report
+    // the page length and `hasMore:false`, which is what the old wire actually
+    // supports — never a fabricated count.
+    const total =
+      typeof result.total === "number" ? result.total : proposals.length;
+    return {
+      proposals,
+      total,
+      limit: typeof result.limit === "number" ? result.limit : proposals.length,
+      offset: typeof result.offset === "number" ? result.offset : 0,
+      hasMore: result.hasMore === true,
+    };
   }
 
   /**
@@ -1456,7 +1557,7 @@ export class HubRestClient {
     const result = await this.request<
       HubAutomation[] | HubListResponse<HubAutomation>
     >("GET", `/api/hub/automations?${params}`);
-    return unwrapList(result);
+    return unwrapList(result, "automations");
   }
 
   /**
@@ -1586,7 +1687,7 @@ export class HubRestClient {
     const result = await this.request<
       HubReactionEvent[] | HubListResponse<HubReactionEvent>
     >("GET", `/api/hub/subscriptions${qs}`);
-    return unwrapList(result);
+    return unwrapList(result, "items");
   }
 
   /**

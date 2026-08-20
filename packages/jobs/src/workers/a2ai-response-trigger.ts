@@ -25,7 +25,10 @@
 import { randomUUID } from "node:crypto";
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
-import { requestHeadlessChatText } from "@synap/intelligence-client";
+import {
+  requestHeadlessChatText,
+  isRetryableHubError,
+} from "@synap/intelligence-client";
 import {
   and,
   chatTurns,
@@ -325,7 +328,19 @@ export async function handleA2AIResponseTrigger(
       status: "failed",
       error: detail,
     });
-    throw err; // let pg-boss retry
+    // Only rethrow when a retry could actually change the outcome. pg-boss
+    // retries a thrown job (`retryLimit: 3`), so rethrowing a 4xx turned one
+    // impossible request into FOUR — four identical rejections, four log
+    // entries, and a user error delayed by the whole chain. The turn is
+    // already recorded as failed above, so returning here loses nothing.
+    if (!isRetryableHubError(err)) {
+      logger.warn(
+        { channelId, userMessageId, turnId: turn.id, detail },
+        "A2AI hub call refused the request — not retrying (a replay cannot succeed)"
+      );
+      return;
+    }
+    throw err; // transient — let pg-boss retry
   }
 
   if (!fullContent) {

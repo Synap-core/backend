@@ -35,6 +35,17 @@ import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 
+/** Page size when the caller names none — matches the historical tRPC default,
+ *  so an existing caller that sends no `limit` sees byte-identical membership. */
+export const DEFAULT_PAGE_SIZE = 50;
+/** Upper bound on one page. MUST match the `.max()` on the procedure's `limit`
+ *  (`hub-protocol/proposals.ts`) — a smaller value here silently caps callers
+ *  below the documented maximum, a larger one turns into a zod 500. */
+export const MAX_PAGE_SIZE = 200;
+/** Deepest reachable offset. `offset` is a native SQL OFFSET on the procedure,
+ *  so this is a sanity bound on absurd input, not a cost ceiling. */
+export const MAX_OFFSET = 100_000;
+
 export function registerProposalsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /proposals* routes ──────────────────────────────
   registerOpenApi(app, {
@@ -62,6 +73,14 @@ export function registerProposalsRoutes(app: HubHono): void {
             z.array(WireProposalSchema),
             z.array(ProposalBasicSchema),
           ]),
+          limit: z.number().describe("Effective page size after clamping."),
+          offset: z.number().describe("Effective offset after clamping."),
+          hasMore: z
+            .boolean()
+            .describe(
+              "True when at least one row exists past this page — the signal " +
+                "that distinguishes a full page from the end of the queue."
+            ),
         }),
       },
       400: {
@@ -278,6 +297,41 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // ── Pagination ───────────────────────────────────────────────────────────
+    // `limit` and `offset` used to be accepted by the router and then DROPPED
+    // on the floor: the call below never forwarded them, so the tRPC default of
+    // 50 applied to every request and proposals 51+ were unreachable through the
+    // Hub API and the CLI. A user working the queue cleared 50 and believed the
+    // queue was empty.
+    //
+    // Both are parsed here and clamped to the SAME ceiling the procedure
+    // enforces, so the two can never disagree. The edge clamp exists to turn an
+    // over-large request into a capped page rather than a zod 500 — it is not a
+    // second, stricter bound. Narrowing it here would silently cap a caller
+    // below the documented maximum.
+    const parsePositiveInt = (raw: string | undefined): number | null => {
+      if (raw === undefined || raw === "") return null;
+      if (!/^\d+$/.test(raw)) return NaN;
+      return Number(raw);
+    };
+    const rawLimit = parsePositiveInt(c.req.query("limit"));
+    const rawOffset = parsePositiveInt(c.req.query("offset"));
+    for (const [name, value] of [
+      ["limit", rawLimit],
+      ["offset", rawOffset],
+    ] as const) {
+      if (value !== null && Number.isNaN(value)) {
+        return c.json(
+          { error: `Invalid ${name}: expected a non-negative integer` },
+          400
+        );
+      }
+    }
+    const limit = Math.min(
+      Math.max(rawLimit ?? DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE
+    );
+    const offset = Math.min(rawOffset ?? 0, MAX_OFFSET);
     try {
       // No workspaceId = the USER-WIDE queue (the user floor), NOT an arbitrary
       // first workspace. listProposals always applies userVisibleWhere; a
@@ -287,20 +341,39 @@ export function registerProposalsRoutes(app: HubHono): void {
       const caller = await getCaller(c, {
         workspaceId: workspaceId ?? undefined,
       });
+      // `limit`/`offset` go to the procedure NATIVELY (SQL LIMIT/OFFSET) and the
+      // procedure returns a real `total` — a COUNT under the same predicate it
+      // filtered on, so the visibility rule is never forked into a second place.
+      //
+      // An earlier pass here over-fetched `offset + limit + 1` rows and sliced
+      // in-process, because the procedure had no offset input. It has one now.
+      // Keeping the over-fetch would mean paying for up to MAX_OFFSET extra rows
+      // per request AND discarding the `total` the procedure already computed —
+      // which is exactly the number the UI is missing: three surfaces render a
+      // page size as if it were the count of what needs you.
       const result = await caller.proposals.listProposals({
         userId,
         ...(workspaceId ? { workspaceId } : {}),
         status,
         ...(sessionId ? { sessionId } : {}),
+        limit,
+        offset,
       });
+      const page = result.proposals as unknown as Record<string, unknown>[];
+      const total = result.total;
+      const hasMore = result.hasMore;
+      // `limit`/`offset`/`hasMore` are ADDITIVE siblings of `proposals`; every
+      // existing consumer reads `.proposals` and is unaffected.
       if (rawView === "basic") {
         return c.json({
-          proposals: (
-            result.proposals as unknown as Record<string, unknown>[]
-          ).map(toProposalBasic),
+          proposals: page.map(toProposalBasic),
+          limit,
+          offset,
+          total,
+          hasMore,
         });
       }
-      return c.json(result);
+      return c.json({ proposals: page, limit, offset, total, hasMore });
     } catch (err) {
       logger.error({ err }, "listProposals failed");
       return c.json(

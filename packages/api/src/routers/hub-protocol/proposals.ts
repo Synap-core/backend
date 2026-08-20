@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { db, proposals, eq, and, desc } from "@synap/database";
+import { db, proposals, eq, and, desc, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
@@ -50,7 +50,15 @@ export const proposalsRouter = router({
         // tRPC `proposals.list` sessionId filter, so external/BYOA agents can ask
         // "what has the AI proposed inside this session" without a tRPC client.
         sessionId: z.string().uuid().optional(),
-        limit: z.number().default(50),
+        // Bounded, and paired with `offset` + a `total` in the result. Before
+        // this, `limit` had no ceiling, there was no `offset` at all, and the
+        // response carried no count — so every caller rendered `items.length`
+        // as if it were the number of pending decisions. Three surfaces showed
+        // three different totals for one question (322 / 100 / 50), two of them
+        // page sizes wearing a total's clothes, and rows past the first page
+        // were unreachable through this door entirely.
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().min(0).default(0),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -76,13 +84,32 @@ export const proposalsRouter = router({
         );
       }
 
-      const items = await db.query.proposals.findMany({
-        where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: desc(proposals.createdAt),
-        limit: input.limit,
-      });
+      const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-      return { proposals: items };
+      // COUNT the matching set, not the returned page. `total` is what a caller
+      // needs to say "12 of 322"; without it the only honest thing a UI can
+      // render is "at least N", and none of them did.
+      const [items, counted] = await Promise.all([
+        db.query.proposals.findMany({
+          where,
+          orderBy: desc(proposals.createdAt),
+          limit: input.limit,
+          offset: input.offset,
+        }),
+        db.select({ total: count() }).from(proposals).where(where),
+      ]);
+
+      const total = Number(counted[0]?.total ?? 0);
+
+      return {
+        proposals: items,
+        total,
+        limit: input.limit,
+        offset: input.offset,
+        // Derived here rather than left to each caller to recompute from three
+        // fields — the recomputation is exactly where an off-by-one lands.
+        hasMore: input.offset + items.length < total,
+      };
     }),
 
   /**

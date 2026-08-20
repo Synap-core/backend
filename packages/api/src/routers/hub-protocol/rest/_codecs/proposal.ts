@@ -203,6 +203,23 @@ export const ListProposalsQuerySchema = z
           "scalars and a capped `summary`, with NO `data` — use it to " +
           "enumerate a queue without paying for every payload."
       ),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe("Page size. Defaults to 50, clamped to 200."),
+    offset: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "Rows to skip (native SQL OFFSET). Defaults to 0. The response carries " +
+          "`total` and `hasMore`, so a caller never has to infer the size of " +
+          "the queue from the size of the page."
+      ),
   })
   .openapi("ListProposalsQuery");
 
