@@ -21,6 +21,7 @@ export { registerDocumentsRoutes } from "./documents.js";
 export { registerProposalsRoutes } from "./proposals.js";
 export { registerSkillsRoutes } from "./skills.js";
 export { registerSkillsCrudRoutes } from "./skills-crud.js";
+export { registerRulesRoutes } from "./rules.js";
 export { registerBriefsRoutes } from "./briefs.js";
 export { registerToolsRoutes } from "./tools.js";
 export { registerCapabilitiesRoutes } from "./capabilities.js";

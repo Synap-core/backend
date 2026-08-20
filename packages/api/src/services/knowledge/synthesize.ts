@@ -44,7 +44,31 @@ export interface SynthesisResult {
   failureClass?: AiFailureClass;
 }
 
-const MAX_CONTEXT_CHARS = 40_000;
+/**
+ * HARD CONTRACT WITH THE CALLEE — do NOT raise without raising the IS first.
+ *
+ * The IS synthesis route validates its body with
+ * `context: z.string().max(20000)`
+ * (`intelligence-hub/src/routes/knowledge-answer.ts`). This constant sat at
+ * 40_000, so any context between 20k and 40k chars was built, sent, and
+ * rejected by zod with HTTP 400 — which `classifyAiFailure` (correctly) reports
+ * as `bad_request` / `retryable: false`. The user saw "synthesis_unavailable"
+ * with a non-retryable failure and no answer at all.
+ *
+ * Measured on the team pod, `ask "list our clients"` (34 sources) built a
+ * 29,670-char context → guaranteed 400. The same pod's `ask "what is PeerPesa"`
+ * (8 sources) synthesized fine. Nothing but size differed.
+ *
+ * The two constants are a cross-repo pair with no shared source of truth, so
+ * this one is pinned to the SMALLER of the two and the overflow is reported to
+ * the model (see `TRUNCATION_NOTICE`) instead of dropped in silence.
+ */
+const MAX_CONTEXT_CHARS = 20_000;
+/**
+ * Chars reserved inside the budget so the truncation notice itself can always
+ * be appended — a notice that got budget-dropped would defeat its own purpose.
+ */
+const TRUNCATION_NOTICE_RESERVE = 200;
 /** Per-snippet-field slice — generous enough to carry a real body/verdict/
  * conclusion instead of the old 300-char stub, while MAX_CONTEXT_CHARS still
  * bounds the total context sent to the IS. */
@@ -121,10 +145,26 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
   const sources: SynthesisSource[] = [];
   const contextParts: string[] = [];
   let contextLen = 0;
+  /**
+   * Retrieved items that did NOT fit the budget. Counted, not ignored: the
+   * structured lane deliberately over-fetches (`ask.ts` forces `limit >= 200`
+   * because "enumeration promises the COMPLETE set"), so a budget cut can
+   * silently turn a complete list into a partial one. Reporting the shortfall
+   * lets the model say "showing N of M" instead of presenting a truncated list
+   * as exhaustive — the same honesty rule the failure path already follows.
+   */
+  let omitted = 0;
+  const budget = MAX_CONTEXT_CHARS - TRUNCATION_NOTICE_RESERVE;
+  let totalItems = 0;
 
   for (const block of answers) {
     if (block.status !== "ok") continue;
     for (const item of block.items) {
+      totalItems++;
+      if (contextLen >= budget) {
+        omitted++;
+        continue;
+      }
       const rec = item as Record<string, unknown>;
       const id = typeof rec.id === "string" ? rec.id : "";
       const title =
@@ -190,11 +230,24 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
         if (snippetBits.length >= 8) break;
       }
       const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
-      if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
+      if (contextLen + entry.length > budget) {
+        omitted++;
+        continue;
+      }
       contextParts.push(entry);
       contextLen += entry.length + 1;
     }
-    if (contextLen >= MAX_CONTEXT_CHARS) break;
+  }
+
+  // NOTE the loops no longer `break` on the budget: they keep scanning so
+  // `omitted` is a true count of what was left out, not "we stopped here".
+  // `sources` is unaffected by the budget — the caller still lists every match.
+  if (omitted > 0) {
+    contextParts.push(
+      `- [NOTICE] CONTEXT TRUNCATED: ${omitted} of ${totalItems} retrieved ` +
+        `items did not fit and are NOT shown above. Any list you produce from ` +
+        `this context is PARTIAL — say so explicitly and give the counts.`
+    );
   }
 
   return { sources, context: contextParts.join("\n") };

@@ -964,6 +964,15 @@ export function registerConnectorsRoutes(app: HubHono): void {
                    * gate so an agent run routes to `propose`, not auto-run.
                    */
                   agentUserId: z.string().optional(),
+                  /**
+                   * Optional focus-session id of the agent turn that produced
+                   * this call. Threaded straight through to
+                   * `triggerProviderAction` → the capability gate, so a
+                   * `capability/run` proposal lands with `proposals.session_id`
+                   * set (migration 0119's column) instead of NULL. Absent =
+                   * non-session agent activity; the column stays NULL.
+                   */
+                  sessionId: z.string().optional(),
                 })
                 .openapi("ToolExecuteRequest"),
             },
@@ -1032,6 +1041,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         headers,
         workspaceId,
         agentUserId,
+        sessionId,
       } = c.req.valid("json");
 
       // Verify a supplied agentUserId is a real agent user before trusting it.
@@ -1062,6 +1072,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
           headers,
           workspaceId,
           agentUserId: resolvedAgentUserId,
+          // Session provenance resolution mirrors the canonical proposals door
+          // (`proposals.ts`): explicit body field > the VERIFIED `X-Session-Id`
+          // resolved once by the hub middleware > null. Null is the correct
+          // value for non-session agent activity — nothing is synthesised.
+          sessionId: sessionId ?? c.get("sessionId") ?? null,
         });
 
         // Gate routed to a reviewable proposal instead of executing.

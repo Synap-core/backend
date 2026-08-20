@@ -240,7 +240,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   { door: "artifact/create", reason: SEVERED },
   { door: "artifact/setState", reason: SEVERED },
   { door: "bento/arrange", reason: SEVERED },
-  { door: "capability/attach", reason: SEVERED },
   { door: "capability/create", reason: SEVERED },
   { door: "cell/update", reason: SEVERED },
   { door: "context/link", reason: SEVERED },
@@ -254,8 +253,34 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
       "coverage would score every future `document/*` door as wired, so this is " +
       "acknowledged instead of widening the detector.",
   },
-  { door: "entity/capture.graph", reason: SEVERED },
-  { door: "entity/import.graph", reason: SEVERED },
+  {
+    door: "entity/capture.graph",
+    reason:
+      "JUSTIFIED KEEP, not a severance — apply-approval.ts branch B0 applies it. " +
+      "That branch keys on the PAYLOAD SHAPE (`isCompositeProposalData`: an " +
+      "`operations[]` array of create_entity/create_relation/... ops) and runs " +
+      "at line ~495, long before `dispatchProposalApproval` at ~1553, so it " +
+      "materializes the whole graph through the real entity/relation callers. " +
+      "A proposalType-keyed scan structurally cannot see a payload predicate — " +
+      "the same blind spot already acknowledged for `document/user_edit`. " +
+      "Teaching the parser to treat a payload predicate as coverage would score " +
+      "every future composite-shaped door as wired, so this is acknowledged " +
+      "instead of widening the detector.",
+  },
+  {
+    door: "entity/import.graph",
+    reason:
+      "JUSTIFIED KEEP, not a severance — apply-approval.ts branch B0 applies it. " +
+      "That branch keys on the PAYLOAD SHAPE (`isCompositeProposalData`: an " +
+      "`operations[]` array of create_entity/create_relation/... ops) and runs " +
+      "at line ~495, long before `dispatchProposalApproval` at ~1553, so it " +
+      "materializes the whole graph through the real entity/relation callers. " +
+      "A proposalType-keyed scan structurally cannot see a payload predicate — " +
+      "the same blind spot already acknowledged for `document/user_edit`. " +
+      "Teaching the parser to treat a payload predicate as coverage would score " +
+      "every future composite-shaped door as wired, so this is acknowledged " +
+      "instead of widening the detector.",
+  },
   { door: "focus_session/grant_capability", reason: SEVERED },
   { door: "playbook_run/update", reason: SEVERED },
   { door: "proactive/recap", reason: SEVERED },
@@ -267,9 +292,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   { door: "vault/vault.request", reason: SEVERED },
   { door: "whiteboard/place", reason: SEVERED },
   { door: "widget/register", reason: SEVERED },
-  { door: "workspaceMember/add", reason: SEVERED },
-  { door: "workspaceMember/remove", reason: SEVERED },
-  { door: "workspaceMember/updateRole", reason: SEVERED },
 ];
 
 /**
@@ -277,7 +299,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
  * LOWERED. Raising it is how this contract would quietly erode, so any PR that
  * raises it is doing the thing this file exists to prevent.
  */
-const GAP_CEILING = 27;
+const GAP_CEILING = 23;
 
 // ── Load the sources ─────────────────────────────────────────────────────────
 

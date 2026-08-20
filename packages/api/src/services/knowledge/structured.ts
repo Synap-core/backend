@@ -96,9 +96,28 @@ export async function structuredLookup(
         facetLens: true,
       });
 
+  // `workspaceId ?? undefined` — the SAME coercion the entity floor does two
+  // statements up (`workspaceLens: workspaceId ?? undefined`), and it must
+  // match or the two halves of this query disagree about what "no lens" means.
+  //
+  // `ask`'s hub route defaults an unpinned query to `workspaceId = null`
+  // meaning "pod-wide query / no lens" (rest/knowledge.ts:717). But
+  // `resolveFacetVisibilityScope` reads `null` as its OWN narrower thing —
+  // "the caller's pod-wide roles ONLY" — which compiles to
+  // `isNull(entity_facets.workspace_id)`. So a pod-wide `ask` floored the
+  // ENTITY half at "everything the caller can see" while flooring the FACET
+  // half at "facets attached with no workspace", and every role-profile facet
+  // attached under a real workspace vanished.
+  //
+  // Live proof on the team pod: pod-wide "list our companies" (a KIND slug →
+  // `entities.type`, no facet predicate) returned 200 rows, while "list our
+  // clients" (a ROLE slug → facet EXISTS) returned 0 — over a pod holding 20
+  // `client` facets. Only the facet branch differed. `undefined` gives the
+  // identity-wide floor (`allowedWorkspaceIds`), which is what a lens-less
+  // enumeration means and what the entity half already used.
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     userId,
-    projectId ? undefined : workspaceId
+    projectId ? undefined : (workspaceId ?? undefined)
   );
 
   // Fail closed on a slug this pod has no profile for — the enumerative lane

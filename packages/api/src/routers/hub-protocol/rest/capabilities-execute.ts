@@ -65,6 +65,12 @@ const ExecuteCapabilityRequestSchema = z
      * origin-trust classification (the dormant default). Mirrors every other Hub
      * REST write door, which accepts `sourceMessageId` in the body. */
     sourceMessageId: z.string().optional(),
+    /** The focus session this run belongs to, when the agent is working inside
+     * one. Persisted as the `proposals.session_id` COLUMN (not into `data`) so a
+     * reviewer can see which operation an agent action is part of instead of
+     * judging it in isolation. Absent → null; non-session agent activity is
+     * legitimate and stays ungrouped. */
+    sessionId: z.string().optional(),
   })
   .refine((b) => !!b.verbId || !!b.skillId, {
     message: "Either verbId or skillId is required",
@@ -149,6 +155,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       workspaceId,
       connectionSelector,
       sourceMessageId,
+      sessionId,
     } = body;
 
     const acting = await resolveActingContext(c, { workspaceId });
@@ -171,6 +178,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // #4 provenance: the triggering message id → resolved to the acting
         // channel inside executeCapability so an untrusted-origin run proposes.
         sourceMessageId: sourceMessageId ?? null,
+        sessionId: sessionId ?? null,
       });
 
       switch (outcome.kind) {

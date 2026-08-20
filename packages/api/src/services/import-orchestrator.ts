@@ -1215,12 +1215,17 @@ export class ImportOrchestrator {
               op.title || "Untitled",
               newRef
             );
-        } else {
+        } else if (op.op === "create_relation") {
           operations.push({
             ...op,
             sourceRef: `${prefix}${op.sourceRef}`,
             targetRef: `${prefix}${op.targetRef}`,
           });
+        } else {
+          // Rule Loop ops (create_skill / create_automation / create_rule) are
+          // never produced by the import path; carry them through untouched
+          // rather than mangling a ref shape they do not have.
+          operations.push(op);
         }
       }
 

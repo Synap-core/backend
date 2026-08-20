@@ -1238,6 +1238,11 @@ export const GATE_WRITE_DOORS = {
   "relation/delete": "gate",
   "relation/update": "gate",
   "relation_def/create": "gate",
+  // The RULE object (NS1 Rule Loop). A rule is persisted as a `skills` row
+  // (see packages/api/src/services/rules), but it is its OWN governed door:
+  // approving one materializes the rule row AND its lineage edges to the
+  // fact/behaviour halves, which `skill/create` knows nothing about.
+  "rule/create": "gate",
   "role/create": "gate",
   "role/delete": "gate",
   "role/update": "gate",

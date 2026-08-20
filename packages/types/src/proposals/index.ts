@@ -386,8 +386,75 @@ export interface CompositeCreateRelationOp {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * ── Rule Loop ops (NS1) ─────────────────────────────────────────────────────
+ *
+ * A user-stated RULE resolves into concrete objects filed as ONE governed
+ * composite proposal. Its two halves are existing first-class objects:
+ *   FACT      — an instruction `skills` row (what the agent should KNOW).
+ *   BEHAVIOUR — an `automations` row (what RUNS when the world changes).
+ * `create_rule` is the memory that links them (see the rule service in
+ * packages/api/src/services/rules).
+ *
+ * All three use the SAME ref→realId mechanism the entity/relation ops use:
+ * `ref` registers a handle, and `factRef`/`behaviourRefs` resolve through it
+ * via `resolveCompositeRef` (an op ref in THIS batch, or a real UUID).
+ */
+export interface CompositeCreateSkillOp {
+  op: "create_skill";
+  /** Stable handle for this skill within the proposal (e.g. "fact1"). */
+  ref: string;
+  name: string;
+  /** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
+  body: string;
+  scope: "pod" | "user" | "workspace";
+  /** NULL/absent = applies to every agent type. */
+  agentTypes?: string[] | null;
+}
+
+export interface CompositeCreateAutomationOp {
+  op: "create_automation";
+  /** Stable handle for this automation within the proposal (e.g. "beh1"). */
+  ref: string;
+  name: string;
+  description?: string;
+  triggerType: "event" | "cron" | "webhook" | "manual";
+  /**
+   * Validated by the EXISTING flow validator
+   * (services/automations/validate-flow.ts) before persisting. Typed `unknown`
+   * because the validator — not this type — owns the shape.
+   */
+  flowDefinition: unknown;
+  /**
+   * ALWAYS FORCED FALSE at materialization. Approve-first means an automation
+   * never arrives already running; the field exists so an authoring agent can
+   * state its intent (and so the materializer can REPORT that it overrode it),
+   * never so the automation can be born live.
+   */
+  enabled?: boolean;
+}
+
+export interface CompositeCreateRuleOp {
+  op: "create_rule";
+  /** Stable handle for this rule within the proposal. */
+  ref: string;
+  /** The user's stated rule, in their words. */
+  intent: string;
+  scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
+  /** Ref (or real id) of the FACT half — a `create_skill` op in this batch. */
+  factRef?: string;
+  /** Refs (or real ids) of the BEHAVIOUR halves — `create_automation` ops. */
+  behaviourRefs?: string[];
+  /** Whether behaviour this rule produces should auto-apply or propose. */
+  trust?: "propose" | "auto";
+}
+
 export type CompositeProposalOperation =
-  CompositeCreateEntityOp | CompositeCreateRelationOp;
+  | CompositeCreateEntityOp
+  | CompositeCreateRelationOp
+  | CompositeCreateSkillOp
+  | CompositeCreateAutomationOp
+  | CompositeCreateRuleOp;
 
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
@@ -632,14 +699,21 @@ export function isCompositeProposalData(
   if (data == null || typeof data !== "object") return false;
   const ops = (data as CompositeProposalData).operations;
   if (!Array.isArray(ops) || ops.length === 0) return false;
+  // Every op must carry a recognized discriminant. The FIRST op no longer has
+  // to be a create_entity: a Rule Loop proposal (skill + automation + rule)
+  // legitimately creates no entity at all. The recognized-discriminant check
+  // below is what keeps a random payload from falling into this branch.
   const first = ops[0] as CompositeProposalOperation | undefined;
-  if (!first || first.op !== "create_entity") return false;
-  // Every op must carry a recognized discriminant.
+  if (!first || typeof first !== "object") return false;
   return ops.every(
     (o) =>
       o != null &&
       typeof o === "object" &&
-      (o.op === "create_entity" || o.op === "create_relation")
+      (o.op === "create_entity" ||
+        o.op === "create_relation" ||
+        o.op === "create_skill" ||
+        o.op === "create_automation" ||
+        o.op === "create_rule")
   );
 }
 

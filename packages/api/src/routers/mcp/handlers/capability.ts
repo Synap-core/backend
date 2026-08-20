@@ -380,6 +380,7 @@ export const capabilityHandlers: McpHandlerMap = {
       apiKeyScopes,
       agentUserId,
       requestedWorkspaceId,
+      sessionId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // Confined workspace (service-key clamp) — not the raw model-supplied id.
@@ -400,6 +401,10 @@ export const capabilityHandlers: McpHandlerMap = {
       // is governed by grant/propose — consistent with every other write proc
       // in this adapter. Omitting it laundered agent writes into operator runs.
       agentUserId: agentUserId ?? null,
+      // Ambient focus session of this MCP turn (X-Session-Id → ctx.sessionId,
+      // the SAME source synap_create_verb reads). Lands on the resulting
+      // `capability.run` proposal's session_id column; null outside a session.
+      sessionId: sessionId ?? null,
     });
     // Surface the same discriminated outcome the hub door returns, in a shape
     // the agent reads naturally (proposed is NOT an error). A `kind:"error"`

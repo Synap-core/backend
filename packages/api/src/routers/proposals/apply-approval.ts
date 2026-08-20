@@ -687,6 +687,118 @@ export async function applyProposalApproval(args: {
       // `entityCaller` doubles as facetCaller for op.facets after materialize.
       {
         facetCaller: entityCaller,
+        // ── Rule Loop callers (NS1) ─────────────────────────────────────
+        // Each routes to its EXISTING canonical door, re-run as the APPROVER.
+        // Lazily imported so this module keeps no static edge to the skills /
+        // automations routers (both of which import back into proposals).
+        skillCaller: {
+          create: async (skillOp) => {
+            const { insertSkillGoverned } = await import("../skills.js");
+            // Typed at the call site (NOT `as never` / `as any`): a blanket
+            // cast here would silently defeat any future tightening of the
+            // skill insert contract — a defect this repo has shipped.
+            const created = await insertSkillGoverned({
+              userId,
+              workspaceId:
+                skillOp.scope === "workspace" ? compositeCtx.workspaceId : null,
+              kind: "instruction",
+              scope: skillOp.scope,
+              name: skillOp.name,
+              body: skillOp.body,
+              agentTypes: skillOp.agentTypes ?? null,
+              // The operator is the authority — no agentUserId, so the
+              // re-entrant gate auto-grants instead of re-proposing.
+              agentUserId: undefined,
+              auditSource: "rule_loop_approval",
+            });
+            if (created.status !== "installed") {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `create_skill did not apply (${created.status})`,
+              });
+            }
+            return { id: created.skill.id };
+          },
+        },
+        automationCaller: {
+          create: async (automationOp) => {
+            const { materializeApprovedAutomation } =
+              await import("../automations.js");
+            // `materializeApprovedAutomation` runs
+            // `prepareAutomationForMaterialization` — the ONE existing flow
+            // validator (services/automations/validate-flow.ts). An invalid
+            // flowDefinition throws here and the op is skipped by the
+            // materializer, never persisted.
+            //
+            // It also forces `status: "draft"` unconditionally, which IS the
+            // "materialize DISABLED" guarantee: `automations.status` (not an
+            // `enabled` column) is what decides whether a trigger can fire.
+            const flow = automationOp.flowDefinition as {
+              nodes?: unknown;
+              edges?: unknown;
+              triggerConfig?: Record<string, unknown>;
+            } | null;
+            const stableId = randomUUID();
+            const created = await materializeApprovedAutomation({
+              database: db,
+              definition: {
+                workspaceId: compositeCtx.workspaceId,
+                name: automationOp.name,
+                ...(automationOp.description
+                  ? { description: automationOp.description }
+                  : {}),
+                triggerType: automationOp.triggerType,
+                // CONTRACT GAP (reported, not papered over): the pinned
+                // `create_automation` op carries no `triggerConfig`. We read
+                // one off the flowDefinition when the producer embedded it,
+                // otherwise an event automation lands with an empty trigger
+                // config and cannot match — visible, not silent, because the
+                // automation is DRAFT either way.
+                triggerConfig: flow?.triggerConfig ?? {},
+                flowDefinition: automationOp.flowDefinition as {
+                  nodes: Array<Record<string, unknown>>;
+                  edges: Array<Record<string, unknown>>;
+                },
+                status: "draft",
+              },
+              agentUserId: userId,
+              stableId,
+            });
+            if (!created) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "create_automation did not materialize",
+              });
+            }
+            return { id: created };
+          },
+        },
+        ruleCaller: {
+          create: async (ruleOp) => {
+            const { createRuleGoverned } =
+              await import("../../services/rules/create.js");
+            const created = await createRuleGoverned({
+              userId,
+              agentUserId: undefined,
+              workspaceId: compositeCtx.workspaceId,
+              intent: ruleOp.intent,
+              scope: ruleOp.scope,
+              ...(ruleOp.trust ? { trust: ruleOp.trust } : {}),
+              ...(ruleOp.factSkillId
+                ? { factSkillId: ruleOp.factSkillId }
+                : {}),
+              automationIds: ruleOp.automationIds,
+              auditSource: "rule_loop_approval",
+            });
+            if (created.status !== "created") {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `create_rule did not apply (${created.status})`,
+              });
+            }
+            return { id: created.ruleId };
+          },
+        },
         // Graph submitters persist their origin in proposal data. Reuse it
         // on approval so source attribution survives the proposal boundary.
         ...(typeof payload.source === "string"

@@ -20,7 +20,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  captured: { where: undefined as any },
+  captured: {
+    where: undefined as any,
+    /** Args the facet-scope door was called with (see the pod-wide suite). */
+    facetScopeArgs: undefined as
+      { userId: string; workspaceId: unknown } | undefined,
+  },
   /** Rows `profileSlugRows` resolves to — emptied to test the fail-closed door. */
   slugRows: [{ id: "kind-1", profileKind: "kind" as const }] as Array<{
     id: string;
@@ -89,7 +94,10 @@ vi.mock("../../../utils/project-scope.js", () => ({
 }));
 
 vi.mock("../../../utils/workspace-membership.js", () => ({
-  resolveFacetVisibilityScope: async () => ({ _tag: "facetScope" }),
+  resolveFacetVisibilityScope: async (userId: string, workspaceId: unknown) => {
+    h.captured.facetScopeArgs = { userId, workspaceId };
+    return { _tag: "facetScope" };
+  },
 }));
 
 import { structuredLookup } from "../structured.js";
@@ -100,6 +108,7 @@ const hasTag = (tag: string) => conditionsOf().some((c) => c?._tag === tag);
 
 beforeEach(() => {
   h.captured.where = undefined;
+  h.captured.facetScopeArgs = undefined;
   h.slugRows = [{ id: "kind-1", profileKind: "kind" }];
 });
 
@@ -217,5 +226,66 @@ describe("structuredLookup — status filter only for task", () => {
       limit: 10,
     });
     expect(hasTag("sql")).toBe(false);
+  });
+});
+
+/**
+ * Pod-wide role enumeration — the "no lens" vocabulary fork.
+ *
+ * Live defect (team pod, 2026-08-19): `synap ask "list our clients"` pod-wide
+ * routed to `structured` and returned ZERO rows over a pod holding 20 `client`
+ * role-facets, so synthesis honestly reported "none are explicitly labeled as
+ * clients". Pod-wide "list our companies" (a KIND slug, no facet predicate)
+ * returned 200 rows on the same call shape — only the facet branch differed.
+ *
+ * Cause: `ask`'s hub route defaults an unpinned query to `workspaceId = null`
+ * meaning "no lens". `resolveFacetVisibilityScope` reads `null` as its own
+ * NARROWER thing — "pod-wide roles only" → `isNull(entity_facets.workspace_id)`
+ * — so every facet attached under a real workspace was excluded, while the
+ * ENTITY half (which already coerced `workspaceId ?? undefined`) stayed
+ * identity-wide. The two halves of one query disagreed about "no lens".
+ */
+describe("structuredLookup — pod-wide (null lens) role enumeration", () => {
+  it("forwards a null lens to the facet door as undefined, not null", async () => {
+    await structuredLookup({
+      profileSlug: "client",
+      userId: USER,
+      workspaceId: null,
+      limit: 200,
+    });
+    // `undefined` = identity-wide floor (allowedWorkspaceIds). `null` would
+    // mean pod-wide-facets-only and drop every workspace-attached role.
+    expect(h.captured.facetScopeArgs?.workspaceId).toBeUndefined();
+    expect(h.captured.facetScopeArgs?.userId).toBe(USER);
+  });
+
+  it("treats an omitted lens the same as an explicit null lens", async () => {
+    await structuredLookup({
+      profileSlug: "client",
+      userId: USER,
+      limit: 200,
+    });
+    expect(h.captured.facetScopeArgs?.workspaceId).toBeUndefined();
+  });
+
+  it("still passes a concrete lens through untouched", async () => {
+    await structuredLookup({
+      profileSlug: "client",
+      userId: USER,
+      workspaceId: "ws-1",
+      limit: 200,
+    });
+    expect(h.captured.facetScopeArgs?.workspaceId).toBe("ws-1");
+  });
+
+  it("suppresses the workspace lens on the project lane (unchanged)", async () => {
+    await structuredLookup({
+      profileSlug: "client",
+      userId: USER,
+      workspaceId: "ws-1",
+      projectId: "proj-1",
+      limit: 200,
+    });
+    expect(h.captured.facetScopeArgs?.workspaceId).toBeUndefined();
   });
 });

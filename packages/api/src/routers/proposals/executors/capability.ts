@@ -27,7 +27,11 @@ import {
   registerProposalExecutor,
   attachFailureMeta,
 } from "../execution-registry.js";
-import { reportApproved, dispatchExternalOnce } from "./shared.js";
+import {
+  assertApplied,
+  reportApproved,
+  dispatchExternalOnce,
+} from "./shared.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -663,6 +667,119 @@ export function registerCapabilityExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability / attach ──────────────────────────────────────────────────
+  // `capabilityContainers.addPart` (routers/capability-containers.ts:377) —
+  // attaching a tool/skill/playbook/automation into a Capability container.
+  //
+  // WHY IT PROPOSES: `capability.attach` is not in DEFAULT_AUTO_APPROVE, so an
+  // agent asking to join a part to a bundle falls to rung 9. The router's own
+  // comment names that path explicitly ("the 'agent asks to join' proposal
+  // path"), so this door is reached BY DESIGN, not by accident.
+  //
+  // WHAT APPROVAL USED TO DO: nothing. `capability` is not a materializer
+  // subject, so the `*​/*` catch-all's honesty gate threw NOT_IMPLEMENTED and
+  // the reviewer could never apply the attach at all.
+  //
+  // PAYLOAD (checked at the gate, not assumed): it stores the COMPLETE
+  // argument set — `{ capabilityId, partType, partId }` — which is exactly the
+  // required half of `addPart`'s input. Nothing needed is missing.
+  //
+  // ⚠️ targetId IS NOT THE SUBJECT. The gate stamps no `data.id`, so
+  // `permission-check.ts` falls back to `randomUUID()` for `targetId`. Reading
+  // it would attach nothing, or the wrong thing. Deliberately not read.
+  //
+  // WHY REPLAY THE ROUTER rather than insert the `links` row here: `addPart`
+  // is not one insert. Before it writes it re-runs (a) the POD-SCOPE FLOOR —
+  // a pod-wide container (`workspaceId === null`) not created by the caller
+  // requires `requirePodAdmin` — and (b) the PART VISIBILITY check
+  // (`userVisibleWhere(partTable.workspaceId, …)`). Both are authorization,
+  // and both must be evaluated for the APPROVER at APPROVAL TIME: the approver
+  // is a different principal than the requester, and the part may have been
+  // deleted or re-scoped since the proposal was filed. A hand-written insert
+  // here would step past both floors — the exact widening this codebase's
+  // `governance-gate-is-not-an-authz-floor` lesson records.
+  //
+  // IDENTITY: acts as the APPROVER, deliberately. `agentUserId` is NOT
+  // forwarded: passing it would re-enter the agent branch of
+  // `checkPermissionOrPropose` and file a SECOND proposal, which
+  // `assertApplied` would then convert into a FORBIDDEN. The approver is the
+  // authority here; the proposal row still records the real author.
+  registerProposalExecutor({
+    key: "capability/attach",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const capabilityId =
+        (inner.capabilityId as string | undefined) ??
+        (raw.capabilityId as string | undefined);
+      const partId =
+        (inner.partId as string | undefined) ??
+        (raw.partId as string | undefined);
+      const partType =
+        (inner.partType as string | undefined) ??
+        (raw.partType as string | undefined);
+      if (!capabilityId || !partId || !partType) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Capability attach proposal is missing the capability, part type " +
+            "or part id — it cannot be applied.",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch. (The insert
+      // is itself `onConflictDoNothing` on the link's unique tuple, so a re-run
+      // is harmless — the guard keeps the shape identical to every sibling.)
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { capabilityContainersRouter } =
+        await import("../../capability-containers.js");
+      const capCaller = capabilityContainersRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(proposal.workspaceId ? { workspaceId: proposal.workspaceId } : {}),
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await capCaller.addPart({
+          capabilityId,
+          partId,
+          partType: partType as Parameters<
+            typeof capCaller.addPart
+          >[0]["partType"],
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

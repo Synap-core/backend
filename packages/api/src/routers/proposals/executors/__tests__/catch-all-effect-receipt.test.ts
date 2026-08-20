@@ -228,12 +228,21 @@ const CATCH_ALL_SRC = join(
 
 /**
  * Subjects the mirror deliberately EXCLUDES even though the worker has a case
- * label for them — because the case body writes nothing. Counting labels
- * instead of bodies is how a severed door scores as wired.
+ * label for them — because the case body writes nothing for ANY action.
+ * Counting labels instead of bodies is how a severed door scores as wired.
  */
 const EXCLUDED_CASE_LABELS = new Set(["whiteboard"]);
 
-describe("(4) MATERIALIZED_SUBJECT_TYPES mirrors the materializer worker", () => {
+/**
+ * `case` labels that fall through to ANOTHER label's body, mapped to the label
+ * that carries the `materializeX` call. The worker writes
+ * `case "facet": case "entity_facet":` — one body, two accepted spellings — so
+ * the mirror must carry both pair spellings or an event emitted under the
+ * second label would be mis-thrown as unmaterialized.
+ */
+const FALLTHROUGH_ALIASES: Record<string, string> = { entity_facet: "facet" };
+
+describe("(4) MATERIALIZED_DOORS mirrors the materializer worker's ACTION GUARDS", () => {
   const materializerSrc = readFileSync(MATERIALIZER, "utf8");
   const catchAllSrc = readFileSync(CATCH_ALL_SRC, "utf8");
 
@@ -242,14 +251,65 @@ describe("(4) MATERIALIZED_SUBJECT_TYPES mirrors the materializer worker", () =>
     [...materializerSrc.matchAll(/^\s{6}case "(\w+)":/gm)].map((m) => m[1])
   );
 
+  /**
+   * The pairs the worker will ACTUALLY write, parsed from each handler's own
+   * action guard — the whole point of this file's granularity change.
+   *
+   * BOTH guard shapes must be read, and the negative one is the load-bearing
+   * case: `if (action !== "create") { warn; return; }` is an ALLOWLIST OF ONE,
+   * and it is invisible to a naive `action === ` scan. This is the same parser
+   * `__tripwires__/governed-writes-have-approval-half.test.ts` uses, with the
+   * same self-guard below, deliberately — two files, one reading of the truth.
+   */
+  function workerPairs(): Set<string> {
+    const subjectToFn = new Map<string, string>();
+    for (const m of materializerSrc.matchAll(
+      /case "(\w+)":([\s\S]*?)break;/g
+    )) {
+      const fn = m[2].match(/await (materialize\w+)\(/);
+      if (fn) subjectToFn.set(m[1], fn[1]);
+    }
+    for (const [alias, target] of Object.entries(FALLTHROUGH_ALIASES)) {
+      const fn = subjectToFn.get(target);
+      if (fn) subjectToFn.set(alias, fn);
+    }
+
+    const pairs = new Set<string>();
+    for (const [subject, fn] of subjectToFn) {
+      const at = materializerSrc.indexOf(`async function ${fn}(`);
+      if (at < 0) continue;
+      const after = materializerSrc.slice(at + 10).search(/\nasync function /);
+      const body = materializerSrc.slice(
+        at,
+        after < 0 ? materializerSrc.length : at + 10 + after
+      );
+      const negative = [...body.matchAll(/action !== "([\w.]+)"/g)].map(
+        (x) => x[1]
+      );
+      const positive = [...body.matchAll(/action === "([\w.]+)"/g)].map(
+        (x) => x[1]
+      );
+      // A negative guard is an allowlist and OVERRIDES the positive matches
+      // inside it. An UNGUARDED handler is counted as covering nothing —
+      // guessing "all actions" would manufacture exactly the coverage this
+      // file exists to disprove.
+      for (const action of negative.length ? negative : positive) {
+        pairs.add(`${subject}/${action}`);
+      }
+    }
+    return pairs;
+  }
+
+  const WORKER_PAIRS = workerPairs();
+
   /** The mirror, read out of the catch-all's own source. */
   const mirrored = new Set(
     [
       ...(
         catchAllSrc.match(
-          /const MATERIALIZED_SUBJECT_TYPES = new Set\(\[([\s\S]*?)\]\)/
+          /const MATERIALIZED_DOORS = new Set\(\[([\s\S]*?)\]\)/
         )?.[1] ?? ""
-      ).matchAll(/"(\w+)"/g),
+      ).matchAll(/"([\w]+\/[\w.]+)"/g),
     ].map((m) => m[1])
   );
 
@@ -258,27 +318,42 @@ describe("(4) MATERIALIZED_SUBJECT_TYPES mirrors the materializer worker", () =>
   it("both corpora parsed (self-guard)", () => {
     expect(materializerSrc.length).toBeGreaterThan(10_000);
     expect(caseLabels.size).toBeGreaterThanOrEqual(10);
-    expect(mirrored.size).toBeGreaterThanOrEqual(10);
+    expect(mirrored.size).toBeGreaterThanOrEqual(15);
+    expect(WORKER_PAIRS.size).toBeGreaterThanOrEqual(15);
     expect(caseLabels.has("entity")).toBe(true);
   });
 
-  it("every mirrored subject really has a case in the worker", () => {
-    for (const subject of mirrored) {
+  // RULE 3 (self-guard) — the NEGATIVE guard form is the one that severs doors.
+  // If this reads red the parser has silently reverted to scoring whole
+  // subjects as materialized, and every verdict below is worthless.
+  it("SELF-GUARD: the parser reads NEGATIVE action guards", () => {
+    // `materializeWorkspace` guards `if (action !== "join") return;`.
+    expect(WORKER_PAIRS.has("workspace/join")).toBe(true);
+    expect(
+      WORKER_PAIRS.has("workspace/update"),
+      "The parser thinks a `case` label covers every action. It does not."
+    ).toBe(false);
+  });
+
+  it("every mirrored pair is really written by the worker", () => {
+    for (const pair of mirrored) {
       expect(
-        caseLabels.has(subject),
-        `MATERIALIZED_SUBJECT_TYPES lists "${subject}" but materializer.ts has no case for it`
+        WORKER_PAIRS.has(pair),
+        `MATERIALIZED_DOORS lists "${pair}" but the materializer's handler ` +
+          `does not write for that action — the catch-all would report a ` +
+          `\`deferred\` handoff to a writer that returns immediately.`
       ).toBe(true);
     }
   });
 
-  it("every worker case is mirrored, or explicitly excluded with a reason", () => {
-    for (const label of caseLabels) {
-      if (EXCLUDED_CASE_LABELS.has(label)) continue;
+  it("every pair the worker writes is mirrored, or its subject is excluded", () => {
+    for (const pair of WORKER_PAIRS) {
+      const subject = pair.slice(0, pair.indexOf("/"));
+      if (EXCLUDED_CASE_LABELS.has(subject)) continue;
       expect(
-        mirrored.has(label),
-        `materializer.ts gained case "${label}" — mirror it in MATERIALIZED_SUBJECT_TYPES ` +
-          `(or add it to EXCLUDED_CASE_LABELS here with a reason). Until then the ` +
-          `catch-all throws for that subject.`
+        mirrored.has(pair),
+        `materializer.ts writes "${pair}" but MATERIALIZED_DOORS does not list ` +
+          `it — the catch-all will THROW for that door instead of deferring.`
       ).toBe(true);
     }
   });
@@ -291,9 +366,43 @@ describe("(4) MATERIALIZED_SUBJECT_TYPES mirrors the materializer worker", () =>
       ).toBe(true);
     }
   });
+
+  // ── THE REGRESSION THIS GRANULARITY CHANGE EXISTS FOR ────────────────────
+  // Both are DECLARED governed doors whose SUBJECT the worker handles and
+  // whose ACTION it does not. Under the old subject-keyed set they returned
+  // `{ applied: "deferred" }` and the write never happened.
+  it.each([
+    ["cell", "update"],
+    ["relation", "update"],
+  ])(
+    "%s/%s is NOT treated as materialized (it was, and silently no-op'd)",
+    (subject, action) => {
+      expect(caseLabels.has(subject)).toBe(true); // the subject IS dispatched…
+      expect(WORKER_PAIRS.has(`${subject}/${action}`)).toBe(false); // …the action is not
+      expect(mirrored.has(`${subject}/${action}`)).toBe(false);
+    }
+  );
 });
 
-// ── (5) THE ALLOWLIST IS DISCIPLINED, NOT A DUMPING GROUND ───────────────────
+describe("(4b) the two false-deferred doors now throw for real", () => {
+  it.each([
+    ["cell", "update"],
+    ["relation", "update"],
+  ])("%s/%s throws instead of returning a deferred receipt", async (t, a) => {
+    await expect(catchAll().execute(args(t, a))).rejects.toThrow(
+      /no approval half/i
+    );
+    expect(dbUpdates).toHaveLength(0);
+    expect(auditCalls).toHaveLength(0);
+  });
+
+  it("but the create side of the SAME subjects still defers (anti-vacuity)", async () => {
+    const cell = await catchAll().execute(args("cell", "create"));
+    expect(cell.effect?.applied).toBe("deferred");
+    const relation = await catchAll().execute(args("relation", "create"));
+    expect(relation.effect?.applied).toBe("deferred");
+  });
+});
 
 describe("(5) ACKNOWLEDGED_NOOP_KEYS", () => {
   const catchAllSrc = readFileSync(CATCH_ALL_SRC, "utf8");

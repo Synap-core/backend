@@ -423,6 +423,135 @@ export const skillsRouter = router({
       return { skill };
     }),
 
+  // ── Rule Loop (NS1) ────────────────────────────────────────────────────
+  // A RULE is a `skills` row (`category: "rule"`) whose `metadata.rule` blob
+  // carries intent / scope / trust / lineage / divergence snapshot — see
+  // `services/rules/index.ts` for why this is a composition and not a table.
+  // These three doors live on the skills router for the same reason.
+
+  /**
+   * Governed rule create. Returns `{ status: "proposed" }` for a caller the
+   * gate routes to review — that is the normal agent path, not an error; the
+   * `rule/create` approve executor applies it.
+   */
+  createRule: protectedProcedure
+    .input(
+      z.object({
+        intent: z.string().min(1),
+        scope: z.object({
+          kind: z.enum(["pod", "workspace", "user"]),
+          workspaceId: z.string().uuid().optional(),
+        }),
+        trust: z.enum(["propose", "auto"]).optional(),
+        factSkillId: z.string().uuid().optional(),
+        automationIds: z.array(z.string().uuid()).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { createRuleGoverned } =
+        await import("../services/rules/create.js");
+      return createRuleGoverned({
+        userId,
+        ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+        workspaceId: input.scope.workspaceId ?? ctx.workspaceId ?? null,
+        intent: input.intent,
+        scope: input.scope,
+        ...(input.trust ? { trust: input.trust } : {}),
+        ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
+        automationIds: input.automationIds,
+        auditSource: "rules.createRule",
+      });
+    }),
+
+  /**
+   * List rules under the caller's visibility floor — the SAME
+   * `visibleSkillsWhere` predicate every other skills read uses (a rule is a
+   * skill row, so it can never be more visible than a skill).
+   */
+  listRules: protectedProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { readRuleMetadata, RULE_CATEGORY } =
+        await import("../services/rules/index.js");
+      const rows = await ctx.db.query.skills.findMany({
+        where: and(
+          eq(skills.category, RULE_CATEGORY),
+          visibleSkillsWhere(userId, input?.workspaceId)
+        ),
+        orderBy: [desc(skills.createdAt)],
+        limit: input?.limit || 50,
+        offset: input?.offset || 0,
+      });
+      return {
+        rules: rows.flatMap((row: typeof skills.$inferSelect) => {
+          const rule = readRuleMetadata(row.metadata);
+          return rule
+            ? [
+                {
+                  id: row.id,
+                  name: row.name,
+                  approved: row.approved,
+                  workspaceId: row.workspaceId,
+                  createdAt: row.createdAt,
+                  rule,
+                },
+              ]
+            : [];
+        }),
+      };
+    }),
+
+  /**
+   * Get one rule, WITH divergence detection: for each behaviour the rule
+   * produced, compare the flow hash the rule recorded at creation against the
+   * automation's flow hash today. Detection only — nothing reconciles.
+   */
+  getRule: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { readRuleMetadata, detectRuleDivergence, RULE_CATEGORY } =
+        await import("../services/rules/index.js");
+      const row = await ctx.db.query.skills.findFirst({
+        where: and(
+          eq(skills.id, input.id),
+          eq(skills.category, RULE_CATEGORY),
+          visibleSkillsWhere(userId, input.workspaceId)
+        ),
+      });
+      const rule = row ? readRuleMetadata(row.metadata) : null;
+      if (!row || !rule) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
+      }
+      const divergence = await detectRuleDivergence(rule);
+      return {
+        rule: {
+          id: row.id,
+          name: row.name,
+          approved: row.approved,
+          workspaceId: row.workspaceId,
+          createdAt: row.createdAt,
+          rule,
+        },
+        divergence,
+      };
+    }),
+
   /**
    * Create a new skill
    */

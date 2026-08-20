@@ -1028,4 +1028,260 @@ export function registerWorkspaceExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── workspaceMember / add · remove · updateRole ───────────────────────────
+  // The THREE membership doors. They live in this file for the same reason
+  // `role/delete` and `apiKey/delete` do: there is no `executors/workspace-
+  // member.ts`, and every one of them replays through `workspacesRouter`.
+  //
+  // WHY THEY PROPOSE: `workspaceMember.*` is not in DEFAULT_AUTO_APPROVE, so
+  // any agent-authored membership change falls to rung 9 (propose). `remove`
+  // additionally sits on the rung-2.5 DESTRUCTIVE floor, which no rung can
+  // widen — so an agent removing a member ALWAYS proposes, by construction.
+  //
+  // WHAT APPROVAL USED TO DO: nothing that lands. `workspaceMember` is not in
+  // the materializer's subject switch, so the `*​/*` catch-all's honesty gate
+  // throws NOT_IMPLEMENTED today (it is one of the two doors that gate's own
+  // test names). That throw is HONEST but it is still an unusable door: the
+  // reviewer can never apply the change. These executors make it apply.
+  //
+  // PAYLOAD (verified at the gate, not assumed — this is the `gate stored only
+  // {id}` check): all three gates in `routers/workspaces/invites.ts` store the
+  // FULL argument set —
+  //   add        (invites.ts:77)  → { workspaceId, targetUserId, role }
+  //   remove     (invites.ts:219) → { workspaceId, targetUserId }
+  //   updateRole (invites.ts:339) → { workspaceId, targetUserId, newRole }
+  // — which is exactly the input each procedure takes. Nothing is lost.
+  //
+  // ⚠️ targetId IS NOT THE SUBJECT. None of these gates stamps `data.id`, and
+  // `permission-check.ts` falls back to `randomUUID()` for `targetId` when
+  // `data.id` is absent. So `proposal.targetId` is a RANDOM uuid here, and
+  // reading it as the member id — the reflex every sibling executor above
+  // uses — would act on nobody. Deliberately NOT read (same shape as
+  // `playbook/run`, whose gate keys on `playbookId`).
+  //
+  // SECOND EFFECTS: each direct path is more than its membership row —
+  // `add` also runs the team-person bridge and provisions the agent thread,
+  // group channel and proactive feed; `remove` detaches the team-member facet;
+  // `updateRole` fans pod-admin promotion out into every pod-visible workspace.
+  // None of that is reconstructable from the payload (it is re-derived at
+  // execution time), which is precisely why all three replay through the
+  // ROUTER door rather than writing `workspace_members` here.
+  //
+  // IDENTITY: acts as the APPROVER. The procedures re-enter
+  // `checkPermissionOrPropose`, whose RBAC reads the CALLER's workspace role,
+  // so replaying as the approver keeps the authorization floor intact; an
+  // approver who lacks the right role gets a loud re-propose that
+  // `assertApplied` converts into FORBIDDEN, never a silent no-op.
+
+  /**
+   * Shared prologue for the three membership doors: read the payload (nested
+   * + flat, never `targetId`), short-circuit an already-approved row, resolve
+   * the approver's membership, and build the caller.
+   *
+   * ONE helper rather than three copies, because the three bodies differ only
+   * in the procedure they call — and a copy is how `playbook/archive` and
+   * `playbook/update` drifted apart inside one file.
+   */
+  async function prepareMembershipReplay(
+    proposal: { data: unknown; workspaceId: string | null },
+    userId: string,
+    proposalId: string
+  ): Promise<
+    | { done: true }
+    | {
+        done: false;
+        workspaceId: string;
+        targetUserId: string;
+        inner: Record<string, unknown>;
+        raw: Record<string, unknown>;
+        caller: ReturnType<
+          (typeof import("../../workspaces.js"))["workspacesRouter"]["createCaller"]
+        >;
+      }
+  > {
+    const raw = (proposal.data ?? {}) as Record<string, unknown>;
+    const inner = (raw.data ?? {}) as Record<string, unknown>;
+    const targetUserId =
+      (inner.targetUserId as string | undefined) ??
+      (raw.targetUserId as string | undefined);
+    const workspaceId =
+      (inner.workspaceId as string | undefined) ??
+      (raw.workspaceId as string | undefined) ??
+      proposal.workspaceId ??
+      undefined;
+    if (!targetUserId || !workspaceId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Membership proposal is missing the target user or workspace — " +
+          "it cannot be applied.",
+      });
+    }
+
+    // Idempotency: approve is not status-guarded before dispatch.
+    const [alreadyDone] = await db
+      .select({ status: proposals.status })
+      .from(proposals)
+      .where(eq(proposals.id, proposalId));
+    if (alreadyDone?.status === ProposalStatus.APPROVED) {
+      return { done: true };
+    }
+
+    const membership = await getWorkspaceMembership(db, workspaceId, userId);
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No workspace access",
+      });
+    }
+
+    const { workspacesRouter } = await import("../../workspaces.js");
+    const caller = workspacesRouter.createCaller({
+      db,
+      authenticated: true as const,
+      userId,
+      workspaceId,
+      workspaceRole: membership.role,
+    } as unknown as Context);
+
+    return { done: false, workspaceId, targetUserId, inner, raw, caller };
+  }
+
+  /** Shared epilogue — the status flip + the telemetry pair, verbatim. */
+  async function closeMembershipApproval(
+    proposal: { workspaceId: string | null; targetType: string },
+    userId: string,
+    input: { proposalId: string },
+    deps: Parameters<
+      Parameters<typeof registerProposalExecutor>[0]["execute"]
+    >[0]["deps"],
+    proposalRow: Parameters<
+      Parameters<typeof registerProposalExecutor>[0]["execute"]
+    >[0]["proposal"]
+  ): Promise<void> {
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportApproved(deps, proposalRow, input.proposalId);
+
+    deps.emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+  }
+
+  registerProposalExecutor({
+    key: "workspaceMember/add",
+    async execute({ proposal, userId, input, deps }) {
+      const prep = await prepareMembershipReplay(
+        proposal,
+        userId,
+        input.proposalId
+      );
+      if (prep.done) return { success: true, alreadyApproved: true };
+
+      // `role` is the gate's own field name for add (contrast `newRole` on
+      // updateRole). No default: a missing role would silently seat the member
+      // at whatever the schema picks, which is an authorization decision the
+      // reviewer never made.
+      const role =
+        (prep.inner.role as string | undefined) ??
+        (prep.raw.role as string | undefined);
+      if (role !== "owner" && role !== "editor" && role !== "viewer") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Membership proposal does not name a valid role — refusing to " +
+            "seat a member at an unreviewed access level.",
+        });
+      }
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await prep.caller.addMember({
+          workspaceId: prep.workspaceId,
+          userId: prep.targetUserId,
+          role,
+        })
+      );
+
+      await closeMembershipApproval(proposal, userId, input, deps, proposal);
+      return { success: true };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "workspaceMember/remove",
+    async execute({ proposal, userId, input, deps }) {
+      const prep = await prepareMembershipReplay(
+        proposal,
+        userId,
+        input.proposalId
+      );
+      if (prep.done) return { success: true, alreadyApproved: true };
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await prep.caller.removeMember({
+          workspaceId: prep.workspaceId,
+          userId: prep.targetUserId,
+        })
+      );
+
+      await closeMembershipApproval(proposal, userId, input, deps, proposal);
+      return { success: true };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "workspaceMember/updateRole",
+    async execute({ proposal, userId, input, deps }) {
+      const prep = await prepareMembershipReplay(
+        proposal,
+        userId,
+        input.proposalId
+      );
+      if (prep.done) return { success: true, alreadyApproved: true };
+
+      // ⚠️ The gate stores `newRole`, NOT `role` — a different field name from
+      // `workspaceMember/add` in the SAME domain. Reading `role` here would
+      // read undefined and refuse every proposal.
+      //
+      // The procedure's own enum is admin|editor|viewer (it does NOT accept
+      // "owner"), so the guard mirrors that exactly rather than the add door's.
+      const newRole =
+        (prep.inner.newRole as string | undefined) ??
+        (prep.raw.newRole as string | undefined);
+      if (newRole !== "admin" && newRole !== "editor" && newRole !== "viewer") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Membership proposal does not name a valid role — refusing to " +
+            "change a member's access level to an unreviewed value.",
+        });
+      }
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await prep.caller.updateMemberRole({
+          workspaceId: prep.workspaceId,
+          userId: prep.targetUserId,
+          role: newRole,
+        })
+      );
+
+      await closeMembershipApproval(proposal, userId, input, deps, proposal);
+      return { success: true };
+    },
+  });
 }

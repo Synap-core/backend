@@ -10,34 +10,72 @@ import {
 import { reportApproved } from "./shared.js";
 
 /**
- * subjectTypes the MATERIALIZER WORKER (`packages/jobs/src/workers/materializer.ts`)
- * actually has a `case` for — i.e. the subjects for which emitting `.validated`
- * hands the write to a real writer instead of falling to that switch's
- * `default:` (which logs "Unknown subject type for materialization" and RETURNS).
+ * `${subjectType}/${action}` pairs the MATERIALIZER WORKER
+ * (`packages/jobs/src/workers/materializer.ts`) actually WRITES — i.e. the doors
+ * for which emitting `.validated` hands the write to a real writer instead of
+ * dying somewhere between that switch's `default:` and a `materializeX`
+ * function's own early return.
  *
- * This is a MIRROR of a set that lives in another package, so it is kept honest
- * by a tripwire that parses the worker's switch and fails on drift
- * (`executors/__tests__/catch-all-effect-receipt.test.ts`). Do not edit this list
- * without running that test.
+ * ⚠️ KEYED ON THE PAIR, NOT THE SUBJECT. This used to be a set of bare
+ * subjectTypes, and that granularity was WRONG — measurably, on two live doors.
+ * The worker's `switch (subjectType)` dispatches on the subject, but EVERY
+ * handler then re-guards on the ACTION and returns when it does not match:
  *
- * `whiteboard` is DELIBERATELY EXCLUDED even though the worker has a `case` for
- * it: that case logs "not yet supported" and returns, so it is a no-op writer.
- * Counting a case label instead of its body is exactly how a severed door scores
- * as wired.
+ *     materializeCell     — `if (action !== "create") { warn; return; }`
+ *     materializeRelation — `if (action !== "create") { warn; return; }`
+ *     materializeLink / materializeProjectMember / materializeRelationDef — same
+ *     materializeCommand  — `if (action !== "execute") { warn; return; }`
+ *     materializeWorkspace— `if (action !== "join")    { warn; return; }`
+ *
+ * So `cell` and `relation` were listed as materialized subjects, and the two
+ * governed doors `cell/update` and `relation/update` therefore SAILED PAST the
+ * honesty gate below and returned `{ applied: "deferred", validatedEventId }` —
+ * a receipt for a handoff to a writer that immediately logs a warning and
+ * returns. Approval read GREEN, the config was never written, and this was
+ * strictly WORSE than the throw every other severed door gets, because the
+ * receipt actively asserted a handoff had happened.
+ *
+ * That is the same "counting a case LABEL instead of its BODY" mistake the
+ * `whiteboard` exclusion note already recorded — one level finer. A subject-
+ * level allowlist structurally CANNOT express "cell/create yes, cell/update
+ * no", so the granularity itself was the defect, not the list contents.
+ *
+ * This is a MIRROR of behaviour that lives in another package, kept honest by
+ * `executors/__tests__/catch-all-effect-receipt.test.ts`, which parses the
+ * worker's ACTION GUARDS (not its case labels) and fails on drift. Do not edit
+ * this list without running that test.
+ *
+ * `whiteboard` has a `case` in the worker but no pair here: that case logs "not
+ * yet supported" and returns, so it is a no-op writer end to end. It reaches
+ * the gate as an ACKNOWLEDGED_NOOP_KEY instead.
  */
-const MATERIALIZED_SUBJECT_TYPES = new Set([
-  "entity",
-  "facet",
-  "entity_facet",
-  "profile",
-  "relation_def",
-  "view",
-  "command",
-  "cell",
-  "workspace",
-  "link",
-  "relation",
-  "projectMember",
+const MATERIALIZED_DOORS = new Set([
+  "entity/create",
+  "entity/update",
+  "entity/delete",
+  // `case "facet":` and `case "entity_facet":` fall through to one body, so
+  // both spellings reach `materializeEntityFacet`. Only the `facet/*` spelling
+  // is a declared governed door today; `entity_facet/*` is mirrored so an
+  // event emitted under the worker's other accepted label is not mis-thrown.
+  "facet/attach",
+  "facet/update",
+  "facet/detach",
+  "entity_facet/attach",
+  "entity_facet/update",
+  "entity_facet/detach",
+  "profile/create",
+  "profile/update",
+  "profile/delete",
+  "relation_def/create",
+  "view/create",
+  "view/update",
+  "view/delete",
+  "command/execute",
+  "cell/create",
+  "workspace/join",
+  "link/create",
+  "relation/create",
+  "projectMember/create",
 ]);
 
 /**
@@ -141,18 +179,25 @@ export function registerCatchAllExecutor(): void {
         // + rejectionReason by `dispatchProposalApproval`'s `onApprovalFailed`,
         // is retryable, and surfaces the missing approval half the FIRST time
         // anyone approves instead of never.
+        // The pair the WORKER will dispatch on — subject picks the `case`,
+        // action picks whether that case's body does anything at all. Checking
+        // the subject alone is what let `cell/update` and `relation/update`
+        // report a handoff to a writer that returns immediately.
+        const materializerDoorKey = `${targetType}/${changeType}`;
         if (
           acknowledgedNoopReason === undefined &&
-          !MATERIALIZED_SUBJECT_TYPES.has(targetType)
+          !MATERIALIZED_DOORS.has(materializerDoorKey)
         ) {
           throw new TRPCError({
             code: "NOT_IMPLEMENTED",
             message:
               `Approval for '${doorKey}' has no approval half: no executor is ` +
-              `registered for it, and the materializer has no writer for subject ` +
-              `'${targetType}'. Approving would have changed nothing. Register an ` +
-              `executor for this door (or, if writing nothing is correct, add it ` +
-              `to ACKNOWLEDGED_NOOP_KEYS with a reason).`,
+              `registered for it, and the materializer has no writer for ` +
+              `'${materializerDoorKey}' (a case for subject '${targetType}' is ` +
+              `not enough — every handler re-guards on the action). Approving ` +
+              `would have changed nothing. Register an executor for this door ` +
+              `(or, if writing nothing is correct, add it to ` +
+              `ACKNOWLEDGED_NOOP_KEYS with a reason).`,
           });
         }
 

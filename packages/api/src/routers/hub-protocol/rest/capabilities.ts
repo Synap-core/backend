@@ -51,7 +51,16 @@ import { playbookStagesSchema } from "../../../schemas/playbook-stage.js";
 export const ParamSpecSchema = z.object({
   name: z.string(),
   label: z.string().optional(),
-  type: z.enum(["text", "number", "entity", "choice", "boolean"]).optional(),
+  // Superset of @synap/playbooks' `PlaybookParamType` by exactly one member:
+  // "password". It is an INPUT-RENDERING hint (mask the prompt) — nothing in the
+  // applier reads `type` — and `proton.capability.json` ships three params
+  // declaring it. Rejecting a whole capability install because a param is
+  // labelled as a secret is disproportionate to what the field does.
+  // FOLLOW-UP (outside this door): reconcile "password" into `PlaybookParamType`
+  // so the TS union and this schema stop being a superset/subset pair.
+  type: z
+    .enum(["text", "number", "entity", "choice", "boolean", "password"])
+    .optional(),
   required: z.boolean().optional(),
   default: z.unknown().optional(),
   description: z.string().optional(),
@@ -147,7 +156,18 @@ export const McpServerDefSchema = z.object({
   name: z.string().min(1).max(128),
   description: z.string().optional(),
   transport: z.enum(["http", "stdio"]),
-  url: z.string().url().optional(),
+  // A capability definition is a TEMPLATE: the applier interpolates `{{param}}`
+  // in every string field AFTER this validation runs. `.url()` alone therefore
+  // rejected the pre-interpolation text — `datagouv.capability.json` declares
+  // `url: "{{mcpUrl}}"` and could not install. Accept either a real URL or a
+  // string carrying a placeholder; anything else is still rejected here.
+  url: z
+    .string()
+    .min(1)
+    .refine((v) => v.includes("{{") || URL.canParse(v), {
+      message: "Must be a valid URL or contain a {{param}} placeholder",
+    })
+    .optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -163,8 +183,17 @@ export const CapabilityDefinitionSchema = z.object({
   description: z.string().optional(),
   params: z.array(ParamSpecSchema).optional(),
   vault: z.array(VaultDefSchema).optional(),
-  tools: z.array(ToolDefSchema),
-  skills: z.array(SkillDefSchema),
+  // OPTIONAL, defaulting to []. A capability is legitimately tools-only (a
+  // Discord/Telegram bot: one transport tool, zero skills) or skills-only (an
+  // `agency-skills`-style prompt pack: zero tools). Of the 25 shipped CP
+  // capability templates, 8 carry `tools: []` and 8 carry `skills: []` — the
+  // empty array is the norm, so REQUIRING the key was pure ceremony that made
+  // an otherwise-valid definition un-appliable (the live 400 on the Discord
+  // bridge's inline definition, which omits `skills` entirely).
+  // `.default([])` also NORMALIZES: the applier iterates `def.tools` /
+  // `def.skills` unguarded, so parsing here is what keeps that safe.
+  tools: z.array(ToolDefSchema).optional().default([]),
+  skills: z.array(SkillDefSchema).optional().default([]),
   // Optional: MCP servers registered so agents get live tools + mcp:// resolves.
   mcpServers: z.array(McpServerDefSchema).optional(),
   // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
@@ -667,11 +696,29 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         workspaceId ?? null
       );
 
+      // NORMALIZE the two collection fields the applier iterates unguarded
+      // (`for (const t of def.tools)` / `for (const s of def.skills)` in
+      // create-from-definition.ts). The INLINE path already gets `[]` from the
+      // schema's `.default([])`; the templateKey path never touches that schema
+      // (parsing a CP definition through it would STRIP contentHash/emits/
+      // updatePolicy/metadata), so a tools-only CP template — e.g. `discord-bot`,
+      // which ships no `skills` key at all — would otherwise TypeError into a 500.
+      // Spread-then-override: every other CP-injected field survives untouched.
+      const normalized = {
+        ...(definition as Record<string, unknown>),
+        tools: Array.isArray((definition as { tools?: unknown }).tools)
+          ? (definition as { tools: unknown[] }).tools
+          : [],
+        skills: Array.isArray((definition as { skills?: unknown }).skills)
+          ? (definition as { skills: unknown[] }).skills
+          : [],
+      };
+
       const result = await createCapabilityFromDefinition(
         // Inline defs are structurally validated by CapabilityDefinitionSchema;
         // `providerSpec` is passed through as opaque JSON (the applier re-casts it
         // to Record), so a boundary cast to the applier's input type is safe.
-        definition as unknown as Parameters<
+        normalized as unknown as Parameters<
           typeof createCapabilityFromDefinition
         >[0],
         body.params ?? {},

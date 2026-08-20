@@ -4683,7 +4683,70 @@ export interface CompositeCreateRelationOp {
 	targetRef: string;
 	metadata?: Record<string, unknown>;
 }
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp;
+/**
+ * ── Rule Loop ops (NS1) ─────────────────────────────────────────────────────
+ *
+ * A user-stated RULE resolves into concrete objects filed as ONE governed
+ * composite proposal. Its two halves are existing first-class objects:
+ *   FACT      — an instruction `skills` row (what the agent should KNOW).
+ *   BEHAVIOUR — an `automations` row (what RUNS when the world changes).
+ * `create_rule` is the memory that links them (see the rule service in
+ * packages/api/src/services/rules).
+ *
+ * All three use the SAME ref→realId mechanism the entity/relation ops use:
+ * `ref` registers a handle, and `factRef`/`behaviourRefs` resolve through it
+ * via `resolveCompositeRef` (an op ref in THIS batch, or a real UUID).
+ */
+export interface CompositeCreateSkillOp {
+	op: "create_skill";
+	/** Stable handle for this skill within the proposal (e.g. "fact1"). */
+	ref: string;
+	name: string;
+	/** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
+	body: string;
+	scope: "pod" | "user" | "workspace";
+	/** NULL/absent = applies to every agent type. */
+	agentTypes?: string[] | null;
+}
+export interface CompositeCreateAutomationOp {
+	op: "create_automation";
+	/** Stable handle for this automation within the proposal (e.g. "beh1"). */
+	ref: string;
+	name: string;
+	description?: string;
+	triggerType: "event" | "cron" | "webhook" | "manual";
+	/**
+	 * Validated by the EXISTING flow validator
+	 * (services/automations/validate-flow.ts) before persisting. Typed `unknown`
+	 * because the validator — not this type — owns the shape.
+	 */
+	flowDefinition: unknown;
+	/**
+	 * ALWAYS FORCED FALSE at materialization. Approve-first means an automation
+	 * never arrives already running; the field exists so an authoring agent can
+	 * state its intent (and so the materializer can REPORT that it overrode it),
+	 * never so the automation can be born live.
+	 */
+	enabled?: boolean;
+}
+export interface CompositeCreateRuleOp {
+	op: "create_rule";
+	/** Stable handle for this rule within the proposal. */
+	ref: string;
+	/** The user's stated rule, in their words. */
+	intent: string;
+	scope: {
+		kind: "pod" | "workspace" | "user";
+		workspaceId?: string;
+	};
+	/** Ref (or real id) of the FACT half — a `create_skill` op in this batch. */
+	factRef?: string;
+	/** Refs (or real ids) of the BEHAVIOUR halves — `create_automation` ops. */
+	behaviourRefs?: string[];
+	/** Whether behaviour this rule produces should auto-apply or propose. */
+	trust?: "propose" | "auto";
+}
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -6017,6 +6080,50 @@ export interface CapabilityGrantRow {
 	revokedAt: string | null;
 	createdAt: string;
 	active: boolean;
+}
+export type CreateRuleGovernedResult = {
+	status: "created";
+	ruleId: string;
+} | {
+	status: "proposed";
+	proposalId: string;
+} | {
+	status: "denied";
+	reason: string;
+};
+export interface RuleBehaviourRecord {
+	automationId: string;
+	/**
+	 * DIVERGENCE SNAPSHOT: hash of the automation's `flowDefinition` AS THE RULE
+	 * PRODUCED IT. The rule is the SOURCE; the automation is DERIVED. Editing the
+	 * produced automation directly must not silently rewrite the rule — so we
+	 * store what the rule asked for and let a reader COMPARE. Detection only.
+	 */
+	flowHash: string;
+}
+export interface RuleMetadata {
+	v: 1;
+	intent: string;
+	scope: {
+		kind: "pod" | "workspace" | "user";
+		workspaceId?: string;
+	};
+	/**
+	 * Recorded, NOT yet enforced. Wiring trust into the policy engine means
+	 * writing a `governance_rules` row, which is deliberately out of scope here
+	 * (the rule object is built BESIDE governance-rules, not on it).
+	 */
+	trust: "propose" | "auto";
+	/** Set only when the fact half is a SEPARATE skill row. */
+	factSkillId?: string;
+	behaviours: RuleBehaviourRecord[];
+	createdAt: string;
+}
+export interface DivergedBehaviour extends RuleBehaviourRecord {
+	/** Hash of the automation's flowDefinition RIGHT NOW. */
+	currentFlowHash: string | null;
+	/** null current hash = the automation row is gone. */
+	status: "matches" | "diverged" | "missing";
 }
 /** Which read paths the newly-created verb was wired into. */
 export interface WireCreatedVerbResult {
@@ -18504,6 +18611,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				skill: any;
+			};
+			meta: object;
+		}>;
+		createRule: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				intent: string;
+				scope: {
+					kind: "user" | "workspace" | "pod";
+					workspaceId?: string | undefined;
+				};
+				trust?: "auto" | "propose" | undefined;
+				factSkillId?: string | undefined;
+				automationIds?: string[] | undefined;
+			};
+			output: CreateRuleGovernedResult;
+			meta: object;
+		}>;
+		listRules: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			} | undefined;
+			output: {
+				rules: any;
+			};
+			meta: object;
+		}>;
+		getRule: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				rule: {
+					id: any;
+					name: any;
+					approved: any;
+					workspaceId: any;
+					createdAt: any;
+					rule: RuleMetadata;
+				};
+				divergence: {
+					diverged: boolean;
+					behaviours: DivergedBehaviour[];
+				};
 			};
 			meta: object;
 		}>;

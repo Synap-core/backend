@@ -100,6 +100,7 @@ import {
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
   registerAgentSkillsRoutes,
+  registerRulesRoutes,
   registerUiRoutes,
   registerArtifactsRoutes,
   registerRunsRoutes,
@@ -630,6 +631,7 @@ registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerAgentSkillsRoutes(app); // /agent-skills*
+registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list)
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)

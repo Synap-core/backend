@@ -165,6 +165,15 @@ export async function executeCapability(input: {
   /** Triggering inbound message id — resolved to the acting `channelId` when one
    * is not passed explicitly (see `channelId`). */
   sourceMessageId?: string | null;
+  /**
+   * Focus-session id of the agent turn that invoked this capability. Stamped
+   * onto a `capability.run` proposal as the `proposals.session_id` COLUMN
+   * (migration 0119) so the review surface can group a proposal with the
+   * session that produced it, instead of re-deriving it from correlationId
+   * text-matching. Absent (no active session / operator run) = NULL, which is
+   * the correct value for non-session activity — never synthesise one.
+   */
+  sessionId?: string | null;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -265,6 +274,9 @@ export async function executeCapability(input: {
       targetType: "capability",
       targetId: skillRow.id,
       proposalType: "capability.run",
+      // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
+      // index. NULL when the caller had no session, by design.
+      sessionId: input.sessionId ?? null,
       data: {
         skillId: skillRow.id,
         verbId: verbId ?? null,

@@ -33,6 +33,7 @@ import { registerViewExecutors } from "./executors/view.js";
 import { registerProfileExecutors } from "./executors/profile.js";
 import { registerSkillExecutors } from "./executors/skill.js";
 import { registerToolExecutors } from "./executors/tool.js";
+import { registerRuleExecutors } from "./executors/rule.js";
 import { registerAutomationExecutors } from "./executors/automation.js";
 import { registerPlaybookExecutors } from "./executors/playbook.js";
 import { registerCellExecutors } from "./executors/cell.js";
@@ -62,6 +63,7 @@ export function registerApproveExecutors(): void {
   registerProfileExecutors();
   registerSkillExecutors();
   registerToolExecutors();
+  registerRuleExecutors();
   registerAutomationExecutors();
   registerPlaybookExecutors();
   registerCellExecutors();

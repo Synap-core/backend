@@ -1,0 +1,124 @@
+import { TRPCError } from "@trpc/server";
+import { db, proposals, eq } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
+import { registerProposalExecutor } from "../execution-registry.js";
+import { assertApplied, reportApproved } from "./shared.js";
+
+/**
+ * Register the rule/* approve executors (NS1 Rule Loop).
+ *
+ * A rule filed by an agent (or by a member whose role lacks `create`) lands
+ * here on approval. Without this half, approval would fall to the `*​/*`
+ * catch-all — which for a gate-made proposal does NOT throw: it emits
+ * `.validated`, flips the row APPROVED and returns success while NOTHING is
+ * written. That silent-success defect has shipped three times in this repo.
+ *
+ * Materializes through the SAME `createRuleGoverned` door the direct path
+ * uses, re-run as the APPROVER (no `agentUserId` ⇒ the operator is the
+ * authority ⇒ the re-entrant gate auto-grants), so the rule row, its
+ * divergence snapshot and its lineage edges are byte-identical to a direct
+ * create.
+ *
+ * REPLAY SUFFICIENCY: the propose gate stores the FULL payload — intent,
+ * scope, trust, factSkillId, automationIds — not just `{ id }`. Everything the
+ * replay needs is in `data.data`.
+ */
+export function registerRuleExecutors(): void {
+  registerProposalExecutor({
+    key: "rule/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const intent = innerData.intent as string | undefined;
+      if (!intent || !intent.trim()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Rule proposal is missing intent",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, and
+      // createRuleGoverned mints a fresh id, so a re-approve without this guard
+      // would double-create.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const rawScope = innerData.scope as
+        { kind?: unknown; workspaceId?: unknown } | undefined;
+      const scopeKind =
+        rawScope?.kind === "workspace" || rawScope?.kind === "user"
+          ? rawScope.kind
+          : "pod";
+      const scope = {
+        kind: scopeKind as "pod" | "workspace" | "user",
+        ...(typeof rawScope?.workspaceId === "string"
+          ? { workspaceId: rawScope.workspaceId }
+          : {}),
+      };
+
+      const { createRuleGoverned } =
+        await import("../../../services/rules/create.js");
+      const result = await createRuleGoverned({
+        userId,
+        // Own the rule as the APPROVER (mirrors project/skill/view) — no
+        // agentUserId so the re-entrant gate auto-grants for the operator.
+        agentUserId: undefined,
+        workspaceId: proposal.workspaceId ?? null,
+        intent,
+        scope,
+        ...(innerData.trust === "auto" || innerData.trust === "propose"
+          ? { trust: innerData.trust }
+          : {}),
+        ...(typeof innerData.factSkillId === "string"
+          ? { factSkillId: innerData.factSkillId }
+          : {}),
+        automationIds: Array.isArray(innerData.automationIds)
+          ? (innerData.automationIds as string[]).filter(
+              (id): id is string => typeof id === "string"
+            )
+          : [],
+        auditSource: "proposal_approval",
+      });
+
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+      // The approver IS the authority — a nested proposal means the replay
+      // filed a SECOND proposal instead of applying the first.
+      assertApplied(result);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+          // Store what the replay produced so revert/audit can read it.
+          data: {
+            ...((proposal.data as Record<string, unknown>) ?? {}),
+            materialized: {
+              ruleId: result.status === "created" ? result.ruleId : undefined,
+              factSkillId: innerData.factSkillId,
+              automationIds: innerData.automationIds ?? [],
+            },
+          },
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+}

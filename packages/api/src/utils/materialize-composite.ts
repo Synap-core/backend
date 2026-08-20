@@ -130,6 +130,39 @@ export interface MaterializeRelationResult {
   type: string;
 }
 
+/** Per-op result for a `create_skill` op (the FACT half of a rule). */
+export interface MaterializeSkillResult {
+  ref: string;
+  opIndex: number;
+  skillId: string;
+}
+
+/** Per-op result for a `create_automation` op (the BEHAVIOUR half of a rule). */
+export interface MaterializeAutomationResult {
+  ref: string;
+  opIndex: number;
+  automationId: string;
+  /** What the op ASKED for. */
+  enabledRequested: boolean;
+  /**
+   * What was actually materialized. ALWAYS false: approve-first means an
+   * automation never arrives already running, so the op's `enabled` is
+   * overridden here and the override is REPORTED rather than swallowed.
+   */
+  enabled: false;
+  /** True when the op said `enabled: true` and we forced it off. */
+  enabledOverridden: boolean;
+}
+
+/** Per-op result for a `create_rule` op. */
+export interface MaterializeRuleResult {
+  ref: string;
+  opIndex: number;
+  ruleId: string;
+  factSkillId?: string;
+  automationIds: string[];
+}
+
 export interface MaterializeResult {
   /** Count of entities CREATED (excludes linked existing entities). */
   created: number;
@@ -141,6 +174,12 @@ export interface MaterializeResult {
   entities: MaterializeEntityResult[];
   /** Per-relation detail for response building. */
   relations: MaterializeRelationResult[];
+  /** Rule Loop (NS1): skills created by `create_skill` ops. Empty by default. */
+  skills: MaterializeSkillResult[];
+  /** Rule Loop (NS1): automations created by `create_automation` ops. */
+  automations: MaterializeAutomationResult[];
+  /** Rule Loop (NS1): rules created by `create_rule` ops. */
+  rules: MaterializeRuleResult[];
 }
 
 /**
@@ -153,6 +192,44 @@ export interface MaterializeResult {
 export type EntityCreateCaller = { create: (input: any) => Promise<any> };
 
 export type RelationCreateCaller = { create: (input: any) => Promise<any> };
+
+/**
+ * Rule Loop callers (NS1). Each routes to its EXISTING canonical door — the
+ * skills service, the automations create path (which runs the ONE flow
+ * validator), and the rule service — wired by the approve/import orchestrator
+ * with the APPROVER's identity. Absent ⇒ the corresponding ops are logged and
+ * skipped, exactly like `facetCaller` (additive: every existing caller that
+ * passes neither behaves byte-identically to today).
+ */
+export type SkillCreateCaller = {
+  create: (input: {
+    name: string;
+    body: string;
+    scope: "pod" | "user" | "workspace";
+    agentTypes?: string[] | null;
+  }) => Promise<{ id: string }>;
+};
+
+export type AutomationCreateCaller = {
+  create: (input: {
+    name: string;
+    description?: string;
+    triggerType: "event" | "cron" | "webhook" | "manual";
+    flowDefinition: unknown;
+    /** Always false — the materializer never asks for a running automation. */
+    enabled: false;
+  }) => Promise<{ id: string }>;
+};
+
+export type RuleCreateCaller = {
+  create: (input: {
+    intent: string;
+    scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
+    trust?: "propose" | "auto";
+    factSkillId?: string;
+    automationIds: string[];
+  }) => Promise<{ id: string }>;
+};
 
 /**
  * Structurally satisfied by the tRPC entitiesRouter caller — reuses its
@@ -234,6 +311,10 @@ export interface MaterializeOptions {
    * ignored, keeping every existing caller (which doesn't pass this) additive.
    */
   facetCaller?: FacetAttachCaller;
+  /** Rule Loop (NS1) — see the caller types above. All three are optional. */
+  skillCaller?: SkillCreateCaller;
+  automationCaller?: AutomationCreateCaller;
+  ruleCaller?: RuleCreateCaller;
 }
 
 export async function materializeCompositeGraph(
@@ -269,6 +350,92 @@ export async function materializeCompositeGraph(
       Extract<CompositeProposalOperation, { op: "create_entity" }>["facets"]
     >;
   }> = [];
+  // ── Pass 0 — Rule Loop CONFIG ops (NS1) ────────────────────────────────
+  // Skills and automations are created BEFORE entities so that (a) a
+  // `create_rule` op in pass 3 can resolve `factRef` / `behaviourRefs` through
+  // the SAME ref→realId map pass 2 uses, and (b) no second ref-resolution
+  // scheme exists. Refs are registered with `registerEntityRef(..., false)` —
+  // identical key shape ($opN + the op's own ref), minus the `$primary` claim,
+  // which stays reserved for the first create_entity op.
+  //
+  // Per-op resilience matches the rest of this file: a failed op is logged and
+  // skipped, never discarding what already succeeded.
+  const skillResults: MaterializeSkillResult[] = [];
+  const automationResults: MaterializeAutomationResult[] = [];
+  const ruleResults: MaterializeRuleResult[] = [];
+
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (op.op !== "create_skill") continue;
+    if (!options?.skillCaller) {
+      logger.warn(
+        { ref: op.ref, name: op.name },
+        "Skipping create_skill op: no skillCaller wired by this caller"
+      );
+      continue;
+    }
+    try {
+      const created = await options.skillCaller.create({
+        name: op.name,
+        body: op.body,
+        scope: op.scope,
+        agentTypes: op.agentTypes ?? null,
+      });
+      registerEntityRef(refToRealId, i, op.ref, created.id, false);
+      skillResults.push({ ref: op.ref, opIndex: i, skillId: created.id });
+    } catch (err) {
+      logger.warn(
+        { err, ref: op.ref, name: op.name },
+        "Skipping create_skill op (batch continues)"
+      );
+    }
+  }
+
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (op.op !== "create_automation") continue;
+    if (!options?.automationCaller) {
+      logger.warn(
+        { ref: op.ref, name: op.name },
+        "Skipping create_automation op: no automationCaller wired by this caller"
+      );
+      continue;
+    }
+    const enabledRequested = op.enabled === true;
+    try {
+      // FORCED DISABLED. Approve-first: an automation never arrives already
+      // running, even when the op says `enabled: true`. The override is
+      // reported on the result rather than swallowed.
+      const created = await options.automationCaller.create({
+        name: op.name,
+        ...(op.description ? { description: op.description } : {}),
+        triggerType: op.triggerType,
+        flowDefinition: op.flowDefinition,
+        enabled: false,
+      });
+      if (enabledRequested) {
+        logger.info(
+          { ref: op.ref, name: op.name, automationId: created.id },
+          "create_automation asked for enabled:true — materialized DISABLED (approve-first)"
+        );
+      }
+      registerEntityRef(refToRealId, i, op.ref, created.id, false);
+      automationResults.push({
+        ref: op.ref,
+        opIndex: i,
+        automationId: created.id,
+        enabledRequested,
+        enabled: false,
+        enabledOverridden: enabledRequested,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, ref: op.ref, name: op.name },
+        "Skipping create_automation op (batch continues)"
+      );
+    }
+  }
+
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
     if (op.op !== "create_entity") continue;
@@ -499,6 +666,51 @@ export async function materializeCompositeGraph(
     }
   );
 
+  // ── Pass 3 — Rule Loop RULE ops (NS1) ──────────────────────────────────
+  // Runs LAST so `factRef` / `behaviourRefs` resolve against the fully
+  // populated map (skills + automations from pass 0, entities from pass 1).
+  // Resolution is `resolveCompositeRef` — the same helper relations use — so a
+  // ref may be an in-batch op ref OR a real UUID for a pre-existing object.
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (op.op !== "create_rule") continue;
+    if (!options?.ruleCaller) {
+      logger.warn(
+        { ref: op.ref },
+        "Skipping create_rule op: no ruleCaller wired by this caller"
+      );
+      continue;
+    }
+    try {
+      const factSkillId = op.factRef
+        ? resolveCompositeRef(refToRealId, op.factRef)
+        : undefined;
+      const automationIds = (op.behaviourRefs ?? []).map((behaviourRef) =>
+        resolveCompositeRef(refToRealId, behaviourRef)
+      );
+      const created = await options.ruleCaller.create({
+        intent: op.intent,
+        scope: op.scope,
+        ...(op.trust ? { trust: op.trust } : {}),
+        ...(factSkillId ? { factSkillId } : {}),
+        automationIds,
+      });
+      registerEntityRef(refToRealId, i, op.ref, created.id, false);
+      ruleResults.push({
+        ref: op.ref,
+        opIndex: i,
+        ruleId: created.id,
+        ...(factSkillId ? { factSkillId } : {}),
+        automationIds,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, ref: op.ref },
+        "Skipping create_rule op (batch continues)"
+      );
+    }
+  }
+
   return {
     created,
     linked: relations.length,
@@ -506,5 +718,8 @@ export async function materializeCompositeGraph(
     refToRealId,
     entities,
     relations,
+    skills: skillResults,
+    automations: automationResults,
+    rules: ruleResults,
   };
 }
