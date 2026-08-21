@@ -24,6 +24,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { scoreTextMatch } from "../../../services/capabilities/capability-registry.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import {
@@ -117,6 +118,17 @@ export const SkillDefSchema = z.object({
   providerSpec: z.record(z.string(), z.unknown()).optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
+  /**
+   * ROUTING intent — what this verb MEANS, independent of its vendor. Validated
+   * HERE, at the door, not only in the applier: `resolveVerbIntent` throws on an
+   * unknown value, and that throw lands in this route's generic catch as a
+   * **500**. A caller's bad input reported as a server fault is wrong twice —
+   * it misattributes the failure, and 5xx is retryable, so an agent re-sends the
+   * same invalid value instead of fixing it (this repo has already watched a
+   * retry loop replay a schema error four times). Zod rejects it as a 400 with
+   * the valid set named.
+   */
+  intent: z.enum(ABSTRACT_VERBS).optional(),
   executionMode: z.enum(["sync", "async"]).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   requires: z.array(z.string()).optional(),

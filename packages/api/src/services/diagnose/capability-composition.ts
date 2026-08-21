@@ -238,6 +238,30 @@ export async function buildCapabilityComposition(
     mode === "standing" || // declared, derived_transport, or derived_produced
     [...toolRows.values()].some((t) => t.kind === "provider");
 
+  // ── Direction: the honest ingest/callable PAIR. `mode` alone lies here — it
+  // is a single enum that never concludes `callable` (see deriveCapabilityMode),
+  // so a UI toggle needs BOTH halves derived from real signals:
+  //   ingest   — standing mode, a declared `metadata.emits`, or a produced
+  //              channel (data comes IN).
+  //   callable — ≥1 resolved catalog verb; a catalog card's `verbs[]` are its
+  //              member SKILLS (buildCapabilityCatalog → mySkills), so the honest
+  //              count here is the resolved member-skill rows.
+  // Neither → "unknown" (honest fallback, never a guessed default).
+  const emits = meta.emits;
+  const ingest =
+    mode === "standing" ||
+    (Array.isArray(emits) && emits.length > 0) ||
+    producedChannelCount > 0;
+  const callable = skillRows.size > 0;
+  const directionKind: CapabilityComposition["direction"]["kind"] = ingest
+    ? callable
+      ? "both"
+      : "ingest"
+    : callable
+      ? "callable"
+      : "unknown";
+  const direction = { ingest, callable, kind: directionKind };
+
   const extractionPolicy = normalizeExtractionPolicy(
     [...toolRows.values()].map((t) => t.metadata)
   );
@@ -255,6 +279,7 @@ export async function buildCapabilityComposition(
     mode,
     modeSource,
     isBridge,
+    direction,
     extractionPolicy,
   };
 }

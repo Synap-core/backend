@@ -1132,6 +1132,12 @@ export interface HubRunnableCapabilityAction {
   };
   governance: "auto";
   executionMode?: string;
+  /** Direction axis of a tool verb — read = pull, write/action = push. Absent
+   *  for a skill-only action (honest-unknown, never defaulted). */
+  kind?: "read" | "write" | "action";
+  /** Vendor-independent routing intent (ABSTRACT_VERBS). Absent when the verb
+   *  fits none of the closed values, or for a skill-only action. */
+  intent?: string;
   parameters: Record<string, unknown>;
 }
 

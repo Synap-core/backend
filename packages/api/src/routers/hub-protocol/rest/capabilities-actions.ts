@@ -35,6 +35,12 @@ const ActionSchema = z.object({
     .optional(),
   governance: z.literal("auto"),
   executionMode: z.string().optional(),
+  // Per-verb direction axis — pull (read) vs push (write/action). Optional:
+  // absent for a skill-only action (honest-unknown, never defaulted).
+  kind: z.enum(["read", "write", "action"]).optional(),
+  // Vendor-independent routing intent (ABSTRACT_VERBS). Optional by nature —
+  // a verb outside the closed vocabulary omits it rather than inventing one.
+  intent: z.string().optional(),
   parameters: z.record(z.string(), z.unknown()),
 });
 

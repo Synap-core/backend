@@ -18,6 +18,7 @@ import {
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { automationDataContractSchema } from "../../automations.js";
 
 /**
@@ -2140,23 +2141,14 @@ export const tools = {
               // vocabulary is closed, so the schema is the honest place to say
               // so. Prose alone makes a caller parse the valid set out of a
               // sentence and discover a typo as a runtime rejection; an enum
-              // constrains the call before it is made. Kept in lock-step with
-              // `ABSTRACT_VERBS` (schema/tools.ts) — the tripwire below pins it.
-              enum: [
-                "search_external",
-                "find_people",
-                "enrich_entity",
-                "fetch_record",
-                "list_records",
-                "send_message",
-                "request_connection",
-                "schedule_event",
-                "manage_file",
-                "generate_media",
-                "capture_into_pod",
-                "run_external_job",
-                "connect_account",
-              ],
+              // constrains the call before it is made.
+              //
+              // SPREAD from the union rather than re-typed: a literal copy here
+              // would be a second definition of a closed vocabulary, and the
+              // parity tripwire would then only catch the drift AFTER someone
+              // shipped it. Same idiom this file already uses for
+              // USER_OBSERVATION_CATEGORIES and PROPOSAL_REJECTION_REASONS.
+              enum: [...ABSTRACT_VERBS],
               description:
                 "Reverse lookup by ABSTRACT INTENT — what you want to DO, without knowing the vendor. Returns the concrete verb ids that serve it (pass one to synap_run_capability). Closed vocabulary: search_external | find_people | enrich_entity | fetch_record | list_records | send_message | request_connection | schedule_event | manage_file | generate_media | capture_into_pod | run_external_job | connect_account. Takes precedence over `query`/`kind`/`limit`. Not every installed verb declares an intent yet, so an empty result is not proof of absence — re-run without `intent` to scan the catalog.",
             },

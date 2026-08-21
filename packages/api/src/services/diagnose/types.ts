@@ -190,6 +190,26 @@ export interface CapabilityComposition {
    */
   isBridge: boolean;
   /**
+   * Directional flow — the honest ingest/callable PAIR (distinct from `mode`,
+   * which is a single standing/callable/unknown enum that NEVER concludes
+   * callable). Lets a UI toggle (ingest / callable / both) and per-verb
+   * placement render truthfully instead of guessing:
+   *   - `ingest`   — the capability brings data IN: it is standing (`mode`),
+   *                  declares `metadata.emits`, or PRODUCES ≥1 channel.
+   *   - `callable` — the capability exposes ≥1 catalog verb (a resolved member
+   *                  skill — the SAME `verbs[]` source `buildCapabilityCatalog`
+   *                  folds into a card).
+   *   - `kind`     — both → "both"; ingest only → "ingest"; callable only →
+   *                  "callable"; NEITHER → "unknown" (honest fallback, never a
+   *                  guessed default).
+   * ADDITIVE: existing consumers that ignore it are unaffected.
+   */
+  direction: {
+    ingest: boolean;
+    callable: boolean;
+    kind: "ingest" | "callable" | "both" | "unknown";
+  };
+  /**
    * Best-effort, NORMALIZED read of a member tool's provider-specific
    * extraction config (currently only the Discord bot template populates
    * this — `tools.metadata.discord.*`; see `normalizeExtractionPolicy` in

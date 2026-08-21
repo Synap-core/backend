@@ -28,6 +28,19 @@ export interface RunnableCapabilityAction {
   governance: "auto" | "propose";
   /** The active grant's execution mode where a tool verb has one. */
   executionMode?: string;
+  /**
+   * Direction axis of a tool verb — `read` = pull (data IN), `write`/`action` =
+   * push (mutation OUT). Straight off `ToolVerb.kind`; lets the client bucket a
+   * verb by direction. Undefined for a skill-only action (no tool verb) — the
+   * client renders honest-unknown, NEVER a defaulted "read".
+   */
+  kind?: "read" | "write" | "action";
+  /**
+   * Vendor-independent routing intent (`ABSTRACT_VERBS`) — off `ToolVerb.intent`.
+   * OPTIONAL by nature: a verb that fits none of the 13 closed values, and every
+   * skill-only action, leave it undefined (honest-unknown, never invented).
+   */
+  intent?: string;
   /** Actual parameter schema; never a fabricated form shape. */
   parameters: Record<string, unknown>;
 }
@@ -89,6 +102,11 @@ export function projectRunnableActions(
         ...(verb.effectiveExecMode
           ? { executionMode: verb.effectiveExecMode }
           : {}),
+        // Per-verb direction — projected straight off the catalog entry, never
+        // defaulted. `kind` is required on ToolVerb; `intent` is optional and
+        // stays undefined for a verb outside the closed vocabulary.
+        ...(verb.kind ? { kind: verb.kind } : {}),
+        ...(verb.intent ? { intent: verb.intent } : {}),
         parameters: inputSchema(verb.paramsSchema),
       });
     }
