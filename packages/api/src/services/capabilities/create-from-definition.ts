@@ -45,6 +45,7 @@ import {
   mcpServers as mcpServersTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
+import { ABSTRACT_VERBS, isAbstractVerb } from "@synap/database/schema";
 import { invalidateMcpCache } from "../../routers/channels.js";
 import type {
   CapabilityDefinition,
@@ -1284,13 +1285,41 @@ export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
 }
 
 /**
+ * Resolve a skill's declared abstract `intent` for the derived catalog entry.
+ *
+ * The vocabulary is CLOSED, so an unrecognised value is REJECTED here — the
+ * boundary where a template's DATA first becomes a stored catalog entry —
+ * rather than silently persisted. Templates are `z.unknown()`-shaped JSON from
+ * the Control Plane, so without this check a typo would land in the jsonb and
+ * quietly split the routing axis into a vendor-keyed one all over again.
+ *
+ * An `instruction` skill is a TEACHING doc, not a callable verb — it never
+ * reaches here, because `deriveToolVerbs` only walks skills that `requires` a
+ * tool and the applier derives no catalog entry for prose.
+ */
+function resolveVerbIntent(
+  s: CapabilitySkillDef
+): ToolVerbCatalogEntry["intent"] {
+  const raw = (s as { intent?: unknown }).intent;
+  if (raw === undefined || raw === null) return undefined;
+  if (!isAbstractVerb(raw)) {
+    throw new Error(
+      `Capability skill "${s.name}" declares an unknown intent ${JSON.stringify(raw)}. ` +
+        `The intent vocabulary is CLOSED — use one of: ${ABSTRACT_VERBS.join(", ")}, ` +
+        `or omit the field entirely if none fits.`
+    );
+  }
+  return raw;
+}
+
+/**
  * Build a tool's structured verb catalog from the definition's skills that
  * `requires` it (by tool NAME). One verb per requiring skill: `id` = skill name
  * (the callable, dispatched via callProvider/the dispatcher), `label` = skill
  * name, `kind` = read/push axis, `argsSchema` = the skill's declared parameters,
  * `govDefault` = the seeded grant exec-mode (passed in, never re-derived here).
  */
-function deriveToolVerbs(
+export function deriveToolVerbs(
   toolName: string,
   skills: CapabilitySkillDef[],
   govDefault: "auto" | "propose" | "dry-run"
@@ -1298,6 +1327,7 @@ function deriveToolVerbs(
   const verbs: ToolVerbCatalogEntry[] = [];
   for (const s of skills) {
     if (!s.requires?.includes(toolName)) continue;
+    const intent = resolveVerbIntent(s);
     verbs.push({
       id: s.name,
       label: s.name,
@@ -1307,6 +1337,9 @@ function deriveToolVerbs(
           ? s.parameters
           : undefined,
       govDefault,
+      // Routing axis — omitted entirely when the template declares none, so a
+      // legacy entry's shape is unchanged.
+      ...(intent ? { intent } : {}),
     });
   }
   return verbs;

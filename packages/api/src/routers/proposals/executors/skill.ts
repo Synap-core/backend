@@ -282,4 +282,68 @@ export function registerSkillExecutors(): void {
       return { success: true };
     },
   });
+
+  /**
+   * `skill/update` — REPLAY, never reconstruct.
+   *
+   * The gate stores the raw procedure patch (`{ id, ...updateData, metadata }`,
+   * `routers/skills.ts:846`) rather than a resolved write, and that is
+   * deliberate: the procedure derives `execChanged` from the patch AFTER the
+   * gate and, when execution-relevant fields moved, resets `approved: false`
+   * (`skills.ts:870` and `:914`). Reimplementing the write here would apply the
+   * fields and silently skip that re-approval reset — an agent could edit a
+   * skill's code and keep its approved flag, which is the whole point of the
+   * reset. So the executor replays the procedure and lets it re-derive.
+   */
+  registerProposalExecutor({
+    key: "skill/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
+
+      const id = inner.id as string | undefined;
+      if (!id || typeof id !== "string") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Skill update proposal is missing the skill id",
+        });
+      }
+
+      // Re-approve guard: `approve` is not status-guarded before dispatch, and
+      // a replayed update would re-run the exec-change reset a second time.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Workspace lens from the STORED payload, never a request-supplied field.
+      const wsLens =
+        (inner.workspaceId as string | null | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+
+      const { skillsRouter } = await import("../../skills.js");
+      const caller = skillsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: wsLens ?? undefined,
+      } as unknown as Context);
+
+      // The stored payload IS the procedure's input shape — pass it through
+      // rather than picking fields, so a field added to the procedure later is
+      // carried automatically instead of being silently dropped here.
+      assertApplied(
+        (await caller.update(
+          inner as unknown as Parameters<typeof caller.update>[0]
+        )) as { status?: string }
+      );
+
+      reportApproved(deps, proposal, input.proposalId);
+      return { success: true };
+    },
+  });
 }

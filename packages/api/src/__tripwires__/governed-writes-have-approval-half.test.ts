@@ -237,11 +237,8 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   { door: "agent/updateCapabilities", reason: SEVERED },
   { door: "apiKey/create", reason: SEVERED },
   { door: "apiKey/update", reason: SEVERED },
-  { door: "artifact/create", reason: SEVERED },
   { door: "artifact/setState", reason: SEVERED },
   { door: "bento/arrange", reason: SEVERED },
-  { door: "capability/create", reason: SEVERED },
-  { door: "cell/update", reason: SEVERED },
   { door: "context/link", reason: SEVERED },
   {
     door: "document/user_edit",
@@ -282,16 +279,9 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
       "instead of widening the detector.",
   },
   { door: "focus_session/grant_capability", reason: SEVERED },
-  { door: "playbook_run/update", reason: SEVERED },
   { door: "proactive/recap", reason: SEVERED },
-  { door: "relation/update", reason: SEVERED },
-  { door: "role/create", reason: SEVERED },
-  { door: "role/update", reason: SEVERED },
-  { door: "skill/update", reason: SEVERED },
-  { door: "tool/update", reason: SEVERED },
   { door: "vault/vault.request", reason: SEVERED },
   { door: "whiteboard/place", reason: SEVERED },
-  { door: "widget/register", reason: SEVERED },
 ];
 
 /**
@@ -299,7 +289,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
  * LOWERED. Raising it is how this contract would quietly erode, so any PR that
  * raises it is doing the thing this file exists to prevent.
  */
-const GAP_CEILING = 23;
+const GAP_CEILING = 13;
 
 // ── Load the sources ─────────────────────────────────────────────────────────
 

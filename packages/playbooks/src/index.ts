@@ -37,6 +37,34 @@ export type ToolKind =
  */
 export type ToolVerbKind = "read" | "write" | "action";
 
+/**
+ * The CLOSED vocabulary of abstract intents — the ROUTING axis over the verb
+ * catalog. Kept in LOCK-STEP with `ABSTRACT_VERBS` / `AbstractVerb` in
+ * @synap/database `schema/tools.ts`, re-declared here (not imported) exactly
+ * like `ToolVerbKind` above, so this package stays dependency-free.
+ *
+ * Routing only, never authorization: an intent resolves to a concrete verb id
+ * BEFORE the governance gate.
+ */
+export type AbstractVerb =
+  // ACQUIRE
+  | "search_external"
+  | "find_people"
+  | "enrich_entity"
+  | "fetch_record"
+  | "list_records"
+  // ACT OUTWARD
+  | "send_message"
+  | "request_connection"
+  | "schedule_event"
+  | "manage_file"
+  | "generate_media"
+  // BRIDGE
+  | "capture_into_pod"
+  // CONTROL
+  | "run_external_job"
+  | "connect_account";
+
 export interface ToolVerb {
   /** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
   id: string;
@@ -56,6 +84,15 @@ export interface ToolVerb {
    * previews. The per-grant exec-mode at the gate still narrows this at run time.
    */
   govDefault: ExecMode;
+  /**
+   * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
+   * can ask for "send a message" without knowing whether the pod has Gmail or
+   * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
+   * `capability_run_receipts.verb_id` and inside stored automation flows), and a
+   * legacy catalog entry with no `intent` reads exactly as before. A verb that
+   * fits none of the closed values leaves this unset rather than inventing one.
+   */
+  intent?: AbstractVerb;
 }
 
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
@@ -643,6 +680,13 @@ export interface CapabilitySkillDef {
    * each name to the created tool's id and writes `skill → requires → tool` links.
    */
   requires?: string[];
+  /**
+   * The abstract INTENT this verb serves — the routing axis carried onto the
+   * derived `ToolVerbCatalogEntry.intent`. Optional; a teaching (`instruction`)
+   * skill is not a callable verb and never carries one. An unknown value is
+   * REJECTED by the applier, never silently stored.
+   */
+  intent?: AbstractVerb;
 }
 
 /**

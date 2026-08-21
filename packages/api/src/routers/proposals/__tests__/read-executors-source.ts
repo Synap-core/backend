@@ -32,6 +32,13 @@ const EXECUTOR_FILES_IN_AGGREGATOR_ORDER = [
   "messaging.ts",
   "capability.ts",
   "provider.ts",
+  // `rule.ts` and `widget.ts` were absent from this list while both were
+  // registered in the aggregator. The list feeds a source blob that the
+  // executor assertions scan, so a missing file is not a cosmetic omission —
+  // that module's source is simply never searched, and every assertion about
+  // it passes by not looking.
+  "rule.ts",
+  "widget.ts",
   "catch-all.ts",
 ];
 

@@ -42,10 +42,21 @@ const mocks = vi.hoisted(() => ({
   updateSets: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@synap/intelligence-client", () => ({
-  requestHeadlessChatText: (...args: unknown[]) =>
-    mocks.requestHeadlessChatText(...args),
-}));
+// TOTAL module replacement: anything the worker imports from here must be
+// listed, or it arrives as `undefined` and every test in this file dies on a
+// TypeError while tsc stays green. `isRetryableHubError` is real logic, not a
+// collaborator to stub — the worker's retry decision is part of what these
+// tests assert — so it delegates to the real implementation.
+vi.mock("@synap/intelligence-client", async () => {
+  const actual = await vi.importActual<
+    typeof import("@synap/intelligence-client")
+  >("@synap/intelligence-client");
+  return {
+    requestHeadlessChatText: (...args: unknown[]) =>
+      mocks.requestHeadlessChatText(...args),
+    isRetryableHubError: actual.isRetryableHubError,
+  };
+});
 
 vi.mock("@synap/database", () => ({
   ChatTurnStatus: {
@@ -233,6 +244,26 @@ describe("handleA2AIResponseTrigger", () => {
     expect(
       mocks.updateSets.find((s) => s.status === ChatTurnStatus.FAILED)?.error
     ).toBe("hub down");
+    expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
+  });
+
+  it("finishes failed WITHOUT rethrowing when the hub refused the request", async () => {
+    // pg-boss retries a thrown job (`retryLimit: 3`). On 2026-08-20 a schema
+    // rejection was therefore attempted FOUR times — four identical impossible
+    // requests. The turn is already recorded failed, so swallowing is correct.
+    mocks.insertReturning = [runningTurn()];
+    const refused = new Error(
+      "Intelligence Hub error: 400 Bad Request"
+    ) as Error & {
+      status?: number;
+    };
+    refused.status = 400;
+    mocks.requestHeadlessChatText.mockRejectedValue(refused);
+
+    await expect(handleA2AIResponseTrigger(baseJob())).resolves.toBeUndefined();
+    expect(
+      mocks.updateSets.some((s) => s.status === ChatTurnStatus.FAILED)
+    ).toBe(true);
     expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
   });
 

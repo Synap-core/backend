@@ -3,9 +3,17 @@ import {
   db,
   proposals,
   playbooks,
+  playbookRuns,
+  entities,
   eq,
+  inArray,
   getWorkspaceMembership,
 } from "@synap/database";
+// `createLinks` is the ONE link door and it lives in @synap/api, not
+// @synap/database — the database package's `ensure-external-channel.ts` says so
+// explicitly. Importing it from @synap/database is a compile error, which is how
+// this arrived: the symbol name is right, the package was not.
+import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -582,6 +590,148 @@ export function registerPlaybookExecutors(): void {
             "your workspace role cannot run this playbook, so re-running it only filed another proposal — ask a workspace admin or owner to approve",
         };
       });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── playbook_run / update ─────────────────────────────────────────────────
+  // Before the payload widening this gate stored `{ runId }`, so an approved
+  // capture-back had no status, no summary, no error and no provenance to
+  // apply. It now carries `{ runId, status, summary, error, producedEntityIds }`.
+  //
+  // NO PROCEDURE TO REPLAY: the direct path is inline in the REST handler
+  // (`hub-protocol/rest/runs.ts` PATCH), not a tRPC mutation — so this mirrors
+  // it, including the two details a naive `.set()` would lose:
+  //   1. TERMINAL STAMP — `completed`/`failed`/`proposed` stamp `completedAt`.
+  //      Omitting it leaves a finished run with a null completion time.
+  //   2. `?? run.<field>` COALESCING — an omitted field keeps its CURRENT value
+  //      rather than being blanked. Reading the row first is what makes that
+  //      possible; a blind `.set()` from the payload would null out `summary`
+  //      on any proposal that only changed `status`.
+  //
+  // PROVENANCE VALIDATION IS PART OF THE WRITE, not a nicety: each produced id
+  // must resolve to an entity in the RUN'S OWN workspace before it is linked.
+  // Skipping that would let an approved capture-back fabricate provenance edges
+  // to arbitrary, possibly cross-tenant, entity ids. The 100 cap is the direct
+  // path's own bound and is reproduced exactly.
+  //
+  // ⚠️ KNOWN PAYLOAD GAP — `usedCapabilities` IS NOT CARRIED BY THIS GATE.
+  // The direct path also writes `session → used → {tool|skill|command}` links
+  // from `body.usedCapabilities`, but the gate's `data: { … }` block stores only
+  // the five fields above. An approved run therefore records WHAT IT PRODUCED
+  // but not WHAT IT USED. That is a gate-payload gap, not an executor gap — it
+  // cannot be fixed here, because the information never reached the proposal.
+  // Fixing it means widening the gate in `rest/runs.ts` and adding
+  // `usedCapabilities` to the `playbook_run/update` pin in
+  // `gate-payload-sufficiency.test.ts`. Left deliberately un-faked: inventing
+  // an empty array here would look like coverage while writing nothing.
+  registerProposalExecutor({
+    key: "playbook_run/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
+      // The gate stores the id under `runId`, NOT `id` — reading `inner.id`
+      // here would find nothing and fall through to `proposal.targetId`.
+      const runId =
+        (inner.runId as string | undefined) ??
+        (raw.runId as string | undefined) ??
+        proposal.targetId;
+      if (!runId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook run update proposal is missing the run id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const run = await db.query.playbookRuns.findFirst({
+        where: eq(playbookRuns.id, runId),
+        columns: {
+          id: true,
+          status: true,
+          summary: true,
+          error: true,
+          completedAt: true,
+          sessionId: true,
+          workspaceId: true,
+        },
+      });
+      if (!run) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Playbook run to update no longer exists",
+        });
+      }
+
+      const nextStatus =
+        (inner.status as typeof run.status | undefined) ?? run.status;
+      const terminal =
+        nextStatus === "completed" ||
+        nextStatus === "failed" ||
+        nextStatus === "proposed";
+
+      await db
+        .update(playbookRuns)
+        .set({
+          status: nextStatus,
+          summary: (inner.summary as string | undefined) ?? run.summary,
+          error: (inner.error as string | undefined) ?? run.error,
+          completedAt: terminal ? new Date() : run.completedAt,
+        })
+        .where(eq(playbookRuns.id, runId));
+
+      // `session → produced → entity` provenance, workspace-validated and
+      // capped exactly as the direct path does.
+      const producedEntityIds = inner.producedEntityIds as string[] | undefined;
+      if (run.sessionId && run.workspaceId && producedEntityIds?.length) {
+        const requested = producedEntityIds.slice(0, 100);
+        const found = await db.query.entities.findMany({
+          where: inArray(entities.id, requested),
+          columns: { id: true, workspaceId: true },
+        });
+        const validIds = found
+          .filter((e) => e.workspaceId === run.workspaceId)
+          .map((e) => e.id);
+        if (validIds.length) {
+          await createLinks(
+            validIds.map((entityId) => ({
+              workspaceId: run.workspaceId as string,
+              fromType: "session" as const,
+              fromId: run.sessionId as string,
+              toType: "entity" as const,
+              toId: entityId,
+              linkType: "produced" as const,
+            }))
+          );
+        }
+      }
 
       await db
         .update(proposals)

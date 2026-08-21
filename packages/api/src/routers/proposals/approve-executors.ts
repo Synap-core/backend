@@ -33,6 +33,8 @@ import { registerViewExecutors } from "./executors/view.js";
 import { registerProfileExecutors } from "./executors/profile.js";
 import { registerSkillExecutors } from "./executors/skill.js";
 import { registerToolExecutors } from "./executors/tool.js";
+import { registerRoleExecutors } from "./executors/role.js";
+import { registerArtifactExecutors } from "./executors/artifact.js";
 import { registerRuleExecutors } from "./executors/rule.js";
 import { registerAutomationExecutors } from "./executors/automation.js";
 import { registerPlaybookExecutors } from "./executors/playbook.js";
@@ -41,6 +43,7 @@ import { registerWorkspaceExecutors } from "./executors/workspace.js";
 import { registerMessagingExecutors } from "./executors/messaging.js";
 import { registerCapabilityExecutors } from "./executors/capability.js";
 import { registerProviderExecutors } from "./executors/provider.js";
+import { registerWidgetExecutors } from "./executors/widget.js";
 import { registerCatchAllExecutor } from "./executors/catch-all.js";
 
 let registered = false;
@@ -63,6 +66,8 @@ export function registerApproveExecutors(): void {
   registerProfileExecutors();
   registerSkillExecutors();
   registerToolExecutors();
+  registerRoleExecutors();
+  registerArtifactExecutors();
   registerRuleExecutors();
   registerAutomationExecutors();
   registerPlaybookExecutors();
@@ -71,6 +76,7 @@ export function registerApproveExecutors(): void {
   registerMessagingExecutors();
   registerCapabilityExecutors();
   registerProviderExecutors();
+  registerWidgetExecutors();
   // Wildcard catch-all — registered LAST (see module docstring).
   registerCatchAllExecutor();
 }

@@ -24,12 +24,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** The kind of integration a Tool represents. */
 export type ToolKind =
-  | "builtin"
-  | "api"
-  | "mcp"
-  | "provider"
-  | "external"
-  | "script";
+  "builtin" | "api" | "mcp" | "provider" | "external" | "script";
 /** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
@@ -44,10 +39,68 @@ export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * Dynamic bindings let ONE tool ("Email", "LinkedIn") run against many accounts.
  */
 export type ToolAuthBinding =
-  | "static"
-  | "per_user"
-  | "per_agent"
-  | "per_entity";
+  "static" | "per_user" | "per_agent" | "per_entity";
+
+/**
+ * The CLOSED vocabulary of abstract intents — the ROUTING axis over the verb
+ * catalog. A verb's `id` is vendor-keyed (`gmail_send`, `unipile_send_message`);
+ * its `intent` says what it MEANS, so an agent can ask for "send a message"
+ * without already knowing the vendor.
+ *
+ * CLOSED, deliberately. W3C Web Intents — the same idea as a web standard — was
+ * abandoned partly because an open verb-space let every developer mint their own
+ * action, which diluted the vocabulary into noise. A verb that fits none of
+ * these leaves `intent` UNSET; it never invents a fourteenth value.
+ *
+ * This is a ROUTING axis and never an authorization axis: an intent resolves to
+ * a concrete verb id BEFORE the governance gate, which continues to decide on
+ * the concrete verb exactly as it did before.
+ */
+export const ABSTRACT_VERBS = [
+  // ACQUIRE — bring information in
+  /** Query an outside corpus (web, provider DB, file store). */
+  "search_external",
+  /** Locate people or companies matching criteria. */
+  "find_people",
+  /** Add known facts to a person/company we already have. */
+  "enrich_entity",
+  /** Get ONE identified external record. */
+  "fetch_record",
+  /** Enumerate records of a kind. */
+  "list_records",
+
+  // ACT OUTWARD — change something outside the pod
+  /** Deliver a message to a human outside the pod. */
+  "send_message",
+  /** Ask a person to connect (invite / relation request). */
+  "request_connection",
+  /** Create or modify a calendar commitment. */
+  "schedule_event",
+  /** Create/copy/move a file in external storage. */
+  "manage_file",
+  /** Produce an image, video, or audio artifact. */
+  "generate_media",
+
+  // BRIDGE — bring external data INTO the pod as proposed entities
+  "capture_into_pod",
+
+  // CONTROL
+  /** Invoke an arbitrary external compute job. */
+  "run_external_job",
+  /** Establish or authorize a provider connection. */
+  "connect_account",
+] as const;
+
+/** One value of the closed intent vocabulary — see `ABSTRACT_VERBS`. */
+export type AbstractVerb = (typeof ABSTRACT_VERBS)[number];
+
+/** Runtime membership test for the closed vocabulary. */
+export function isAbstractVerb(value: unknown): value is AbstractVerb {
+  return (
+    typeof value === "string" &&
+    (ABSTRACT_VERBS as readonly string[]).includes(value)
+  );
+}
 
 /**
  * One verb in a Tool's structured capability catalog (the capability-matrix
@@ -64,6 +117,14 @@ export type ToolVerbCatalogEntry = {
   argsSchema?: Record<string, unknown>;
   /** Aligns to the seeded grant exec-mode. */
   govDefault: "auto" | "propose" | "dry-run";
+  /**
+   * ROUTING axis: what this verb MEANS, independent of its vendor. OPTIONAL and
+   * always additive — `id` is untouched (verb ids are persisted durably in
+   * `capability_run_receipts.verb_id` and inside stored automation flows, so
+   * re-keying them would corrupt live rows). A legacy entry with no `intent`
+   * reads exactly as before. Never an authorization axis — see `ABSTRACT_VERBS`.
+   */
+  intent?: AbstractVerb;
 };
 
 export const tools = pgTable(

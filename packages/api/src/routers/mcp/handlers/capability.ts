@@ -260,6 +260,42 @@ export const capabilityHandlers: McpHandlerMap = {
         : undefined;
     const kind = typeof args.kind === "string" ? args.kind : undefined;
     const limit = typeof args.limit === "number" ? args.limit : undefined;
+
+    // ── INTENT LOOKUP (the reverse index) ─────────────────────────────────
+    // "Which installed capability can send a message?" answered WITHOUT the
+    // caller knowing the vendor. Routing only: it returns CONCRETE verb ids,
+    // which `synap_run_capability` then governs exactly as before.
+    if (args.intent !== undefined) {
+      const { isAbstractVerb, ABSTRACT_VERBS } =
+        await import("@synap/database/schema");
+      if (!isAbstractVerb(args.intent)) {
+        return ok({
+          error:
+            `Unknown intent ${JSON.stringify(args.intent)}. The vocabulary is closed — ` +
+            `one of: ${ABSTRACT_VERBS.join(", ")}.`,
+        });
+      }
+      const { capabilitiesByIntent } =
+        await import("../../../services/capabilities/capability-intent-index.js");
+      const matches = await capabilitiesByIntent(
+        { workspaceId: wsId, userId },
+        args.intent
+      );
+      return ok({
+        intent: args.intent,
+        matches,
+        // Empty is a real answer, not silence — say so, the same way the
+        // zero-hit rescue below refuses to hand back a bare [].
+        ...(matches.length === 0
+          ? {
+              note:
+                `No visible capability declares the intent "${args.intent}". Not every installed ` +
+                `verb declares one yet — call synap_list_capabilities without \`intent\` to scan the full catalog ` +
+                `before concluding the pod cannot do this.`,
+            }
+          : {}),
+      });
+    }
     const { listCapabilities, sectionCapabilities, DEFAULT_QUERY_LIMIT } =
       await import("../../../services/capabilities/capability-registry.js");
     // `limit: null` — never slice the RAW flat list here when a `query` is

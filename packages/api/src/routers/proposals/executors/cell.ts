@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, and, cellInstances } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -89,6 +89,111 @@ export function registerCellExecutors(): void {
         .where(eq(proposals.id, input.proposalId));
 
       // Report to IS telemetry (fire-and-forget — never blocks)
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── cell / update ─────────────────────────────────────────────────────────
+  // Before the payload widening this gate stored `{ id }` alone — and the whole
+  // point of this door is the new `config`, so an approved proposal had nothing
+  // to write. It now carries `{ id, config, workspaceId }`.
+  //
+  // NO PROCEDURE TO REPLAY: unlike `tool/update` or `role/update`, the direct
+  // path here is an inline `db.update(cellInstances)` inside the REST handler
+  // (`hub-protocol/rest/cell-instances.ts` PATCH), not a tRPC mutation. There is
+  // no router door to re-enter, so this MIRRORS that `.set()` exactly — the same
+  // shape `tool/create` uses for its inline insert. If that handler ever grows a
+  // side effect, it must be added here too; there is no shared door to inherit
+  // it from.
+  //
+  // WORKSPACE: taken from the STORED payload, which the gate recorded as the
+  // CONFINED value (never the raw request `body.workspaceId`). The `.where()`
+  // below re-applies it as a scope predicate exactly as the direct path does, so
+  // an approval can never write a cell outside the workspace that was reviewed.
+  registerProposalExecutor({
+    key: "cell/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
+      const cellId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!cellId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cell update proposal is missing the cell id",
+        });
+      }
+      const config = inner.config as Record<string, unknown> | undefined;
+      if (config === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Cell update proposal carries no `config` — nothing to apply.",
+        });
+      }
+
+      const wsLens =
+        (inner.workspaceId as string | undefined) ??
+        proposal.workspaceId ??
+        undefined;
+      if (!wsLens) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Cell update proposal has no workspace scope — refusing an unscoped write.",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch. The update
+      // itself is idempotent, but the guard keeps the emit/report half from
+      // firing twice.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const [row] = await db
+        .update(cellInstances)
+        .set({ config, updatedAt: new Date() })
+        .where(
+          and(
+            eq(cellInstances.id, cellId),
+            eq(cellInstances.workspaceId, wsLens)
+          )
+        )
+        .returning();
+      if (!row) {
+        // Matches the direct path's own not-found branch. Throwing leaves the
+        // proposal PENDING rather than reporting a write that never landed.
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Cell to update no longer exists in the proposed workspace",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
 
       deps.emitProposalReviewed(

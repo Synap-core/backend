@@ -2930,6 +2930,23 @@ export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * Dynamic bindings let ONE tool ("Email", "LinkedIn") run against many accounts.
  */
 export type ToolAuthBinding = "static" | "per_user" | "per_agent" | "per_entity";
+declare const ABSTRACT_VERBS: readonly [
+	"search_external",
+	"find_people",
+	"enrich_entity",
+	"fetch_record",
+	"list_records",
+	"send_message",
+	"request_connection",
+	"schedule_event",
+	"manage_file",
+	"generate_media",
+	"capture_into_pod",
+	"run_external_job",
+	"connect_account"
+];
+/** One value of the closed intent vocabulary — see `ABSTRACT_VERBS`. */
+export type AbstractVerb = (typeof ABSTRACT_VERBS)[number];
 /**
  * One verb in a Tool's structured capability catalog (the capability-matrix
  * axis). Kept in lock-step with `ToolVerb` in @synap/playbooks — re-declared here
@@ -2945,6 +2962,14 @@ export type ToolVerbCatalogEntry = {
 	argsSchema?: Record<string, unknown>;
 	/** Aligns to the seeded grant exec-mode. */
 	govDefault: "auto" | "propose" | "dry-run";
+	/**
+	 * ROUTING axis: what this verb MEANS, independent of its vendor. OPTIONAL and
+	 * always additive — `id` is untouched (verb ids are persisted durably in
+	 * `capability_run_receipts.verb_id` and inside stored automation flows, so
+	 * re-keying them would corrupt live rows). A legacy entry with no `intent`
+	 * reads exactly as before. Never an authorization axis — see `ABSTRACT_VERBS`.
+	 */
+	intent?: AbstractVerb;
 };
 declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "tools";
@@ -3191,7 +3216,7 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "tools";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "error" | "inactive";
+			data: "active" | "inactive" | "error";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -5886,6 +5911,7 @@ export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * the schema's `capabilities` column).
  */
 export type ToolVerbKind = "read" | "write" | "action";
+type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
 export interface ToolVerb {
 	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
 	id: string;
@@ -5905,6 +5931,15 @@ export interface ToolVerb {
 	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
 	 */
 	govDefault: ExecMode;
+	/**
+	 * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
+	 * can ask for "send a message" without knowing whether the pod has Gmail or
+	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
+	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
+	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
+	 * fits none of the closed values leaves this unset rather than inventing one.
+	 */
+	intent?: AbstractVerb$1;
 }
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
 export interface CredentialRequirement {
@@ -6039,6 +6074,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
 	 * A brick can therefore state what it returns, not just what it takes.
 	 */
 	responseShape?: ProviderVerbSpec["responseShape"];
+	/**
+	 * Whether a VISIBLE active+approved backing skill exists for this verb, i.e.
+	 * whether `executeCapability` could actually run it. Emitted by
+	 * `buildVerbStates` since the backing-skill gate landed, but never declared —
+	 * so a consumer reading it (the intent reverse index) did not typecheck.
+	 * Optional: a verb state built by any other path simply does not carry it.
+	 */
+	backingSkillExecutable?: boolean;
 }
 /**
  * The registry's own capability row: the shared `Capability` contract with the

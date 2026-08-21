@@ -104,6 +104,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
    * A brick can therefore state what it returns, not just what it takes.
    */
   responseShape?: ProviderVerbSpec["responseShape"];
+  /**
+   * Whether a VISIBLE active+approved backing skill exists for this verb, i.e.
+   * whether `executeCapability` could actually run it. Emitted by
+   * `buildVerbStates` since the backing-skill gate landed, but never declared —
+   * so a consumer reading it (the intent reverse index) did not typecheck.
+   * Optional: a verb state built by any other path simply does not carry it.
+   */
+  backingSkillExecutable?: boolean;
 }
 
 /**

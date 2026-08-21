@@ -5,6 +5,7 @@ import {
   eq,
   skills,
   knowledgeRepository,
+  capabilities,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
@@ -769,6 +770,87 @@ export function registerCapabilityExecutors(): void {
           >[0]["partType"],
         })
       );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability / create ───────────────────────────────────────────────────
+  // Before the payload widening this gate stored `{ name }` alone, losing
+  // `description` AND the workspace SCOPE — so an approved proposal would have
+  // materialized the documented "empty shell": an unscoped, undescribed
+  // capability. It now carries the full insert shape.
+  //
+  // NO PROCEDURE TO REPLAY: the direct path is a bare `db.insert(capabilities)`
+  // with NO side effects — no `emitSideEffects`, no `recordDomainMutation`, no
+  // grant seeding (unlike `tool/create`, which seeds one). Mirroring the insert
+  // is therefore complete, not a shortcut. Deliberately NOT adding an emit here
+  // that the direct path does not fire: an approval must reproduce the direct
+  // write, not improve on it, or the two paths diverge.
+  //
+  // ⚠️ targetId trap: this gate stores NO `id`, so `permission-check.ts` fell
+  // back to `randomUUID()` for `proposal.targetId`. That id names NOTHING. The
+  // reflexive `inner.id ?? raw.id ?? proposal.targetId` would hand a random uuid
+  // to the insert. It is a CREATE, so no id is read at all — the row mints its
+  // own, exactly as the direct path does.
+  //
+  // AUTHOR: `createdBy: proposal.agentUserId ?? userId` mirrors the direct
+  // path's `input.agentUserId ?? userId` — the agent wrote it, the human only
+  // approved it.
+  registerProposalExecutor({
+    key: "capability/create",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
+      const name = inner.name as string | undefined;
+      if (!name || typeof name !== "string" || name.trim() === "") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Capability proposal is missing name",
+        });
+      }
+
+      // Idempotency: the insert mints a fresh id each run, so a re-approve
+      // without this guard would double-create.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Workspace lens from the STORED payload (`null` = pod-wide, which is a
+      // legitimate reviewed value here — not a missing one).
+      const wsLens =
+        (inner.workspaceId as string | null | undefined) ??
+        proposal.workspaceId ??
+        null;
+
+      await db.insert(capabilities).values({
+        workspaceId: wsLens,
+        createdBy: proposal.agentUserId ?? userId,
+        name,
+        description: (inner.description as string | null) ?? undefined,
+      });
 
       await db
         .update(proposals)

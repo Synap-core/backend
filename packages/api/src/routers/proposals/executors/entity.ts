@@ -1066,4 +1066,124 @@ export function registerEntityExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── relation / update ─────────────────────────────────────────────────────
+  // Before the payload widening this gate stored `{ id }` alone — it described
+  // NO CHANGE, so an approved relation-update proposal had nothing to apply.
+  // It now carries the two fields `relationRepo.update` actually reads.
+  //
+  // SECOND EFFECT: the direct path is `assertWorkspaceWrite` →
+  // `relationRepo.update` (row + the `relation.update` event through the SHARED
+  // `eventRepository` singleton, whose hooks drive realtime/materialization) →
+  // `recordDomainMutation` (audit + reactor bus). A direct `db.update(relations)`
+  // here would drop the event hooks and the reactor — the same trap
+  // `relation/delete` above documents.
+  //
+  // IDENTITY: acts as the relation's OWNER, for the SAME reason as
+  // `relation/delete` — `RelationRepository.update` gates on
+  // `and(eq(relations.id, …), eq(relations.userId, userId))`, an OWNERSHIP
+  // predicate, so an approver who is not the owner would silently match zero
+  // rows. The APPROVER's own floor is asserted first against the LOADED row
+  // (workspace + ownerId), which is same-or-stricter than the router's
+  // `assertWorkspaceWrite`, so no authority is widened.
+  registerProposalExecutor({
+    key: "relation/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const relationId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!relationId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Relation update proposal is missing the relation id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const relation = await db.query.relations.findFirst({
+        where: eq(relations.id, relationId),
+        columns: { id: true, userId: true, workspaceId: true },
+      });
+      if (!relation) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Relation to update no longer exists",
+        });
+      }
+
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: relation.workspaceId,
+        ownerId: relation.userId,
+      });
+
+      // The patch must carry ONLY what was proposed: the procedure copies a
+      // field into `updateData` solely when it is `!== undefined`, so an
+      // omitted key stays omitted and the column is untouched. Spreading
+      // conditionally reproduces that; passing `type: undefined` explicitly
+      // would be equivalent here, but building the object this way keeps the
+      // "only patch what was sent" contract visible at the call site.
+      const type = inner.type as string | undefined;
+      const metadata = inner.metadata as Record<string, unknown> | undefined;
+      if (type === undefined && metadata === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Relation update proposal describes no change (no `type`, no `metadata`).",
+        });
+      }
+
+      const { relationsRouter } = await import("../../relations.js");
+      const relationCaller = relationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: relation.userId,
+        workspaceId: relation.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // Pass the ROW's workspace explicitly — `update` derives
+      // `effectiveWorkspaceId` from input/ctx, and that value is what the
+      // audit/reactor emit keys off (same reason as `relation/delete`).
+      assertApplied(
+        await relationCaller.update({
+          id: relationId,
+          ...(type !== undefined ? { type } : {}),
+          ...(metadata !== undefined ? { metadata } : {}),
+          ...(relation.workspaceId
+            ? { workspaceId: relation.workspaceId }
+            : {}),
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
 }

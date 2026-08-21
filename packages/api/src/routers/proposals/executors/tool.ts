@@ -214,4 +214,107 @@ export function registerToolExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── tool / update ────────────────────────────────────────────────────────
+  // Before the payload widening this gate stored `{ id }` alone, describing NO
+  // change — an approved tool-update proposal had literally nothing to apply.
+  // It now carries the full patch `toolsRouter.update` reads.
+  //
+  // REPLAY, not a direct `db.update(tools)`: the procedure loads the existing
+  // row, clears the `assertWorkspaceWrite` floor against the TOOL's real
+  // workspace, and drives its own side effects. Mirroring the `.set()` here
+  // would skip both — the same two things `tool/delete` above replays for.
+  //
+  // IDENTITY: acts as the APPROVER, exactly as `tool/delete` does and for the
+  // same reason — `assertWorkspaceWrite` is an authorization floor, so the
+  // reviewer must clear it rather than borrowing the row owner's identity.
+  //
+  // OMITTED-FIELD FIDELITY: `undefined` keys were dropped at JSON
+  // serialization, so a field the proposer never set is absent here and stays
+  // unchanged. Do NOT coalesce to `null` — that would blank a column the
+  // proposal never mentioned.
+  registerProposalExecutor({
+    key: "tool/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
+      const toolId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!toolId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Tool update proposal is missing the tool id",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, toolId),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Tool to update no longer exists",
+        });
+      }
+
+      const { toolsRouter } = await import("../../tools.js");
+      const toolCaller = toolsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await toolCaller.update({
+          id: toolId,
+          name: inner.name as string | undefined,
+          description: inner.description as string | undefined,
+          credentialRef: inner.credentialRef as string | undefined,
+          config: inner.config as Record<string, unknown> | undefined,
+          metadata: inner.metadata as Record<string, unknown> | undefined,
+          executor: inner.executor as
+            Parameters<typeof toolCaller.update>[0]["executor"] | undefined,
+          kind: inner.kind as
+            Parameters<typeof toolCaller.update>[0]["kind"] | undefined,
+          inputSchema: inner.inputSchema as Record<string, unknown> | undefined,
+          status: inner.status as
+            Parameters<typeof toolCaller.update>[0]["status"] | undefined,
+        })
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
 }
