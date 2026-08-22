@@ -34,6 +34,8 @@ import type {
   CaptureExecuteInput,
   CaptureExecuteResponse,
   AskResponse,
+  HubDiagnoseInput,
+  HubDiagnoseResult,
   HubDocument,
   HubRelation,
   HubGraphResult,
@@ -1522,6 +1524,8 @@ export class HubRestClient {
   async ask(input: {
     query: string;
     workspaceId?: string;
+    /** Optional project lens — orthogonal to workspaceId. */
+    projectId?: string;
     limit?: number;
     /**
      * Return just the glass-box understanding + routing (no retrieval) — for a
@@ -1533,9 +1537,24 @@ export class HubRestClient {
     return this.request<AskResponse>("POST", "/api/hub/knowledge/ask", {
       query: input.query,
       workspaceId: input.workspaceId ?? this.workspaceId,
+      projectId: input.projectId,
       limit: input.limit,
       parseOnly: input.parseOnly,
     });
+  }
+
+  /**
+   * `diagnose` — third door alongside ask + capture. Mode derived from payload,
+   * not a chosen endpoint: {} → whole-pod health · {type} → class surface ·
+   * {id} → auto-detect object · {agentId} → agent scorecard · {runId,flowType}
+   * / {flowType,flowId} → run feed/detail.
+   */
+  async diagnose(input?: HubDiagnoseInput): Promise<HubDiagnoseResult> {
+    return this.request<HubDiagnoseResult>(
+      "POST",
+      "/api/hub/diagnose",
+      input ?? {}
+    );
   }
 
   // ─── Automations ───────────────────────────────────────────────────────────

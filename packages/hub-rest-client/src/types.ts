@@ -534,6 +534,30 @@ export interface AskResponse {
   [key: string]: unknown;
 }
 
+// ─── Diagnose (third door alongside ask + capture) ───────────────────────────
+
+/**
+ * Input for POST /api/hub/diagnose. Mode is derived from payload shape, not a
+ * chosen endpoint: {} → whole-pod health · {type} → class surface · {id} →
+ * auto-detect object · {agentId} → agent scorecard · {runId,flowType} /
+ * {flowType,flowId} → run feed/detail.
+ */
+export interface HubDiagnoseInput {
+  agentId?: string;
+  id?: string;
+  type?: "proposal" | "session" | "capability" | "agent" | "entity" | "run";
+  workspaceId?: string | null;
+  stuckThresholdHours?: number;
+  flowType?:
+    "automation" | "playbook" | "capture" | "capability" | "session" | "chat";
+  flowId?: string;
+  runId?: string;
+  limit?: number;
+}
+
+/** Diagnose response — server returns z.any(); shape varies by mode. */
+export type HubDiagnoseResult = unknown;
+
 // ─── Relations & Graph ───────────────────────────────────────────────────────
 
 export interface HubRelation {

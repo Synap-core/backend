@@ -150,4 +150,7 @@ export type {
   SubmitCaptureGraphResult,
   AskResponse,
   AskAnswerBlock,
+  // Diagnose (third door)
+  HubDiagnoseInput,
+  HubDiagnoseResult,
 } from "./types.js";
