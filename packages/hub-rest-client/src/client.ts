@@ -36,6 +36,8 @@ import type {
   AskResponse,
   HubDiagnoseInput,
   HubDiagnoseResult,
+  CreateFocusSessionInput,
+  CreateFocusSessionResult,
   HubDocument,
   HubRelation,
   HubGraphResult,
@@ -1554,6 +1556,34 @@ export class HubRestClient {
       "POST",
       "/api/hub/diagnose",
       input ?? {}
+    );
+  }
+
+  // ─── Focus Sessions ────────────────────────────────────────────────────────
+
+  /**
+   * Declare a focus session — Raycast/CLI "I'm starting work on X".
+   * Wraps POST /api/hub/focus-sessions. Provide `workspaceId` and/or
+   * `projectId` (at least one). `userId` is resolved from GET /users/me.
+   *
+   * This is declaration only — not the session runtime (no update/complete).
+   * A `status: "proposed"` result is normal under governance; not an error.
+   */
+  async createFocusSession(
+    input: CreateFocusSessionInput
+  ): Promise<CreateFocusSessionResult> {
+    const userId = await this.resolveUserId();
+    // Project-only creates must stay workspace-null — do not stamp this.workspaceId.
+    const workspaceId =
+      input.workspaceId ?? (input.projectId ? undefined : this.workspaceId);
+    return this.request<CreateFocusSessionResult>(
+      "POST",
+      "/api/hub/focus-sessions",
+      {
+        ...input,
+        userId,
+        ...(workspaceId ? { workspaceId } : {}),
+      }
     );
   }
 

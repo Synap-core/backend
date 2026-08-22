@@ -558,6 +558,77 @@ export interface HubDiagnoseInput {
 /** Diagnose response — server returns z.any(); shape varies by mode. */
 export type HubDiagnoseResult = unknown;
 
+// ─── Focus Sessions ──────────────────────────────────────────────────────────
+
+/**
+ * One expected-output chip on session create. Mirrors REST
+ * ExpectedOutputItemSchema on POST /api/hub/focus-sessions.
+ */
+export interface FocusSessionExpectedOutput {
+  kind: string;
+  label: string;
+  icon?: string;
+  status?: "pending" | "done";
+}
+
+/**
+ * Input for POST /api/hub/focus-sessions.
+ * Provide `workspaceId` and/or `projectId` (at least one). `userId` is resolved
+ * by the client from GET /users/me — callers must not pass it.
+ */
+export interface CreateFocusSessionInput {
+  /** Workspace lens — optional when `projectId` is set. */
+  workspaceId?: string;
+  /** Project lens — optional when `workspaceId` is set. */
+  projectId?: string;
+  goal: string;
+  correlationId?: string;
+  templateId?: string;
+  expectedOutputs?: FocusSessionExpectedOutput[];
+  channelId?: string;
+  agentIds?: string[];
+}
+
+/** Applied focus-session row returned by POST /api/hub/focus-sessions. */
+export interface HubFocusSession {
+  id: string;
+  goal: string;
+  workspaceId: string | null;
+  projectId: string | null;
+  status: string;
+  userId?: string;
+  correlationId?: string | null;
+  templateId?: string | null;
+  expectedOutputs?: unknown;
+  channelId?: string | null;
+  progress?: number | null;
+  currentStage?: string | null;
+  agentIds?: string[];
+  closedAt?: string | null;
+  verificationReport?: unknown;
+  metadata?: unknown;
+  startedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Governance-gated create: either a pending proposal receipt or the applied
+ * session row. `proposed` is normal — never treat it as an error.
+ */
+export type CreateFocusSessionResult =
+  | {
+      status: "proposed";
+      proposalId: string;
+      reviewUrl?: string;
+      reviewPath?: string;
+      summary?: string;
+      message?: string;
+      session: null;
+    }
+  | HubFocusSession;
+
 // ─── Relations & Graph ───────────────────────────────────────────────────────
 
 export interface HubRelation {

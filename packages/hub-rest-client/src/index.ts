@@ -153,4 +153,9 @@ export type {
   // Diagnose (third door)
   HubDiagnoseInput,
   HubDiagnoseResult,
+  // Focus Sessions
+  FocusSessionExpectedOutput,
+  CreateFocusSessionInput,
+  HubFocusSession,
+  CreateFocusSessionResult,
 } from "./types.js";
