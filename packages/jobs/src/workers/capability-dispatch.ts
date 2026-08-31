@@ -88,7 +88,8 @@ export interface PlaybookRunnerInput {
   params?: Record<string, unknown>;
   subjectId?: string;
   idempotentBySubject?: boolean;
-  goalResolver?: (goalTemplate: string) => string;
+  /** `undefined` ⇒ defer to the spine's own resolveGoal (see run-playbook). */
+  goalResolver?: (goalTemplate: string) => string | undefined;
   chainContext?: PlaybookRunnerChainContext;
 }
 

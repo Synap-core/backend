@@ -128,8 +128,30 @@ export async function executePlaybookRun(
     params: resolvedParams,
     subjectId: resolvedSubjectId,
     idempotentBySubject: true,
-    goalResolver: (goalTemplate) =>
-      resolveTemplate(goalTemplate, context) || goalTemplate,
+    goalResolver: (goalTemplate) => {
+      const resolved = resolveTemplate(goalTemplate, context);
+      // `resolveTemplate` speaks ONLY {{mustache}}. A goalTemplate authored in
+      // the command-template grammar (`@{arg:name:type}`) contains no `{{ }}`,
+      // so it comes back BYTE-FOR-BYTE — and handing that on as a "resolved"
+      // goal is how 49 sessions were born reading a literal
+      // "Advance @{arg:company:entity} through …". It never counted as a miss,
+      // so every existing diagnostic stayed silent. Returning undefined says
+      // "wrong resolver for this grammar" and lets the spine's resolveGoal —
+      // which DOES speak it — substitute against `params`.
+      if (resolved === goalTemplate && goalTemplate.includes("@{arg:")) {
+        return undefined;
+      }
+      // A template mixing both grammars cannot be fully resolved by either side
+      // alone. Don't guess — resolve what we can and make the remainder LOUD,
+      // since silence is what let the original bug run 49 times.
+      if (resolved.includes("@{arg:")) {
+        logger.warn(
+          { playbookId: data.playbookId, playbookName: data.playbookName },
+          "playbook_run: goal mixes {{...}} and @{arg:...} grammars — the @{arg:...} references will not be substituted"
+        );
+      }
+      return resolved || goalTemplate;
+    },
     chainContext: automationContext
       ? {
           automationRunId: automationContext.automationRunId,

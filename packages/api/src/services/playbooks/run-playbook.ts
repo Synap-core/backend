@@ -106,7 +106,13 @@ export interface RunPlaybookInput {
    * / `{{steps.*}}` interpolate). Absent ⇒ the template is substituted against
    * `params` (the manual-run behavior) inside instantiateSession.
    */
-  goalResolver?: (goalTemplate: string) => string;
+  /**
+   * Resolves the playbook's goalTemplate against the caller's own context.
+   * Returning `undefined` means "I am not the right resolver for this grammar"
+   * — the spine then falls back to resolveGoal(), which substitutes
+   * `@{arg:name:type}` references against `params`.
+   */
+  goalResolver?: (goalTemplate: string) => string | undefined;
   /** Automation chain context — stamped onto the session (F2 depth floor). */
   chainContext?: RunChainContext;
   /** The entity this run is about (e.g. a contact, deal, or document).

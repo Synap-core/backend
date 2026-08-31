@@ -20,6 +20,18 @@ import { ensureSessionChannel } from "./ensure-session-channel.js";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * The key of a playbook's first stage, or null for a stageless playbook.
+ * Stages are stored as JSONB, so this stays defensive about shape rather than
+ * trusting the row to be well-formed.
+ */
+export function firstStageKey(stages: unknown): string | null {
+  if (!Array.isArray(stages) || stages.length === 0) return null;
+  const first = stages[0] as { key?: unknown } | null;
+  const key = first && typeof first === "object" ? first.key : undefined;
+  return typeof key === "string" && key.length > 0 ? key : null;
+}
+
 export interface CreateFocusSessionParams {
   userId: string;
   /**
@@ -165,6 +177,13 @@ export async function createFocusSession(
         // `openRunSession`. Readers prefer this column and fall back to the
         // legacy metadata sniff only for rows a non-stamping writer produced.
         origin: playbook ? "playbook" : "agent",
+        // `focus_sessions.current_stage` is documented as "seeded from the
+        // playbook's first stage on instantiation" — but this door only ever
+        // wired playbookId, so a session started from a staged playbook opened
+        // with a NULL stage and every stage-aware surface read it as stageless.
+        // Seed it here so the column matches its contract from birth; stageless
+        // playbooks (stages: []) correctly stay NULL.
+        currentStage: firstStageKey(playbook?.stages),
         expectedOutputs,
         channelId,
         agentIds,
