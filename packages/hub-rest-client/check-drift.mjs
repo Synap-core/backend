@@ -55,8 +55,9 @@ const SERVER_ONLY = new Set([
   "/skills/system",
   // Security vault — server-to-server only
   "/vault/request",
-  // Widget definitions are fetched by the UI layer (synap-app) directly via tRPC
-  "/widget-definitions",
+  // POST upsert stays UI/IS. GET is HubRestClient.listWidgetDefinitions.
+  // The drift path set is method-agnostic, so listing the path here would
+  // hide the GET we now wrap. Keyword coverage comes from listWidgetDefinitions.
   // Knowledge base is queried via IS hub tools, not directly from surfaces
   "/knowledge",
   "/knowledge/{key}",

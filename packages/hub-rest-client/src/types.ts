@@ -932,6 +932,32 @@ export interface HubView {
   updatedAt: string;
 }
 
+/**
+ * One row from GET /widget-definitions. Hub listWidgetDefs already merges
+ * compose-catalog builtins (source: "compose-catalog") with DB rows — this is
+ * the compose allowlist, not raw seeder output. Extra DB columns are allowed.
+ */
+export interface HubWidgetDefinition {
+  id: string;
+  typeKey?: string;
+  name?: string;
+  description?: string | null;
+  category?: string;
+  rendererType?: string;
+  rendererSource?: unknown;
+  workspaceId?: string | null;
+  isActive?: boolean;
+  defaultSize?: { w: number; h: number };
+  configSchema?: Record<string, unknown>;
+  defaultConfig?: Record<string, unknown>;
+  aliasOf?: string | null;
+  source?: string;
+  notes?: string;
+  /** Stale OpenAPI field on some pods. Prefer `typeKey`. */
+  kind?: string;
+  [key: string]: unknown;
+}
+
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 export interface HubSearchResult {

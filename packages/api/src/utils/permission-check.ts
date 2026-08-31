@@ -25,6 +25,8 @@ import {
   ProfileResolutionService,
   insertPendingProposal,
   findExistingPendingDuplicate,
+  resolveOrCreateAgentProposalSession,
+  deriveAgentProposalSessionGoal,
   type InsertPendingProposalResult,
 } from "@synap/database";
 import {
@@ -1611,6 +1613,36 @@ async function createPendingProposalRow(
   input: CreatePendingProposalInput,
   tx?: DbTx
 ): Promise<InsertPendingProposalResult> {
+  // Wave 2 — agent writes without a session get packaged into a focus session
+  // (teammate metaphor). Humans and already-sessioned callers are untouched.
+  // Never mint for focus_session self-writes (recursion). Best-effort.
+  let sessionId = input.sessionId ?? null;
+  if (
+    input.agentUserId &&
+    !sessionId &&
+    !input.proposalType.startsWith("focus_session")
+  ) {
+    try {
+      sessionId = await resolveOrCreateAgentProposalSession({
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        goal: deriveAgentProposalSessionGoal({
+          data: input.data,
+          proposalType: input.proposalType,
+          targetType: input.targetType,
+          notificationDescription: input.notificationDescription,
+        }),
+        // Per-proposal correlation UUIDs would force one session per row —
+        // only reuse by agent+goal (openRunSession mint on miss).
+        stableCorrelation: false,
+      });
+    } catch {
+      sessionId = null;
+    }
+  }
+
   // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
   // shape the automation write path uses via proposeAutomationWrite. createdBy
   // keeps this path's fallback (explicit → agent → requesting user).
@@ -1629,7 +1661,7 @@ async function createPendingProposalRow(
       sourceMessageId: input.sourceMessageId,
       correlationId: input.correlationId,
       requestedEventId: input.requestedEventId,
-      sessionId: input.sessionId,
+      sessionId,
       projectId: input.projectId,
       expiresAt: input.expiresAt,
       governanceReason: input.governanceReason,

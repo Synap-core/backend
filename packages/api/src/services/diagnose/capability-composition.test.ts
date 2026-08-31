@@ -469,6 +469,134 @@ describe("buildCapabilityComposition — description + extractionPolicy", () => 
   });
 });
 
+describe("buildCapabilityComposition — direction pair", () => {
+  it("ingest via a produced channel ⇒ direction.ingest, kind:'ingest' (no member skills)", async () => {
+    // Same shape as the isBridge "PRODUCED a channel" fixture above.
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Discord Bot", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(links, [{ channelId: "ch1" }]);
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Discord",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.mode).toBe("standing"); // sanity: this is the produced-channel path
+    expect(result.direction.ingest).toBe(true);
+    expect(result.direction.callable).toBe(false); // zero member skills
+    expect(result.direction.kind).toBe("ingest");
+  });
+
+  it("ingest via declared metadata.emits, with NO produced channel and NOT standing ⇒ kind:'ingest'", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Webhook Source", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(links, []); // no produced edges
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Webhook Ingest",
+        approved: true,
+        metadata: { emits: ["external_message.received.completed"] },
+      },
+    });
+
+    expect(result.mode).toBe("unknown"); // proves ingest isn't riding on `mode`
+    expect(result.direction.ingest).toBe(true);
+    expect(result.direction.callable).toBe(false);
+    expect(result.direction.kind).toBe("ingest");
+  });
+
+  it("callable only — ≥1 resolved member skill, no produced channel, no emits ⇒ kind:'callable'", async () => {
+    // NOTE: the "verb-only api-tool, no connection ⇒ mode:unknown" fixture
+    // elsewhere in this file actually carries ONLY a tool member — no skill
+    // link — so its real direction is {ingest:false, callable:false,
+    // kind:'unknown'}, not "callable only" as it might sound. This fixture
+    // is the genuine callable-only case: a single self-standing (code-kind)
+    // skill member, no tool, no produced edge.
+    mockGetLinksFor.mockResolvedValue([memberLink("skill", "s1")]);
+    rowsByTable.clear();
+    rowsByTable.set(skills, [
+      { id: "s1", name: "entity.create", kind: "code" },
+    ]);
+    rowsByTable.set(links, []); // no produced edges, no `requires` rows needed (code verb)
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Verb-only",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.direction.callable).toBe(true);
+    expect(result.direction.ingest).toBe(false);
+    expect(result.direction.kind).toBe("callable");
+  });
+
+  it("both — a produced channel AND ≥1 member skill ⇒ kind:'both'", async () => {
+    mockGetLinksFor.mockResolvedValue([
+      memberLink("tool", "t1"),
+      memberLink("skill", "s1"),
+    ]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [
+      { id: "t1", name: "Discord Bot", config: {}, kind: "api" },
+    ]);
+    rowsByTable.set(skills, [{ id: "s1", name: "post_message", kind: "code" }]);
+    rowsByTable.set(links, [{ channelId: "ch1" }]); // produced edge; skill is code-kind (no `requires` row needed)
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: {
+        id: CAP_ID,
+        name: "Discord Bot",
+        approved: true,
+        metadata: null,
+      },
+    });
+
+    expect(result.mode).toBe("standing");
+    expect(result.direction.ingest).toBe(true);
+    expect(result.direction.callable).toBe(true);
+    expect(result.direction.kind).toBe("both");
+  });
+
+  it("neither → unknown — the bare, flow-less capability fixture (tool member, no skills/emits/produced)", async () => {
+    mockGetLinksFor.mockResolvedValue([memberLink("tool", "t1")]);
+    rowsByTable.clear();
+    rowsByTable.set(tools, [{ id: "t1", name: "Linear" }]);
+    mockListRuns.mockResolvedValue([]);
+
+    const result = await buildCapabilityComposition({
+      userId: "user-1",
+      capability: { id: CAP_ID, name: "Bare", approved: false, metadata: null },
+    });
+
+    expect(result.direction.ingest).toBe(false);
+    expect(result.direction.callable).toBe(false);
+    expect(result.direction.kind).toBe("unknown");
+  });
+});
+
 describe("listCapabilityCompositions — the whole-pod map door", () => {
   it("returns one CapabilityComposition per visible container, keyed by container id", async () => {
     // Two containers; each has a single tool member with no runs.

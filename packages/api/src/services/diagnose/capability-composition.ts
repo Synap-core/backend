@@ -238,9 +238,11 @@ export async function buildCapabilityComposition(
     mode === "standing" || // declared, derived_transport, or derived_produced
     [...toolRows.values()].some((t) => t.kind === "provider");
 
-  // ── Direction: the honest ingest/callable PAIR. `mode` alone lies here — it
-  // is a single enum that never concludes `callable` (see deriveCapabilityMode),
-  // so a UI toggle needs BOTH halves derived from real signals:
+  // ── Direction: the honest ingest/callable PAIR. `mode` alone can't express it —
+  // it is a single enum whose `callable` value is declared-only (deriveCapabilityMode
+  // returns it just when `metadata.mode === "callable"`; it is never DERIVED), and it
+  // can't say "both" — so a UI toggle needs BOTH halves derived independently from
+  // real signals:
   //   ingest   — standing mode, a declared `metadata.emits`, or a produced
   //              channel (data comes IN).
   //   callable — ≥1 resolved catalog verb; a catalog card's `verbs[]` are its

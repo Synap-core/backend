@@ -53,6 +53,7 @@ import type {
   HubThreadContext,
   HubProposal,
   HubView,
+  HubWidgetDefinition,
   HubSearchResult,
   HubCommand,
   HubAgentUser,
@@ -1165,6 +1166,24 @@ export class HubRestClient {
         sourceMessageId: input.sourceMessageId,
       }
     );
+  }
+
+  /**
+   * Compose widget catalog: curated builtins plus generated/frame DB rows.
+   * GET /widget-definitions already merges composeCatalogAsDefinitionRows —
+   * do not copy the catalog into callers.
+   */
+  async listWidgetDefinitions(options?: {
+    workspaceId?: string;
+  }): Promise<HubWidgetDefinition[]> {
+    const params = new URLSearchParams();
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    if (workspaceId) params.set("workspaceId", workspaceId);
+    const qs = params.toString() ? `?${params}` : "";
+    const result = await this.request<
+      HubWidgetDefinition[] | HubListResponse<HubWidgetDefinition>
+    >("GET", `/api/hub/widget-definitions${qs}`);
+    return unwrapList(result, "widgets");
   }
 
   // ─── Documents ────────────────────────────────────────────────────────────

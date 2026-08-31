@@ -88,6 +88,7 @@ export type {
   // Views
   HubView,
   HubBentoArrangementResult,
+  HubWidgetDefinition,
   // Search
   HubSearchResult,
   // Commands & Agents
