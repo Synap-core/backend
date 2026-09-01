@@ -36,15 +36,20 @@
 import { createLogger } from "@synap-core/core";
 import { db, eq, and, inArray, drizzleSql } from "@synap/database";
 import { capabilities, skills, tools, links } from "@synap/database/schema";
+import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { queryCatalogCache } from "./catalog-cache-query.js";
 import {
   loadCapabilityTemplate,
   createCapabilityFromDefinition,
+  deriveToolVerbs,
+  GRANT_DEFAULT_EXEC_MODE,
 } from "./create-from-definition.js";
 import {
   capabilityDefinitionDrift,
+  capabilityVerbCatalogDrift,
+  DRIFT_COMPARATOR_VERSION,
   type InstalledSkillRow,
 } from "./capability-drift.js";
 import type { Context } from "../../types/context.js";
@@ -115,7 +120,9 @@ export function missingToolMemberships(
  * already-installed capability pick up a template's newly-declared `mode` on
  * the very next reconcile, even when nothing else drifted (a metadata-only
  * template edit changes `contentHash`, which alone triggers this stamp — see
- * the "no drift" call site).
+ * the "no drift" call site). The stamp also carries the comparator version that
+ * cleared it, which is what keeps the fast path from trusting a verdict a newer
+ * comparator would not have reached.
  */
 async function stampContainerMetadata(
   containerId: string,
@@ -131,7 +138,13 @@ async function stampContainerMetadata(
         ...currentMetadata,
         ...(defMetadata ?? {}),
         templateKey,
-        ...(contentHash ? { contentHash } : {}),
+        // The hash is never stamped alone: it only means "this container is
+        // clean at this template version AS JUDGED BY comparator vN", and the
+        // fast path below honours it only for the CURRENT N. See
+        // DRIFT_COMPARATOR_VERSION for the miss this prevents.
+        ...(contentHash
+          ? { contentHash, comparatorVersion: DRIFT_COMPARATOR_VERSION }
+          : {}),
       },
       updatedAt: new Date(),
     })
@@ -218,6 +231,12 @@ export async function reconcileCapabilitiesToTemplates(
         typeof metadata.contentHash === "string"
           ? metadata.contentHash
           : undefined;
+      // Absent on any container stamped before the comparator was versioned —
+      // which is exactly a container whose stamp we must not trust.
+      const storedComparatorVersion =
+        typeof metadata.comparatorVersion === "number"
+          ? metadata.comparatorVersion
+          : undefined;
 
       let templateKey = storedTemplateKey;
       let backfilled = false;
@@ -261,15 +280,24 @@ export async function reconcileCapabilitiesToTemplates(
         continue;
       }
 
-      // FAST PATH: both sides carry a contentHash and they match → no drift,
-      // skip the structural diff entirely. A backfilled key has no prior stored
-      // hash, so it always falls through to the structural diff below (which
-      // also lets us stamp provenance the first time, even with zero drift).
+      // FAST PATH: both sides carry a contentHash, they match, AND the stamp was
+      // written by the comparator running now → no drift, skip the structural
+      // diff entirely. A backfilled key has no prior stored hash, so it always
+      // falls through to the structural diff below (which also lets us stamp
+      // provenance the first time, even with zero drift).
+      //
+      // The comparator-version clause is what makes the skip earned rather than
+      // self-certifying: a stamp written by a comparator that could not see a
+      // field (`intent`) is not evidence about that field, so teaching the
+      // comparator retires every stamp it wrote and each container is re-diffed
+      // once. Without it, a template field added after install could never reach
+      // an already-installed pod.
       if (
         !backfilled &&
         cachedDef.contentHash &&
         storedContentHash &&
-        cachedDef.contentHash === storedContentHash
+        cachedDef.contentHash === storedContentHash &&
+        storedComparatorVersion === DRIFT_COMPARATOR_VERSION
       ) {
         report.skipped.push({
           containerId: container.id,
@@ -295,12 +323,21 @@ export async function reconcileCapabilitiesToTemplates(
       const installedSkills: InstalledSkillRow[] =
         memberSkillIds.length > 0
           ? await db
+              // Every column `PROJECTED_SKILL_FIELDS` compares — a column the
+              // comparator reads but the select omits is `undefined` on every
+              // row, i.e. a diff that silently can never fire.
               .select({
                 name: skills.name,
                 providerSpec: skills.providerSpec,
                 parameters: skills.parameters,
                 code: skills.code,
                 description: skills.description,
+                kind: skills.kind,
+                scope: skills.scope,
+                category: skills.category,
+                agentTypes: skills.agentTypes,
+                executionMode: skills.executionMode,
+                timeoutSeconds: skills.timeoutSeconds,
               })
               .from(skills)
               .where(inArray(skills.id, memberSkillIds))
@@ -314,7 +351,9 @@ export async function reconcileCapabilitiesToTemplates(
       // See `missingToolMemberships` above for why this is a distinct check
       // from `capabilityDefinitionDrift` (skills only, content not presence).
       const memberToolRows = await db
-        .select({ name: tools.name })
+        // `capabilities` = the stored verb catalog, compared below against what
+        // `deriveToolVerbs` projects (the surface `intent` actually lands on).
+        .select({ name: tools.name, capabilityCatalog: tools.capabilities })
         .from(links)
         // `tools.id` is uuid, `links.fromId` is text — same cast trap
         // `loadContainerRefs` (capability-registry.ts) documents for
@@ -334,18 +373,54 @@ export async function reconcileCapabilitiesToTemplates(
         new Set(memberToolRows.map((r) => r.name))
       );
 
+      // Verb-catalog drift — the definition's skills also project onto the
+      // requiring TOOL's `capabilities` jsonb, and some fields (`intent`, the
+      // routing axis) land ONLY there. Projected with the applier's own
+      // `deriveToolVerbs` at the same `govDefault` a re-apply would write, so
+      // the diff and the convergence can never disagree. A template declaring
+      // an unknown intent makes this throw — caught by the per-container catch
+      // below and reported as a conflict, which is the honest outcome.
+      const projectedVerbs = new Map<string, ToolVerbCatalogEntry[]>();
+      for (const t of cachedDef.tools ?? []) {
+        if (typeof t.name !== "string") continue;
+        const verbs = deriveToolVerbs(
+          t.name,
+          cachedDef.skills ?? [],
+          GRANT_DEFAULT_EXEC_MODE
+        );
+        if (verbs.length > 0) projectedVerbs.set(t.name, verbs);
+      }
+      const catalogDrift = capabilityVerbCatalogDrift(
+        memberToolRows,
+        projectedVerbs
+      );
+
       const hasDrift =
         drift.missing.length > 0 ||
         drift.drifted.length > 0 ||
-        missingTools.length > 0;
+        missingTools.length > 0 ||
+        catalogDrift.drifted.length > 0;
 
       if (!hasDrift) {
         // Nothing to converge, but a legacy container may still be missing
-        // provenance (backfilled key) or a stale hash — stamp it directly (no
-        // skills/tools touched, so no need to go through the applier).
+        // provenance (backfilled key) or a template-declared `metadata` key —
+        // stamp those directly (no skills/tools touched, so no need to go
+        // through the applier).
+        //
+        // The hash stamped here is a CLEAN-DIFF claim, not a convergence one —
+        // `stampContainerMetadata` records the comparator version alongside it
+        // so the fast path can tell the two apart from a later comparator's
+        // point of view. Re-stamp also when only the version is stale, so a
+        // container re-diffed after a comparator bump does not re-diff forever.
         if (
           !dryRun &&
-          (backfilled || cachedDef.contentHash !== storedContentHash)
+          (backfilled ||
+            cachedDef.contentHash !== storedContentHash ||
+            // Only meaningful where a hash is actually stamped — a hash-less
+            // template stamps no version either, and must not re-write on
+            // every boot chasing one.
+            (!!cachedDef.contentHash &&
+              storedComparatorVersion !== DRIFT_COMPARATOR_VERSION))
         ) {
           await stampContainerMetadata(
             container.id,
@@ -365,7 +440,7 @@ export async function reconcileCapabilitiesToTemplates(
       }
 
       const updatePolicy = cachedDef.updatePolicy ?? "auto";
-      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}`;
+      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}${catalogDrift.drifted.length > 0 ? ` verbCatalogDrift=[${catalogDrift.drifted.join(",")}]` : ""}`;
 
       // A template that carries `{{param}}` in a skill NAME needs install-time
       // params the reconcile doesn't have — re-projecting it with `{}` would

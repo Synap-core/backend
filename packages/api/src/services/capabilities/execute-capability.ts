@@ -290,6 +290,14 @@ export async function executeCapability(input: {
           ? { idempotencyKey: input.idempotencyKey }
           : {}),
       },
+      // WHY this needs a human, persisted onto `proposals.governance_reason`.
+      // Previously never passed here: `createPendingProposal` has forwarded
+      // this field all along and the dominant producer simply never populated
+      // it, so 620 of 680 pending rows carried no cause (measured 2026-09-01).
+      // It matters most inside a cluster — the fingerprint keys on the
+      // capability id, so without this an UNTRUSTED_ORIGIN run is
+      // indistinguishable from a routine one among 400 siblings.
+      governanceReason: decision.reasonCode ?? null,
       notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
     });
     // Every other governed write hands the caller a clickable review link —

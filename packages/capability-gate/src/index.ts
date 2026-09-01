@@ -147,6 +147,20 @@ export type GateCapabilityDecision =
       decision: "propose";
       proposalType: string;
       data: Record<string, unknown>;
+      /**
+       * WHY this run needs a human — a `PROPOSE_REASON` key, persisted onto
+       * `proposals.governance_reason` by the caller.
+       *
+       * Without it a capability-run proposal reaches review with NO recorded
+       * cause, and since the fingerprint keys on `targetId` (the capability)
+       * an untrusted-origin run is INDISTINGUISHABLE from a routine one inside
+       * a cluster of 400. Measured 2026-09-01: 620 of 680 pending rows carried
+       * no reason at all, because this field did not exist.
+       *
+       * Optional so every existing consumer of the propose branch compiles
+       * unchanged.
+       */
+      reasonCode?: string;
     }
   | { decision: "deny"; reason: string }
   | { decision: "dry-run" };
@@ -355,7 +369,12 @@ export async function gateCapabilityExecution(
       ) {
         return { decision: "run" };
       }
-      return buildProposeDecision(input);
+      // The policy has NOT run on this path — it short-circuits above the
+      // verdict — so the rung-2.55 floor has to be named here or it is lost.
+      return buildProposeDecision(
+        input,
+        originUntrusted ? "UNTRUSTED_ORIGIN" : "CAPABILITY_PROPOSE"
+      );
     }
     // Grant row is the source of truth for exec-mode (override only if explicitly
     // supplied via grantMetadata — normally absent).
@@ -405,7 +424,13 @@ export async function gateCapabilityExecution(
   ) {
     return { decision: "run" };
   }
-  return buildProposeDecision(input);
+  // The verdict already carries the structured cause (the policy emits
+  // UNTRUSTED_ORIGIN / ADMIN / DESTRUCTIVE_HARD_FLOOR itself). It was being
+  // dropped on the floor here; carry it through rather than re-deriving it.
+  return buildProposeDecision(
+    input,
+    verdict.reasonCode ?? "CAPABILITY_PROPOSE"
+  );
 }
 
 /**
@@ -458,10 +483,12 @@ async function capabilityRuleAuthorizesRun(
  * proposal shape.
  */
 function buildProposeDecision(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  reasonCode: string
 ): Extract<GateCapabilityDecision, { decision: "propose" }> {
   return {
     decision: "propose",
+    reasonCode,
     proposalType: CAPABILITY_RUN_PROPOSAL.proposalType,
     data: {
       capabilityKind: input.capabilityKind,

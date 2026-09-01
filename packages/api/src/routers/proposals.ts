@@ -584,6 +584,12 @@ export const proposalsRouter = router({
           stepRunId: proposals.stepRunId,
           workspaceId: proposals.workspaceId,
           createdAt: proposals.createdAt,
+          // The escalation cause. NOT type-determined — an `entity/update` that
+          // reached review only because rung 2.55 flagged its instruction as
+          // untrusted-origin fingerprints identically to a routine one, so
+          // without this column a cluster cannot warn that it contains an item
+          // the injection floor exists to surface.
+          governanceReason: proposals.governanceReason,
         })
         .from(proposals)
         .where(and(...conditions))
@@ -651,6 +657,7 @@ export const proposalsRouter = router({
         automationId: r.stepRunId
           ? (automationByStepRun.get(r.stepRunId) ?? null)
           : null,
+        governanceReason: r.governanceReason ?? null,
       }));
 
       let clusters = collapseProposalsToClusters(clusterRows);

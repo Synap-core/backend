@@ -66,10 +66,22 @@ vi.mock("@synap/database", () => {
 vi.mock("@synap/database/schema", () => ({
   tools: { name: "name", createdAt: "created_at" },
 }));
-vi.mock("drizzle-orm", () => ({
-  eq: (a: unknown, b: unknown) => ({ a, b }),
-  asc: (a: unknown) => ({ asc: a }),
-}));
+// TOTAL replacement: whatever this factory omits does not exist for the whole
+// module graph, so a NEW source import of any other drizzle export collapses
+// the suite at COLLECTION time — "no tests", not a failed assertion, and tsc
+// stays green throughout. That is what happened here: a schema file began using
+// `relations`, and this file went dark without a single test reporting failure.
+//
+// `importOriginal` spreads the real module first, so only the two helpers this
+// suite actually asserts on are stubbed and a future import cannot repeat it.
+vi.mock("drizzle-orm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("drizzle-orm")>();
+  return {
+    ...actual,
+    eq: (a: unknown, b: unknown) => ({ a, b }),
+    asc: (a: unknown) => ({ asc: a }),
+  };
+});
 vi.mock("./place-artboard-deck.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./place-artboard-deck.js")>();

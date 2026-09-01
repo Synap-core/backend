@@ -39,7 +39,13 @@ import {
 import {
   resolveActionLabel,
   resolveObjectNoun,
+  humanizeToken,
 } from "@synap-core/types/vocabulary";
+import { listCapabilities } from "../services/capabilities/capability-registry.js";
+import {
+  projectRunnableActions,
+  type RunnableCapabilityAction,
+} from "../services/capabilities/action-projection.js";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import {
   flowValidationErrorMessage,
@@ -785,7 +791,17 @@ export type EventOption = z.infer<typeof eventOptionSchema>;
 const actionOptionSchema = z.object({
   key: z.string(),
   label: z.string(),
-  outputType: z.string(),
+  // Which flow node this action compiles to. "output" (default) → an `output`
+  // node keyed on `outputType`; "capability" → a `type:"capability"` node calling
+  // `verbId` on `capabilityId`, governed by the shared capability gate.
+  nodeType: z.enum(["output", "capability"]).default("output"),
+  // Set for OUTPUT actions (the executor `outputType`); absent for capability.
+  outputType: z.string().optional(),
+  // Set for CAPABILITY actions: the verb id (`<subject>.<action>` — the exact id
+  // `executeCapability` dispatches) + its owning capability (flow-node provenance).
+  // Absent for output actions.
+  capabilityId: z.string().uuid().optional(),
+  verbId: z.string().optional(),
   params: z
     .array(
       z.object({
@@ -797,6 +813,54 @@ const actionOptionSchema = z.object({
     .optional(),
 });
 export type ActionOption = z.infer<typeof actionOptionSchema>;
+
+/**
+ * Project a verb's `paramsSchema` (`{ [name]: { required, description? } }`, off
+ * the real execute-time contract via `projectRunnableActions`) into the SAME
+ * `{ key, label, required }` shape the 5 output actions use — so the rule editor's
+ * generic param renderer AND the required-config activate gate work for capability
+ * THEN with zero new UI. Labels go through the ONE humanization door.
+ */
+export function paramsFromVerbSchema(
+  schema: Record<string, unknown>
+): NonNullable<ActionOption["params"]> {
+  const out: NonNullable<ActionOption["params"]> = [];
+  for (const [key, spec] of Object.entries(schema)) {
+    const required =
+      typeof spec === "object" && spec !== null && "required" in spec
+        ? (spec as { required?: unknown }).required === true
+        : false;
+    out.push({ key, label: humanizeToken(key), required });
+  }
+  return out;
+}
+
+/**
+ * Map a capability's RUNNABLE verbs into capability-THEN `ActionOption`s. Runnable
+ * = `projectRunnableActions`' floor (governance:auto + connected + backing-skill
+ * executable) — so a verb that would fail closed unattended inside a flow
+ * (unapproved → suppressProposal → deny) is never offered. Skill-only actions
+ * (no `verbId`) are skipped: the sentence path emits a `type:"capability"` node
+ * keyed on `verbId`, which they lack.
+ */
+export function capabilityActionOptions(
+  runnable: RunnableCapabilityAction[],
+  capabilityId: string
+): ActionOption[] {
+  const out: ActionOption[] = [];
+  for (const action of runnable) {
+    if (!action.verbId) continue;
+    out.push({
+      key: `verb:${action.verbId}`,
+      label: action.label,
+      nodeType: "capability",
+      capabilityId,
+      verbId: action.verbId,
+      params: paramsFromVerbSchema(action.parameters),
+    });
+  }
+  return out;
+}
 
 /**
  * The automation OUTPUT-node vocabulary — the THEN half of a rule.
@@ -1484,31 +1548,52 @@ export const automationsRouter = router({
    */
   availableActions: protectedProcedure
     .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
-    .query(async () => {
-      // NOTE(rules-slice2): the THEN menu is the executable output vocabulary.
-      // Capability-verb actions are intentionally NOT offered yet — a capability
-      // action must compile to a `type:"capability"` flow node (executor:
-      // automation-executor.ts `case "capability"`), NOT an `output` node (there
-      // is no `outputType:"capability"` the output executor in steps/output.ts can
-      // run), so surfacing one here would be a menu entry that silently never
-      // fires. Wire it (keyed off scope.capabilityId) once the sentence path can
-      // emit a capability node; until then the menu stays honest.
-      // Only the SENTENCE-CONFIGURABLE outputs are offered here: those with a
-      // config branch in OutputSettings (see SENTENCE_ACTION_PARAMS). The advanced
-      // graph-only types (facet_*/relation_create/session_update/set_state) have
-      // no sentence config UI, so surfacing them would let a user activate a rule
-      // whose required config the "activate" gate cannot check — they remain
-      // available on the node/canvas flow editor. `params` carries each output's
-      // required (+ key optional) fields so the create modal's required-config
-      // check is real, not vacuous.
+    .query(async ({ input, ctx }) => {
+      const scope = input?.scope ?? {};
+
+      // The SENTENCE-CONFIGURABLE outputs: those with a config branch in
+      // OutputSettings (see SENTENCE_ACTION_PARAMS). The advanced graph-only types
+      // (facet_*/relation_create/session_update/set_state) have no sentence config
+      // UI, so surfacing them would let a user activate a rule whose required
+      // config the "activate" gate cannot check — they remain on the canvas
+      // editor. `params` carries each output's required (+ key optional) fields so
+      // the create modal's required-config check is real, not vacuous.
       const actions: ActionOption[] = SENTENCE_OUTPUT_TYPES.map(
         (outputType) => ({
           key: outputType,
           label: actionLabelFor(outputType),
+          nodeType: "output" as const,
           outputType,
           params: SENTENCE_ACTION_PARAMS[outputType],
         })
       );
+
+      // Capability-verb THEN (rules-slice2): when a rule is scoped to a capability,
+      // also offer THAT capability's RUNNABLE verbs. A capability action compiles
+      // to a `type:"capability"` flow node (executor: automation-executor.ts `case
+      // "capability"` → the shared governed `executeCapability` door), NOT an
+      // `output` node — the sentence path now emits that node. Honest twice over:
+      // `projectRunnableActions` yields only verbs that WILL fire unattended
+      // (governance:auto + connected + executable), so a verb that would fail
+      // closed mid-flow (unapproved → suppressProposal → deny) is never offered.
+      // `scope.workspaceId ?? null` = pod altitude when the lens is absent (still
+      // resolves pod-wide capabilities honestly).
+      const userId = AccessContext.from(ctx).userId;
+      if (scope.capabilityId && userId) {
+        const caps = await listCapabilities({
+          workspaceId: scope.workspaceId ?? null,
+          userId,
+        });
+        const target = caps.find((c) => c.id === scope.capabilityId);
+        if (target) {
+          actions.push(
+            ...capabilityActionOptions(
+              projectRunnableActions([target]),
+              scope.capabilityId
+            )
+          );
+        }
+      }
 
       return { actions: actionOptionSchema.array().parse(actions) };
     }),

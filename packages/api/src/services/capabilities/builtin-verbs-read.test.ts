@@ -118,6 +118,13 @@ describe("W6 read/resolve verbs — registry", () => {
     }
   });
 
+  // EXACT equality on purpose. Every member of this set AUTO-RUNS with no
+  // proposal, so the set growing is a governance change, not a refactor. When
+  // this fails, the question is never "update the list" — it is "was this verb
+  // deliberately made auto-running, and is its rationale written down?". Three
+  // verbs were added between 08-19 and 08-31; each had its own dedicated test
+  // and a documented reason in `builtin-verbs.ts`, and this list was still the
+  // last place to find out.
   it("marks the reads (+ ai.generate pure-compute) as read-only (writes flow through the gate)", () => {
     expect([...READ_ONLY_BUILTIN_VERBS].sort()).toEqual([
       // ai.generate is pure compute (no mutation) → auto-runs like the reads.
@@ -138,9 +145,21 @@ describe("W6 read/resolve verbs — registry", () => {
       // safe to auto-run" — it is NOT an authorization claim: the handler
       // gates on `assertPodAdmin(ctx.userId)` because it scans every agent
       // pod-wide and files proposals attributed to other users.
+      // The two calibration twins, added after this list was first written.
+      // Same rationale, verbatim: they file review items and mutate no graph
+      // data, so a propose verdict on the VERB would stall the daily cron they
+      // live in. Each also carries its own dedicated read-only test.
+      // (Sorted position — the assertion compares against `.sort()`.)
+      "governance.recommend_raise_ceiling",
       "governance.recommend_tighten",
+      "governance.recommend_tighten_posture",
       "graph.relations",
       "market.search",
+      // message.interpret files a human-governed PENDING proposal and never a
+      // direct graph write (no agentUserId is threaded, so submitCaptureGraph
+      // always proposes). Governance lives on the proposal it emits, not on
+      // running interpret.
+      "message.interpret",
     ]);
     expect(READ_ONLY_BUILTIN_VERBS.has("channel.ensure")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("graph.link")).toBe(false);

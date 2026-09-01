@@ -55,6 +55,7 @@ import type {
 } from "@synap/playbooks";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
+import { mergeVerbCatalog } from "./verb-catalog.js";
 
 import { createLogger } from "@synap-core/core";
 // Validate DECLARED emit patterns before persisting them to `metadata.emits` —
@@ -605,33 +606,57 @@ export async function createCapabilityFromDefinition(
         def.skills,
         GRANT_DEFAULT_EXEC_MODE
       );
-      await db
-        .update(toolsTable)
-        .set({
-          // Adopt the template's canonical name so skills can address the tool by
-          // a known name (the bare provider tool was named by Nango's displayName).
-          name: t.name,
-          description: t.description,
-          credentialRef: credentialRef ?? null,
-          // Read-modify-write: the template provides STRUCTURE + defaults, but the
-          // tool's config/metadata also hold RUNTIME state written by the operator
-          // at runtime (e.g. the Discord bot's `metadata.discord` channel links set
-          // via /setup). A blind overwrite here reset that config on every boot-time
-          // reconcile after a template drifted — so merge template UNDER existing
-          // (existing runtime values win; template only fills NEW keys). Mirrors the
-          // container-metadata read-modify-write below.
-          config: mergePreservingExisting(
-            t.config ?? {},
-            (existingTool.config ?? {}) as Record<string, unknown>
-          ),
-          metadata: mergePreservingExisting(
-            t.metadata ?? {},
-            (existingTool.metadata ?? {}) as Record<string, unknown>
-          ),
-          ...(verbs.length > 0 ? { capabilities: verbs } : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(toolsTable.id, existingTool.id));
+      // Row-locked read-modify-write on `tools.capabilities`: the verb catalog
+      // is a jsonb array with a SECOND writer — `createDeclarativeVerb`, which
+      // takes the same `.for("update")` lock for the same reason (see its
+      // `wireCreatedVerb` step 3). `existingTool` above was read long before
+      // this write, so merging against it would clobber a verb minted in the
+      // gap; re-read under the lock instead.
+      await db.transaction(async (tx) => {
+        // The template owns the verbs it DECLARES (re-projected here — that is
+        // how a template-side field like `intent` reaches the pod) but not the
+        // ones it doesn't: a wholesale `capabilities: verbs` destroyed every
+        // user-minted verb on a template-owned tool at the next re-apply. Merge
+        // additively, matching the subset semantics `capabilityVerbCatalogDrift`
+        // compares with, so a converged tool reports no drift next pass.
+        let mergedVerbs: ToolVerbCatalogEntry[] | undefined;
+        if (verbs.length > 0) {
+          const [locked] = await tx
+            .select({ capabilities: toolsTable.capabilities })
+            .from(toolsTable)
+            .where(eq(toolsTable.id, existingTool.id))
+            .for("update")
+            .limit(1);
+          mergedVerbs = mergeVerbCatalog(locked?.capabilities, verbs);
+        }
+        await tx
+          .update(toolsTable)
+          .set({
+            // Adopt the template's canonical name so skills can address the tool by
+            // a known name (the bare provider tool was named by Nango's displayName).
+            name: t.name,
+            description: t.description,
+            credentialRef: credentialRef ?? null,
+            // Read-modify-write: the template provides STRUCTURE + defaults, but the
+            // tool's config/metadata also hold RUNTIME state written by the operator
+            // at runtime (e.g. the Discord bot's `metadata.discord` channel links set
+            // via /setup). A blind overwrite here reset that config on every boot-time
+            // reconcile after a template drifted — so merge template UNDER existing
+            // (existing runtime values win; template only fills NEW keys). Mirrors the
+            // container-metadata read-modify-write below.
+            config: mergePreservingExisting(
+              t.config ?? {},
+              (existingTool.config ?? {}) as Record<string, unknown>
+            ),
+            metadata: mergePreservingExisting(
+              t.metadata ?? {},
+              (existingTool.metadata ?? {}) as Record<string, unknown>
+            ),
+            ...(mergedVerbs ? { capabilities: mergedVerbs } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(toolsTable.id, existingTool.id));
+      });
       createdTools.push({
         name: t.name,
         status: "created",

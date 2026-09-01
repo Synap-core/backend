@@ -4,6 +4,7 @@ import {
   collapseProposalsToClusters,
   extractProposalName,
   normalizeSignatureToken,
+  ATTENTION_FLOOR_REASONS,
   type ClusterInputRow,
 } from "./fingerprint.js";
 
@@ -167,22 +168,44 @@ describe("collapseProposalsToClusters", () => {
 
   it("folds identical-shape rows into one cluster and counts them", () => {
     const clusters = collapseProposalsToClusters([
-      row({ id: "p1", targetId: "ent-1", createdAt: at("2026-01-01T00:00:00Z") }),
-      row({ id: "p2", targetId: "ent-1", createdAt: at("2026-01-02T00:00:00Z") }),
-      row({ id: "p3", targetId: "ent-2", createdAt: at("2026-01-03T00:00:00Z") }),
+      row({
+        id: "p1",
+        targetId: "ent-1",
+        createdAt: at("2026-01-01T00:00:00Z"),
+      }),
+      row({
+        id: "p2",
+        targetId: "ent-1",
+        createdAt: at("2026-01-02T00:00:00Z"),
+      }),
+      row({
+        id: "p3",
+        targetId: "ent-2",
+        createdAt: at("2026-01-03T00:00:00Z"),
+      }),
     ]);
     expect(clusters).toHaveLength(2);
     const ent1 = clusters.find((c) => c.sampleProposalIds.includes("p1"))!;
     expect(ent1.count).toBe(2);
     expect(ent1.sampleProposalIds).toEqual(["p1", "p2"]);
     // latestAt is the MAX createdAt across the cluster's members.
-    expect(ent1.latestAt.toISOString()).toBe(at("2026-01-02T00:00:00Z").toISOString());
+    expect(ent1.latestAt.toISOString()).toBe(
+      at("2026-01-02T00:00:00Z").toISOString()
+    );
   });
 
   it("orders clusters newest-active first", () => {
     const clusters = collapseProposalsToClusters([
-      row({ id: "old", targetId: "ent-1", createdAt: at("2026-01-01T00:00:00Z") }),
-      row({ id: "new", targetId: "ent-2", createdAt: at("2026-06-01T00:00:00Z") }),
+      row({
+        id: "old",
+        targetId: "ent-1",
+        createdAt: at("2026-01-01T00:00:00Z"),
+      }),
+      row({
+        id: "new",
+        targetId: "ent-2",
+        createdAt: at("2026-06-01T00:00:00Z"),
+      }),
     ]);
     expect(clusters[0]!.sampleProposalIds).toEqual(["new"]);
     expect(clusters[1]!.sampleProposalIds).toEqual(["old"]);
@@ -200,7 +223,10 @@ describe("collapseProposalsToClusters", () => {
     expect(c.count).toBe(4);
     expect(c.sources).toHaveLength(2);
     expect(c.sources).toContainEqual({ agentLabel: "CTO", sessionId: "s1" });
-    expect(c.sources).toContainEqual({ sessionId: "s2", automationId: "auto-9" });
+    expect(c.sources).toContainEqual({
+      sessionId: "s2",
+      automationId: "auto-9",
+    });
   });
 
   it("collects distinct workspaceIds and respects the sample cap", () => {
@@ -214,5 +240,79 @@ describe("collapseProposalsToClusters", () => {
     expect(c!.count).toBe(5);
     expect(c!.sampleProposalIds).toHaveLength(3);
     expect([...c!.workspaceIds].sort()).toEqual(["ws-a", "ws-b"]);
+  });
+});
+
+/**
+ * Composition — a cluster must be able to say WHAT it is made of, not just how
+ * many. The rollup exists because `governance_reason` is not type-determined:
+ * a floor-escalated member fingerprints identically to a routine one, so the
+ * count alone cannot tell a reviewer that one of 411 members only reached
+ * review because rung 2.55 flagged its instruction as untrusted-origin.
+ */
+describe("cluster composition (reasonCounts / attentionFloorCount)", () => {
+  const row = (
+    id: string,
+    governanceReason: string | null
+  ): ClusterInputRow => ({
+    id,
+    proposalType: "run",
+    targetType: "capability",
+    targetId: "cap-1",
+    data: {},
+    createdAt: new Date("2026-09-01T10:00:00Z"),
+    workspaceId: "ws-1",
+    governanceReason,
+  });
+
+  it("counts members by reason and sums to the cluster count", () => {
+    const [c] = collapseProposalsToClusters([
+      row("a", "WRITES_REQUIRE_PROPOSAL"),
+      row("b", "WRITES_REQUIRE_PROPOSAL"),
+      row("c", "UNTRUSTED_ORIGIN"),
+    ]);
+    expect(c.count).toBe(3);
+    expect(c.reasonCounts).toEqual({
+      WRITES_REQUIRE_PROPOSAL: 2,
+      UNTRUSTED_ORIGIN: 1,
+    });
+    const summed = Object.values(c.reasonCounts).reduce((a, b) => a + b, 0);
+    expect(summed, "reasonCounts must account for every member").toBe(c.count);
+  });
+
+  it("a null reason is counted as `unspecified`, never dropped", () => {
+    const [c] = collapseProposalsToClusters([
+      row("a", null),
+      row("b", "ADMIN"),
+    ]);
+    expect(c.reasonCounts.unspecified).toBe(1);
+    expect(
+      Object.values(c.reasonCounts).reduce((a, b) => a + b, 0),
+      "a member with no recorded cause must still be in the rollup"
+    ).toBe(c.count);
+  });
+
+  it("flags the members whose whole purpose is per-item human attention", () => {
+    const [c] = collapseProposalsToClusters([
+      row("a", "WRITES_REQUIRE_PROPOSAL"),
+      row("b", "UNTRUSTED_ORIGIN"),
+      row("c", "DESTRUCTIVE_HARD_FLOOR"),
+    ]);
+    expect(
+      c.attentionFloorCount,
+      "a non-zero floor count is what tells a caller this group is NOT safe to approve as a unit"
+    ).toBe(2);
+  });
+
+  it("DAILY_WRITE_CEILING is volume, not danger — it must NOT be a floor", () => {
+    const [c] = collapseProposalsToClusters([
+      row("a", "DAILY_WRITE_CEILING"),
+      row("b", "DAILY_WRITE_CEILING"),
+    ]);
+    expect(
+      c.attentionFloorCount,
+      "a noisy agent is exactly what grouping is FOR; treating it as a floor would make every busy agent's backlog ungroupable"
+    ).toBe(0);
+    expect(ATTENTION_FLOOR_REASONS.has("DAILY_WRITE_CEILING")).toBe(false);
   });
 });

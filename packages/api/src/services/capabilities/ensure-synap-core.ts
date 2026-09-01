@@ -692,12 +692,23 @@ export async function ensureSynapCoreCapability(): Promise<void> {
       .limit(1);
     if (existing) {
       const seededSkills = await db
+        // Every column `PROJECTED_SKILL_FIELDS` compares — an omitted column
+        // reads `undefined` on every row, which is drift the comparator would
+        // report on every boot (or, the other way round, a diff that can never
+        // fire). Kept in lock-step with the same select in the general
+        // capability reconcile.
         .select({
           name: skills.name,
           parameters: skills.parameters,
           providerSpec: skills.providerSpec,
           code: skills.code,
           description: skills.description,
+          kind: skills.kind,
+          scope: skills.scope,
+          category: skills.category,
+          agentTypes: skills.agentTypes,
+          executionMode: skills.executionMode,
+          timeoutSeconds: skills.timeoutSeconds,
         })
         .from(skills)
         .where(
@@ -706,8 +717,8 @@ export async function ensureSynapCoreCapability(): Promise<void> {
             inArray(skills.name, SYNAP_CORE_SKILL_NAMES)
           )
         );
-      // Definition-drift detection: a seeded verb whose stored `providerSpec` /
-      // `parameters` / `code` / `description` differ from the code definition
+      // Definition-drift detection: a seeded verb whose stored projection (the
+      // `PROJECTED_SKILL_FIELDS` set) differs from the code definition
       // (the catalog "lying" — e.g. a param was added in code but the name-only
       // guard never re-projected it). Falling through re-runs the (now
       // field-refreshing) applier, which self-heals the catalog — no manual

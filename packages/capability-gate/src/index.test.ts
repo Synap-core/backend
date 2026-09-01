@@ -265,3 +265,80 @@ describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
     expect(resolveOriginTrustMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Every propose decision must name WHY. Measured on the live pod 2026-09-01:
+ * 620 of 680 pending proposals carried no `governance_reason` at all, because
+ * this gate never produced one — `createPendingProposal` had forwarded the
+ * field all along, and the dominant producer simply never populated it.
+ *
+ * This matters at review time far more than it looks. The cluster fingerprint
+ * keys on `targetId` (the capability), so an UNTRUSTED_ORIGIN run — rung 2.55,
+ * the prompt-injection floor — folds into a cluster of hundreds of routine runs
+ * and becomes invisible. A reviewer approving that group would sweep in the one
+ * item the floor exists to surface.
+ */
+describe("propose decisions carry a structured cause", () => {
+  // A separate top-level `describe` does NOT inherit the block above's
+  // `beforeEach`, so without this the origin-trust mock keeps whatever the
+  // previous test left and every case here silently reads as untrusted.
+  beforeEach(() => {
+    findCapabilityGrantMock.mockReset();
+    resolveGovernanceRuleMock.mockReset();
+    resolveOriginTrustMock.mockReset();
+    resolveOriginTrustMock.mockResolvedValue(undefined);
+  });
+
+  it("no-grant route names CAPABILITY_PROPOSE", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+
+    expect(decision.decision).toBe("propose");
+    expect(decision.decision === "propose" ? decision.reasonCode : null).toBe(
+      "CAPABILITY_PROPOSE"
+    );
+  });
+
+  it("an UNTRUSTED origin on the no-grant route names the FLOOR, not the generic cause", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    // An auto rule that WOULD widen — rung 2.55 sits above rung 2.8, so it
+    // must neither run the call nor let the generic reason mask the floor.
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "any",
+    });
+
+    resolveOriginTrustMock.mockResolvedValue("untrusted");
+
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+
+    expect(
+      decision.decision,
+      "an untrusted origin can never be widened to run"
+    ).toBe("propose");
+    expect(
+      decision.decision === "propose" ? decision.reasonCode : null,
+      "the prompt-injection floor must be nameable at review time — this is the " +
+        "signal a grouped approval would otherwise swallow"
+    ).toBe("UNTRUSTED_ORIGIN");
+  });
+
+  it("the policy route carries the verdict's OWN code rather than re-deriving it", async () => {
+    findCapabilityGrantMock.mockResolvedValue({
+      ok: true,
+      execMode: "propose",
+    });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+
+    expect(decision.decision).toBe("propose");
+    const code = decision.decision === "propose" ? decision.reasonCode : null;
+    expect(
+      code,
+      "a propose decision must never reach review with no cause"
+    ).toBeTruthy();
+  });
+});

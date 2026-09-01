@@ -5142,6 +5142,20 @@ export interface ProposalCluster {
 	latestAt: Date;
 	/** Distinct workspaces the cluster's proposals span. */
 	workspaceIds: string[];
+	/**
+	 * Member count per `governance_reason`, so a card can render its composition
+	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
+	 * total. Terraform's plan rollup is the precedent: never "N changes", always
+	 * N-to-add / N-to-change / N-to-destroy BEFORE the verb.
+	 */
+	reasonCounts: Record<string, number>;
+	/**
+	 * How many members carry an {@link ATTENTION_FLOOR_REASONS} reason. NON-ZERO
+	 * MEANS THE GROUP IS NOT SAFE TO APPROVE AS A UNIT — those members were
+	 * escalated precisely so a human would look at each one. Callers must carve
+	 * them out, never sweep them in.
+	 */
+	attentionFloorCount: number;
 }
 /**
  * Approval patterns — the "notice" rung of record → notice → propose → ratify.
@@ -23253,7 +23267,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				actions: {
 					key: string;
 					label: string;
-					outputType: string;
+					nodeType: "output" | "capability";
+					outputType?: string | undefined;
+					capabilityId?: string | undefined;
+					verbId?: string | undefined;
 					params?: {
 						key: string;
 						label: string;

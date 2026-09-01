@@ -186,16 +186,28 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: dbMock };
 });
 
+import { DRIFT_COMPARATOR_VERSION } from "./capability-drift.js";
+
 vi.mock("./catalog-cache-query.js", () => ({
   queryCatalogCache: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("./create-from-definition.js", () => ({
-  loadCapabilityTemplate: (...args: unknown[]) =>
-    loadCapabilityTemplate(...args),
-  createCapabilityFromDefinition: (...args: unknown[]) =>
-    createCapabilityFromDefinition(...args),
-}));
+// PARTIAL mock: the two DB-touching doors are stubbed, but `deriveToolVerbs` /
+// `GRANT_DEFAULT_EXEC_MODE` are the REAL pure projection the verb-catalog drift
+// check diffs against — stubbing them would compare the reconcile to a fiction.
+// (A total `() => ({...})` factory here also silently broke the moment the
+// reconcile imported anything new from this module.)
+vi.mock("./create-from-definition.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./create-from-definition.js")>();
+  return {
+    ...actual,
+    loadCapabilityTemplate: (...args: unknown[]) =>
+      loadCapabilityTemplate(...args),
+    createCapabilityFromDefinition: (...args: unknown[]) =>
+      createCapabilityFromDefinition(...args),
+  };
+});
 
 describe("reconcileCapabilitiesToTemplates — tool membership self-heal", () => {
   const container: Row = {
@@ -256,5 +268,145 @@ describe("reconcileCapabilitiesToTemplates — tool membership self-heal", () =>
     expect(report.applied).toHaveLength(0);
     expect(report.skipped).toHaveLength(1);
     expect(report.skipped[0]!.reason).toBe("no drift");
+  });
+});
+
+/**
+ * The stamp must be EARNED. `contentHash` is what the fast path trusts to skip a
+ * container entirely, so a hash stamped by a comparator that could not see a
+ * field is not evidence about that field — it is a self-certifying miss (how
+ * `intent` reached zero pods). The stamp therefore carries the comparator
+ * version that cleared it, and the fast path honours it only for the current one.
+ */
+describe("reconcileCapabilitiesToTemplates — earned contentHash stamp", () => {
+  const templateDef = {
+    key: "tmpl-key",
+    name: "Test Capability",
+    updatePolicy: "auto" as const,
+    contentHash: "hash-v1",
+    tools: [{ name: "toolA" }],
+    skills: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.memberSkillLinkRows = [];
+    state.installedSkillRows = [];
+    state.memberToolRows = [{ name: "toolA" }];
+    state.updateCalls.length = 0;
+    loadCapabilityTemplate.mockResolvedValue(templateDef);
+    createCapabilityFromDefinition.mockResolvedValue(undefined);
+  });
+
+  it("does NOT fast-path a matching hash stamped by an older comparator", async () => {
+    state.containersRows = [
+      {
+        id: "container-1",
+        name: "Test Capability",
+        createdBy: "user-1",
+        workspaceId: null,
+        // Hash matches the template, but no comparator version — i.e. cleared
+        // by a comparator that did not read today's field set.
+        metadata: { templateKey: "tmpl-key", contentHash: "hash-v1" },
+      },
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped[0]!.reason).toBe("no drift");
+    const stamped = state.updateCalls[0]!.set as {
+      metadata: Record<string, unknown>;
+    };
+    expect(stamped.metadata.comparatorVersion).toBe(DRIFT_COMPARATOR_VERSION);
+  });
+
+  it("DOES fast-path a matching hash stamped by the current comparator", async () => {
+    state.containersRows = [
+      {
+        id: "container-1",
+        name: "Test Capability",
+        createdBy: "user-1",
+        workspaceId: null,
+        metadata: {
+          templateKey: "tmpl-key",
+          contentHash: "hash-v1",
+          comparatorVersion: DRIFT_COMPARATOR_VERSION,
+        },
+      },
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped[0]!.reason).toBe("up to date (contentHash match)");
+    expect(state.updateCalls).toHaveLength(0);
+  });
+
+  it("detects a template that only ADDED an intent to a verb (the shipped miss)", async () => {
+    loadCapabilityTemplate.mockResolvedValue({
+      ...templateDef,
+      contentHash: "hash-v2",
+      skills: [
+        {
+          name: "gmail_send",
+          kind: "declarative",
+          requires: ["toolA"],
+          parameters: {},
+          intent: "send_message",
+        },
+      ],
+    });
+    state.containersRows = [
+      {
+        id: "container-1",
+        name: "Test Capability",
+        createdBy: "user-1",
+        workspaceId: null,
+        metadata: { templateKey: "tmpl-key", contentHash: "hash-v1" },
+      },
+    ];
+    // The live skill row matches the definition on every projected field — the
+    // ONLY difference is on the tool's verb catalog, which is where intent lives.
+    state.memberSkillLinkRows = [{ fromId: "skill-1" }];
+    state.installedSkillRows = [
+      {
+        name: "gmail_send",
+        providerSpec: null,
+        parameters: {},
+        code: null,
+        description: null,
+        kind: "declarative",
+        scope: "pod",
+        category: null,
+        agentTypes: null,
+        executionMode: "sync",
+        timeoutSeconds: 30,
+      },
+    ];
+    state.memberToolRows = [
+      {
+        name: "toolA",
+        capabilityCatalog: [
+          {
+            id: "gmail_send",
+            label: "gmail_send",
+            kind: "action",
+            argsSchema: {},
+            govDefault: "propose",
+          },
+        ],
+      },
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.applied).toHaveLength(1);
+    expect(report.applied[0]!.reason).toContain("verbCatalogDrift=[toolA]");
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
   });
 });
