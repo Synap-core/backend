@@ -19,10 +19,17 @@ vi.mock("../client-pg.js", () => ({
   },
 }));
 vi.mock("../schema/focus-sessions.js", () => ({ focusSessions: {} }));
+vi.mock("../schema/links.js", () => ({ links: {} }));
+// `openRunSession` now imports the `spawned_from` producer (session-spawn.js),
+// which pulls in `inArray` + `sql`. A vi.mock factory is a TOTAL replacement, so
+// a named export it omits is an import-time failure for the whole file — the
+// exact trap that has silently killed mocking tests here before.
 vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   desc: vi.fn(),
   eq: vi.fn(),
+  inArray: vi.fn(),
+  sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
 
 import { openRunSession } from "./open-run-session.js";

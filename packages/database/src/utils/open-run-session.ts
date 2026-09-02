@@ -1,6 +1,7 @@
 import { and, desc, eq, sql as drizzleSql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { recordSessionSpawn } from "./session-spawn.js";
 
 export interface OpenRunSessionInput {
   /** Owner of the run (the operator on whose behalf the automation/agent acts). */
@@ -23,6 +24,17 @@ export interface OpenRunSessionInput {
   expectedOutputs?: unknown[];
   /** Extra run context to fold into session.metadata (trigger kind, etc.). */
   extraMetadata?: Record<string, unknown>;
+  /**
+   * The session this run was PUSHED FROM — recorded as
+   * `session --spawned_from--> session`, never a column. Owner-floored against
+   * `userId` by the producer; an unowned parent silently drops the edge.
+   * Governance metadata is NEVER inherited from the parent.
+   * Only applied when a session is actually CREATED (a reused channel session
+   * already has its own lineage and must not be re-parented).
+   */
+  parentSessionId?: string | null;
+  /** One line recorded on the PARENT's `metadata.suspended` at push time. */
+  suspendedIntent?: string | null;
 }
 
 export interface OpenRunSessionResult {
@@ -141,8 +153,20 @@ export async function openRunSession(
       })
       .returning({ id: focusSessions.id });
 
+  const linkSpawn = async (sessionId: string): Promise<void> => {
+    if (!input.parentSessionId) return;
+    await recordSessionSpawn({
+      childSessionId: sessionId,
+      parentSessionId: input.parentSessionId,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      suspendedIntent: input.suspendedIntent ?? null,
+    });
+  };
+
   try {
     const [session] = await insert(input.channelId ?? null);
+    await linkSpawn(session.id);
     return { sessionId: session.id, reused: false };
   } catch (err) {
     // Partial unique index `idx_focus_sessions_active_channel` rejects a second
@@ -157,6 +181,7 @@ export async function openRunSession(
     const racedId = await findReusableRunSession();
     if (racedId) return { sessionId: racedId, reused: true };
     const [session] = await insert(null);
+    await linkSpawn(session.id);
     return { sessionId: session.id, reused: false };
   }
 }

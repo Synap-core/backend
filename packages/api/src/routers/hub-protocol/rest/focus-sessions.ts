@@ -88,6 +88,15 @@ const CreateBodySchema = z
     expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
     channelId: z.string().uuid().optional(),
     agentIds: z.array(z.string()).optional(),
+    /**
+     * The session this one was PUSHED FROM (a detour). Recorded as
+     * `session --spawned_from--> session`; owner-floored server-side, so an
+     * unowned/unknown parent drops the edge rather than failing the create.
+     * Never a column, never a governance inherit.
+     */
+    parentSessionId: z.string().uuid().optional(),
+    /** One line describing what the PARENT was about to do, at push time. */
+    suspendedIntent: z.string().min(1).max(2000).optional(),
   })
   .refine((b) => !!b.workspaceId || !!b.projectId, {
     message: "Provide a workspaceId or a projectId",
@@ -453,6 +462,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         agentIds: body.agentIds,
         templateId: body.templateId ?? null,
         expectedOutputs: body.expectedOutputs,
+        parentSessionId: body.parentSessionId ?? null,
+        suspendedIntent: body.suspendedIntent ?? null,
       });
 
       if (result.status === "proposed") {

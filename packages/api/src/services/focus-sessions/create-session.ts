@@ -11,6 +11,7 @@ import {
   playbookRuns,
   eq,
   and,
+  recordSessionSpawn,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
@@ -58,6 +59,23 @@ export interface CreateFocusSessionParams {
     icon?: string;
     status?: "pending" | "done";
   }>;
+  /**
+   * The session this one was PUSHED FROM — a detour. Recorded as
+   * `session --spawned_from--> session` (the edge, never a column: see
+   * `schema/links.ts`). The parent must belong to the same user; an unowned or
+   * unknown parent drops the edge rather than failing the create.
+   *
+   * The child NEVER inherits the parent's `metadata` — least of all
+   * `metadata.governance`, which `deriveSessionForceProposeGovernance` reads to
+   * force-propose every AI write in the session.
+   */
+  parentSessionId?: string | null;
+  /**
+   * "What were you about to do" — one line captured at SUSPENSION and written
+   * onto the PARENT's `metadata.suspended`, so popping back restates the goal.
+   * Only meaningful together with `parentSessionId`.
+   */
+  suspendedIntent?: string | null;
 }
 
 export type CreateFocusSessionResult =
@@ -87,6 +105,8 @@ export async function createFocusSession(
     agentIds = [],
     templateId = null,
     expectedOutputs = [],
+    parentSessionId = null,
+    suspendedIntent = null,
   } = params;
 
   // Idempotency: correlationId returns the existing session for this user,
@@ -123,6 +143,12 @@ export async function createFocusSession(
       ...(channelId ? { channelId } : {}),
       ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
       ...(agentIds.length > 0 ? { agentIds } : {}),
+      // Detour lineage must survive the PROPOSED path too, or an agent-opened
+      // detour silently loses its parent on approval (the plumbed-field-with-
+      // no-producer shape this whole slice exists to retire). Applied by
+      // `proposals/executors/focus-session.ts` after the row is inserted.
+      ...(parentSessionId ? { parentSessionId } : {}),
+      ...(suspendedIntent ? { suspendedIntent } : {}),
     },
   });
 
@@ -231,6 +257,20 @@ export async function createFocusSession(
       });
       if (reloaded) sessionOut = reloaded;
     }
+  }
+
+  // Detour lineage: `child --spawned_from--> parent` (+ the suspend note on the
+  // parent). AFTER the session exists, and never inside the transaction — a bad
+  // parent handle must not roll back a legitimate session. The producer owns the
+  // owner floor and the "never inherit governance" invariant.
+  if (parentSessionId) {
+    await recordSessionSpawn({
+      childSessionId: sessionOut.id,
+      parentSessionId,
+      userId,
+      workspaceId: sessionOut.workspaceId,
+      suspendedIntent,
+    });
   }
 
   emitHubRealtimeEvent({

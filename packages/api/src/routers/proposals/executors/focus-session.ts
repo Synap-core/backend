@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, focusSessions } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  focusSessions,
+  recordSessionSpawn,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import {
@@ -100,6 +106,22 @@ export function registerFocusSessionExecutors(): void {
         ids: insertedSessions.map((row) => row.id),
         subject: "focus_session",
       };
+
+      // Detour lineage carried through the proposal (parity with
+      // createFocusSession's post-insert step). Owner-floored by the producer
+      // against the APPROVER's userId — which is the session's own owner here.
+      if (created && typeof innerData.parentSessionId === "string") {
+        await recordSessionSpawn({
+          childSessionId: created.id,
+          parentSessionId: innerData.parentSessionId,
+          userId,
+          workspaceId: created.workspaceId,
+          suspendedIntent:
+            typeof innerData.suspendedIntent === "string"
+              ? innerData.suspendedIntent
+              : null,
+        });
+      }
 
       // Gate 2: mint work channel if none (parity with createFocusSession).
       if (created && !created.channelId) {

@@ -8,7 +8,16 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  eq,
+  and,
+  desc,
+  inArray,
+  getParentSessionId,
+  getParentSessionIds,
+} from "@synap/database";
 import {
   ok,
   requireScope,
@@ -45,6 +54,8 @@ export const sessionHandlers: McpHandlerMap = {
             status?: "pending" | "done";
           }>
         | undefined,
+      parentSessionId: args.parentSessionId as string | undefined,
+      suspendedIntent: args.suspendedIntent as string | undefined,
     });
     return ok(result);
   },
@@ -118,8 +129,11 @@ export const sessionHandlers: McpHandlerMap = {
     // confident one back while three are open is precisely the mis-attribution
     // the old refusal guarded against — the fix is to answer AND say it was
     // inferred, not to withhold the answer.
+    // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
+    // there is exactly one store for "what was this forked from".
+    const parentSessionId = await getParentSessionId(session.id);
     return ok({
-      session,
+      session: { ...session, parentSessionId },
       ...(ambient?.ambiguous
         ? {
             inferred: true,
@@ -175,7 +189,15 @@ export const sessionHandlers: McpHandlerMap = {
       .where(and(...conditions))
       .orderBy(desc(focusSessions.startedAt))
       .limit(Math.min(Math.max(Math.trunc(rawLimit), 1), 50));
-    return ok({ sessions, count: sessions.length });
+    // Derived lineage for the whole page in ONE query (never N+1, never a column).
+    const parents = await getParentSessionIds(sessions.map((s) => s.id));
+    return ok({
+      sessions: sessions.map((s) => ({
+        ...s,
+        parentSessionId: parents.get(s.id) ?? null,
+      })),
+      count: sessions.length,
+    });
   },
   synap_update_session: async (
     ctx: McpToolContext
