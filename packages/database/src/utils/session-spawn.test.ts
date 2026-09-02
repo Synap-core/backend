@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
+  selectWhereMock,
   selectFromWhereLimitMock,
   insertValuesMock,
   onConflictMock,
@@ -16,8 +17,16 @@ const {
 } = vi.hoisted(() => {
   const onConflictMock = vi.fn(async () => undefined);
   const updateWhereMock = vi.fn(async () => undefined);
+  const selectFromWhereLimitMock = vi.fn(async () => [] as unknown[]);
   return {
-    selectFromWhereLimitMock: vi.fn(async () => [] as unknown[]),
+    // Captures the PREDICATE, not just the fact that a where() happened — the
+    // owner floor is the thing under test and a discarded argument cannot
+    // prove it (see the "floors the lookup on userId" test below).
+    selectWhereMock: vi.fn((predicate: unknown) => {
+      void predicate;
+      return { limit: selectFromWhereLimitMock };
+    }),
+    selectFromWhereLimitMock,
     insertValuesMock: vi.fn(() => ({ onConflictDoNothing: onConflictMock })),
     onConflictMock,
     updateSetMock: vi.fn(() => ({ where: updateWhereMock })),
@@ -27,9 +36,7 @@ const {
 
 vi.mock("../client-pg.js", () => ({
   db: {
-    select: () => ({
-      from: () => ({ where: () => ({ limit: selectFromWhereLimitMock }) }),
-    }),
+    select: () => ({ from: () => ({ where: selectWhereMock }) }),
     insert: () => ({ values: insertValuesMock }),
     update: () => ({ set: updateSetMock }),
   },
@@ -73,6 +80,7 @@ const OTHER_USERS_SESSION = "33333333-3333-4333-8333-333333333333";
 const SAME = "44444444-4444-4444-8444-444444444444";
 
 beforeEach(() => {
+  selectWhereMock.mockClear();
   selectFromWhereLimitMock.mockReset();
   selectFromWhereLimitMock.mockResolvedValue([]);
   insertValuesMock.mockClear();
@@ -107,8 +115,11 @@ describe("recordSessionSpawn", () => {
     expect(onConflictMock).toHaveBeenCalledTimes(1);
   });
 
-  it("REJECTS a parent owned by another user — no edge, no parent write", async () => {
-    // The owner-floored lookup returns nothing for a cross-user parent.
+  it("REJECTS a parent owned by another user — the lookup itself is owner-floored", async () => {
+    // The floor is a PREDICATE, so the predicate is what gets asserted. Driving
+    // the mock to return `[]` and checking the empty branch proves nothing: it
+    // stays green with `eq(focusSessions.userId, …)` deleted from the source,
+    // at which point a cross-user parent is found and linked.
     selectFromWhereLimitMock.mockResolvedValue([]);
 
     const result = await recordSessionSpawn({
@@ -116,6 +127,17 @@ describe("recordSessionSpawn", () => {
       parentSessionId: OTHER_USERS_SESSION,
       userId: "user-A",
       suspendedIntent: "finish the migration",
+    });
+
+    expect(selectWhereMock).toHaveBeenCalledTimes(1);
+    // Mocked `and`/`eq` build a plain tree, so the whole predicate is
+    // comparable — an exact match also catches the floor being WIDENED (an
+    // `or(...)` branch around it) rather than only deleted.
+    expect(selectWhereMock.mock.calls[0][0]).toEqual({
+      and: [
+        { eq: ["fs.id", OTHER_USERS_SESSION] },
+        { eq: ["fs.user_id", "user-A"] },
+      ],
     });
 
     expect(result).toEqual({ linked: false, reason: "parent_not_found" });
