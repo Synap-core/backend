@@ -65,14 +65,38 @@ const logger = createLogger({ module: "channels" });
 
 export const TURN_CONTEXT_SENSITIVE_KEY =
   /(?:api[-_]?key|authorization|cookie|credential|email|password|phone|private|secret|token)/i;
+
+/**
+ * TURN CONTEXT — the canonical wire contract, with ONE deliberate twin.
+ *
+ * The Intelligence Service re-declares this exact shape at
+ * `synap-intelligence-service/apps/intelligence-hub/src/routes/chat-stream.ts`
+ * (`TurnContextSchema`) because the two live in separate repos and neither can
+ * import the other. They MUST be kept in lockstep: the pod validates first and
+ * forwards, so a field the pod strips or rejects can never reach the agent, and
+ * a field the IS rejects 400s a turn the pod already persisted. That asymmetry
+ * IS the 2026-08-20 Companion outage — three definitions of this contract
+ * disagreeing on what "20 items" meant. Do not add a fourth definition; when
+ * you change anything here, change the IS twin in the same wave.
+ *
+ * `channels.turn-context.test.ts` pins the field list and every bound below.
+ */
+export const TURN_CONTEXT_MAX_ENTRIES = 20;
+export const TURN_CONTEXT_MAX_KEY_LENGTH = 64;
+export const TURN_CONTEXT_MAX_STRING_LENGTH = 400;
+export const TURN_CONTEXT_MAX_ARRAY_ITEMS = 12;
+export const TURN_CONTEXT_MAX_ARRAY_STRING_LENGTH = 128;
+export const TURN_CONTEXT_MAX_SESSION_CHAIN = 8;
 export const TURN_CONTEXT_MAX_SERIALIZED_LENGTH = 8_000;
 
 export const TurnContextValueSchema = z.union([
-  z.string().max(400),
+  z.string().max(TURN_CONTEXT_MAX_STRING_LENGTH),
   z.number().finite(),
   z.boolean(),
   z.null(),
-  z.array(z.string().max(128)).max(12),
+  z
+    .array(z.string().max(TURN_CONTEXT_MAX_ARRAY_STRING_LENGTH))
+    .max(TURN_CONTEXT_MAX_ARRAY_ITEMS),
 ]);
 
 export const TurnContextEntrySchema = z
@@ -80,9 +104,44 @@ export const TurnContextEntrySchema = z
     key: z
       .string()
       .min(1)
-      .max(64)
+      .max(TURN_CONTEXT_MAX_KEY_LENGTH)
       .regex(/^[A-Za-z][A-Za-z0-9_.:-]*$/),
     value: TurnContextValueSchema,
+  })
+  .strict();
+
+/**
+ * The caller's view of the focus session this turn belongs to.
+ *
+ * A SIBLING of `entries`, deliberately — not an entry, and not nested in one.
+ * `entries` is the flat primitive bag whose 20-item cap is shared verbatim with
+ * the browser and the IS; flattening a goal chain into it would spend that
+ * shared budget on one field. This field carries its OWN bounds and counts
+ * against neither the entry cap nor the entry value union. The serialized
+ * ceiling still covers it, which is why its chain and strings are length-capped.
+ *
+ * `version` is a literal so an incompatible caller fails loudly at the boundary
+ * instead of silently under-populating the prompt.
+ */
+export const TurnContextSessionSchema = z
+  .object({
+    version: z.literal(1),
+    id: z.string().min(1).max(TURN_CONTEXT_MAX_KEY_LENGTH),
+    goal: z.string().min(1).max(TURN_CONTEXT_MAX_STRING_LENGTH),
+    stage: z.string().max(TURN_CONTEXT_MAX_KEY_LENGTH).optional(),
+    progress: z.number().finite().min(0).max(100).optional(),
+    depth: z.number().int().min(0).max(TURN_CONTEXT_MAX_SESSION_CHAIN),
+    chain: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(TURN_CONTEXT_MAX_KEY_LENGTH),
+            goal: z.string().min(1).max(TURN_CONTEXT_MAX_STRING_LENGTH),
+          })
+          .strict()
+      )
+      .max(TURN_CONTEXT_MAX_SESSION_CHAIN),
+    suspendedIntent: z.string().max(TURN_CONTEXT_MAX_STRING_LENGTH).optional(),
   })
   .strict();
 
@@ -92,9 +151,27 @@ export const TurnContextEntrySchema = z
  * a deeply nested arbitrary payload into chat history or the Intelligence Hub.
  */
 export const TurnContextSchema = z
-  .object({ entries: z.array(TurnContextEntrySchema).min(1).max(20) })
+  .object({
+    // OPTIONAL since the session sibling landed: a turn may carry a session and
+    // no surface entries. Still `.min(1)` WHEN PRESENT, so "never an empty
+    // entries array" is unchanged.
+    entries: z
+      .array(TurnContextEntrySchema)
+      .min(1)
+      .max(TURN_CONTEXT_MAX_ENTRIES)
+      .optional(),
+    session: TurnContextSessionSchema.optional(),
+  })
   .strict()
   .superRefine((value, ctx) => {
+    // `{}` is a caller bug, not a valid payload — it must not become newly
+    // acceptable just because `entries` went optional.
+    if (!value.entries && !value.session) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "turnContext must carry entries, session, or both",
+      });
+    }
     if (JSON.stringify(value).length > TURN_CONTEXT_MAX_SERIALIZED_LENGTH) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -164,13 +241,25 @@ export const channelSendMessageInputSchema = z.object({
 });
 
 /** Redact credential-like entry keys before persisting or forwarding context. */
+/**
+ * Redacts sensitive ENTRY values. Every other field must be carried through
+ * verbatim — this used to rebuild the object as `{ entries }`, which would
+ * silently strip the `session` sibling on its way to the IS, i.e. exactly the
+ * "pod accepts, agent never sees it" severance the twin comment above warns of.
+ * Spread first, then overwrite only what is redacted.
+ */
 export function redactTurnContext(turnContext: TurnContext): TurnContext {
   return {
-    entries: turnContext.entries.map((entry) =>
-      TURN_CONTEXT_SENSITIVE_KEY.test(entry.key)
-        ? { ...entry, value: "[redacted]" }
-        : entry
-    ),
+    ...turnContext,
+    ...(turnContext.entries
+      ? {
+          entries: turnContext.entries.map((entry) =>
+            TURN_CONTEXT_SENSITIVE_KEY.test(entry.key)
+              ? { ...entry, value: "[redacted]" }
+              : entry
+          ),
+        }
+      : {}),
   };
 }
 

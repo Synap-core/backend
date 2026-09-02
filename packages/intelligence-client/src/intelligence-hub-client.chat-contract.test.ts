@@ -57,6 +57,46 @@ describe("buildChatRequestBody", () => {
     });
   });
 
+  it("forwards the turnContext session sibling verbatim to the IS body", () => {
+    // The pod validates `turnContext.session` (channels/helpers.ts) and the IS
+    // accepts it (chat-stream.ts). This client must not flatten the object to
+    // `{ entries }` in between — that severance is invisible to a typecheck
+    // because TurnContext is a passthrough record.
+    const session = {
+      version: 1,
+      id: "session-1",
+      goal: "Ship the sibling",
+      stage: "build",
+      progress: 40,
+      depth: 1,
+      chain: [{ id: "session-0", goal: "Parent goal" }],
+      suspendedIntent: "Finish the audit first",
+    };
+
+    const body = buildChatRequestBody(
+      {
+        ...request,
+        turnContext: {
+          entries: [{ key: "viewMode", value: "compact" }],
+          session,
+        },
+      },
+      true
+    ) as { turnContext?: Record<string, unknown> };
+
+    expect(body.turnContext).toEqual({
+      entries: [{ key: "viewMode", value: "compact" }],
+      session,
+    });
+
+    // A session-only turnContext survives too.
+    const sessionOnly = buildChatRequestBody(
+      { ...request, turnContext: { session } },
+      true
+    ) as { turnContext?: Record<string, unknown> };
+    expect(sessionOnly.turnContext).toEqual({ session });
+  });
+
   it("preserves a bounded named integration skill outside onboarding", () => {
     expect(
       buildChatRequestBody(
