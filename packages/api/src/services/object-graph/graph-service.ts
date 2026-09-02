@@ -970,6 +970,59 @@ export async function getTemporalNeighbors(
 }
 
 /**
+ * Merge every neighbour source into ONE list, de-duplicated.
+ *
+ * Two de-dup rules, and the second is the one live dogfood found:
+ *
+ *  1. **Same edge, twice** — de-dup on `(kind, id, edgeType, via)`, so an object
+ *     linked twice the same way isn't double-counted.
+ *
+ *  2. **One fact, two rows** — a session that PRODUCED the focused object is
+ *     already a stored `links` edge (`edgeType: "produced"`, `via: "links"`).
+ *     The temporal fold independently derives the same session from the events
+ *     spine and emits it as `produced_in` / `via: "produced-in"`. Both rows name
+ *     the same session and the same fact, so the DERIVED one is dropped: the
+ *     stored edge is primary. The temporal row SURVIVES when no `produced` link
+ *     exists for that session — e.g. an update made inside a session, which
+ *     creates no `produced` link and whose only trace is the events spine.
+ *
+ * Order matters: `linkNeighbors` must come before `temporalNeighbors` so the
+ * stored edge is the one that lands.
+ */
+export function mergeNeighbors(
+  sources: readonly GraphNeighbor[][]
+): GraphNeighbor[] {
+  const all = sources.flat();
+
+  // Sessions already asserted as producers by a STORED link edge.
+  const producedByLink = new Set(
+    all
+      .filter(
+        (n) =>
+          n.kind === "session" && n.edgeType === "produced" && n.via === "links"
+      )
+      .map((n) => n.id)
+  );
+
+  const seen = new Set<string>();
+  const neighbors: GraphNeighbor[] = [];
+  for (const n of all) {
+    if (
+      n.via === "produced-in" &&
+      n.kind === "session" &&
+      producedByLink.has(n.id)
+    ) {
+      continue;
+    }
+    const key = `${n.kind}:${n.id}:${n.edgeType}:${n.via}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    neighbors.push(n);
+  }
+  return neighbors;
+}
+
+/**
  * Assemble the uniform envelope: the focused object (hydrated) + its neighbours.
  * `extraNeighbors` lets the route layer fold in the ENTITY-DATA graph
  * (relations + property + channel from `getConnections`) for entity kinds —
@@ -1000,21 +1053,14 @@ export async function getObjectGraph(
       getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     ]);
 
-  // Merge config + data graphs; de-dup on (kind, id, edgeType, via) so an object
-  // linked twice the same way isn't double-counted.
-  const seen = new Set<string>();
-  const neighbors: GraphNeighbor[] = [];
-  for (const n of [
-    ...linkNeighbors,
-    ...governanceNeighbors,
-    ...temporalNeighbors,
-    ...extraNeighbors,
-  ]) {
-    const key = `${n.kind}:${n.id}:${n.edgeType}:${n.via}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    neighbors.push(n);
-  }
+  // Merge config + data graphs through the ONE de-dup door (see `mergeNeighbors`:
+  // same-edge-twice, plus the produced / produced-in one-fact-two-rows fold).
+  const neighbors = mergeNeighbors([
+    linkNeighbors,
+    governanceNeighbors,
+    temporalNeighbors,
+    extraNeighbors,
+  ]);
 
   // Resolve the focal node. `hydrateNodes` already gives stub kinds
   // (`participant`/`source` — no KIND_TABLE) a raw-id node, so a MISS here means

@@ -63,7 +63,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { getTemporalNeighbors } from "./graph-service.js";
+import {
+  getTemporalNeighbors,
+  mergeNeighbors,
+  type GraphNeighbor,
+} from "./graph-service.js";
 
 const OWNER = "user-owner";
 const ENTITY_ID = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -239,6 +243,82 @@ describe("getTemporalNeighbors", () => {
       WORKSPACE_ID
     );
     expect(out).toEqual([]);
+  });
+});
+
+/**
+ * ONE FACT, TWO ROWS (live dogfood, entity ab8b1cce…).
+ *
+ * A session that produced an object is BOTH a stored `links` edge and, via the
+ * events spine, a derived temporal neighbour. Emitting both made the neighbour
+ * pane list the same session twice under two names. The stored edge is the
+ * primary fact; the derived one folds into it — but only when it exists, since
+ * an UPDATE done inside a session writes no `produced` link at all and the
+ * temporal row is then the only trace of it.
+ */
+describe("mergeNeighbors — produced / produced-in fold", () => {
+  const SESSION_A = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const SESSION_B = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  const producedLink = (id: string): GraphNeighbor => ({
+    kind: "session",
+    id,
+    name: "Close the Acme renewal",
+    subtype: null,
+    subtypes: [],
+    workspaceId: WORKSPACE_ID,
+    edgeType: "produced",
+    direction: "incoming",
+    via: "links",
+  });
+
+  const producedInTemporal = (id: string): GraphNeighbor => ({
+    kind: "session",
+    id,
+    name: "Close the Acme renewal",
+    subtype: null,
+    subtypes: [],
+    workspaceId: WORKSPACE_ID,
+    edgeType: "produced_in",
+    direction: "incoming",
+    via: "produced-in",
+  });
+
+  it("(a) keeps ONE row — the stored link — when both name the same session", () => {
+    const out = mergeNeighbors([
+      [producedLink(SESSION_A)],
+      [producedInTemporal(SESSION_A)],
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      id: SESSION_A,
+      via: "links",
+      edgeType: "produced",
+    });
+  });
+
+  it("(b) keeps the temporal row when no produced link exists (update-in-session)", () => {
+    const out = mergeNeighbors([[], [producedInTemporal(SESSION_A)]]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: SESSION_A, via: "produced-in" });
+  });
+
+  it("(c) folds only the matching session — two different sessions stay two rows", () => {
+    const out = mergeNeighbors([
+      [producedLink(SESSION_A)],
+      [producedInTemporal(SESSION_B)],
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.map((n) => n.id).sort()).toEqual([SESSION_A, SESSION_B].sort());
+    expect(out.find((n) => n.id === SESSION_B)?.via).toBe("produced-in");
+  });
+
+  it("still de-dups the same edge arriving twice", () => {
+    const out = mergeNeighbors([
+      [producedLink(SESSION_A)],
+      [producedLink(SESSION_A)],
+    ]);
+    expect(out).toHaveLength(1);
   });
 });
 
