@@ -104,6 +104,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   capture: { imperative: "Capture", past: "Captured" },
   send: { imperative: "Send", past: "Sent" },
   approve: { imperative: "Approve", past: "Approved" },
+  // The decision verb for OBJECT-WORK proposals — a proposed entity that
+  // renders as the entity, editable, in a draft state. Approving that is not
+  // reviewing a diff, it is finishing a draft, and the verb should say so.
+  // Both moods matter: "Publish" on the button, "Published" in the receipt.
+  publish: { imperative: "Publish", past: "Published" },
   // Governance surfaces disagreed on this one ("Refused" vs "Rejected").
   // "Reject" is the canonical pair — it matches the API verb and the
   // `PROPOSAL_REJECTION_REASONS` taxonomy.

@@ -352,3 +352,13 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     }
   });
 });
+
+describe("publish — the object-work decision verb", () => {
+  it("carries BOTH moods, so the button and the receipt cannot disagree", () => {
+    // "Publish" on the button while the trail says "Approved" would describe
+    // one act two ways. The past mood is the proof the table entry exists:
+    // an unknown token humanizes to "Publish" in BOTH moods.
+    expect(resolveActionLabel("publish")).toBe("Publish");
+    expect(resolveActionLabel("publish", "past")).toBe("Published");
+  });
+});
