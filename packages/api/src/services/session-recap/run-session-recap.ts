@@ -266,7 +266,20 @@ export async function runSessionRecap(
 
   // 6. Best-effort close the session with the recap as its summary.
   try {
-    await completeFocusSession({ sessionId, userId, summary: recapText });
+    const closed = await completeFocusSession({
+      sessionId,
+      userId,
+      summary: recapText,
+    });
+    // This is the one UNATTENDED close — no agent or human reads the return
+    // value, so the retirement report would otherwise vanish here. A log line
+    // is the honest surface on a worker.
+    if (closed && closed.counts.expiredEphemerals > 0) {
+      logger.info(
+        { sessionId, expired: closed.counts.expiredEphemerals },
+        "session recap closed the session; expired its unanswered capability runs"
+      );
+    }
   } catch (err) {
     logger.warn(
       { err, sessionId },

@@ -297,21 +297,22 @@ export async function insertPendingProposal(
   //
   // An explicit `input.projectId` always wins — this only fills a gap, and a
   // session with no project leaves it null rather than inventing one.
+  //
+  // Runs on the caller's `executor` so a session minted earlier in the SAME
+  // transaction is visible. Deliberately NOT wrapped in a try/catch: inside a
+  // transaction a failed statement aborts the whole tx, so swallowing the
+  // error here would only defer the failure to the insert below with a less
+  // useful message; outside one, a primary-key read failing means the
+  // connection is unusable and the insert would fail regardless. A guard
+  // that cannot deliver its promise is worse than none.
   let projectId = input.projectId ?? null;
   if (!projectId && input.sessionId) {
-    try {
-      const [session] = await executor
-        .select({ projectId: focusSessions.projectId })
-        .from(focusSessions)
-        .where(eq(focusSessions.id, input.sessionId))
-        .limit(1);
-      projectId = session?.projectId ?? null;
-    } catch {
-      // Best-effort, exactly like the recall deposit: a lens is worth less
-      // than the proposal itself, and losing the write to enrich it would be
-      // the wrong trade.
-      projectId = null;
-    }
+    const [session] = await executor
+      .select({ projectId: focusSessions.projectId })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.sessionId))
+      .limit(1);
+    projectId = session?.projectId ?? null;
   }
 
   try {

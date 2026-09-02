@@ -948,7 +948,7 @@ export class HubRestClient {
    * Filter by status: "pending" (needs review), "approved", "rejected",
    * "auto_approved" (the write EXECUTED immediately under governance and filed
    * this row as its audit receipt), "reverted", "approval_failed",
-   * "withdrawn", or "all". Mirrors the server-side `PROPOSAL_STATUS_FILTERS`.
+   * "withdrawn", "expired", or "all". Mirrors the server-side `PROPOSAL_STATUS_FILTERS`.
    */
   async listProposals(options?: {
     status?:
@@ -959,6 +959,7 @@ export class HubRestClient {
       | "reverted"
       | "approval_failed"
       | "withdrawn"
+      | "expired"
       | "all";
     workspaceId?: string;
     /**
@@ -1018,6 +1019,7 @@ export class HubRestClient {
       | "reverted"
       | "approval_failed"
       | "withdrawn"
+      | "expired"
       | "all";
     workspaceId?: string;
     scope?: "workspace" | "all";

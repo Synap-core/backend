@@ -68,16 +68,28 @@ describe("proposals carry the project lens", () => {
     ).toBe(true);
   });
 
-  it("a session-lookup failure cannot lose the proposal", () => {
+  it("runs the lookup on the caller's executor, so a same-transaction session is visible", () => {
+    // Review finding: a try/catch here was pinned as "a lookup failure cannot
+    // lose the proposal". It could not deliver that — inside a transaction a
+    // failed statement aborts the tx, so the swallowed error only resurfaced
+    // at the insert with a worse message. The real invariant is visibility:
+    // `resolveOrCreateAgentProposalSession` can mint the session in the SAME
+    // tx, and a read on a different connection would miss it and derive null.
     const start = src.indexOf("let projectId");
-    // Bound on the INSERT, not on the next `try {` — the derivation's own
-    // guard IS a try/catch, so searching for `try {` lands inside the block
-    // being measured and slices the catch away.
-    const block = src.slice(start, src.indexOf(".insert(proposals)", start));
+    // Bound at the if-block's close (two-space `}` on its own line), NOT at
+    // the insert: the insert sits inside the outer `try {`, and slicing that
+    // far would make the no-try/catch check below trip on the wrong `try`.
+    const block = src.slice(start, src.indexOf("\n  }\n", start));
+    // Two containment checks rather than one layout-sensitive regex, so a
+    // prettier reflow cannot turn this pin red for a harmless reason.
     expect(
-      /catch\s*\{/.test(block),
-      "the lookup must be best-effort — a lens is worth less than the write it " +
-        "annotates, and an unguarded select turns a DB blip into a lost proposal"
+      /await executor[\s\S]{0,40}\.select\(/.test(block),
+      "lookup must run on `executor`"
     ).toBe(true);
+    expect(block).toMatch(/focusSessions\.projectId/);
+    expect(
+      /try\s*\{/.test(block),
+      "a guard that cannot deliver its promise is worse than none — do not re-add it"
+    ).toBe(false);
   });
 });

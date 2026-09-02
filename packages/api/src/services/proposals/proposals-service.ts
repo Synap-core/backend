@@ -55,6 +55,7 @@ export async function listCreatedProposals(params: {
     reverted: ProposalStatus.REVERTED,
     approval_failed: ProposalStatus.APPROVAL_FAILED,
     withdrawn: ProposalStatus.WITHDRAWN,
+    expired: ProposalStatus.EXPIRED,
   };
   const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
 

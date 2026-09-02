@@ -245,6 +245,7 @@ export const tools = {
                 "reverted",
                 "approval_failed",
                 "withdrawn",
+                "expired",
                 "all",
               ],
               default: "pending",
