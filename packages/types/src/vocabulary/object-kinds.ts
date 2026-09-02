@@ -60,7 +60,10 @@ export type ObjectCategory =
   | "tool"
   | "agent"
   | "proposal"
-  | "notification";
+  | "notification"
+  | "run"
+  | "source"
+  | "participant";
 
 /** One canonical identity entry. Colors are TOKENS, icons are NAMES. */
 export interface ObjectKindDef {
@@ -374,6 +377,37 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(12),
     label: "Tool",
     labelPlural: "Tools",
+  },
+
+  // ── Graph-only kinds ──
+  // `source`, `participant` and `run` are returned by `getObjectGraph`
+  // (`GRAPH_KINDS`) and by the Processes queue, but had no identity entry, so
+  // every surface that showed them either fell back to the neutral `Box` or
+  // kept its own hand-written glyph/label map beside the registry. Registered
+  // here so there is one answer.
+  run: {
+    kind: "run",
+    category: "run",
+    icon: "Play",
+    color: ID(11),
+    label: "Run",
+    labelPlural: "Runs",
+  },
+  source: {
+    kind: "source",
+    category: "source",
+    icon: "Database",
+    color: ID(3),
+    label: "Source",
+    labelPlural: "Sources",
+  },
+  participant: {
+    kind: "participant",
+    category: "participant",
+    icon: "User",
+    color: ID(6),
+    label: "Participant",
+    labelPlural: "Participants",
   },
 
   // ── AI / governance (agent is ALWAYS emerald) ──

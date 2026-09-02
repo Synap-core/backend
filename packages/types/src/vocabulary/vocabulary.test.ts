@@ -10,6 +10,7 @@ import {
   ACTION_VERBS,
   OBJECT_KINDS,
   OBJECT_KIND_ALIASES,
+  FALLBACK_ICON,
   resolveProposalKindLabel,
   PROPOSAL_KIND_LABELS,
 } from "./index.js";
@@ -98,6 +99,21 @@ describe("resolveObjectNoun", () => {
       expect(rendered[0], slug).toBe(rendered[0]?.toUpperCase());
     }
     expect(disagreements).toEqual([]);
+  });
+
+  /**
+   * The graph door (`GRAPH_KINDS`) and the Processes queue return these three;
+   * before they were registered, `resolveObjectIcon` gave every one of them the
+   * neutral `Box` and each surface kept its own glyph map beside the registry.
+   */
+  it("registers the graph-only kinds the Why pane and the queue render", () => {
+    for (const kind of ["run", "source", "participant"] as const) {
+      expect(OBJECT_KINDS[kind], kind).toBeDefined();
+      expect(OBJECT_KINDS[kind]?.icon, kind).not.toBe(FALLBACK_ICON);
+    }
+    expect(resolveObjectNoun("run")).toBe("Run");
+    expect(resolveObjectNoun("source")).toBe("Source");
+    expect(resolveObjectNoun("participant")).toBe("Participant");
   });
 
   it("the backend-only tail never shadows a registry kind (one table, no fork)", () => {
