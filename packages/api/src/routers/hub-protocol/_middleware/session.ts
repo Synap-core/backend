@@ -113,3 +113,38 @@ export async function sessionMiddleware(
   }
   await next();
 }
+
+/**
+ * Resolve the ONE session handle a request may be attributed to, from the two
+ * places a caller can put it.
+ *
+ * The `X-Session-Id` header is already verified by the time it reaches a
+ * handler (`resolveHubSessionHeader`, above). A handle on the request BODY is
+ * not — and a body field is the only handle a body-only caller has, which is
+ * exactly how the Relay app sends it on `capture.execute`. Left unchecked, a
+ * caller can stamp ANOTHER USER'S session onto their own rows: that user's
+ * session graph grows an edge to a foreign entity and their derived participant
+ * list shows someone who never worked there.
+ *
+ * Same contract as the header path, deliberately: this is a SCOPE HINT, not an
+ * authorization decision. A handle that fails ownership DROPS to `undefined`
+ * and the write proceeds unattributed, because a stale or foreign session id
+ * must never fail a write the user meant to make.
+ */
+export async function resolveVerifiedSessionId(
+  userId: string,
+  verifiedHandle: string | null | undefined,
+  bodyHandle: string | null | undefined
+): Promise<string | undefined> {
+  // The header handle already passed `ownsFocusSession`; re-checking it would
+  // buy nothing and cost a round-trip on every attributed write.
+  if (verifiedHandle) return verifiedHandle;
+  if (!bodyHandle) return undefined;
+  if (!UUID_RE.test(bodyHandle)) return undefined;
+  if (await ownsFocusSession(userId, bodyHandle)) return bodyHandle;
+  logger.warn(
+    { userId, sessionId: bodyHandle },
+    "session handle on the request body does not belong to the caller — ignoring"
+  );
+  return undefined;
+}

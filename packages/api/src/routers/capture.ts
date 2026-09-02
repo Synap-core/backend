@@ -14,6 +14,7 @@ import type { Context } from "../context.js";
 import { entitiesRouter } from "./entities.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
+import { resolveVerifiedSessionId } from "./hub-protocol/_middleware/session.js";
 import {
   resolveIntelligenceService,
   IntelligenceAuthError,
@@ -1775,6 +1776,19 @@ export const captureRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const database = await getDb();
+      // ── The ONE verified session handle for this capture ────────────────────
+      // Two doors reach this procedure and they carried DIFFERENT trust levels.
+      // `ctx.sessionId` came from the `X-Session-Id` header and was already
+      // ownership-checked. `input.sessionId` — what the Relay app sends on the
+      // tRPC body, and what the MCP capture handler forwards — was a bare
+      // `z.string().uuid()` that NOTHING validated, while being written onto the
+      // capture proposal, the `session --produced--> entity` links and the
+      // workspace/project placement rungs. Both now resolve through one door.
+      const sessionId = await resolveVerifiedSessionId(
+        userId,
+        ctx.sessionId,
+        input.sessionId
+      );
       // The capture's self-diagnosis id. Minted UP HERE (rather than at the
       // facet pass, where it used to live) so it can also be the governance
       // gate's correlationId — a proposal-gated capture is then joinable to the
@@ -1812,7 +1826,7 @@ export const captureRouter = router({
           // Rung 3: a bound focus session outranks a plain AI guess (rung 5)
           // when it resolves — sessionId is already on this input for the
           // session→produced link below, just not yet consulted for placement.
-          context: input.sessionId ? { sessionId: input.sessionId } : undefined,
+          context: sessionId ? { sessionId } : undefined,
           aiHint: {
             workspaceId: input.aiWorkspaceId,
             confidence: input.aiWorkspaceConfidence,
@@ -1991,7 +2005,7 @@ export const captureRouter = router({
           workspaceId,
           correlationId: captureId,
           projectId: input.projectId ?? undefined,
-          sessionId: input.sessionId ?? ctx.sessionId ?? undefined,
+          sessionId: sessionId ?? undefined,
           entities: input.entities,
           relations: input.relations,
           resolveRelationType: (type) =>
@@ -2027,7 +2041,7 @@ export const captureRouter = router({
       const projectPlacement = await resolveProjectPlacement(database, {
         userId,
         explicitProjectId: input.projectId,
-        sessionId: input.sessionId,
+        sessionId: sessionId ?? null,
         relatedEntityIds: batchRelatedEntityIds,
       });
       let resolvedProjectId = projectPlacement.projectId;
@@ -2145,7 +2159,7 @@ export const captureRouter = router({
         subjectType: "entity",
         action: "create",
         correlationId: captureId,
-        sessionId: input.sessionId ?? ctx.sessionId ?? undefined,
+        sessionId: sessionId ?? undefined,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         // Deterministic only — an AI-suggested project must never ride the gate
         // into a stamp-on-approve auto-link.
@@ -2623,7 +2637,7 @@ export const captureRouter = router({
       // identity-deduped) rather than created, so this explicit pass is still
       // required to cover the full `created` set. Idempotent via the links
       // unique-edge index; best-effort (never blocks the capture).
-      if (input.sessionId) {
+      if (sessionId) {
         for (const c of created) {
           try {
             await database
@@ -2631,7 +2645,7 @@ export const captureRouter = router({
               .values({
                 workspaceId: workspaceId ?? null,
                 fromType: "session" as LinkEndpointType,
-                fromId: input.sessionId,
+                fromId: sessionId,
                 toType: "entity" as LinkEndpointType,
                 toId: c.entityId,
                 linkType: "produced" as LinkType,
@@ -2640,7 +2654,7 @@ export const captureRouter = router({
               .onConflictDoNothing();
           } catch (err) {
             logger.warn(
-              { err, sessionId: input.sessionId, entityId: c.entityId },
+              { err, sessionId, entityId: c.entityId },
               "capture: session-produced link failed (non-fatal)"
             );
           }
@@ -2699,18 +2713,11 @@ export const captureRouter = router({
             // row would escape by accident. Attribution must be ADDITIVE.
             createdBy: userId,
             ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
-            // VERIFIED handle first. `ctx.sessionId` passed the ownership check in
-            // `resolveHubSessionHeader` → `ownsFocusSession`; `input.sessionId` is
-            // a bare `z.string().uuid()` body field that nothing validates. Letting
-            // the body win would let a caller stamp another user's session onto
-            // rows that user's dashboard reads — their derived participant list
-            // would show an agent that never worked there, and their session graph
-            // would grow an edge to a foreign entity. The body value is kept only
-            // as a fallback for callers with no header (its pre-existing use), and
-            // is worth verifying at the top of `execute` in a follow-up.
-            ...((ctx.sessionId ?? input.sessionId)
-              ? { sessionId: ctx.sessionId ?? input.sessionId }
-              : {}),
+            // The one verified handle resolved at the top of `execute` — header
+            // first, body only after an ownership check. This used to prefer the
+            // header and fall back to an UNVALIDATED body value; that follow-up
+            // is now done, so both doors are equally trusted here.
+            ...(sessionId ? { sessionId } : {}),
             // The deterministically-resolved project (already LINKED above), or —
             // when none resolved — the AI's advisory suggestion. This is an
             // auto_approved RECORD (createAutoApprovedProposal never stamps
