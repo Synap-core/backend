@@ -50,6 +50,7 @@ import { storage } from "@synap/storage";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
+import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -1314,6 +1315,9 @@ export const proposalsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+      // Same door the approve path uses — a rejected proposal's notification
+      // used to stay unread forever (Approve/Reject still offered on a decided row).
+      markProposalNotificationsActioned([input.proposalId]);
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       if (proposal) {
@@ -2321,6 +2325,7 @@ export const proposalsRouter = router({
             )
           )
           .returning({ workspaceId: proposals.workspaceId });
+        markProposalNotificationsActioned([proposalId]);
 
         if (updated) {
           emitProposalReviewed(

@@ -34,7 +34,8 @@ import {
   type GovernanceScope,
   type GovernanceTarget,
 } from "@synap/database";
-import { proposals, notifications } from "@synap/database/schema";
+import { proposals } from "@synap/database/schema";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import type { PropertyDecisionMap } from "@synap/database";
 import type {
   StoredProposalData,
@@ -87,27 +88,6 @@ const logger = createLogger({ module: "proposals" });
 // against. Runs once, from this module (imported unconditionally by every
 // path into `applyProposalApproval`).
 registerApproveExecutors();
-
-function markProposalNotificationActioned(proposalId: string): void {
-  db.update(notifications)
-    .set({ status: "actioned", readAt: new Date() })
-    .where(
-      and(
-        eq(notifications.sourceType, "proposal"),
-        eq(notifications.sourceId, proposalId)
-      )
-    )
-    .then(() => {
-      logger.debug({ proposalId }, "Proposal notification marked as actioned");
-    })
-    .catch((err) => {
-      // Non-fatal — notifications must never break the proposal flow
-      logger.warn(
-        { err, proposalId },
-        "Failed to mark proposal notification as actioned (non-fatal)"
-      );
-    });
-}
 
 /**
  * Stamp `entity --belongs_to_project--> project` membership for entities created
@@ -173,7 +153,7 @@ export function emitProposalReviewed(
   // into the pending queue on every client.
   if (status === "reopened") return;
   if (status === "withdrawn") {
-    markProposalNotificationActioned(proposalId);
+    markProposalNotificationsActioned([proposalId]);
     return;
   }
   // Automation side-effects (proposal.approved/rejected.completed) are
@@ -189,7 +169,7 @@ export function emitProposalReviewed(
     });
   }
   // Mark the corresponding notification as actioned (fire-and-forget)
-  markProposalNotificationActioned(proposalId);
+  markProposalNotificationsActioned([proposalId]);
   // Notify the originating channel so waiting agents can continue (fire-and-forget)
   enqueueProposalReviewedNotify(proposalId, status);
 }

@@ -20,6 +20,7 @@
  * keeps paying for.
  */
 
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import {
   db,
   proposals,
@@ -142,6 +143,8 @@ export async function expireLapsedProposals(
         )
       )
       .returning({ id: proposals.id });
+    // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
+    markProposalNotificationsActioned(rows.map((r) => r.id));
     expired += rows.length;
   }
 
@@ -198,6 +201,8 @@ export async function expireSessionEphemerals(
         )
       )
       .returning({ id: proposals.id });
+    // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
+    markProposalNotificationsActioned(rows.map((r) => r.id));
 
     if (rows.length > 0) {
       logger.info(
