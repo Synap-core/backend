@@ -43,6 +43,9 @@ export { HubApiError } from "./errors.js";
 // Setup utilities
 export { checkPodHealth, setupAgent } from "./setup.js";
 
+// Portable locator — `{pod}/open/<id>` and `synap://open/<kind>/<id>`
+export { openPath, openUrl, openAppUrl } from "./open.js";
+
 // Types
 export type {
   // Core entity types

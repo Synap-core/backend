@@ -21,10 +21,13 @@ function publicBase(): string | undefined {
 /** Absolute, clickable link into the app: `${PUBLIC_URL}/open/<id>`. */
 export function openLink(id: string): string {
   const base = publicBase();
-  return base ? `${base}/open/${id}` : openPath(id);
+  return base ? `${base}${openPath(id)}` : openPath(id);
 }
 
-/** Pod-relative path into the app: `/open/<id>`. */
+/**
+ * Pod-relative path into the app: `/open/<id>`.
+ * Lock-step with `@synap/hub-rest-client` `openPath` (same encoding).
+ */
 export function openPath(id: string): string {
-  return `/open/${id}`;
+  return `/open/${encodeURIComponent(id)}`;
 }

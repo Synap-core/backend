@@ -19,6 +19,7 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
@@ -377,6 +378,15 @@ export const skillsRouter = router({
       const conditions: SQL[] = [];
 
       conditions.push(visibleSkillsWhere(userId, input?.workspaceId));
+      // An EXPIRED rule must stop acting. This is the read the IS
+      // `dynamic-skill-loader` reaches through `/agent-skills/executable`, so
+      // filtering here is what stops a lapsed standing intent from being
+      // injected into the model's prompt. Vacuously true for every non-rule row
+      // (no `metadata.rule` ⇒ NULL), so it narrows nothing else.
+      // NOTE: deliberately NOT applied to `GET /api/hub/rules` — the owner must
+      // still SEE an expired rule to renew or delete it. Expiry stops a rule
+      // from ACTING, it does not hide it.
+      conditions.push(ruleNotExpiredWhere());
 
       if (input?.kind) {
         conditions.push(eq(skills.kind, input.kind));
@@ -452,8 +462,11 @@ export const skillsRouter = router({
         scope: z.object({
           kind: z.enum(["pod", "workspace", "user"]),
           workspaceId: z.string().uuid().optional(),
+          /** Cross-cutting project lens — composes with the workspace lens. */
+          projectId: z.string().uuid().optional(),
         }),
-        trust: z.enum(["propose", "auto"]).optional(),
+        /** ISO-8601 instant after which the rule stops applying. */
+        expiresAt: z.string().datetime({ offset: true }).optional(),
         factSkillId: z.string().uuid().optional(),
         automationIds: z.array(z.string().uuid()).default([]),
       })
@@ -468,7 +481,7 @@ export const skillsRouter = router({
         workspaceId: input.scope.workspaceId ?? ctx.workspaceId ?? null,
         intent: input.intent,
         scope: input.scope,
-        ...(input.trust ? { trust: input.trust } : {}),
+        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
         ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
         automationIds: input.automationIds,
         auditSource: "rules.createRule",

@@ -102,6 +102,52 @@ describe.each(DOORS)(
       ).toBe(false);
     });
 
+    it("wires that decision to the approval write, and only that way", () => {
+      // The three assertions above prove the door COMPUTES the right answer.
+      // None of them proved it USES it. A door that calls execFieldsChanged and
+      // then ignores the result — or inverts it — would pass every check above
+      // while leaving the live defect (a rename un-approving the row) exactly
+      // where it was. This is the only assertion that reaches the consequence.
+      expect(
+        /execChanged\s*\?\s*\{\s*approved:\s*false\s*\}/.test(src),
+        `${file} must spread \`...(execChanged ? { approved: false } : {})\` into its ` +
+          `update .set(). Computing the demotion and not writing it is the same bug ` +
+          `with extra steps.`
+      ).toBe(true);
+      // Scoped to THIS mutation's `.set()`, not the file: `tools.ts` also has a
+      // legitimate sibling demotion in `setAuthBinding` (`bindingChanged ?
+      // { approved: false }`) for a field the update door does not accept, and
+      // it already compares by VALUE. A file-wide count would flag that as a
+      // fork. What must not exist is a SECOND demotion inside this update.
+      // Bound it by brace-matching the FIRST `.set({` after the call, so the
+      // window is the real mutation body rather than a guessed char count (the
+      // call sits ~80 lines above its own `.set()` in tools.ts).
+      const setStart = src.indexOf(".set({", callIdx);
+      expect(
+        setStart,
+        `${file}: no .set({ found after the execChanged call`
+      ).toBeGreaterThan(-1);
+      let depth = 0;
+      let setEnd = setStart;
+      for (let i = src.indexOf("{", setStart); i < src.length; i++) {
+        if (src[i] === "{") depth++;
+        else if (src[i] === "}") {
+          depth--;
+          if (depth === 0) {
+            setEnd = i;
+            break;
+          }
+        }
+      }
+      const setBlock = src.slice(setStart, setEnd);
+      const demotions = [...setBlock.matchAll(/approved:\s*false/g)].length;
+      expect(
+        demotions,
+        `${file}'s update .set() has ${demotions} \`approved: false\` writes; exactly ` +
+          `one is expected (the execChanged spread). A second is a second rule.`
+      ).toBe(1);
+    });
+
     it("every declared field is covered by the value sample below", () => {
       // Guards the sample from silently going stale when a field is added.
       expect(Object.keys(sample).sort()).toEqual([...fields].sort());

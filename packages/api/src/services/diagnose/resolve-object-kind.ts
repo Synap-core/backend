@@ -9,13 +9,27 @@
  * There is no existing single polymorphic id-resolver to reuse — the runs
  * substrate's per-flow scans require you to already know the flow (confirmed by
  * the design audit; re-grepped). This is the net-new piece.
+ *
+ * ── ONE PROBER, TWO CONSUMERS ────────────────────────────────────────────────
+ * `GET /resolve/:id` (the `synap open <bare-id>` door) used to carry a SECOND,
+ * unguarded probe list of its own — four kinds against this one's seven — so a
+ * bare id could open 4 of the ~21 kinds the browser routes. That list is gone;
+ * the endpoint calls this function. The two lists diverged in VOCABULARY as well
+ * as coverage (`view`/`document` existed only there), so what merged is the
+ * MECHANISM — which table owns this id, under the caller's floor — and the
+ * union of the kinds. The LABEL stays per-consumer: diagnose keeps its
+ * explanatory kinds (`automation_run`, `playbook_run`, `capability` covering
+ * three tables), and `/resolve/:id` projects them onto the browser's route table
+ * via `routers/hub-protocol/rest/resolve-browser-route.ts`.
  */
 
 import {
   db,
   and,
+  or,
   eq,
   isNull,
+  isNotNull,
   drizzleSql,
   proposals,
   focusSessions,
@@ -24,10 +38,13 @@ import {
   playbookRuns,
   users,
   entities,
+  views,
+  documents,
   skills,
   tools,
   events,
 } from "@synap/database";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
@@ -40,6 +57,25 @@ const CAPABILITY_RUN_EVENT_KIND = "capability_run";
 export interface ResolvedObject {
   kind: ObjectKind;
   id: string;
+  /**
+   * Display metadata read off the SAME row the matching probe already had to
+   * touch — never a second query. `/resolve/:id` needs a title to print; making
+   * that a follow-up lookup per kind would rebuild, in the consumer, exactly the
+   * per-table list this prober exists to own. Absent (undefined) for the
+   * correlationId fallbacks, which match no display row.
+   */
+  displayName?: string | null;
+  workspaceId?: string | null;
+  /** `entities.type` — the profile slug. Only the `entity` probe sets it. */
+  profileSlug?: string | null;
+  /**
+   * WHICH table under the `capability` umbrella matched. `capability` is one
+   * diagnose kind covering three tables (a registered verb, a bare skill, a bare
+   * tool), because diagnose explains all three the same way. A consumer that
+   * ROUTES cannot collapse them — the browser has a separate door per table — so
+   * the distinction is carried here instead of being re-derived by re-probing.
+   */
+  subKind?: "capability" | "skill" | "tool";
 }
 
 /**
@@ -55,8 +91,20 @@ export const PROBE_ORDER: ObjectKind[] = [
   "automation_run",
   "playbook_run",
   "agent",
+  // `view` and `document` sit ABOVE the broad `entity` catch and BELOW every
+  // specific governance/capability probe — the same slot they held in the
+  // `/resolve/:id` list this prober absorbed (which probed entities → views →
+  // documents). Ids are UUIDs from disjoint tables, so relative order between
+  // these three only ever matters on a collision; keeping the specific probes
+  // first preserves the precedence both lists already had.
+  "view",
+  "document",
   "entity",
 ];
+
+/** What a probe returns on a hit: the display metadata off the matched row.
+ *  `null` = miss. `{}` is a legitimate hit for a table with nothing to show. */
+type ProbeHit = Omit<ResolvedObject, "kind" | "id">;
 
 /**
  * Probe `id` against each candidate table in order, USER-floored per table, and
@@ -68,13 +116,23 @@ export async function resolveObjectKind(
   userId: string
 ): Promise<ResolvedObject | null> {
   // Each probe is its own tiny query — kept explicit (not a table-map loop) so
-  // each table's OWN user-floor predicate is visible and correct.
-  const probes: Array<{ kind: ObjectKind; run: () => Promise<boolean> }> = [
+  // each table's OWN user-floor predicate is visible and correct. A probe
+  // returns the display metadata off the row it matched (or `{}` when the table
+  // has none), never a bare boolean: the row was already fetched, and a consumer
+  // that needs a title must not have to re-derive "which table was that?".
+  const probes: Array<{
+    kind: ObjectKind;
+    run: () => Promise<ProbeHit | null>;
+  }> = [
     {
       kind: "proposal",
       run: async () => {
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({
+            targetType: proposals.targetType,
+            targetId: proposals.targetId,
+            workspaceId: proposals.workspaceId,
+          })
           .from(proposals)
           .where(
             and(
@@ -83,14 +141,24 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        if (!r) return null;
+        // Same label `/resolve/:id` printed before it stopped probing itself.
+        const target =
+          typeof r.targetId === "string" ? r.targetId.slice(0, 8) : "";
+        return {
+          displayName: `Proposal (${r.targetType}:${target}…)`,
+          workspaceId: r.workspaceId ?? null,
+        };
       },
     },
     {
       kind: "session",
       run: async () => {
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({
+            goal: focusSessions.goal,
+            workspaceId: focusSessions.workspaceId,
+          })
           .from(focusSessions)
           .where(
             and(
@@ -104,14 +172,21 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        if (!r) return null;
+        return {
+          displayName: r.goal ?? null,
+          workspaceId: r.workspaceId ?? null,
+        };
       },
     },
     {
       kind: "capability",
       run: async () => {
         const [capabilityRow] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({
+            name: capabilities.name,
+            workspaceId: capabilities.workspaceId,
+          })
           .from(capabilities)
           .where(
             and(
@@ -120,35 +195,51 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        if (capabilityRow) return true;
+        if (capabilityRow)
+          return {
+            subKind: "capability" as const,
+            displayName: capabilityRow.name ?? null,
+            workspaceId: capabilityRow.workspaceId ?? null,
+          };
 
         // A `capability.run`/`capability/run` proposal's skillId is a `skills`
         // (or `tools`) row, not necessarily a registered `capabilities` verb —
         // without this, `diagnose(<skillId>)` fell through to "no diagnosable
-        // object" for those. Probed under the SAME "capability" kind (there is
-        // no separate ObjectKind for a raw skill/tool).
+        // object" for those. Probed under the SAME "capability" kind (diagnose
+        // explains all three identically); `subKind` records WHICH table
+        // matched, because a consumer that ROUTES needs the distinction.
         const [skillRow] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({ name: skills.name, workspaceId: skills.workspaceId })
           .from(skills)
           .where(and(eq(skills.id, id), visibleSkillsWhere(userId)))
           .limit(1);
-        if (skillRow) return true;
+        if (skillRow)
+          return {
+            subKind: "skill" as const,
+            displayName: skillRow.name ?? null,
+            workspaceId: skillRow.workspaceId ?? null,
+          };
 
         const [toolRow] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({ name: tools.name, workspaceId: tools.workspaceId })
           .from(tools)
           .where(
             and(eq(tools.id, id), userVisibleWhere(tools.workspaceId, userId))
           )
           .limit(1);
-        return !!toolRow;
+        if (!toolRow) return null;
+        return {
+          subKind: "tool" as const,
+          displayName: toolRow.name ?? null,
+          workspaceId: toolRow.workspaceId ?? null,
+        };
       },
     },
     {
       kind: "automation_run",
       run: async () => {
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({ workspaceId: automationRuns.workspaceId })
           .from(automationRuns)
           .where(
             and(
@@ -157,14 +248,14 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        return r ? { workspaceId: r.workspaceId ?? null } : null;
       },
     },
     {
       kind: "playbook_run",
       run: async () => {
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({ workspaceId: playbookRuns.workspaceId })
           .from(playbookRuns)
           .where(
             and(
@@ -173,7 +264,7 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        return r ? { workspaceId: r.workspaceId ?? null } : null;
       },
     },
     {
@@ -182,7 +273,7 @@ export async function resolveObjectKind(
         // Only the caller's OWN agent-users (createdByUserId floor) — the
         // scorecard reads governance data scoped to this owner.
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({ name: users.name })
           .from(users)
           .where(
             and(
@@ -192,14 +283,75 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        return r ? { displayName: r.name ?? null } : null;
+      },
+    },
+    {
+      kind: "view",
+      run: async () => {
+        const [r] = await db
+          .select({ name: views.name, workspaceId: views.workspaceId })
+          .from(views)
+          // Mirror the canonical views floor (viewVisibleWhere in views.ts):
+          // pod-personal (owner) OR workspace-membership. Views carry no
+          // facets. Copied VERBATIM from the `/resolve/:id` probe this
+          // absorbed — the floor is unchanged, only its home moved.
+          .where(
+            and(
+              eq(views.id, id),
+              or(
+                and(isNull(views.workspaceId), eq(views.userId, userId)),
+                and(
+                  isNotNull(views.workspaceId),
+                  userVisibleWhere(views.workspaceId, userId)
+                )
+              )
+            )
+          )
+          .limit(1);
+        return r
+          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
+      },
+    },
+    {
+      kind: "document",
+      run: async () => {
+        const [r] = await db
+          .select({
+            title: documents.title,
+            workspaceId: documents.workspaceId,
+          })
+          .from(documents)
+          // Canonical DATA-table floor (registry documents rule) — NO
+          // facetLens (documents have no facets; their id doesn't map to
+          // entity_facets). Copied VERBATIM from the `/resolve/:id` probe.
+          .where(
+            and(
+              eq(documents.id, id),
+              accessScopeWhere({
+                workspaceIdColumn: documents.workspaceId,
+                entityIdColumn: documents.id,
+                ownerColumn: documents.userId,
+                userId,
+              })
+            )
+          )
+          .limit(1);
+        return r
+          ? { displayName: r.title ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
       },
     },
     {
       kind: "entity",
       run: async () => {
         const [r] = await db
-          .select({ one: drizzleSql<number>`1` })
+          .select({
+            title: entities.title,
+            type: entities.type,
+            workspaceId: entities.workspaceId,
+          })
           .from(entities)
           .where(
             and(
@@ -209,7 +361,13 @@ export async function resolveObjectKind(
             )
           )
           .limit(1);
-        return !!r;
+        return r
+          ? {
+              displayName: r.title ?? null,
+              workspaceId: r.workspaceId ?? null,
+              profileSlug: r.type ?? null,
+            }
+          : null;
       },
     },
   ];
@@ -221,7 +379,9 @@ export async function resolveObjectKind(
   const byKind = new Map(probes.map((p) => [p.kind, p]));
   for (const kind of PROBE_ORDER) {
     const probe = byKind.get(kind);
-    if (probe && (await probe.run())) return { kind, id };
+    if (!probe) continue;
+    const hit = await probe.run();
+    if (hit) return { kind, id, ...hit };
   }
 
   // FALLBACK — `id` as a `proposals.correlationId`, not a row id. A capability

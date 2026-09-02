@@ -43,6 +43,21 @@ export const capabilities = pgTable(
      * exactly like `tools.approved` / `mcp_servers.approved`.
      */
     approved: boolean("approved").notNull().default(false),
+    /**
+     * Container ADDRESS — the capability template this container was
+     * instantiated from (`CapabilityDefinition.key`). NOT an external id: a
+     * container has no remote object, so its identity is `(templateKey, scope)`
+     * — the Terraform-address shape. Unique per scope (migration 0242,
+     * `capabilities_template_key_scope_uq`, NULL workspace coalesced to a
+     * sentinel so pod-wide containers participate). NULL = hand-made container,
+     * or a clone that lost the address to a better-linked sibling.
+     *
+     * Kept in lock-step with `metadata.templateKey`, which predates it and is
+     * still read by `workspace-to-package-definition.ts` / `pod-config.ts`. Any
+     * door that stamps one MUST stamp the other — enforced by
+     * `capability-template-key.parity.tripwire.test.ts`.
+     */
+    templateKey: text("template_key"),
     metadata: jsonb("metadata").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -56,6 +71,9 @@ export const capabilities = pgTable(
       table.workspaceId
     ),
     createdByIdx: index("idx_capabilities_created_by").on(table.createdBy),
+    templateKeyIdx: index("idx_capabilities_template_key").on(
+      table.templateKey
+    ),
   })
 );
 

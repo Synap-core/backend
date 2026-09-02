@@ -884,6 +884,17 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "created_by",
     addedBy: "0147_capabilities.sql",
   },
+  // capabilities — container ADDRESS (0242). Absence means a pod is on a
+  // pre-0242 schema where every container-creating door would write a column
+  // that does not exist (the applier, the tRPC create procedure, and the
+  // capability/create proposal executor all set it), and container identity
+  // would silently fall back to name+scope — the duplicate-minting behaviour
+  // 0242 exists to end.
+  {
+    table: "capabilities",
+    column: "template_key",
+    addedBy: "0242_capabilities_template_key.sql",
+  },
   {
     table: "links",
     column: "from_type",

@@ -276,7 +276,11 @@ export async function runSessionRecap(
     // is the honest surface on a worker.
     if (closed && closed.counts.expiredEphemerals > 0) {
       logger.info(
-        { sessionId, expired: closed.counts.expiredEphemerals },
+        {
+          sessionId,
+          expired: closed.counts.expiredEphemerals,
+          warnings: closed.warnings,
+        },
         "session recap closed the session; expired its unanswered capability runs"
       );
     }

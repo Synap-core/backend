@@ -26,6 +26,7 @@ import {
   workspaceMembers,
   and,
   eq,
+  isNull,
   eventRepository,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -34,6 +35,8 @@ import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
+import { sendExpoPush } from "./expo-push.js";
+import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import type {
   NotificationCategory,
   NotificationPriority,
@@ -101,6 +104,75 @@ interface NotificationPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Channel resolution — the ONE place a notification's delivery channels are
+// decided.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve which channels this notification actually goes out on.
+ *
+ * The vocabulary is NOT new: `notification_preferences.routingRules` has always
+ * declared `"in_app" | "os" | "telegram" | "all" | "mute"`, and every registry
+ * entry has always declared a `defaultChannels: DeliveryChannel[]`. Only two of
+ * those five rule values were ever read (`"mute"`, `"os"`) and `defaultChannels`
+ * had ZERO readers anywhere in the repo — so `"all"` and `"in_app"` behaved
+ * identically, and the registry's own declared intent was ignored. This reads
+ * all of it, and adds no sixth token of its own.
+ *
+ * `"mute"` is absent here on purpose: it is handled by the caller BEFORE the row
+ * is written, because a muted notification is not persisted at all.
+ *
+ * QUIET HOURS apply to every INTERRUPTIVE channel, not just the socket. Quiet
+ * hours mean "persist, don't interrupt" — a push transport that ignored them
+ * would make the phone the single loudest channel at 3am, the exact inverse of
+ * the setting. So `suppressRealtime` drops both `in_app` and `os`; the row is
+ * still written above and is waiting in the bell in the morning.
+ */
+function resolveChannels(
+  def: NotificationDef,
+  categoryRule: string | undefined,
+  suppressRealtime: boolean
+): Set<DeliveryChannel> {
+  let channels: Set<DeliveryChannel>;
+
+  switch (categoryRule) {
+    case "in_app":
+      channels = new Set<DeliveryChannel>(["in_app"]);
+      break;
+    case "os":
+      channels = new Set<DeliveryChannel>(["os"]);
+      break;
+    case "all":
+      channels = new Set<DeliveryChannel>(["in_app", "os"]);
+      break;
+    case "telegram":
+      // Declared in the routingRules vocabulary but NOT implemented. It used to
+      // fall through to the ordinary socket emit with no log line at all, so a
+      // user who picked Telegram silently got in-app instead and nothing
+      // anywhere said so. Still unimplemented — but now it says so, and it
+      // falls back to the type's declared defaults rather than pretending.
+      logger.warn(
+        { type: def.type, category: def.category },
+        "routingRules value 'telegram' is not implemented — falling back to the " +
+          "notification type's defaultChannels"
+      );
+      channels = new Set<DeliveryChannel>(def.defaultChannels);
+      break;
+    default:
+      // No rule (or an unrecognized one) → the type's declared defaults.
+      channels = new Set<DeliveryChannel>(def.defaultChannels);
+      break;
+  }
+
+  if (suppressRealtime) {
+    channels.delete("in_app");
+    channels.delete("os");
+  }
+
+  return channels;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -133,14 +205,29 @@ export const NotificationService = {
       // Check user preferences: global kill switch, routing rules, quiet hours.
       // routingRules stores category-based rules: { "governance": "mute", "ai": "in_app", ... }
       // If a category is "mute", skip entirely (don't persist, don't emit).
-      const prefs = input.workspaceId
-        ? await db.query.notificationPreferences.findFirst({
-            where: and(
-              eq(notificationPreferences.userId, input.userId),
-              eq(notificationPreferences.workspaceId, input.workspaceId)
-            ),
-          })
-        : null;
+      // Workspace row first, then the user's POD-LEVEL row (workspaceId IS
+      // NULL) as the fallback. This used to read `input.workspaceId ? … : null`
+      // — so a pod-wide notification (workspaceId === null) resolved NO
+      // preferences at all and silently ignored the kill switch, every mute,
+      // and quiet hours. That hole is load-bearing now that a channel can ring
+      // a phone: `proposal.created` is the type most often raised pod-wide, and
+      // it defaults to the `"os"` channel. Without this, the one notification
+      // most likely to fire at 3am is the one that could not be quieted.
+      const prefs =
+        (input.workspaceId
+          ? await db.query.notificationPreferences.findFirst({
+              where: and(
+                eq(notificationPreferences.userId, input.userId),
+                eq(notificationPreferences.workspaceId, input.workspaceId)
+              ),
+            })
+          : undefined) ??
+        (await db.query.notificationPreferences.findFirst({
+          where: and(
+            eq(notificationPreferences.userId, input.userId),
+            isNull(notificationPreferences.workspaceId)
+          ),
+        }));
 
       // Global kill switch — skip everything if notifications are disabled
       if (prefs?.enabled === false) {
@@ -258,11 +345,13 @@ export const NotificationService = {
         createdAt: new Date().toISOString(),
       };
 
-      // Fire-and-forget — never blocks the caller
-      // Skip real-time emission during quiet hours (notification is still persisted above)
-      // Skip real-time emission if routing rule is "os" only (no in-app)
-      const shouldEmitSocket = !suppressRealtime && categoryRule !== "os";
-      if (shouldEmitSocket) {
+      // ── THE one channel-selection point ──────────────────────────────
+      // Fire-and-forget — no channel ever blocks the caller, and the row above
+      // is already persisted, so a channel that declines (or fails) only costs
+      // the interruption, never the notification.
+      const channels = resolveChannels(def, categoryRule, suppressRealtime);
+
+      if (channels.has("in_app")) {
         // Deliver to the RECIPIENT's user room — never the workspace room. The
         // bridge emits once per room key present, so passing `workspaceId` would
         // fan a private notification to every workspace member (disclosure), and
@@ -274,6 +363,26 @@ export const NotificationService = {
           data: { notification: payload, userId: input.userId },
           userId: input.userId,
         });
+      }
+
+      if (channels.has("os")) {
+        // Native push. Deliberately NOT awaited — Expo is a third-party HTTP
+        // hop and `create()` is called from write paths that must not wait on
+        // it. `sendExpoPush` never throws; the `.catch` is belt-and-braces.
+        void sendExpoPush({
+          userId: input.userId,
+          title,
+          body,
+          data: {
+            notificationId: row.id,
+            type: input.type,
+            category: def.category,
+            sourceType: input.sourceType,
+            ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+          },
+        }).catch((err) =>
+          logger.warn({ err, notificationId: row.id }, "Push send failed")
+        );
       }
 
       logger.debug(

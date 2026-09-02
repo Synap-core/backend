@@ -32,6 +32,14 @@ export type ObjectKind =
   | "playbook_run"
   | "entity"
   /**
+   * A saved VIEW and a DOCUMENT. Added when `/resolve/:id` (the `synap open
+   * <bare-id>` door) stopped keeping its own second probe list and started
+   * calling `resolveObjectKind`: those two kinds existed ONLY in that weaker,
+   * unguarded list, so the union of the two lists is what this prober now owns.
+   */
+  | "view"
+  | "document"
+  /**
    * A completed external-dispatch send (messaging.external.send / provider
    * proxy call) — resolved ONLY via its `correlationId` (there is no separate
    * row; see resolve-object-kind.ts's correlationId fallback). Wave 2 of the

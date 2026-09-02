@@ -5,7 +5,6 @@ import {
   eq,
   skills,
   knowledgeRepository,
-  capabilities,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
@@ -18,6 +17,7 @@ import {
 import { applyMarketInstall } from "../../../services/capabilities/marketplace-install.js";
 import { setCapabilityRenderer } from "../../../services/capabilities/set-capability-renderer.js";
 import type { CapabilityRendererPage } from "@synap/database";
+import { resolveOrCreateContainer } from "../../../services/capabilities/container-address.js";
 import {
   triggerProviderAction,
   type ConnectionSelector,
@@ -799,7 +799,7 @@ export function registerCapabilityExecutors(): void {
   // materialized the documented "empty shell": an unscoped, undescribed
   // capability. It now carries the full insert shape.
   //
-  // NO PROCEDURE TO REPLAY: the direct path is a bare `db.insert(capabilities)`
+  // NO PROCEDURE TO REPLAY: the direct path is a single `resolveOrCreateContainer`
   // with NO side effects — no `emitSideEffects`, no `recordDomainMutation`, no
   // grant seeding (unlike `tool/create`, which seeds one). Mirroring the insert
   // is therefore complete, not a shortcut. Deliberately NOT adding an emit here
@@ -845,11 +845,25 @@ export function registerCapabilityExecutors(): void {
         proposal.workspaceId ??
         null;
 
-      await db.insert(capabilities).values({
+      // Container ADDRESS (0242). Stored by the gate alongside name/description/
+      // scope; dropping it here would materialize an UNADDRESSED container and
+      // the next apply would mint a clone — the same class of defect as the
+      // "empty shell" the payload widening fixed.
+      const templateKey =
+        typeof inner.templateKey === "string" && inner.templateKey.trim() !== ""
+          ? inner.templateKey
+          : null;
+
+      // ONE door (`resolveOrCreateContainer`): the 0242 address index makes a
+      // bare insert throw 23505 BEFORE the status update below — an opaque 500
+      // on a proposal that could then never be approved. Resolving the address
+      // first turns an approved duplicate into a reuse.
+      await resolveOrCreateContainer(db, {
         workspaceId: wsLens,
         createdBy: proposal.agentUserId ?? userId,
         name,
         description: (inner.description as string | null) ?? undefined,
+        templateKey,
       });
 
       await db

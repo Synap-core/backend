@@ -3853,12 +3853,24 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
   "name"         text        NOT NULL,
   "description"  text,
   "approved"     boolean     NOT NULL DEFAULT false,
+  -- Container ADDRESS: the capability template this container was instantiated
+  -- from (0242). Unique per scope — see capabilities_template_key_scope_uq.
+  "template_key" text,
   "metadata"     jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "created_at"   timestamptz NOT NULL DEFAULT now(),
   "updated_at"   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS "idx_capabilities_workspace_id" ON "capabilities" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_created_by"   ON "capabilities" ("created_by");
+CREATE INDEX IF NOT EXISTS "idx_capabilities_template_key" ON "capabilities" ("template_key");
+-- NULL workspace_id coalesced to a sentinel so pod-wide containers participate
+-- in uniqueness (plain UNIQUE would treat NULLs as distinct). 0242.
+CREATE UNIQUE INDEX IF NOT EXISTS "capabilities_template_key_scope_uq"
+  ON "capabilities" (
+    COALESCE(workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    "template_key"
+  )
+  WHERE "template_key" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

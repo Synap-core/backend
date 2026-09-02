@@ -84,11 +84,15 @@ const run = async (data: Record<string, unknown>) => {
   });
 };
 
+// Deliberately carries EVERY field the propose gate stores, so the replay
+// tripwire below fails the day the payload grows a field the executor drops.
+// `trust` is gone on purpose — it granted nothing (governance_rules is the real
+// authorization store), so it is no longer stored or replayed.
 const FULL_PAYLOAD = {
   id: "rule-1",
   intent: "Inside that Drive folder, one subfolder per client.",
-  scope: { kind: "workspace", workspaceId: "ws-1" },
-  trust: "propose",
+  scope: { kind: "workspace", workspaceId: "ws-1", projectId: "prj-9" },
+  expiresAt: "2027-01-01T00:00:00.000Z",
   factSkillId: "skill-77",
   automationIds: ["auto-88"],
 };
@@ -121,8 +125,13 @@ describe("rule/create approval APPLIES (never re-proposes)", () => {
     await run(FULL_PAYLOAD);
     const args = createRuleGoverned.mock.calls[0]?.[0];
     expect(args?.intent).toBe(FULL_PAYLOAD.intent);
-    expect(args?.scope).toEqual({ kind: "workspace", workspaceId: "ws-1" });
-    expect(args?.trust).toBe("propose");
+    // Scope must survive WHOLE — a dropped projectId silently rescopes the rule.
+    expect(args?.scope).toEqual({
+      kind: "workspace",
+      workspaceId: "ws-1",
+      projectId: "prj-9",
+    });
+    expect(args?.expiresAt).toBe("2027-01-01T00:00:00.000Z");
     expect(args?.factSkillId).toBe("skill-77");
     expect(args?.automationIds).toEqual(["auto-88"]);
   });

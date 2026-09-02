@@ -55,7 +55,6 @@ const ruleOp: CompositeProposalOperation = {
   scope: { kind: "workspace", workspaceId: "ws-1" },
   factRef: "fact1",
   behaviourRefs: ["beh1"],
-  trust: "propose",
 };
 
 describe("Rule Loop composite ops", () => {
@@ -116,7 +115,6 @@ describe("Rule Loop composite ops", () => {
       expect.objectContaining({
         factSkillId: "skill-77",
         automationIds: ["auto-88"],
-        trust: "propose",
       })
     );
   });

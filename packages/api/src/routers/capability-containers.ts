@@ -19,6 +19,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, isNull, inArray, desc } from "@synap/database";
+import { resolveOrCreateContainer } from "../services/capabilities/container-address.js";
 import {
   capabilities,
   tools,
@@ -209,6 +210,15 @@ export const capabilityContainersRouter = router({
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
+        /**
+         * Container ADDRESS — the `CapabilityDefinition.key` this container is
+         * being instantiated from. Unique per scope (0242), so a re-apply
+         * resolves to the existing container instead of minting a clone. Absent
+         * for a hand-made container. MUST stay in lock-step with the caller's
+         * `metadata.templateKey` stamp (tripwire:
+         * `capability-template-key.parity.tripwire.test.ts`).
+         */
+        templateKey: z.string().min(1).max(255).optional(),
         agentUserId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
@@ -234,6 +244,11 @@ export const capabilityContainersRouter = router({
           name: input.name,
           description: input.description ?? null,
           workspaceId: input.workspaceId ?? null,
+          // Same sufficiency argument as `description`/`workspaceId` above: an
+          // approved proposal that dropped the address would materialize an
+          // UNADDRESSED container, and the next apply would mint yet another
+          // one. The executor reads it back.
+          templateKey: input.templateKey ?? null,
         },
       });
       if ("denied" in perm && perm.denied)
@@ -245,18 +260,23 @@ export const capabilityContainersRouter = router({
           proposalId: perm.proposalId,
         };
 
-      const [cap] = await db
-        .insert(capabilities)
-        .values({
-          workspaceId: input.workspaceId ?? null,
-          createdBy: input.agentUserId ?? userId,
-          name: input.name,
-          description: input.description,
-        })
-        .returning();
+      // ONE door — resolves the 0242 address before inserting, so a re-apply
+      // (or a lost race on `capabilities_template_key_scope_uq`) reuses the
+      // container instead of raising 23505 at the caller.
+      const { container: cap, status } = await resolveOrCreateContainer(db, {
+        workspaceId: input.workspaceId ?? null,
+        createdBy: input.agentUserId ?? userId,
+        name: input.name,
+        description: input.description,
+        templateKey: input.templateKey ?? null,
+      });
+      // `status` is reported HONESTLY: a create at an address (or name) that
+      // already resolves returns the existing container as "reused". Hardcoding
+      // "created" would tell the caller a row was minted when none was — the
+      // same shape of lie as a marker asserting a convergence that never ran.
       return {
         capability: cap as CapabilityRow,
-        status: "created" as const,
+        status,
         proposalId: null as string | null,
       };
     }),

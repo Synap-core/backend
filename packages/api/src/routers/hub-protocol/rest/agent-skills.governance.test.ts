@@ -65,6 +65,14 @@ vi.mock("./_shared.js", () => ({
   }),
 }));
 
+// Mocked like `visibility.js` below: this file tests GOVERNANCE, not SQL, and
+// the real module pulls the drizzle schema in (which this file's `drizzle-orm`
+// mock deliberately does not provide). Applying the predicate at the door is
+// pinned separately by `expiry-enforced.tripwire.test.ts`.
+vi.mock("../../../services/rules/expiry.js", () => ({
+  ruleNotExpiredWhere: () => ({ op: "ruleNotExpired" }),
+}));
+
 vi.mock("../../../services/skills/visibility.js", () => ({
   visibleSkillsWhere: () => ({ op: "visible" }),
 }));

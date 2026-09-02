@@ -447,7 +447,15 @@ export const capabilityHandlers: McpHandlerMap = {
     // (the verb ran and its handler failed) surfaces as an error to the agent —
     // the adapter's `{ error }` convention — not a success payload.
     if (outcome.kind === "error") {
-      return ok({ error: outcome.message });
+      // `errorClass`/`providerRef` ride ALONGSIDE the human message (set when the
+      // failure came from a provider dispatch). Without them this agent-facing
+      // door cannot tell a retryable provider blip from a credential expiry that
+      // needs a reconnect — the same signal the Hub door surfaces on its 424.
+      return ok({
+        error: outcome.message,
+        ...(outcome.errorClass ? { errorClass: outcome.errorClass } : {}),
+        ...(outcome.providerRef ? { providerRef: outcome.providerRef } : {}),
+      });
     }
     return ok(outcome);
   },

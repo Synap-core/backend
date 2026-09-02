@@ -445,8 +445,6 @@ export interface CompositeCreateRuleOp {
   factRef?: string;
   /** Refs (or real ids) of the BEHAVIOUR halves — `create_automation` ops. */
   behaviourRefs?: string[];
-  /** Whether behaviour this rule produces should auto-apply or propose. */
-  trust?: "propose" | "auto";
 }
 
 export type CompositeProposalOperation =

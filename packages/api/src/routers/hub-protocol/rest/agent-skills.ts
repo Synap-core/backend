@@ -40,6 +40,7 @@ import {
 } from "./_shared.js";
 import { insertSkillGoverned } from "../../skills.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
+import { ruleNotExpiredWhere } from "../../../services/rules/expiry.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -403,6 +404,9 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         eq(skills.kind, "instruction"),
         eq(skills.status, "active"),
         eq(skills.approved, true),
+        // Expiry is a lifecycle gate, exactly like status/approved: a lapsed
+        // standing intent must not reach an agent. Vacuously true for non-rules.
+        ruleNotExpiredWhere(),
       ];
 
       if (topic) {

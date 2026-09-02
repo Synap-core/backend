@@ -89,8 +89,11 @@ const CreateRuleBodySchema = z.object({
   scope: z.object({
     kind: z.enum(["pod", "workspace", "user"]),
     workspaceId: z.string().uuid().optional(),
+    /** Cross-cutting project lens — composes with the workspace lens. */
+    projectId: z.string().uuid().optional(),
   }),
-  trust: z.enum(["propose", "auto"]).optional(),
+  /** ISO-8601 instant after which the rule stops applying. */
+  expiresAt: z.string().datetime({ offset: true }).optional(),
   factSkillId: z.string().uuid().optional(),
   automationIds: z.array(z.string().uuid()).default([]),
   /** Acting AGENT identity when the key carries one (verified, never trusted raw). */
@@ -289,8 +292,9 @@ export function registerRulesRoutes(app: HubHono): void {
         scope: {
           kind: body.scope.kind,
           ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+          ...(body.scope.projectId ? { projectId: body.scope.projectId } : {}),
         },
-        ...(body.trust ? { trust: body.trust } : {}),
+        ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
         ...(body.factSkillId ? { factSkillId: body.factSkillId } : {}),
         automationIds: body.automationIds,
         auditSource: "hub.rules.create",

@@ -23,6 +23,11 @@ import {
   lte,
 } from "@synap/database";
 import { NotificationStatus } from "@synap/database";
+import {
+  messagingAccounts,
+  MESSAGING_ACCOUNT_PROVIDER_EXPO,
+} from "@synap/database";
+import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 
@@ -316,4 +321,109 @@ export const notifCenterRouter = router({
 
       return { success: true };
     }),
+
+  // ── Push devices ────────────────────────────────────────────────────────
+  //
+  // WHY THIS ROUTER. `relay-app` reaches the pod over tRPC through its pod
+  // client and makes no Hub REST calls at all, so a Hub `/api/hub/*` door would
+  // be unreachable from the one client that needs it. And a registered device
+  // is a NOTIFICATION-DELIVERY fact, not a workspace object: it belongs beside
+  // `getPrefs`/`updatePrefs`, which is where the rest of "how do I want to be
+  // reached" already lives.
+  //
+  // These are `protectedProcedure`, not `workspaceProcedure`: a phone is owned
+  // by a USER across every workspace (and pod-wide notifications have no
+  // workspace at all), so requiring a workspace header would scope a device to
+  // a lens it does not belong to.
+
+  /**
+   * Register or refresh this device's Expo push token. Idempotent: the
+   * (user, provider, external_id) unique index makes a repeat call on the same
+   * device an update, and re-registering a token previously killed by a
+   * `DeviceNotRegistered` receipt flips it back to `connected`.
+   */
+  registerDevice: protectedProcedure
+    .input(
+      z.object({
+        // Expo's own token format. Validated so a malformed value cannot be
+        // stored and then silently fail on every send forever.
+        token: z
+          .string()
+          .regex(
+            /^Expo(nent)?PushToken\[[^\]]+\]$/,
+            "Must be an Expo push token, e.g. ExponentPushToken[...]"
+          ),
+        platform: z.enum(["ios", "android"]),
+        deviceName: z.string().max(200).optional(),
+        appVersion: z.string().max(50).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      await MessagingAccountService.upsert({
+        userId,
+        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
+        externalId: input.token,
+        displayName: input.deviceName ?? `${input.platform} device`,
+        status: "connected",
+        metadata: {
+          platform: input.platform,
+          ...(input.deviceName ? { deviceName: input.deviceName } : {}),
+          ...(input.appVersion ? { appVersion: input.appVersion } : {}),
+        },
+      });
+
+      return { success: true };
+    }),
+
+  /**
+   * Revoke this device (sign-out, or the user turning push off). Flips `status`
+   * to `disconnected` — never a delete, so the row still absorbs a re-register
+   * on the same device instead of accumulating duplicates. Owner-floored, so it
+   * can only ever touch the caller's own device.
+   */
+  unregisterDevice: protectedProcedure
+    .input(z.object({ token: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const revoked = await MessagingAccountService.setStatusForUser({
+        userId,
+        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
+        externalId: input.token,
+        status: "disconnected",
+      });
+
+      // `revoked: false` means there was nothing to revoke — reported rather
+      // than dressed up as a success.
+      return { success: true, revoked };
+    }),
+
+  /**
+   * The caller's registered devices, so a settings screen can show and revoke
+   * them. Floored on the caller's own `userId`; the push TOKEN is deliberately
+   * not returned (it is a delivery credential) — `unregisterDevice` is driven
+   * by the token the device already holds locally.
+   */
+  listDevices: protectedProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+
+    const rows = await db.query.messagingAccounts.findMany({
+      where: and(
+        eq(messagingAccounts.userId, userId),
+        eq(messagingAccounts.provider, MESSAGING_ACCOUNT_PROVIDER_EXPO)
+      ),
+      columns: {
+        id: true,
+        displayName: true,
+        status: true,
+        metadata: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return rows;
+  }),
 });

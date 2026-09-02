@@ -85,6 +85,10 @@ const ExecuteCapabilityResultSchema = z
     dryRun: z.boolean().optional(),
     /** Observability handle for a direct run — pass to diagnose / getRun. */
     correlationId: z.string().optional(),
+    /** Idempotency receipt: `applied` = executed now, `duplicate-ignored` = an
+     * idempotent replay of a prior run (no second external effect) — so the
+     * caller can stop retrying. Absent on a dry-run. */
+    ackState: z.enum(["applied", "proposed", "duplicate-ignored"]).optional(),
   })
   .openapi("ExecuteCapabilityResult");
 
@@ -92,6 +96,15 @@ const ExecuteCapabilityProposedSchema = z
   .object({
     proposed: z.literal(true),
     proposalId: z.string(),
+    /** Where the human approves it. The handler has always RETURNED this, but
+     * it was absent from this schema — and a declared schema IS the contract,
+     * so `reviewUrl` was invisible to every generated client and doc reader
+     * even though the bytes went out. Non-optional: `execute-capability.ts:91`
+     * types it `reviewUrl: string` on the proposed outcome. */
+    reviewUrl: z.string(),
+    /** Idempotency receipt — `duplicate-ignored` when this proposal is the
+     * replay of a prior submission rather than a newly queued one. */
+    ackState: z.enum(["applied", "proposed", "duplicate-ignored"]),
   })
   .openapi("ExecuteCapabilityProposed");
 
@@ -238,6 +251,9 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
               proposed: true as const,
               proposalId: outcome.proposalId,
               reviewUrl: outcome.reviewUrl,
+              // Idempotency receipt — tells the caller whether this proposal was
+              // queued now or is the replay of a prior submission.
+              ackState: outcome.ackState,
             },
             202
           );
@@ -250,6 +266,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
               // The direct-run observability handle (best-effort — see
               // executeCapability): lets the caller diagnose/getRun the run.
               correlationId: outcome.correlationId,
+              // Idempotency receipt: `duplicate-ignored` means this was a replay
+              // of a prior run (the stored result, no second external effect) —
+              // without it the caller cannot tell a replay from a fresh run and
+              // keeps retrying.
+              ackState: outcome.ackState,
             },
             200
           );

@@ -41,10 +41,14 @@ import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
   RULE_CATEGORY,
   buildRuleMetadata,
+  readRuleRouting,
+  readRuleScope,
   ruleNameFromIntent,
   type RuleBehaviourRecord,
   type RuleMetadata,
+  type RuleRouting,
 } from "../rules/index.js";
+import { readExpiresAt } from "../rules/expiry.js";
 
 /** `proposals.target_type` for a rule — stamped by `checkPermissionOrPropose`
  * from `subjectType: "rule"`. Same literal the rule's `skills.category` uses. */
@@ -77,35 +81,34 @@ export function readRulePayload(data: unknown): {
   id: string;
   intent: string;
   scope: RuleMetadata["scope"];
-  trust: "propose" | "auto";
+  /** Absent when the rule never expires. */
+  expiresAt?: string;
   factSkillId?: string;
   automationIds: string[];
+  /** Absent for payloads written before the classifier was wired in. */
+  routing?: RuleRouting;
 } | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
   const intent = typeof d.intent === "string" ? d.intent.trim() : "";
   if (!intent) return null;
-  const rawScope = (d.scope ?? {}) as Record<string, unknown>;
-  const kind =
-    rawScope.kind === "workspace" || rawScope.kind === "user"
-      ? rawScope.kind
-      : "pod";
+  const routing = readRuleRouting(d.routing);
+  // REPLAY OF AN OLD PAYLOAD: proposals filed before `trust` was dropped still
+  // carry `d.trust`. It is simply not read — an unknown key in a JSONB blob is
+  // inert, so nothing crashes and the removed field grants nothing on approval.
+  const expiresAt = readExpiresAt(d.expiresAt);
   return {
     id: typeof d.id === "string" ? d.id : "",
     intent,
-    scope: {
-      kind,
-      ...(typeof rawScope.workspaceId === "string"
-        ? { workspaceId: rawScope.workspaceId }
-        : {}),
-    },
-    trust: d.trust === "auto" ? "auto" : "propose",
+    scope: readRuleScope(d.scope),
+    ...(expiresAt ? { expiresAt } : {}),
     ...(typeof d.factSkillId === "string"
       ? { factSkillId: d.factSkillId }
       : {}),
     automationIds: Array.isArray(d.automationIds)
       ? d.automationIds.filter((a): a is string => typeof a === "string")
       : [],
+    ...(routing ? { routing } : {}),
   };
 }
 
@@ -186,9 +189,12 @@ export async function listPendingRuleProposals(
         rule: buildRuleMetadata({
           intent: payload.intent,
           scope: payload.scope,
-          trust: payload.trust,
+          ...(payload.expiresAt ? { expiresAt: payload.expiresAt } : {}),
           ...(payload.factSkillId ? { factSkillId: payload.factSkillId } : {}),
           behaviours,
+          // Same routing the approved rule will carry — a pending rule must
+          // not read as "unclassified" and then acquire a shape on approval.
+          ...(payload.routing ? { routing: payload.routing } : {}),
           now: row.createdAt instanceof Date ? row.createdAt : undefined,
         }),
         status: "proposed" as const,

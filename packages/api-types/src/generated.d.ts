@@ -3830,6 +3830,26 @@ declare const capabilities: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		templateKey: import("drizzle-orm/pg-core").PgColumn<{
+			name: "template_key";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		metadata: import("drizzle-orm/pg-core").PgColumn<{
 			name: "metadata";
 			tableName: "capabilities";
@@ -3991,6 +4011,7 @@ export interface EventRecord {
 	finishReason?: string;
 	workspaceId?: string;
 	proposalId?: string;
+	sessionId?: string;
 }
 /**
  * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
@@ -4768,8 +4789,6 @@ export interface CompositeCreateRuleOp {
 	factRef?: string;
 	/** Refs (or real ids) of the BEHAVIOUR halves — `create_automation` ops. */
 	behaviourRefs?: string[];
-	/** Whether behaviour this rule produces should auto-apply or propose. */
-	trust?: "propose" | "auto";
 }
 export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp;
 /**
@@ -6146,16 +6165,57 @@ export interface CapabilityGrantRow {
 	createdAt: string;
 	active: boolean;
 }
-export type CreateRuleGovernedResult = {
-	status: "created";
-	ruleId: string;
-} | {
-	status: "proposed";
-	proposalId: string;
-} | {
-	status: "denied";
-	reason: string;
-};
+/**
+ * Intent classification for the WRITE side of the Rule Loop — the sibling of
+ * `classify.ts`.
+ *
+ * `classifySubstrates` routes a QUESTION to the memory substrates that can
+ * answer it. This routes a STATEMENT — a rule the user just told the pod — to
+ * the SHAPES it implies, so the agent that materialises it knows what it is
+ * building before it starts building. A rule is rarely one thing: "when a
+ * Calendly event lands, research the prospect and brief me an hour before the
+ * call" is a trigger, a schedule and an outward message at once, so this is
+ * MULTI-LABEL by construction.
+ *
+ * The seven shapes:
+ *   fact         — knowledge the agent should hold while reasoning. → instruction skill
+ *   behaviour    — something that runs when the world changes.      → automation
+ *   structure    — a mapping / identity claim ("a subfolder IS a client").
+ *   schedule     — recurring or temporal ("every Monday", "an hour before").
+ *   notification — an outward message ("tell me", "post to this channel").
+ *   extraction   — deriving structured data from unstructured input.
+ *   unknown      — could not classify confidently.
+ *
+ * Same engineering contract as `classify.ts`: a PURE, synchronous function over
+ * cheap heuristics — no I/O, no LLM, no network — so it can run on the parse-only
+ * fast path and be unit-tested with zero mocks. Matching is WORD-BOUNDARY, not
+ * raw substring: "extract" must be the word "extract", not the head of
+ * "Extractor Inc"; "index" won't fire on "reindex". And the cue lists avoid bare
+ * single-word nouns that collide with this product's own entity vocabulary — a
+ * trigger is signalled by a determiner-anchored PHRASE ("when a", "whenever"),
+ * never by a lone word that is just as likely a company name.
+ *
+ * WHERE THE TWO SIBLINGS DIVERGE — the cost of a wrong label is not symmetric.
+ * On the read side, over-routing only adds a cheap extra query. Here, a wrong
+ * label BUILDS something: mis-reading a one-off request as a standing rule
+ * leaves a permanent automation firing forever, and mis-reading a statement of
+ * fact as a behaviour does the same. So the biases are:
+ *
+ *   1. Prefer `needsClarification` to a confident wrong label. When the rule is
+ *      genuinely undecidable, or when two readings conflict, we STOP and ask
+ *      rather than guess — guessing is worse than asking.
+ *   2. Declarative beats executable on a confidence tie (see `PRECEDENCE`).
+ *   3. A standing rule must carry an explicit standing marker. "if" alone is not
+ *      one — in a rule, "if" almost always qualifies an action that is already
+ *      being described ("if the client doesn't exist, create it first"), it does
+ *      not declare a trigger. Requiring a temporal/distributive marker is what
+ *      keeps a one-line request from becoming a permanent automation.
+ *
+ * Every fired cue is returned with its shape, so a human reviewing an
+ * AI-authored rule can see WHY it routed that way. That is the whole point: an
+ * unexplained classification is not reviewable.
+ */
+export type RuleShape = "fact" | "behaviour" | "structure" | "schedule" | "notification" | "extraction" | "unknown";
 export interface RuleBehaviourRecord {
 	automationId: string;
 	/**
@@ -6166,22 +6226,66 @@ export interface RuleBehaviourRecord {
 	 */
 	flowHash: string;
 }
+/**
+ * What `classifyRuleIntent` concluded about this rule's text, recorded AT
+ * CREATION.
+ *
+ * WHY IT IS STORED: the classifier is a pure function of the intent, so this is
+ * reproducible — but it is not free, and more importantly a reader (and a human
+ * reviewing an agent-authored rule) must be able to see WHY the rule routed the
+ * way it did without re-running a heuristic that may have been retuned since.
+ * `cues` is the literal evidence; an unexplained classification is not
+ * reviewable.
+ *
+ * It is DESCRIPTIVE, never authoritative: nothing branches on it, and a rule
+ * whose shape says "behaviour" with `behaviours: []` is still a valid rule —
+ * see `needsBehaviour` on `CreateRuleGovernedResult`.
+ */
+export interface RuleRouting {
+	/** The lead shape — `IntentRoute.primary`. */
+	shape: RuleShape;
+	/** 0–1 confidence of the primary shape. */
+	confidence: number;
+	/** True when the text reads as a one-off ask rather than a standing rule. */
+	oneShot: boolean;
+	/** The literal cues that fired for the primary shape. */
+	cues: string[];
+}
+/**
+ * WHERE a rule applies.
+ *
+ * `kind` is the `skills.scope` enum verbatim — it is the COLUMN, and it is what
+ * `visibleSkillsWhere` reads. `projectId` is the cross-cutting dimension that
+ * composes with it (workspace = domain lens, project = cross-cutting lens);
+ * `skills` has no `project_id` column and this change ships no migration, so it
+ * lives in the same JSONB blob as `expiresAt`. Absent = not project-scoped.
+ */
+export interface RuleScope {
+	kind: "pod" | "workspace" | "user";
+	workspaceId?: string;
+	/** Cross-cutting project lens. Absent = the rule is not project-scoped. */
+	projectId?: string;
+}
 export interface RuleMetadata {
 	v: 1;
 	intent: string;
-	scope: {
-		kind: "pod" | "workspace" | "user";
-		workspaceId?: string;
-	};
+	scope: RuleScope;
 	/**
-	 * Recorded, NOT yet enforced. Wiring trust into the policy engine means
-	 * writing a `governance_rules` row, which is deliberately out of scope here
-	 * (the rule object is built BESIDE governance-rules, not on it).
+	 * ISO-8601 UTC instant after which this rule stops influencing anything —
+	 * ENFORCED by `ruleNotExpiredWhere()` inside `visibleSkillsWhere`, the one
+	 * predicate every rule read door inherits. Absent = no expiry, NEVER
+	 * "expired" (mirrors `governance_rules.expires_at`). See `./expiry.ts`.
 	 */
-	trust: "propose" | "auto";
+	expiresAt?: string;
 	/** Set only when the fact half is a SEPARATE skill row. */
 	factSkillId?: string;
 	behaviours: RuleBehaviourRecord[];
+	/**
+	 * Optional because rows written before the classifier was wired into the
+	 * write door carry none. Absent ⇒ "never classified", not "classified as
+	 * nothing".
+	 */
+	routing?: RuleRouting;
 	createdAt: string;
 }
 export interface DivergedBehaviour extends RuleBehaviourRecord {
@@ -6190,6 +6294,38 @@ export interface DivergedBehaviour extends RuleBehaviourRecord {
 	/** null current hash = the automation row is gone. */
 	status: "matches" | "diverged" | "missing";
 }
+/**
+ * NON-FATAL signal: the rule's text describes something that RUNS, but no
+ * behaviour is attached to it, so nothing will.
+ *
+ * This is INFORMATION, not a refusal — the rule is created either way. It
+ * exists because `createRuleGoverned` LINKS pre-existing automations and never
+ * compiles text into a flow; a caller that passes `automationIds: []` (every
+ * live caller does today) would otherwise get a `skills` row of prose that
+ * silently never executes, and be told nothing about it.
+ *
+ * A `fact` rule ("Acme prefers async") is legitimately prose-only, so it never
+ * carries this. Neither does a one-shot ask, which is not a standing rule at
+ * all.
+ */
+export interface RuleBehaviourGap {
+	/** The behavioural shape the text implies. */
+	shape: RuleShape;
+	/** Short, human. Safe to show a user verbatim. */
+	reason: string;
+}
+export type CreateRuleGovernedResult = {
+	status: "created";
+	ruleId: string;
+	needsBehaviour?: RuleBehaviourGap;
+} | {
+	status: "proposed";
+	proposalId: string;
+	needsBehaviour?: RuleBehaviourGap;
+} | {
+	status: "denied";
+	reason: string;
+};
 /** Which read paths the newly-created verb was wired into. */
 export interface WireCreatedVerbResult {
 	/** `skill --requires--> tool` edge written. */
@@ -7124,7 +7260,7 @@ export interface GraphNeighbor extends GraphNode {
 	edgeType: string;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
-	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation";
+	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in";
 }
 /** "Fetch X, get X + everything it's linked to, typed." */
 export interface GraphEnvelope {
@@ -10072,10 +10208,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				branchPurpose?: string | undefined;
 				ephemeral?: boolean | undefined;
 				turnContext?: {
-					entries: {
+					entries?: {
 						key: string;
 						value: string | number | boolean | string[] | null;
-					}[];
+					}[] | undefined;
+					session?: {
+						version: 1;
+						id: string;
+						goal: string;
+						depth: number;
+						chain: {
+							id: string;
+							goal: string;
+						}[];
+						stage?: string | undefined;
+						progress?: number | undefined;
+						suspendedIntent?: string | undefined;
+					} | undefined;
 				} | undefined;
 				onboardingSkill?: "onboard" | "agent-os" | undefined;
 			};
@@ -10233,7 +10382,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -10975,7 +11124,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -11074,7 +11223,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -11187,7 +11336,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -11386,7 +11535,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
-				status?: "pending" | "rejected" | "validated" | "all" | undefined;
+				status?: "pending" | "rejected" | "all" | "validated" | undefined;
 				cursor?: string | undefined;
 			};
 			output: {
@@ -14769,6 +14918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					createdBy: string;
 					approved: boolean;
+					templateKey: string | null;
 				}[];
 				meta: object;
 			}>;
@@ -14806,6 +14956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description?: string | undefined;
 					workspaceId?: string | undefined;
+					templateKey?: string | undefined;
 					agentUserId?: string | undefined;
 					source?: string | undefined;
 					reasoning?: string | undefined;
@@ -14816,7 +14967,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposalId: string;
 				} | {
 					capability: CapabilityRow;
-					status: "created";
+					status: "created" | "reused";
 					proposalId: string | null;
 				};
 				meta: object;
@@ -15791,6 +15942,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				allData?: boolean | undefined;
 				includePodWide?: boolean | undefined;
+				projectId?: string | undefined;
 			};
 			output: SystemMapOverview;
 			meta: object;
@@ -15802,6 +15954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				allData?: boolean | undefined;
 				includePodWide?: boolean | undefined;
+				projectId?: string | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -15832,6 +15985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				allData?: boolean | undefined;
 				includePodWide?: boolean | undefined;
+				projectId?: string | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 				edgeLimit?: number | undefined;
@@ -17358,7 +17512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "calendar" | "table" | "whiteboard" | "list" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "all" | "whiteboard" | "list" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -18718,8 +18872,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scope: {
 					kind: "user" | "workspace" | "pod";
 					workspaceId?: string | undefined;
+					projectId?: string | undefined;
 				};
-				trust?: "auto" | "propose" | undefined;
+				expiresAt?: string | undefined;
 				factSkillId?: string | undefined;
 				automationIds?: string[] | undefined;
 			};
@@ -22238,6 +22393,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		registerDevice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				token: string;
+				platform: "ios" | "android";
+				deviceName?: string | undefined;
+				appVersion?: string | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		unregisterDevice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				token: string;
+			};
+			output: {
+				success: boolean;
+				revoked: boolean;
+			};
+			meta: object;
+		}>;
+		listDevices: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				status: string;
+				metadata: Record<string, unknown>;
+				createdAt: Date;
+				updatedAt: Date;
+				displayName: string;
+			}[];
+			meta: object;
+		}>;
 	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -24386,7 +24575,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale" | "all" | undefined;
 				limit?: number | undefined;
 			};
-			output: {
+			output: ({
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
@@ -24409,7 +24598,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				createdAt: Date;
 				updatedAt: Date;
-			}[];
+			} & {
+				parentSessionId: string | null;
+			})[];
 			meta: object;
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
@@ -24443,6 +24634,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				createdAt: Date;
 				updatedAt: Date;
+			} & {
+				parentSessionId: string | null;
 			};
 			meta: object;
 		}>;
@@ -26598,7 +26791,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					interests: string[];
 					dislikedTopics: string[];
 					persona: "cto" | "founder" | "sales" | "marketing" | "general" | "project-manager" | "researcher";
-					frequency: "realtime" | "hourly" | "daily" | "weekly";
+					frequency: "daily" | "weekly" | "hourly" | "realtime";
 					sources: {
 						id: string;
 						url: string;

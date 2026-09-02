@@ -2,19 +2,29 @@
  * Hub Protocol REST — /resolve
  *
  * Universal ID resolver. Takes any UUID and returns what type of thing it is.
- * Probes proposals → entities → views → documents in order.
  *
  * AI agents call this when they want to open something but don't know the type.
  * Usage: synap open <id> → CLI calls this endpoint → dispatches the right deep link.
+ *
+ * ── THIS ENDPOINT OWNS NO PROBE LIST ─────────────────────────────────────────
+ * It used to: four hand-written kinds (proposal, entity, view, document) with
+ * their own inline queries, next to `services/diagnose/resolve-object-kind.ts`'s
+ * SEVEN in the same package — a second answer to "which table holds this id?".
+ * The user-visible cost was that `synap open <bare-id>` reached 4 of the ~21
+ * kinds the browser routes: every capability-substrate object (skill, session,
+ * playbook run, agent, …) came back `unknown` → "Nothing to open."
+ *
+ * The MECHANISM is now `resolveObjectKind` (which absorbed this file's `view`
+ * and `document` probes, floors verbatim — they existed only here). The LABEL
+ * is a per-consumer projection: `resolve-browser-route.ts` maps a probed kind
+ * onto `object-nav.ts`'s route table, because this endpoint's only consumer is
+ * the CLI and a label the browser has no arm for is a dead link.
  */
 
 import { z } from "@hono/zod-openapi";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { db } from "@synap/database";
-import { proposals, entities, views, documents } from "@synap/database/schema";
-import { eq, and, or, isNull, isNotNull } from "drizzle-orm";
 import {
   hasScope,
   logger,
@@ -22,8 +32,8 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { resolveByName } from "../../../services/object-graph/graph-service.js";
-import { accessScopeWhere } from "../../../utils/project-scope.js";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { resolveObjectKind } from "../../../services/diagnose/resolve-object-kind.js";
+import { browserRouteFor, EMITTABLE_LABELS } from "./resolve-browser-route.js";
 
 const ResolveByNameSchema = z
   .object({
@@ -41,15 +51,41 @@ const ResolveByNameSchema = z
   })
   .openapi("ResolveByNameResponse");
 
+/** `unknown` is not a routable label — it is the honest "no match" answer. */
+const UNKNOWN_TYPE = "unknown";
+
 const ResolveResponseSchema = z
   .object({
     type: z
-      .enum(["proposal", "entity", "view", "document", "unknown"])
-      .describe("Discovered type of the given ID"),
-    id: z.string().describe("The queried ID"),
+      .string()
+      .describe(
+        "Browser-routable label for the given ID — an `object-nav.ts` case " +
+          `label, one of: ${[...EMITTABLE_LABELS, UNKNOWN_TYPE].join(", ")}. ` +
+          "Never a free string: see resolve-browser-route.ts."
+      ),
+    /**
+     * The id to OPEN — not always the id queried. A correlationId handed back
+     * by a capability run resolves to the proposal (or skill) row it belongs
+     * to, and that ROW id is what a deep link must carry.
+     */
+    id: z.string().describe("The id to open (may differ from the queried id)"),
     displayName: z.string().nullable().optional(),
     workspaceId: z.string().nullable().optional(),
     profileSlug: z.string().nullable().optional(),
+    /**
+     * False when the id resolved but the thing has no browser surface at all
+     * (an external send). The caller must report what it is rather than mint a
+     * deep link that lands nowhere — a dead link is worse than a refusal.
+     */
+    openable: z
+      .boolean()
+      .describe("Whether `type` names a surface the browser can open"),
+    /**
+     * Address parameters the deep link must carry for `type` to be resolvable.
+     * Only runs use one today (`flowType`), because a run is addressed by
+     * `{flowType, runId}` and the id alone does not identify it.
+     */
+    params: z.record(z.string()).optional(),
   })
   .openapi("ResolveResponse");
 
@@ -132,171 +168,57 @@ export function registerResolveRoutes(app: HubHono): void {
       return c.json({ error: "id is required" }, 400);
     }
 
-    // Bind the resolve to the acting principal. Each probe below ANDs the
-    // acting user's visibility floor onto its `eq(table.id, id)` lookup — without
-    // it, resolve returned title + workspaceId for ANY row in the pod (a
-    // cross-tenant existence + metadata leak). Not-found (→ `unknown`) is the
-    // correct response for an id the caller cannot see.
+    // Bind the resolve to the acting principal. Every probe inside
+    // `resolveObjectKind` ANDs the acting user's visibility floor onto its
+    // `eq(table.id, id)` lookup — without it, resolve returned title +
+    // workspaceId for ANY row in the pod (a cross-tenant existence + metadata
+    // leak). Not-found (→ `unknown`) is the correct response for an id the
+    // caller cannot see. The floors are UNCHANGED by the consolidation: the
+    // `view` and `document` predicates moved into the prober verbatim.
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const userId = acting.userId;
 
-    async function probe<T>(
-      label: string,
-      fn: () => Promise<T | undefined>
-    ): Promise<T | undefined> {
-      try {
-        return await fn();
-      } catch (err) {
-        logger.warn(
-          { err, id, table: label },
-          "resolve probe failed (continuing)"
-        );
-        return undefined;
-      }
+    let resolved;
+    try {
+      resolved = await resolveObjectKind(id, acting.userId);
+    } catch (err) {
+      // Same posture as the old per-probe try/catch: a resolver failure is not
+      // an outage for the caller, it is "I could not tell you what this is".
+      logger.warn({ err, id }, "resolve failed (returning unknown)");
+      resolved = null;
     }
 
-    // 1. Probe proposals first
-    const proposal = await probe("proposals", async () => {
-      const [row] = await db
-        .select({
-          id: proposals.id,
-          targetType: proposals.targetType,
-          targetId: proposals.targetId,
-          workspaceId: proposals.workspaceId,
-        })
-        .from(proposals)
-        // Mirror the canonical proposals floor (registry `workspace` rule):
-        // visible when the proposal's workspace is one the caller can see.
-        .where(
-          and(
-            eq(proposals.id, id),
-            userVisibleWhere(proposals.workspaceId, userId)
-          )
-        )
-        .limit(1);
-      return row;
-    });
-    if (proposal) {
+    if (!resolved) {
       return c.json({
-        type: "proposal",
-        id: proposal.id,
-        displayName: `Proposal (${proposal.targetType}:${proposal.targetId.slice(0, 8)}…)`,
-        workspaceId: proposal.workspaceId,
+        type: UNKNOWN_TYPE,
+        id,
+        displayName: null,
+        workspaceId: null,
+        openable: false,
       });
     }
 
-    // 2. Probe entities (type column = profile slug)
-    const entity = await probe("entities", async () => {
-      const [row] = await db
-        .select({
-          id: entities.id,
-          title: entities.title,
-          workspaceId: entities.workspaceId,
-          type: entities.type,
-        })
-        .from(entities)
-        // Canonical DATA-table floor. Display read → facetLens honors role-as-lens.
-        .where(
-          and(
-            eq(entities.id, id),
-            accessScopeWhere({
-              workspaceIdColumn: entities.workspaceId,
-              entityIdColumn: entities.id,
-              ownerColumn: entities.userId,
-              userId,
-              facetLens: true,
-            })
-          )
-        )
-        .limit(1);
-      return row;
-    });
-    if (entity) {
+    const route = browserRouteFor(resolved);
+    if (!route) {
+      // Resolved, but there is no browser surface for it. Report WHAT it is and
+      // that it cannot be opened — never a link into nothing.
       return c.json({
-        type: "entity",
-        id: entity.id,
-        displayName: entity.title,
-        workspaceId: entity.workspaceId,
-        profileSlug: entity.type,
+        type: resolved.kind,
+        id: resolved.id,
+        displayName: resolved.displayName ?? null,
+        workspaceId: resolved.workspaceId ?? null,
+        openable: false,
       });
     }
 
-    // 3. Probe views
-    const view = await probe("views", async () => {
-      const [row] = await db
-        .select({
-          id: views.id,
-          name: views.name,
-          workspaceId: views.workspaceId,
-        })
-        .from(views)
-        // Mirror the canonical views floor (viewVisibleWhere in views.ts):
-        // pod-personal (owner) OR workspace-membership. Views carry no facets.
-        .where(
-          and(
-            eq(views.id, id),
-            or(
-              and(isNull(views.workspaceId), eq(views.userId, userId)),
-              and(
-                isNotNull(views.workspaceId),
-                userVisibleWhere(views.workspaceId, userId)
-              )
-            )
-          )
-        )
-        .limit(1);
-      return row;
-    });
-    if (view) {
-      return c.json({
-        type: "view",
-        id: view.id,
-        displayName: view.name,
-        workspaceId: view.workspaceId,
-      });
-    }
-
-    // 4. Probe documents
-    const doc = await probe("documents", async () => {
-      const [row] = await db
-        .select({
-          id: documents.id,
-          title: documents.title,
-          workspaceId: documents.workspaceId,
-        })
-        .from(documents)
-        // Canonical DATA-table floor (registry documents rule) — NO facetLens
-        // (documents have no facets; their id doesn't map to entity_facets).
-        .where(
-          and(
-            eq(documents.id, id),
-            accessScopeWhere({
-              workspaceIdColumn: documents.workspaceId,
-              entityIdColumn: documents.id,
-              ownerColumn: documents.userId,
-              userId,
-            })
-          )
-        )
-        .limit(1);
-      return row;
-    });
-    if (doc) {
-      return c.json({
-        type: "document",
-        id: doc.id,
-        displayName: doc.title,
-        workspaceId: doc.workspaceId,
-      });
-    }
-
-    // 5. Not found
     return c.json({
-      type: "unknown",
-      id,
-      displayName: null,
-      workspaceId: null,
+      type: route.label,
+      id: resolved.id,
+      displayName: resolved.displayName ?? null,
+      workspaceId: resolved.workspaceId ?? null,
+      ...(resolved.profileSlug ? { profileSlug: resolved.profileSlug } : {}),
+      openable: true,
+      ...(route.params ? { params: route.params } : {}),
     });
   });
 }

@@ -16,12 +16,12 @@
  *   - `skills` already has a governed create door (`insertSkillGoverned` →
  *     `checkPermissionOrPropose`), an approve executor, visibility rules, and
  *     an `approved` gate. A `rules` table would have to re-earn all of it.
- *   - `skills.metadata` is untyped JSONB with a default — `intent`, `trust`,
- *     the fact/behaviour lineage and the divergence snapshot ride there with
- *     no DDL at all.
+ *   - `skills.metadata` is untyped JSONB with a default — `intent`, `expiresAt`,
+ *     the project lens, the fact/behaviour lineage and the divergence snapshot
+ *     ride there with no DDL at all.
  *
  * WHY NOT `links` alone: an edge has no identity, so it cannot hold `intent`,
- * `trust`, or a divergence snapshot. Links carry the lineage, not the rule.
+ * an expiry, or a divergence snapshot. Links carry the lineage, not the rule.
  *
  * WHY NOT `capabilities` (the repo's other container): a capability is "the
  * tool" in the Configuration-over-Code triptych, it has no `user` scope, and
@@ -41,6 +41,8 @@
 import { createHash } from "node:crypto";
 import { db, automations, inArray } from "@synap/database";
 import { createLinks } from "../links/links-service.js";
+import type { RuleShape } from "../knowledge/classify-intent.js";
+import { normalizeExpiresAt, readExpiresAt } from "./expiry.js";
 
 /** Marker written into `skills.metadata` — what makes a skill row a RULE. */
 export const RULE_METADATA_KEY = "rule" as const;
@@ -58,19 +60,68 @@ export interface RuleBehaviourRecord {
   flowHash: string;
 }
 
+/**
+ * What `classifyRuleIntent` concluded about this rule's text, recorded AT
+ * CREATION.
+ *
+ * WHY IT IS STORED: the classifier is a pure function of the intent, so this is
+ * reproducible — but it is not free, and more importantly a reader (and a human
+ * reviewing an agent-authored rule) must be able to see WHY the rule routed the
+ * way it did without re-running a heuristic that may have been retuned since.
+ * `cues` is the literal evidence; an unexplained classification is not
+ * reviewable.
+ *
+ * It is DESCRIPTIVE, never authoritative: nothing branches on it, and a rule
+ * whose shape says "behaviour" with `behaviours: []` is still a valid rule —
+ * see `needsBehaviour` on `CreateRuleGovernedResult`.
+ */
+export interface RuleRouting {
+  /** The lead shape — `IntentRoute.primary`. */
+  shape: RuleShape;
+  /** 0–1 confidence of the primary shape. */
+  confidence: number;
+  /** True when the text reads as a one-off ask rather than a standing rule. */
+  oneShot: boolean;
+  /** The literal cues that fired for the primary shape. */
+  cues: string[];
+}
+
+/**
+ * WHERE a rule applies.
+ *
+ * `kind` is the `skills.scope` enum verbatim — it is the COLUMN, and it is what
+ * `visibleSkillsWhere` reads. `projectId` is the cross-cutting dimension that
+ * composes with it (workspace = domain lens, project = cross-cutting lens);
+ * `skills` has no `project_id` column and this change ships no migration, so it
+ * lives in the same JSONB blob as `expiresAt`. Absent = not project-scoped.
+ */
+export interface RuleScope {
+  kind: "pod" | "workspace" | "user";
+  workspaceId?: string;
+  /** Cross-cutting project lens. Absent = the rule is not project-scoped. */
+  projectId?: string;
+}
+
 export interface RuleMetadata {
   v: 1;
   intent: string;
-  scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
+  scope: RuleScope;
   /**
-   * Recorded, NOT yet enforced. Wiring trust into the policy engine means
-   * writing a `governance_rules` row, which is deliberately out of scope here
-   * (the rule object is built BESIDE governance-rules, not on it).
+   * ISO-8601 UTC instant after which this rule stops influencing anything —
+   * ENFORCED by `ruleNotExpiredWhere()` inside `visibleSkillsWhere`, the one
+   * predicate every rule read door inherits. Absent = no expiry, NEVER
+   * "expired" (mirrors `governance_rules.expires_at`). See `./expiry.ts`.
    */
-  trust: "propose" | "auto";
+  expiresAt?: string;
   /** Set only when the fact half is a SEPARATE skill row. */
   factSkillId?: string;
   behaviours: RuleBehaviourRecord[];
+  /**
+   * Optional because rows written before the classifier was wired into the
+   * write door carry none. Absent ⇒ "never classified", not "classified as
+   * nothing".
+   */
+  routing?: RuleRouting;
   createdAt: string;
 }
 
@@ -103,33 +154,84 @@ export function readRuleMetadata(
   if (!raw || typeof raw !== "object") return null;
   const candidate = raw as Partial<RuleMetadata>;
   if (typeof candidate.intent !== "string") return null;
+  const routing = readRuleRouting(candidate.routing);
+  // `trust` was stored by rules written before it was dropped. It is IGNORED,
+  // never surfaced — reading an old blob must not crash and must not resurrect
+  // a field that granted nothing.
+  const expiresAt = readExpiresAt(candidate.expiresAt);
   return {
     v: 1,
     intent: candidate.intent,
-    scope: candidate.scope ?? { kind: "pod" },
-    trust: candidate.trust === "auto" ? "auto" : "propose",
+    scope: readRuleScope(candidate.scope),
+    ...(expiresAt ? { expiresAt } : {}),
     ...(candidate.factSkillId ? { factSkillId: candidate.factSkillId } : {}),
     behaviours: Array.isArray(candidate.behaviours) ? candidate.behaviours : [],
+    ...(routing ? { routing } : {}),
     createdAt: candidate.createdAt ?? new Date(0).toISOString(),
+  };
+}
+
+/**
+ * Re-validate a stored scope blob. Same contract as `readRuleRouting`: stored
+ * JSONB is DATA, so an unrecognised `kind` degrades to the narrowest honest
+ * answer (`pod` — what the row already defaulted to before `projectId`
+ * existed) rather than being trusted.
+ */
+export function readRuleScope(raw: unknown): RuleScope {
+  if (!raw || typeof raw !== "object") return { kind: "pod" };
+  const r = raw as Partial<RuleScope>;
+  const kind =
+    r.kind === "workspace" || r.kind === "user" || r.kind === "pod"
+      ? r.kind
+      : "pod";
+  return {
+    kind,
+    ...(typeof r.workspaceId === "string"
+      ? { workspaceId: r.workspaceId }
+      : {}),
+    ...(typeof r.projectId === "string" ? { projectId: r.projectId } : {}),
+  };
+}
+
+/**
+ * Re-validate a stored routing blob. Stored JSONB is DATA, not a contract: a
+ * partial or hand-edited blob reads as absent rather than as a half-trusted
+ * shape.
+ */
+export function readRuleRouting(raw: unknown): RuleRouting | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<RuleRouting>;
+  if (typeof r.shape !== "string") return null;
+  return {
+    shape: r.shape,
+    confidence: typeof r.confidence === "number" ? r.confidence : 0,
+    oneShot: r.oneShot === true,
+    cues: Array.isArray(r.cues)
+      ? r.cues.filter((c) => typeof c === "string")
+      : [],
   };
 }
 
 /** Build the metadata blob a rule row stores. Pure — unit-testable. */
 export function buildRuleMetadata(input: {
   intent: string;
-  scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
-  trust?: "propose" | "auto";
+  scope: RuleScope;
+  /** Normalised to canonical ISO-8601 UTC; throws on a non-instant. */
+  expiresAt?: string | Date;
   factSkillId?: string;
   behaviours: RuleBehaviourRecord[];
+  routing?: RuleRouting;
   now?: Date;
 }): RuleMetadata {
+  const expiresAt = normalizeExpiresAt(input.expiresAt);
   return {
     v: 1,
     intent: input.intent,
     scope: input.scope,
-    trust: input.trust ?? "propose",
+    ...(expiresAt ? { expiresAt } : {}),
     ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
     behaviours: input.behaviours,
+    ...(input.routing ? { routing: input.routing } : {}),
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }

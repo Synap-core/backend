@@ -258,7 +258,6 @@ export type RuleCreateCaller = {
   create: (input: {
     intent: string;
     scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
-    trust?: "propose" | "auto";
     factSkillId?: string;
     automationIds: string[];
   }) => Promise<{ id: string }>;
@@ -728,7 +727,6 @@ export async function materializeCompositeGraph(
       const created = await options.ruleCaller.create({
         intent: op.intent,
         scope: op.scope,
-        ...(op.trust ? { trust: op.trust } : {}),
         ...(factSkillId ? { factSkillId } : {}),
         automationIds,
       });

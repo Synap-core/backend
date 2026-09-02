@@ -45,8 +45,8 @@ describe("rule metadata", () => {
   it("round-trips through the skills.metadata blob", () => {
     const metadata = buildRuleMetadata({
       intent: "One subfolder per client.",
-      scope: { kind: "workspace", workspaceId: "ws-1" },
-      trust: "auto",
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-1" },
+      expiresAt: "2027-01-01T00:00:00.000Z",
       factSkillId: "skill-1",
       behaviours: [{ automationId: "auto-1", flowHash: "abc" }],
     });
@@ -54,17 +54,79 @@ describe("rule metadata", () => {
     expect(read).toEqual(metadata);
   });
 
-  it("defaults trust to propose — a rule never widens by omission", () => {
+  /**
+   * `trust` was removed: it looked like authorization and granted nothing
+   * (`governance_rules` is the real store). Rows written before the removal
+   * still carry it — reading one must not crash and must not resurrect it.
+   */
+  it("tolerates a legacy `trust` key on a stored blob without surfacing it", () => {
+    const read = readRuleMetadata({
+      [RULE_METADATA_KEY]: { intent: "x", trust: "auto" },
+    });
+    expect(read).not.toBeNull();
+    expect(read).not.toHaveProperty("trust");
+    expect(read?.intent).toBe("x");
+  });
+
+  it("absent expiresAt means NO expiry — never 'expired'", () => {
     const metadata = buildRuleMetadata({
       intent: "x",
       scope: { kind: "pod" },
       behaviours: [],
     });
-    expect(metadata.trust).toBe("propose");
+    expect(metadata.expiresAt).toBeUndefined();
     expect(
-      readRuleMetadata({ [RULE_METADATA_KEY]: { intent: "x", trust: "yes" } })
-        ?.trust
-    ).toBe("propose");
+      readRuleMetadata({ [RULE_METADATA_KEY]: { intent: "x" } })?.expiresAt
+    ).toBeUndefined();
+  });
+
+  it("normalises expiresAt to canonical ISO-8601 UTC (the form SQL compares)", () => {
+    expect(
+      buildRuleMetadata({
+        intent: "x",
+        scope: { kind: "pod" },
+        expiresAt: "2027-03-01T12:00:00+02:00",
+        behaviours: [],
+      }).expiresAt
+    ).toBe("2027-03-01T10:00:00.000Z");
+  });
+
+  it("REFUSES a non-instant expiry at the write door rather than storing it", () => {
+    expect(() =>
+      buildRuleMetadata({
+        intent: "x",
+        scope: { kind: "pod" },
+        expiresAt: "next tuesday",
+        behaviours: [],
+      })
+    ).toThrow(/not a valid instant/);
+  });
+
+  it("an unreadable stored expiry reads as absent — a read door never throws", () => {
+    expect(
+      readRuleMetadata({
+        [RULE_METADATA_KEY]: { intent: "x", expiresAt: "next tuesday" },
+      })?.expiresAt
+    ).toBeUndefined();
+  });
+
+  it("carries the cross-cutting projectId, and drops a non-string one", () => {
+    expect(
+      readRuleMetadata({
+        [RULE_METADATA_KEY]: {
+          intent: "x",
+          scope: { kind: "workspace", workspaceId: "ws", projectId: "p" },
+        },
+      })?.scope
+    ).toEqual({ kind: "workspace", workspaceId: "ws", projectId: "p" });
+    expect(
+      readRuleMetadata({
+        [RULE_METADATA_KEY]: {
+          intent: "x",
+          scope: { kind: "pod", projectId: 7 },
+        },
+      })?.scope
+    ).toEqual({ kind: "pod" });
   });
 
   it("returns null for a skills row that is not a rule", () => {

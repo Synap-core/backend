@@ -669,6 +669,30 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     degraded: z.array(z.string()),
     understanding: z.record(z.string(), z.unknown()),
     verdict: z.enum(["confident", "ambiguous", "empty"]),
+    // The caller's OWN pending captures that text-match the query. `ask()`
+    // already computes this block and `handleRetrieval` returns its result
+    // verbatim — but a field absent from THIS declared schema is absent from
+    // the contract, so every generated client and doc reader was blind to it.
+    // It must reach the caller: the block exists to stop an agent re-capturing
+    // something already awaiting review (the amnesia→duplicate loop), and an
+    // agent that cannot see it re-files instead. Omitted when the scan found
+    // nothing — never merged into `answers`, which are FACTS.
+    pending: z
+      .object({
+        notice: z.string(),
+        matches: z.array(
+          z.object({
+            proposalId: z.string(),
+            proposalType: z.string(),
+            summary: z.string().optional(),
+            entityTitle: z.string().optional(),
+            profileSlug: z.string().optional(),
+            reviewUrl: z.string(),
+            score: z.number(),
+          })
+        ),
+      })
+      .optional(),
     // A/B ranker comparison — present ONLY when `compare` was requested.
     comparison: z
       .object({

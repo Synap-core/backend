@@ -30,6 +30,9 @@ import {
   relations,
   registerIdentitySignals,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "entity-link-idempotency" });
 
 /** nangoConnectionId sentinel for non-OAuth imports (mirrors entity-upsert-service). */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
@@ -113,9 +116,15 @@ export function makeExternalLinkIdempotency(
         entityId,
         [{ type: "external_id", value: `${p}:${externalId}` }],
         "import"
-      ).catch(() => {
+      ).catch((error) => {
         // Best-effort — the external-links row above is the source of truth
         // for import idempotency; a signal-write failure must never break it.
+        // But it must not be silent: a lost signal degrades cross-source
+        // matching, and nothing else reports it.
+        logger.warn(
+          { err: error, entityId, provider: p, externalId },
+          "entity-link-idempotency: external_id identity-signal write failed — the external link exists but is invisible to resolveIdentity"
+        );
       });
     },
     relationExists: async (sourceEntityId, targetEntityId, type) => {

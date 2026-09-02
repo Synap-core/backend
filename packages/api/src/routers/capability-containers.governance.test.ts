@@ -52,14 +52,26 @@ vi.mock("@synap/database", () => ({
   db: {
     select: vi.fn(() => ({
       from: (table: unknown) => ({
-        where: async () => {
-          if (table === capabilitiesTable) {
-            return h.capabilityRow ? [h.capabilityRow] : [];
-          }
-          if (table === toolsTable || table === skillsTable) {
-            return h.partRow ? [h.partRow] : [];
-          }
-          return [];
+        where: () => {
+          const rows =
+            table === capabilitiesTable
+              ? h.capabilityRow
+                ? [h.capabilityRow]
+                : []
+              : table === toolsTable || table === skillsTable
+                ? h.partRow
+                  ? [h.partRow]
+                  : []
+                : [];
+          // Awaitable AND chainable: `container-address.ts` resolves the
+          // address with `.where(...).limit(1)`, while the older call sites
+          // await `.where(...)` directly. The stub must model both or it
+          // fails on a shape the real driver supports.
+          const q = Promise.resolve(rows) as Promise<unknown[]> & {
+            limit: (n: number) => Promise<unknown[]>;
+          };
+          q.limit = async (n: number) => rows.slice(0, n);
+          return q;
         },
       }),
     })),
@@ -67,8 +79,12 @@ vi.mock("@synap/database", () => ({
       values: (v: Record<string, unknown>) => {
         if (table === capabilitiesTable) {
           h.insertedCapabilities.push(v);
+          const rows = [{ id: "new-cap-1", ...v }];
+          // The one insert door writes `.onConflictDoNothing().returning()` —
+          // the address index makes a bare insert crash-prone.
           return {
-            returning: async () => [{ id: "new-cap-1", ...v }],
+            returning: async () => rows,
+            onConflictDoNothing: () => ({ returning: async () => rows }),
           };
         }
         if (table === linksTable) {
@@ -248,6 +264,9 @@ describe("containers.create — agent caller is governed", () => {
   });
 
   it("inserts normally when the gate grants", async () => {
+    // No container resolves at this address yet — otherwise `create` correctly
+    // REUSES rather than minting a second one (asserted separately below).
+    h.capabilityRow = null;
     const result = await caller().create({
       name: "Google",
       workspaceId: WS,
@@ -265,10 +284,39 @@ describe("containers.create — agent caller is governed", () => {
 
 describe("containers.create — operator caller is NOT regressed", () => {
   it("inserts directly and reports created", async () => {
+    h.capabilityRow = null;
     const result = await caller().create({ name: "Google", workspaceId: WS });
 
     expect(result.status).toBe("created");
     expect(h.insertedCapabilities).toHaveLength(1);
+  });
+
+  // The 0242 address guarantee. `capabilities_template_key_scope_uq` makes a
+  // second container at the same address a 23505, so `create` must resolve the
+  // address FIRST and hand back what is already there. Before this, the door
+  // inserted blind: the duplicate either landed (pre-0242) or the call threw.
+  it("reuses the existing container instead of minting a duplicate", async () => {
+    h.capabilityRow = {
+      id: "cap-1",
+      workspaceId: WS,
+      createdBy: "user-1",
+      name: "Google",
+      templateKey: "google",
+    };
+
+    const result = await caller().create({
+      name: "Google",
+      workspaceId: WS,
+      templateKey: "google",
+    });
+
+    expect(result.status).toBe("reused");
+    expect(result.capability).toMatchObject({ id: "cap-1" });
+    expect(
+      h.insertedCapabilities,
+      "create wrote a second row at an address that already resolves — the " +
+        "duplicate the unique index exists to prevent"
+    ).toHaveLength(0);
   });
 });
 

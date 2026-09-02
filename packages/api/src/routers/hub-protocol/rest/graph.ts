@@ -56,6 +56,11 @@ const GraphNeighborSchema = GraphNodeSchema.extend({
     "session",
     "grant",
     "automation",
+    // The temporal half (why-spine): derived at read time from the `events`
+    // spine, not from a stored edge. `governed` = the proposal that authorized a
+    // change to this object; `produced-in` = the session it happened inside.
+    "governed",
+    "produced-in",
   ]),
 }).openapi("GraphNeighbor");
 

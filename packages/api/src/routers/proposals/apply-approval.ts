@@ -783,7 +783,6 @@ export async function applyProposalApproval(args: {
               workspaceId: compositeCtx.workspaceId,
               intent: ruleOp.intent,
               scope: ruleOp.scope,
-              ...(ruleOp.trust ? { trust: ruleOp.trust } : {}),
               ...(ruleOp.factSkillId
                 ? { factSkillId: ruleOp.factSkillId }
                 : {}),

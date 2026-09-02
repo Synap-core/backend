@@ -36,7 +36,7 @@ import {
   propertyDefs,
   relations,
 } from "@synap/database/schema";
-import { accessScopeWhere } from "../utils/project-scope.js";
+import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import {
@@ -137,6 +137,19 @@ function systemMapPropertyDefScope(workspaceLens: string | null | undefined) {
 }
 
 /**
+ * PROJECT rung of the System Map lens. Projects are a cross-cutting DATA scope
+ * (instances), not a lens-config axis: membership rides the `belongs_to_project`
+ * relation over `entities`, so the narrow is the existing `projectLensWhere`
+ * preset — never a new predicate. PURE narrow, ANDed with the workspace/pod
+ * floor `systemMapEntityScope` already imposes; it can only remove rows.
+ * `undefined` = no narrow, so an absent `projectId` is byte-for-byte today's
+ * behaviour.
+ */
+function systemMapProjectScope(projectId: string | undefined) {
+  return projectId ? projectLensWhere(entities.id, projectId) : undefined;
+}
+
+/**
  * `resolveFacetVisibilityScope` confirms an explicit workspace lens by
  * returning it as `workspaceId`; `allowedWorkspaceIds` is reserved for
  * identity-wide (no-lens) reads. Keep this assertion at the System Map door
@@ -233,6 +246,8 @@ export const graphRouter = router({
         allData: z.boolean().default(false),
         /** Opt into the active workspace + pod-wide entity union. */
         includePodWide: z.boolean().default(false),
+        /** Optional project narrow — the cross-cutting data lens (pure narrow). */
+        projectId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }): Promise<SystemMapOverview> => {
@@ -249,7 +264,8 @@ export const graphRouter = router({
       const entityRows = await db.query.entities.findMany({
         where: and(
           isNull(entities.deletedAt),
-          systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+          systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide),
+          systemMapProjectScope(input.projectId)
         ),
         columns: { id: true, type: true },
       });
@@ -328,6 +344,8 @@ export const graphRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         allData: z.boolean().default(false),
         includePodWide: z.boolean().default(false),
+        /** Optional project narrow — the cross-cutting data lens (pure narrow). */
+        projectId: z.string().uuid().optional(),
         limit: z.number().int().min(1).max(100).default(50),
         offset: z.number().int().min(0).default(0),
       })
@@ -351,7 +369,8 @@ export const graphRouter = router({
         isNull(entities.deletedAt),
         systemMapKindScope(input.kind),
         roleScope,
-        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide),
+        systemMapProjectScope(input.projectId)
       );
       const [items, totalRows] = await Promise.all([
         db.query.entities.findMany({
@@ -416,6 +435,8 @@ export const graphRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         allData: z.boolean().default(false),
         includePodWide: z.boolean().default(false),
+        /** Optional project narrow — the cross-cutting data lens (pure narrow). */
+        projectId: z.string().uuid().optional(),
         /** Hard cap keeps force-graph payloads bounded even for large pods. */
         limit: z.number().int().min(1).max(250).default(150),
         offset: z.number().int().min(0).default(0),
@@ -446,7 +467,8 @@ export const graphRouter = router({
         isNull(entities.deletedAt),
         input.kind ? systemMapKindScope(input.kind) : undefined,
         roleScope,
-        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide)
+        systemMapEntityScope(ctx.userId, workspaceLens, input.includePodWide),
+        systemMapProjectScope(input.projectId)
       );
       const [entityRows, totalRows] = await Promise.all([
         db.query.entities.findMany({

@@ -20,8 +20,23 @@ import { assertApplied, reportApproved } from "./shared.js";
  * create.
  *
  * REPLAY SUFFICIENCY: the propose gate stores the FULL payload — intent,
- * scope, trust, factSkillId, automationIds — not just `{ id }`. Everything the
- * replay needs is in `data.data`.
+ * scope (kind + workspaceId + projectId), expiresAt, factSkillId,
+ * automationIds, routing — not just `{ id }`. Everything the replay needs is in
+ * `data.data`.
+ *
+ * OLD PAYLOADS: a proposal filed before `trust` was dropped still carries
+ * `data.data.trust`. It is not read — an unknown key in the stored blob is
+ * inert, so an in-flight proposal replays fine and the removed field grants
+ * nothing. Same for a payload with no `expiresAt`: absent = no expiry.
+ *
+ * ROUTING is deliberately NOT read back off the payload. `createRuleGoverned`
+ * classifies from `intent` with an EMPTY context, so the classifier is a pure
+ * function of a field this executor already replays byte-for-byte — re-running
+ * it reproduces `data.routing` exactly. Reading the stored blob instead would
+ * make the payload a second source for a value the door already owns, and this
+ * repo's dominant defect is exactly that kind of fork. The payload copy exists
+ * so a REVIEWER can see the shape before approving, not so the replay can
+ * trust it.
  */
 export function registerRuleExecutors(): void {
   registerProposalExecutor({
@@ -48,18 +63,12 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const rawScope = innerData.scope as
-        { kind?: unknown; workspaceId?: unknown } | undefined;
-      const scopeKind =
-        rawScope?.kind === "workspace" || rawScope?.kind === "user"
-          ? rawScope.kind
-          : "pod";
-      const scope = {
-        kind: scopeKind as "pod" | "workspace" | "user",
-        ...(typeof rawScope?.workspaceId === "string"
-          ? { workspaceId: rawScope.workspaceId }
-          : {}),
-      };
+      const { readRuleScope } =
+        await import("../../../services/rules/index.js");
+      const { readExpiresAt } =
+        await import("../../../services/rules/expiry.js");
+      const scope = readRuleScope(innerData.scope);
+      const expiresAt = readExpiresAt(innerData.expiresAt);
 
       const { createRuleGoverned } =
         await import("../../../services/rules/create.js");
@@ -71,9 +80,7 @@ export function registerRuleExecutors(): void {
         workspaceId: proposal.workspaceId ?? null,
         intent,
         scope,
-        ...(innerData.trust === "auto" || innerData.trust === "propose"
-          ? { trust: innerData.trust }
-          : {}),
+        ...(expiresAt ? { expiresAt } : {}),
         ...(typeof innerData.factSkillId === "string"
           ? { factSkillId: innerData.factSkillId }
           : {}),

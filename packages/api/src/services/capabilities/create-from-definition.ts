@@ -56,6 +56,7 @@ import type {
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { mergeVerbCatalog } from "./verb-catalog.js";
+import { findContainerByAddress } from "./container-address.js";
 
 import { createLogger } from "@synap-core/core";
 // Validate DECLARED emit patterns before persisting them to `metadata.emits` —
@@ -1080,25 +1081,24 @@ export async function createCapabilityFromDefinition(
   }
 
   // 5. Capability CONTAINER — group the seeded tools + skills under ONE named
-  //    capability (the container model). Idempotent on name within scope; parts
-  //    attach as `tool|skill --member_of--> capability` via the GOVERNED container
-  //    router (addPart is itself idempotent — re-apply never duplicates a member).
+  //    capability (the container model). Idempotent on ADDRESS within scope
+  //    (`template_key`, 0242) and, for containers that predate the column, on
+  //    name within scope; parts attach as `tool|skill --member_of--> capability`
+  //    via the GOVERNED container router (addPart is itself idempotent —
+  //    re-apply never duplicates a member).
   const containersCaller = capabilityContainersRouter.createCaller(
     ctx as never
   );
   let container: CreateCapabilityResult["created"]["container"] = null;
-  const [existingContainer] = await db
-    .select({ id: capabilitiesTable.id })
-    .from(capabilitiesTable)
-    .where(
-      and(
-        eq(capabilitiesTable.name, def.name),
-        connWorkspaceId
-          ? eq(capabilitiesTable.workspaceId, connWorkspaceId)
-          : isNull(capabilitiesTable.workspaceId)
-      )
-    )
-    .limit(1);
+  // ADDRESS-first resolution lives in ONE place (`findContainerByAddress`) —
+  // this door, `capabilityContainers.create` and the proposal executor all read
+  // the 0242 address the same way, so they can never disagree about what
+  // "already exists" means.
+  const existingContainer = await findContainerByAddress(db, {
+    templateKey: def.key,
+    name: def.name,
+    workspaceId: connWorkspaceId ?? null,
+  });
   const containerId = existingContainer
     ? existingContainer.id
     : ((
@@ -1106,6 +1106,7 @@ export async function createCapabilityFromDefinition(
           name: def.name,
           description: def.description,
           workspaceId: connWorkspaceId,
+          templateKey: def.key,
         })
       ).capability?.id ?? null);
   if (containerId) {
@@ -1147,6 +1148,13 @@ export async function createCapabilityFromDefinition(
     await db
       .update(capabilitiesTable)
       .set({
+        // The COLUMN and the metadata key are one fact written twice — the
+        // column is the enforced address (0242), the metadata key predates it
+        // and is still read by `workspace-to-package-definition.ts` /
+        // `pod-config.ts`. They must never diverge (tripwire:
+        // `capability-template-key.parity.tripwire.test.ts`). Writing it here
+        // (not only on create) is what converges a pre-0242 container.
+        templateKey: def.key,
         metadata: {
           ...existingMetadata,
           ...(def.metadata ?? {}),

@@ -151,7 +151,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, project and projectCandidate. Two dissimilar payloads share this route, which is why the 200 schema stays a free-form record rather than claiming one shape.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -632,6 +632,17 @@ export function registerCaptureRoutes(app: HubHono): void {
           relations,
           ...(structureRawSource ? { rawSource: structureRawSource } : {}),
         });
+        // Forward the WHOLE submit result, not a hand-picked subset. This door
+        // previously re-typed the response by hand and dropped six fields the
+        // service computes — including `pendingDuplicateCandidates` (the
+        // in-flight duplicate warning that exists precisely so a caller does
+        // not file a second copy), `relationsFailed` (partial failure) and
+        // `writeReceipt` (what actually landed, and where). `applied` is NOT
+        // constant on this path: an idempotent replay of an already-applied
+        // graph returns `applied: true` with the prior proposal's receipt, so
+        // `status: "awaiting_confirmation"` alone is not the full answer.
+        // Optional fields stay spread-if-present so an absent one keeps
+        // meaning "nothing to report" rather than an explicit null.
         return c.json({
           proposalId: graph.proposalId,
           reviewUrl: graph.reviewUrl,
@@ -639,8 +650,18 @@ export function registerCaptureRoutes(app: HubHono): void {
           summary: graph.summary,
           entityCount: graph.entityCount,
           relationCount: graph.relationCount,
+          bindingCount: graph.bindingCount,
+          applied: graph.applied,
+          writeReceipt: graph.writeReceipt,
           ...(graph.projectCandidate
             ? { projectCandidate: graph.projectCandidate }
+            : {}),
+          ...(graph.project ? { project: graph.project } : {}),
+          ...(graph.pendingDuplicateCandidates
+            ? { pendingDuplicateCandidates: graph.pendingDuplicateCandidates }
+            : {}),
+          ...(graph.relationsFailed
+            ? { relationsFailed: graph.relationsFailed }
             : {}),
         });
       }

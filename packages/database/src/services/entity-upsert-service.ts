@@ -350,6 +350,26 @@ export class EntityUpsertService {
         status: "active",
       })
       .onConflictDoNothing();
+    // Also absorb the (provider, externalId) pair into the identity signal
+    // layer, under EXACTLY the key Step 2 above looks up
+    // (`${input.source}:${input.externalId}`, normalized trim-only for
+    // `external_id`). Both writers of `entity_external_links` must do this:
+    // otherwise a link created here is invisible to `resolveIdentity`, and this
+    // service is the very reader that queries it.
+    await registerIdentitySignals(
+      this.db,
+      entityId,
+      [{ type: "external_id", value: `${provider}:${externalId}` }],
+      provider
+    ).catch((error) => {
+      // Best-effort — the external-links row above is the source of truth for
+      // re-import dedup (Step 1); a signal-write failure must never break it.
+      // But it must not be silent: a lost signal degrades cross-source matching.
+      logger.warn(
+        { err: error, entityId, provider, externalId },
+        "EntityUpsertService: external_id identity-signal write failed — the external link exists but is invisible to resolveIdentity"
+      );
+    });
   }
 
   private async registerSignals(

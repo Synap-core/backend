@@ -16,8 +16,8 @@ describe("readRulePayload", () => {
     const p = readRulePayload({
       id: "rule-1",
       intent: "Always CC me on invoices",
-      scope: { kind: "workspace", workspaceId: "ws-1" },
-      trust: "auto",
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-1" },
+      expiresAt: "2027-01-01T00:00:00.000Z",
       factSkillId: "skill-1",
       automationIds: ["a-1", "a-2"],
       auditSource: "rules.createRule",
@@ -25,11 +25,27 @@ describe("readRulePayload", () => {
     expect(p).toEqual({
       id: "rule-1",
       intent: "Always CC me on invoices",
-      scope: { kind: "workspace", workspaceId: "ws-1" },
-      trust: "auto",
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-1" },
+      expiresAt: "2027-01-01T00:00:00.000Z",
       factSkillId: "skill-1",
       automationIds: ["a-1", "a-2"],
     });
+  });
+
+  /**
+   * IN-FLIGHT PROPOSALS filed before `trust` was dropped still carry it in the
+   * stored payload. Replay must tolerate the key and never surface it — an
+   * unknown key in a JSONB blob is inert.
+   */
+  it("tolerates a legacy `trust` key on an in-flight payload", () => {
+    const p = readRulePayload({
+      id: "rule-1",
+      intent: "x",
+      trust: "auto",
+      automationIds: [],
+    });
+    expect(p).not.toBeNull();
+    expect(p).not.toHaveProperty("trust");
   });
 
   it("rejects a payload with no intent — there is no rule to show", () => {
@@ -39,14 +55,14 @@ describe("readRulePayload", () => {
     expect(readRulePayload("nope")).toBeNull();
   });
 
-  it("defaults an unrecognised scope kind to pod and a bad trust to propose", () => {
+  it("defaults an unrecognised scope kind to pod and drops a bad expiry", () => {
     const p = readRulePayload({
       intent: "x",
       scope: { kind: "galaxy" },
-      trust: "yolo",
+      expiresAt: "whenever",
     });
     expect(p?.scope.kind).toBe("pod");
-    expect(p?.trust).toBe("propose");
+    expect(p?.expiresAt).toBeUndefined();
   });
 
   it("drops non-string automation ids rather than trusting the blob", () => {

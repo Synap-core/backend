@@ -78,3 +78,20 @@ export const MESSAGING_ACCOUNT_STATUSES = [
 ] as const;
 export type MessagingAccountStatus =
   (typeof MESSAGING_ACCOUNT_STATUSES)[number];
+
+/**
+ * `provider` is deliberately free `text()` — its values arrive from external
+ * systems (Unipile account kinds: 'linkedin', 'whatsapp', …; 'mailgun' from the
+ * inbound webhook) and there is NO closed union to widen. This constant names
+ * the ONE provider the pod itself writes: a native push device.
+ *
+ * An `expo` row is a DEVICE, not a social account:
+ *   externalId  = the ExponentPushToken[...] (unique per install per device)
+ *   displayName = a human device label ("Antoine's iPhone")
+ *   metadata    = { platform: 'ios' | 'android', deviceName?, appVersion? }
+ *
+ * Revocation flips `status` to 'disconnected' — a dead token is never deleted,
+ * so a re-register on the same device reuses the row via the (user, provider,
+ * external_id) unique index instead of accumulating duplicates.
+ */
+export const MESSAGING_ACCOUNT_PROVIDER_EXPO = "expo";
