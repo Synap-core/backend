@@ -26,6 +26,10 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import {
+  withParentSessionId,
+  attachParentSessionIds,
+} from "../services/focus-sessions/parent-lineage.js";
+import {
   getLinksFor,
   createLinks,
   getCapabilityMemberParts,
@@ -192,7 +196,15 @@ export const focusSessionsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const scope = resolveScope(ctx, input);
-      return queryUserSessions(ctx.userId, scope, input.status, input.limit);
+      const sessions = await queryUserSessions(
+        ctx.userId,
+        scope,
+        input.status,
+        input.limit
+      );
+      // Derived lineage for the whole page in ONE query (never N+1, never a
+      // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
+      return attachParentSessionIds(sessions);
     }),
 
   /**
@@ -270,7 +282,10 @@ export const focusSessionsRouter = router({
         }
       }
 
-      return { ...row, participants };
+      // Derived detour lineage (see `services/focus-sessions/parent-lineage.ts`)
+      // — mirrors `synap_get_session` (mcp/handlers/session.ts) so the two
+      // doors can never disagree.
+      return withParentSessionId({ ...row, participants });
     }),
 
   /**
