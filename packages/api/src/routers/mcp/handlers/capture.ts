@@ -20,6 +20,7 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
+  resolveProjectPlacement,
 } from "@synap/database";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
@@ -87,6 +88,33 @@ const captureHandler: McpToolHandler = async (
           typeof (args.project as { name?: unknown }).name === "string"
         ? (args.project as { name: string }).name
         : null;
+
+  /**
+   * THE SCOPE THE RECEIPT REPORTS on the project axis.
+   *
+   * `captureProjectId` is only what the CALLER pinned (rung 1). Every receipt
+   * below echoed it raw, so a capture made inside a session that IS scoped to a
+   * project reported `scope.projectId: null` — while the proposal row it filed
+   * carried the right project, because `insertPendingProposal` derives it from
+   * the session at the SSOT insert (Wave A). Receipt and row disagreed.
+   *
+   * Derived through the SAME one door the write path uses
+   * (`resolveProjectPlacement`, rung 1 explicit pin → rung 2 session), so the
+   * two can never fork. Rungs 3/4 (channel / relational gravity) are NOT run
+   * here: those resolve inside the write itself, and the applied lane already
+   * prefers the LINKED outcome it reports back.
+   *
+   * PLACEMENT IS UNCHANGED: this value feeds the receipt echo only. What is
+   * forwarded to `submitCaptureGraph` / `execute` is still the caller's pin.
+   */
+  const scopeProjectId =
+    (
+      await resolveProjectPlacement(db, {
+        userId,
+        explicitProjectId: captureProjectId,
+        ...(sessionId ? { sessionId } : {}),
+      })
+    ).projectId ?? null;
 
   // `global` is the pod-wide RUNBOOK lane — a keyed text doc, not entities.
   // Mixing it with a structured payload has no meaning; say so rather than
@@ -173,7 +201,7 @@ const captureHandler: McpToolHandler = async (
     const graphWsId = requestedWorkspaceId ?? null;
     const graphScope: CaptureScope = {
       workspaceId: graphWsId,
-      projectId: captureProjectId,
+      projectId: scopeProjectId,
       sessionId: sessionId ?? null,
     };
 
@@ -421,7 +449,7 @@ const captureHandler: McpToolHandler = async (
   let captureWsId: string | undefined = requestedWorkspaceId;
   const textScope: CaptureScope = {
     workspaceId: captureWsId ?? null,
-    projectId: captureProjectId,
+    projectId: scopeProjectId,
     sessionId: sessionId ?? null,
   };
   // ── REJECT: no-durable-content ─────────────────────────────────────────
@@ -483,7 +511,9 @@ const captureHandler: McpToolHandler = async (
       state: "applied",
       // Honest echo: this row is pod-wide, not placed in a workspace.
       effectiveWorkspaceId: null,
-      ...(captureProjectId ? { projectId: captureProjectId } : {}),
+      // Same derived value `globalScope` reports (it spreads `textScope`), so
+      // the receipt and the scope echo of one response cannot disagree.
+      ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
       source: "agent",
     };
     return ok({
@@ -619,7 +649,7 @@ const captureHandler: McpToolHandler = async (
   // capture, stamp the proposal onto this thread, then narrate the receipt
   // (pending OR auto-approved). Do not wait for approval.
   const intakeFlowId = newProcessFlowId();
-  const { channel } = await openProcessChannel({
+  const { channel, messageIds: intakeMessageIds } = await openProcessChannel({
     userId,
     flowType: "capture",
     flowId: intakeFlowId,
@@ -682,6 +712,7 @@ const captureHandler: McpToolHandler = async (
     // produced it, which is exactly the case a session dashboard needs most.
     ...(sessionId ? { sessionId } : {}),
     threadId: channel.id,
+    ...(intakeMessageIds[0] ? { sourceMessageId: intakeMessageIds[0] } : {}),
     // Rung 1 of the placement ladder: a caller-pinned workspace (explicit
     // `args.workspaceId`, or a bound service key's confinement) must WIN over
     // ontology/session/relational routing, not just seed the ambient lens.
@@ -792,7 +823,7 @@ const captureHandler: McpToolHandler = async (
       status: "proposed",
       scope: {
         workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
-        projectId: captureProjectId,
+        projectId: scopeProjectId,
         sessionId: sessionId ?? null,
       },
       threadId: channel.id,
@@ -818,8 +849,11 @@ const captureHandler: McpToolHandler = async (
   // have moved it (movedToWorkspace), and a project only counts when it was
   // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
   const landedWsId = ex.movedToWorkspace ?? captureWsId ?? null;
+  // A LINKED outcome is the ground truth (the write ran the full ladder,
+  // rungs 3/4 included); otherwise fall back to the derived scope, which is
+  // still the caller's pin when there is one.
   const landedProjectId =
-    ex.project?.status === "linked" ? ex.project.projectId : captureProjectId;
+    ex.project?.status === "linked" ? ex.project.projectId : scopeProjectId;
   const textReceipt: CaptureWriteReceipt = {
     state: "applied",
     effectiveWorkspaceId: landedWsId,
