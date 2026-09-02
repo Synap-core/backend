@@ -2506,6 +2506,7 @@ export const captureRouter = router({
         targetEntityId: r.targetEntityId,
         relationType: r.type,
       }));
+      const relationsFailed = result.relationsFailed;
 
       // Kind + Facets: attach each entity's proposed role-profiles now that the
       // batch has materialized (created OR dedup-matched — both carry a real id).
@@ -2967,6 +2968,10 @@ export const captureRouter = router({
         // N, dropped M facets — why". Empty array on the happy path.
         captureId,
         ...(facetsFailed.length ? { facetsFailed } : {}),
+        // Relation ops submitted but never created (bad ref / DB failure) — the
+        // honest gap behind `relations.length < requested relation count`.
+        // Empty on the happy path.
+        ...(relationsFailed.length ? { relationsFailed } : {}),
         // Routing outcome (present only when routing engaged) — the surface can
         // show "moved to X" / offer to confirm a suggested switch.
         ...(routing?.movedToWorkspace
@@ -3267,6 +3272,12 @@ export const captureRouter = router({
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
+      const relationsFailed: Array<{
+        sourceRef: string;
+        targetRef: string;
+        type: string;
+        reason: string;
+      }> = [];
       const createdRelations = (
         await createRelationsFromRefs(
           input.relations.map((r) => ({
@@ -3296,8 +3307,14 @@ export const captureRouter = router({
           {
             resolveRelationType: (t) =>
               validRelationSlugs.has(t) ? t : FALLBACK_RELATION_TYPE,
-            onError: (err, type) =>
-              logger.warn({ err, type }, "Relation creation failed, skipping"),
+            onError: (err, type, refs) => {
+              relationsFailed.push({
+                ...refs,
+                type,
+                reason: err instanceof Error ? err.message : String(err),
+              });
+              logger.warn({ err, type }, "Relation creation failed, skipping");
+            },
           }
         )
       ).map((r) => ({
@@ -3414,6 +3431,7 @@ export const captureRouter = router({
         propertiesFailed,
         created,
         relations: createdRelations,
+        ...(relationsFailed.length ? { relationsFailed } : {}),
       };
     }),
 });

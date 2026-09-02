@@ -93,3 +93,27 @@ export async function resolveFacetVisibilityScope(
     allowedWorkspaceIds: await validateWorkspaceAccess(userId),
   };
 }
+
+/**
+ * The caller's own workspace MEMBERSHIPS, with names — for actionable
+ * "you are not a member of that workspace" errors.
+ *
+ * Strictly caller-scoped: one `workspaceMembers.userId = :userId` predicate,
+ * so it can only ever return rows the caller is already a member of. Nothing
+ * about other users' or other members' workspaces is observable through it.
+ *
+ * Deliberately NOT `getUserWorkspaceIds()` above: that helper additionally
+ * folds in pod_visible/pod_joinable workspaces the caller is NOT a member of.
+ * Those fail the membership check in `workspaceProcedure`/`podProcedure`, so
+ * offering them as candidates would be actively misleading. Membership is
+ * exactly the predicate the denial is about.
+ */
+export async function listMemberWorkspaces(
+  userId: string
+): Promise<Array<{ id: string; name: string }>> {
+  return db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(eq(workspaceMembers.userId, userId));
+}

@@ -1,8 +1,25 @@
 /**
  * reconcileWorkspaceFromDefinition
  *
- * Brings an EXISTING workspace's definition (capabilities/subtype, profiles,
- * property-defs, views) up to a template — NON-DESTRUCTIVELY and idempotently.
+ * Brings an EXISTING workspace's definition up to a template — NON-DESTRUCTIVELY
+ * and idempotently. NINE sections, and their convergence semantics DIFFER; a
+ * reader who assumes one rule for all of them will misdiagnose this file (that
+ * has happened — an earlier version of this header listed only sections 1-3 and
+ * a reviewer concluded the applier writes a strict subset of what the caller
+ * stamps):
+ *   1 settings · 2/2b profiles + property-defs · 3 views · 4 entity links ·
+ *   5 home bento · 6 layout — all ADD-ONLY / additive-merge.
+ *   7 automations — VERSION-AWARE: stamps `metadata.seedVersion = defHash`,
+ *     hashing exactly the fields its update writes, and re-converges on drift.
+ *     This is the correct marker pattern; copy it, not the ones below.
+ *   8 commands · 9 relation-defs — CREATE-IF-MISSING, no version concept: seeded
+ *     once, thereafter owned by the user. An edited command is never overwritten
+ *     — and neither is an UNTOUCHED one, because there is no per-row marker to
+ *     tell the two apart.
+ *
+ * NOT handled here: playbooks, stages and loops. Those live in
+ * `packages/api/src/services/package-apply-post-workspace.ts`, which this
+ * reconcile never calls — so they converge on install only.
  *
  * This is the counterpart to `createWorkspaceFromDefinition`: that one provisions
  * a fresh workspace; this one SYNCS a live one to a (possibly newer) template

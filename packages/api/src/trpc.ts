@@ -15,6 +15,7 @@ import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and, inArray } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
+import { listMemberWorkspaces } from "./utils/workspace-membership.js";
 import "@synap/database"; // Fix TS2742: inferred type portability
 import {
   isSynapLikeError,
@@ -112,6 +113,76 @@ export const protectedProcedure = publicProcedure
   .use(readOnlyGuardMiddleware)
   .use(auditLogMiddleware);
 
+/** How many candidate workspaces the denial message names before eliding. */
+const DENIAL_CANDIDATE_LIMIT = 8;
+
+/**
+ * Build the actionable body of a "not a member of that workspace" denial.
+ *
+ * Why the candidates are safe to disclose: `available` comes from
+ * {@link listMemberWorkspaces}, whose only predicate is
+ * `workspaceMembers.userId = <caller>`. It can therefore only ever name
+ * workspaces the caller is ALREADY a member of — it reveals nothing about a
+ * team pod's other workspaces or other members. (This is also why the broader
+ * `getUserWorkspaceIds()` is NOT used: it folds in pod_visible/pod_joinable
+ * workspaces the caller is not a member of, which would fail this very check.)
+ *
+ * `rejected` is echoed back because it is the caller's own input, and because
+ * the failure mode this exists for — passing a POD id where a WORKSPACE id
+ * belongs; both are bare UUIDs — is invisible without seeing which id lost.
+ * The pod-id case is only a HINT: a pod cannot know its own Control Plane pod
+ * id, so this layer can never confirm it.
+ *
+ * Exported for tests; the two membership middlewares below are its only
+ * production callers.
+ */
+export function buildWorkspaceDenialMessage(
+  rejected: string,
+  available: Array<{ id: string; name: string }>
+): string {
+  if (available.length === 0) {
+    return (
+      `Access denied to workspace ${rejected} — you are not a member of it, ` +
+      `and you are not a member of any workspace yet. Create or join one first.`
+    );
+  }
+  const shown = available.slice(0, DENIAL_CANDIDATE_LIMIT);
+  const list = shown.map((w) => `${w.name} (${w.id})`).join("; ");
+  const elided = available.length - shown.length;
+  return (
+    `Access denied to workspace ${rejected} — you are not a member of it. ` +
+    `Pass one of your workspaces instead (X-Workspace-Id header, or workspaceId): ` +
+    `${list}${elided > 0 ? `; +${elided} more` : ""}. ` +
+    `If that id came from pod configuration it may be a POD id, not a workspace id — ` +
+    `the two are both bare UUIDs.`
+  );
+}
+
+/**
+ * The one door for the membership denial thrown by `workspaceProcedure` and
+ * `podProcedure`. Code stays FORBIDDEN — only the message becomes actionable.
+ * The extra query runs ONLY on the already-failing path.
+ */
+async function workspaceMembershipDenied(
+  userId: string,
+  workspaceId: string
+): Promise<TRPCError> {
+  let available: Array<{ id: string; name: string }> = [];
+  try {
+    available = await listMemberWorkspaces(userId);
+  } catch (error) {
+    // A denial must stay a denial even if the candidate lookup fails.
+    logger.warn(
+      { err: error, userId },
+      "Could not list member workspaces for denial message"
+    );
+  }
+  return new TRPCError({
+    code: "FORBIDDEN",
+    message: buildWorkspaceDenialMessage(workspaceId, available),
+  });
+}
+
 /**
  * Workspace-scoped procedure (auth + workspace required)
  *
@@ -144,10 +215,7 @@ export const workspaceProcedure = protectedProcedure.use(async (opts) => {
   });
 
   if (!membership) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Access denied to workspace",
-    });
+    throw await workspaceMembershipDenied(ctx.userId, ctx.workspaceId);
   }
 
   const workspace = await db.query.workspaces.findFirst({
@@ -210,10 +278,7 @@ export const podProcedure = protectedProcedure.use(async (opts) => {
   });
 
   if (!membership) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Access denied to workspace",
-    });
+    throw await workspaceMembershipDenied(ctx.userId, ctx.workspaceId);
   }
 
   const workspace = await db.query.workspaces.findFirst({

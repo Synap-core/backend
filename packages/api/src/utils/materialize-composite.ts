@@ -40,7 +40,17 @@ export async function createRelationsFromRefs(
   opts?: {
     /** Validate/normalize the relation type (e.g. slug fallback). */
     resolveRelationType?: (type: string) => string;
-    onError?: (err: unknown, type: string) => void;
+    /**
+     * Called for every relation op that failed to resolve/create. Carries the
+     * RAW requested sourceRef/targetRef (not the resolved entity ids — those
+     * may not exist if resolution itself is what failed) so a caller can name
+     * exactly which requested edge was dropped, not just count it.
+     */
+    onError?: (
+      err: unknown,
+      type: string,
+      refs: { sourceRef: string; targetRef: string }
+    ) => void;
     /**
      * Relation-retry idempotency (U1): true if this (source, target, type) edge
      * already exists for the tenant → skip re-creating it. Entities are keyed
@@ -74,10 +84,26 @@ export async function createRelationsFromRefs(
       await relationCaller.create({ sourceEntityId, targetEntityId, type });
       relations.push({ sourceEntityId, targetEntityId, type });
     } catch (err) {
-      opts?.onError?.(err, op.type);
+      opts?.onError?.(err, op.type, {
+        sourceRef: op.sourceRef,
+        targetRef: op.targetRef,
+      });
     }
   }
   return relations;
+}
+
+/** One relation op that was submitted but never created — the honest detail
+ * behind a `created < submitted` gap on a materialize receipt. */
+export interface MaterializeRelationFailure {
+  sourceRef: string;
+  targetRef: string;
+  type: string;
+  reason: string;
+}
+
+function errorReason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export interface MaterializeEntityResult {
@@ -174,6 +200,13 @@ export interface MaterializeResult {
   entities: MaterializeEntityResult[];
   /** Per-relation detail for response building. */
   relations: MaterializeRelationResult[];
+  /**
+   * Relation ops that were SUBMITTED but never created (bad ref, DB failure,
+   * etc). `relations.length + relationsFailed.length` is the submitted count —
+   * this is what makes the gap between "submitted" and "created" honest and
+   * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
+   */
+  relationsFailed: MaterializeRelationFailure[];
   /** Rule Loop (NS1): skills created by `create_skill` ops. Empty by default. */
   skills: MaterializeSkillResult[];
   /** Rule Loop (NS1): automations created by `create_automation` ops. */
@@ -655,13 +688,17 @@ export async function materializeCompositeGraph(
       >;
       return { sourceRef: r.sourceRef, targetRef: r.targetRef, type: r.type };
     });
+  const relationsFailed: MaterializeRelationFailure[] = [];
   const relations = await createRelationsFromRefs(
     relationOps,
     refToRealId,
     relationCaller,
     {
       resolveRelationType: options?.resolveRelationType,
-      onError: onRelationError,
+      onError: (err, type, refs) => {
+        relationsFailed.push({ ...refs, type, reason: errorReason(err) });
+        onRelationError?.(err, type);
+      },
       relationExists: options?.idempotency?.relationExists,
     }
   );
@@ -718,6 +755,7 @@ export async function materializeCompositeGraph(
     refToRealId,
     entities,
     relations,
+    relationsFailed,
     skills: skillResults,
     automations: automationResults,
     rules: ruleResults,

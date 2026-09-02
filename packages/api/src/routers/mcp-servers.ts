@@ -18,6 +18,7 @@ import { mcpServers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import {
   getWorkspaceRole,
   requireAdminRole,
@@ -176,8 +177,15 @@ export const mcpServersRouter = router({
         "url",
         "transport",
       ] as const;
-      const execChanged = RE_APPROVAL_FIELDS.some(
-        (k) => (fields as Record<string, unknown>)[k] !== undefined
+      // VALUE, not PRESENCE. `saveEdit()` in the browser's MCP settings is a
+      // full-object form save: it re-sends transport/command/args/url on every
+      // save, so a presence test un-approved the server on a rename or an
+      // enabled-toggle — silently pulling its tools out of LLM requests.
+      // The comparison rule is shared with the skill and tool doors.
+      const execChanged = execFieldsChanged(
+        RE_APPROVAL_FIELDS,
+        fields as Record<string, unknown>,
+        existing as unknown as Record<string, unknown>
       );
 
       const [updated] = await db

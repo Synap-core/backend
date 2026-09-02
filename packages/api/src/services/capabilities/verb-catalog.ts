@@ -52,5 +52,31 @@ export function mergeVerbCatalog(
   existing: ToolVerbCatalogEntry[] | null | undefined,
   projected: ToolVerbCatalogEntry[]
 ): ToolVerbCatalogEntry[] {
-  return projected.reduce(upsertVerbCatalogEntry, existing ?? []);
+  return projected.reduce(upsertVerbCatalogEntry, dedupeById(existing ?? []));
+}
+
+/**
+ * Collapse duplicate `id`s in a LIVE catalogue, keeping the first — the exact
+ * entry `upsertVerbCatalogEntry` replaces.
+ *
+ * Duplicates exist in the wild: entries were appended before this array was
+ * id-keyed (see `upsertVerbCatalogEntry` above). They made the applier and the
+ * drift comparator disagree BY CONSTRUCTION — the upsert replaces the FIRST
+ * entry with a given id, while `capabilityVerbCatalogDrift` folds the array
+ * into a Map, where the LAST wins. So `[{X stale}, {X stale}]` merged to
+ * `[{X fresh}, {X stale}]`, drift then read the stale last copy, reported
+ * drift, and the reconcile re-applied — forever, on every boot, through the
+ * full governed applier.
+ *
+ * Fixed on the WRITE side rather than in the comparator on purpose: collapsing
+ * also REPAIRS the row, so the duplicate stops being able to desynchronize any
+ * future reader of the catalogue, not just this one comparator.
+ */
+function dedupeById(entries: ToolVerbCatalogEntry[]): ToolVerbCatalogEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((v) => {
+    if (seen.has(v.id)) return false;
+    seen.add(v.id);
+    return true;
+  });
 }

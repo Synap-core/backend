@@ -11,6 +11,7 @@
 import { ask } from "../../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
+import { db, entities, eq, and, isNull } from "@synap/database";
 import {
   toProfileCatalogEntry,
   type ProfileCatalogEntry,
@@ -42,21 +43,38 @@ export const readHandlers: McpHandlerMap = {
     if (typeof args.query !== "string" || args.query.trim() === "") {
       return ok({ error: "query is required" });
     }
-    const workspaceId = args.workspaceId as string | undefined;
-    // READ/catalog only: the semantic engine's type-inference catalog needs a
-    // concrete workspace id. First membership is fine here — this is not a
-    // write placement. Recall itself keeps the caller's lens (undefined =
-    // pod-wide).
-    let catalogWs = workspaceId;
-    if (!catalogWs) {
-      const wsIds = await getUserMemberWorkspaceIds(userId);
-      catalogWs = wsIds[0];
+    let workspaceId = args.workspaceId as string | undefined;
+    // ACCESS PARITY (security, not just honesty): the `mcp.read` scope proves
+    // "may call recall", NEVER "may see THIS workspace". `ask()` forwards this
+    // value as the PROCEDURAL namespace, and `knowledge_keys` has no user
+    // column (`services/knowledge/ask.ts:227` — its own comment warns that an
+    // unfiltered value "would read UNFILTERED across every user/workspace on
+    // the pod"). So an unchecked, caller-supplied workspaceId lets an
+    // authenticated agent read a workspace's runbooks without being a member —
+    // and workspace UUIDs are freely disclosed elsewhere (the get_relations
+    // honesty note prints one), so the id is not a secret.
+    //
+    // Degrade a non-accessible id to pod-wide rather than honouring it, exactly
+    // as the hub `/knowledge/answer` door already does
+    // (`hub-protocol/rest/knowledge.ts:987-990`, "rather than leaking a foreign
+    // workspace's knowledge"). This door never received that check.
+    if (workspaceId) {
+      const accessible = await getUserAccessibleWorkspaceIds(userId);
+      if (!accessible.includes(workspaceId)) workspaceId = undefined;
     }
+    // DOOR PARITY: the catalog lens must track the QUERY lens, exactly as the
+    // hub `/knowledge/answer` door does — both read the same `workspaceId`,
+    // no separate resolution. This USED to fall back to the caller's first
+    // membership workspace (`wsIds[0]`, an unordered SELECT) whenever no
+    // workspaceId was passed, so the same `ask` call could type-infer against
+    // a DIFFERENT workspace than the one it retrieved from, depending on
+    // which door answered it. Unscoped now means pod-wide for both, honestly:
+    // no catalog (empty), same as the hub door's `workspaceId: null` case.
     let catalog: ProfileCatalogEntry[] = [];
-    if (catalogWs) {
+    if (workspaceId) {
       const { profiles: profileRows } = await caller.profiles.listProfiles({
         userId,
-        workspaceId: catalogWs,
+        workspaceId,
       });
       catalog = profileRows.flatMap((p) => {
         const entry = toProfileCatalogEntry(p);
@@ -119,6 +137,7 @@ export const readHandlers: McpHandlerMap = {
       return ok({
         ...synthesis,
         ...pendingBlock,
+        degraded: retrieved.degraded,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
           (failure.retryable
@@ -127,7 +146,13 @@ export const readHandlers: McpHandlerMap = {
           "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
       });
     }
-    return ok({ ...synthesis, ...pendingBlock });
+    // DOOR PARITY: `degraded` is the retrieval-health signal `ask()` already
+    // computes (a substrate outage, a keyword-only fallback after the vector
+    // index went down). The hub `/answer` door has forwarded it since the
+    // keyword-fallback incident; this door never did, so an MCP caller — the
+    // primary agent surface — could not tell a healthy empty result from a
+    // degraded one. `truncated` rides along inside `...synthesis`.
+    return ok({ ...synthesis, ...pendingBlock, degraded: retrieved.degraded });
   },
   synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
@@ -401,18 +426,31 @@ export const readHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     let relWsId = args.workspaceId as string | undefined;
-    // HONEST FALLBACK: relations are workspace-scoped, but when the caller
-    // gives no workspaceId we pick ids[0] — an ARBITRARY workspace. A "no
-    // relations" answer from an arbitrary lens must NOT read as "this entity
-    // has none": its relations may live in another workspace entirely. Track
-    // that we auto-picked, and among how many, so the note can say so.
+    // HONEST FALLBACK: relations are workspace-scoped. When the caller gives
+    // no workspaceId, the entity's OWN workspace is the right lens — not an
+    // arbitrary member workspace — so a "no relations" answer reflects the
+    // entity's real home instead of whichever workspace happened to sort
+    // first. Only fall back to the old ids[0] pick (and say so) when the
+    // entity's workspace can't be resolved (deleted, pod-global/no
+    // workspaceId, or not visible to this caller).
     let autoPicked = false;
     let memberCount = 0;
     if (!relWsId) {
-      const ids = await getUserMemberWorkspaceIds(userId);
-      memberCount = ids.length;
-      relWsId = ids[0];
-      autoPicked = true;
+      const entityRow = await db.query.entities.findFirst({
+        columns: { workspaceId: true },
+        where: and(
+          eq(entities.id, args.entityId as string),
+          isNull(entities.deletedAt)
+        ),
+      });
+      if (entityRow?.workspaceId) {
+        relWsId = entityRow.workspaceId;
+      } else {
+        const ids = await getUserMemberWorkspaceIds(userId);
+        memberCount = ids.length;
+        relWsId = ids[0];
+        autoPicked = true;
+      }
     }
     if (!relWsId) return ok({ error: "No accessible workspace found" });
     const result = await caller.relations.listRelations({
@@ -426,7 +464,11 @@ export const readHandlers: McpHandlerMap = {
     // return an array or an object, so attach the honesty note without
     // clobbering either shape.
     if (autoPicked && memberCount > 1) {
-      const note = `No workspaceId was given, so relations were read from ONE workspace (${relWsId}) of your ${memberCount}. If this looks empty or incomplete, the entity's relations may live in another workspace — pass an explicit workspaceId to scope deliberately.`;
+      // Labeled deliberately: this is the MEMBER-only count
+      // (getUserMemberWorkspaceIds), not the wider "accessible" count synap_orient
+      // reports (member ∪ pod-visible) — the two are correct, separate lenses, and
+      // an unlabeled bare number is exactly what reads as a bug when they disagree.
+      const note = `The entity's own workspace could not be resolved, so relations were read from ONE workspace (${relWsId}) of your ${memberCount} member workspaces. If this looks empty or incomplete, the entity's relations may live in another workspace — pass an explicit workspaceId to scope deliberately.`;
       return ok(
         Array.isArray(result)
           ? { relations: result, scopedWorkspaceId: relWsId, note }

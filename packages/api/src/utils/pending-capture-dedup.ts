@@ -52,6 +52,7 @@ import {
   COMMON_STOPWORDS,
   QUESTION_WORDS,
 } from "../services/retrieval/stopwords.js";
+import { tokenize } from "../services/retrieval/understand-query.js";
 import { openLink } from "./deep-links.js";
 
 /** The create-graph proposal types whose operations[] we can scan in v1. */
@@ -216,25 +217,40 @@ const QUERY_TERM_FILLER = new Set<string>([
 ]);
 
 /**
- * Reduce a natural-language query to its content terms — the retrieval engine's
- * tokenizer idiom (lowercase → split on non-alphanumerics), filler stripped and
- * single-char noise dropped (a stray "a"/"x" would substring-match everything).
- * Pure + deterministic; exported for unit cover.
+ * Reduce a natural-language query to its content terms — the SAME tokenizer as
+ * the retrieval engine's `understandQuery` (`tokenize()`, exported for this
+ * reuse), filler stripped and single-char noise dropped (a stray "a"/"x" would
+ * substring-match everything). Pure + deterministic; exported for unit cover.
  */
 export function extractQueryTerms(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 1 && !QUERY_TERM_FILLER.has(t));
+  return tokenize(query).filter(
+    (t) => t.length > 1 && !QUERY_TERM_FILLER.has(t)
+  );
 }
 
 /**
  * Score one pending op's text against the query terms: the count of DISTINCT
- * terms that appear (substring) in the op's title/description/profileSlug plus
- * the proposal summary. Pure; exported for unit cover. Mirrors the structured
- * substrate's lowercased term-overlap — deliberately NOT embeddings (pending
- * ops aren't indexed, and over-engineering recall over a bounded review queue
- * buys nothing).
+ * terms that appear in the op's title/description/profileSlug plus the
+ * proposal summary. Pure; exported for unit cover.
+ *
+ * Word-boundary matching, NOT substring: a single-word term (the only shape
+ * `extractQueryTerms` ever produces — it splits on non-alphanumerics, so a
+ * "term" with a space can only arrive via a caller passing raw phrases) is
+ * matched against a Set of the haystack's own tokens, so a short term like
+ * "ai" can no longer match inside "email" or "captain". A multi-word phrase
+ * still substring-matches the raw haystack — it can't be a single token by
+ * definition. Same idiom as `understandQuery`'s `cueHit`
+ * (`understand-query.ts`): `term.includes(" ") ? haystack.includes(term) :
+ * tokenSet.has(term)`.
+ *
+ * Fixed at admit `score > 0` (unchanged) rather than a raised numeric
+ * threshold: the reported false-positive mode (a 2-char term like "12"/"ai"
+ * matching almost any summary) is a SUBSTRING defect, and word-boundary
+ * matching alone closes it — "12" now only scores when the haystack contains
+ * the literal token "12", not when it's a substring of "1234" or "day12". No
+ * measured score distribution across real pending queues was available to
+ * justify a specific higher cutoff, and an unjustified magic number would
+ * only trade one unexplained behavior for another.
  */
 export function scorePendingText(
   terms: string[],
@@ -256,8 +272,12 @@ export function scorePendingText(
     .join(" ")
     .toLowerCase();
   if (!haystack) return 0;
+  const tokenSet = new Set(tokenize(haystack));
   let score = 0;
-  for (const t of terms) if (haystack.includes(t)) score += 1;
+  for (const t of terms) {
+    const hit = t.includes(" ") ? haystack.includes(t) : tokenSet.has(t);
+    if (hit) score += 1;
+  }
   return score;
 }
 

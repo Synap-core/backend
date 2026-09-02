@@ -36,6 +36,7 @@ import {
   hasDurableText,
   hasDurableEntity,
   captureRejected,
+  listMemberWorkspacesForAgent,
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
@@ -53,6 +54,7 @@ const captureHandler: McpToolHandler = async (
     agentUserId,
     sessionId,
     requestedWorkspaceId,
+    confinedWorkspaceId,
     workspaceAccessible,
   } = ctx;
   requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -342,8 +344,13 @@ const captureHandler: McpToolHandler = async (
     // Without it an MCP key could queue a proposal in a foreign lens. The
     // verdict was already computed once at the top of this function.
     if (graphWsId && !workspaceAccessible) {
+      // ACTIONABLE, not a dead-end: adopt the same disambiguation shape
+      // `rejectMissingWriteWorkspace`/`synap_set_workspace_focus` already
+      // return — a bare "Forbidden" left the agent with nowhere to go.
+      const available = await listMemberWorkspacesForAgent(userId);
       return ok({
         error: `Forbidden: no access to workspace ${graphWsId}`,
+        availableWorkspaces: available,
       });
     }
     const { submitCaptureGraph } =
@@ -652,6 +659,15 @@ const captureHandler: McpToolHandler = async (
     // deduped into an existing entity left no edge back to the session that
     // produced it, which is exactly the case a session dashboard needs most.
     ...(sessionId ? { sessionId } : {}),
+    // Rung 1 of the placement ladder: a caller-pinned workspace (explicit
+    // `args.workspaceId`, or a bound service key's confinement) must WIN over
+    // ontology/session/relational routing, not just seed the ambient lens.
+    // `confinedWorkspaceId` (unlike `requestedWorkspaceId`) never folds in the
+    // agent's advisory focus, so an unpinned call still reaches
+    // `resolveWorkspacePlacement`'s rungs 2-5 exactly as before. Mirrors the
+    // hub REST door (routers/hub-protocol/rest/capture.ts), which already
+    // keeps `targetWorkspaceId` separate from the ambient `workspaceId`.
+    ...(confinedWorkspaceId ? { targetWorkspaceId: confinedWorkspaceId } : {}),
     aiWorkspaceId: (structured as { targetWorkspaceId?: string | null })
       .targetWorkspaceId,
     aiWorkspaceConfidence: (

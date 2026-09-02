@@ -1567,7 +1567,8 @@
             "description": "Optional stable key (namespace:slug, e.g. 'deploy:backend') for a global runbook — derived from the text if omitted."
           },
           "workspaceId": {
-            "type": "string"
+            "type": "string",
+            "description": "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in; leave it out to let the resolver place it (see `workspaceRouting`)."
           },
           "projectId": {
             "type": "string",
@@ -1581,7 +1582,7 @@
           "workspaceRouting": {
             "type": "string",
             "enum": ["auto", "ask", "locked"],
-            "description": "How much latitude the backend resolver has to place the capture. Placement is DERIVED by the backend, not free-picked by you: the resolver files pod-wide kinds pod-wide and computes a workspace lens from the ontology (a role enabled in exactly one of your workspaces) and context (bound channel / focus session). You do NOT choose a workspace and cannot invent one — you are only ever consulted as a TIE-BREAKER among the pre-approved candidates the resolver could not separate, and you may abstain. 'auto' (default) = let the resolver place it (deterministic when possible; tie-break only when >1 candidate survive; returned as movedToWorkspace). 'ask' = never move silently; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = keep the caller's/session workspace, no resolution. To force a specific workspace, pass an explicit workspaceId (rung-1 explicit placement) rather than expecting to route there by inference."
+            "description": "How much latitude the backend resolver has over the AI's workspace GUESS (rung 5) specifically — it does NOT gate the deterministic rungs above it (ontology role-routing, focus-session context, relational gravity), which still run and can place the capture regardless of this setting. 'auto' (default) = let a confident AI guess win a tie among deterministic candidates the resolver couldn't separate on its own (returned as movedToWorkspace). 'ask' = never move on the AI's guess alone; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = suppress the AI guess entirely — only the deterministic rungs place the capture; it does NOT freeze the capture onto the caller's/session workspace by itself. To pin an EXACT workspace and skip resolution altogether (deterministic rungs included), pass an explicit `workspaceId` (rung-1 placement) instead of relying on this setting."
           },
           "sessionId": {
             "type": "string",

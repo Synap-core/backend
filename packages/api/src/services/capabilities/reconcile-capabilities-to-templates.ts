@@ -114,7 +114,13 @@ export function missingToolMemberships(
 }
 
 /**
- * Read-modify-write merge of a container's `metadata` jsonb (never clobbers).
+ * Read-modify-write merge of a container's `metadata` jsonb. The TEMPLATE WINS
+ * on any key it declares — deliberately, and opposite to the tool-metadata
+ * merge in `create-from-definition.ts` (`mergePreservingExisting`, existing
+ * wins). The two hold different things: a tool's metadata carries RUNTIME
+ * state a re-apply must not stomp, while a container's carries the template's
+ * DECLARED config, which the template owns. Keys the template does not
+ * declare are preserved.
  * `defMetadata` carries the template's declared container-level config (e.g.
  * `mode`) — merging it here (not just on a full re-apply) is what lets an
  * already-installed capability pick up a template's newly-declared `mode` on

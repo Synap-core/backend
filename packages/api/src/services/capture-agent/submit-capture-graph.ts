@@ -49,7 +49,10 @@ import {
   createEventBackedProposal,
   createAutoApprovedProposal,
 } from "../../utils/event-backed-proposal.js";
-import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import {
+  materializeCompositeGraph,
+  type MaterializeRelationFailure,
+} from "../../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../../utils/entity-link-idempotency.js";
 import {
   computeCaptureGraphIdempotencyKey,
@@ -215,6 +218,13 @@ export interface SubmitCaptureGraphResult {
   project?:
     | { status: "linked"; projectId: string }
     | { status: "not_linked"; reason: string };
+  /**
+   * Relation ops that were SUBMITTED (via `relations`/`operations`) but never
+   * created (bad ref, DB failure). Only ever populated on the `applied: true`
+   * path — a `pending` proposal hasn't materialized anything yet, so nothing
+   * can have failed. Omitted when nothing failed.
+   */
+  relationsFailed?: MaterializeRelationFailure[];
   writeReceipt: {
     state: "pending" | "applied";
     proposalId?: string;
@@ -757,7 +767,11 @@ export async function submitCaptureGraph(
         return {
           proposalId: recordId,
           entityCount: graphEntities.length,
-          relationCount: relations.length,
+          // The ACTUALLY CREATED relation count, not the submitted one — this
+          // graph was just materialized above, so `materialized.relations` is
+          // the honest number. `relations.length` (submitted) diverges the
+          // moment any relation op fails to resolve/create.
+          relationCount: materialized.relations.length,
           bindingCount: bindings.length,
           reviewUrl: undefined,
           summary,
@@ -767,6 +781,12 @@ export async function submitCaptureGraph(
             : {}),
           ...(projectCandidate ? { projectCandidate } : {}),
           ...(projectOutcome ? { project: projectOutcome } : {}),
+          // Relation ops submitted but never created (bad ref / DB failure) —
+          // named, not just a shortfall between relationCount and the
+          // requested count. Empty on the happy path.
+          ...(materialized.relationsFailed.length
+            ? { relationsFailed: materialized.relationsFailed }
+            : {}),
           writeReceipt: {
             state: "applied",
             ...(recordId ? { proposalId: recordId } : {}),

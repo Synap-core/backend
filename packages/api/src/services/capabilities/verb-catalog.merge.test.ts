@@ -110,6 +110,34 @@ describe("re-apply round-trip vs capabilityVerbCatalogDrift", () => {
     ).toEqual(["linear"]);
   });
 
+  it("converges a catalogue carrying DUPLICATE ids, with no drift on the next pass", () => {
+    // Legacy shape: entries were appended before the array was id-keyed, so the
+    // same verb can appear twice. The applier replaces the FIRST match while the
+    // drift comparator's Map keeps the LAST — left alone, that disagreement
+    // re-applies this tool on every boot, forever.
+    const stale: ToolVerbCatalogEntry = {
+      id: "linear_create_issue",
+      label: "linear_create_issue",
+      kind: "read",
+      govDefault: "propose",
+    };
+    const live: ToolVerbCatalogEntry[] = [stale, { ...stale }, userVerb];
+
+    const converged = mergeVerbCatalog(live, project());
+
+    expect(
+      capabilityVerbCatalogDrift(
+        [{ name: "linear", capabilityCatalog: converged }],
+        projectedByTool
+      ).drifted
+    ).toEqual([]);
+    // The duplicate is collapsed, so no stale copy survives to be read back.
+    expect(
+      converged.filter((v) => v.id === "linear_create_issue")
+    ).toHaveLength(1);
+    expect(converged).toContainEqual(userVerb);
+  });
+
   it("converges, then reports NO drift on the immediately following pass", () => {
     const live: ToolVerbCatalogEntry[] = [
       userVerb,

@@ -55,6 +55,7 @@ import { getDefaultActiveService } from "@synap/intelligence-client";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { toolNotRetiredWhere } from "../tools/visibility.js";
 
 export interface CapabilityRegistryContext {
   /**
@@ -480,13 +481,24 @@ export async function listCapabilities(
   // ── Tools ──────────────────────────────────────────────────────────────────
   // Pod altitude (workspaceId === null) sees pod-wide rows only — no workspace
   // branch, so no chance of an unbound `eq(...)` against a missing lens.
+  // `toolNotRetiredWhere()` is the same floor the skill branch below applies in
+  // JS (`s.status === "active" && s.approved`): a retired row must not be
+  // advertised as an action. See that helper for why the predicate is
+  // `status <> 'inactive'` and not `= 'active'`, and why `approved` — which
+  // gates EXECUTION, not visibility — is deliberately not consulted here.
   const toolRows = await db
     .select()
     .from(tools)
     .where(
-      ctx.workspaceId
-        ? or(isNull(tools.workspaceId), eq(tools.workspaceId, ctx.workspaceId))
-        : isNull(tools.workspaceId)
+      and(
+        ctx.workspaceId
+          ? or(
+              isNull(tools.workspaceId),
+              eq(tools.workspaceId, ctx.workspaceId)
+            )
+          : isNull(tools.workspaceId),
+        toolNotRetiredWhere()
+      )
     );
 
   // Resolve each tool's active grant so the verb catalog can be surfaced WITH

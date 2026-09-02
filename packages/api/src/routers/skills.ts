@@ -25,6 +25,7 @@ import {
   createPendingProposal,
 } from "../utils/permission-check.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
+import { skillExecFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -234,6 +235,16 @@ export function assertSkillGlobalsAllowed(
     });
   }
 }
+
+/**
+ * Execution-defining content rule — the SHARED definition, so this door and the
+ * template applier (`create-from-definition.ts`) can never drift apart. Lives in
+ * a leaf module because the applier cannot statically import this router.
+ */
+export {
+  RE_APPROVAL_FIELDS,
+  skillExecFieldsChanged,
+} from "../services/capabilities/skill-exec-fields.js";
 
 /**
  * The ONE governed persistence path for inserting a `skills` row. Shared by
@@ -897,36 +908,6 @@ export const skillsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      // Security: if any execution-defining field changes, the skill may now run
-      // different code — reset approval so an approved skill can't be silently
-      // re-pointed to execute untrusted code.
-      const RE_APPROVAL_FIELDS = [
-        "code",
-        // For a `declarative` skill the providerSpec IS the executable — it
-        // defines the HTTP call (baseUrl, method, path, headers). Re-pointing it
-        // is `code`'s equivalent, so it must reset approval too; without this,
-        // making it updatable would let an approved declarative skill be
-        // silently aimed at a different endpoint while staying approved.
-        "providerSpec",
-        "parameters",
-        "executionMode",
-        "timeoutSeconds",
-        "kind",
-      ] as const;
-      const execChanged =
-        RE_APPROVAL_FIELDS.some(
-          (k) => (updateData as Record<string, unknown>)[k] !== undefined
-        ) ||
-        // An AGENT rewriting `body` must re-earn approval. `body` is not
-        // executable, so it isn't in RE_APPROVAL_FIELDS — but for an
-        // `instruction` skill the body IS injected verbatim into an agent's
-        // system prompt (is-agent-executor.ts). Without this, an agent could
-        // take an already-approved instruction skill and rewrite its body while
-        // it KEPT `approved: true` — precisely the "hostile fetched content
-        // persists itself into the prompt" path the approval gate exists to
-        // stop. A human editing their own skill is unaffected.
-        (updateData.body !== undefined && !!input.agentUserId);
-
       // Documentation + optional Code: when code is set, derive `kind` (unless
       // given) and store empty code as null (the skill becomes doc-only).
       if (updateData.code !== undefined) {
@@ -940,6 +921,29 @@ export const skillsRouter = router({
             : "instruction";
         }
       }
+
+      // Security: if any execution-defining field actually CHANGES, the skill
+      // may now run different code — reset approval so an approved skill can't
+      // be silently re-pointed to execute untrusted code. Computed HERE, after
+      // the normalization above, so it compares exactly the values the UPDATE
+      // writes (an emptied `code` normalizes to null, and a derived `kind` is
+      // already resolved) rather than the raw input.
+      const execChanged =
+        skillExecFieldsChanged(
+          updateData as Record<string, unknown>,
+          existingSkill as unknown as Record<string, unknown>
+        ) ||
+        // An AGENT rewriting `body` must re-earn approval. `body` is not
+        // executable, so it isn't in RE_APPROVAL_FIELDS — but for an
+        // `instruction` skill the body IS injected verbatim into an agent's
+        // system prompt (is-agent-executor.ts). Without this, an agent could
+        // take an already-approved instruction skill and rewrite its body while
+        // it KEPT `approved: true` — precisely the "hostile fetched content
+        // persists itself into the prompt" path the approval gate exists to
+        // stop. A human editing their own skill is unaffected. Deliberately
+        // PRESENCE-based, not value-based: an agent that submits a body must
+        // re-earn approval even in the edge case where the text is unchanged.
+        (updateData.body !== undefined && !!input.agentUserId);
 
       // The column is typed `ProviderVerbSpec`; the input accepts the open
       // `z.record` shape the spec is stored as. Narrow it for the write — same

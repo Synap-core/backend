@@ -34,6 +34,7 @@ import {
   notifications,
   feeds,
   inboxItems,
+  messagingAccounts,
   sourceConfigs,
   sourceSubscriptions,
   userPreferences,
@@ -387,6 +388,17 @@ registerVisibility({
   // External items (email/calendar/slack) ingested per user; every read floors
   // by `userId` alone (the nullable workspaceId is a tag, not a read lens).
   rule: { kind: "user", userColumn: inboxItems.userId },
+});
+registerVisibility({
+  table: messagingAccounts,
+  query: () => db.query.messagingAccounts,
+  // CREDENTIAL-BEARING — `metadata` jsonb carries provider tokens/scopes, so the
+  // owner floor is deliberately the narrowest rule (same reasoning as apiKeys /
+  // secrets above). The one read that legitimately cannot be user-scoped is the
+  // INBOUND webhook lookup by (externalId, provider) — resolving the owning user
+  // is its entire purpose — and it runs on raw `db`, not scopedDb
+  // (routers/webhooks-inbound.ts:720), so this floor does not narrow it.
+  rule: { kind: "user", userColumn: messagingAccounts.userId },
 });
 registerVisibility({
   table: userPreferences,

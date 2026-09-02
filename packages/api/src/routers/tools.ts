@@ -29,10 +29,12 @@ import {
 import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { toolNotRetiredWhere } from "../services/tools/visibility.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getLinksFor } from "../services/links/links-service.js";
+import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { emitSideEffects } from "@synap/events";
 
@@ -87,10 +89,21 @@ export const toolsRouter = router({
       const lens = ws
         ? or(isNull(tools.workspaceId), eq(tools.workspaceId, ws))
         : isNull(tools.workspaceId);
+      // Retired rows drop out of this enumeration too — every consumer is a
+      // DISCOVERY surface (the skill-editor tool picker, the capabilities
+      // grid, the atlas graph, slash-command sources), so a retired duplicate
+      // showing here is the same ghost the registry filter removes. `.get` by
+      // id stays UNFILTERED so a retired tool remains inspectable/fixable.
       const rows = await db
         .select()
         .from(tools)
-        .where(and(lens, userVisibleWhere(tools.workspaceId, userId)))
+        .where(
+          and(
+            lens,
+            userVisibleWhere(tools.workspaceId, userId),
+            toolNotRetiredWhere()
+          )
+        )
         .orderBy(desc(tools.createdAt))
         .limit(input?.limit ?? 100);
       return rows as Tool[];
@@ -251,8 +264,19 @@ export const toolsRouter = router({
         "kind",
         "inputSchema",
       ] as const;
-      const execChanged = RE_APPROVAL_FIELDS.some(
-        (k) => (input as Record<string, unknown>)[k] !== undefined
+      // VALUE, not PRESENCE. `CapabilitiesSurface`'s tool editor is a
+      // full-object form save: it re-sends `credentialRef` (hydrated from the
+      // row) on every save, so a presence test made a NAME-ONLY edit look
+      // egress-changing — it proposal-gated a benign rename and reset
+      // `approved`. Widening the CONFIG-ONLY carve-out below is the point, not
+      // a side effect: an unchanged field is by definition not a new egress
+      // ability. A real re-point still differs by value and still routes
+      // through the full proposal path. Comparison rule shared with the skill
+      // and MCP-server doors.
+      const execChanged = execFieldsChanged(
+        RE_APPROVAL_FIELDS,
+        input as Record<string, unknown>,
+        existing as unknown as Record<string, unknown>
       );
 
       // CONFIG-ONLY carve-out: a metadata/status-only update is benign — it does

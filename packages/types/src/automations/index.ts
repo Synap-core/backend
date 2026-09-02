@@ -7,6 +7,10 @@
 
 // ── Database types ──────────────────────────────────────────────────────────
 
+// Type-only — erased at build, so no drizzle/postgres runtime import reaches
+// browser/Electron consumers (see the NOTE below).
+import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
+
 export type {
   Automation,
   NewAutomation,
@@ -41,41 +45,26 @@ export type AutomationStatus = "draft" | "active" | "paused" | "error";
 export type AutomationTriggerType = "event" | "cron" | "webhook" | "manual";
 
 export type AutomationRunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  "running" | "completed" | "failed" | "cancelled";
 
 export type AutomationStepStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "skipped";
+  "pending" | "running" | "completed" | "failed" | "skipped";
 
-export type AutomationNodeType =
-  | "trigger"
-  | "command"
-  | "query"
-  | "messages_query"
-  | "condition"
-  | "delay"
-  | "output"
-  | "loop"
-  | "transform"
-  | "fetch"
-  | "switch"
-  | "skill"
-  | "sub_automation"
-  | "playbook_run";
+/**
+ * DERIVED from the executor's own node/output definitions — never hand-written.
+ *
+ * Both of these WERE hand-maintained copies and both had already drifted:
+ * `AutomationNodeType` listed 14 of the schema's 23 node types, and
+ * `AutomationOutputType` listed 6 of 11 — silently omitting `facet_attach`,
+ * `facet_update`, `facet_detach`, `relation_create` and `set_state`, so nothing
+ * typed against it could express five output kinds the executor supports.
+ *
+ * A second copy of a union the applier already owns is a fork with a countdown;
+ * deriving means teaching the executor a new node type updates this in place.
+ */
+export type AutomationNodeType = AutomationNodeBase["type"];
 
-export type AutomationOutputType =
-  | "notification"
-  | "entity_create"
-  | "entity_update"
-  | "webhook"
-  | "channel_message"
-  | "session_update";
+export type AutomationOutputType = OutputNodeDef["data"]["outputType"];
 
 // ── API input types ─────────────────────────────────────────────────────────
 
@@ -119,3 +108,34 @@ export interface AutomationExecutionContext {
  * Prevents infinite loops where automation A triggers automation B triggers A.
  */
 export const MAX_AUTOMATION_CHAIN_DEPTH = 3;
+
+// ── Rule "sentence" value-model + bidirectional converters ──────────────────
+//
+// Zero imports, pure functions — safe for browser/Electron/Node/CLI. Lives here
+// (not in synap-app) so the backend's server-side rule doors can reach it;
+// `@synap-core/automation-intent` re-exports it, so its consumers are unchanged.
+export {
+  buildEventPattern,
+  buildCronExpression,
+  toBackendTrigger,
+  toFlowDefinition,
+  parseCron,
+  triggerToSentence,
+  flowToSentenceAction,
+  flowToConditions,
+} from "./sentence.js";
+export type {
+  ActionType,
+  SentenceAction,
+  TriggerSubjectCategory,
+  ActionVerb,
+  ConditionOperator,
+  ConditionRow,
+  CronFrequency,
+  SentenceTrigger,
+  RuleSentenceValue,
+  RuleFlowNode,
+  RuleFlowEdge,
+  RuleFlowDefinition,
+  BackendTrigger,
+} from "./sentence.js";

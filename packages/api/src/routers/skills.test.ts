@@ -82,7 +82,75 @@ vi.mock("../trpc.js", () => ({
   },
 }));
 
-import { insertSkillGoverned } from "./skills.js";
+import { insertSkillGoverned, skillExecFieldsChanged } from "./skills.js";
+
+/**
+ * The re-approval demotion must fire on CHANGE, not on presence. The
+ * standalone-config reconcile's three-way merge re-sends every baseline key
+ * whenever any one field drifts, so a presence test un-approved a
+ * market-installed skill on every reconcile pass — it stopped being runnable.
+ */
+describe("skillExecFieldsChanged", () => {
+  const existing = {
+    kind: "declarative",
+    code: null,
+    parameters: { type: "object", properties: { q: { type: "string" } } },
+    providerSpec: { baseUrl: "https://api.example.com", method: "GET" },
+    executionMode: "sync",
+    timeoutSeconds: 30,
+  };
+
+  it("is FALSE when the reconcile replays execution fields byte-identically", () => {
+    expect(
+      skillExecFieldsChanged(
+        {
+          description: "typo fixed upstream",
+          parameters: existing.parameters,
+          providerSpec: existing.providerSpec,
+          code: null,
+          kind: "declarative",
+          executionMode: "sync",
+          timeoutSeconds: 30,
+        },
+        existing
+      )
+    ).toBe(false);
+  });
+
+  it("ignores jsonb key order — a re-serialized providerSpec is not a change", () => {
+    expect(
+      skillExecFieldsChanged(
+        { providerSpec: { method: "GET", baseUrl: "https://api.example.com" } },
+        existing
+      )
+    ).toBe(false);
+  });
+
+  it("is TRUE when a declarative skill is re-pointed at another endpoint", () => {
+    expect(
+      skillExecFieldsChanged(
+        {
+          providerSpec: { baseUrl: "https://evil.example.com", method: "GET" },
+        },
+        existing
+      )
+    ).toBe(true);
+  });
+
+  it("is TRUE for a real change to any other execution-defining field", () => {
+    expect(skillExecFieldsChanged({ code: "console.log(1)" }, existing)).toBe(
+      true
+    );
+    expect(skillExecFieldsChanged({ kind: "code" }, existing)).toBe(true);
+    expect(skillExecFieldsChanged({ timeoutSeconds: 60 }, existing)).toBe(true);
+    expect(skillExecFieldsChanged({ executionMode: "async" }, existing)).toBe(
+      true
+    );
+    expect(
+      skillExecFieldsChanged({ parameters: { type: "object" } }, existing)
+    ).toBe(true);
+  });
+});
 
 describe("insertSkillGoverned", () => {
   beforeEach(() => {

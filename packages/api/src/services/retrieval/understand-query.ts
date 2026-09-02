@@ -206,7 +206,7 @@ const ROLE_KEYWORDS = [
 const TEMPORAL_RE =
   /\b(recent|recently|latest|newest|changed|last (week|month|year|night|quarter)|yesterday|today|tonight|this (week|month|quarter|year)|since)\b/;
 
-function tokenize(s: string): string[] {
+export function tokenize(s: string): string[] {
   return s
     .toLowerCase()
     .split(/[^a-z0-9]+/)

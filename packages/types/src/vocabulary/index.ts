@@ -203,6 +203,59 @@ export function buildObjectActionTitle(params: {
 }
 
 /**
+ * Proposal-KIND labels — the SHAPE of a proposed change ("what kind of
+ * proposal is this"), shown as a chip on every proposal card/detail surface.
+ * This is its OWN taxonomy: distinct from an object kind (what THING it acts
+ * on, resolved by {@link resolveObjectNoun}) and from an action verb (what
+ * happens on approval, resolved by {@link resolveActionLabel}). `facet` and
+ * `composite` prove the distinction — neither reads as its literal object
+ * noun or action verb: a `facet` proposal reads as "Role" (the product's own
+ * word for what a facet grants — see the "Kind + Facets" model) and a
+ * `composite` proposal reads as "Bundle" (several operations, not one).
+ *
+ * Curated here because relay's own local map (pre-consolidation) had ALREADY
+ * forked from `synap-app/packages/core/proposal-ui/ProposalChrome.tsx`'s local
+ * map: `facet` was "Role" in one and "Facet" in the other; `composite` was
+ * "Bundle" vs "Multi-entity" — and the latter's `?? presentation.kind`
+ * fallback leaked the raw token for any kind it didn't list (e.g. `install`,
+ * every `governance_*` kind). This table is the ONE place both should resolve
+ * kind, so a reviewer sees the same word on the card and the detail screen
+ * regardless of which repo renders it.
+ */
+export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
+  create: "Create",
+  update: "Update",
+  delete: "Delete",
+  document: "Document",
+  link: "Link",
+  facet: "Role",
+  composite: "Bundle",
+  session: "Session",
+  merge: "Merge",
+  install: "Install",
+  // Governance recommender kinds — reviewer never approved these before; the
+  // chip is the FIRST thing they read, so it names the change, not the token.
+  governance_widen: "Widen a lane",
+  governance_tighten: "Tighten a lane",
+  governance_raise_ceiling: "Raise a ceiling",
+  governance_tighten_posture: "Tighten posture",
+  capability_run: "Run capability",
+  automation_run: "Run automation",
+};
+
+/**
+ * The human label for a proposal kind. Unknown/new kinds humanize rather than
+ * leak, so a future `ProposalKind` addition is safe (if unpolished) before
+ * this table is updated.
+ */
+export function resolveProposalKindLabel(
+  kind: string | null | undefined
+): string {
+  if (!kind) return "";
+  return PROPOSAL_KIND_LABELS[kind.toLowerCase()] ?? humanizeToken(kind);
+}
+
+/**
  * Lifecycle STATUS labels — the state a thing is in, as a human word.
  *
  * SCOPE. These are the CANONICAL lifecycle states of Synap's own objects

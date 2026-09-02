@@ -27,17 +27,14 @@ import { getDb } from "@synap/database";
 import {
   db,
   focusSessions,
-  workspaces,
   eq,
   and,
   desc,
   inArray,
   PropertyValueType,
 } from "@synap/database";
-import {
-  getUserMemberWorkspaceIds,
-  logger,
-} from "../../hub-protocol/rest/_shared.js";
+import { logger } from "../../hub-protocol/rest/_shared.js";
+import { listMemberWorkspaces } from "../../../utils/workspace-membership.js";
 import { openLink } from "../../../utils/deep-links.js";
 import type { Context } from "../../../types/context.js";
 
@@ -691,15 +688,12 @@ export function captureRejected(params: {
  * Caller's member workspaces (id + name) for write-placement error messages.
  * Cheap: membership ids + one name query. Same shape as set_workspace_focus.
  */
-async function listMemberWorkspacesForAgent(
+export async function listMemberWorkspacesForAgent(
   userId: string
 ): Promise<Array<{ id: string; name: string }>> {
-  const memberIds = await getUserMemberWorkspaceIds(userId);
-  if (memberIds.length === 0) return [];
-  return db
-    .select({ id: workspaces.id, name: workspaces.name })
-    .from(workspaces)
-    .where(inArray(workspaces.id, memberIds));
+  // Delegates to the one implementation, shared with the tRPC membership
+  // denial in `trpc.ts` — never a second copy of "list this user's workspaces".
+  return listMemberWorkspaces(userId);
 }
 
 /**

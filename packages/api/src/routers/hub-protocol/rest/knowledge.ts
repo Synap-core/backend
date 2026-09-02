@@ -1042,6 +1042,15 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // withholding it is what let a keyword-only fallback render as a
           // clean empty result.
           degraded: result.degraded,
+          // DOOR PARITY (the inverse of `degraded`): the MCP door forwards the
+          // pending block and this one did not, so a CLI/REST caller saw only
+          // `prependPendingNotice`'s one sentence and never the matches
+          // themselves. Additive; omitted when nothing pends.
+          ...(result.pending ? { pending: result.pending } : {}),
+          // Structured truncation, so a caller can DETECT a partial context
+          // instead of hoping the model echoes the prose notice — the prose
+          // dies with the response whenever synthesis fails.
+          ...(synthesis.truncated ? { truncated: synthesis.truncated } : {}),
           ...(synthesis.error && failure
             ? {
                 error: synthesis.error,

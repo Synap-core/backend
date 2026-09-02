@@ -69,6 +69,8 @@ import {
   skillsRouter,
   assertSkillGlobalsAllowed,
 } from "../../routers/skills.js";
+import { skillExecFieldsChanged } from "./skill-exec-fields.js";
+import { canonicalJson } from "./capability-drift.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -729,6 +731,12 @@ export async function createCapabilityFromDefinition(
         kind: skillsTable.kind,
         code: skillsTable.code,
         providerSpec: skillsTable.providerSpec,
+        // parameters/executionMode/timeoutSeconds are selected ONLY so the
+        // shared `skillExecFieldsChanged` rule below can compare them — it
+        // covers six execution-defining fields, not three.
+        parameters: skillsTable.parameters,
+        executionMode: skillsTable.executionMode,
+        timeoutSeconds: skillsTable.timeoutSeconds,
         body: skillsTable.body,
         approved: skillsTable.approved,
       })
@@ -751,16 +759,37 @@ export async function createCapabilityFromDefinition(
       // branchPurpose param). STATE fields (status/errorMessage/metadata) are
       // NOT touched — DB owns those. `approved` is state too, with ONE
       // exception (security review 2026-07-12): when the EXECUTION-DEFINING
-      // content actually changes (kind/code/providerSpec), the row is demoted
-      // to unapproved — same rule skillsRouter.update enforces. Without it a
-      // drifted CP template could swap an approved skill's code while keeping
-      // its approval (content-swap-under-approval). Unchanged content (the
-      // common reconcile no-op-heal) never demotes.
-      const execContentChanged =
+      // content actually changes, the row is demoted to unapproved — literally
+      // the same rule skillsRouter.update enforces, via the ONE shared
+      // definition (`skillExecFieldsChanged` / `RE_APPROVAL_FIELDS`). Without
+      // it a drifted CP template could swap an approved skill's code while
+      // keeping its approval (content-swap-under-approval). Compared by VALUE
+      // against the loaded row, so unchanged content (the common reconcile
+      // no-op-heal) never demotes.
+      //
+      // The patch mirrors the `.set({...})` projection below exactly — a field
+      // this comparator reads must be a field that update actually writes.
+      const execContentChanged = skillExecFieldsChanged(
+        {
+          kind: s.kind ?? "code",
+          code: s.code ?? null,
+          providerSpec: s.providerSpec ?? null,
+          parameters: s.parameters,
+          executionMode: s.executionMode ?? "sync",
+          timeoutSeconds: s.timeoutSeconds ?? 30,
+        },
+        existingSkill as unknown as Record<string, unknown>
+      );
+
+      // NARROWER than `execContentChanged` on purpose: the globals scan must
+      // fire only when the CODE ITSELF is being rewritten. Gating it on the
+      // wider approval rule would hard-fail a skill grandfathered with a
+      // disallowed global on a `parameters`-only reconcile (see below).
+      const codeContentChanged =
         (s.kind ?? "code") !== existingSkill.kind ||
         (s.code ?? null) !== existingSkill.code ||
-        JSON.stringify(s.providerSpec ?? null) !==
-          JSON.stringify(existingSkill.providerSpec ?? null);
+        canonicalJson(s.providerSpec ?? null) !==
+          canonicalJson(existingSkill.providerSpec ?? null);
 
       // Save-time global-reference scan (B1) — this reconcile branch is a
       // DIRECT db.update (not the governed `skillsCaller.create` a few lines
@@ -769,11 +798,11 @@ export async function createCapabilityFromDefinition(
       // references an unprovided global. Only scan when the reconciled row is
       // actually a code skill AND the code is actually changing — same gate
       // `skillsRouter.update` uses (`input.code?.trim()`), via the
-      // `execContentChanged` flag computed above. Without this gate, a skill
+      // `codeContentChanged` flag computed above. Without this gate, a skill
       // grandfathered with a disallowed global before this scan existed would
       // hard-fail on every future metadata-only reconcile (description/
       // parameters/scope/category), even though its code never changed.
-      if ((s.kind ?? "code") === "code" && execContentChanged) {
+      if ((s.kind ?? "code") === "code" && codeContentChanged) {
         assertSkillGlobalsAllowed(s.code);
       }
 

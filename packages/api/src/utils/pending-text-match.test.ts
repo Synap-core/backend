@@ -62,6 +62,32 @@ describe("scorePendingText", () => {
     expect(scorePendingText(["acme"], { title: "Talentir" })).toBe(0);
     expect(scorePendingText([], { title: "Talentir" })).toBe(0);
   });
+
+  // Regression: `haystack.includes(t)` was a SUBSTRING match, so a short term
+  // ("ai", "12") matched almost any unrelated summary — the reason five pending
+  // proposals with full summaries opened every single `ask` answer. Fixed by
+  // matching a single-word term against a Set of the haystack's own tokens
+  // (word boundary), not the raw haystack string.
+  it("does not substring-match a short term inside an unrelated longer word", () => {
+    expect(
+      scorePendingText(["ai"], {
+        title: "Captain Marvel",
+        summary: "An email thread about the movie",
+      })
+    ).toBe(0);
+    expect(
+      scorePendingText(["12"], {
+        summary: "Reviewed proposal 1234 with the team",
+      })
+    ).toBe(0);
+  });
+
+  it("still matches a short term at a real word boundary", () => {
+    expect(scorePendingText(["ai"], { title: "AI research notes" })).toBe(1);
+    expect(
+      scorePendingText(["12"], { summary: "Meeting scheduled for day 12" })
+    ).toBe(1);
+  });
 });
 
 /**

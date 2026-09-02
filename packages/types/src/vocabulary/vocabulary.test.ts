@@ -10,6 +10,8 @@ import {
   ACTION_VERBS,
   OBJECT_KINDS,
   OBJECT_KIND_ALIASES,
+  resolveProposalKindLabel,
+  PROPOSAL_KIND_LABELS,
 } from "./index.js";
 import { buildFallbackTitle } from "../proposals/proposal-utils.js";
 
@@ -263,6 +265,90 @@ describe("resolveStatusLabel", () => {
       const label = resolveStatusLabel(key);
       expect(label, key).not.toMatch(/[_.]/);
       expect(label[0], key).toBe(label[0]?.toUpperCase());
+    }
+  });
+});
+
+describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
+  // The full `ProposalKind` union from `@synap-core/proposal-types`
+  // (`useProposalPresentation.ts`), minus `document`/`session` which are
+  // covered by `resolveObjectNoun` via `OBJECT_KINDS` directly.
+  const ALL_PROPOSAL_KINDS = [
+    "create",
+    "update",
+    "delete",
+    "document",
+    "link",
+    "facet",
+    "composite",
+    "session",
+    "merge",
+    "install",
+    "governance_widen",
+    "governance_tighten",
+    "governance_raise_ceiling",
+    "governance_tighten_posture",
+    "capability_run",
+    "automation_run",
+  ];
+
+  it("settles the facet/composite fork between relay and proposal-ui", () => {
+    // relay's shared.tsx said "Role"/"Bundle"; synap-app's ProposalChrome.tsx
+    // said "Facet"/"Multi-entity" (and leaked raw tokens for anything else it
+    // didn't list). This table is the one both should resolve through.
+    expect(resolveProposalKindLabel("facet")).toBe("Role");
+    expect(resolveProposalKindLabel("composite")).toBe("Bundle");
+  });
+
+  it("names the governance recommender kinds instead of humanizing them", () => {
+    expect(resolveProposalKindLabel("governance_widen")).toBe("Widen a lane");
+    expect(resolveProposalKindLabel("governance_tighten")).toBe(
+      "Tighten a lane"
+    );
+    expect(resolveProposalKindLabel("governance_raise_ceiling")).toBe(
+      "Raise a ceiling"
+    );
+    expect(resolveProposalKindLabel("governance_tighten_posture")).toBe(
+      "Tighten posture"
+    );
+  });
+
+  it("covers every ProposalKind with a real word, never a raw token", () => {
+    for (const kind of ALL_PROPOSAL_KINDS) {
+      const label = resolveProposalKindLabel(kind);
+      expect(label, kind).not.toBe("");
+      expect(label, kind).not.toMatch(/[_.]/);
+      expect(label[0], kind).toBe(label[0]?.toUpperCase());
+    }
+  });
+
+  it("humanizes an unknown kind instead of leaking it", () => {
+    expect(resolveProposalKindLabel("some_future_kind")).toBe(
+      "Some future kind"
+    );
+    expect(resolveProposalKindLabel(null)).toBe("");
+  });
+
+  it("PROPOSAL_KIND_LABELS has an entry for every curated kind used above", () => {
+    for (const kind of [
+      "create",
+      "update",
+      "delete",
+      "document",
+      "link",
+      "facet",
+      "composite",
+      "session",
+      "merge",
+      "install",
+      "governance_widen",
+      "governance_tighten",
+      "governance_raise_ceiling",
+      "governance_tighten_posture",
+      "capability_run",
+      "automation_run",
+    ]) {
+      expect(PROPOSAL_KIND_LABELS[kind], kind).toBeTruthy();
     }
   });
 });

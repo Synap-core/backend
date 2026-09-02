@@ -63,4 +63,70 @@ describe("buildSynthesisContext — IS payload contract", () => {
     const { sources } = buildSynthesisContext(manyEntities(200, 1500));
     expect(sources).toHaveLength(200);
   });
+
+  it("names the omitted items in the truncation notice instead of just a count", () => {
+    const { context } = buildSynthesisContext(manyEntities(200, 1500));
+    // Entity 0 is protected (rank-1) and always fits; later entities are the
+    // ones that get cut, so their titles ("Entity N") should be named.
+    expect(context).toMatch(/omitted: "Entity \d+"/);
+  });
+
+  it("keeps the truncation notice itself under the IS cap regardless of how many/long the omitted titles are", () => {
+    const huge: AskAnswer[] = [
+      {
+        substrate: "structured",
+        status: "ok",
+        items: Array.from({ length: 300 }, (_, i) => ({
+          id: `e${i}`,
+          // A title far longer than the per-name slice, to prove the notice
+          // hard-caps itself rather than growing unboundedly with the data.
+          title: `Entity ${i} ${"x".repeat(200)}`,
+          content: "z".repeat(1500),
+        })),
+      },
+    ] as unknown as AskAnswer[];
+    const { context } = buildSynthesisContext(huge);
+    // Whole context (entries + notice) must still respect the 20k IS cap.
+    expect(context.length).toBeLessThanOrEqual(IS_CONTEXT_MAX);
+    const notice = context.split("\n").find((l) => l.includes("[NOTICE]"));
+    expect(notice).toBeDefined();
+    expect(notice!.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("buildSynthesisContext — rank-1 protection", () => {
+  // A short LOW-ranked item and a long HIGH-ranked (rank-1) item: fit-based
+  // admission alone would keep the short one and drop the long one, silently
+  // dropping the single most relevant result. Rank-1 must be admitted
+  // unconditionally.
+  it("always admits the first (highest-ranked) item even when it is the largest", () => {
+    const answers: AskAnswer[] = [
+      {
+        substrate: "structured",
+        status: "ok",
+        items: [
+          { id: "rank1", title: "Most relevant", content: "y".repeat(19_000) },
+          { id: "rank2", title: "Less relevant", content: "short" },
+        ],
+      },
+    ] as unknown as AskAnswer[];
+    const { context } = buildSynthesisContext(answers);
+    expect(context).toContain("Most relevant");
+  });
+
+  it("hard-caps the protected first entry so it alone can never blow the IS budget", () => {
+    // An entity whose `title` column is null falls back to the (unsliced, up
+    // to 64k-char) `content` field as its title — the one field this builder
+    // does not slice anywhere else. Prove that even in that pathological
+    // shape, a single protected-first entry cannot exceed the budget.
+    const pathological: AskAnswer[] = [
+      {
+        substrate: "structured",
+        status: "ok",
+        items: [{ id: "e1", content: "q".repeat(64_000) }],
+      },
+    ] as unknown as AskAnswer[];
+    const { context } = buildSynthesisContext(pathological);
+    expect(context.length).toBeLessThanOrEqual(IS_CONTEXT_MAX);
+  });
 });
