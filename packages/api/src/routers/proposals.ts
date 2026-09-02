@@ -2287,6 +2287,12 @@ export const proposalsRouter = router({
             agentUserId: true,
             proposalType: true,
             correlationId: true,
+            // Outcome-telemetry inputs, to match what single `reject` reports.
+            // Selected here rather than re-fetched per item: the batch already
+            // has the row in hand, and a second read per proposal would turn one
+            // query into N.
+            targetType: true,
+            sourceMessageId: true,
           },
         });
         if (!target) continue;
@@ -2332,6 +2338,28 @@ export const proposalsRouter = router({
             "rejected",
             userId
           );
+
+          // Outcome telemetry — parity with single `reject`, which has always
+          // reported. The APPROVE side reports from the executor layer
+          // (`reportApproved`, called by 24 executors), so it fires on the batch
+          // door too; only rejection was router-level and therefore missing here.
+          //
+          // The effect was a one-sided learning signal: every bulk approval
+          // reached IS telemetry and every bulk rejection was dropped, so the
+          // corpus a model learns from saw agents' accepted work and never their
+          // refused work. Fire-and-forget, exactly like the single path — it must
+          // never block or fail a rejection.
+          reportProposalOutcome({
+            proposalId,
+            outcome: "rejected",
+            sourceMessageId: target.sourceMessageId,
+            agentUserId: target.agentUserId,
+            targetType: target.targetType,
+            proposalType: target.proposalType,
+            source: (target.data as Record<string, unknown> | null)?.source as
+              string | undefined,
+            rejectionReason: input.reason,
+          });
 
           // Feedback signal — same shape as `reject` (see the note there). Emit on
           // any reasoned rejection; correlationId falls back to the proposal id.
