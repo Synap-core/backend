@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 import { stableStringify } from "./stable-stringify.js";
 
 /**
@@ -286,6 +287,33 @@ export async function insertPendingProposal(
   // FIRST attempt's correlation id, which is the correct grouping.
   const correlationId = input.correlationId ?? randomUUID();
 
+  // PROJECT LENS FLOOR: a proposal that belongs to a session belongs to that
+  // session's project. Derived HERE — the SSOT insert — for the same reason
+  // correlationId is: doing it at each door means every door that forgets
+  // produces a row the project lens cannot see, and measured on the live pod
+  // 2026-09-01 that was EVERY door: `projectId` was set on 0 of 670 pending
+  // proposals while `sessionId` was set on 361. The column, the forwarding and
+  // the API field all existed; only the derivation was missing.
+  //
+  // An explicit `input.projectId` always wins — this only fills a gap, and a
+  // session with no project leaves it null rather than inventing one.
+  let projectId = input.projectId ?? null;
+  if (!projectId && input.sessionId) {
+    try {
+      const [session] = await executor
+        .select({ projectId: focusSessions.projectId })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, input.sessionId))
+        .limit(1);
+      projectId = session?.projectId ?? null;
+    } catch {
+      // Best-effort, exactly like the recall deposit: a lens is worth less
+      // than the proposal itself, and losing the write to enrich it would be
+      // the wrong trade.
+      projectId = null;
+    }
+  }
+
   try {
     const [proposal] = await executor
       .insert(proposals)
@@ -321,7 +349,7 @@ export async function insertPendingProposal(
           ? { requestedEventId: input.requestedEventId }
           : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(projectId ? { projectId } : {}),
         ...(input.stepRunId ? { stepRunId: input.stepRunId } : {}),
         ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         ...(input.governanceReason
