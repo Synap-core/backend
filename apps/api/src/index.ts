@@ -2029,8 +2029,22 @@ try {
             // passing. Separate detections, deliberately sharing the 6h tick
             // rather than adding a second cron over the same rows.
             registerStaleProposalRunner(async () => {
-              const stale = await api.scanStaleProposals();
-              const lapsed = await api.expireLapsedProposals();
+              // Settled independently: a throw in one detection must not
+              // silently switch the other off until someone reads the log.
+              const [stale, lapsed] = await Promise.allSettled([
+                api.scanStaleProposals(),
+                api.expireLapsedProposals(),
+              ]);
+              for (const [name, r] of [
+                ["scanStaleProposals", stale],
+                ["expireLapsedProposals", lapsed],
+              ] as const) {
+                if (r.status === "rejected")
+                  apiLogger.error(
+                    { err: r.reason },
+                    `${name} failed on the stale-proposal tick`
+                  );
+              }
               return { stale, lapsed };
             });
             registerBrokenAutomationRunner(() => api.scanBrokenAutomations());

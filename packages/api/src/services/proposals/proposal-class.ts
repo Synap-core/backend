@@ -3,20 +3,12 @@
  * it stays answerable.
  *
  * ── Why a static rule, not a classifier ─────────────────────────────────────
- * Derived ONLY from `proposalType` × `targetType` — never from the payload, the
- * agent's prose, or any learned signal. That line matters. Gmail's Priority
- * Inbox paper reports 80±5% accuracy, 31% error on personalized models, and a
- * false-negative rate 3–4× its false-positive rate — it HID important mail more
- * often than it promoted unimportant mail, and its threshold needed manual
- * per-user tuning. Linear's Triage Intelligence suggests assignee, team, project
- * and labels, and pointedly NOT priority. So: a class is a lookup a human can
- * read and predict, and an agent cannot influence.
- *
- * That last clause is a security property, not a style preference. Approval-
- * fatigue exploitation is a catalogued technique (Agent-Threat-Rules
- * ATR-2026-00118): an attacker engineers repetitive requests with minimizing
- * language to train reflexive approval. If an agent could nominate its own
- * class, it would nominate the quiet one.
+ * Derived ONLY from `proposalType` × `targetType` — never the payload, the
+ * agent's prose, or a learned signal — so a human can read and predict it and
+ * an agent cannot influence it. That last clause is a security property:
+ * approval-fatigue exploitation works by engineering repetitive requests that
+ * train reflexive approval, and an agent able to nominate its own class would
+ * nominate the quiet one.
  *
  * ── Measured, 660 pending on the team pod, 2026-09-02 ───────────────────────
  *   ephemeral   441  capability.run     median age 11.7d, ZERO under 24h
@@ -44,15 +36,11 @@ export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
  * live and worthless after. A merge candidate or a proposed entity is exactly as
  * reviewable next week as today.
  *
- * The BACKSTOP, not the mechanism. The real trigger is session close — OpenID
- * CIBA's rule, that a server "is encouraged to terminate the authentication when
- * it knows the client is no longer interested in the result". There is no
- * industry convention to copy for the number itself: shipped lifetimes range
- * from Slack's 3-second `trigger_id` to GitHub Actions' non-configurable 30-day
- * deployment approval. 24h is chosen to outlive a working day plus a night, so
- * a run proposed at 6pm is still answerable the next morning — and 158 of the
- * 441 ephemeral rows carry no session at all, so for those this is the ONLY
- * trigger.
+ * The BACKSTOP, not the mechanism — the real trigger is session close (OpenID
+ * CIBA: terminate "when it knows the client is no longer interested"). 24h is
+ * chosen to outlive a working day plus a night, so a run proposed at 6pm is
+ * still answerable next morning; 158 of the 441 ephemeral rows carry no
+ * session at all, so for those this is the ONLY trigger.
  */
 export const CLASS_LIFETIME_HOURS: Record<ProposalClass, number | null> = {
   ephemeral: 24,

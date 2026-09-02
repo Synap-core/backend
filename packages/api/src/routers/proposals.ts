@@ -678,18 +678,9 @@ export const proposalsRouter = router({
       }
 
       const groups = clusters.slice(0, limit);
-      // The two numbers a caller cannot recover from `groups` alone, both
-      // already computed here and otherwise thrown away.
-      //
-      // `groups.length` is a PAGE SIZE (`limit` defaults to 50) — reading it as
-      // "how many distinct things are waiting" under-reports the moment the
-      // queue exceeds it, which on the dogfood pod it does: 105 clusters over
-      // 680 rows. And `scanned` is the honest row total, which the flat
-      // `proposals.list` cannot supply at all because it runs no COUNT.
-      //
-      // `scanTruncated` is the load-bearing one: at the scan cap BOTH numbers
-      // become floors rather than totals, and a surface that renders them as
-      // exact would be stating something false. Callers must degrade to "N+".
+      // `groups.length` is a page size (`limit`), and the flat list runs no
+      // COUNT — so the distinct count and the row total are only knowable here.
+      // `scanTruncated` is the load-bearing one: at the cap both become floors.
       return {
         groups,
         /** Distinct fingerprints BEFORE the `limit` slice. */
@@ -2339,16 +2330,10 @@ export const proposalsRouter = router({
             userId
           );
 
-          // Outcome telemetry — parity with single `reject`, which has always
-          // reported. The APPROVE side reports from the executor layer
-          // (`reportApproved`, called by 24 executors), so it fires on the batch
-          // door too; only rejection was router-level and therefore missing here.
-          //
-          // The effect was a one-sided learning signal: every bulk approval
-          // reached IS telemetry and every bulk rejection was dropped, so the
-          // corpus a model learns from saw agents' accepted work and never their
-          // refused work. Fire-and-forget, exactly like the single path — it must
-          // never block or fail a rejection.
+          // Outcome telemetry — parity with single `reject`. Approve reports from
+          // the executor layer (`reportApproved`), so the batch door gets it for
+          // free; reject reports at the router, so the batch door must do it
+          // explicitly. Fire-and-forget, like the single path.
           reportProposalOutcome({
             proposalId,
             outcome: "rejected",

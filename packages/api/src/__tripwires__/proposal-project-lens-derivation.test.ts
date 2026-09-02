@@ -91,5 +91,12 @@ describe("proposals carry the project lens", () => {
       /try\s*\{/.test(block),
       "a guard that cannot deliver its promise is worse than none — do not re-add it"
     ).toBe(false);
+    // Review finding: without a catch, a malformed body-supplied sessionId
+    // (22P02 on a healthy connection) would LOSE the proposal. The guard is
+    // shape-checking before the query, not catching after it.
+    expect(
+      /UUID_SHAPE\.test\(input\.sessionId\)/.test(block),
+      "a non-uuid sessionId must be excluded before the query — otherwise a bad id costs the proposal, not just the lens"
+    ).toBe(true);
   });
 });

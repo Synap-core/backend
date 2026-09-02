@@ -85,6 +85,7 @@ export const PROPOSAL_STATUS_VALUES = [
   "reverted",
   "approval_failed",
   "withdrawn",
+  "expired",
 ] as const;
 type ProposalStatusValue = (typeof PROPOSAL_STATUS_VALUES)[number];
 

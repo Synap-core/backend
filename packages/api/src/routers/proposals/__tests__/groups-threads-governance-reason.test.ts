@@ -103,7 +103,7 @@ describe("proposals.groups reports its own limits", () => {
     // The honesty hinge: at the scan cap both numbers are floors, and a badge
     // rendering them as exact states something false.
     expect(
-      /scanTruncated:\s*rows\.length >= scanLimit/.test(body),
+      /scanTruncated:\s*[^,\n]*scanLimit/.test(body),
       "a truncated scan must be distinguishable from a complete one, or a " +
         "capped count is indistinguishable from a true one"
     ).toBe(true);

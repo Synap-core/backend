@@ -3,6 +3,10 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+
+/** Postgres `uuid` accepts only this shape; anything else is a 22P02 statement error. */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { stableStringify } from "./stable-stringify.js";
 
 /**
@@ -299,14 +303,15 @@ export async function insertPendingProposal(
   // session with no project leaves it null rather than inventing one.
   //
   // Runs on the caller's `executor` so a session minted earlier in the SAME
-  // transaction is visible. Deliberately NOT wrapped in a try/catch: inside a
-  // transaction a failed statement aborts the whole tx, so swallowing the
-  // error here would only defer the failure to the insert below with a less
-  // useful message; outside one, a primary-key read failing means the
-  // connection is unusable and the insert would fail regardless. A guard
-  // that cannot deliver its promise is worse than none.
+  // transaction is visible. Not wrapped in a try/catch: inside a transaction a
+  // failed statement aborts the whole tx, so a swallowed error would only
+  // resurface at the insert with a worse message. The one failure that IS
+  // reachable on a healthy connection — a malformed `sessionId` (several
+  // doors accept it from the request body unvalidated; Postgres raises 22P02
+  // on a non-uuid) — is excluded BEFORE the query instead of caught after,
+  // so a bad id costs the lens, never the proposal.
   let projectId = input.projectId ?? null;
-  if (!projectId && input.sessionId) {
+  if (!projectId && input.sessionId && UUID_SHAPE.test(input.sessionId)) {
     const [session] = await executor
       .select({ projectId: focusSessions.projectId })
       .from(focusSessions)

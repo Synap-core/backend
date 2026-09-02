@@ -21,6 +21,7 @@ import {
 import type { ProposalRevision } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { isNestedEnvelope } from "@synap-core/types/proposals";
+import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -47,7 +48,10 @@ export async function listCreatedProposals(params: {
   limit?: number;
 }): Promise<Array<typeof proposals.$inferSelect>> {
   const statusArg = params.status || "pending";
-  const statusMap: Record<string, ProposalStatus> = {
+  // `satisfies` against the wire filter type: adding a status to the column
+  // without naming it here is a compile error, not a silent fall-through to
+  // PENDING — which is how both `auto_approved` and `expired` slipped past.
+  const statusMap = {
     pending: ProposalStatus.PENDING,
     approved: ProposalStatus.APPROVED,
     rejected: ProposalStatus.REJECTED,
@@ -56,8 +60,13 @@ export async function listCreatedProposals(params: {
     approval_failed: ProposalStatus.APPROVAL_FAILED,
     withdrawn: ProposalStatus.WITHDRAWN,
     expired: ProposalStatus.EXPIRED,
-  };
-  const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
+  } as const satisfies Record<
+    Exclude<ProposalStatusFilter, "all">,
+    ProposalStatus
+  >;
+  const status =
+    (statusMap as Record<string, ProposalStatus>)[statusArg] ??
+    ProposalStatus.PENDING;
 
   // Session pack path: verify ownership then list by sessionId only.
   if (params.sessionId) {

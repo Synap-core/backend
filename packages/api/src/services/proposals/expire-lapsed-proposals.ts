@@ -1,23 +1,11 @@
 /**
  * expireLapsedProposals — retire pending proposals whose MOMENT PASSED.
  *
- * ── The problem, measured ───────────────────────────────────────────────────
- * 660 pending proposals on the team pod (2026-09-02). 441 of them are
- * `capability.run` — an agent's outbound call, urgent for MINUTES because it is
- * bound to a live session. Median age: 11.7 days. ZERO under 24 hours. Not one
- * of them is still answerable; they are corpses of moments that passed, and they
- * make the ~100 real decisions harder to see.
- *
  * ── Why this is not the TTL that was removed ────────────────────────────────
- * Proposals used to carry a default `expiresAt` and it was deliberately deleted
- * (the C2 note in `insert-pending-proposal.ts`): it dropped rows out of the
- * actionable queue "with no status change, no sweep, and no notification —
- * data that looked gone but was still counted", a lying count.
- *
- * The difference is the whole point. This writes a STATUS a reader can see.
- * `EXPIRED` is a terminal state meaning *nobody decided this*, distinct from
- * approved, rejected, and from `WITHDRAWN` (which the proposer chose). Nothing
- * disappears; the queue stops claiming a decision is owed.
+ * A default `expiresAt` once dropped rows out of the queue with no status
+ * change and no notification while `orient` still counted them (the C2 note
+ * in `insert-pending-proposal.ts`). This writes a STATUS a reader can see —
+ * `EXPIRED`, meaning *nobody decided this*. Nothing disappears.
  *
  * ── Session death is the trigger; this is the BACKSTOP ──────────────────────
  * OpenID CIBA's rule is that a server "is encouraged to terminate the
@@ -39,9 +27,23 @@ import {
   eq,
   and,
   inArray,
+  lt,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { proposalLifetimeHours } from "./proposal-class.js";
+import {
+  CLASS_LIFETIME_HOURS,
+  proposalLifetimeHours,
+} from "./proposal-class.js";
+
+const MIN_LIFETIME_MS =
+  Math.min(
+    ...Object.values(CLASS_LIFETIME_HOURS).filter(
+      (h): h is number => h !== null
+    )
+  ) *
+  60 *
+  60 *
+  1000;
 
 const logger = createLogger({ module: "expire-lapsed-proposals" });
 
@@ -100,6 +102,10 @@ export async function expireLapsedProposals(
   // deliberately does NOT carry `scanStaleProposals`' `isNotNull(workspaceId)`
   // restriction — that scan is about a workspace disappearing, this one is
   // about time passing.
+  // Bounded by the SHORTEST lifetime any class has: nothing younger than that
+  // can have lapsed, so the index does the work and memory stays flat as the
+  // pod grows. The pure decision below still applies each class's own limit.
+  const oldestPossiblyLive = new Date(now.getTime() - MIN_LIFETIME_MS);
   const pending = await db
     .select({
       id: proposals.id,
@@ -108,7 +114,12 @@ export async function expireLapsedProposals(
       createdAt: proposals.createdAt,
     })
     .from(proposals)
-    .where(eq(proposals.status, ProposalStatus.PENDING));
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        lt(proposals.createdAt, oldestPossiblyLive)
+      )
+    );
 
   const lapsed = selectLapsedIds(pending, now);
 
