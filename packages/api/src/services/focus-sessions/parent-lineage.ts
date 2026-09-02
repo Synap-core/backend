@@ -11,10 +11,11 @@
  * can use it without that tripwire mistaking a read projection for a close
  * door reaching into the parent.
  *
- * ONE projection, reused by the tRPC `focusSessions.get`/`.list` here and
- * mirrored (not shared — different module graph) by the MCP handlers
- * `synap_get_session`/`synap_list_sessions` (`routers/mcp/handlers/session.ts`).
- * Keep the two in lockstep if the shape ever changes.
+ * ONE projection, and the ONLY one: the tRPC `focusSessions.get`/`.list` and
+ * the MCP `synap_get_session`/`synap_list_sessions`
+ * (`routers/mcp/handlers/session.ts`) both import these two functions. A
+ * hand-mirrored copy is how the shape forks — there is nothing to keep in
+ * lockstep because there is one implementation.
  */
 
 import { getParentSessionId, getParentSessionIds } from "@synap/database";

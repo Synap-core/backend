@@ -8,16 +8,11 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import {
-  db,
-  focusSessions,
-  eq,
-  and,
-  desc,
-  inArray,
-  getParentSessionId,
-  getParentSessionIds,
-} from "@synap/database";
+  withParentSessionId,
+  attachParentSessionIds,
+} from "../../../services/focus-sessions/parent-lineage.js";
 import {
   ok,
   requireScope,
@@ -163,10 +158,10 @@ export const sessionHandlers: McpHandlerMap = {
     // the old refusal guarded against — the fix is to answer AND say it was
     // inferred, not to withhold the answer.
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
-    // there is exactly one store for "what was this forked from".
-    const parentSessionId = await getParentSessionId(session.id);
+    // there is exactly one store for "what was this forked from". ONE
+    // projection, shared with the tRPC `focusSessions.get`.
     return ok({
-      session: { ...session, parentSessionId },
+      session: await withParentSessionId(session),
       ...(ambient?.ambiguous
         ? {
             inferred: true,
@@ -222,13 +217,10 @@ export const sessionHandlers: McpHandlerMap = {
       .where(and(...conditions))
       .orderBy(desc(focusSessions.startedAt))
       .limit(Math.min(Math.max(Math.trunc(rawLimit), 1), 50));
-    // Derived lineage for the whole page in ONE query (never N+1, never a column).
-    const parents = await getParentSessionIds(sessions.map((s) => s.id));
+    // Derived lineage for the whole page in ONE query (never N+1, never a
+    // column) — the same projection the tRPC `focusSessions.list` uses.
     return ok({
-      sessions: sessions.map((s) => ({
-        ...s,
-        parentSessionId: parents.get(s.id) ?? null,
-      })),
+      sessions: await attachParentSessionIds(sessions),
       count: sessions.length,
     });
   },

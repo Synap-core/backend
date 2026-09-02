@@ -148,6 +148,19 @@ export async function recordSessionSpawn(
  * Deliberately a derived read and never a column: the edge is the store, and a
  * `focus_sessions.parent_session_id` column would be a second copy of the same
  * fact. Returns null when the session was not spawned from anything.
+ *
+ * NO OWNER FLOOR HERE, and that is safe for exactly one reason: **every
+ * producer floors the parent on the CHILD's owner** — `recordSessionSpawn`
+ * above requires `focusSessions.userId === input.userId`, `createFocusSession`
+ * passes the creating user, `openRunSession` passes `input.userId`, and the
+ * approve executor passes the approver, who is also the row's `userId`. A
+ * `spawned_from` edge can therefore only ever connect two sessions with the
+ * SAME owner, so handing the parent id back to a caller who has already loaded
+ * the child through an owner-floored query discloses nothing new.
+ *
+ * That is a property of the WRITE side. A future producer that floors
+ * differently (or does not floor at all) silently turns this read into a
+ * cross-user disclosure — add the floor here before adding such a producer.
  */
 export async function getParentSessionId(
   sessionId: string
