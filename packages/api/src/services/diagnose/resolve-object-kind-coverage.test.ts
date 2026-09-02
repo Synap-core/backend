@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * non-null kind, including the two correlationId-based fallbacks.
  *
  * WHY THIS EXISTS: `resolveObjectKind` is an ORDERED probe (`PROBE_ORDER`)
- * across seven row-id kinds, plus two more fallbacks that key off
+ * across nine row-id kinds, plus two more fallbacks that key off
  * `proposals.correlationId` and `events.correlationId` when no row id matched.
  * `diagnose.test.ts` locks the PURE math (scorecard, global health) and
  * asserts `PROBE_ORDER`'s shape, but nothing exercised the probe function
@@ -70,6 +70,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import {
   automationRuns,
   capabilities,
+  documents,
   entities,
   events,
   focusSessions,
@@ -78,6 +79,7 @@ import {
   skills,
   tools,
   users,
+  views,
 } from "@synap/database";
 import { PROBE_ORDER, resolveObjectKind } from "./resolve-object-kind.js";
 
@@ -93,33 +95,59 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
   beforeEach(reset);
 
   it("proposal: a matching row id resolves to kind 'proposal'", async () => {
-    mockDb.__push(proposals, [{ one: 1 }]);
+    mockDb.__push(proposals, [
+      {
+        targetType: "entity",
+        targetId: "abcdef01-2345-4678-8abc-def012345678",
+      },
+    ]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "proposal", id: ID });
+    expect(result).toMatchObject({
+      kind: "proposal",
+      id: ID,
+      // `/resolve/:id` printed this exact label before it stopped probing for
+      // itself — the label moved with the probe, it was not re-invented.
+      displayName: "Proposal (entity:abcdef01…)",
+    });
   });
 
   it("session: a matching row id resolves to kind 'session'", async () => {
     mockDb.__push(proposals, []); // proposal probe misses
-    mockDb.__push(focusSessions, [{ one: 1 }]);
+    mockDb.__push(focusSessions, [{ goal: "Ship wave 3" }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "session", id: ID });
+    expect(result).toMatchObject({
+      kind: "session",
+      id: ID,
+      displayName: "Ship wave 3",
+    });
   });
 
   it("capability: a matching `capabilities` row resolves to kind 'capability'", async () => {
     mockDb.__push(proposals, []);
     mockDb.__push(focusSessions, []);
-    mockDb.__push(capabilities, [{ one: 1 }]);
+    mockDb.__push(capabilities, [{ name: "Send mail" }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "capability", id: ID });
+    expect(result).toMatchObject({
+      kind: "capability",
+      id: ID,
+      // WHICH table matched is load-bearing: `/resolve/:id` routes a
+      // capabilities row, a skills row and a tools row to THREE different
+      // browser doors. Collapsing them would send two of the three nowhere.
+      subKind: "capability",
+    });
   });
 
   it("capability: a bare `skills` row (no capabilities row) still resolves to kind 'capability'", async () => {
     mockDb.__push(proposals, []);
     mockDb.__push(focusSessions, []);
     mockDb.__push(capabilities, []);
-    mockDb.__push(skills, [{ one: 1 }]);
+    mockDb.__push(skills, [{ name: "summarize" }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "capability", id: ID });
+    expect(result).toMatchObject({
+      kind: "capability",
+      id: ID,
+      subKind: "skill",
+    });
   });
 
   it("capability: a bare `tools` row (no capabilities/skills row) still resolves to kind 'capability'", async () => {
@@ -127,9 +155,13 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(focusSessions, []);
     mockDb.__push(capabilities, []);
     mockDb.__push(skills, []);
-    mockDb.__push(tools, [{ one: 1 }]);
+    mockDb.__push(tools, [{ name: "gmail" }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "capability", id: ID });
+    expect(result).toMatchObject({
+      kind: "capability",
+      id: ID,
+      subKind: "tool",
+    });
   });
 
   it("automation_run: a matching row id resolves to kind 'automation_run'", async () => {
@@ -140,7 +172,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(tools, []);
     mockDb.__push(automationRuns, [{ one: 1 }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "automation_run", id: ID });
+    expect(result).toMatchObject({ kind: "automation_run", id: ID });
   });
 
   it("playbook_run: a matching row id resolves to kind 'playbook_run'", async () => {
@@ -152,7 +184,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, [{ one: 1 }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "playbook_run", id: ID });
+    expect(result).toMatchObject({ kind: "playbook_run", id: ID });
   });
 
   it("agent: a matching agent-user row resolves to kind 'agent'", async () => {
@@ -165,7 +197,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, [{ one: 1 }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "agent", id: ID });
+    expect(result).toMatchObject({ kind: "agent", id: ID });
   });
 
   it("entity: the broad catch-all resolves to kind 'entity'", async () => {
@@ -177,9 +209,55 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
-    mockDb.__push(entities, [{ one: 1 }]);
+    mockDb.__push(views, []);
+    mockDb.__push(documents, []);
+    mockDb.__push(entities, [{ title: "Acme", type: "company" }]);
     const result = await resolveObjectKind(ID, USER_ID);
-    expect(result).toEqual({ kind: "entity", id: ID });
+    expect(result).toMatchObject({
+      kind: "entity",
+      id: ID,
+      // Display metadata comes off the row the probe ALREADY matched — the
+      // consumer must never need a second per-kind lookup to print a title.
+      displayName: "Acme",
+      profileSlug: "company",
+    });
+  });
+
+  it("view: a matching row id resolves to kind 'view' (a probe that existed ONLY in the old /resolve list)", async () => {
+    mockDb.__push(proposals, []);
+    mockDb.__push(focusSessions, []);
+    mockDb.__push(capabilities, []);
+    mockDb.__push(skills, []);
+    mockDb.__push(tools, []);
+    mockDb.__push(automationRuns, []);
+    mockDb.__push(playbookRuns, []);
+    mockDb.__push(users, []);
+    mockDb.__push(views, [{ name: "Pipeline" }]);
+    const result = await resolveObjectKind(ID, USER_ID);
+    expect(result).toMatchObject({
+      kind: "view",
+      id: ID,
+      displayName: "Pipeline",
+    });
+  });
+
+  it("document: a matching row id resolves to kind 'document' (also absorbed from the old /resolve list)", async () => {
+    mockDb.__push(proposals, []);
+    mockDb.__push(focusSessions, []);
+    mockDb.__push(capabilities, []);
+    mockDb.__push(skills, []);
+    mockDb.__push(tools, []);
+    mockDb.__push(automationRuns, []);
+    mockDb.__push(playbookRuns, []);
+    mockDb.__push(users, []);
+    mockDb.__push(views, []);
+    mockDb.__push(documents, [{ title: "Q3 memo" }]);
+    const result = await resolveObjectKind(ID, USER_ID);
+    expect(result).toMatchObject({
+      kind: "document",
+      id: ID,
+      displayName: "Q3 memo",
+    });
   });
 
   it("PROBE_ORDER has exactly one test case per declared kind (this file stays honest as kinds are added)", () => {
@@ -192,6 +270,8 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       "automation_run",
       "playbook_run",
       "agent",
+      "view",
+      "document",
       "entity",
     ]);
   });
@@ -210,6 +290,8 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(views, []);
+    mockDb.__push(documents, []);
     mockDb.__push(entities, []);
     // ...but the correlationId fallback finds the proposal, and must return
     // its ROW id (not the correlationId the caller passed in).
@@ -218,6 +300,8 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
 
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toEqual({ kind: "proposal", id: proposalRowId });
+    // The fallbacks carry NO display metadata — they matched no display row,
+    // and fabricating one would be a claim nothing checked.
   });
 
   it("a capability_run ai_decision event's correlationId resolves to kind 'capability' (a direct/owner-bypass run with NO proposal)", async () => {
@@ -229,13 +313,13 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(views, []);
+    mockDb.__push(documents, []);
     mockDb.__push(entities, []);
     mockDb.__push(proposals, []); // correlationId fallback also misses
 
     const skillId = "00000000-0000-4000-8000-0000000000bb";
-    mockDb.__push(events, [
-      { data: { kind: "capability_run", skillId } },
-    ]);
+    mockDb.__push(events, [{ data: { kind: "capability_run", skillId } }]);
 
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toEqual({ kind: "capability", id: skillId });
@@ -250,6 +334,8 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(views, []);
+    mockDb.__push(documents, []);
     mockDb.__push(entities, []);
     mockDb.__push(proposals, []);
     mockDb.__push(events, []);

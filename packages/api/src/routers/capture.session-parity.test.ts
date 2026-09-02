@@ -144,3 +144,72 @@ describe("both doors reach the same verified handle", () => {
     expect(after).not.toContain("input.sessionId");
   });
 });
+
+describe("capture.execute stamps threadId onto the proposal", () => {
+  const captureSrc = readFileSync(join(HERE, "capture.ts"), "utf8");
+  const mcpSrc = readFileSync(join(HERE, "mcp/handlers/capture.ts"), "utf8");
+  const executeSrc = captureSrc.slice(
+    captureSrc.indexOf("  execute: podProcedure"),
+    captureSrc.indexOf("  executeWithSchema:")
+  );
+
+  it("execute input accepts optional threadId uuid", () => {
+    const inputBlock = executeSrc.slice(0, executeSrc.indexOf(".mutation("));
+    expect(inputBlock).toMatch(
+      /threadId:\s*z\.string\(\)\.uuid\(\)\.optional\(\)/
+    );
+  });
+
+  it("forwards input.threadId into checkPermissionOrPropose", () => {
+    const start = executeSrc.indexOf(
+      "const perm = await checkPermissionOrPropose({"
+    );
+    expect(start).toBeGreaterThan(-1);
+    const permCall = executeSrc.slice(
+      start,
+      executeSrc.indexOf("});", start) + 3
+    );
+    expect(permCall).toMatch(/threadId:\s*input\.threadId/);
+  });
+
+  it("returns threadId on both proposed and granted execute responses", () => {
+    const proposed = executeSrc.slice(
+      executeSrc.indexOf('if ("proposalId" in perm)'),
+      executeSrc.indexOf("Identity-first:")
+    );
+    expect(proposed).toMatch(/threadId:\s*input\.threadId/);
+    const grantedReturn = executeSrc.slice(executeSrc.lastIndexOf("return {"));
+    expect(grantedReturn).toMatch(/threadId:\s*input\.threadId/);
+  });
+
+  it("auto-approved recorder also receives threadId so receipts land on the channel", () => {
+    const start = executeSrc.indexOf("await createAutoApprovedProposal({");
+    expect(start).toBeGreaterThan(-1);
+    const call = executeSrc.slice(start, start + 2500);
+    expect(call).toMatch(/threadId:\s*input\.threadId/);
+  });
+
+  it("MCP opens a capture RUN channel before execute and passes channel.id as threadId", () => {
+    const execIdx = mcpSrc.indexOf(
+      "const executed = await captureCaller.execute({"
+    );
+    expect(execIdx).toBeGreaterThan(-1);
+    const before = mcpSrc.slice(0, execIdx);
+    const execCall = mcpSrc.slice(execIdx, mcpSrc.indexOf("});", execIdx) + 3);
+    expect(before).toMatch(/openProcessChannel\(/);
+    expect(before).toMatch(/flowType:\s*["']capture["']/);
+    expect(before).toMatch(/idempotencyKey:\s*["']user-input["']/);
+    expect(execCall).toMatch(/threadId:\s*channel\.id/);
+  });
+
+  it("MCP posts an assistant receipt after execute and does not wait for approval", () => {
+    const execIdx = mcpSrc.indexOf(
+      "const executed = await captureCaller.execute({"
+    );
+    const after = mcpSrc.slice(execIdx);
+    expect(after).toMatch(/openProcessChannel\(/);
+    expect(after).toMatch(/Queued for your review/);
+    expect(after).toMatch(/Saved \$\{/);
+    expect(after).not.toMatch(/waitForApproval|await.*approv/i);
+  });
+});

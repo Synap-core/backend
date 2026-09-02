@@ -1754,6 +1754,12 @@ export const captureRouter = router({
          */
         sessionId: z.string().uuid().optional(),
         /**
+         * Intake / RUN channel this capture is narrated on. Stamped onto the
+         * proposal (`proposals.threadId`) so chat can show pending AND
+         * auto-approved receipts. Optional — absent = today's unthreaded write.
+         */
+        threadId: z.string().uuid().optional(),
+        /**
          * Propose mode ("Capture updates on this entity"). When truthy, the
          * extracted changes are filed as reviewable, user-owned PROPOSALS through
          * the governed forcePropose door instead of written directly — an entity
@@ -2161,6 +2167,7 @@ export const captureRouter = router({
         correlationId: captureId,
         sessionId: sessionId ?? undefined,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        threadId: input.threadId,
         // Deterministic only — an AI-suggested project must never ride the gate
         // into a stamp-on-approve auto-link.
         projectId: resolvedProjectId ?? undefined,
@@ -2193,6 +2200,7 @@ export const captureRouter = router({
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
+          threadId: input.threadId,
         };
       }
 
@@ -2718,6 +2726,7 @@ export const captureRouter = router({
             // header and fall back to an UNVALIDATED body value; that follow-up
             // is now done, so both doors are equally trusted here.
             ...(sessionId ? { sessionId } : {}),
+            ...(input.threadId ? { threadId: input.threadId } : {}),
             // The deterministically-resolved project (already LINKED above), or —
             // when none resolved — the AI's advisory suggestion. This is an
             // auto_approved RECORD (createAutoApprovedProposal never stamps
@@ -2974,6 +2983,7 @@ export const captureRouter = router({
         // so the caller (and a diagnose query keyed on captureId) can see "filed
         // N, dropped M facets — why". Empty array on the happy path.
         captureId,
+        threadId: input.threadId,
         ...(facetsFailed.length ? { facetsFailed } : {}),
         // Relation ops submitted but never created (bad ref / DB failure) — the
         // honest gap behind `relations.length < requested relation count`.

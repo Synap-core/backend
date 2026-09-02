@@ -24,7 +24,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  // PARTIAL mock (`importOriginal` + spread), deliberately. This used to be a
+  // TOTAL replacement returning only the handful of exports the auth middleware
+  // touched — and a total mock breaks the moment ANY module in the import graph
+  // reaches for an export the object does not list, with an error that names
+  // the export rather than the cause ("No \"isNull\" export is defined on the
+  // @synap/database mock"). That is exactly what happened when `/resolve/:id`
+  // stopped carrying its own probe list and began importing `resolveObjectKind`:
+  // a file this suite never mentions pulled a new drizzle helper into the graph
+  // and killed the whole suite. Spreading the real module makes the stub
+  // additive, so only `db` is fake.
+  const actual = await importOriginal<typeof import("@synap/database")>();
+
   // Tiny chainable stub — we only need .select(...).from(...).leftJoin(...).where(...)
   // to resolve to an array. The auth middleware itself uses `apiKeyService`,
   // which we mock separately.
@@ -42,23 +54,12 @@ vi.mock("@synap/database", () => {
   const select = vi.fn(() => makeQueryBuilder(nextRows));
 
   return {
+    ...actual,
     db: {
       select,
       _setRows: (rows: unknown[]) => {
         nextRows = rows;
       },
-    },
-    apiKeys: { id: "id" },
-    users: { id: "id" },
-    eq: vi.fn((a, b) => ({ type: "eq", a, b })),
-    ChannelType: {
-      THREAD: "thread",
-      PERSONAL: "personal",
-      SUB_THREAD: "sub_thread",
-      FEED: "feed",
-      EXTERNAL: "external",
-      AGENT_COLLAB: "agent_collab",
-      GROUP: "group",
     },
   };
 });

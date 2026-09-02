@@ -27,6 +27,10 @@ import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
 import {
+  newProcessFlowId,
+  openProcessChannel,
+} from "../../../services/messaging/open-process-channel.js";
+import {
   ok,
   requireScope,
   CaptureScope,
@@ -610,6 +614,24 @@ const captureHandler: McpToolHandler = async (
   // Workspace routing is centralized in captureCaller.execute (see
   // resolveCaptureRouting): the adapter just forwards the AI's structure
   // hints + the caller's mode, so MCP routes identically to every other door.
+  //
+  // Intake RUN channel — separate from the personal chat. Seed the user
+  // capture, stamp the proposal onto this thread, then narrate the receipt
+  // (pending OR auto-approved). Do not wait for approval.
+  const intakeFlowId = newProcessFlowId();
+  const { channel } = await openProcessChannel({
+    userId,
+    flowType: "capture",
+    flowId: intakeFlowId,
+    workspaceId: captureWsId ?? null,
+    seedMessages: [
+      {
+        role: "user",
+        content: captureRawText,
+        idempotencyKey: "user-input",
+      },
+    ],
+  });
   const executed = await captureCaller.execute({
     // Idempotency keyed on the RAW TEXT, because this door is the only place
     // that still holds it. Everything below has already passed through the
@@ -659,6 +681,7 @@ const captureHandler: McpToolHandler = async (
     // deduped into an existing entity left no edge back to the session that
     // produced it, which is exactly the case a session dashboard needs most.
     ...(sessionId ? { sessionId } : {}),
+    threadId: channel.id,
     // Rung 1 of the placement ladder: a caller-pinned workspace (explicit
     // `args.workspaceId`, or a bound service key's confinement) must WIN over
     // ontology/session/relational routing, not just seed the ambient lens.
@@ -710,7 +733,42 @@ const captureHandler: McpToolHandler = async (
       status: "linked" | "proposed" | "not_linked";
       reason?: string;
     };
+    created?: Array<{ title?: string }>;
+    threadId?: string;
   };
+
+  const intakeTitles = (mergedProposals as Array<{ title?: string }>)
+    .map((p) => p.title?.trim())
+    .filter((t): t is string => Boolean(t));
+  const appliedCount = Array.isArray(ex.created) ? ex.created.length : 0;
+  const assistantReceipt =
+    ex.status === "proposed" || ex.proposalId
+      ? ex.reviewUrl
+        ? `Queued for your review\n${ex.reviewUrl}`
+        : "Queued for your review"
+      : `Saved ${appliedCount || intakeTitles.length} things${
+          intakeTitles.length ? `\n${intakeTitles.join("\n")}` : ""
+        }`;
+  try {
+    await openProcessChannel({
+      userId,
+      flowType: "capture",
+      flowId: intakeFlowId,
+      workspaceId: captureWsId ?? null,
+      seedMessages: [
+        {
+          role: "assistant",
+          content: assistantReceipt,
+          idempotencyKey: "assistant-receipt",
+        },
+      ],
+    });
+  } catch (err) {
+    logger.warn(
+      { err, flowId: intakeFlowId, channelId: channel.id },
+      "capture intake receipt failed to post (capture preserved)"
+    );
+  }
 
   // GOVERNANCE MAY HAVE ROUTED THIS TO REVIEW — say so.
   //
@@ -737,6 +795,7 @@ const captureHandler: McpToolHandler = async (
         projectId: captureProjectId,
         sessionId: sessionId ?? null,
       },
+      threadId: channel.id,
       ...(ex.proposalId ? { proposalId: ex.proposalId } : {}),
       ...(ex.proposalType ? { proposalType: ex.proposalType } : {}),
       ...(ex.reviewUrl ? { reviewUrl: ex.reviewUrl } : {}),
@@ -782,6 +841,7 @@ const captureHandler: McpToolHandler = async (
       projectId: landedProjectId,
       sessionId: sessionId ?? null,
     },
+    threadId: channel.id,
     writeReceipt: textReceipt,
     // The note LANDED, so the receipt is honestly "applied" — but what landed
     // is a raw note, not the structured thing the caller asked for. Say both.

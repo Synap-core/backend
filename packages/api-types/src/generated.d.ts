@@ -8789,6 +8789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
 				sessionId?: string | undefined;
+				threadId?: string | undefined;
 				propose?: boolean | undefined;
 				anchorEntityId?: string | undefined;
 			};
@@ -8806,6 +8807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: undefined;
 				reviewPath?: undefined;
 				reviewUrl?: undefined;
+				threadId?: undefined;
 			} | {
 				status: "proposed";
 				message: string;
@@ -8818,6 +8820,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning: string;
 				reviewPath: string;
 				reviewUrl: string;
+				threadId: string | undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
 			} | {
@@ -8854,6 +8857,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
 				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
@@ -8898,6 +8902,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
 				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
@@ -8942,6 +8947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
 				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
@@ -8980,6 +8986,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
 				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;

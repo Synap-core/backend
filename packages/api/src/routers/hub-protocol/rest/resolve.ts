@@ -85,7 +85,7 @@ const ResolveResponseSchema = z
      * Only runs use one today (`flowType`), because a run is addressed by
      * `{flowType, runId}` and the id alone does not identify it.
      */
-    params: z.record(z.string()).optional(),
+    params: z.record(z.string(), z.string()).optional(),
   })
   .openapi("ResolveResponse");
 

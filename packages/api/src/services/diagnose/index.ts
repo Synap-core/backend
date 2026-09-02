@@ -20,14 +20,18 @@
 import {
   db,
   and,
+  or,
   eq,
   desc,
   isNull,
+  isNotNull,
   drizzleSql,
   proposals,
   focusSessions,
   capabilities,
   entities,
+  views,
+  documents,
   users,
   skills,
   tools,
@@ -36,6 +40,7 @@ import {
 } from "@synap/database";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import type { ProposalRevision } from "@synap/database";
+import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
@@ -433,6 +438,77 @@ async function diagnoseObject(
           type: row.type,
           workspaceId: row.workspaceId,
         },
+        why: null,
+      };
+    }
+
+    // `view` and `document` joined `ObjectKind` when `/resolve/:id` stopped
+    // keeping its own probe list (they existed only there). They get their own
+    // arms rather than falling to the `default` below: a kind the prober can
+    // detect but the explainer answers with "No object handler for kind view"
+    // is a worse answer than the one it replaced. Floors mirror the probes.
+    case "view": {
+      const [row] = await db
+        .select({
+          name: views.name,
+          type: views.type,
+          workspaceId: views.workspaceId,
+        })
+        .from(views)
+        .where(
+          and(
+            eq(views.id, id),
+            or(
+              and(isNull(views.workspaceId), eq(views.userId, userId)),
+              and(
+                isNotNull(views.workspaceId),
+                userVisibleWhere(views.workspaceId, userId)
+              )
+            )
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "View not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `View "${row.name}" (${row.type})`,
+        state: {
+          name: row.name,
+          type: row.type,
+          workspaceId: row.workspaceId,
+        },
+        why: null,
+      };
+    }
+
+    case "document": {
+      const [row] = await db
+        .select({
+          title: documents.title,
+          workspaceId: documents.workspaceId,
+        })
+        .from(documents)
+        .where(
+          and(
+            eq(documents.id, id),
+            accessScopeWhere({
+              workspaceIdColumn: documents.workspaceId,
+              entityIdColumn: documents.id,
+              ownerColumn: documents.userId,
+              userId,
+            })
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "Document not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `Document "${row.title}"`,
+        state: { title: row.title, workspaceId: row.workspaceId },
         why: null,
       };
     }

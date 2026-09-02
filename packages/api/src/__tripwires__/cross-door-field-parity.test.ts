@@ -509,7 +509,13 @@ function callSiteLabel(
 /** Every `z.object({ … })` region in a file — the declared response contract. */
 function schemaRegions(src: string): string {
   const out: string[] = [];
-  const re = /z\.object\(/g;
+  // WHITESPACE-TOLERANT. Prettier breaks a chained builder as `z\n  .object({`,
+  // and a `/z\.object\(/` pattern sees NONE of those: `capabilities-execute.ts`
+  // has 0 literal `z.object(` and 4 chained ones, so its three declared
+  // response schemas were entirely invisible here (`knowledge.ts` hides 5 more
+  // the same way). A formatter's line break must not be able to erase a
+  // declared contract from this audit.
+  const re = /z\s*\.\s*object\s*\(/g;
   for (const m of src.matchAll(re)) {
     const open = src.indexOf("{", m.index! + m[0].length - 1);
     if (open >= 0) out.push(sliceBalanced(src, open));
@@ -602,7 +608,9 @@ function forwardsWholeResult(region: string, fn: string): boolean {
  */
 function declaresResponseSchema(source: string): boolean {
   return (
-    /z\.object\(/.test(source) && /\.openapi\(|registerOpenApi\(/.test(source)
+    // Same whitespace tolerance as `schemaRegions` — see the note there.
+    /z\s*\.\s*object\s*\(/.test(source) &&
+    /\.openapi\(|registerOpenApi\(/.test(source)
   );
 }
 
@@ -756,6 +764,30 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
    * the registration helper's signature fails here loudly instead of quietly
    * disarming the rule.
    */
+  /**
+   * SELF-GUARD for the schema-region pattern.
+   *
+   * `capabilities-execute.ts` declares three response schemas and contains
+   * ZERO literal `z.object(` — Prettier formats every one as `z\n  .object({`.
+   * A `/z\.object\(/` pattern therefore saw no schema in that file at all, so
+   * both `declaresResponseSchema` and `schemaRegions` reported it as declaring
+   * nothing. A formatter's line break must never be able to erase a declared
+   * contract from this audit; `knowledge.ts` hides five more the same way.
+   */
+  it("schema regions survive a chained `z\\n.object({` formatting", () => {
+    const chained =
+      'const S = z\n  .object({ reviewUrl: z.string() })\n  .openapi("S");';
+    expect(
+      declaresResponseSchema(chained),
+      "a chained builder must still count as declaring a response schema"
+    ).toBe(true);
+    expect(
+      schemaRegions(chained),
+      "the chained schema's fields must be extractable, or every field in it " +
+        "silently reads as undeclared"
+    ).toMatch(/reviewUrl/);
+  });
+
   it("the declared-schema disqualifier actually fires on a path-labelled Hub door", () => {
     const door = AUDITS.flatMap((a) => a.discovery.doors).find((d) =>
       d.id.endsWith("rest/capabilities-execute.ts:/capabilities/execute")
