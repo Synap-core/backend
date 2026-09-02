@@ -731,8 +731,13 @@ export async function applyMarketInstall(
                 .map((s) => slugToProfileId.get(s))
                 .filter((id): id is string => Boolean(id));
         // W4a source-link: `fields` = the reconcilable values written from the
-        // definition (the merge baseline) — MUST equal what create()/update()
-        // receives for an honest 3-way merge.
+        // definition (the merge baseline). The invariant is `fields` ⊆ the
+        // UPDATE door's write-set: the reconcile derives its desired set from
+        // exactly these keys and replays them through views.update, so a key the
+        // update input cannot write is stripped, yet the baseline advances as if
+        // applied — a permanent false "user-edited" classification. (It is NOT
+        // "equal to create()": create also writes `description` and
+        // `scopeProfileIds`, which are deliberately unmanaged here.)
         const fields = {
           name,
           type: v.type,

@@ -2449,13 +2449,13 @@ export const tools = {
       {
         name: "synap_create_skill",
         annotations: {
-          title: "Create code skill",
+          title: "Create skill",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Author a runnable CODE skill — a sandboxed executable (plus its docs) the agent can later run, e.g. a custom transform/enrichment that no connected-service verb covers. Use this when you need CODE; for a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed the same as every write: an agent create returns status='proposed'. Once approved, a code skill is born UNAPPROVED — it does NOT load or run as a tool until the owner explicitly approves it (code executes, so it needs a deliberate human OK). `code` is required.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2468,15 +2468,20 @@ export const tools = {
               type: "string",
               description: "One line: what it does + when to use it.",
             },
+            slug: {
+              type: "string",
+              description:
+                "Stable ref that synap_load_skill resolves, lowercase path segments (e.g. 'biz/business-plan'). REQUIRED for a documentation-only skill — without it the skill is authored but unreachable. Pod-wide unique; 'system/' is reserved for seeded skills.",
+            },
             code: {
               type: "string",
               description:
-                "The executable source (runs sandboxed). REQUIRED — this is what makes it a code skill.",
+                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill.",
             },
             body: {
               type: "string",
               description:
-                "Optional Markdown documentation: how the skill works, inputs/outputs, when to use it.",
+                "Markdown documentation — for a teaching skill this IS the skill: the process/checklist/style an agent should follow. For a code skill, how it works, inputs/outputs, when to use it. Required unless `code` is given.",
             },
             parameters: {
               type: "object",
@@ -2489,7 +2494,7 @@ export const tools = {
                 "Optional workspace to scope the skill to (default: pod-wide).",
             },
           },
-          required: ["name", "code"],
+          required: ["name"],
         },
       },
       {

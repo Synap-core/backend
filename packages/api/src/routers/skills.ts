@@ -590,6 +590,24 @@ export const skillsRouter = router({
           .optional(),
         scope: z.enum(["pod", "user", "workspace"]).default("pod"),
         agentTypes: z.array(z.string()).optional(),
+        /** Stable ref `load_skill` resolves by (e.g. "biz/business-plan").
+         *  Without one, a documentation skill is authored but unreachable:
+         *  `resolveSkillContent` matches on `slug` ONLY. `system/` is reserved
+         *  for seeded skills — a user row there would shadow them (that
+         *  resolver ORs `system/<stem>` against a user-visible row, LIMIT 1). */
+        slug: z
+          .string()
+          .min(1)
+          .max(255)
+          .regex(
+            /^[a-z0-9]+(?:[-_.][a-z0-9]+)*(?:\/[a-z0-9]+(?:[-_.][a-z0-9]+)*)*$/,
+            "slug must be lowercase path segments, e.g. 'biz/business-plan'"
+          )
+          .refine((s) => !s.startsWith("system/"), {
+            message:
+              "the 'system/' slug namespace is reserved for seeded skills",
+          })
+          .optional(),
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         /** Documentation (Markdown): what the skill does + when to use it. */
@@ -672,6 +690,7 @@ export const skillsRouter = router({
           kind,
           scope: input.scope,
           agentTypes: input.agentTypes ?? null,
+          slug: input.slug ?? null,
           name: input.name,
           description: input.description,
           body: input.body ?? null,
@@ -701,6 +720,15 @@ export const skillsRouter = router({
       //    no side effects → born approved. `code` skills execute → born draft
       //    (DEFAULT false) and require an owner to approve before they run or
       //    load as agent tools.
+      //    …but ONLY for a trusted human author. An AGENT-initiated instruction
+      //    skill is born UNAPPROVED: its body lands in a future agent's system
+      //    prompt, so prose is a prompt-injection vector exactly as code is an
+      //    execution one. This mirrors `insertSkillGoverned`'s rule verbatim
+      //    (`kind === "instruction" && !agentUserId`); the two born-approved
+      //    decisions MUST stay identical or this direct path becomes the
+      //    bypass the shared door exists to prevent. Normally an agent create
+      //    returns `proposed` before reaching here — this closes the case where
+      //    a governance rule has widened `skill/create` to auto for an agent.
       const [skill] = await db
         .insert(skills)
         .values({
@@ -712,6 +740,7 @@ export const skillsRouter = router({
           kind,
           scope: input.scope,
           agentTypes: input.agentTypes ?? null,
+          slug: input.slug ?? null,
           name: input.name,
           description: input.description,
           body: input.body ?? null,
@@ -726,7 +755,7 @@ export const skillsRouter = router({
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),
           status: "active",
-          approved: kind === "instruction",
+          approved: kind === "instruction" && !input.agentUserId,
         })
         .returning();
 
@@ -781,6 +810,17 @@ export const skillsRouter = router({
         body: z.string().optional(),
         /** Optional executable; empty clears it (doc-only). */
         code: z.string().optional(),
+        /**
+         * Declarative provider-verb spec (kind="declarative") — mirrors `create`.
+         * Updatable because a published template fix to a declarative skill's
+         * provider spec must be able to REACH an already-installed row: the
+         * standalone-config reconcile builds its desired set from the install
+         * baseline's keys, and `providerSpec` is one of them. Absent here, zod
+         * stripped it silently — the reconcile then advanced the baseline and
+         * reported `updated: [providerSpec]` for a row it never changed, which
+         * classifies the field as user-edited forever.
+         */
+        providerSpec: z.record(z.string(), z.unknown()).optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).optional(),
@@ -862,6 +902,12 @@ export const skillsRouter = router({
       // re-pointed to execute untrusted code.
       const RE_APPROVAL_FIELDS = [
         "code",
+        // For a `declarative` skill the providerSpec IS the executable — it
+        // defines the HTTP call (baseUrl, method, path, headers). Re-pointing it
+        // is `code`'s equivalent, so it must reset approval too; without this,
+        // making it updatable would let an approved declarative skill be
+        // silently aimed at a different endpoint while staying approved.
+        "providerSpec",
         "parameters",
         "executionMode",
         "timeoutSeconds",
@@ -895,11 +941,20 @@ export const skillsRouter = router({
         }
       }
 
+      // The column is typed `ProviderVerbSpec`; the input accepts the open
+      // `z.record` shape the spec is stored as. Narrow it for the write — same
+      // cast `create` applies above — WITHOUT peeling it off `updateData`, which
+      // the RE_APPROVAL_FIELDS check and the audit payload both read.
+      const columnPatch = updateData as Omit<
+        typeof updateData,
+        "providerSpec"
+      > & { providerSpec?: ProviderVerbSpec };
+
       // 2. Direct DB operation
       const [_updated] = await db
         .update(skills)
         .set({
-          ...updateData,
+          ...columnPatch,
           // Shallow-merge the metadata patch onto the existing bag (never replace)
           // — same semantics as views/automations update.
           ...(metadataPatch

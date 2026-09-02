@@ -537,6 +537,12 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           },
           version: { type: "string" },
           params: { type: "object" },
+          // RC4 payload-in: the already-resolved package definition, so a
+          // private package installs without the unauthenticated by-slug CP
+          // fetch (which 404s for private). Advertised because the handler
+          // already ACCEPTS it — an accepted-but-unadvertised param is the
+          // exact undiscoverable state this catalog exists to prevent.
+          definition: { type: "object" },
         },
       },
     },

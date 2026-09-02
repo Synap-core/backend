@@ -552,10 +552,33 @@ export const buildHandlers: McpHandlerMap = {
     if (typeof args.name !== "string" || args.name.trim() === "") {
       return ok({ error: "name is required" });
     }
-    if (typeof args.code !== "string" || args.code.trim() === "") {
+    // A skill is Documentation (always) + OPTIONAL code — the router derives
+    // `kind` from code presence (`skills.ts`: hasCode ? "code" : "instruction").
+    // So this door requires documentation-or-code, never code specifically: a
+    // prose-only skill is a first-class teaching skill that `synap_load_skill`
+    // resolves BY SLUG, which is why `slug` is required when there is no code.
+    const skillCode =
+      typeof args.code === "string" && args.code.trim() !== ""
+        ? args.code
+        : undefined;
+    const skillBody =
+      typeof args.body === "string" && args.body.trim() !== ""
+        ? args.body
+        : undefined;
+    if (!skillCode && !skillBody) {
       return ok({
         error:
-          "code is required — synap_create_skill authors a runnable (sandboxed) code skill. For a declarative provider-HTTP verb use synap_create_verb instead.",
+          "a skill needs documentation or code — pass `body` (Markdown) to author a teaching skill, `code` to author a runnable one, or both.",
+      });
+    }
+    const skillSlug =
+      typeof args.slug === "string" && args.slug.trim() !== ""
+        ? args.slug.trim()
+        : undefined;
+    if (!skillCode && !skillSlug) {
+      return ok({
+        error:
+          "slug is required for a documentation-only skill — it is the ref synap_load_skill resolves (e.g. 'biz/business-plan'). Without one the skill is authored but unreachable.",
       });
     }
     const skillWorkspaceId =
@@ -570,18 +593,20 @@ export const buildHandlers: McpHandlerMap = {
     );
     const skillsCaller = regularSkillsRouter.createCaller(skillsCtx as never);
     // GOVERNED (skillsRouter.create → checkPermissionOrPropose { skill, create }).
-    // With agentUserId set, an agent create returns status:"proposed". On
-    // approval the code skill is born UNAPPROVED (approved = kind==="instruction"
-    // → false for code): it does NOT load or run as an agent tool until the
-    // owner explicitly approves it. Same governance every skill-create door uses.
+    // With agentUserId set, an agent create returns status:"proposed". Either
+    // way the skill is born UNAPPROVED whenever an agent authored it — code
+    // executes, and instruction PROSE lands in a future agent's system prompt,
+    // so both are born draft and need an explicit owner approval before they
+    // run or load. `kind` is deliberately NOT passed: the router derives it from
+    // code presence, so passing it here would fork that derivation.
     const result = await skillsCaller.create({
       workspaceId: skillWorkspaceId,
-      kind: "code",
       scope: skillWorkspaceId ? "workspace" : "pod",
+      slug: skillSlug,
       name: args.name,
       description: args.description as string | undefined,
-      body: args.body as string | undefined,
-      code: args.code,
+      body: skillBody,
+      code: skillCode,
       parameters: args.parameters as Record<string, unknown> | undefined,
       agentUserId: agentUserId ?? undefined,
     });

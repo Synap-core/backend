@@ -18745,6 +18745,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind?: "code" | "instruction" | "declarative" | "builtin" | undefined;
 				scope?: "user" | "workspace" | "pod" | undefined;
 				agentTypes?: string[] | undefined;
+				slug?: string | undefined;
 				description?: string | undefined;
 				body?: string | undefined;
 				code?: string | undefined;
@@ -18778,6 +18779,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				body?: string | undefined;
 				code?: string | undefined;
+				providerSpec?: Record<string, unknown> | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				category?: string | undefined;
 				executionMode?: "sync" | "async" | undefined;

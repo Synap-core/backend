@@ -16,25 +16,43 @@
 import { and, eq, inArray, isNull, like, or } from "drizzle-orm";
 import { db, skills } from "@synap/database";
 
-export async function loadSkillCatalog(): Promise<string> {
+/**
+ * @param userId Caller — their OWN authored teaching skills are listed
+ *   alongside the seeded `system/*` ones. Omitting it lists system skills only.
+ *   A catalog that hides user-authored skills makes them unfindable in
+ *   practice: an agent that cannot see a skill never thinks to load it, so the
+ *   authoring door would be built and severed at the discovery step.
+ */
+export async function loadSkillCatalog(userId?: string): Promise<string> {
   const rows = await db
     .select({
       slug: skills.slug,
       description: skills.description,
       skillGroup: skills.skillGroup,
+      userId: skills.userId,
     })
     .from(skills)
     .where(
       and(
         eq(skills.kind, "instruction"),
-        isNull(skills.workspaceId),
-        like(skills.slug, "system/%")
+        eq(skills.status, "active"),
+        // Same approval floor `resolveSkillContent` enforces — never advertise
+        // a skill the resolver would then refuse to hand over.
+        eq(skills.approved, true),
+        userId
+          ? or(
+              and(isNull(skills.workspaceId), like(skills.slug, "system/%")),
+              eq(skills.userId, userId)
+            )
+          : and(isNull(skills.workspaceId), like(skills.slug, "system/%"))
       )
     );
 
   const byGroup = new Map<string, string[]>();
   for (const r of rows) {
-    const group = r.skillGroup ?? "core";
+    if (!r.slug) continue; // unreachable by ref → never advertise it
+    const isSystem = r.slug.startsWith("system/");
+    const group = isSystem ? (r.skillGroup ?? "core") : "yours";
     const line = `${r.slug} — ${r.description ?? r.slug}`;
     if (!byGroup.has(group)) byGroup.set(group, []);
     byGroup.get(group)!.push(line);
@@ -50,7 +68,7 @@ export async function resolveSkillContent(
   ref: string,
   userId: string
 ): Promise<string> {
-  if (ref === "catalog") return loadSkillCatalog();
+  if (ref === "catalog") return loadSkillCatalog(userId);
 
   // Seeded slugs have no extension (`ensureSystemSkills` strips it), but the
   // always-on session instructions spliced from `skills/synap/reflexes.md` refer
