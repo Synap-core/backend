@@ -678,7 +678,27 @@ export const proposalsRouter = router({
       }
 
       const groups = clusters.slice(0, limit);
-      return { groups };
+      // The two numbers a caller cannot recover from `groups` alone, both
+      // already computed here and otherwise thrown away.
+      //
+      // `groups.length` is a PAGE SIZE (`limit` defaults to 50) — reading it as
+      // "how many distinct things are waiting" under-reports the moment the
+      // queue exceeds it, which on the dogfood pod it does: 105 clusters over
+      // 680 rows. And `scanned` is the honest row total, which the flat
+      // `proposals.list` cannot supply at all because it runs no COUNT.
+      //
+      // `scanTruncated` is the load-bearing one: at the scan cap BOTH numbers
+      // become floors rather than totals, and a surface that renders them as
+      // exact would be stating something false. Callers must degrade to "N+".
+      return {
+        groups,
+        /** Distinct fingerprints BEFORE the `limit` slice. */
+        distinct: clusters.length,
+        /** Pending rows actually scanned — the row total while not truncated. */
+        scanned: rows.length,
+        /** The scan hit `scanLimit`: `distinct`/`scanned` are FLOORS, not totals. */
+        scanTruncated: rows.length >= scanLimit,
+      };
     }),
 
   /**

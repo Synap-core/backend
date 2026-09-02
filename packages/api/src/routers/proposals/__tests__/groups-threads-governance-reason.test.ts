@@ -64,3 +64,48 @@ describe("proposals.groups carries the escalation cause", () => {
     ).toBe(true);
   });
 });
+
+/**
+ * `groups` must report the two numbers a caller cannot recover from its rows.
+ *
+ * Source-level for the same reason as the threading pin above: the procedure
+ * needs a live DB to invoke, and these fields are additive, so dropping one is
+ * invisible to `tsc` and to every existing test.
+ *
+ * Why it matters: `groups.length` is a PAGE SIZE — `limit` defaults to 50 while
+ * the dogfood pod has 105 clusters over 680 rows — so a surface reading it as
+ * "distinct things waiting" silently under-reports by half. The flat
+ * `proposals.list` cannot supply the row total either: it runs no COUNT, so its
+ * `pagination.total` is undefined and its `count` saturates at one page. These
+ * three fields are the only honest source for "670 waiting, 105 distinct".
+ */
+describe("proposals.groups reports its own limits", () => {
+  const body = (() => {
+    const src = readFileSync(ROUTER, "utf8");
+    const start = src.indexOf("groups: protectedProcedure");
+    const next = src.indexOf(": protectedProcedure", start + 30);
+    return next === -1 ? src.slice(start) : src.slice(start, next);
+  })();
+
+  it("returns `distinct` — clusters BEFORE the limit slice", () => {
+    expect(
+      /distinct:\s*clusters\.length/.test(body),
+      "without this, a caller reads `groups.length` (a page size) as the " +
+        "distinct count and under-reports every queue larger than `limit`"
+    ).toBe(true);
+  });
+
+  it("returns `scanned` — the row total the flat list cannot give", () => {
+    expect(/scanned:\s*rows\.length/.test(body)).toBe(true);
+  });
+
+  it("declares when the scan was TRUNCATED", () => {
+    // The honesty hinge: at the scan cap both numbers are floors, and a badge
+    // rendering them as exact states something false.
+    expect(
+      /scanTruncated:\s*rows\.length >= scanLimit/.test(body),
+      "a truncated scan must be distinguishable from a complete one, or a " +
+        "capped count is indistinguishable from a true one"
+    ).toBe(true);
+  });
+});

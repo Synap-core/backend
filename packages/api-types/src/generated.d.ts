@@ -11475,6 +11475,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				groups: ProposalCluster[];
+				distinct: number;
+				scanned: number;
+				scanTruncated: boolean;
 			};
 			meta: object;
 		}>;
