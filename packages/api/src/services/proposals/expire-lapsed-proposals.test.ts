@@ -27,25 +27,28 @@ describe("selectLapsedIds", () => {
 
   it("expires an ephemeral run past its 24h backstop", () => {
     // The real shape: 441 capability runs, median age 11.7 days.
-    const out = selectLapsedIds([row("a", "run", "capability", 24 * 12)], NOW);
+    const out = selectLapsedIds(
+      [row("a", "capability.run", "capability", 24 * 12)],
+      NOW
+    );
     expect(out).toEqual(["a"]);
   });
 
   it("keeps an ephemeral run that is still within its window", () => {
     // Proposed at 6pm, reviewed next morning — must survive.
-    expect(selectLapsedIds([row("a", "run", "capability", 15)], NOW)).toEqual(
-      []
-    );
+    expect(
+      selectLapsedIds([row("a", "capability.run", "capability", 15)], NOW)
+    ).toEqual([]);
   });
 
   it("a run exactly AT the limit is still answerable", () => {
     // Strictly greater-than. A boundary that expires is a decision lost to
     // rounding.
-    expect(selectLapsedIds([row("a", "run", "capability", 24)], NOW)).toEqual(
-      []
-    );
     expect(
-      selectLapsedIds([row("a", "run", "capability", 24.001)], NOW)
+      selectLapsedIds([row("a", "capability.run", "capability", 24)], NOW)
+    ).toEqual([]);
+    expect(
+      selectLapsedIds([row("a", "capability.run", "capability", 24.001)], NOW)
     ).toEqual(["a"]);
   });
 
@@ -79,15 +82,15 @@ describe("selectLapsedIds", () => {
 
   it("a run against a NON-capability target is not ephemeral", () => {
     expect(
-      selectLapsedIds([row("x", "run", "playbook", 24 * 999)], NOW)
+      selectLapsedIds([row("x", "capability.run", "playbook", 24 * 999)], NOW)
     ).toEqual([]);
   });
 
   it("selects only the lapsed rows out of a mixed queue", () => {
     const out = selectLapsedIds(
       [
-        row("old-run", "run", "capability", 240),
-        row("new-run", "run", "capability", 2),
+        row("old-run", "capability.run", "capability", 240),
+        row("new-run", "capability.run", "capability", 2),
         row("merge", "merge", "entity", 240),
         row("create", "create", "entity", 240),
       ],

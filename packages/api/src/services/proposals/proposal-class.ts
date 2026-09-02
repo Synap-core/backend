@@ -59,8 +59,12 @@ export function classifyProposal(
   proposalType: string,
   targetType: string
 ): ProposalClass {
-  // A capability run is an outbound call bound to a live session.
-  if (proposalType === "run" && targetType === "capability") return "ephemeral";
+  // A capability run is an outbound call bound to a live session. The literal
+  // is the one `execute-capability.ts` writes (`capability.run`); a test scans
+  // that source so the two can never drift — they did once, and the class
+  // table silently filed every run as objectWork, which never expires.
+  if (proposalType === "capability.run" && targetType === "capability")
+    return "ephemeral";
   // Governance meta-proposals are the policy lane, already rendered apart.
   if (proposalType.startsWith("governance.")) return "governance";
   // "Are these two records the same thing?" — unhurried, batched work.

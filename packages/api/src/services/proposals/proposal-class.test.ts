@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   classifyProposal,
@@ -13,7 +15,7 @@ import {
 describe("classifyProposal", () => {
   it("classifies the four shapes present in the live queue", () => {
     // Counts measured on the team pod 2026-09-02 (660 pending).
-    expect(classifyProposal("run", "capability")).toBe("ephemeral"); // 441
+    expect(classifyProposal("capability.run", "capability")).toBe("ephemeral"); // 441
     expect(classifyProposal("merge", "entity")).toBe("curatorial"); //  143
     expect(classifyProposal("create", "entity")).toBe("objectWork"); //  56
     expect(classifyProposal("import.graph", "entity")).toBe("objectWork"); // 12
@@ -36,10 +38,10 @@ describe("classifyProposal", () => {
   });
 
   it("a run on something OTHER than a capability is not ephemeral", () => {
-    // `proposalType === "run"` alone is not enough — the pair is the key. A
+    // `proposalType === "capability.run"` alone is not enough — the pair is the key. A
     // future `run` against a different target must not inherit a 24h fuse.
-    expect(classifyProposal("run", "playbook")).toBe("objectWork");
-    expect(proposalLifetimeHours("run", "playbook")).toBeNull();
+    expect(classifyProposal("capability.run", "playbook")).toBe("objectWork");
+    expect(proposalLifetimeHours("capability.run", "playbook")).toBeNull();
   });
 
   it("ONLY ephemeral has a lifetime", () => {
@@ -75,5 +77,23 @@ describe("classifyProposal", () => {
       classifyProposal.length,
       "arity is (proposalType, targetType) only"
     ).toBe(2);
+  });
+
+  it("classifies the literal the executor actually WRITES (source-scan tripwire)", () => {
+    // Dogfood 2026-09-02: the table matched "run" while execute-capability.ts
+    // wrote "capability.run" — every run filed as objectWork, nothing expired,
+    // and the tests were green because they pinned the same wrong literal.
+    const src = readFileSync(
+      fileURLToPath(
+        new URL("../capabilities/execute-capability.ts", import.meta.url)
+      ),
+      "utf8"
+    );
+    const m = /proposalType:\s*"([^"]+)"/.exec(src);
+    expect(
+      m,
+      "execute-capability.ts must write a literal proposalType"
+    ).not.toBeNull();
+    expect(classifyProposal(m![1], "capability")).toBe("ephemeral");
   });
 });
