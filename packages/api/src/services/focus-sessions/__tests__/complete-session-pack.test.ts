@@ -25,12 +25,17 @@ describe("completeFocusSession pack types", () => {
     const result: CompleteFocusSessionResult = {
       session: { id: "s1" } as CompleteFocusSessionResult["session"],
       pendingProposals: [],
-      counts: { pending: 0, unfinishedOutputs: 2 },
+      counts: { pending: 0, unfinishedOutputs: 2, expiredEphemerals: 0 },
       warnings: [
         "2 expected output(s) still not marked done — session closed anyway (warn-only).",
       ],
     };
     expect(result.counts.unfinishedOutputs).toBe(2);
+    // Closing a session retires its unanswered EPHEMERAL proposals (a
+    // capability run is bound to the session and stops being answerable when it
+    // ends). Reported here so the retirement is never silent — a silent drop is
+    // the lying-count defect the old default TTL was removed for.
+    expect(result.counts.expiredEphemerals).toBe(0);
     expect(result.warnings[0]).toMatch(/warn-only/);
   });
 });

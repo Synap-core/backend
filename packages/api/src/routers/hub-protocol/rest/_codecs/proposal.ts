@@ -43,6 +43,8 @@ export const PROPOSAL_ROW_STATUSES = [
   "reverted",
   "approval_failed",
   "withdrawn",
+  // Never decided — its moment passed. See ProposalStatus.EXPIRED.
+  "expired",
 ] as const;
 
 export const PROPOSAL_STATUS_FILTERS = [

@@ -2024,7 +2024,15 @@ try {
               return { imported, mirrored };
             });
             registerEventEndRunner(() => api.runEventEnd());
-            registerStaleProposalRunner(() => api.scanStaleProposals());
+            // ONE cron, two reasons to walk the pending table. `scanStale`
+            // detects a workspace that disappeared; `expireLapsed` detects time
+            // passing. Separate detections, deliberately sharing the 6h tick
+            // rather than adding a second cron over the same rows.
+            registerStaleProposalRunner(async () => {
+              const stale = await api.scanStaleProposals();
+              const lapsed = await api.expireLapsedProposals();
+              return { stale, lapsed };
+            });
             registerBrokenAutomationRunner(() => api.scanBrokenAutomations());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));

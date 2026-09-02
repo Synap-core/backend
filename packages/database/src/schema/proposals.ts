@@ -29,6 +29,30 @@ export const ProposalStatus = {
   APPROVAL_FAILED: "approval_failed",
   /** A pending proposal retracted by its own proposer (not a reviewer action). */
   WITHDRAWN: "withdrawn",
+  /**
+   * A pending proposal whose MOMENT PASSED before anyone acted — never decided.
+   *
+   * Distinct from every other terminal state: nobody approved it, nobody
+   * rejected it, and the proposer did not recall it. It simply stopped being
+   * answerable, because the live session it belonged to closed (an agent's
+   * outbound call is urgent for minutes and worthless after) or because its
+   * class-specific backstop elapsed.
+   *
+   * Measured 2026-09-02: 441 of 660 pending proposals were `capability.run`,
+   * median age 11.7 days, ZERO under 24h — an entire class of corpses making the
+   * real decisions harder to see.
+   *
+   * ⚠️ This must never be a SILENT drop. A default TTL used to exist and was
+   * deliberately removed (see the C2 note in `insert-pending-proposal.ts`)
+   * because it took rows out of the actionable queue with no status change and
+   * no notification, while `synap_orient` still counted them — a lying count.
+   * Expiry is honest precisely BECAUSE it writes a status a reader can see.
+   *
+   * NOT SCORED, like {@link WITHDRAWN}: `agent-scorecard`'s denominator is
+   * `approved + rejected + reverted`, so an expired row moves no approve-rate
+   * and can never silently raise an agent's daily-cap ceiling.
+   */
+  EXPIRED: "expired",
 } as const;
 export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
@@ -77,6 +101,7 @@ export const proposals = pgTable(
         ProposalStatus.REVERTED,
         ProposalStatus.APPROVAL_FAILED,
         ProposalStatus.WITHDRAWN,
+        ProposalStatus.EXPIRED,
       ],
     })
       .notNull()

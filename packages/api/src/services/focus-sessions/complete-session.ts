@@ -19,6 +19,7 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { expireSessionEphemerals } from "../proposals/expire-lapsed-proposals.js";
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
@@ -46,6 +47,11 @@ export type CompleteFocusSessionResult = {
     pending: number;
     /** expectedOutputs still status !== done (warn only — does not block close). */
     unfinishedOutputs: number;
+    /**
+     * Ephemeral proposals retired because this session closed — bound to it and
+     * no longer answerable. Reported so the close is never a silent retirement.
+     */
+    expiredEphemerals: number;
   };
   warnings: string[];
 };
@@ -183,6 +189,20 @@ export async function completeFocusSession(
     .where(eq(focusSessions.id, sessionId))
     .returning();
 
+  // The session is closed, so its EPHEMERAL proposals are no longer answerable.
+  // A capability run is an outbound call bound to this session — urgent for
+  // minutes, worthless after. OpenID CIBA's rule is the one to follow here: a
+  // server should "terminate the authentication when it knows the client is no
+  // longer interested in the result". Session close IS that signal; the 6h cron
+  // is only the backstop for sessions that die without a clean close.
+  //
+  // Runs BEFORE the pack query below so the pack reports what is really still
+  // owed, not rows this call is about to retire. Best-effort and never throws —
+  // a session must close even if the sweep fails. Only classes WITH a lifetime
+  // are touched: a proposed entity or a merge candidate created during a session
+  // outlives it by design.
+  const expiredEphemerals = await expireSessionEphemerals(sessionId);
+
   // Proposal pack — pending rows attributed to this session.
   const pendingRows = await db
     .select()
@@ -198,12 +218,23 @@ export async function completeFocusSession(
 
   const pendingProposals = pendingRows.map(packItem);
 
+  // Say it out loud. Expiry is honest only if the person closing the session
+  // learns it happened — a silent retirement is the lying-count defect the C2
+  // TTL removal was about, wearing a different hat.
+  if (expiredEphemerals > 0) {
+    warnings.push(
+      `${expiredEphemerals} unanswered capability run(s) expired with this session — ` +
+        `they were bound to it and are no longer actionable.`
+    );
+  }
+
   return {
     session: updated,
     pendingProposals,
     counts: {
       pending: pendingProposals.length,
       unfinishedOutputs,
+      expiredEphemerals,
     },
     warnings,
   };

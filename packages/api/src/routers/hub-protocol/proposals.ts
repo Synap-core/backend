@@ -27,6 +27,7 @@ export const PROPOSAL_STATUS_BY_FILTER = {
   reverted: ProposalStatus.REVERTED,
   approval_failed: ProposalStatus.APPROVAL_FAILED,
   withdrawn: ProposalStatus.WITHDRAWN,
+  expired: ProposalStatus.EXPIRED,
 } as const satisfies Record<
   Exclude<ProposalStatusFilter, "all">,
   ProposalStatus

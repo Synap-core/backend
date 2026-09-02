@@ -333,6 +333,10 @@ export {
   type SyncScope,
 } from "./services/event-sync/connection-sync.js";
 export { scanStaleProposals } from "./services/proposals/scan-stale-proposals.js";
+export {
+  expireLapsedProposals,
+  expireSessionEphemerals,
+} from "./services/proposals/expire-lapsed-proposals.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever
