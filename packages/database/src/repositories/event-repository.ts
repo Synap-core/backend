@@ -95,6 +95,11 @@ export interface EventRecord {
   // Undefined when the write executed with no proposal — an "ungoverned AI write"
   // is `isAgent && proposalId == null` on the `.completed` event.
   proposalId?: string;
+
+  // ── Temporal spine (0241) ───────────────────────────────────────────────────
+  // The focus session this write belongs to. Undefined for a write that
+  // happened outside any session and for rows written before the column existed.
+  sessionId?: string;
 }
 
 export interface EventStreamOptions {
@@ -253,10 +258,12 @@ export class EventRepository {
           run_status,
           finish_reason,
           workspace_id,
-          proposal_id
+          proposal_id,
+          session_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+          $26
         )
         RETURNING *
       `,
@@ -294,6 +301,9 @@ export class EventRepository {
           // Governance linkage (0231). The proposal an agent write went through;
           // null for a direct/ungoverned write or any human write.
           validated.proposalId ?? null,
+          // Temporal spine (0241). The focus session that produced this write;
+          // null when it happened outside any session.
+          validated.sessionId ?? null,
         ]
       );
 
@@ -1215,6 +1225,8 @@ export class EventRepository {
       workspaceId: (row.workspace_id as string | null) ?? undefined,
       // Governance linkage real column (0231). Absent on pre-migration rows.
       proposalId: (row.proposal_id as string | null) ?? undefined,
+      // Temporal spine real column (0241). Absent on pre-migration rows.
+      sessionId: (row.session_id as string | null) ?? undefined,
     };
   }
 }

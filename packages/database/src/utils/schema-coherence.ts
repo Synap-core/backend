@@ -1001,6 +1001,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "proposal_id",
     addedBy: "0231_events_proposal_id_column.sql",
   },
+  {
+    table: "events",
+    column: "session_id",
+    addedBy: "0241_events_session_id_column.sql",
+  },
 
   // vault_grants → capability grants generalization (0142). The polymorphic
   // subject columns are what the resolver/issuance now key on; their absence

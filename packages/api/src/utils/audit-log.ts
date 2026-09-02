@@ -39,6 +39,14 @@ export interface AuditLogOpts {
    * write executed with no proposal (a direct/ungoverned write, or a human write).
    */
   proposalId?: string | null;
+  /**
+   * The focus session this write belongs to → the event row's `session_id`
+   * column (0241). The session is the only handle on the spine that carries an
+   * INTENT (its goal is NOT NULL), so this is what turns "what happened to X"
+   * into "why does X look like this". Absent → the write happened outside any
+   * session; NEVER invent one.
+   */
+  sessionId?: string | null;
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -113,6 +121,8 @@ export async function auditLog(
       // Governance linkage (0231): the proposal this agent write went through.
       // Null for a direct/ungoverned write or any human write.
       proposalId: opts.proposalId ?? undefined,
+      // Temporal spine (0241): the focus session that produced this write.
+      sessionId: opts.sessionId ?? undefined,
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
         "api" | "automation" | "sync" | "migration" | "system" | "intelligence",

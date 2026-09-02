@@ -969,6 +969,10 @@ export const relationsRouter = router({
         subjectId: relation.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        // Temporal spine (0241) — which session produced this edge. The value
+        // is the SAME verified handle this router already passes to the graph
+        // link above; it now also reaches `events.session_id`.
+        sessionId: ctx.sessionId ?? undefined,
         logData: {
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
@@ -1416,6 +1420,7 @@ export const relationsRouter = router({
         subjectId: relationId,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        sessionId: ctx.sessionId ?? undefined,
         logData: { metadata: input.metadata, type: input.type },
         data: {
           relationType: relation.type,
@@ -1556,6 +1561,7 @@ export const relationsRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        sessionId: ctx.sessionId ?? undefined,
         logData: { id: input.id },
         data: {
           relationType: relationToDelete?.type,

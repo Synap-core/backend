@@ -100,6 +100,14 @@ export const events = pgTable(
     // deletable (a FK could block an append or a proposal delete). Plain uuid,
     // mirroring correlation_id / agent_user_id staying FK-free.
     proposalId: uuid("proposal_id"),
+
+    // ─── Temporal spine (0241) ──────────────────────────────────────────────
+    // The focus session this write belongs to — the ONLY handle on the spine
+    // that carries an INTENT (`focus_sessions.goal` is NOT NULL). NULL when the
+    // write happened outside any session. `recordDomainMutation` has always had
+    // this value in scope; before 0241 it reached only the automation matcher.
+    // No FK — events are append-only history, sessions are deletable.
+    sessionId: uuid("session_id"),
   },
   (table) => ({
     // ✨ COMPOSITE PK: Required for TimescaleDB hypertable with primary key
@@ -130,6 +138,13 @@ export const events = pgTable(
     ungovernedAgentIdx: index("idx_events_ungoverned_agent")
       .on(table.agentUserId, table.timestamp)
       .where(sql`${table.isAgent} = true AND ${table.proposalId} IS NULL`),
+
+    // INDEX: "everything that happened in this session, in order" (0241).
+    // Partial (session_id IS NOT NULL) — most events carry no session, so only
+    // session-attributed rows are indexed. Mirrors 0241's CREATE INDEX exactly.
+    sessionIdIdx: index("idx_events_session_id")
+      .on(table.sessionId, table.timestamp)
+      .where(sql`${table.sessionId} IS NOT NULL`),
   })
 );
 

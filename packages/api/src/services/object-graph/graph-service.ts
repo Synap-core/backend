@@ -43,6 +43,10 @@ import {
   intelligenceCommands,
   agents,
   vaultGrants,
+  events,
+  proposals,
+  desc,
+  isNotNull,
   GRANTABLE_TYPES,
   type GrantableType,
   loadFacetSlugsBatch,
@@ -63,6 +67,7 @@ import { accessScopeWhere } from "../../utils/project-scope.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { EntityConnection } from "./entity-connections.js";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -136,7 +141,23 @@ export interface GraphNeighbor extends GraphNode {
     // read-time for capability/tool/skill/command↔agent bindings.
     | "grant"
     // automations.createdBy ownership — an agent → the automations it authored.
-    | "automation";
+    | "automation"
+    // ── The TEMPORAL half (why-spine) ────────────────────────────────────────
+    // Neither of these is a stored EDGE: both are derived at read time from the
+    // append-only `events` spine, which is the only substrate that knows WHEN.
+    // The file's own header used to admit this gap ("the runs/governs dimension
+    // has no stored link").
+    //
+    // `governed`   — the PROPOSAL that authorized a change to this object,
+    //                reached via `events.proposal_id` on an event whose subject
+    //                IS this object.
+    // `produced-in`— the SESSION the change happened in, reached via
+    //                `events.session_id` (0241) or the proposal's own
+    //                `session_id`. A session is the only handle on the spine
+    //                carrying an INTENT (`focus_sessions.goal` is NOT NULL), so
+    //                this is the edge that answers "why does this look like this".
+    | "governed"
+    | "produced-in";
 }
 
 /** "Fetch X, get X + everything it's linked to, typed." */
@@ -798,6 +819,157 @@ export async function getGovernanceNeighbors(
 }
 
 /**
+ * How many events back the temporal fold reads for one object. The spine is
+ * append-only and an active entity accrues events indefinitely, so the fold is
+ * bounded by RECENCY, not by "everything" — the pane it feeds shows 5–7 rows and
+ * a "show all". Distinct proposals/sessions are then capped independently below.
+ */
+const TEMPORAL_EVENT_SCAN_LIMIT = 200;
+/** Max distinct proposal / session neighbours returned per focused object. */
+const TEMPORAL_NEIGHBOR_CAP = 25;
+
+/**
+ * The TEMPORAL neighbours of any object — the "why" half of the graph.
+ *
+ * Every other neighbour source here answers WHAT an object is connected to.
+ * None of them answers WHEN, or WHO AUTHORIZED IT, or WHAT THE PERSON WAS
+ * TRYING TO DO — because none of that is a stored `links`/`relations` edge. It
+ * is on the `events` spine, which has carried `subject_type`/`subject_id` (with
+ * `idx_events_subject`), `proposal_id` (0231) and now `session_id` (0241).
+ *
+ * So this is a read-time fold, exactly like the entity-data and governance folds:
+ *
+ *   events WHERE (subject_type, subject_id) = focus      ← one indexed scan
+ *     → proposals via events.proposal_id                  ← via: "governed"
+ *     → sessions  via events.session_id                   ← via: "produced-in"
+ *                  and via proposals.session_id           ← (pre-0241 rows)
+ *
+ * Both neighbour classes are BACKWARD-looking (`direction: "incoming"`): they
+ * are things that acted ON the focused object.
+ *
+ * ── VISIBILITY ──────────────────────────────────────────────────────────────
+ * The driver scan floors on `events.user_id` — the events spine is per-user, and
+ * an event row is the only thing naming the proposal/session ids at all, so an
+ * owner floor here means a caller can never enumerate another user's ids. On top
+ * of that:
+ *   - proposals are re-floored with `userVisibleWhere` (their registered rule),
+ *   - sessions hydrate through `hydrateNodes`, whose `session` branch is the
+ *     owner-aware `ownerPrivateVisibleWhere` floor + the workspace lens.
+ * A row that fails either floor is DROPPED, never surfaced as a bare id.
+ *
+ * FORWARD effects of a session (produced / targets / used) are NOT re-fetched
+ * here: `getLinksFor` already returns edges in both directions, so a session
+ * focus already lists them via `via: "links"`. Duplicating them would double-count.
+ */
+export async function getTemporalNeighbors(
+  userId: string,
+  kind: string,
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  const db = await getDb();
+
+  // ONE indexed scan (idx_events_subject), newest first, owner-floored.
+  const rows = await db
+    .select({
+      proposalId: events.proposalId,
+      sessionId: events.sessionId,
+      timestamp: events.timestamp,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.subjectType, kind),
+        eq(events.subjectId, id),
+        eq(events.userId, userId),
+        or(isNotNull(events.proposalId), isNotNull(events.sessionId))
+      )
+    )
+    .orderBy(desc(events.timestamp))
+    .limit(TEMPORAL_EVENT_SCAN_LIMIT);
+  if (rows.length === 0) return [];
+
+  const proposalIds = [
+    ...new Set(rows.map((r) => r.proposalId).filter(Boolean) as string[]),
+  ].slice(0, TEMPORAL_NEIGHBOR_CAP);
+  const sessionIds = new Set(
+    rows.map((r) => r.sessionId).filter(Boolean) as string[]
+  );
+
+  const out: GraphNeighbor[] = [];
+
+  // ── Proposals: the governance decisions that touched this object ───────────
+  if (proposalIds.length > 0) {
+    const proposalRows = await db
+      .select({
+        id: proposals.id,
+        proposalType: proposals.proposalType,
+        targetType: proposals.targetType,
+        status: proposals.status,
+        workspaceId: proposals.workspaceId,
+        sessionId: proposals.sessionId,
+      })
+      .from(proposals)
+      .where(
+        and(
+          inArray(proposals.id, proposalIds),
+          userVisibleWhere(proposals.workspaceId, userId)
+        )
+      );
+    for (const p of proposalRows) {
+      // Pre-0241 rows carry no `events.session_id`; the proposal itself often
+      // does, so it is the second (older) route to the same session.
+      if (p.sessionId) sessionIds.add(p.sessionId);
+      out.push({
+        kind: "proposal",
+        id: p.id,
+        // NEVER a hand-written label map — the one vocabulary door. Past mood:
+        // this is history, something that already happened to the object.
+        name: buildObjectActionTitle({
+          action: p.proposalType,
+          objectKind: p.targetType,
+          mood: "past",
+        }),
+        subtype: p.status,
+        subtypes: [p.status],
+        workspaceId: p.workspaceId,
+        edgeType: p.proposalType,
+        direction: "incoming",
+        via: "governed",
+      });
+    }
+  }
+
+  // ── Sessions: the goal-bound work the change happened inside ──────────────
+  const sessionIdList = [...sessionIds].slice(0, TEMPORAL_NEIGHBOR_CAP);
+  if (sessionIdList.length > 0) {
+    const nodes = await hydrateNodes(
+      userId,
+      sessionIdList.map((sid) => ({ kind: "session", id: sid })),
+      facetVisibilityScope,
+      workspaceId
+    );
+    for (const sid of sessionIdList) {
+      // The focused object IS this session — a session is not its own neighbour.
+      if (kind === "session" && sid === id) continue;
+      const node = nodes.get(`session:${sid}`);
+      // Not visible to this caller (another user's session, or outside the
+      // lens) → dropped. Never surface a bare id.
+      if (!node) continue;
+      out.push({
+        ...node,
+        edgeType: "produced_in",
+        direction: "incoming",
+        via: "produced-in",
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Assemble the uniform envelope: the focused object (hydrated) + its neighbours.
  * `extraNeighbors` lets the route layer fold in the ENTITY-DATA graph
  * (relations + property + channel from `getConnections`) for entity kinds —
@@ -814,11 +986,19 @@ export async function getObjectGraph(
     userId,
     workspaceId
   );
-  const [selfMap, linkNeighbors, governanceNeighbors] = await Promise.all([
-    hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
-    getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
-    getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
-  ]);
+  const [selfMap, linkNeighbors, governanceNeighbors, temporalNeighbors] =
+    await Promise.all([
+      hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
+      getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+      getGovernanceNeighbors(
+        userId,
+        kind,
+        id,
+        facetVisibilityScope,
+        workspaceId
+      ),
+      getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    ]);
 
   // Merge config + data graphs; de-dup on (kind, id, edgeType, via) so an object
   // linked twice the same way isn't double-counted.
@@ -827,6 +1007,7 @@ export async function getObjectGraph(
   for (const n of [
     ...linkNeighbors,
     ...governanceNeighbors,
+    ...temporalNeighbors,
     ...extraNeighbors,
   ]) {
     const key = `${n.kind}:${n.id}:${n.edgeType}:${n.via}`;

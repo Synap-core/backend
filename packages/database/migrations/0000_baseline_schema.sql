@@ -254,6 +254,10 @@ CREATE TABLE IF NOT EXISTS "events" (
   -- (auto-approved OR pending→approved). NULL = the write executed with no
   -- proposal. No FK — events are immutable history, proposals are deletable.
   "proposal_id"    uuid,
+  -- Temporal spine (0241): the focus session that produced this event — the
+  -- only handle on the spine that carries an INTENT (the session's goal).
+  -- NULL = the write happened outside any session. No FK, same reason as above.
+  "session_id"     uuid,
   PRIMARY KEY ("id", "timestamp")
 );
 -- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
@@ -278,6 +282,8 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "finish_reason" text;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "workspace_id"  text;
 -- Governance linkage as a first-class column (0231).
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "proposal_id"   uuid;
+-- Temporal spine as a first-class column (0241).
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "session_id"    uuid;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -309,6 +315,12 @@ CREATE INDEX IF NOT EXISTS "idx_events_workspace_id"
 CREATE INDEX IF NOT EXISTS "idx_events_ungoverned_agent"
   ON "events" ("agent_user_id", "timestamp")
   WHERE "is_agent" = true AND "proposal_id" IS NULL;
+
+-- "Everything that happened in this session, in order" (migration 0241).
+-- Partial so only session-attributed rows are indexed.
+CREATE INDEX IF NOT EXISTS "idx_events_session_id"
+  ON "events" ("session_id", "timestamp")
+  WHERE "session_id" IS NOT NULL;
 
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 

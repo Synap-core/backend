@@ -88,6 +88,15 @@ export const SynapEventSchema = z.object({
   // Absent/undefined when the write executed with no proposal. Optional so every
   // existing event still validates unchanged.
   proposalId: z.string().uuid().optional(),
+
+  // ── Temporal spine (persisted into the REAL events.session_id column, 0241) ─
+  // The focus session that produced this write — the only handle on the spine
+  // carrying an INTENT (`focus_sessions.goal`). Absent when the write happened
+  // outside a session. Declared HERE because `EventRepository.append` runs every
+  // payload through this schema: a field the schema does not know is SILENTLY
+  // STRIPPED, which is exactly how a fully-plumbed provenance field has reached
+  // zero rows before in this repo.
+  sessionId: z.string().uuid().optional(),
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;

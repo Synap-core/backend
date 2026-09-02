@@ -178,7 +178,10 @@ export const contextRouter = router({
         thread: {
           id: threadResult.channel.id,
           userId: threadResult.channel.userId,
-          projectId: undefined,
+          // `channels.project_id` has existed since the project lens landed and
+          // the full row is already in hand here — this projection hardcoded
+          // `undefined`, so every agent turn read the thread as project-less.
+          projectId: threadResult.channel.projectId ?? undefined,
           agentId:
             (threadResult.channel.assignedAgentId ??
               threadResult.channel.senderAgentId) ||

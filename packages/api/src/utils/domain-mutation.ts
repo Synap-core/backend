@@ -59,7 +59,13 @@ export interface DomainMutationOpts {
   proposalId?: string | null;
   correlationId?: string;
   source?: string;
-  /** Focus session that produced this mutation → automation matcher (+ F2 chain floor). */
+  /**
+   * Focus session that produced this mutation. Reaches the automation matcher
+   * (+ the F2 chain floor) AND — since 0241 — the `events.session_id` column, so
+   * the event spine can answer "which session produced this" and not only "which
+   * agent / which proposal". It was already in scope here and went only to the
+   * matcher; that gap is what made the why-spine unanswerable.
+   */
   sessionId?: string | null;
   /** Automation chain context → the cycle / depth guard. */
   automationContext?: SideEffectPayload["automationContext"];
@@ -93,6 +99,7 @@ export async function recordDomainMutation(
     proposalId: opts.proposalId,
     workspaceId: opts.workspaceId,
     correlationId: opts.correlationId,
+    sessionId: opts.sessionId,
     source: opts.source,
     data: opts.logData ?? opts.data,
     throwOnError: opts.throwOnError,

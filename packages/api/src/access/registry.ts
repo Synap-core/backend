@@ -40,6 +40,7 @@ import {
   userPreferences,
   userResourceState,
   agentConfigs,
+  focusSessions,
 } from "@synap/database/schema";
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
@@ -448,6 +449,24 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: sourceSubscriptions.workspaceId,
     userColumn: sourceSubscriptions.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A focus session is one person's goal-bound work room. Every read floors on
+// `eq(focusSessions.userId, …)` today — the routers, the MCP handlers, the Hub
+// REST doors and the object-graph's `session` hydration branch all hand-inline
+// it — so the shape was already `workspaceOwned`, just undeclared. Declaring it
+// matters now that the object graph surfaces SESSIONS as neighbours of an
+// object: an undeclared table is not a safe table, and `hydration-floor-owner-
+// private.test.ts` explicitly names focus_sessions as one whose semantics nobody
+// had stated. A NULL workspace here is a PERSONAL session, never pod-wide.
+registerVisibility({
+  table: focusSessions,
+  query: () => db.query.focusSessions,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: focusSessions.workspaceId,
+    userColumn: focusSessions.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
