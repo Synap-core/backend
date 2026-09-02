@@ -29,10 +29,43 @@ import {
   McpHandlerMap,
 } from "./shared.js";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** One line, not a transcript — mirrors the tool schema's `maxLength`. */
+const SUSPENDED_INTENT_MAX = 400;
+
 export const sessionHandlers: McpHandlerMap = {
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // MCP tool schemas are ADVISORY — nothing validates the args server-side,
+    // so a non-uuid handle would reach `eq(focusSessions.id, …)` against a
+    // `uuid` column. Tell the agent what it may pass instead of letting the
+    // shape become a database error. (Hub REST validates the same field with
+    // `z.string().uuid()` — this is the MCP door catching up.)
+    const parentSessionIdArg = args.parentSessionId;
+    if (
+      parentSessionIdArg !== undefined &&
+      parentSessionIdArg !== null &&
+      (typeof parentSessionIdArg !== "string" ||
+        !UUID_RE.test(parentSessionIdArg))
+    ) {
+      return ok({
+        error:
+          "parentSessionId must be a session UUID (the id of a session you own that you are pushing FROM).",
+      });
+    }
+    const suspendedIntentArg = args.suspendedIntent;
+    if (
+      suspendedIntentArg !== undefined &&
+      suspendedIntentArg !== null &&
+      (typeof suspendedIntentArg !== "string" ||
+        suspendedIntentArg.length > SUSPENDED_INTENT_MAX)
+    ) {
+      return ok({
+        error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
+      });
+    }
     const { createFocusSession } =
       await import("../../../services/focus-sessions/create-session.js");
     const result = await createFocusSession({

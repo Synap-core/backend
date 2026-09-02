@@ -37,6 +37,9 @@ import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface RecordSessionSpawnInput {
   /** The newly-opened (child / detour) session. */
   childSessionId: string;
@@ -70,6 +73,14 @@ export async function recordSessionSpawn(
 ): Promise<RecordSessionSpawnResult> {
   if (input.childSessionId === input.parentSessionId) {
     return { linked: false, reason: "self_parent" };
+  }
+
+  // Shape floor BEFORE the query. `focus_sessions.id` is a `uuid` column, so a
+  // malformed handle reaches Postgres as `22P02 invalid input syntax for type
+  // uuid` — a THROW, from a door whose whole contract is that a bad parent
+  // handle drops the edge instead of failing the child's creation.
+  if (!UUID_RE.test(input.parentSessionId)) {
+    return { linked: false, reason: "parent_not_found" };
   }
 
   // Owner floor on the PARENT — never `scopedDb`/`userVisibleWhere`, which have

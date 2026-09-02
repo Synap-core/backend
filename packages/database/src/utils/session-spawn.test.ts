@@ -62,6 +62,16 @@ vi.mock("drizzle-orm", () => ({
 const { recordSessionSpawn, getParentSessionId } =
   await import("./session-spawn.js");
 
+// Real uuids on purpose: `focus_sessions.id` is a `uuid` column, and the
+// producer now floors the SHAPE before it queries (a malformed handle would
+// otherwise reach Postgres as `22P02` — a throw from a door contracted to drop
+// the edge instead). Fixtures that could not be real ids would test a path the
+// runtime never takes.
+const CHILD = "11111111-1111-4111-8111-111111111111";
+const PARENT = "22222222-2222-4222-8222-222222222222";
+const OTHER_USERS_SESSION = "33333333-3333-4333-8333-333333333333";
+const SAME = "44444444-4444-4444-8444-444444444444";
+
 beforeEach(() => {
   selectFromWhereLimitMock.mockReset();
   selectFromWhereLimitMock.mockResolvedValue([]);
@@ -73,11 +83,11 @@ beforeEach(() => {
 
 describe("recordSessionSpawn", () => {
   it("inserts ONE spawned_from edge, child -> parent, when the parent is owned", async () => {
-    selectFromWhereLimitMock.mockResolvedValue([{ id: "parent-1" }]);
+    selectFromWhereLimitMock.mockResolvedValue([{ id: PARENT }]);
 
     const result = await recordSessionSpawn({
-      childSessionId: "child-1",
-      parentSessionId: "parent-1",
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
       userId: "user-A",
       workspaceId: "ws-1",
     });
@@ -86,9 +96,9 @@ describe("recordSessionSpawn", () => {
     expect(insertValuesMock).toHaveBeenCalledTimes(1);
     expect(insertValuesMock.mock.calls[0][0]).toMatchObject({
       fromType: "session",
-      fromId: "child-1",
+      fromId: CHILD,
       toType: "session",
-      toId: "parent-1",
+      toId: PARENT,
       linkType: "spawned_from",
       workspaceId: "ws-1",
       createdBy: "user-A",
@@ -102,8 +112,8 @@ describe("recordSessionSpawn", () => {
     selectFromWhereLimitMock.mockResolvedValue([]);
 
     const result = await recordSessionSpawn({
-      childSessionId: "child-1",
-      parentSessionId: "someone-elses-session",
+      childSessionId: CHILD,
+      parentSessionId: OTHER_USERS_SESSION,
       userId: "user-A",
       suspendedIntent: "finish the migration",
     });
@@ -113,10 +123,32 @@ describe("recordSessionSpawn", () => {
     expect(updateSetMock).not.toHaveBeenCalled();
   });
 
+  it("DROPS a malformed parent handle — never queries, never throws", async () => {
+    // `focus_sessions.id` is `uuid`. Without the shape floor this reaches
+    // Postgres as `22P02 invalid input syntax for type uuid` and REJECTS —
+    // from the one door whose contract is that a bad parent handle costs you
+    // the edge, not the session that was already committed.
+    for (const bad of ["not-a-uuid", "", "child-1", "'; drop table --"]) {
+      const result = await recordSessionSpawn({
+        childSessionId: CHILD,
+        parentSessionId: bad,
+        userId: "user-A",
+        suspendedIntent: "finish the migration",
+      });
+      expect(result, bad).toEqual({
+        linked: false,
+        reason: "parent_not_found",
+      });
+    }
+    expect(selectFromWhereLimitMock).not.toHaveBeenCalled();
+    expect(insertValuesMock).not.toHaveBeenCalled();
+    expect(updateSetMock).not.toHaveBeenCalled();
+  });
+
   it("refuses to make a session its own parent", async () => {
     const result = await recordSessionSpawn({
-      childSessionId: "same",
-      parentSessionId: "same",
+      childSessionId: SAME,
+      parentSessionId: SAME,
       userId: "user-A",
     });
     expect(result).toEqual({ linked: false, reason: "self_parent" });
@@ -124,11 +156,11 @@ describe("recordSessionSpawn", () => {
   });
 
   it("writes the suspend note onto the PARENT, and only the metadata key", async () => {
-    selectFromWhereLimitMock.mockResolvedValue([{ id: "parent-1" }]);
+    selectFromWhereLimitMock.mockResolvedValue([{ id: PARENT }]);
 
     const result = await recordSessionSpawn({
-      childSessionId: "child-1",
-      parentSessionId: "parent-1",
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
       userId: "user-A",
       suspendedIntent: "  wire the approve executor  ",
     });
@@ -144,14 +176,14 @@ describe("recordSessionSpawn", () => {
       (patch.metadata as { values: unknown[] }).values[1] as string
     ) as { suspended: { intent: string; childSessionId: string } };
     expect(merged.suspended.intent).toBe("wire the approve executor");
-    expect(merged.suspended.childSessionId).toBe("child-1");
+    expect(merged.suspended.childSessionId).toBe(CHILD);
   });
 
   it("blank suspendedIntent writes NOTHING to the parent", async () => {
-    selectFromWhereLimitMock.mockResolvedValue([{ id: "parent-1" }]);
+    selectFromWhereLimitMock.mockResolvedValue([{ id: PARENT }]);
     const result = await recordSessionSpawn({
-      childSessionId: "child-1",
-      parentSessionId: "parent-1",
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
       userId: "user-A",
       suspendedIntent: "   ",
     });
@@ -180,9 +212,9 @@ describe("recordSessionSpawn", () => {
 describe("getParentSessionId", () => {
   it("derives the parent from the edge (never a column) and returns null when absent", async () => {
     selectFromWhereLimitMock.mockResolvedValue([]);
-    expect(await getParentSessionId("child-1")).toBeNull();
+    expect(await getParentSessionId(CHILD)).toBeNull();
 
-    selectFromWhereLimitMock.mockResolvedValue([{ toId: "parent-1" }]);
-    expect(await getParentSessionId("child-1")).toBe("parent-1");
+    selectFromWhereLimitMock.mockResolvedValue([{ toId: PARENT }]);
+    expect(await getParentSessionId(CHILD)).toBe(PARENT);
   });
 });

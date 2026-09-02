@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { findFirstMock, insertValuesMock, returningMock } = vi.hoisted(() => {
+const {
+  findFirstMock,
+  insertValuesMock,
+  returningMock,
+  recordSessionSpawnMock,
+} = vi.hoisted(() => {
   const returningMock = vi.fn(async () => [{ id: "new-session-id" }]);
   const insertValuesMock = vi.fn((_values: Record<string, unknown>) => ({
     returning: returningMock,
@@ -9,6 +14,10 @@ const { findFirstMock, insertValuesMock, returningMock } = vi.hoisted(() => {
     findFirstMock: vi.fn(),
     insertValuesMock,
     returningMock,
+    recordSessionSpawnMock: vi.fn(async () => ({
+      linked: true as const,
+      suspendedIntentRecorded: false,
+    })),
   };
 });
 
@@ -24,6 +33,12 @@ vi.mock("../schema/links.js", () => ({ links: {} }));
 // which pulls in `inArray` + `sql`. A vi.mock factory is a TOTAL replacement, so
 // a named export it omits is an import-time failure for the whole file — the
 // exact trap that has silently killed mocking tests here before.
+// The spawn producer is stubbed so the call SITE's contract can be tested:
+// `openRunSession` runs inside the jobs layer, where a throw from a best-effort
+// lineage write would fail the whole run over an already-committed session.
+vi.mock("./session-spawn.js", () => ({
+  recordSessionSpawn: recordSessionSpawnMock,
+}));
 vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   desc: vi.fn(),
@@ -39,6 +54,11 @@ beforeEach(() => {
   insertValuesMock.mockClear();
   returningMock.mockReset();
   returningMock.mockResolvedValue([{ id: "new-session-id" }]);
+  recordSessionSpawnMock.mockReset();
+  recordSessionSpawnMock.mockResolvedValue({
+    linked: true,
+    suspendedIntentRecorded: false,
+  });
 });
 
 describe("openRunSession", () => {
@@ -137,5 +157,29 @@ describe("openRunSession", () => {
     });
 
     expect(result).toEqual({ sessionId: "winner-session", reused: true });
+  });
+});
+
+describe("openRunSession detour lineage", () => {
+  it("keeps the session when the spawn edge throws — best effort, not best case", async () => {
+    findFirstMock.mockResolvedValue(undefined);
+    recordSessionSpawnMock.mockRejectedValue(
+      new Error('22P02 invalid input syntax for type uuid: "not-a-uuid"')
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await openRunSession({
+      userId: "u1",
+      goal: "run",
+      source: "automation",
+      parentSessionId: "not-a-uuid",
+    });
+
+    // The session row is already committed at this point. A rejected lineage
+    // write must cost the EDGE, never the run.
+    expect(result).toEqual({ sessionId: "new-session-id", reused: false });
+    expect(recordSessionSpawnMock).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

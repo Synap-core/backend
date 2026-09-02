@@ -16,6 +16,9 @@ import {
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "focus-sessions/create-session" });
 
 /** RFC-4122 UUID shape — templateId may be a legacy free-text template name. */
 const UUID_RE =
@@ -263,14 +266,26 @@ export async function createFocusSession(
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the
   // owner floor and the "never inherit governance" invariant.
+  // Best-effort by CONTRACT, not by luck: the session row is already committed,
+  // so anything thrown here would hand the caller a 500 over a session that
+  // exists — the exact opposite of "drops the edge rather than failing the
+  // create". The producer returns a result object for the expected misses; this
+  // catch covers the unexpected ones (a malformed handle, a transport blip).
   if (parentSessionId) {
-    await recordSessionSpawn({
-      childSessionId: sessionOut.id,
-      parentSessionId,
-      userId,
-      workspaceId: sessionOut.workspaceId,
-      suspendedIntent,
-    });
+    try {
+      await recordSessionSpawn({
+        childSessionId: sessionOut.id,
+        parentSessionId,
+        userId,
+        workspaceId: sessionOut.workspaceId,
+        suspendedIntent,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: sessionOut.id, parentSessionId },
+        "recordSessionSpawn failed — session kept, spawned_from edge dropped"
+      );
+    }
   }
 
   emitHubRealtimeEvent({

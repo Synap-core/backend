@@ -153,15 +153,25 @@ export async function openRunSession(
       })
       .returning({ id: focusSessions.id });
 
+  // Best-effort by CONTRACT: this runs AFTER the session row is committed and
+  // inside the jobs layer, where a throw fails the whole run. A bad parent
+  // handle drops the edge; it never costs the caller their session.
   const linkSpawn = async (sessionId: string): Promise<void> => {
     if (!input.parentSessionId) return;
-    await recordSessionSpawn({
-      childSessionId: sessionId,
-      parentSessionId: input.parentSessionId,
-      userId: input.userId,
-      workspaceId: input.workspaceId ?? null,
-      suspendedIntent: input.suspendedIntent ?? null,
-    });
+    try {
+      await recordSessionSpawn({
+        childSessionId: sessionId,
+        parentSessionId: input.parentSessionId,
+        userId: input.userId,
+        workspaceId: input.workspaceId ?? null,
+        suspendedIntent: input.suspendedIntent ?? null,
+      });
+    } catch (err) {
+      console.warn(
+        "[open-run-session] recordSessionSpawn failed — session kept, spawned_from edge dropped",
+        { sessionId, parentSessionId: input.parentSessionId, err }
+      );
+    }
   };
 
   try {

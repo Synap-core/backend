@@ -1139,11 +1139,13 @@ export const tools = {
             },
             parentSessionId: {
               type: "string",
+              format: "uuid",
               description:
                 "Optional UUID of the session you are PUSHING FROM — use it when something blocked the work you were doing and this session is the detour to clear it. Records `session --spawned_from--> session` so the chain is recoverable; the parent stays OPEN (closing this one never closes it). Must be a session you own. The child does NOT inherit the parent's governance settings.",
             },
             suspendedIntent: {
               type: "string",
+              maxLength: 400,
               description:
                 "ONE line naming what you were about to do in the PARENT session when you pushed — recorded on the parent so popping back restates the goal instead of relying on memory. Only meaningful with parentSessionId.",
             },
