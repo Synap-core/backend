@@ -3,10 +3,11 @@ import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { RendererRef } from "@synap/database";
 import { profilesRouter } from "../../profiles.js";
-import {
-  setProfileRenderer,
-  type RendererSlot,
-} from "../../../services/profiles/set-profile-renderer.js";
+import { setProfileRenderer } from "../../../services/profiles/set-profile-renderer.js";
+import type {
+  RendererScope,
+  RendererSlot,
+} from "../../../services/profiles/renderer-slots.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -145,8 +146,14 @@ export function registerProfileExecutors(): void {
       // (`card`) while the runtime value flowed through unchanged.
       const slot = innerData.slot as RendererSlot | undefined;
       const ref = innerData.ref as RendererRef | null | undefined;
+      // Read as the exported `RendererScope`, same reasoning as `slot` above —
+      // a re-typed literal union here would silently drop `user`.
       const scope =
-        (innerData.scope as "workspace" | "pod" | undefined) ?? "workspace";
+        (innerData.scope as RendererScope | undefined) ?? "workspace";
+      // A per-object binding (the GOVERNED EXCEPTION) arrives here the same way
+      // a kind-level one does: as an approved proposal. `null` = whole kind.
+      const subjectId =
+        (innerData.subjectId as string | null | undefined) ?? null;
       if (!profileSlug || !slot || ref === undefined) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -170,6 +177,11 @@ export function registerProfileExecutors(): void {
         slot,
         ref,
         scope,
+        subjectId,
+        // Lineage: the binding row records the proposal that minted it, the
+        // same `source_proposal_id` trail `governance_rules` keeps for a rule
+        // born of an approved widening.
+        sourceProposalId: input.proposalId,
       });
 
       await db
