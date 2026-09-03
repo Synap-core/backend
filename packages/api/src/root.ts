@@ -84,6 +84,7 @@ import { onboardingRouter } from "./routers/onboarding.js";
 // the SINGLE source of truth for the served + typed API surface.
 import { diagnoseRouter } from "./routers/diagnose.js";
 import { signalRouter } from "./routers/signal.js";
+import { signalsRouter } from "./routers/signals.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
@@ -176,6 +177,7 @@ export const coreRouter = router({
   onboarding: onboardingRouter,
   diagnose: diagnoseRouter,
   signal: signalRouter,
+  signals: signalsRouter,
   typesense: typesenseRouter,
   n8nActions: n8nActionsRouter,
   users: usersRouter,
