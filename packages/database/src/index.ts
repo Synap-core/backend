@@ -21,6 +21,7 @@ export * from "./repositories/index.js";
 
 // Export services
 export * from "./services/profile-resolution-service.js";
+export * from "./services/renderer-binding-service.js";
 export * from "./services/facet-resolution-service.js";
 export * from "./services/property-validation-service.js";
 export * from "./services/property-reconciliation.js";

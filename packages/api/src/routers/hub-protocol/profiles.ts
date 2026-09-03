@@ -34,6 +34,10 @@ import { createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
+import {
+  RENDERER_SCOPES,
+  RENDERER_SLOTS,
+} from "../../services/profiles/renderer-slots.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
 
 /**
@@ -281,8 +285,13 @@ export const hubProfilesRouter = router({
     }),
 
   /**
-   * Bind a cell as a profile's renderer (list | detail | dashboard).
+   * Bind a cell as a profile's renderer (list | detail | card | dashboard).
    * Requires: hub-protocol.write scope.
+   *
+   * The `slot` and `scope` enums are DERIVED from `RENDERER_SLOTS` /
+   * `RENDERER_SCOPES` in the write service, never hand-written here — a
+   * hand-mirrored copy is what kept `card` unreachable from this door while the
+   * backend had had four slots all along.
    *
    * GOVERNANCE (locked): binding an AI-generated cell as a durable renderer is
    * consequential, so this routes through `checkPermissionOrPropose` with the
@@ -302,10 +311,16 @@ export const hubProfilesRouter = router({
         userId: z.string(),
         workspaceId: z.string().uuid().optional(),
         profileSlug: z.string().min(1),
-        slot: z.enum(["list", "detail", "dashboard"]),
+        slot: z.enum(RENDERER_SLOTS),
         cellKey: z.string().min(1),
         props: z.record(z.string(), z.unknown()).optional(),
-        scope: z.enum(["workspace", "pod"]).optional(),
+        scope: z.enum(RENDERER_SCOPES).optional(),
+        /**
+         * Bind for ONE object instead of the whole kind. A GOVERNED EXCEPTION —
+         * it reaches the store through the same `profile/renderer.set` gate,
+         * so an agent's per-object binding arrives as a proposal like any other.
+         */
+        subjectId: z.string().min(1).optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
       })
@@ -347,6 +362,9 @@ export const hubProfilesRouter = router({
           profileSlug: input.profileSlug,
           slot: input.slot,
           scope,
+          // Only present for the per-object exception, so a kind-level
+          // proposal payload is byte-identical to what it was before.
+          ...(input.subjectId ? { subjectId: input.subjectId } : {}),
           ref,
         },
       });
@@ -369,6 +387,7 @@ export const hubProfilesRouter = router({
         slot: input.slot,
         ref,
         scope,
+        ...(input.subjectId ? { subjectId: input.subjectId } : {}),
       });
       return { status: "applied" as const, proposalId: null };
     }),

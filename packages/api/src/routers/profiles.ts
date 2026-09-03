@@ -34,10 +34,11 @@ import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
 import {
-  setProfileRenderer,
+  RENDERER_SCOPES,
   type RendererSlot,
-} from "../services/profiles/set-profile-renderer.js";
+} from "../services/profiles/renderer-slots.js";
 import { auditLog } from "../utils/audit-log.js";
 import { randomUUID } from "crypto";
 
@@ -1318,9 +1319,16 @@ export const profilesRouter = router({
         contentKind: ProfileContentKindSchema,
         ref: RendererRefSchema.nullable(),
         // WHERE the binding is written: 'workspace' overlays this kind for this
-        // workspace; 'pod' sets the profile-wide default across every workspace.
-        // The per-entity door is `entities.setEntityRenderer`.
-        scope: z.enum(["workspace", "pod"]).default("workspace"),
+        // workspace; 'pod' sets the profile-wide default across every workspace;
+        // 'user' is MY personal override, invisible to everyone else.
+        // Derived from RENDERER_SCOPES — never a hand-written copy.
+        scope: z.enum(RENDERER_SCOPES).default("workspace"),
+        /**
+         * Bind for ONE object instead of the whole kind. A GOVERNED EXCEPTION:
+         * the default is kind-level, and this reaches `renderer_bindings`
+         * through the same `profile/renderer.set` gate as any other write.
+         */
+        subjectId: z.string().min(1).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1339,6 +1347,9 @@ export const profilesRouter = router({
           profileSlug: input.profileSlug,
           slot,
           scope: input.scope,
+          // Only present for the per-object exception, so a kind-level
+          // proposal payload is byte-identical to what it was before.
+          ...(input.subjectId ? { subjectId: input.subjectId } : {}),
           ref: input.ref,
         },
       });
@@ -1361,6 +1372,7 @@ export const profilesRouter = router({
         slot,
         ref: input.ref,
         scope: input.scope,
+        ...(input.subjectId ? { subjectId: input.subjectId } : {}),
       });
 
       logger.info(
