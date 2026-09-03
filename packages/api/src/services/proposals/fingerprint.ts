@@ -24,6 +24,7 @@
  */
 
 import type { PROPOSE_REASON } from "@synap/governance-policy";
+import { proposalClassFields, type ProposalClass } from "./proposal-class.js";
 
 /**
  * The minimum a proposal row must expose to be fingerprinted. Mirrors the
@@ -242,6 +243,14 @@ export interface ProposalCluster {
   targetType: string;
   /** Human label for the shared target (name, else `<type> · <shortId>`). */
   targetLabel: string;
+  /**
+   * Decision CLASS of the cluster — derived from the fingerprint's own
+   * (proposalType, targetType), which every member shares BY CONSTRUCTION:
+   * both columns are fingerprint inputs, so a cluster can never mix classes.
+   */
+  class: ProposalClass;
+  /** Hours this class stays answerable; `null` when it never expires. */
+  lifetimeHours: number | null;
   count: number;
   /** Up to `sampleCap` member proposal ids (newest-first as fed). */
   sampleProposalIds: string[];
@@ -368,6 +377,7 @@ export function collapseProposalsToClusters(
     proposalType: acc.proposalType,
     targetType: acc.targetType,
     targetLabel: acc.targetLabel,
+    ...proposalClassFields(acc.proposalType, acc.targetType),
     count: acc.count,
     sampleProposalIds: acc.sampleProposalIds,
     sources: acc.sources,

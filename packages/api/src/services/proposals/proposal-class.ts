@@ -79,3 +79,31 @@ export function proposalLifetimeHours(
 ): number | null {
   return CLASS_LIFETIME_HOURS[classifyProposal(proposalType, targetType)];
 }
+
+/**
+ * The two class-derived fields every READ door stamps onto a proposal row.
+ *
+ * Returned as a PAIR, and only as a pair, on purpose: `class` without
+ * `lifetimeHours` forces a surface that wants to show the ephemeral countdown
+ * to re-derive the lifetime from a table it does not own, which is how a second
+ * (and eventually disagreeing) copy of `CLASS_LIFETIME_HOURS` gets written.
+ * `lifetimeHours` is `null` for every class that never expires.
+ */
+export interface ProposalClassFields {
+  class: ProposalClass;
+  lifetimeHours: number | null;
+}
+
+/**
+ * Stamp the class fields for a `(proposalType, targetType)` pair. THE one door
+ * every read-side projection calls — `enrichProposalsForDisplay` (tRPC
+ * list/get), `collapseProposalsToClusters` (groups), and `toProposalBasic` /
+ * `withProposalClass` (Hub REST + MCP).
+ */
+export function proposalClassFields(
+  proposalType: string,
+  targetType: string
+): ProposalClassFields {
+  const cls = classifyProposal(proposalType, targetType);
+  return { class: cls, lifetimeHours: CLASS_LIFETIME_HOURS[cls] };
+}

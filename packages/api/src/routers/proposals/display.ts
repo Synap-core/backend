@@ -20,6 +20,7 @@ import {
   isFacetVisibleForLens,
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
+import { proposalClassFields } from "../../services/proposals/proposal-class.js";
 import { entityFacets, profiles } from "@synap/database/schema";
 import type { EventRecord } from "@synap/database";
 import type {
@@ -449,6 +450,12 @@ export async function enrichProposalsForDisplay(
 
     return {
       ...row,
+      // Decision CLASS + its lifetime, derived (never stored) from
+      // proposalType × targetType. Serialized here so `proposals.list` and
+      // `proposals.get` — and every surface over them — can render the
+      // ephemeral countdown without a second call or a second copy of the
+      // lifetime table. ONE door: `proposalClassFields`.
+      ...proposalClassFields(row.proposalType, row.targetType),
       authorName,
       targetName,
       ...(row.sessionId && sessionGoalById.has(row.sessionId)

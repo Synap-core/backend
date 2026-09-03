@@ -7,6 +7,10 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import {
+  PROPOSAL_CLASSES,
+  proposalClassFields,
+} from "../../../../services/proposals/proposal-class.js";
 
 /**
  * The selectable `status` filters for a proposal listing — the SSOT every
@@ -68,6 +72,53 @@ export const ProposalRowStatusSchema = z
   .enum(PROPOSAL_ROW_STATUSES)
   .openapi("ProposalRowStatus");
 
+/**
+ * Decision CLASS of a proposal — WHAT KIND of decision it is, and therefore how
+ * long it stays answerable. Derived on read from `proposalType` × `targetType`
+ * (never stored, never agent-nominated); see `services/proposals/proposal-class.ts`
+ * for why that derivation is a security property.
+ */
+export const ProposalClassSchema = z
+  .enum(PROPOSAL_CLASSES)
+  .openapi("ProposalClass");
+
+/**
+ * The two class fields every proposal projection carries. Declared once and
+ * spread into both `WireProposalSchema` and `ProposalBasicSchema` so the two
+ * views cannot describe the class differently.
+ */
+const proposalClassShape = {
+  class: ProposalClassSchema.describe(
+    "Decision class — derived from proposalType x targetType, not stored."
+  ),
+  lifetimeHours: z
+    .number()
+    .nullable()
+    .describe(
+      "Hours this proposal stays answerable once its context is gone. " +
+        "`null` for every class that never expires; only `ephemeral` has one."
+    ),
+} as const;
+
+/**
+ * Stamp the class fields onto a raw proposal row. THE producer behind
+ * `WireProposalSchema`'s `class` — a declared field with no producer is the
+ * exact shape of the T4 finding ("a DECLARED zod schema IS the contract"), so
+ * every door that answers with `WireProposalSchema` passes its rows through
+ * here.
+ */
+export function withProposalClass<T extends Record<string, unknown>>(
+  row: T
+): T & { class: string; lifetimeHours: number | null } {
+  return {
+    ...row,
+    ...proposalClassFields(
+      String(row.proposalType ?? ""),
+      String(row.targetType ?? "")
+    ),
+  };
+}
+
 /** Wire shape of a proposal row. */
 export const WireProposalSchema = z
   .object({
@@ -88,6 +139,7 @@ export const WireProposalSchema = z
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
     sessionId: z.string().nullable().optional(),
+    ...proposalClassShape,
   })
   .openapi("Proposal");
 
@@ -149,6 +201,7 @@ export const ProposalBasicSchema = z
         `Author-written one-liner, capped at ${PROPOSAL_SUMMARY_MAX} chars. ` +
           "Omitted entirely when the proposal carries none — never generated."
       ),
+    ...proposalClassShape,
   })
   .openapi("ProposalBasic");
 
@@ -183,6 +236,13 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
     sessionId: (row.sessionId ?? null) as string | null,
     agentUserId: (row.agentUserId ?? null) as string | null,
     ...(summary ? { summary } : {}),
+    // Class + lifetime travel with the BASIC row: the ephemeral countdown is a
+    // list-row affordance ("this expires in 6h"), and a caller that can only
+    // see it after fetching the full payload cannot triage a queue.
+    ...proposalClassFields(
+      row.proposalType as string,
+      row.targetType as string
+    ),
   };
 }
 
