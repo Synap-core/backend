@@ -485,6 +485,12 @@ export async function applyProposalApproval(args: {
       // playbook automations fire for these entities. Mirrors the import
       // orchestrator's apply() path for the governed-approval route.
       sessionId: string | null;
+      // The proposal being applied. `entities.create` stamps it onto
+      // `events.proposal_id` so every entity this approval materializes names
+      // its authorizer on the event spine — the same linkage the single-entity
+      // door gets from its own auto-approve receipt, and what the object graph's
+      // `via: "governed"` fold reads.
+      governanceProposalId: string;
     };
     if (proposal.workspaceId) {
       const membership = await getWorkspaceMembership(
@@ -505,6 +511,7 @@ export async function applyProposalApproval(args: {
         workspaceId: proposal.workspaceId,
         workspaceRole: membership.role,
         sessionId: proposal.sessionId ?? null,
+        governanceProposalId: proposal.id,
       };
     } else {
       compositeCtx = {
@@ -514,6 +521,7 @@ export async function applyProposalApproval(args: {
         workspaceId: null,
         workspaceRole: "owner",
         sessionId: proposal.sessionId ?? null,
+        governanceProposalId: proposal.id,
       };
     }
 

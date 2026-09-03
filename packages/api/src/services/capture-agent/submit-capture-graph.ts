@@ -731,6 +731,16 @@ export async function submitCaptureGraph(
           "capture auto-apply: no workspace membership — filing pending instead"
         );
       } else {
+        // Pre-allocate the auto_approved receipt id BEFORE materializing, so the
+        // `entity.create.completed` events the create door writes below can name
+        // the proposal that authorized them (`events.proposal_id`). The receipt
+        // row itself is inserted after materialization (it has to carry
+        // `data.materialized.entityIds` for revert) WITH THIS id — so the events
+        // and the row can never disagree. Until now the receipt was created with
+        // a fresh id afterwards and nothing linked it to the entities: every
+        // capture-created entity read as an authorizer-less write, and the object
+        // graph's `via: "governed"` fold returned no proposal neighbour for it.
+        const captureProposalId = randomUUID();
         const compositeCtx = {
           db,
           authenticated: true as const,
@@ -738,6 +748,9 @@ export async function submitCaptureGraph(
           workspaceId,
           workspaceRole: membershipRole,
           sessionId: input.sessionId ?? null,
+          // Internal composite-caller channel read by `entities.create` — never
+          // set from HTTP. See the note at its recordDomainMutation call.
+          governanceProposalId: captureProposalId,
         };
         const { entitiesRouter } = await import("../../routers/entities.js");
         const { relationsRouter } = await import("../../routers/relations.js");
@@ -800,6 +813,8 @@ export async function submitCaptureGraph(
         let recordId: string | undefined;
         try {
           const { proposal } = await createAutoApprovedProposal({
+            // The id the events above already name (see captureProposalId).
+            id: captureProposalId,
             userId,
             reviewedBy: userId,
             workspaceId,

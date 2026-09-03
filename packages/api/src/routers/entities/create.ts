@@ -1231,7 +1231,19 @@ export const createProcs = {
         // Governance linkage (0231): stamp the auto-approve receipt so this agent
         // write reads as GOVERNED, not an "ungoverned AI write". `perm` is the
         // granted result here (denied + proposed already returned above).
-        proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+        // Composite/graph callers (capture auto-apply, proposal approval) run
+        // this door through `createCaller` with an already-decided governance
+        // receipt in hand: the write is authorized by THAT proposal, and the
+        // per-call `perm` here is a first-party grant carrying no receipt of its
+        // own. Without this, every entity a capture graph creates landed with
+        // `events.proposal_id = NULL` and the object graph's `via: "governed"`
+        // fold found no proposal neighbour — the capture door's created entities
+        // were the only ones with no visible authorizer. Narrow typed read: the
+        // field is an INTERNAL composite-caller channel, never set from HTTP
+        // (createContext builds no such field), so it is not on the public ctx.
+        proposalId:
+          ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+          (ctx as { governanceProposalId?: string }).governanceProposalId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,

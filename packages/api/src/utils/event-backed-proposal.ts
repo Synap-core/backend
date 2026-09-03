@@ -123,6 +123,14 @@ export async function createEventBackedProposal(
 export interface CreateAutoApprovedProposalInput extends CreateEventBackedProposalInput {
   /** The user who performed (and is implicitly approving) the already-done write. */
   reviewedBy: string;
+  /**
+   * Pre-allocated proposal id. A composite caller that must stamp the receipt
+   * onto the writes it is ABOUT to make (capture auto-apply threads it into
+   * `events.proposal_id` via the create door) generates the id first and passes
+   * it here, so the row it records afterwards IS the proposal those events name.
+   * Omitted → the DB default assigns one, exactly as before.
+   */
+  id?: string;
 }
 
 /**
@@ -154,6 +162,7 @@ export async function createAutoApprovedProposal(
   const [proposal] = await db
     .insert(proposals)
     .values({
+      ...(input.id ? { id: input.id } : {}),
       workspaceId: input.workspaceId ?? null,
       targetType: input.targetType,
       targetId: input.targetId,
