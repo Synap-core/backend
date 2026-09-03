@@ -191,4 +191,32 @@ describe("signal targets", () => {
     expect(title).not.toContain("create");
     expect(title).toContain("Acme Corp");
   });
+
+  it("carries the cluster's class AND lifetime onto the signal", () => {
+    // An ephemeral cluster (a capability run) must reach the tray with the
+    // countdown it needs; re-deriving the lifetime downstream is how a second
+    // copy of CLASS_LIFETIME_HOURS gets written.
+    const ephemeral = signalFromCluster(
+      cluster({ proposalType: "capability.run", targetType: "capability" })
+    );
+    expect(ephemeral.class).toBe("ephemeral");
+    expect(ephemeral.lifetimeHours).toBe(
+      proposalClassFields("capability.run", "capability").lifetimeHours
+    );
+
+    // A never-expiring class carries an explicit null, not an absent field.
+    const objectWork = signalFromCluster(cluster());
+    expect(objectWork.class).toBe("objectWork");
+    expect(objectWork.lifetimeHours).toBeNull();
+  });
+
+  it("leaves class/lifetime absent on a non-cluster signal", () => {
+    const [signal] = unionNeedsYou({
+      clusters: [],
+      notifications: [notif()],
+    });
+    expect(signal.kind).toBe("notification");
+    expect(signal.class).toBeUndefined();
+    expect(signal.lifetimeHours).toBeUndefined();
+  });
 });

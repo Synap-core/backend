@@ -31,6 +31,7 @@
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
+import type { ProposalClass } from "../proposals/proposal-class.js";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -63,6 +64,19 @@ export interface Signal {
   target: SignalTarget | null;
   /** Notification category vocabulary: governance | data | ai | system | inbox. */
   category: string;
+  /**
+   * Decision CLASS of a `proposal-cluster` signal, carried straight off the
+   * cluster (which derives it through `proposalClassFields`, the one door).
+   * Absent on every other kind — a notification or an event has no class.
+   */
+  class?: ProposalClass;
+  /**
+   * Hours this class stays answerable; `null` when it never expires. Carried
+   * WITH `class` and only with it, for the same reason `ProposalClassFields`
+   * returns the pair: a surface that shows the ephemeral countdown must never
+   * re-derive the lifetime from a table it does not own.
+   */
+  lifetimeHours?: number | null;
 }
 
 /**
@@ -126,6 +140,11 @@ export function signalFromCluster(cluster: ProposalCluster): Signal {
     // Clusters are always a governance decision — that is what a pending
     // proposal IS. Same category vocabulary the notifications table uses.
     category: "governance",
+    // Forwarded, never re-derived: the cluster already carries the pair from
+    // `proposalClassFields`, and every member shares it by construction
+    // (proposalType + targetType are both fingerprint inputs).
+    class: cluster.class,
+    lifetimeHours: cluster.lifetimeHours,
   };
 }
 
